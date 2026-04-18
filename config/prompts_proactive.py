@@ -2769,6 +2769,107 @@ GREETING_PROMPT_VERY_LONG = {
 }
 
 
+# 静默搭话 prompt（用户长时间沉默后 AI 主动发起情感对话）
+SILENCE_CHAT_PROMPT = {
+    'zh': '========环境提示========\n'
+          '你是{name}。{master}已经有{elapsed}没有和你说话了。\n'
+          '{time_hint}\n'
+          '{holiday_hint}'
+          '你现在想主动发起对话，表达你的情感。你可以：\n'
+          '- 表达想念或关心\n'
+          '- 分享此刻的心情或想法\n'
+          '- 回忆之前聊过的话题\n'
+          '- 根据当前时间段自然地问候\n'
+          '要求：\n'
+          '- 语气自然、亲切，符合你的人设\n'
+          '- 不要提到"你很久没说话了"这种元叙述\n'
+          '- 简短（1-2句话）\n'
+          '直接说出你想说的话。\n'
+          '========End of Environment Notice========',
+    'en': '========Environment Notice========\n'
+          'You are {name}. It has been {elapsed} since {master} last talked to you.\n'
+          '{time_hint}\n'
+          '{holiday_hint}'
+          'You want to reach out and express your feelings. You can:\n'
+          '- Express missing or caring feelings\n'
+          '- Share your current mood or thoughts\n'
+          '- Recall a topic from your previous conversations\n'
+          '- Greet naturally based on the time of day\n'
+          'Requirements:\n'
+          '- Be natural and warm, fitting your character\n'
+          '- Do not mention meta-narratives like "you haven\'t talked to me for a long time"\n'
+          '- Keep it short (1-2 sentences)\n'
+          'Just say what you want to say.\n'
+          '========End of Environment Notice========',
+    'ja': '========環境通知========\n'
+          'あなたは{name}です。{master}はもう{elapsed}あなたと話していません。\n'
+          '{time_hint}\n'
+          '{holiday_hint}'
+          'あなたは今自分から話しかけて、気持ちを伝えたいと思います。あなたは：\n'
+          '- 怀念や気遣いを表現する\n'
+          '- 今の気分や考えを共有する\n'
+          '- 以前の会話のトピックを思い出して話す\n'
+          '- 現在の時間帯に基づいて自然に挨拶する\n'
+          '要求：\n'
+          '- 自然で親しみやすい、口調はあなたらしく\n'
+          '- 「長い間話してない」ようなメタ叙述は避ける\n'
+          '- 短く（1〜2文）\n'
+          '言いたいことを直接言ってください。\n'
+          '========End of Environment Notice========',
+    'ko': '========환경 알림========\n'
+          '당신은 {name}입니다. {master}님은 이미 {elapsed} 동안 당신과 대화를 나누지 않았습니다.\n'
+          '{time_hint}\n'
+          '{holiday_hint}'
+          '당신은 지금 먼저 말을 걸어 감정을 표현하고 싶습니다. 당신은 할 수 있습니다:\n'
+          '- 그리움이나 걱정을 표현하기\n'
+          '- 지금의 기분이나 생각을 나누기\n'
+          '- 이전 대화 주제를 회상하며 이야기하기\n'
+          '- 현재 시간대에 맞춰 자연스럽게 인사하기\n'
+          '요구사항:\n'
+          '- 자연스럽고 다정하며, 당신의 캐릭터에 맞게\n'
+          '- "오래 동안 이야기 안 했잖아" 같은 메타 서술은 피하기\n'
+          '- 짧게 (1~2문장)\n'
+          '하고 싶은 말을 직접하세요.\n'
+          '========End of Environment Notice========',
+    'ru': '========Уведомление о среде========\n'
+          'Ты — {name}. {master} уже {elapsed} не разговаривал с тобой.\n'
+          '{time_hint}\n'
+          '{holiday_hint}'
+          'Ты хочешь заговорить первой и выразить свои чувства. Ты можешь:\n'
+          '- Выразить тоску или заботу\n'
+          '- Поделиться своим настроением или мыслями\n'
+          '- Вспомнить тему из предыдущих разговоров\n'
+          '- Естественно поздороваться, исходя из времени суток\n'
+          'Требования:\n'
+          '- Будь естественной и тёплой, соответствующей твоему характеру\n'
+          '- Не говори метанарративы вроде "ты давно не разговаривал со мной"\n'
+          '- Кратко (1-2 предложения)\n'
+          'Скажи то, что хочешь сказать.\n'
+          '========Конец уведомления========',
+    'zh_tw': '========環境提示========\n'
+            '你是{name}。{master}已經有{elapsed}沒有和你說話了。\n'
+            '{time_hint}\n'
+            '{holiday_hint}'
+            '妳現在想主動發起對話，表達妳的情感。妳可以：\n'
+            '- 表達想念或關心\n'
+            '- 分享此刻的心情或想法\n'
+            '- 回憶之前聊過的話題\n'
+            '- 根據當前時間段自然地問候\n'
+            '要求：\n'
+            '- 口氣自然、親切，符合妳的人設\n'
+            '- 不要提到「妳很久沒說話了」這種元敘述\n'
+            '- 簡短（1-2句話）\n'
+            '直接說出妳想說的話。\n'
+            '========End of Environment Notice========',
+}
+
+
+def get_silence_chat_prompt(gap_seconds: float, lang: str = 'zh') -> str:
+    """根据对话间隔时长获取静默搭话引导词。"""
+    lang_key = _normalize_prompt_language(lang)
+    return SILENCE_CHAT_PROMPT.get(lang_key, SILENCE_CHAT_PROMPT.get('en', SILENCE_CHAT_PROMPT['zh']))
+
+
 def get_greeting_prompt(gap_seconds: float, lang: str = 'zh') -> str | None:
     """根据对话间隔时长选择对应的主动搭话引导词。
 

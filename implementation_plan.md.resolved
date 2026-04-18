@@ -1,0 +1,232 @@
+# 静默时长搭话（Silence-Triggered Proactive Chat）
+
+## 需求描述
+
+**始终生效的自适应行为**（无开关）：当用户长时间没有和猫娘聊天时，AI 主动发起对话，表达情感。
+
+- **不需要用户手动开启**——只要页面连接着就自动工作
+- **不依赖主动搭话 / 自主视觉开关**——完全独立
+- **不依赖外部信息源**——纯粹基于"用户多久没聊天了"驱动
+
+## 现有基础设施复用
+
+| 组件 | 位置 | 复用点 |
+|------|------|--------|
+| `window.lastUserInputTime` | [app.js:45](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app.js#L45-L51) | 前端已跟踪用户最后输入时间 |
+| `/last_conversation_gap/{name}` | [memory_server.py:904](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/memory_server.py#L904-L916) | 后端已有查询距上次对话间隔的 API |
+| `trigger_greeting()` | [core.py:2497](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/main_logic/core.py#L2497-L2602) | 首次连接时的主动问候，结构可参考 |
+| `prepare_proactive_delivery()` | [core.py:2266](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/main_logic/core.py#L2266-L2294) | 投递前置检查 |
+| Leader election | [app-proactive.js:25-201](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app-proactive.js#L25-L201) | 跨窗口协调 |
+| `isGoodbyeActive()` | [app-proactive.js:236](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app-proactive.js#L236-L240) | "请她离开"检查 |
+| `_isAssistantSpeaking()` | [app-proactive.js:274](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app-proactive.js#L274-L289) | AI 说话中检查 |
+
+## 设计方案
+
+### 核心思路
+
+在 `app-proactive.js` 中新增一个**始终运行的轻量定时器**，每 60 秒检测一次用户沉默时长。达到阈值（默认 30 分钟）后，发送请求到后端，后端用 `prompt_ephemeral` 注入一条情感引导指令让主模型自行回复。
+
+与 `trigger_greeting` 走同一路径（零额外 LLM 调用，只用主模型）。
+
+```mermaid
+sequenceDiagram
+    participant FE as 前端 (app-proactive.js)
+    participant BE as 后端 (system_router.py)
+    participant MEM as 记忆服务 (memory_server.py)
+    participant CORE as Core (LLMSessionManager)
+
+    Note over FE: 60s 定时器触发
+    FE->>FE: lastUserInputTime 检查
+    alt 沉默 < 30min
+        Note over FE: 跳过，等下个 tick
+    else 沉默 >= 30min
+        FE->>BE: POST /api/silence_chat
+        BE->>MEM: GET /last_conversation_gap/{name}
+        MEM-->>BE: gap_seconds（双校验）
+        BE->>CORE: prepare_proactive_delivery()
+        BE->>CORE: session.prompt_ephemeral(silence_prompt)
+        CORE-->>FE: WebSocket 流式推送 AI 回复
+    end
+```
+
+### 回避条件（完整清单）
+
+双层防线，任一层命中即跳过：
+
+#### 前端回避（`scheduleSilenceChat` 定时器内）
+
+| # | 条件 | 检查方式 | 说明 |
+|---|------|---------|------|
+| F1 | 非 leader 窗口 | `!isProactiveLeader()` | 多窗口只有 leader 执行 |
+| F2 | 「请她离开」状态 | `isGoodbyeActive()` | 角色已被送走 |
+| F3 | AI 正在说话 | `_isAssistantSpeaking()` | 避免打断 TTS |
+| F4 | 用户正在发声 | `_isUserRecentlySpeaking()` | 语音模式 8s 内有麦克风活动 |
+| F5 | 沉默未达阈值 | `now - lastUserInputTime < 30min` | 还不够久 |
+| F6 | 冷却未过 | `now - _silenceChatLastTriggered < 30min` | 上次触发后等一个周期 |
+| F7 | 主动搭话执行中 | `S.isProactiveChatRunning` | 防止冲突 |
+| F8 | 用户 20s 内有输入 | `now - lastUserInputTime < 20000` | 发请求前最终拦截 |
+
+#### 后端回避（`/api/silence_chat`）
+
+| # | 条件 | 检查位置 | 说明 |
+|---|------|---------|------|
+| B1 | 后端 gap 不足 | `gap_seconds < 30min` | memory_server 双校验 |
+| B2 | 用户 30s 内有活动 | `last_user_activity_time` | `prepare_proactive_delivery` 守卫 |
+| B3 | 语音 session 活跃 | `OmniRealtimeClient` | 语音模式不走此路径 |
+| B4 | WebSocket 断开 | `websocket is None` | 无法投递 |
+| B5 | session 不可用 | 无 `_conversation_history` | 启动失败 |
+| B6 | 写锁被持有 | `_proactive_write_lock` | 有其他投递正在执行 |
+| B7 | session 回复中 | `_is_responding` | AI 正在生成 |
+
+#### 流程图
+
+```mermaid
+flowchart TD
+    START[60s tick] --> F1{是 leader?}
+    F1 -->|No| SKIP[跳过]
+    F1 -->|Yes| F2{请她离开?}
+    F2 -->|Yes| SKIP
+    F2 -->|No| F3{AI 在说话?}
+    F3 -->|Yes| SKIP
+    F3 -->|No| F4{用户在发声?}
+    F4 -->|Yes| SKIP
+    F4 -->|No| F5{沉默 >= 30min?}
+    F5 -->|No| SKIP
+    F5 -->|Yes| F6{冷却已过?}
+    F6 -->|No| SKIP
+    F6 -->|Yes| F7{主动搭话中?}
+    F7 -->|Yes| SKIP
+    F7 -->|No| API[POST /api/silence_chat]
+    API --> B1{后端 gap 确认?}
+    B1 -->|No| PASS[pass]
+    B1 -->|Yes| B2{用户空闲?}
+    B2 -->|No| PASS
+    B2 -->|Yes| DELIVER[prompt_ephemeral]
+    DELIVER --> OK[AI 说话 ✓]
+```
+
+### 冷却时序
+
+```
+用户最后输入                                    现在
+──────|──────────── 30min ──────────|──────── 30min ──────────|
+                             ↑ 首次触发               ↑ 第二次触发
+```
+
+- 触发后记 `_silenceChatLastTriggered = now`
+- 下次需同时满足 F5（距用户输入 ≥ 阈值）和 F6（距上次触发 ≥ 阈值）
+- 用户说话 → `_silenceChatLastTriggered` 重置为 0，从新输入时间重新计时
+
+## Proposed Changes
+
+### 前端
+
+#### [MODIFY] [app-state.js](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app-state.js)
+
+新增状态变量（无开关，始终生效）：
+
+```javascript
+// --- 静默搭话（始终生效，无开关） ---
+_silenceChatTimer: null,              // 定时器
+_silenceChatLastTriggered: 0,         // 上次触发时间戳
+```
+
+> [!NOTE]
+> 不新增 `silenceChatEnabled`，不新增 UI 开关，不新增 preferences 字段。
+
+---
+
+#### [MODIFY] [app-proactive.js](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app-proactive.js)
+
+新增 `scheduleSilenceChat()` / `triggerSilenceChat()`：
+
+- `scheduleSilenceChat()` — 始终启动的 60s 定时器，嵌入回避条件
+- `triggerSilenceChat()` — POST `/api/silence_chat`
+- 在 `resetProactiveChatBackoff()` 中同时重置 `_silenceChatLastTriggered`
+
+---
+
+#### [MODIFY] [app.js](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/static/app.js)
+
+初始化时调用 `scheduleSilenceChat()`。
+
+### 后端
+
+#### [MODIFY] [system_router.py](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/main_routers/system_router.py)
+
+新增 `/api/silence_chat` 端点：
+
+```python
+@router.post('/silence_chat')
+async def silence_chat(request: Request):
+    """静默搭话：用户长时间未聊天时 AI 主动发起情感对话。"""
+    data = await request.json()
+    lanlan_name = data.get('lanlan_name')
+    
+    # 1. 查 memory_server 确认 gap（双校验）
+    gap = await _query_conversation_gap(lanlan_name)
+    if gap < 1800:  # 30min
+        return {"success": True, "action": "pass"}
+    
+    # 2. core 层投递检查
+    mgr = get_session_manager(lanlan_name)
+    if not mgr or not await mgr.prepare_proactive_delivery():
+        return {"success": True, "action": "pass"}
+    
+    # 3. 构建 prompt + prompt_ephemeral
+    prompt = _build_silence_prompt(...)
+    delivered = await mgr.session.prompt_ephemeral(prompt)
+    
+    return {"success": True, "action": "chat" if delivered else "pass"}
+```
+
+---
+
+#### [MODIFY] [prompts_proactive.py](file:///c:/Users/xzq/Documents/GitHub/N.E.K.O-Himifox/config/prompts_proactive.py)
+
+新增 silence prompt（6 语言 × 1 模板）：
+
+```python
+silence_chat_prompt = """你是{name}。{master}已经{elapsed}没有和你说话了。
+{time_hint}
+
+你现在想主动发起对话，表达你的情感。你可以：
+- 表达想念或关心
+- 分享此刻的心情或想法
+- 回忆之前聊过的话题
+- 根据当前时间段自然地问候
+
+要求：
+- 语气自然、亲切，符合你的人设
+- 不要提到"你很久没说话了"这种元叙述
+- 简短（1-2句话）
+{holiday_hint}
+直接说出你想说的话。"""
+```
+
+对称语言版本：`_en` / `_ja` / `_ko` / `_ru` / `_zh_tw`
+
+### 不变
+
+- **无** `avatar-ui-popup.js` 变更（无开关 UI）
+- **无** `preferences.py` 变更（无新配置字段）
+- **无** i18n locale 变更（无开关标签）
+
+## Open Questions
+
+> [!IMPORTANT]
+> **阈值是否需要可配置？**
+> 
+> 既然没有开关，阈值（30 分钟）是否需要暴露给用户调整？
+> 
+> 建议：**不暴露**，硬编码 30 分钟作为合理默认值。如果后续用户反馈需要调整再加配置。
+
+## 验证计划
+
+### 手动验证
+1. 打开页面后不操作 → 30 分钟后验证 AI 主动说话
+2. AI 说话后等 30 分钟 → 验证第二次触发
+3. 中途说一句话 → 验证计时重置
+4. 同时开着主动搭话 → 验证两者不冲突
+5. index.html + chat.html → 验证只有 leader 触发
+6. "请她离开" → 验证不触发

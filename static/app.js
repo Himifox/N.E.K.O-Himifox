@@ -143,6 +143,11 @@ function init_app() {
         window.appSettings.initProactiveChatScheduler();
     }
 
+    // 静默搭话（始终生效，无需开关）
+    if (typeof window.scheduleSilenceChat === 'function') {
+        window.scheduleSilenceChat();
+    }
+
     // Agent UI 初始化
     if (window.appAgent && window.appAgent.setupAgentCheckboxListeners) {
         // Agent checkbox listeners are set up via live2d-floating-buttons-ready event

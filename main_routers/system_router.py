@@ -19,6 +19,7 @@ import re
 import time
 from collections import deque
 from io import BytesIO
+from uuid import uuid4
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Request
@@ -53,6 +54,7 @@ from config.prompts_proactive import (
     PROACTIVE_SOURCE_LABELS,
     PROACTIVE_MUSIC_TAG_INSTRUCTIONS,
     MUSIC_SEARCH_RESULT_TEXTS,
+    get_silence_chat_prompt,
 )
 from utils.workshop_utils import get_workshop_path
 from utils.screenshot_utils import (
@@ -3708,3 +3710,97 @@ async def get_personal_dynamics(request: Request):
             "error": "服务器内部错误",
             "detail": str(e)
         }, status_code=500)
+
+
+@router.post('/silence_chat')
+async def silence_chat(request: Request):
+    """
+    静默搭话：用户长时间（>= 30分钟）未聊天时，AI 主动发起情感对话。
+
+    流程：
+      1. 查询 memory_server 确认 gap（双校验）
+      2. 调用 prepare_proactive_delivery 守卫检查
+      3. 构建 silence prompt 并通过 prompt_ephemeral 投递
+    """
+    try:
+        data = await request.json()
+        lanlan_name = data.get('lanlan_name', '')
+
+        if not lanlan_name:
+            return JSONResponse({"success": False, "error": "缺少 lanlan_name"}, status_code=400)
+
+        session_manager = get_session_manager()
+        mgr = session_manager.get(lanlan_name)
+        if not mgr:
+            return JSONResponse({"success": False, "error": f"角色 {lanlan_name} 不存在"}, status_code=404)
+
+        # B1: 查询 memory_server 确认 gap >= 30min（双校验）
+        try:
+            async with httpx.AsyncClient(timeout=2.0, proxy=None, trust_env=False) as client:
+                resp = await client.get(f"http://127.0.0.1:{MEMORY_SERVER_PORT}/last_conversation_gap/{lanlan_name}")
+                if not resp.is_success:
+                    logger.warning("[%s] silence_chat: memory server returned %s", lanlan_name, resp.status_code)
+                    return JSONResponse({"success": True, "action": "pass"})
+                gap_seconds = resp.json().get("gap_seconds", -1)
+        except Exception as e:
+            logger.warning("[%s] silence_chat: failed to query gap: %s", lanlan_name, e)
+            return JSONResponse({"success": True, "action": "pass"})
+
+        if gap_seconds < 1800:
+            return JSONResponse({"success": True, "action": "pass"})
+
+        # B2: prepare_proactive_delivery 守卫检查（用户空闲、session 可用等）
+        if not await mgr.prepare_proactive_delivery():
+            return JSONResponse({"success": True, "action": "pass"})
+
+        # 获取语言
+        _lang = normalize_language_code(mgr.user_language, format='short')
+
+        # 构建 prompt
+        from config.prompts_proactive import get_time_of_day_hint
+        from utils.time_format import format_elapsed as _format_elapsed
+        from utils.holiday_cache import preview_holiday_or_weekend_hint, commit_holiday_or_weekend_hint
+
+        elapsed = _format_elapsed(_lang, gap_seconds)
+        time_hint = get_time_of_day_hint(_lang).format(master=mgr.master_name)
+
+        _holiday_token = None
+        try:
+            holiday_hint_text, _holiday_token = await preview_holiday_or_weekend_hint(_lang, lanlan_name)
+        except Exception:
+            holiday_hint_text = None
+        holiday_hint = (holiday_hint_text + '\n') if holiday_hint_text else ''
+
+        template = get_silence_chat_prompt(gap_seconds, _lang)
+        instruction = template.format(
+            elapsed=elapsed,
+            name=lanlan_name,
+            master=mgr.master_name,
+            time_hint=time_hint,
+            holiday_hint=holiday_hint,
+        )
+
+        # 投递
+        from main_logic.core import _proactive_expected_sid
+        async with mgr._proactive_write_lock:
+            async with mgr.lock:
+                mgr.current_speech_id = str(uuid4())
+                mgr._tts_done_queued_for_turn = False
+                proactive_sid = mgr.current_speech_id
+
+            _sid_token = _proactive_expected_sid.set(proactive_sid)
+            try:
+                delivered = await mgr.session.prompt_ephemeral(instruction)
+            finally:
+                _proactive_expected_sid.reset(_sid_token)
+
+        # 投递成功后才消费节日预算
+        if delivered and _holiday_token is not None:
+            await asyncio.to_thread(commit_holiday_or_weekend_hint, lanlan_name, _holiday_token)
+
+        logger.info("[%s] silence_chat: gap=%.0fs elapsed=%s, delivered=%s", lanlan_name, gap_seconds, elapsed, delivered)
+        return JSONResponse({"success": True, "action": "chat" if delivered else "pass"})
+
+    except Exception as e:
+        logger.error("silence_chat error: %s", e)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

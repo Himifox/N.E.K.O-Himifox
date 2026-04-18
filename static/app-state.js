@@ -122,6 +122,10 @@
         proactiveVisionInterval: 10,
         _lastProactiveChatScreenTime: 0,
 
+        // --- 静默搭话（始终生效，无开关） ---
+        _silenceChatTimer: null,
+        _silenceChatLastTriggered: 0,
+
         // --- 角色切换 ---
         isSwitchingCatgirl: false,
 

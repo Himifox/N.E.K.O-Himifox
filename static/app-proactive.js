@@ -1246,6 +1246,8 @@
         S.proactiveChatBackoffLevel = 0;
         // 语音模式：用户说话了，重置无回复计数
         S._voiceProactiveNoResponseCount = 0;
+        // 静默搭话：用户说话了，重置冷却计时（下次触发需同时满足沉默阈值和冷却已过）
+        S._silenceChatLastTriggered = 0;
         // 重新安排定时器
         scheduleProactiveChat();
         // 跨窗口同步：分发环境下 chat.html 输入只会 reset 它自己这份无用的 state，
@@ -1572,6 +1574,94 @@
     }
     mod.releaseProactiveVisionStream = releaseProactiveVisionStream;
 
+    // ======================== silence chat (always on) ========================
+
+    var SILENCE_CHECK_INTERVAL_MS = 60 * 1000;
+    var SILENCE_THRESHOLD_MS = 30 * 60 * 1000;
+    var SILENCE_COOLDOWN_MS = 30 * 60 * 1000;
+
+    function scheduleSilenceChat() {
+        if (S._silenceChatTimer) {
+            clearTimeout(S._silenceChatTimer);
+            S._silenceChatTimer = null;
+        }
+
+        if (!isProactiveLeader()) {
+            return;
+        }
+
+        S._silenceChatTimer = setTimeout(async function () {
+            var now = Date.now();
+            var lastInput = window.lastUserInputTime || 0;
+
+            // F1: 非 leader → 跳过（理论上不会发生，leader 会清 timer）
+            if (!isProactiveLeader()) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F2: 请她离开
+            if (isGoodbyeActive()) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F3: AI 正在说话
+            if (_isAssistantSpeaking()) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F4: 用户正在发声
+            if (_isUserRecentlySpeaking()) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F5: 沉默未达阈值
+            if ((now - lastInput) < SILENCE_THRESHOLD_MS) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F6: 冷却未过
+            if ((now - S._silenceChatLastTriggered) < SILENCE_COOLDOWN_MS) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F7: 主动搭话执行中
+            if (S.isProactiveChatRunning) {
+                scheduleSilenceChat();
+                return;
+            }
+            // F8: 用户 20s 内有输入（发请求前最终拦截）
+            if ((now - lastInput) < 20000) {
+                scheduleSilenceChat();
+                return;
+            }
+
+            S._silenceChatLastTriggered = now;
+            try {
+                await triggerSilenceChat();
+            } finally {
+                // 无论结果如何，重新安排下一次
+                scheduleSilenceChat();
+            }
+        }, SILENCE_CHECK_INTERVAL_MS);
+    }
+
+    async function triggerSilenceChat() {
+        try {
+            var lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+            var resp = await fetch('/api/silence_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lanlan_name: lanlanName })
+            });
+            var result = await resp.json();
+            if (result.success && result.action === 'chat') {
+                console.log('[SilenceChat] AI 主动发起对话');
+            }
+        } catch (e) {
+            console.warn('[SilenceChat] 请求失败:', e);
+        }
+    }
+
     // ======================== backward-compat window exports ========================
 
     window.hasAnyChatModeEnabled = hasAnyChatModeEnabled;
@@ -1582,6 +1672,7 @@
     window.acquireProactiveVisionStream = acquireProactiveVisionStream;
     window.releaseProactiveVisionStream = releaseProactiveVisionStream;
     window.scheduleProactiveChat = scheduleProactiveChat;
+    window.scheduleSilenceChat = scheduleSilenceChat;
     window.isProactiveLeader = isProactiveLeader;
     window.captureCanvasFrame = captureCanvasFrame;
     window.fetchBackendScreenshot = fetchBackendScreenshot;
