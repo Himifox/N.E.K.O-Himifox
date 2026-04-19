@@ -2286,17 +2286,27 @@ def gptsovits_tts_worker(request_queue, response_queue, audio_api_key, voice_id)
             receive_task = asyncio.create_task(receive_loop(ws))
             return ws
 
-        # ─── 初始连接验证 ───
-        try:
-            await create_connection()
-            logger.info(f"[GPT-SoVITS v3] TTS 已就绪 (WS 双工模式): {WS_URL}")
-            logger.info(f"  voice_id: {v3_voice_id}")
-            response_queue.put(("__ready__", True))
-        except Exception as e:
-            logger.error(f"[GPT-SoVITS v3] 初始连接失败: {e}")
-            logger.error("请确保 GPT-SoVITS 服务已运行且端口正确")
-            response_queue.put(("__ready__", False))
-            return
+        # ─── 初始连接验证（带自动等待重试）───
+        max_initial_retries = 60
+        retry_delay = 1.0
+        max_retry_delay = 10.0
+        for attempt in range(max_initial_retries):
+            try:
+                await create_connection()
+                logger.info(f"[GPT-SoVITS v3] TTS 已就绪 (WS 双工模式): {WS_URL}")
+                logger.info(f"  voice_id: {v3_voice_id}")
+                response_queue.put(("__ready__", True))
+                break
+            except Exception as e:
+                if attempt < max_initial_retries - 1:
+                    logger.warning(f"[GPT-SoVITS v3] 连接失败 ({attempt+1}/{max_initial_retries}): {e}，{retry_delay:.1f}秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 1.2, max_retry_delay)
+                else:
+                    logger.error(f"[GPT-SoVITS v3] 初始连接失败，已重试{max_initial_retries}次: {e}")
+                    logger.error("请确保 GPT-SoVITS 服务已运行且端口正确")
+                    response_queue.put(("__ready__", False))
+                    return
 
         # ─── 主循环 ───
         try:
@@ -2719,6 +2729,12 @@ def get_tts_worker(core_api_type='qwen', has_custom_voice=False, voice_id=''):
             # 仅 enableCustomApi + http URL 不应自动路由到 GPT-SoVITS。
             core_cfg = cm.get_core_config()
             gsv_enabled = core_cfg.get('GPTSOVITS_ENABLED', False)
+            # 检测 voice_id 是否为 GSV 音色
+            voice_is_gsv = voice_id.startswith(GSV_VOICE_PREFIX) if voice_id else False
+            if voice_is_gsv and not gsv_enabled:
+                logger.warning(f"[TTS路由] 检测到 GSV 音色 '{voice_id}' 但 GPTSOVITS_ENABLED=False，已自动启用并等待 GSV 启动...")
+                core_cfg['GPTSOVITS_ENABLED'] = True
+                gsv_enabled = True
             if gsv_enabled and (base_url.startswith('http://') or base_url.startswith('https://')):
                 return gptsovits_tts_worker, None, 'gptsovits'
             if gsv_enabled and (base_url.startswith('ws://') or base_url.startswith('wss://')):
