@@ -1834,6 +1834,8 @@ Live2DManager.prototype.triggerRandomEmotion = async function() {
     // 使用唯一 ID 标记此次点击效果，用于判断是否应该恢复
     const clickEffectId = Date.now();
     this._currentClickEffectId = clickEffectId;
+    this._clickEffectGeneration = (this._clickEffectGeneration || 0) + 1;
+    const currentGeneration = this._clickEffectGeneration;
     
     this._clickEffectRestoreTimer = setTimeout(() => {
         this._clickEffectRestoreTimer = null;
@@ -1846,9 +1848,25 @@ Live2DManager.prototype.triggerRandomEmotion = async function() {
         
         console.log('[Interaction] 点击效果持续时间结束，平滑恢复到默认状态');
         this._currentClickEffectId = null;
-        // 使用平滑过渡恢复到常驻表情或默认状态（smoothReset 内部会在快照后停止 motion/expression）
+        // 待机动画恢复函数，等平滑恢复完成后再调用，避免被 smoothReset 停掉刚恢复的待机动画
+        const restoreIdleMotion = () => {
+            if (currentGeneration !== this._clickEffectGeneration) {
+                console.log('[Interaction] Idle 恢复已被新点击效果覆盖，跳过');
+                return;
+            }
+            if (typeof window.restoreLive2DIdleAnimationOnMainPage === 'function') {
+                window.restoreLive2DIdleAnimationOnMainPage();
+            }
+        };
         if (typeof this.smoothResetToInitialState === 'function') {
-            this.smoothResetToInitialState().catch(e => {
+            const resetGeneration = currentGeneration;
+            this.smoothResetToInitialState().then(() => {
+                if (resetGeneration !== this._clickEffectGeneration) {
+                    console.log('[Interaction] Idle 恢复已被新点击效果覆盖（Promise resolve 时检测），跳过');
+                    return;
+                }
+                restoreIdleMotion();
+            }).catch(e => {
                 console.warn('[Interaction] 平滑恢复失败，回退到即时恢复:', e);
                 if (typeof this.clearExpression === 'function') this.clearExpression();
             });
@@ -1974,17 +1992,17 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId) {
         return;
     }
 
-    const config = touchSet[hitAreaId];
-    const { motions = [], expressions = [] } = config;
+        const config = touchSet[hitAreaId];
+        const { motions = [], expressions = [] } = config;
+        // 过滤哨兵值，避免误报资源错误
+        const validMotions = motions.filter(m => m && m !== '_no_motion_');
+        const validExpressions = expressions.filter(e => e && e !== '_no_expression_');
 
-    console.log(`[TouchSet] 播放 ${hitAreaId} 的动画:`, { motions, expressions });
+        console.log(`[TouchSet] 播放 ${hitAreaId} 的动画:`, { motions: validMotions, expressions: validExpressions });
 
-    try {
-        // 播放动作
-        if (motions.length > 0) {
-            const randomMotion = motions[Math.floor(Math.random() * motions.length)];
-            
-            // 优先使用 motionManager.definitions，回退到 fileReferences.Motions
+        if (validMotions.length > 0) {
+            const randomMotion = validMotions[Math.floor(Math.random() * validMotions.length)];
+
             const motionDefs = this.currentModel.internalModel?.motionManager?.definitions;
             const fileRefs = this.fileReferences?.Motions;
             
@@ -2024,10 +2042,29 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId) {
                                 console.warn(`[TouchSet] 无法获取motion持续时间:`, error);
                             }
 
-                            try {
-                                const internalModel = this.currentModel.internalModel;
-                                const motionManager = internalModel.motionManager;
-                                const json = internalModel.settings.json;
+                let backupDefs, backupGroups, backupSettingsMotions, backupJsonMotions, backupJsonFileRefs;
+                let defsExisted = false, groupsExisted = false;
+                let settingsMotionsExisted = false, jsonMotionsExisted = false, jsonFileRefsExisted = false;
+                let internalModel, motionManager, json, live2dModel;
+
+                try {
+                    internalModel = this.currentModel.internalModel;
+                    motionManager = internalModel.motionManager;
+                    json = internalModel.settings.json;
+
+                    defsExisted = motionManager.definitions && Object.prototype.hasOwnProperty.call(motionManager.definitions, groupName);
+                    groupsExisted = motionManager.motionGroups && Object.prototype.hasOwnProperty.call(motionManager.motionGroups, groupName);
+                    settingsMotionsExisted = internalModel.settings.motions && Object.prototype.hasOwnProperty.call(internalModel.settings.motions, groupName);
+                    jsonMotionsExisted = json && json.motions && Object.prototype.hasOwnProperty.call(json.motions, groupName);
+                    jsonFileRefsExisted = json && json.FileReferences?.Motions && Object.prototype.hasOwnProperty.call(json.FileReferences.Motions, groupName);
+
+                    backupDefs = defsExisted ? motionManager.definitions[groupName] : undefined;
+                    backupGroups = groupsExisted ? motionManager.motionGroups[groupName] : undefined;
+                    backupSettingsMotions = settingsMotionsExisted ? internalModel.settings.motions[groupName] : undefined;
+                    backupJsonMotions = jsonMotionsExisted ? json.motions[groupName] : undefined;
+                    backupJsonFileRefs = jsonFileRefsExisted ? json.FileReferences.Motions[groupName] : undefined;
+
+                        let tempMotionsList = [{ 'File': motion.File }];
 
                                 if (json) {
                                     json.FileReferences = json.FileReferences || {};
@@ -2060,24 +2097,55 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId) {
                                 motionManager.stopAllMotions();
                                 const result = await this.currentModel.motion(groupName, index, 3);
 
-                                if (result) {
-                                    console.log(`[TouchSet] ✅ 成功下发播放指令: ${groupName}[${index}]`);
-                                } else {
-                                    console.warn(`[TouchSet] ❌ 动作加载成功但引擎仍拒绝播放: ${groupName}[${index}]`);
-                                }
-                            } catch (motionError) {
-                                console.warn(`[TouchSet] 动作播放异常: ${groupName}[${index}]`, motionError);
+                        if (result) {
+                            console.log(`[TouchSet] ✅ 成功下发播放指令: ${groupName}[0]`);
+                        } else {
+                            console.warn(`[TouchSet] ❌ 动作加载成功但引擎仍拒绝播放: ${groupName}[0]`);
+                        }
+                    } catch (error) {
+                        console.warn(`[TouchSet] 动作播放异常: ${groupName}[0]`, error);
+                    } finally {
+                        if (motionManager?.definitions) {
+                            if (defsExisted) {
+                                motionManager.definitions[groupName] = backupDefs;
+                            } else {
+                                delete motionManager.definitions[groupName];
                             }
-                            break;
+                        }
+                        if (motionManager?.motionGroups) {
+                            if (groupsExisted) {
+                                motionManager.motionGroups[groupName] = backupGroups;
+                            } else {
+                                delete motionManager.motionGroups[groupName];
+                            }
+                        }
+                        if (internalModel?.settings?.motions) {
+                            if (settingsMotionsExisted) {
+                                internalModel.settings.motions[groupName] = backupSettingsMotions;
+                            } else {
+                                delete internalModel.settings.motions[groupName];
+                            }
+                        }
+                        if (json?.motions) {
+                            if (jsonMotionsExisted) {
+                                json.motions[groupName] = backupJsonMotions;
+                            } else {
+                                delete json.motions[groupName];
+                            }
+                        }
+                        if (json?.FileReferences?.Motions) {
+                            if (jsonFileRefsExisted) {
+                                json.FileReferences.Motions[groupName] = backupJsonFileRefs;
+                            } else {
+                                delete json.FileReferences.Motions[groupName];
+                            }
                         }
                     }
-                }
             }
         }
 
-        // 播放表情
-        if (expressions.length > 0) {
-            const randomExpressionName = expressions[Math.floor(Math.random() * expressions.length)];
+        if (validExpressions.length > 0) {
+            const randomExpressionName = validExpressions[Math.floor(Math.random() * validExpressions.length)];
             const faceInfo = this.fileReferences?.Expressions?.find(e => e.Name === randomExpressionName);
             if (!faceInfo || !faceInfo.File) {
                 console.warn(`[TouchSet] 表情文件不存在: ${randomExpressionName}`);
@@ -2089,9 +2157,18 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId) {
                     console.log(`[TouchSet] 播放表情成功: ${randomExpressionName}, 持续时间: ${faceHoldingTime}ms`);
                     
                     clearTimeout(this.expressionTimer);
-                    this.expressionTimer = setTimeout(() => {
-                        this.clearExpression?.();
-                    }, faceHoldingTime);
+                    const holdingTime = Number.isFinite(faceHoldingTime) && faceHoldingTime > 0 ? faceHoldingTime : 3000;
+                    this.expressionTimer = setTimeout(async () => {
+                        if (typeof this.clearExpression === 'function') {
+                            this.clearExpression();
+                            console.log(`[TouchSet] 临时表情清除，准备恢复常驻状态`);
+                            if (typeof this.applyPersistentExpressionsNative === 'function') {
+                                try {
+                                    await this.applyPersistentExpressionsNative(true);
+                                } catch (_) {}
+                            }
+                        }
+                    }, holdingTime);
                 } catch (e) {
                     console.warn(`[TouchSet] 播放表情失败: ${randomExpressionName}`, e);
                 }

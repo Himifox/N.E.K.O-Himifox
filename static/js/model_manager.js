@@ -3527,6 +3527,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 重置选择器到第一个选项（保持显示"选择动作"）
                 e.target.value = '';
                 updateVRMAnimationSelectButtonText(); // 更新按钮文字为"选择动作"
+                hasUnsavedChanges = true;
+                updateSettingsSnapshot();
+                return;
+            }
+
+            // 无动作选项：停止当前播放的 VRM 动作
+            if (selectedValue === '_no_motion_') {
+                if (vrmManager) {
+                    vrmManager.stopVRMAAnimation();
+                    isVrmAnimationPlaying = false;
+                    updateVRMAnimationPlayButtonIcon();
+                    showStatus(t('live2d.motionStopped', '动作已停止'), 1000);
+                }
+                if (playVrmAnimationBtn) playVrmAnimationBtn.disabled = true;
+                stopIdleRotation('vrm');
+                hasUnsavedChanges = true;
+                updateSettingsSnapshot();
                 return;
             }
 
@@ -3558,13 +3575,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             } else {
                 if (playVrmAnimationBtn) playVrmAnimationBtn.disabled = true;
-                // 如果没有选择动作，停止播放
                 if (isVrmAnimationPlaying && vrmManager) {
                     vrmManager.stopVRMAAnimation();
                     isVrmAnimationPlaying = false;
                     updateVRMAnimationPlayButtonIcon();
                 }
             }
+            hasUnsavedChanges = true;
+            updateSettingsSnapshot();
         });
     }
 
@@ -4415,6 +4433,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 isMmdAnimationPlaying = false;
                 updateMMDAnimationPlayButtonIcon();
                 if (playMmdAnimationBtn) playMmdAnimationBtn.disabled = true;
+                hasUnsavedChanges = true;
+                updateSettingsSnapshot();
+                return;
+            }
+
+            // 无动作选项：停止当前播放的 MMD 动画，并重置 idle 状态避免状态污染
+            // stopAnimation() 会停掉当前待机动画，但 isMmdIdlePlaying 仍保持旧值；
+            // 下一次启动 idle rotation 时可能把 stale currentAnimationUrl 当成仍在播放，
+            // 导致跳过首次播放/监听器注册。因此需要同步重置 isMmdIdlePlaying。
+            if (animPath === '_no_motion_') {
+                if (window.mmdManager) {
+                    window.mmdManager.stopAnimation();
+                    isMmdAnimationPlaying = false;
+                    updateMMDAnimationPlayButtonIcon();
+                    showStatus(t('live2d.motionStopped', '动作已停止'), 1000);
+                }
+                if (playMmdAnimationBtn) playMmdAnimationBtn.disabled = true;
+                isMmdIdlePlaying = false;
+                stopIdleRotation('mmd');
+                hasUnsavedChanges = true;
+                updateSettingsSnapshot();
                 return;
             }
 
@@ -4526,13 +4565,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             updateVRMExpressionDropdown();
             updateVRMExpressionSelectButtonText();
         } else {
-            vrmExpressionSelect.innerHTML = `<option value="">${t('live2d.vrmExpression.noExpressions', '无可用表情')}</option>`;
-            vrmExpressionSelect.disabled = true;
+            vrmExpressionSelect.disabled = false;
             if (vrmExpressionSelectBtn) {
                 vrmExpressionSelectBtn.disabled = true;
             }
             updateVRMExpressionDropdown();
             updateVRMExpressionSelectButtonText();
+            if (triggerVrmExpressionBtn) triggerVrmExpressionBtn.disabled = true;
         }
     }
 
@@ -4585,6 +4624,20 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (triggerVrmExpressionBtn) {
                     triggerVrmExpressionBtn.disabled = true;
                 }
+                return;
+            }
+
+            // 无表情选项：清除 VRM 表情
+            if (selectedValue === '_no_expression_') {
+                if (vrmManager && vrmManager.expression) {
+                    vrmManager.expression.resetBaseExpression();
+                    isVrmExpressionPlaying = false;
+                    updateVRMExpressionPlayButtonIcon();
+                    showStatus(t('live2d.expressionCleared', '表情已清除'), 1000);
+                }
+                if (triggerVrmExpressionBtn) triggerVrmExpressionBtn.disabled = true;
+                hasUnsavedChanges = true;
+                updateSettingsSnapshot();
                 return;
             }
 
@@ -6277,6 +6330,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             } catch (error) {
                 console.error('停止动作失败:', error);
             }
+            hasUnsavedChanges = true;
+            updateSettingsSnapshot();
             return;
         }
 
@@ -6422,6 +6477,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             e.target.value = '';
             playMotionBtn.disabled = false;
+            hasUnsavedChanges = true;
+            updateSettingsSnapshot();
             return;
         }
 
@@ -6432,6 +6489,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             isMotionPlaying = false;
             updateMotionPlayButtonIcon();
             updateMotionSelectButtonText();
+            hasUnsavedChanges = true;
+            updateSettingsSnapshot();
             return;
         }
 
