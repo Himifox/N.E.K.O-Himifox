@@ -80,6 +80,10 @@ def _maybe_reexec_into_project_venv(project_dir: str) -> None:
     if IS_FROZEN:
         return
 
+    if sys.prefix != sys.base_prefix:
+        return  
+
+
     current_executable = os.path.abspath(sys.executable or "")
     if not current_executable:
         return

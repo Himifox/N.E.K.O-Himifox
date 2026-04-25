@@ -1302,9 +1302,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 textSpanId: 'motion-select-text',
                 iconClass: 'motion-select-icon',
                 iconSrc: '/static/icons/motion_select_icon.png?v=1',
-                defaultText: window.i18next?.t('live2d.selectMotion') || '选择动作',
+                defaultText: window.i18next?.t('live2d.selectMotion') || '动作预览',
                 defaultTextKey: 'live2d.selectMotion',
-                iconAlt: window.i18next?.t('live2d.selectMotion') || '选择动作',
+                iconAlt: window.i18next?.t('live2d.selectMotion') || '动作预览',
                 iconAltKey: 'live2d.selectMotion',
                 shouldSkipOption: (option) => {
                     return option.value === '' && (
@@ -1396,9 +1396,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 textSpanId: 'vrm-animation-select-text',
                 iconClass: 'vrm-animation-select-icon',
                 iconSrc: '/static/icons/motion_select_icon.png?v=1',
-                defaultText: window.i18next?.t('live2d.vrmAnimation.selectAnimation') || '选择动作',
+                defaultText: window.i18next?.t('live2d.vrmAnimation.selectAnimation') || '动作预览',
                 defaultTextKey: 'live2d.vrmAnimation.selectAnimation',
-                iconAlt: window.i18next?.t('live2d.vrmAnimation.selectAnimation') || '选择动作',
+                iconAlt: window.i18next?.t('live2d.vrmAnimation.selectAnimation') || '动作预览',
                 iconAltKey: 'live2d.vrmAnimation.selectAnimation',
                 shouldSkipOption: (option) => {
                     return option.value === '' && (
@@ -1435,9 +1435,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 textSpanId: 'vrm-expression-select-text',
                 iconClass: 'vrm-expression-select-icon',
                 iconSrc: '/static/icons/expression_chosen.png?v=1',
-                defaultText: window.i18next?.t('live2d.vrmExpression.selectExpression') || '选择表情',
+                defaultText: window.i18next?.t('live2d.vrmExpression.selectExpression') || '表情预览',
                 defaultTextKey: 'live2d.vrmExpression.selectExpression',
-                iconAlt: window.i18next?.t('live2d.vrmExpression.selectExpression') || '选择表情',
+                iconAlt: window.i18next?.t('live2d.vrmExpression.selectExpression') || '表情预览',
                 iconAltKey: 'live2d.vrmExpression.selectExpression',
                 shouldSkipOption: (option) => {
                     return option.value === '' && (
@@ -3434,11 +3434,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (vrmAnimationSelect) {
                 // 始终保留"无动作"选项，让用户能清空已保存的动作配置
-                vrmAnimationSelect.innerHTML = `<option value="">${t('live2d.selectMotion', '选择动作')}</option>`;
+                vrmAnimationSelect.innerHTML = `<option value="">${t('live2d.vrmAnimation.selectAnimation', '动作预览')}</option>`;
                 const noMotionOption = document.createElement('option');
                 noMotionOption.value = '_no_motion_';
                 noMotionOption.textContent = t('live2d.noMotion', '无动作');
                 vrmAnimationSelect.appendChild(noMotionOption);
+                const selectMotionOption = document.createElement('option');
+                selectMotionOption.value = '';
+                selectMotionOption.textContent = t('live2d.selectMotion', '选择动作');
+                vrmAnimationSelect.appendChild(selectMotionOption);
 
                 if (vrmAnimations.length > 0) {
                     vrmAnimations.forEach(anim => {
@@ -3539,9 +3543,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (vrmAnimationFileUpload) {
                     vrmAnimationFileUpload.click();
                 }
-                // 重置选择器到第一个选项（保持显示"选择动作"）
+                // 重置选择器到第一个选项（保持显示"动作预览"）
                 e.target.value = '';
-                updateVRMAnimationSelectButtonText(); // 更新按钮文字为"选择动作"
+                updateVRMAnimationSelectButtonText(); // 更新按钮文字为"动作预览"
                 return;
             }
 
@@ -4555,11 +4559,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const expressions = vrmManager.expression.getExpressionList();
 
-        vrmExpressionSelect.innerHTML = `<option value="">${t('live2d.selectExpression', '选择表情')}</option>`;
+        vrmExpressionSelect.innerHTML = `<option value="">${t('live2d.vrmExpression.selectExpression', '表情预览')}</option>`;
         const noExpressionOption = document.createElement('option');
         noExpressionOption.value = '_no_expression_';
         noExpressionOption.textContent = t('live2d.noExpression', '无表情');
         vrmExpressionSelect.appendChild(noExpressionOption);
+        const selectExpressionOption = document.createElement('option');
+        selectExpressionOption.value = '';
+        selectExpressionOption.textContent = t('live2d.selectExpression', '选择表情');
+        vrmExpressionSelect.appendChild(selectExpressionOption);
 
         if (expressions.length > 0) {
             expressions.forEach(name => {
@@ -4626,12 +4634,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         vrmExpressionSelect.addEventListener('change', async (e) => {
             const selectedValue = e.target.value;
 
-            // 如果选择的是第一个选项（空值，即"选择表情"），显示提示（VRM表情通常是内置的）
+            // 如果选择的是第一个选项（空值，即"表情预览"），显示提示（VRM表情通常是内置的）
             if (selectedValue === '') {
                 showStatus(t('live2d.vrmExpression.builtInOnly', 'VRM表情通常是模型内置的，无法单独上传'), 3000);
-                // 重置选择器到第一个选项（保持显示"选择表情"）
+                // 重置选择器到第一个选项（保持显示"表情预览"）
                 e.target.value = '';
-                updateVRMExpressionSelectButtonText(); // 更新按钮文字为"选择表情"
+                updateVRMExpressionSelectButtonText(); // 更新按钮文字为"表情预览"
                 // 禁用播放按钮
                 if (triggerVrmExpressionBtn) {
                     triggerVrmExpressionBtn.disabled = true;
@@ -8110,6 +8118,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     function updateSelectWithOptions(select, options, defaultText, type) {
         const noMotionText = t('live2d.noMotion', '无动作');
         const noExpressionText = t('live2d.noExpression', '无表情');
+        const selectMotionText = t('live2d.selectMotion', '选择动作');
+        const selectExpressionText = t('live2d.selectExpression', '选择表情');
 
         select.innerHTML = '';
         const placeholderOption = document.createElement('option');
@@ -8123,11 +8133,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             noMotionOption.value = '_no_motion_';
             noMotionOption.textContent = noMotionText;
             select.appendChild(noMotionOption);
+
+            const selectMotionOption = document.createElement('option');
+            selectMotionOption.value = '';
+            selectMotionOption.textContent = selectMotionText;
+            select.appendChild(selectMotionOption);
         } else if (type === 'expression') {
             const noExpressionOption = document.createElement('option');
             noExpressionOption.value = '_no_expression_';
             noExpressionOption.textContent = noExpressionText;
             select.appendChild(noExpressionOption);
+
+            const selectExpressionOption = document.createElement('option');
+            selectExpressionOption.value = '';
+            selectExpressionOption.textContent = selectExpressionText;
+            select.appendChild(selectExpressionOption);
         }
 
         options.forEach(opt => {
