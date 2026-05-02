@@ -275,21 +275,18 @@ my_strategy
 
 返回中会包含 `intent`、`action`、`executed`、`needs_confirmation`、`summary` 和底层 `result`。
 
-### `sts2_health_check`
+### `sts2_status`
 
-检查本地尖塔 Agent 服务是否可用。
+统一读取尖塔状态，可选刷新、附带快照或历史。
 
-### `sts2_refresh_state`
+参数：
 
-强制刷新一次当前尖塔状态。
+- `refresh`：可选，默认 `false`。为 `true` 时先检查连接并刷新一次状态。
+- `include_snapshot`：可选，默认 `true`。是否返回最近快照。
+- `include_history`：可选，默认 `false`。是否附带最近历史。
+- `history_limit`：可选，默认 `20`，范围会限制在 `1 ~ 100`。
 
-### `sts2_get_status`
-
-获取连接状态、自动游玩状态、当前模式、角色策略、半自动任务、最近错误、最近动作等信息。
-
-### `sts2_get_snapshot`
-
-获取最近缓存的游戏快照和当前可执行动作。
+默认返回连接状态、自动游玩状态、当前模式、角色策略、半自动任务、最近错误，以及最近快照。
 
 ### `sts2_step_once`
 
@@ -314,14 +311,15 @@ my_strategy
 
 如果当前没有可打出的牌，会返回 `idle`，并推送失败原因。
 
-### `sts2_start_autoplay`
+### `sts2_control`
 
-启动后台半自动游玩循环。
+统一控制自动游玩生命周期。
 
 参数：
 
-- `objective`：可选，用户授权目标。例如：`帮我打这一关`。
-- `stop_condition`：停止条件，默认 `current_floor`。
+- `action`：必填。支持 `start` / `pause` / `resume` / `stop`。
+- `objective`：可选，仅 `start` 时使用。例如：`帮我打这一关`。
+- `stop_condition`：可选，仅 `start` 时使用，默认 `current_floor`。
 
 `stop_condition` 支持：
 
@@ -329,27 +327,7 @@ my_strategy
 - `current_combat` / `combat`：任务期间只要进入过战斗，随后离开战斗后结束。
 - `manual` / `none`：不自动完成，需要手动停止。
 
-启动后插件会创建半自动任务上下文，并向前端推送任务开始事件。任务完成时会推送 `semi_auto_task_completed`。
-
-### `sts2_pause_autoplay`
-
-暂停自动游玩。
-
-### `sts2_resume_autoplay`
-
-恢复已暂停且后台任务仍存在的自动游玩。如果后台任务已经不存在，会安全返回 `idle`，不会隐式重新启动自动游玩。
-
-### `sts2_stop_autoplay`
-
-停止自动游玩并清除半自动任务上下文。
-
-### `sts2_get_history`
-
-获取最近动作和状态历史。
-
-参数：
-
-- `limit`：返回条数，默认 `20`，范围会限制在 `1 ~ 100`。
+`start` 后插件会创建半自动任务上下文，并向前端推送任务开始事件。任务完成时会推送 `semi_auto_task_completed`。
 
 ### `sts2_send_neko_guidance`
 
@@ -361,31 +339,36 @@ my_strategy
 - `step`：可选，对应步数。
 - `type`：可选，默认 `soft_guidance`。
 
-### `sts2_set_mode`
+### `sts2_configure`
 
-设置自动游玩模式。
+统一设置自动游玩模式、角色策略或运行速度，并把速度参数写回本地 `plugin.toml`。
 
 参数：
 
 - `mode`：支持 `full-program` / `全程序`、`half-program` / `半程序`、`full-model` / `全模型`。
-
-### `sts2_set_character_strategy`
-
-设置角色策略名称。
-
-参数：
-
 - `character_strategy`：会经过名称标准化后匹配 `strategies/<name>.md`。例如 `defect` 会匹配 `strategies/defect.md`。
-
-### `sts2_set_speed`
-
-设置速度参数，并写回本地 `plugin.toml`。
-
-参数：
-
 - `action_interval_seconds`
 - `post_action_delay_seconds`
 - `poll_interval_active_seconds`
+
+至少需要提供一个字段。
+
+### 旧入口迁移表
+
+| 旧入口 | 新入口 |
+| --- | --- |
+| `sts2_health_check` | `sts2_status(refresh=true, include_snapshot=false)` |
+| `sts2_refresh_state` | `sts2_status(refresh=true)` |
+| `sts2_get_status` | `sts2_status()` |
+| `sts2_get_snapshot` | `sts2_status(include_snapshot=true)` |
+| `sts2_get_history` | `sts2_status(include_history=true, history_limit=20)` |
+| `sts2_start_autoplay` | `sts2_control(action="start", ...)` |
+| `sts2_pause_autoplay` | `sts2_control(action="pause")` |
+| `sts2_resume_autoplay` | `sts2_control(action="resume")` |
+| `sts2_stop_autoplay` | `sts2_control(action="stop")` |
+| `sts2_set_mode` | `sts2_configure(mode=...)` |
+| `sts2_set_character_strategy` | `sts2_configure(character_strategy=...)` |
+| `sts2_set_speed` | `sts2_configure(action_interval_seconds=..., post_action_delay_seconds=..., poll_interval_active_seconds=...)` |
 
 ## 典型使用方式
 
@@ -393,7 +376,7 @@ my_strategy
 
 1. 启动《Slay the Spire 2》。
 2. 确认 `http://127.0.0.1:8080/health` 可访问。
-3. 在 N.E.K.O 中调用 `sts2_health_check`。
+3. 在 N.E.K.O 中调用 `sts2_status(refresh=true, include_snapshot=false)`。
 
 ### 手动执行一步
 
@@ -432,13 +415,14 @@ sts2_play_one_card_by_neko
 宿主应调用：
 
 ```text
-sts2_start_autoplay
+sts2_control
 ```
 
 推荐参数：
 
 ```json
 {
+  "action": "start",
   "objective": "帮我打这一关",
   "stop_condition": "current_floor"
 }
@@ -533,11 +517,11 @@ sts2_send_neko_guidance
 
 检查 `stop_condition`：
 
-- 如果是 `manual` / `none`，任务不会自动完成，需要调用 `sts2_stop_autoplay`。
+- 如果是 `manual` / `none`，任务不会自动完成，需要调用 `sts2_control(action="stop")`。
 - 如果是 `current_combat`，任务期间只要进入过战斗，随后离开战斗后就会完成。
 - 如果是 `current_floor`，通常在当前楼层完成或进入下一层后完成。
 
-可以调用 `sts2_get_status` 查看 `autoplay.task`。
+可以调用 `sts2_status()` 查看 `autoplay.task`。
 
 ### 事件房、弹窗或过渡态卡住
 
@@ -548,7 +532,7 @@ sts2_send_neko_guidance
 - `choose_event_option`
 - `proceed`
 
-如果仍卡住，先用 `sts2_get_snapshot` 查看当前 `screen` 和 `available_actions`。
+如果仍卡住，先用 `sts2_status(include_snapshot=true)` 查看当前 `screen` 和 `available_actions`。
 
 ### 自动游玩突然暂停或变慢
 
@@ -558,4 +542,4 @@ sts2_send_neko_guidance
 - Boss 战或危险攻击时会减速。
 - 若 `neko_auto_resume_after_low_hp` 为 `true`，血量恢复到 `neko_auto_safe_hp_threshold` 后可能自动恢复。
 
-可调用 `sts2_get_status` 查看状态，或调用 `sts2_resume_autoplay` / `sts2_stop_autoplay` 处理。
+可调用 `sts2_status()` 查看状态，或调用 `sts2_control(action="resume")` / `sts2_control(action="stop")` 处理。

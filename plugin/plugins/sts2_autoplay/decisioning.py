@@ -9,6 +9,27 @@ from typing import Any, Awaitable, Dict, Optional
 
 
 class DecisioningMixin:
+    _NON_COMBAT_SCREEN_FAMILIES = {
+        "card_reward": "reward",
+        "combat_reward": "reward",
+        "rewards": "reward",
+        "reward": "reward",
+        "shop": "shop",
+        "merchant": "shop",
+        "map": "map",
+        "dungeon_map": "map",
+        "rest": "rest",
+        "campfire": "rest",
+        "treasure": "treasure",
+        "boss_treasure": "treasure",
+        "card_selection": "card_selection",
+        "reward_card_selection": "reward_card_selection",
+        "character_select": "character_select",
+        "character_selection": "character_select",
+        "player_select": "character_select",
+        "start": "character_select",
+    }
+
     def _first_present(self, *values: Any, default: Any = None) -> Any:
         for value in values:
             if value is not None:
@@ -266,6 +287,38 @@ class DecisioningMixin:
         if any(k in text_blob for k in {"metallicize", "金属化", "护甲每回合"}):
             state["block_boost"] = state.get("block_boost", 0) + 3
 
+    def _screen_family(self, context: dict[str, Any]) -> str:
+        snapshot = context.get("snapshot") if isinstance(context.get("snapshot"), dict) else {}
+        if bool(snapshot.get("in_combat")):
+            return "combat"
+        if self._is_character_select_context(context):
+            return "character_select"
+        if self._is_reward_card_selection_context(context):
+            return "reward_card_selection"
+        if self._is_rewardish_screen(snapshot):
+            return "reward"
+        screen = self._normalized_screen_name(snapshot)
+        if screen in self._NON_COMBAT_SCREEN_FAMILIES:
+            return self._NON_COMBAT_SCREEN_FAMILIES[screen]
+        if self._is_eventish_screen(screen):
+            return "event"
+        if screen:
+            return "generic_non_combat"
+        return "unknown"
+
+    def _is_reward_card_selection_context(self, context: dict[str, Any]) -> bool:
+        snapshot = context.get("snapshot") if isinstance(context.get("snapshot"), dict) else {}
+        if self._normalized_screen_name(snapshot) != "card_selection":
+            return False
+        raw_state = snapshot.get("raw_state") if isinstance(snapshot.get("raw_state"), dict) else {}
+        reward = raw_state.get("reward") if isinstance(raw_state.get("reward"), dict) else {}
+        selection = raw_state.get("selection") if isinstance(raw_state.get("selection"), dict) else {}
+        if bool(reward.get("pending_card_choice")):
+            return True
+        if str(selection.get("kind") or "").strip().lower() == "deck_card_select" and bool(reward.get("card_options")):
+            return True
+        return False
+
     def _calc_marginal_benefit(self, card: dict[str, Any], state: dict[str, Any], combat: dict[str, Any], tactical: dict[str, Any], strategy_constraints, remaining_cards: Optional[list[dict[str, Any]]] = None) -> float:
         synergy_type = self._detect_card_synergy_type(card, combat)
         energy_cost = self._safe_int(card.get("cost"), 0)
@@ -303,6 +356,73 @@ class DecisioningMixin:
         if synergy_type == "end_turn":
             benefit = 1.0
         return benefit
+
+    def _select_combat_screen_action(self, actions: list[dict[str, Any]], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if self._screen_family(context) != "combat":
+            return None
+        return self._select_action_heuristic(actions, context=context)
+
+    def _select_non_combat_screen_action(self, actions: list[dict[str, Any]], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+        screen_family = self._screen_family(context)
+        if screen_family == "combat":
+            return None
+        if screen_family == "reward":
+            return self._select_reward_action_heuristic(actions, context)
+        if screen_family == "reward_card_selection":
+            return self._select_reward_action_heuristic(actions, context)
+        if screen_family == "shop":
+            return self._select_shop_action_heuristic(actions, context)
+        if screen_family == "card_selection":
+            return self._select_shop_remove_selection_action(actions, context)
+        if screen_family == "map":
+            return self._select_map_screen_action(actions, context)
+        if screen_family in {"event", "rest", "treasure", "character_select", "generic_non_combat"}:
+            return self._select_non_combat_preferred_action(actions, context)
+        return None
+
+    def _select_map_screen_action(self, actions: list[dict[str, Any]], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+        choose_map_node = next(
+            (action for action in actions if isinstance(action, dict) and str(action.get("type") or "") == "choose_map_node"),
+            None,
+        )
+        if not isinstance(choose_map_node, dict):
+            return self._select_non_combat_preferred_action(actions, context)
+        raw = choose_map_node.get("raw") if isinstance(choose_map_node.get("raw"), dict) else {}
+        preferred_option_index = self._find_preferred_map_option_index(raw, context)
+        if preferred_option_index is not None:
+            return {**choose_map_node, "raw": {**raw, "option_index": preferred_option_index}}
+        return choose_map_node
+
+    def _select_non_combat_preferred_action(self, actions: list[dict[str, Any]], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if not actions:
+            return None
+        actions_by_type = {str(action.get("type") or ""): action for action in actions if isinstance(action, dict)}
+        for action_type in (
+            "choose_treasure_relic",
+            "choose_rest_option",
+            "choose_event_option",
+            "choose_map_node",
+            "select_deck_card",
+            "choose_reward_card",
+            "claim_reward",
+            "collect_rewards_and_proceed",
+            "proceed",
+            "confirm",
+            "confirm_modal",
+            "dismiss_modal",
+            "cancel",
+        ):
+            action = actions_by_type.get(action_type)
+            if isinstance(action, dict):
+                return action
+        return next(
+            (
+                action
+                for action in actions
+                if isinstance(action, dict) and str(action.get("type") or "") not in {"wait", "noop", "play_card", "end_turn"}
+            ),
+            actions[0],
+        )
 
     def _select_maximize_benefit_action(self, actions: list[dict[str, Any]], context: dict[str, Any]) -> Optional[dict[str, Any]]:
         combat = self._combat_state(context)
@@ -409,6 +529,16 @@ class DecisioningMixin:
             self._drain_neko_guidance()
             self._log_action_decision(f"{mode}-program-preflight", preemptive_action, decision_context)
             return preemptive_action
+        combat_action = self._select_combat_screen_action(actions, decision_context)
+        if combat_action is not None:
+            self._drain_neko_guidance()
+            self._log_action_decision(f"{mode}-combat-routing", combat_action, decision_context)
+            return combat_action
+        non_combat_action = self._select_non_combat_screen_action(actions, decision_context)
+        if non_combat_action is not None:
+            self._drain_neko_guidance()
+            self._log_action_decision(f"{mode}-screen-routing", non_combat_action, decision_context)
+            return non_combat_action
         if mode == "full-program":
             self._drain_neko_guidance()
             action = self._select_action_heuristic(actions, context=decision_context)
@@ -476,6 +606,16 @@ class DecisioningMixin:
             self._drain_neko_guidance()
             self._log_action_decision(f"{mode}-program-preflight", preemptive_action, decision_context)
             return preemptive_action, None
+        combat_action = self._select_combat_screen_action(actions, decision_context)
+        if combat_action is not None:
+            self._drain_neko_guidance()
+            self._log_action_decision(f"{mode}-combat-routing", combat_action, decision_context)
+            return combat_action, None
+        non_combat_action = self._select_non_combat_screen_action(actions, decision_context)
+        if non_combat_action is not None:
+            self._drain_neko_guidance()
+            self._log_action_decision(f"{mode}-screen-routing", non_combat_action, decision_context)
+            return non_combat_action, None
         if mode == "full-program":
             self._drain_neko_guidance()
             action = self._select_action_heuristic(actions, context=decision_context)

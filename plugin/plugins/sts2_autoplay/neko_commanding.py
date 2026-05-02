@@ -9,11 +9,11 @@ from typing import Any, Awaitable, Dict, Optional
 
 
 class NekoCommandingMixin:
-    def _first_present(self, *values: Any) -> Any:
+    def _first_present(self, *values: Any, default: Any = None) -> Any:
         for value in values:
             if value is not None:
                 return value
-        return None
+        return default
 
     async def neko_command(self, command: str, scope: str = "auto", confirm: bool = False) -> Dict[str, Any]:
         raw_command = str(command or "").strip()
@@ -142,7 +142,21 @@ class NekoCommandingMixin:
         return self._neko_text_has_any(text, ["打一步", "执行一步", "操作一下", "走一步"])
 
     def _is_neko_autoplay_text(self, text: str) -> bool:
-        return self._neko_text_has_any(text, ["打这一关", "打一关", "打一层", "打完这场", "自动打", "托管", "代打"])
+        return self._neko_text_has_any(text, [
+            "打这一关",
+            "打一关",
+            "打一层",
+            "打完这场",
+            "自动打",
+            "自动游玩",
+            "开自动",
+            "开启自动",
+            "开始自动",
+            "帮我自动",
+            "帮我托管",
+            "托管",
+            "代打",
+        ])
 
     def _infer_neko_stop_condition(self, text: str) -> str:
         if self._neko_text_has_any(text, ["这场战斗", "当前战斗", "本场战斗", "打完这场", "只打这场", "这一场"]):

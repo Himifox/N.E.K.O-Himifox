@@ -169,6 +169,9 @@ class ActionExecutionMixin:
     def _combat_player_block(self, combat: dict[str, Any]) -> int:
         return self._combat_analyzer._combat_player_block(combat)
 
+    def _combat_orbs(self, combat: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._combat_analyzer._combat_orb_state(combat)
+
     def _potions(self, context: dict[str, Any]) -> list[dict[str, Any]]:
         return self._context_analyzer._potions(context)
 
@@ -225,6 +228,7 @@ class ActionExecutionMixin:
 
     def _known_option_indices_for_action(self, action_type: str, raw: JsonObject, context: JsonObject) -> list[int]:
         option_sources = {
+            "choose_map_node": lambda: self._map_node_options(context),
             "buy_card": lambda: self._shop_card_options(context),
             "buy_relic": lambda: self._shop_relic_options(context),
             "buy_potion": lambda: self._shop_potion_options(context),
@@ -510,7 +514,17 @@ class ActionExecutionMixin:
         return self._heuristic_selector.find_preferred_card_option_index(raw, context, self)
 
     def _find_preferred_map_option_index(self, raw: dict[str, Any], context: dict[str, Any]) -> Optional[int]:
-        return self._heuristic_selector.find_preferred_map_option_index(raw, context, self)
+        heuristic_selector = getattr(self, "_heuristic_selector", None)
+        if heuristic_selector is not None:
+            preferred = heuristic_selector.find_preferred_map_option_index(raw, context, self)
+            if preferred is not None:
+                return preferred
+        option_indices = _dedupe_ints(
+            option.get("index")
+            for option in self._map_node_options(context)
+            if isinstance(option, Mapping)
+        )
+        return option_indices[0] if option_indices else None
 
     def _score_strategy_map_option_details(self, option: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         return self._heuristic_selector.score_strategy_map_option_details(option, context, self)
@@ -591,6 +605,9 @@ class ActionExecutionMixin:
 
     def _shop_potion_options(self, context: dict[str, Any]) -> list[dict[str, Any]]:
         return self._context_analyzer._shop_potion_options(context)
+
+    def _map_node_options(self, context: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._context_analyzer._build_map_summary(context).get("available_nodes", [])
 
     def _extract_character_options(self, candidate: Any) -> list[dict[str, Any]]:
         return self._context_analyzer._extract_character_options(candidate)

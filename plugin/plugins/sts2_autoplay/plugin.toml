@@ -1,5 +1,5 @@
 [plugin]
-name = "杀戮尖塔猫娘自动陪玩插件"
+name = "杀戮尖塔2陪玩"
 description = "连接本地杀戮尖塔 Agent 服务，读取游戏局面并执行自动游玩、单步操作、出牌建议、自然语言指令、猫娘软指导、局面汇报与实况短评。目前主要支持原版角色。"
 short_description = "杀戮尖塔猫娘自动陪玩与局面汇报"
 version = "0.1.0"
@@ -8,11 +8,20 @@ type = "plugin"
 entry = "plugin.plugins.sts2_autoplay:STS2AutoplayPlugin"
 
 [plugin.author]
-name = "ZhaiJiu、N.E.K.O Team"
+name = "N.E.K.O Team"
 
 [plugin.sdk]
 recommended = ">=0.1.0,<0.2.0"
 supported = ">=0.1.0,<0.3.0"
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.guide]]
+id = "quickstart"
+title = "快速开始"
+entry = "README.md"
+permissions = ["state:read"]
 
 [plugin_runtime]
 enabled = true

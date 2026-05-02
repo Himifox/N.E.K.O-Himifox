@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import math
 import os
 
@@ -205,27 +205,32 @@ class STS2AutoplayPlugin(NekoPluginBase):
         _atomic_write_text(_CONFIG_FILE, updated_text)
         self._cfg = {**self._cfg, **normalized_updates}
 
-    @plugin_entry(id="sts2_health_check", name="检查尖塔服务", description="检查本地尖塔 Agent 服务健康状态。仅在用户明确要求检查尖塔服务健康时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}}, metadata={"agent_auto": False})
-    async def sts2_health_check(self, **_: Any):
-        return await self._run_entry(self._service.health_check)
-
-    @plugin_entry(id="sts2_refresh_state", name="刷新尖塔状态", description="强制刷新一次当前尖塔游戏状态。仅在用户明确要求刷新尖塔状态时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}}, metadata={"agent_auto": False})
-    async def sts2_refresh_state(self, **_: Any):
-        return await self._run_entry(self._service.refresh_state)
-
-    @plugin_entry(id="sts2_get_status", name="获取尖塔状态", description="获取尖塔连接状态、自动游玩状态和最近错误。仅在用户明确要求查看尖塔状态时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}}, metadata={"agent_auto": False})
-    async def sts2_get_status(self, **_: Any):
+    @plugin_entry(id="sts2_status", name="获取尖塔状态", description="获取尖塔连接状态、自动游玩状态、当前快照，并可选刷新或附带历史。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"refresh": {"type": "boolean", "default": False}, "include_snapshot": {"type": "boolean", "default": True}, "include_history": {"type": "boolean", "default": False}, "history_limit": {"type": "integer", "default": _DEFAULT_HISTORY_LIMIT}}, "required": []}, metadata={"agent_auto": False})
+    async def sts2_status(
+        self,
+        refresh: bool = False,
+        include_snapshot: bool = True,
+        include_history: bool = False,
+        history_limit: int = _DEFAULT_HISTORY_LIMIT,
+        **_: Any,
+    ):
         async def action() -> JsonObject:
-            payload = await self._service.get_status()
+            try:
+                raw_limit = int(history_limit)
+            except (TypeError, ValueError):
+                raw_limit = _DEFAULT_HISTORY_LIMIT
+            safe_limit = max(1, min(raw_limit, _MAX_HISTORY_LIMIT))
+            payload = await self._service.get_status_bundle(
+                refresh=bool(refresh),
+                include_snapshot=bool(include_snapshot),
+                include_history=bool(include_history),
+                history_limit=safe_limit,
+            )
             server_state = str(_as_mapping(payload.get("server")).get("state") or "unknown")
             autoplay_state = str(_as_mapping(payload.get("autoplay")).get("state") or "unknown")
             return {**payload, "message": f"{server_state} | autoplay={autoplay_state}"}
 
         return await self._run_entry(action)
-
-    @plugin_entry(id="sts2_get_snapshot", name="获取尖塔快照", description="获取最近缓存的尖塔游戏快照和合法动作。仅在用户明确要求查看尖塔快照或合法动作时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}}, metadata={"agent_auto": False})
-    async def sts2_get_snapshot(self, **_: Any):
-        return await self._run_entry(self._service.get_snapshot)
 
     @plugin_entry(id="sts2_step_once", name="执行一步", description="根据当前策略执行一步尖塔合法动作。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}})
     async def sts2_step_once(self, **_: Any):
@@ -246,71 +251,80 @@ class STS2AutoplayPlugin(NekoPluginBase):
     async def sts2_play_one_card_by_neko(self, objective: Optional[str] = None, **_: Any):
         return await self._run_entry(lambda: self._service.play_one_card_by_neko(objective=objective), finish=True)
 
-    @plugin_entry(id="sts2_start_autoplay", name="开启尖塔游玩", description="由猫娘根据用户请求启动半自动尖塔游玩循环；例如用户说'帮我打这一关'时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"objective": {"type": "string", "description": "用户授权目标，例如：帮我打这一关"}, "stop_condition": {"type": "string", "default": _DEFAULT_STOP_CONDITION, "description": "停止条件：current_floor/current_combat/manual"}}})
-    async def sts2_start_autoplay(self, objective: Optional[str] = None, stop_condition: str = _DEFAULT_STOP_CONDITION, **_: Any):
-        return await self._run_entry(lambda: self._service.start_autoplay(objective=objective, stop_condition=stop_condition), finish=True)
-
-    @plugin_entry(id="sts2_pause_autoplay", name="暂停尖塔游玩", description="暂停后台尖塔自动游玩循环。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}})
-    async def sts2_pause_autoplay(self, **_: Any):
-        return await self._run_entry(self._service.pause_autoplay, finish=True)
-
-    @plugin_entry(id="sts2_resume_autoplay", name="恢复尖塔游玩", description="恢复已暂停的尖塔自动游玩循环。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}})
-    async def sts2_resume_autoplay(self, **_: Any):
-        return await self._run_entry(self._service.resume_autoplay, finish=True)
-
-    @plugin_entry(id="sts2_stop_autoplay", name="停止尖塔游玩", description="停止后台尖塔自动游玩循环。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {}})
-    async def sts2_stop_autoplay(self, **_: Any):
-        return await self._run_entry(self._service.stop_autoplay, finish=True)
-
-    @plugin_entry(id="sts2_get_history", name="获取尖塔历史", description="获取最近尖塔动作和状态历史。仅在用户明确要求查看尖塔历史时调用。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"limit": {"type": "integer", "default": _DEFAULT_HISTORY_LIMIT}}}, metadata={"agent_auto": False})
-    async def sts2_get_history(self, limit: int = _DEFAULT_HISTORY_LIMIT, **_: Any):
-        try:
-            raw_limit = int(limit)
-        except (TypeError, ValueError):
-            raw_limit = _DEFAULT_HISTORY_LIMIT
-        safe_limit = max(1, min(raw_limit, _MAX_HISTORY_LIMIT))
-        return await self._run_entry(lambda: self._service.get_history(limit=safe_limit))
+    @plugin_entry(id="sts2_control", name="控制尖塔游玩", description="控制尖塔自动游玩生命周期：开始、暂停、恢复或停止。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "pause", "resume", "stop"]}, "objective": {"type": "string", "description": "仅 start 时使用的用户目标"}, "stop_condition": {"type": "string", "default": _DEFAULT_STOP_CONDITION, "description": "仅 start 时使用：current_floor/current_combat/manual"}}, "required": ["action"]})
+    async def sts2_control(
+        self,
+        action: Literal["start", "pause", "resume", "stop"],
+        objective: Optional[str] = None,
+        stop_condition: str = _DEFAULT_STOP_CONDITION,
+        **_: Any,
+    ):
+        normalized_action = action.strip().lower()
+        if normalized_action == "start":
+            return await self._run_entry(lambda: self._service.start_autoplay(objective=objective, stop_condition=stop_condition), finish=True)
+        if normalized_action == "pause":
+            return await self._run_entry(self._service.pause_autoplay, finish=True)
+        if normalized_action == "resume":
+            return await self._run_entry(self._service.resume_autoplay, finish=True)
+        if normalized_action == "stop":
+            return await self._run_entry(self._service.stop_autoplay, finish=True)
+        return Err(f"不支持的 control action: {action}")
 
     @plugin_entry(id="sts2_send_neko_guidance", name="发送Neko指导", description="向后台 autoplay 发送猫娘的软指导，会在下一轮决策时被 LLM 参考。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"content": {"type": "string", "description": "猫娘的指导内容，自然语言"}, "step": {"type": "integer", "description": "对应的步数（可选）"}, "type": {"type": "string", "default": _DEFAULT_GUIDANCE_TYPE}}, "required": ["content"]})
     async def sts2_send_neko_guidance(self, content: str, step: Optional[int] = None, type: str = _DEFAULT_GUIDANCE_TYPE, **_: Any):
         guidance = {"content": content.strip(), "step": step, "type": type}
         return await self._run_entry(lambda: self._service.send_neko_guidance(guidance), finish=True)
 
-    @plugin_entry(id="sts2_set_mode", name="设置尖塔模式", description="设置尖塔自动游玩模式。支持 full-program / half-program / full-model。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"mode": {"type": "string", "default": _DEFAULT_MODE}}, "required": ["mode"]})
-    async def sts2_set_mode(self, mode: str, **_: Any):
-        return await self._run_entry(lambda: self._service.set_mode(mode.strip()), finish=True)
-
-    @plugin_entry(id="sts2_set_character_strategy", name="设置角色策略", description="设置角色策略名称。会按 strategies/<name>.md 在策略目录中匹配对应文档。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"character_strategy": {"type": "string", "default": _DEFAULT_CHARACTER_STRATEGY}}, "required": ["character_strategy"]})
-    async def sts2_set_character_strategy(self, character_strategy: str, **_: Any):
-        return await self._run_entry(lambda: self._service.set_character_strategy(character_strategy.strip()), finish=True)
-
-    @plugin_entry(id="sts2_set_speed", name="设置尖塔速度", description="设置动作间隔、动作后等待时间和尖塔活跃轮询间隔。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"action_interval_seconds": {"type": "number"}, "post_action_delay_seconds": {"type": "number"}, "poll_interval_active_seconds": {"type": "number"}}})
-    async def sts2_set_speed(
+    @plugin_entry(id="sts2_configure", name="配置尖塔游玩", description="设置尖塔模式、角色策略或运行速度。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"mode": {"type": "string", "default": _DEFAULT_MODE}, "character_strategy": {"type": "string", "default": _DEFAULT_CHARACTER_STRATEGY}, "action_interval_seconds": {"type": "number"}, "post_action_delay_seconds": {"type": "number"}, "poll_interval_active_seconds": {"type": "number"}}})
+    async def sts2_configure(
         self,
+        mode: Optional[str] = None,
+        character_strategy: Optional[str] = None,
         action_interval_seconds: Optional[float] = None,
         post_action_delay_seconds: Optional[float] = None,
         poll_interval_active_seconds: Optional[float] = None,
         **_: Any,
     ):
         async def action() -> JsonObject:
-            payload = await self._service.set_speed(
-                action_interval_seconds=_optional_finite_float(action_interval_seconds, key="action_interval_seconds"),
-                post_action_delay_seconds=_optional_finite_float(post_action_delay_seconds, key="post_action_delay_seconds"),
-                poll_interval_active_seconds=_optional_finite_float(poll_interval_active_seconds, key="poll_interval_active_seconds"),
-            )
-            try:
-                self._save_speed_overrides(
-                    action_interval_seconds=payload.get("action_interval_seconds"),
-                    post_action_delay_seconds=payload.get("post_action_delay_seconds"),
-                    poll_interval_active_seconds=payload.get("poll_interval_active_seconds"),
+            if (
+                mode is None
+                and character_strategy is None
+                and action_interval_seconds is None
+                and post_action_delay_seconds is None
+                and poll_interval_active_seconds is None
+            ):
+                raise SdkError("至少提供一个配置字段")
+            result: JsonObject = {}
+            if mode is not None:
+                result["mode"] = await self._service.set_mode(mode.strip())
+            if character_strategy is not None:
+                result["character_strategy"] = await self._service.set_character_strategy(character_strategy.strip())
+            if (
+                action_interval_seconds is not None
+                or post_action_delay_seconds is not None
+                or poll_interval_active_seconds is not None
+            ):
+                speed_payload = await self._service.set_speed(
+                    action_interval_seconds=_optional_finite_float(action_interval_seconds, key="action_interval_seconds"),
+                    post_action_delay_seconds=_optional_finite_float(post_action_delay_seconds, key="post_action_delay_seconds"),
+                    poll_interval_active_seconds=_optional_finite_float(poll_interval_active_seconds, key="poll_interval_active_seconds"),
                 )
-            except Exception as exc:
-                self.logger.warning(f"STS2 speed override persistence failed: {exc}")
-                return {
-                    **payload,
-                    "local_save_failed": True,
-                    "warning": f"运行时速度已生效，但写回 plugin.toml 失败: {exc}",
-                }
-            return payload
+                try:
+                    self._save_speed_overrides(
+                        action_interval_seconds=speed_payload.get("action_interval_seconds"),
+                        post_action_delay_seconds=speed_payload.get("post_action_delay_seconds"),
+                        poll_interval_active_seconds=speed_payload.get("poll_interval_active_seconds"),
+                    )
+                except Exception as exc:
+                    self.logger.warning(f"STS2 speed override persistence failed: {exc}")
+                    speed_payload = {
+                        **speed_payload,
+                        "local_save_failed": True,
+                        "warning": f"运行时速度已生效，但写回 plugin.toml 失败: {exc}",
+                    }
+                result["speed"] = speed_payload
+            status = await self._service.get_status()
+            summary = "尖塔配置已更新"
+            return {**result, "status": "ok", "message": summary, "summary": summary, "current": status}
 
         return await self._run_entry(action, finish=True)

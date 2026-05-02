@@ -268,6 +268,34 @@ class STS2AutoplayService(
         )
         return {"status": "ok", "message": summary, "summary": summary, "snapshot": self._snapshot}
 
+    async def get_status_bundle(
+        self,
+        *,
+        refresh: bool = False,
+        include_snapshot: bool = True,
+        include_history: bool = False,
+        history_limit: int = 20,
+    ) -> Dict[str, Any]:
+        health: Dict[str, Any] = {}
+        if refresh:
+            health = await self.health_check()
+            await self.refresh_state()
+        status_payload = await self.get_status()
+        result: Dict[str, Any] = dict(status_payload)
+        if health:
+            result["health"] = health.get("health", health)
+        elif self._server_state == "connected":
+            result["health"] = {"state": self._server_state}
+        if include_snapshot:
+            snapshot_payload = await self.get_snapshot()
+            result["snapshot"] = snapshot_payload.get("snapshot", self._snapshot)
+        if include_history:
+            safe_limit = max(1, min(int(history_limit), 100))
+            history_payload = await self.get_history(limit=safe_limit)
+            result["history"] = history_payload.get("history", [])
+            result["history_limit"] = safe_limit
+        return result
+
     async def step_once(self) -> Dict[str, Any]:
         async with self._step_lock:
             return await self._step_once_locked()

@@ -237,19 +237,63 @@ class ContextFlowMixin:
         actions = context.get("actions") if isinstance(context.get("actions"), list) else []
         return [self._summarize_action(action, context) for action in actions if isinstance(action, dict)]
 
+    def _prepared_action_still_available(self, prepared: dict[str, Any], context: dict[str, Any]) -> bool:
+        actions = context.get("actions") if isinstance(context.get("actions"), list) else []
+        action_type = str(prepared.get("action_type") or "")
+        if action_type == "play_card":
+            kwargs = prepared.get("kwargs") if isinstance(prepared.get("kwargs"), dict) else {}
+            card_index = kwargs.get("card_index")
+            target_index = kwargs.get("target_index")
+            snapshot = context.get("snapshot") if isinstance(context.get("snapshot"), dict) else {}
+            raw_state = snapshot.get("raw_state") if isinstance(snapshot.get("raw_state"), dict) else {}
+            combat = raw_state.get("combat") if isinstance(raw_state.get("combat"), dict) else {}
+            hand = combat.get("hand") if isinstance(combat.get("hand"), list) else []
+            matching_card = next(
+                (
+                    card for card in hand
+                    if isinstance(card, dict)
+                    and card.get("index") == card_index
+                    and bool(card.get("playable"))
+                ),
+                None,
+            )
+            if matching_card is None:
+                return False
+            requires_target = bool(matching_card.get("requires_target"))
+            valid_targets = matching_card.get("valid_target_indices") if isinstance(matching_card.get("valid_target_indices"), list) else []
+            if requires_target:
+                return target_index in valid_targets
+            return target_index is None
+        return any(
+            self._action_fingerprint(action) == prepared["fingerprint"]
+            for action in actions
+            if isinstance(action, dict)
+        )
+
     async def _revalidate_prepared_action(self, prepared: dict[str, Any], context: dict[str, Any]) -> Optional[dict[str, Any]]:
-        actions = context["actions"]
-        if not any(self._action_fingerprint(action) == prepared["fingerprint"] for action in actions if isinstance(action, dict)):
+        if not self._prepared_action_still_available(prepared, context):
             return None
         latest = await self._fetch_step_context()
-        matching_action = next(
-            (action for action in latest["actions"] if isinstance(action, dict) and self._action_fingerprint(action) == prepared["fingerprint"]),
-            None,
-        )
+        if not self._prepared_action_still_available(prepared, latest):
+            return None
+        action_type = str(prepared.get("action_type") or "")
+        if action_type == "play_card":
+            matching_action = next(
+                (
+                    action for action in latest["actions"]
+                    if isinstance(action, dict)
+                    and str(action.get("type") or ((action.get("raw") if isinstance(action.get("raw"), dict) else {}).get("type") or ((action.get("raw") if isinstance(action.get("raw"), dict) else {}).get("name")) or ((action.get("raw") if isinstance(action.get("raw"), dict) else {}).get("action")) or "")) == "play_card"
+                ),
+                None,
+            )
+        else:
+            matching_action = next(
+                (action for action in latest["actions"] if isinstance(action, dict) and self._action_fingerprint(action) == prepared["fingerprint"]),
+                None,
+            )
         if matching_action is None:
             return None
         raw = matching_action.get("raw") if isinstance(matching_action.get("raw"), dict) else {}
-        action_type = str(prepared.get("action_type") or "")
         template_raw = dict(raw)
         if action_type in {"choose_reward_card", "select_deck_card"}:
             template_raw.pop("option_index", None)
