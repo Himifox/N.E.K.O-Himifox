@@ -10,8 +10,14 @@ from typing import Any, Awaitable, Dict, Optional
 
 class AutoplayLoopMixin:
     async def start_autoplay(self, objective: Optional[str] = None, stop_condition: str = "current_floor") -> Dict[str, Any]:
+        replaced_existing_task = False
+        previous_task = dict(self._semi_auto_task) if isinstance(self._semi_auto_task, dict) else None
         if self._autoplay_task and not self._autoplay_task.done():
-            return {"status": "running", "message": "尖塔半自动任务已在运行", "task": self._semi_auto_task, "executed": False}
+            replaced_existing_task = True
+            await self.stop_autoplay(reason="用户重新请求代打，停止旧的半自动任务")
+        if self._autoplay_task and self._autoplay_task.done():
+            self._autoplay_task = None
+        self._last_error = ""
 
         try:
             await self.refresh_state()
@@ -30,7 +36,17 @@ class AutoplayLoopMixin:
         self._autoplay_state = "running"
         self._autoplay_task = asyncio.create_task(self._autoplay_loop())
         self._emit_status()
-        return {"status": "running", "message": "尖塔半自动任务已启动", "task": self._semi_auto_task, "executed": True}
+        message = "尖塔半自动任务已重新启动，旧任务已停止，尚未代表已经执行游戏动作" if replaced_existing_task else "尖塔半自动任务已启动，尚未代表已经执行游戏动作"
+        return {
+            "status": "running",
+            "message": message,
+            "task": self._semi_auto_task,
+            "previous_task": previous_task,
+            "replaced_existing_task": replaced_existing_task,
+            "task_started": True,
+            "action_executed": False,
+            "executed": False,
+        }
 
     async def pause_autoplay(self, reason: str = "用户请求暂停") -> Dict[str, Any]:
         if self._autoplay_task is None or self._autoplay_task.done():
@@ -74,6 +90,7 @@ class AutoplayLoopMixin:
                 pass
             self._autoplay_task = None
         self._autoplay_state = "idle"
+        self._last_error = ""
         self._emit_status()
         try:
             await self._notify_neko_task_event("stopped", task=task, reason=reason)
@@ -119,10 +136,11 @@ class AutoplayLoopMixin:
         while not self._shutdown:
             try:
                 await self.refresh_state()
-                recovered = self._server_state != "connected" or bool(self._last_error)
+                recovered = self._transport_state != "connected" or bool(self._poll_last_error) or bool(self._last_error)
                 self._consecutive_errors = 0
-                self._server_state = "connected"
-                self._last_error = ""
+                self._poll_last_error = ""
+                self._poll_last_success_at = time.time()
+                self._set_transport_state("connected", error="")
                 if recovered:
                     self._emit_status()
             except Exception as exc:
@@ -131,8 +149,11 @@ class AutoplayLoopMixin:
                     max_errors = max(1, int(self._cfg.get("max_consecutive_errors", 3) or 3))
                 except (ValueError, TypeError):
                     max_errors = 3
-                self._server_state = "degraded" if self._consecutive_errors < max_errors else "disconnected"
-                self._last_error = str(exc)
+                next_state = "degraded" if self._consecutive_errors < max_errors else "disconnected"
+                error_text = str(exc)
+                self._poll_last_error = error_text
+                self._poll_last_failure_at = time.time()
+                self._set_transport_state(next_state, error=error_text)
                 self._emit_status()
             try:
                 interval = float(self._cfg.get("poll_interval_active_seconds", 1) if self._autoplay_state == "running" else self._cfg.get("poll_interval_idle_seconds", 3))
@@ -201,6 +222,7 @@ class AutoplayLoopMixin:
             task = dict(self._semi_auto_task) if isinstance(self._semi_auto_task, dict) else None
             self._autoplay_state = "error"
             self._last_error = str(exc)
+            self.logger.exception("尖塔半自动循环异常停止")
             try:
                 await self._maybe_emit_frontend_message(event_type="error", detail=str(exc), snapshot=self._snapshot, priority=7, force=True)
             except Exception as notify_exc:
@@ -210,6 +232,9 @@ class AutoplayLoopMixin:
             except Exception as notify_exc:
                 self.logger.warning(f"终态任务事件通知失败: {notify_exc}")
             self._emit_status()
+        finally:
+            if self._autoplay_task is asyncio.current_task():
+                self._autoplay_task = None
 
     def _build_semi_auto_task(self, *, objective: Optional[str], stop_condition: str) -> Dict[str, Any]:
         snapshot = self._snapshot if isinstance(self._snapshot, dict) else {}

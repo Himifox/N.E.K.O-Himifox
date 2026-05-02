@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections import deque
 from pathlib import Path
@@ -19,9 +20,11 @@ from .context_flow import ContextFlowMixin
 from .decisioning import DecisioningMixin
 from .neko_commanding import NekoCommandingMixin
 from .neko_reporting import NekoReportingMixin
+from .value_helpers import ValueHelpersMixin
 
 
 class STS2AutoplayService(
+    ValueHelpersMixin,
     NekoCommandingMixin,
     NekoReportingMixin,
     ContextFlowMixin,
@@ -29,10 +32,12 @@ class STS2AutoplayService(
     DecisioningMixin,
     ActionExecutionMixin,
 ):
-    def __init__(self, logger, status_reporter: Callable[[dict[str, Any]], None], frontend_notifier: Optional[Callable[..., Any]] = None) -> None:
+    def __init__(self, logger, status_reporter: Callable[[dict[str, Any]], None], frontend_notifier: Optional[Callable[..., Any]] = None, *, sdk_bus: Any = None, sdk_ctx: Any = None) -> None:
         self.logger = logger
         self._report_status = status_reporter
         self._frontend_notifier = frontend_notifier
+        self._sdk_bus = sdk_bus
+        self._sdk_ctx = sdk_ctx
         self._client: Optional[STS2ApiClient] = None
         self._cfg: Dict[str, Any] = {}
         self._snapshot: Dict[str, Any] = {}
@@ -42,8 +47,14 @@ class STS2AutoplayService(
         self._shutdown = False
         self._paused = False
         self._server_state = "disconnected"
+        self._transport_state = "disconnected"
+        self._game_state = "unknown"
+        self._action_state = "none"
         self._autoplay_state = "disabled"
         self._last_error = ""
+        self._poll_last_error = ""
+        self._poll_last_success_at = 0.0
+        self._poll_last_failure_at = 0.0
         self._last_action = ""
         self._last_poll_at = 0.0
         self._last_action_at = 0.0
@@ -67,6 +78,8 @@ class STS2AutoplayService(
         self._last_neko_event_scene = ""
         self._last_neko_event_floor = -1
         self._auto_pause_reason: Optional[str] = None
+        self._recent_user_turns: Deque[Dict[str, Any]] = deque(maxlen=20)
+        self._seen_user_message_ids: set[str] = set()
 
     _MODE_ALIASES = {
         "full-program": "full-program",
@@ -168,6 +181,116 @@ class STS2AutoplayService(
     def _strategies_dir(self) -> Path:
         return Path(__file__).with_name("strategies")
 
+    async def _maybe_await(self, value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    def _read_record_field(self, record: Any, name: str) -> Any:
+        if isinstance(record, dict):
+            return record.get(name)
+        return getattr(record, name, None)
+
+    def _record_to_user_turn(self, record: Any) -> Optional[Dict[str, Any]]:
+        metadata = self._read_record_field(record, "metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        raw = self._read_record_field(record, "raw")
+        if isinstance(raw, dict):
+            raw_metadata = raw.get("metadata")
+            if isinstance(raw_metadata, dict):
+                metadata = {**raw_metadata, **metadata}
+        turn_type = self._read_record_field(record, "turn_type") or metadata.get("turn_type")
+        if str(turn_type or "").strip().lower() != "user":
+            return None
+        content = self._read_record_field(record, "content")
+        if content is None and isinstance(raw, dict):
+            content = raw.get("content")
+        content_text = str(content or "").strip()
+        if not content_text:
+            return None
+        conversation_id = self._read_record_field(record, "conversation_id") or metadata.get("conversation_id")
+        message_id = self._read_record_field(record, "message_id") or self._read_record_field(record, "id") or metadata.get("message_id")
+        timestamp = self._read_record_field(record, "timestamp") or self._read_record_field(record, "time")
+        return {
+            "content": content_text,
+            "conversation_id": str(conversation_id) if conversation_id is not None else None,
+            "timestamp": timestamp,
+            "message_id": str(message_id) if message_id is not None else None,
+            "metadata": dict(metadata),
+        }
+
+    def _remember_user_turns(self, turns: list[Dict[str, Any]]) -> None:
+        for turn in turns:
+            message_id = turn.get("message_id")
+            dedupe_key = str(message_id) if message_id else f"{turn.get('conversation_id') or ''}:{turn.get('timestamp') or ''}:{turn.get('content') or ''}"
+            if dedupe_key in self._seen_user_message_ids:
+                continue
+            self._seen_user_message_ids.add(dedupe_key)
+            self._recent_user_turns.append(turn)
+        if len(self._seen_user_message_ids) > 200:
+            self._seen_user_message_ids = {
+                str(turn.get("message_id") or f"{turn.get('conversation_id') or ''}:{turn.get('timestamp') or ''}:{turn.get('content') or ''}")
+                for turn in self._recent_user_turns
+            }
+
+    def _extract_user_turns(self, records: Any, *, limit: int) -> list[Dict[str, Any]]:
+        if records is None:
+            return []
+        if isinstance(records, dict):
+            items = records.get("items") or records.get("records") or records.get("messages") or []
+        else:
+            items = getattr(records, "items", records)
+        if not isinstance(items, list) and not isinstance(items, tuple):
+            try:
+                items = list(items)
+            except TypeError:
+                items = []
+        turns: list[Dict[str, Any]] = []
+        for record in items:
+            turn = self._record_to_user_turn(record)
+            if turn is not None:
+                turns.append(turn)
+        turns.sort(key=lambda item: float(item.get("timestamp") or 0) if isinstance(item.get("timestamp"), (int, float)) else 0.0)
+        return turns[-max(1, limit):]
+
+    async def _get_recent_user_context(self, conversation_id: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+        max_turns = int(limit or self._cfg.get("message_context_max_user_turns", 3) or 3)
+        max_turns = max(1, min(max_turns, 10))
+        empty = {"latest_user_turn": None, "recent_user_turns": []}
+        if not bool(self._cfg.get("message_context_enabled", True)):
+            return empty
+        if self._sdk_bus is None:
+            cached = list(self._recent_user_turns)[-max_turns:]
+            return {"latest_user_turn": cached[-1] if cached else None, "recent_user_turns": cached}
+
+        turns: list[Dict[str, Any]] = []
+        conversations = getattr(self._sdk_bus, "conversations", None)
+        if conversations is not None:
+            try:
+                if conversation_id and callable(getattr(conversations, "get_by_id", None)):
+                    result = await self._maybe_await(conversations.get_by_id(conversation_id, max_count=max(max_turns * 3, 10), timeout=2.0))
+                else:
+                    result = await self._maybe_await(conversations.get(max_count=max(max_turns * 3, 10), timeout=2.0))
+                turns = self._extract_user_turns(result, limit=max_turns)
+            except Exception as exc:
+                self.logger.debug(f"[sts2_autoplay] SDK conversations user context unavailable: {exc}")
+
+        messages = getattr(self._sdk_bus, "messages", None)
+        if not turns and messages is not None:
+            try:
+                msg_filter = {"conversation_id": conversation_id} if conversation_id else None
+                result = await self._maybe_await(messages.get(plugin_id="*", max_count=max(max_turns * 5, 20), filter=msg_filter, timeout=2.0))
+                turns = self._extract_user_turns(result, limit=max_turns)
+            except Exception as exc:
+                self.logger.debug(f"[sts2_autoplay] SDK messages user context unavailable: {exc}")
+
+        if turns:
+            self._remember_user_turns(turns)
+        else:
+            turns = list(self._recent_user_turns)[-max_turns:]
+        return {"latest_user_turn": turns[-1] if turns else None, "recent_user_turns": turns}
+
     async def startup(self, cfg: Dict[str, Any]) -> None:
         self._cfg = dict(cfg)
         self._cfg["mode"] = self._configured_mode()
@@ -210,13 +333,15 @@ class STS2AutoplayService(
                 self.logger.warning("[sts2_autoplay] shutdown skipped client close because event loop is already closed")
             self._client = None
         self._server_state = "disconnected"
+        self._transport_state = "disconnected"
+        self._game_state = "unknown"
+        self._action_state = "none"
         self._emit_status()
 
     async def health_check(self) -> Dict[str, Any]:
         client = self._require_client()
         data = await client.health()
-        self._server_state = "connected"
-        self._last_error = ""
+        self._set_transport_state("connected", error="")
         self._emit_status()
         message = f"STS2-Agent 已连接: {client.base_url}"
         return {"status": "connected", "message": message, "summary": message, "health": data}
@@ -229,14 +354,20 @@ class STS2AutoplayService(
     async def get_status(self) -> Dict[str, Any]:
         current_mode = self._configured_mode()
         current_character_strategy = self._configured_character_strategy()
+        runtime_state = self._build_runtime_state()
         summary = (
-            f"尖塔服务={self._server_state}，自动游玩={self._autoplay_state}，"
-            f"screen={self._snapshot.get('screen', 'unknown')}，floor={self._snapshot.get('floor', 0)}"
+            f"尖塔服务={self._server_state}，传输={runtime_state['server']['transport_state']}，"
+            f"游戏={runtime_state['game']['state']}，可执行={runtime_state['actionability']['state']}，"
+            f"自动游玩={self._autoplay_state}，screen={self._snapshot.get('screen', 'unknown')}，"
+            f"floor={self._snapshot.get('floor', 0)}"
         )
         return {
             "summary": summary,
             "message": summary,
-            "server": {"state": self._server_state, "base_url": self._cfg.get("base_url", "http://127.0.0.1:8080")},
+            "server": runtime_state["server"],
+            "game": runtime_state["game"],
+            "actionability": runtime_state["actionability"],
+            "poll": runtime_state["poll"],
             "autoplay": {
                 "state": self._autoplay_state,
                 "mode": current_mode,
@@ -417,12 +548,85 @@ class STS2AutoplayService(
             raise RuntimeError("STS2 客户端未初始化")
         return self._client
 
+    def _set_transport_state(self, state: str, *, error: str = "") -> None:
+        self._transport_state = state
+        self._server_state = state
+        self._last_error = error
+
+    def _derive_game_state(self, snapshot: Dict[str, Any]) -> str:
+        screen = str(snapshot.get("screen") or snapshot.get("normalized_screen") or "unknown").strip().lower()
+        if not snapshot or screen in {"", "unknown", "none"}:
+            return "unknown"
+        if bool(snapshot.get("in_combat", False)):
+            return "combat_active"
+        if any(token in screen for token in ["combat", "battle"]):
+            return "combat_active"
+        if any(token in screen for token in ["reward", "card_reward", "combat_reward"]):
+            return "reward"
+        if "map" in screen:
+            return "map"
+        if any(token in screen for token in ["shop", "rest", "event", "boss_relic", "chest"]):
+            return "run_active"
+        if any(token in screen for token in ["menu", "start", "none"]):
+            return "menu"
+        return "run_active"
+
+    def _derive_action_state(self, snapshot: Dict[str, Any]) -> str:
+        actions = snapshot.get("available_actions") if isinstance(snapshot.get("available_actions"), list) else []
+        if not actions:
+            return "none"
+        if any(self._action_type_from_snapshot_action(action) == "play_card" for action in actions if isinstance(action, dict)):
+            return "card_actionable"
+        return "actionable"
+
+    def _action_type_from_snapshot_action(self, action: Dict[str, Any]) -> str:
+        raw = action.get("raw") if isinstance(action.get("raw"), dict) else {}
+        return str(action.get("type") or raw.get("type") or raw.get("name") or raw.get("action") or "")
+
+    def _refresh_runtime_state_from_snapshot(self, snapshot: Optional[Dict[str, Any]] = None) -> None:
+        active_snapshot = snapshot if isinstance(snapshot, dict) else self._snapshot
+        self._game_state = self._derive_game_state(active_snapshot)
+        self._action_state = self._derive_action_state(active_snapshot)
+
+    def _build_runtime_state(self) -> Dict[str, Any]:
+        self._refresh_runtime_state_from_snapshot()
+        base_url = self._cfg.get("base_url", "http://127.0.0.1:8080")
+        return {
+            "server": {
+                "state": self._server_state,
+                "transport_state": self._transport_state,
+                "base_url": base_url,
+                "last_error": self._poll_last_error or self._last_error,
+            },
+            "game": {
+                "state": self._game_state,
+                "screen": self._snapshot.get("screen", "unknown"),
+                "floor": self._snapshot.get("floor", 0),
+                "act": self._snapshot.get("act", 0),
+                "in_combat": self._snapshot.get("in_combat", False),
+            },
+            "actionability": {
+                "state": self._action_state,
+                "available_action_count": self._snapshot.get("available_action_count", 0),
+            },
+            "poll": {
+                "consecutive_errors": self._consecutive_errors,
+                "last_error": self._poll_last_error,
+                "last_success_at": self._poll_last_success_at,
+                "last_failure_at": self._poll_last_failure_at,
+            },
+        }
+
     def _emit_status(self) -> None:
         try:
             current_mode = self._configured_mode()
             current_character_strategy = self._configured_character_strategy()
+            runtime_state = self._build_runtime_state()
             self._report_status({
-                "server": {"state": self._server_state, "base_url": self._cfg.get("base_url", "http://127.0.0.1:8080")},
+                "server": runtime_state["server"],
+                "game": runtime_state["game"],
+                "actionability": runtime_state["actionability"],
+                "poll": runtime_state["poll"],
                 "autoplay": {
                     "state": self._autoplay_state,
                     "mode": current_mode,

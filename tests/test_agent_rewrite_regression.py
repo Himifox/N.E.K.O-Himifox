@@ -684,25 +684,80 @@ def test_task_executor_format_messages_mentions_image_attachments():
     assert "LATEST_USER_REQUEST: 帮我看看这张图哪里报错了 [Attached images: 1]" in output
 
 
+def test_plugin_terminal_status_defaults_and_run_data_overrides():
+    from agent_server import _plugin_terminal_status
+
+    # Default: success → completed, fail → failed.
+    assert _plugin_terminal_status(True, None) == "completed"
+    assert _plugin_terminal_status(False, None) == "failed"
+    assert _plugin_terminal_status(True, {}) == "completed"
+    assert _plugin_terminal_status(False, {}) == "failed"
+
+    # Explicit blocked signals (plugin opts in via run_data).
+    assert _plugin_terminal_status(True, {"status": "clarify", "action": "clarify", "needs_confirmation": True}) == "blocked"
+    assert _plugin_terminal_status(True, {"status": "confirm_required", "needs_confirmation": True}) == "blocked"
+    assert _plugin_terminal_status(True, {"status": "blocked"}) == "blocked"
+
+    # Error signal forces failed even on raw success.
+    assert _plugin_terminal_status(True, {"status": "error"}) == "failed"
+
+    # observation_only bypasses overrides → fall back to raw success.
+    assert _plugin_terminal_status(True, {"status": "error", "observation_only": True}) == "completed"
+    assert _plugin_terminal_status(True, {"status": "blocked", "observation_only": True}) == "completed"
+
+    # executed=False on its own is intentionally NOT enough — many plugins use
+    # it to mean "no game-side card played" while the control op succeeded
+    # (e.g. STS2 stop_autoplay returns status="idle", executed=False after a
+    # real stop). Inferring blocked from that misreports successful ops.
+    assert _plugin_terminal_status(True, {"status": "idle", "executed": False}) == "completed"
+    assert _plugin_terminal_status(True, {"status": "stale", "executed": False}) == "completed"
+    assert _plugin_terminal_status(True, {"status": "ok", "executed": True}) == "completed"
+
+
+def test_callback_instruction_renders_blocked_plugin_result_as_not_executed():
+    from main_logic.core import _build_callback_instruction
+
+    output = _build_callback_instruction(
+        [
+            {
+                "status": "blocked",
+                "source_kind": "plugin",
+                "source_name": "示例插件",
+                "summary": "需要确认后才能执行",
+                "detail": "需要确认后才能执行",
+                "delivery_mode": "proactive",
+            }
+        ],
+        lang="zh",
+        lanlan_name="小天",
+        master_name="主人",
+    )
+
+    assert "未执行" in output
+    assert "说明未执行原因" in output
+    assert "执行失败" not in output
+    assert "需要确认后才能执行" in output
+
+
 def test_task_executor_hides_agent_auto_disabled_plugin_entries():
     from brain.task_executor import DirectTaskExecutor
 
     executor = object.__new__(DirectTaskExecutor)
     plugins = [
         {
-            "id": "sts2_autoplay",
-            "description": "尖塔插件",
+            "id": "demo_plugin",
+            "description": "示例插件",
             "entries": [
-                {"id": "sts2_get_snapshot", "description": "获取快照", "metadata": {"agent_auto": False}},
-                {"id": "sts2_start_autoplay", "description": "开启尖塔游玩"},
+                {"id": "diagnostics_snapshot", "description": "获取诊断快照", "metadata": {"agent_auto": False}},
+                {"id": "start_job", "description": "启动示例任务"},
             ],
         }
     ]
 
     desc = "\n".join(executor._build_plugin_desc_lines(plugins))
-    assert "sts2_get_snapshot" not in desc
-    assert "sts2_start_autoplay" in desc
-    plugin, entry = executor._find_plugin_entry(plugins, "sts2_autoplay", "sts2_get_snapshot")
+    assert "diagnostics_snapshot" not in desc
+    assert "start_job" in desc
+    plugin, entry = executor._find_plugin_entry(plugins, "demo_plugin", "diagnostics_snapshot")
     assert plugin is plugins[0]
     assert entry is None
 
@@ -713,16 +768,16 @@ def test_task_executor_skips_plugin_with_only_agent_hidden_entries():
     executor = object.__new__(DirectTaskExecutor)
     plugins = [
         {
-            "id": "sts2_autoplay",
-            "description": "尖塔插件",
+            "id": "demo_plugin",
+            "description": "示例插件",
             "entries": [
-                {"id": "sts2_get_snapshot", "description": "获取快照", "metadata": {"agent_auto": False}},
+                {"id": "diagnostics_snapshot", "description": "获取诊断快照", "metadata": {"agent_auto": False}},
             ],
         }
     ]
 
     assert executor._build_plugin_desc_lines(plugins) == []
-    plugin, entry = executor._find_plugin_entry(plugins, "sts2_autoplay", "sts2_get_snapshot")
+    plugin, entry = executor._find_plugin_entry(plugins, "demo_plugin", "diagnostics_snapshot")
     assert plugin is plugins[0]
     assert entry is None
 

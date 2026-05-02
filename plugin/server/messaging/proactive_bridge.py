@@ -21,15 +21,9 @@ import os
 import threading
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from plugin.logging_config import get_logger
 from plugin.sdk.shared.core.push_message_schema import AI_BEHAVIOR_VALUES
-
-
-def _is_safe_music_url(value: str) -> bool:
-    parsed = urlparse(value.strip())
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 try:
     import zmq
@@ -230,9 +224,9 @@ class ProactiveBridge:
             action = ui.get("action")
             if action == "media_play_url":
                 url = ui.get("url") or metadata.get("url")
-                if not isinstance(url, str) or not _is_safe_music_url(url):
+                if not isinstance(url, str) or not url.strip():
                     logger.debug(
-                        "ui_action=media_play_url missing or unsafe url; plugin={}",
+                        "ui_action=media_play_url missing url; plugin={}",
                         plugin_id,
                     )
                     continue

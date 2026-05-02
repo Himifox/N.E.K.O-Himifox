@@ -30,9 +30,11 @@ class ContextFlowMixin:
 
     def _publish_snapshot(self, snapshot: Dict[str, Any], *, record_history: bool) -> Dict[str, Any]:
         self._snapshot = snapshot
-        self._server_state = "connected"
-        self._last_error = ""
-        self._last_poll_at = time.time()
+        self._set_transport_state("connected", error="")
+        self._poll_last_error = ""
+        self._poll_last_success_at = time.time()
+        self._refresh_runtime_state_from_snapshot(snapshot)
+        self._last_poll_at = self._poll_last_success_at
         if record_history:
             self._history.appendleft({
                 "type": "snapshot",
@@ -88,6 +90,49 @@ class ContextFlowMixin:
 
     def _kwargs_signature(self, kwargs: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
         return tuple(sorted((str(key), value) for key, value in kwargs.items()))
+
+    def _action_type_from(self, action: dict[str, Any]) -> str:
+        raw = action.get("raw") if isinstance(action.get("raw"), dict) else {}
+        raw_action = raw.get("action")
+        return str(
+            action.get("type")
+            or raw.get("type")
+            or raw.get("name")
+            or (raw_action if isinstance(raw_action, str) else "")
+        )
+
+    def _is_prepared_action_available(self, prepared: dict[str, Any], action: dict[str, Any], context: dict[str, Any]) -> bool:
+        if self._action_fingerprint(action) == prepared.get("fingerprint"):
+            return True
+        action_type = str(prepared.get("action_type") or "")
+        if action_type != self._action_type_from(action):
+            return False
+        kwargs = prepared.get("kwargs") if isinstance(prepared.get("kwargs"), dict) else {}
+        if not kwargs:
+            return False
+        raw = action.get("raw") if isinstance(action.get("raw"), dict) else {}
+        allowed_kwargs = self._allowed_kwargs_for_action(action_type, raw, context)
+        if not allowed_kwargs:
+            return False
+        for key, value in kwargs.items():
+            allowed_values = allowed_kwargs.get(str(key))
+            if allowed_values is None:
+                return False
+            if allowed_values and value not in allowed_values:
+                return False
+        if action_type == "play_card" and hasattr(self, "_validate_play_card_target_combo"):
+            return bool(self._validate_play_card_target_combo(dict(kwargs), context, {"action_type": action_type, "kwargs": kwargs}))
+        return True
+
+    def _matching_prepared_action(self, prepared: dict[str, Any], actions: list[Any], context: dict[str, Any]) -> Optional[dict[str, Any]]:
+        return next(
+            (
+                action
+                for action in actions
+                if isinstance(action, dict) and self._is_prepared_action_available(prepared, action, context)
+            ),
+            None,
+        )
 
     def _state_signature(self, snapshot: dict[str, Any]) -> tuple[Any, ...]:
         raw_state = snapshot.get("raw_state") if isinstance(snapshot.get("raw_state"), dict) else {}
@@ -299,7 +344,10 @@ class ContextFlowMixin:
             template_raw.pop("option_index", None)
         kwargs = self._normalize_action_kwargs(action_type, template_raw, latest)
         if self._kwargs_signature(kwargs) != prepared.get("kwargs_signature"):
-            return None
+            prepared_kwargs = prepared.get("kwargs") if isinstance(prepared.get("kwargs"), dict) else {}
+            if not self._is_prepared_action_available({**prepared, "kwargs": prepared_kwargs}, matching_action, latest):
+                return None
+            kwargs = dict(prepared_kwargs)
         return {**prepared, "action": matching_action, "kwargs": kwargs, "context": latest, "context_signature": latest["signature"]}
 
     async def _await_action_interval(self) -> None:
@@ -316,11 +364,7 @@ class ContextFlowMixin:
                 await asyncio.sleep(delay)
             context = await self._fetch_step_context()
             last_context = context
-            prepared_action_still_available = any(
-                self._action_fingerprint(action) == prepared["fingerprint"]
-                for action in context["actions"]
-                if isinstance(action, dict)
-            )
+            prepared_action_still_available = self._matching_prepared_action(prepared, context["actions"], context) is not None
             if context["signature"] != before_context["signature"]:
                 if not self._is_transitional_context(context) and not prepared_action_still_available:
                     return context

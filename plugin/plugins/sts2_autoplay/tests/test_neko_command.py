@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-
-from plugin.plugins.sts2_autoplay.tests._isolated_loader import load_isolated_sts2_module
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-
-
-STS2AutoplayService = load_isolated_sts2_module("sts2_neko_command_test_pkg", "service").STS2AutoplayService
+from plugin.plugins.sts2_autoplay.service import STS2AutoplayService
 
 
 class DummyLogger:
@@ -59,9 +51,10 @@ class CommandService(STS2AutoplayService):
     async def start_autoplay(self, objective: str | None = None, stop_condition: str = "current_floor") -> dict[str, Any]:
         self.called.append(("start_autoplay", {"objective": objective, "stop_condition": stop_condition}))
         if objective == "自动打一下但是已经在运行":
-            return {"status": "running", "message": "尖塔半自动任务已在运行", "executed": False}
+            self._autoplay_state = "running"
+            return {"status": "running", "message": "尖塔半自动任务已重新启动，旧任务已停止，尚未代表已经执行游戏动作", "task_started": True, "replaced_existing_task": True, "action_executed": False, "executed": False}
         self._autoplay_state = "running"
-        return {"status": "running", "message": "尖塔半自动任务已启动", "executed": True}
+        return {"status": "running", "message": "尖塔半自动任务已启动，尚未代表已经执行游戏动作", "task_started": True, "replaced_existing_task": False, "action_executed": False, "executed": False}
 
     async def pause_autoplay(self, reason: str = "用户请求暂停") -> dict[str, Any]:
         self.called.append(("pause_autoplay", reason))
@@ -114,6 +107,64 @@ def test_neko_command_play_one_card_requires_explicit_wording(service: CommandSe
 
 
 @pytest.mark.unit
+def test_neko_command_short_play_text_routes_to_one_card(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打"))
+    assert result["intent"] == "play_one_card"
+    assert result["executed"] is True
+    assert service.called == [("play_one_card_by_neko", "帮我打")]
+
+
+@pytest.mark.unit
+def test_neko_command_short_play_text_does_not_steal_autoplay_range(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打这一关"))
+    assert result["intent"] == "start_autoplay"
+    assert result["executed"] is False
+    assert service.called == [("start_autoplay", {"objective": "帮我打这一关", "stop_condition": "current_floor"})]
+
+
+@pytest.mark.unit
+def test_neko_command_treats_game_scope_as_auto(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打一张牌", scope="game", confirm=True))
+    assert result["intent"] == "play_one_card"
+    assert result["executed"] is True
+    assert service.called == [("play_one_card_by_neko", "帮我打一张牌")]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("scope", ["game", "play", "unknown_scope"])
+def test_neko_command_scope_aliases_do_not_block_text_intent(service: CommandService, scope: str) -> None:
+    result = run(service.neko_command("帮我打一张牌", scope=scope, confirm=True))
+    assert result["intent"] == "play_one_card"
+    assert result["executed"] is True
+    assert service.called == [("play_one_card_by_neko", "帮我打一张牌")]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("scope", ["one_card", "card", "play_card", "autoplay"])
+def test_neko_command_scope_cannot_escalate_unclear_text_to_action(service: CommandService, scope: str) -> None:
+    result = run(service.neko_command("你看着办", scope=scope, confirm=True))
+    assert result["needs_confirmation"] is True
+    assert result["executed"] is False
+    assert service.called == []
+
+
+@pytest.mark.unit
+def test_neko_command_rejects_llm_scope_escalation_from_single_card_to_autoplay(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打一张牌", scope="autoplay", confirm=True))
+    assert result["intent"] == "play_one_card"
+    assert result["executed"] is True
+    assert service.called == [("play_one_card_by_neko", "帮我打一张牌")]
+
+
+@pytest.mark.unit
+def test_neko_command_rejects_ambiguous_autoplay_scope_without_range(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打牌哦", scope="autoplay", confirm=True))
+    assert result["intent"] == "play_one_card"
+    assert result["executed"] is True
+    assert service.called == [("play_one_card_by_neko", "帮我打牌哦")]
+
+
+@pytest.mark.unit
 def test_neko_command_step_once(service: CommandService) -> None:
     result = run(service.neko_command("执行一步"))
     assert result["intent"] == "step_once"
@@ -125,7 +176,9 @@ def test_neko_command_step_once(service: CommandService) -> None:
 def test_neko_command_autoplay_current_floor_by_default(service: CommandService) -> None:
     result = run(service.neko_command("帮我打这一关"))
     assert result["intent"] == "start_autoplay"
-    assert result["executed"] is True
+    assert result["executed"] is False
+    assert result["result"]["task_started"] is True
+    assert result["result"]["action_executed"] is False
     assert service.called == [("start_autoplay", {"objective": "帮我打这一关", "stop_condition": "current_floor"})]
 
 
@@ -133,7 +186,9 @@ def test_neko_command_autoplay_current_floor_by_default(service: CommandService)
 def test_neko_command_autoplay_current_combat(service: CommandService) -> None:
     result = run(service.neko_command("打完这场战斗"))
     assert result["intent"] == "start_autoplay"
-    assert result["executed"] is True
+    assert result["executed"] is False
+    assert result["result"]["task_started"] is True
+    assert result["result"]["action_executed"] is False
     assert service.called == [("start_autoplay", {"objective": "打完这场战斗", "stop_condition": "current_combat"})]
 
 
@@ -147,11 +202,23 @@ def test_neko_command_manual_autoplay_requires_confirmation(service: CommandServ
 
 
 @pytest.mark.unit
-def test_neko_command_start_autoplay_respects_result_executed_flag(service: CommandService) -> None:
+def test_neko_command_start_autoplay_replacement_is_not_action_executed(service: CommandService) -> None:
     result = run(service.neko_command("自动打一下但是已经在运行"))
     assert result["intent"] == "start_autoplay"
     assert result["executed"] is False
+    assert result["result"]["task_started"] is True
+    assert result["result"]["replaced_existing_task"] is True
+    assert "已在运行" not in result["message"]
     assert service.called == [("start_autoplay", {"objective": "自动打一下但是已经在运行", "stop_condition": "current_floor"})]
+
+
+@pytest.mark.unit
+def test_neko_command_start_autoplay_task_started_is_not_action_executed(service: CommandService) -> None:
+    result = run(service.neko_command("帮我打这一关"))
+    assert result["intent"] == "start_autoplay"
+    assert result["executed"] is False
+    assert result["result"]["task_started"] is True
+    assert result["result"]["action_executed"] is False
 
 
 @pytest.mark.unit
@@ -233,3 +300,46 @@ def test_neko_command_unknown_is_conservative(service: CommandService) -> None:
     assert result["needs_confirmation"] is True
     assert result["executed"] is False
     assert service.called == []
+
+
+@pytest.mark.unit
+def test_neko_command_entry_prefers_ctx_latest_user_request_over_llm_command() -> None:
+    """sts2_neko_command 必须优先用 framework 注入的 _ctx[latest_user_request]
+    （= 用户原文），而不是 LLM 决策出来的可能被改写的 command 参数；
+    没有 _ctx 或 _ctx 为空白时回落到 command。"""
+    from types import SimpleNamespace
+    from plugin.plugins.sts2_autoplay import STS2AutoplayPlugin
+
+    plugin = object.__new__(STS2AutoplayPlugin)
+    captured: dict[str, str] = {}
+
+    async def fake_neko_command(*, command: str, scope: str, confirm: bool) -> dict[str, Any]:
+        captured["command"] = command
+        captured["scope"] = scope
+        captured["confirm"] = str(confirm)
+        return {"status": "ok", "summary": "x", "executed": False}
+
+    async def fake_run_entry(factory: Any, *, finish: bool = False) -> Any:
+        return await factory()
+
+    plugin._service = SimpleNamespace(neko_command=fake_neko_command)
+    plugin._run_entry = fake_run_entry
+
+    run(plugin.sts2_neko_command(
+        command="LLM rewritten phrasing",
+        scope="auto",
+        _ctx={"latest_user_request": "帮我打一张牌"},
+    ))
+    assert captured["command"] == "帮我打一张牌"
+
+    captured.clear()
+    run(plugin.sts2_neko_command(command="LLM rewritten phrasing", scope="auto"))
+    assert captured["command"] == "LLM rewritten phrasing"
+
+    captured.clear()
+    run(plugin.sts2_neko_command(
+        command="LLM fallback",
+        scope="auto",
+        _ctx={"latest_user_request": "   "},
+    ))
+    assert captured["command"] == "LLM fallback"

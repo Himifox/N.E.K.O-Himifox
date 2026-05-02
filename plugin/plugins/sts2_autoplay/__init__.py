@@ -82,6 +82,8 @@ class STS2AutoplayPlugin(NekoPluginBase):
             self.logger,
             self.report_status,
             self._push_frontend_notification,
+            sdk_bus=self.bus,
+            sdk_ctx=self.ctx,
         )
 
     @lifecycle(id="startup")
@@ -147,7 +149,7 @@ class STS2AutoplayPlugin(NekoPluginBase):
         try:
             payload = await action()
             if finish:
-                return await self.finish(data=payload, reply=False, message=_summary_from(payload))
+                return await self.finish(data=payload, delivery="proactive", message=_summary_from(payload))
             return Ok(payload)
         except SdkError as error:
             self.logger.warning(f"STS2 plugin entry failed: {error}")
@@ -164,15 +166,33 @@ class STS2AutoplayPlugin(NekoPluginBase):
         metadata: JsonObject,
         priority: int = _DEFAULT_PRIORITY,
         message_type: str = _DEFAULT_MESSAGE_TYPE,
+        visibility: list[str] | None = None,
+        ai_behavior: str | None = None,
     ) -> None:
-        self.push_message(
-            source=_SOURCE_ID,
-            message_type=message_type,
-            description=description,
-            priority=priority,
-            content=content,
-            metadata=dict(metadata),
-        )
+        kwargs: dict[str, Any] = {
+            "source": _SOURCE_ID,
+            "priority": priority,
+            "metadata": dict(metadata),
+        }
+        if visibility is not None or ai_behavior is not None:
+            kwargs.update(
+                {
+                    "visibility": visibility if visibility is not None else [],
+                    "ai_behavior": ai_behavior or "blind",
+                    "parts": [{"type": "text", "text": content}],
+                }
+            )
+            kwargs["metadata"]["description"] = description
+            kwargs["metadata"]["message_type"] = message_type
+        else:
+            kwargs.update(
+                {
+                    "message_type": message_type,
+                    "description": description,
+                    "content": content,
+                }
+            )
+        self.push_message(**kwargs)
 
     def _save_speed_overrides(
         self,
@@ -237,17 +257,23 @@ class STS2AutoplayPlugin(NekoPluginBase):
         return await self._run_entry(self._service.step_once, finish=True)
 
     @plugin_entry(id="sts2_neko_command", name="尖塔猫娘指令", description="杀戮尖塔普通用户自然语言总入口。用户没有明确指定底层工具时优先调用本入口；它会根据用户原话自动判断查看状态、给建议、打一张牌、执行一步、开启自动游玩、暂停、恢复、停止或发送软指导。默认咨询不操作，只有用户明确授权时才执行游戏动作。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"command": {"type": "string", "description": "用户原话，例如：这回合怎么打、帮我打一张牌、先防一下、暂停一下"}, "scope": {"type": "string", "default": _DEFAULT_SCOPE, "description": "可选意图提示：auto/status/advice/one_card/one_action/autoplay/control/guidance"}, "confirm": {"type": "boolean", "default": False, "description": "是否已确认允许持续托管等高风险操作"}}, "required": ["command"]})
-    async def sts2_neko_command(self, command: str, scope: str = _DEFAULT_SCOPE, confirm: bool = False, **_: Any):
+    async def sts2_neko_command(self, command: str, scope: str = _DEFAULT_SCOPE, confirm: bool = False, **kwargs: Any):
+        # 内部 NL 决策（intent classifier）必须看用户原文：连词、语气、限定都决定意图。
+        # framework 在 _ctx["latest_user_request"] 里放了原话；direct-call 路径没有就
+        # fallback 到 LLM 给的 command。
+        ctx_obj = kwargs.get("_ctx") if isinstance(kwargs.get("_ctx"), dict) else {}
+        raw_user_request = str(ctx_obj.get("latest_user_request") or "").strip()
+        effective_command = raw_user_request or command.strip()
         return await self._run_entry(
-            lambda: self._service.neko_command(command=command.strip(), scope=scope, confirm=confirm),
+            lambda: self._service.neko_command(command=effective_command, scope=scope, confirm=confirm),
             finish=True,
         )
 
-    @plugin_entry(id="sts2_recommend_one_card_by_neko", name="猫娘推荐一张牌", description="当用户询问杀戮尖塔当前打哪张牌好、帮忙看看出牌建议时调用：插件只会读取玩家/手牌/敌人状态并推荐一张 play_card，说明理由，不会自动打出卡牌。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"objective": {"type": "string", "description": "用户咨询目标，例如：帮我看看当前打哪张牌好"}}})
+    @plugin_entry(id="sts2_recommend_one_card_by_neko", name="猫娘推荐一张牌", description="当用户询问杀戮尖塔当前打哪张牌好、帮忙看看出牌建议时调用：插件只会读取玩家/手牌/敌人状态并推荐一张 play_card，说明理由，不会自动打出卡牌。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"objective": {"type": "string", "description": "用户咨询目标，例如：帮我看看当前打哪张牌好"}}}, metadata={"agent_auto": False})
     async def sts2_recommend_one_card_by_neko(self, objective: Optional[str] = None, **_: Any):
         return await self._run_entry(lambda: self._service.recommend_one_card_by_neko(objective=objective), finish=True)
 
-    @plugin_entry(id="sts2_play_one_card_by_neko", name="猫娘选择并打出一张牌", description="仅当用户明确授权插件实际操作、自动打出、代打或说帮我选一张牌打出去时调用：插件会读取玩家/手牌/敌人状态，选择一张 play_card，先通知将要打出的卡牌和理由，然后执行出牌。用户只是问打哪张牌好、想要建议时不要调用本入口，应调用 sts2_recommend_one_card_by_neko。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"objective": {"type": "string", "description": "用户授权目标，例如：帮我选一张牌打出去"}}})
+    @plugin_entry(id="sts2_play_one_card_by_neko", name="猫娘选择并打出一张牌", description="仅当用户明确授权插件实际操作、自动打出、代打或说帮我选一张牌打出去时调用：插件会读取玩家/手牌/敌人状态，选择一张 play_card，先通知将要打出的卡牌和理由，然后执行出牌。用户只是问打哪张牌好、想要建议时不要调用本入口，应调用 sts2_recommend_one_card_by_neko。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"objective": {"type": "string", "description": "用户授权目标，例如：帮我选一张牌打出去"}}}, metadata={"agent_auto": False})
     async def sts2_play_one_card_by_neko(self, objective: Optional[str] = None, **_: Any):
         return await self._run_entry(lambda: self._service.play_one_card_by_neko(objective=objective), finish=True)
 
@@ -270,7 +296,7 @@ class STS2AutoplayPlugin(NekoPluginBase):
             return await self._run_entry(self._service.stop_autoplay, finish=True)
         return Err(f"不支持的 control action: {action}")
 
-    @plugin_entry(id="sts2_send_neko_guidance", name="发送Neko指导", description="向后台 autoplay 发送猫娘的软指导，会在下一轮决策时被 LLM 参考。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"content": {"type": "string", "description": "猫娘的指导内容，自然语言"}, "step": {"type": "integer", "description": "对应的步数（可选）"}, "type": {"type": "string", "default": _DEFAULT_GUIDANCE_TYPE}}, "required": ["content"]})
+    @plugin_entry(id="sts2_send_neko_guidance", name="发送Neko指导", description="向后台 autoplay 发送猫娘的软指导，会在下一轮决策时被 LLM 参考。", llm_result_fields=["summary"], input_schema={"type": "object", "properties": {"content": {"type": "string", "description": "猫娘的指导内容，自然语言"}, "step": {"type": "integer", "description": "对应的步数（可选）"}, "type": {"type": "string", "default": _DEFAULT_GUIDANCE_TYPE}}, "required": ["content"]}, metadata={"agent_auto": False})
     async def sts2_send_neko_guidance(self, content: str, step: Optional[int] = None, type: str = _DEFAULT_GUIDANCE_TYPE, **_: Any):
         guidance = {"content": content.strip(), "step": step, "type": type}
         return await self._run_entry(lambda: self._service.send_neko_guidance(guidance), finish=True)
