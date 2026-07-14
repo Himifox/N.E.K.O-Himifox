@@ -177,4 +177,15 @@ def create_default_turn_dispatcher(
             )
         )
     )
+    try:
+        from main_logic.proactive_recommendation_feedback import (
+            ProactiveRecommendationFeedbackTurnSink,
+        )
+        dispatcher.add_sink(ProactiveRecommendationFeedbackTurnSink())
+    except Exception:
+        logger.debug(
+            "[%s] proactive recommendation feedback sink unavailable",
+            lanlan_name,
+            exc_info=True,
+        )
     return dispatcher

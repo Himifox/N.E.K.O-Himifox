@@ -15,6 +15,10 @@
 
 """Mini-game invitation and proactive-source decay settings."""
 
+import os
+
+from .network import _read_str_env
+
 MINI_GAME_INVITE_ENABLED = True
 """Mini-game 邀请短路通道总开关（默认开）。
 - 用途：proactive_chat 在过完 propensity / skip_probability / restricted_screen_only
@@ -115,6 +119,43 @@ PROACTIVE_SOURCE_HALF_LIFE_DEFAULT = 3 * 86400.0
 PROACTIVE_SOURCE_FORGET_P = 0.05
 """p_skip 跌破此阈值即从衰减历史中遗忘（让文件体积自然有界）。
 - 当前参数下：music ≈ 4.5d 后遗忘，web/image ≈ 13d 后遗忘。"""
+
+PROACTIVE_RECOMMENDATION_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_MODE",
+    "shadow",
+    allowed=("shadow", "off", "active_source"),
+)
+"""Lightweight proactive recommendation layer mode."""
+
+try:
+    PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP = max(
+        0.0,
+        float(os.getenv("PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP", "0.05")),
+    )
+except (TypeError, ValueError):
+    PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP = 0.05
+"""Minimum top1-top2 material score gap required for active_source bias."""
+
+PROACTIVE_RECOMMENDATION_OBSERVATION_LOG = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_OBSERVATION_LOG",
+    "off",
+    allowed=("off", "jsonl"),
+)
+"""Optional local observation sink for proactive recommendation decisions."""
+
+PROACTIVE_RECOMMENDATION_FEEDBACK_LOG = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_FEEDBACK_LOG",
+    "off",
+    allowed=("off", "jsonl"),
+)
+"""Optional local feedback sink for proactive recommendation reactions."""
+
+PROACTIVE_RECOMMENDATION_TUNING_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_TUNING_MODE",
+    "off",
+    allowed=("off", "manual", "auto_safe"),
+)
+"""Optional local source-score tuning mode for proactive recommendations."""
 
 EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。

@@ -52,6 +52,7 @@ from .proactive_history import (
     _increment_proactive_chat_total,
     _is_recent_proactive_material,
     _is_similar_to_recent_proactive_chat,
+    _proactive_chat_history,
     _proactive_material_key,
     _record_invite_delivery_persistent,
     _record_proactive_chat,
@@ -101,7 +102,8 @@ import json
 import random
 import re
 import time
-from typing import Any
+from collections import deque
+from typing import Any, Mapping
 from uuid import uuid4
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -143,6 +145,31 @@ from config import (
     ANTI_REPEAT_EXEMPT_SOURCE_TAGS,
     MINI_GAME_INVITE_ENABLED,
     MINI_GAME_INVITE_FORCE_GAME_TYPE,
+    PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
+    PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
+    PROACTIVE_RECOMMENDATION_MODE,
+    PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_TUNING_MODE,
+)
+from main_logic.proactive_recommendation import (
+    ProactiveRecommendationContext,
+    build_active_source_bias,
+    build_phase1_material_shadow_decision,
+    build_recommendation_observation,
+    build_shadow_recommendation_decision,
+    reorder_phase1_topics_for_bias,
+)
+from main_logic.proactive_recommendation_feedback import (
+    music_feedback_event_type,
+    record_feedback_event,
+    register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation_observer import (
+    append_recommendation_observation_jsonl,
+)
+from main_logic.proactive_recommendation_tuning import (
+    load_recommendation_tuning,
+    tuning_public_status,
 )
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_directives import render_regen_avoid_instruction, render_format_fix_instruction
@@ -219,6 +246,128 @@ _PHASE1_FETCH_PER_SOURCE = PROACTIVE_PHASE1_FETCH_PER_SOURCE  # Phase 1 每个�
 
 
 _PHASE1_TOTAL_TOPIC_TARGET = PROACTIVE_PHASE1_TOTAL_TOPICS  # Phase 1 输入给筛选模型的总候选目标条数
+
+
+_proactive_recommendation_shadow_history: dict[str, deque] = {}
+_PROACTIVE_RECOMMENDATION_SHADOW_HISTORY_MAX = 20
+
+
+def _record_proactive_recommendation_shadow_selection(
+    lanlan_name: str,
+    decision: Any,
+    *,
+    now: float | None = None,
+) -> None:
+    selected = getattr(decision, "selected_candidate", None)
+    source_type = getattr(selected, "source_type", None)
+    candidate_id = getattr(selected, "id", None)
+    if not source_type and not candidate_id:
+        return
+    history = _proactive_recommendation_shadow_history.get(lanlan_name)
+    if history is None:
+        history = deque(maxlen=_PROACTIVE_RECOMMENDATION_SHADOW_HISTORY_MAX)
+        _proactive_recommendation_shadow_history[lanlan_name] = history
+    history.append(
+        {
+            "ts": time.time() if now is None else now,
+            "source_type": str(source_type or ""),
+            "candidate_id": str(candidate_id or ""),
+        }
+    )
+
+
+def _recent_proactive_recommendation_shadow_sources(lanlan_name: str) -> list[str]:
+    return [
+        str(item.get("source_type") or "")
+        for item in _proactive_recommendation_shadow_history.get(lanlan_name, ())
+        if isinstance(item, Mapping) and item.get("source_type")
+    ]
+
+
+def _recent_proactive_recommendation_shadow_candidate_ids(lanlan_name: str) -> list[str]:
+    return [
+        str(item.get("candidate_id") or "")
+        for item in _proactive_recommendation_shadow_history.get(lanlan_name, ())
+        if isinstance(item, Mapping) and item.get("candidate_id")
+    ]
+
+
+def _load_proactive_recommendation_tuning_adjustments() -> dict[str, float]:
+    if PROACTIVE_RECOMMENDATION_TUNING_MODE not in ("manual", "auto_safe"):
+        return {}
+    try:
+        config_dir = getattr(get_config_manager(), "config_dir", None)
+        status = tuning_public_status(load_recommendation_tuning(config_dir=config_dir))
+        if not status.get("enabled"):
+            return {}
+        return {
+            str(source): float(adjustment)
+            for source, adjustment in (status.get("source_type_adjustment") or {}).items()
+        }
+    except Exception as exc:
+        logger.debug("proactive recommendation tuning load failed: %s", exc)
+        return {}
+
+
+def _record_proactive_recommendation_observation(
+    decision: Any,
+    *,
+    lanlan_name: str,
+    response_body: dict[str, Any],
+    recommendation_mode: str,
+    active_bias: Any = None,
+    observation_log_mode: str = "off",
+    config_dir: Any | None = None,
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    """Build and optionally persist the finalized recommendation observation."""
+    if decision is None:
+        return None
+    observation = build_recommendation_observation(
+        decision,
+        recommendation_mode=recommendation_mode,
+        active_bias=active_bias,
+        action=response_body.get("action"),
+        reason_code=response_body.get("reason_code"),
+        stage=response_body.get("stage"),
+        source_mode=response_body.get("source_mode"),
+        channel=response_body.get("channel"),
+        source_tag=response_body.get("source_tag"),
+        active_channels=response_body.get("active_channels"),
+        source_links=response_body.get("source_links"),
+        ts=time.time() if ts is None else ts,
+        lanlan_name=lanlan_name,
+        turn_id=response_body.get("turn_id"),
+    )
+    logger.info(
+        "[%s] proactive recommendation observation: %s",
+        lanlan_name,
+        json.dumps(observation, ensure_ascii=False),
+    )
+    if observation_log_mode == "jsonl":
+        append_recommendation_observation_jsonl(
+            observation,
+            log_mode=observation_log_mode,
+            config_dir=config_dir,
+        )
+    register_pending_feedback_from_observation(
+        observation,
+        log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
+        config_dir=config_dir,
+    )
+    try:
+        _record_proactive_recommendation_shadow_selection(
+            lanlan_name,
+            decision,
+            now=observation.get("ts"),
+        )
+    except Exception as exc:
+        logger.debug(
+            "[%s] proactive recommendation shadow history record failed: %s",
+            lanlan_name,
+            exc,
+        )
+    return observation
 
 
 def _open_threads_for_activity_state(activity_snapshot, fresh_open_threads) -> list[str]:
@@ -523,6 +672,9 @@ async def proactive_chat(request: Request):
         _focus_phase2_reached = False
         _focus_episode_token = None
         _focus_turn_token = None
+        shadow_recommendation_decision = None
+        material_recommendation_decision = None
+        active_recommendation_bias = None
 
         async def _end_proactive(resp: JSONResponse) -> JSONResponse:
             """Wraps every normal/short-circuit proactive exit: idempotently fires PROACTIVE_DONE.
@@ -546,6 +698,20 @@ async def proactive_chat(request: Request):
             if not isinstance(body, dict):
                 return resp
             body = _ensure_proactive_reason_code(body)
+            final_recommendation_decision = material_recommendation_decision or shadow_recommendation_decision
+            if PROACTIVE_RECOMMENDATION_MODE != "off" and final_recommendation_decision is not None:
+                try:
+                    _record_proactive_recommendation_observation(
+                        final_recommendation_decision,
+                        lanlan_name=lanlan_name,
+                        response_body=body,
+                        recommendation_mode=PROACTIVE_RECOMMENDATION_MODE,
+                        active_bias=active_recommendation_bias,
+                        observation_log_mode=PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+                        config_dir=getattr(get_config_manager(), "config_dir", None),
+                    )
+                except Exception as _rec_err:
+                    logger.debug("[%s] proactive recommendation observation failed: %s", lanlan_name, _rec_err)
             # text-mode 占坑后的所有出口都经过这里。本轮最终没把话说出来
             # （action != "chat"：各种 guard/skip/内容为空/被用户接管）就在
             # info 留一条带原因的日志，原因取响应体 message（无则 error）。
@@ -1631,6 +1797,7 @@ async def proactive_chat(request: Request):
         weight_candidates = list(non_vision_modes)
         if _surfaced_reflection_ids:
             weight_candidates.append('reminiscence')
+        source_weights: dict[str, float] = {}
         if weight_candidates:
             source_weights = _compute_source_weights(lanlan_name, weight_candidates)
             suppressed = _filter_sources_by_weight(source_weights)
@@ -1721,6 +1888,31 @@ async def proactive_chat(request: Request):
         # 合并 Phase 1 LLM 调用：web 筛选 + music 关键词 + meme 关键词
         # 一次 LLM 调用完成所有任务，降低 RPM
         # ============================================================
+        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+            try:
+                shadow_ctx = ProactiveRecommendationContext(
+                    lanlan_name=lanlan_name,
+                    enabled_modes=tuple(enabled_modes),
+                    source_weights=source_weights,
+                    source_type_adjustments=_load_proactive_recommendation_tuning_adjustments(),
+                    recent_sources=[
+                        str(entry[2])
+                        for entry in _proactive_chat_history.get(lanlan_name, ())
+                        if len(entry) > 2 and entry[2]
+                    ],
+                    recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
+                    recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
+                    privacy_state="open" if activity_snapshot is not None else "unknown",
+                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    mini_game_available=MINI_GAME_INVITE_ENABLED,
+                )
+                shadow_recommendation_decision = build_shadow_recommendation_decision(
+                    shadow_ctx,
+                    sources,
+                )
+            except Exception as _rec_err:
+                logger.debug("[%s] proactive recommendation shadow decision failed: %s", lanlan_name, _rec_err)
+
         has_music_task = bool(music_content and music_content.get('placeholder'))
         has_meme_task = bool(meme_content and meme_content.get('placeholder'))
         has_web_task = bool(merged_web_content)
@@ -2036,6 +2228,45 @@ async def proactive_chat(request: Request):
         
         # 收集各通道结果
         active_channels = [ch for ch, _ in phase1_topics]
+        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+            try:
+                material_ctx = ProactiveRecommendationContext(
+                    lanlan_name=lanlan_name,
+                    enabled_modes=tuple(enabled_modes),
+                    source_weights=source_weights,
+                    source_type_adjustments=_load_proactive_recommendation_tuning_adjustments(),
+                    recent_sources=[
+                        str(entry[2])
+                        for entry in _proactive_chat_history.get(lanlan_name, ())
+                        if len(entry) > 2 and entry[2]
+                    ],
+                    recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
+                    recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
+                    privacy_state="open" if activity_snapshot is not None else "unknown",
+                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    mini_game_available=MINI_GAME_INVITE_ENABLED,
+                )
+                material_recommendation_decision = build_phase1_material_shadow_decision(
+                    material_ctx,
+                    phase1_topics=phase1_topics,
+                    selected_web_link=selected_web_link,
+                    selected_music_link=selected_music_link,
+                    selected_meme_link=selected_meme_link,
+                    vision_content=vision_content,
+                    active_channels=active_channels,
+                )
+                if PROACTIVE_RECOMMENDATION_MODE == "active_source":
+                    active_recommendation_bias = build_active_source_bias(
+                        material_recommendation_decision,
+                        min_score_gap=PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
+                    )
+                    phase1_topics = reorder_phase1_topics_for_bias(
+                        phase1_topics,
+                        active_recommendation_bias,
+                    )
+                    active_channels = [ch for ch, _ in phase1_topics]
+            except Exception as _rec_err:
+                logger.debug("[%s] proactive recommendation material decision failed: %s", lanlan_name, _rec_err)
         print(f"[{lanlan_name}] Phase 1 结果: phase1_topics={phase1_topics}, vision_content={'有' if vision_content else '无'}")
         web_topic = None
         music_topic = None
@@ -3232,6 +3463,20 @@ async def proactive_music_played_through(request: Request):
     if not lanlan_name:
         return JSONResponse({"success": False, "error": "lanlan_name missing"}, status_code=400)
     cleared = _clear_channel_from_proactive_history(lanlan_name, 'music')
+    turn_id = str(data.get("turn_id") or "").strip()
+    if turn_id:
+        record_feedback_event(
+            lanlan_name=lanlan_name,
+            turn_id=turn_id,
+            event_type=music_feedback_event_type(played_through=True),
+            source_type="music",
+            metadata={
+                "completion_ratio": 1.0,
+                "reason": "played_through",
+            },
+            log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
+            config_dir=getattr(get_config_manager(), "config_dir", None),
+        )
     if cleared:
         logger.info(f"[{lanlan_name}] 音乐完整播放，重置 music 通道权重衰减（清空 {cleared} 条）")
     return JSONResponse({"success": True, "cleared": cleared, "lanlan_name": lanlan_name})

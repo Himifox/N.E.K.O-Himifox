@@ -69,6 +69,7 @@
     let currentPlayingTrack = null;
     let currentMusicPlaybackId = null;
     let currentMusicOwnerStartedAt = 0;
+    let currentMusicFeedbackMeta = null;
     let localPlayer = null;
     let musicCardMessageId = null;
     let aplayerLoadPromise = null;
@@ -1570,6 +1571,78 @@
         consecutiveSkipCount = 0;
     }
 
+    function normalizeProactiveMusicFeedbackOptions(options) {
+        options = options || {};
+        if (options.source !== 'proactive') return null;
+        const turnId = String(options.turnId || options.turn_id || '').trim();
+        if (!turnId) return null;
+        const lanlanName = String(
+            options.lanlanName
+            || (window.lanlan_config && window.lanlan_config.lanlan_name)
+            || ''
+        ).trim();
+        return {
+            turnId: turnId,
+            lanlanName: lanlanName,
+            sourceType: String(options.sourceType || 'music')
+        };
+    }
+
+    function getMusicPlaybackFeedbackMetadata(startedAt) {
+        const metadata = {};
+        if (startedAt) metadata.played_wall_ms = Math.max(0, Date.now() - startedAt);
+        try {
+            const audio = localPlayer && localPlayer.audio;
+            if (audio) {
+                const current = Number(audio.currentTime);
+                const duration = Number(audio.duration);
+                if (isFinite(current) && current >= 0) metadata.audio_current_time_sec = Math.round(current * 1000) / 1000;
+                if (isFinite(duration) && duration > 0) {
+                    metadata.audio_duration_sec = Math.round(duration * 1000) / 1000;
+                    if (isFinite(current) && current >= 0) {
+                        metadata.completion_ratio = Math.max(0, Math.min(1, Math.round((current / duration) * 1000) / 1000));
+                    }
+                }
+            }
+        } catch (_) { }
+        return metadata;
+    }
+
+    function reportProactiveMusicFeedback(eventType, metadata) {
+        if (!currentMusicFeedbackMeta || !currentMusicFeedbackMeta.turnId) return;
+        const feedbackMeta = currentMusicFeedbackMeta;
+        (async () => {
+            const headers = { 'Content-Type': 'application/json' };
+            const sec = window.nekoLocalMutationSecurity;
+            if (sec && typeof sec.getMutationHeaders === 'function') {
+                try { Object.assign(headers, await sec.getMutationHeaders()); } catch (_) { }
+            }
+            try {
+                await fetch('/api/proactive/recommendation/feedback', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        lanlan_name: feedbackMeta.lanlanName,
+                        turn_id: feedbackMeta.turnId,
+                        source_type: feedbackMeta.sourceType || 'music',
+                        event_type: eventType,
+                        metadata: metadata || {}
+                    })
+                });
+            } catch (_) { }
+        })();
+    }
+
+    function musicCloseFeedbackEventType(metadata) {
+        const wallMs = Number(metadata && metadata.played_wall_ms);
+        const ratio = Number(metadata && metadata.completion_ratio);
+        if (isFinite(wallMs) && wallMs <= SKIP_CONFIG.hardSkipThresholdMs) return 'music_hard_skip';
+        if (isFinite(wallMs) && wallMs < SKIP_CONFIG.skipThresholdMs) return 'music_early_close';
+        if (isFinite(ratio) && ratio >= 0.7) return 'music_high_completion';
+        if (isFinite(ratio) && ratio >= 0.3) return 'music_mid_completion';
+        return 'music_normal_close';
+    }
+
     // 用户关闭播放器时结算「秒关」反馈。判定用「从首次起播到关闭」的墙钟时长：
     //   startedAt == 0（压根没起播过——autoplay 被拦 / 加载失败 / 关得太早）→ 这次分享没有
     //     效送达用户，不构成喜恶信号，既不冷却也不计秒关，直接返回
@@ -1579,8 +1652,15 @@
     //   < skipThresholdMs      → 秒关，累计 consecutiveSkipsToTrigger 次进冷却
     //   >= skipThresholdMs     → 正常收听，重置秒关计数
     function recordMusicCloseFeedback(startedAt) {
-        if (!startedAt) return;
-        const wallMs = Date.now() - startedAt;
+        if (!startedAt) {
+            reportProactiveMusicFeedback('music_not_started', { reason: 'close_before_start' });
+            currentMusicFeedbackMeta = null;
+            return;
+        }
+        const metadata = getMusicPlaybackFeedbackMetadata(startedAt);
+        const wallMs = metadata.played_wall_ms;
+        reportProactiveMusicFeedback(musicCloseFeedbackEventType(metadata), metadata);
+        currentMusicFeedbackMeta = null;
         if (wallMs <= SKIP_CONFIG.hardSkipThresholdMs) {
             console.log('[Music UI] 秒叉（起播后 ≤' + (SKIP_CONFIG.hardSkipThresholdMs / 1000) + 's 关闭），立即冷却');
             enterMusicCooldown();
@@ -1610,7 +1690,8 @@
         }
         lastMusicPlayedThroughKey = trackKey;
         lastMusicPlayedThroughAt = now;
-        const lanlanName = (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+        const feedbackMeta = currentMusicFeedbackMeta;
+        const lanlanName = (feedbackMeta && feedbackMeta.lanlanName) || (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
         // fire-and-forget：用 async IIFE 包一层，让 getMutationHeaders 能 await
         // 但不阻塞外层调用方（aplayer 'ended' 回调本身不关心后端是否成功）。
         (async () => {
@@ -1625,6 +1706,7 @@
                     headers: playedHeaders,
                     body: JSON.stringify({
                         lanlan_name: lanlanName,
+                        turn_id: feedbackMeta ? feedbackMeta.turnId : '',
                         track: track ? { name: track.name, artist: track.artist, url: track.url } : null
                     })
                 });
@@ -1937,14 +2019,14 @@
     // 都拿到自己的实例后写 currentPlayingTrack/musicCardMessageId，第一份卡片
     // 会被第二份盖掉，被覆盖的实例如果 destroy 不及时还会残留 <audio>。
     // 用 executePlayChain 把所有 executePlay 排成单线，保证内部 await 不会被抢跑。
-    const executePlay = (trackInfo, currentToken, shouldAutoPlay = true) => {
-        const run = () => executePlayCore(trackInfo, currentToken, shouldAutoPlay);
+    const executePlay = (trackInfo, currentToken, shouldAutoPlay = true, options = {}) => {
+        const run = () => executePlayCore(trackInfo, currentToken, shouldAutoPlay, options);
         const next = executePlayChain.then(run, run); // 即使前一次 reject 也继续
         executePlayChain = next.catch(() => { /* 链路自愈，避免 rejection 阻断后续 */ });
         return next;
     };
 
-    const executePlayCore = async (trackInfo, currentToken, shouldAutoPlay = true) => {
+    const executePlayCore = async (trackInfo, currentToken, shouldAutoPlay = true, options = {}) => {
         if (currentToken !== latestMusicRequestToken) return;
 
         // 清除可能的自动销毁与 DOM 移除定时器
@@ -2048,6 +2130,7 @@
         currentMusicPlaybackId = playbackIdForRequest;
         currentMusicOwnerStartedAt = Date.now();
         currentPlayingTrack = trackInfo;
+        currentMusicFeedbackMeta = normalizeProactiveMusicFeedbackOptions(options);
         // 广播一次占位 state —— APlayer 还在初始化/切曲，但 follower 现在
         // 就能把 bar 刷新到新 track，避免旧歌信息停留或 bar 空白。
         emitBarInitialState(trackInfo);
@@ -2212,6 +2295,7 @@
                     updatePlayBtnState(false);
                     resetSkipCounter();
                     notifyMusicPlayedThrough(currentPlayingTrack);
+                    currentMusicFeedbackMeta = null;
                     playbackStartedAt = 0;
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
@@ -2224,6 +2308,8 @@
                 boundPlayer.on('error', (err) => {
                     if (boundPlayer._destroying) return;
                     console.error('[Music UI] APlayer error:', err);
+                    reportProactiveMusicFeedback('music_error', { reason: 'aplayer_error' });
+                    currentMusicFeedbackMeta = null;
                     playbackStartedAt = 0;
 
                     const tokenAtEvent = boundPlayer._latestToken;
@@ -2551,7 +2637,11 @@
      * 向播放器发送播放请求 [Async Ready]
      * 如果 URL 暂时不在白名单中，会等待最多 500ms 以响应并行的插件注册
      */
-    window.sendMusicMessage = async function (trackInfo, shouldAutoPlay = true) {
+    window.sendMusicMessage = async function (trackInfo, shouldAutoPlay = true, options = {}) {
+        if (shouldAutoPlay && typeof shouldAutoPlay === 'object') {
+            options = shouldAutoPlay;
+            shouldAutoPlay = true;
+        }
         if (!trackInfo) return false;
 
         // 进入 dispatch 流水线就立即 +1 —— 让并发的 dispatchMusicPlay
@@ -2659,7 +2749,7 @@
         showNowPlayingToast(trackInfo.name);
 
         loadAPlayerLibrary().then(function () {
-            return executePlay(trackInfo, currentToken, shouldAutoPlay);
+            return executePlay(trackInfo, currentToken, shouldAutoPlay, options);
         }).catch(function (err) {
             // 库加载失败同样需要校验 token，防止关闭后弹出报错
             if (currentToken === latestMusicRequestToken) {

@@ -1411,7 +1411,11 @@
                                 console.log('[ProactiveChat] 音乐 dispatch 前检测到播放器已占用，跳过本次音乐链接');
                             } else {
                                 console.log('[ProactiveChat] 发送音乐消息:', track);
-                                var dispatchResult = await window.dispatchMusicPlay(track, { source: 'proactive' });
+                                var dispatchResult = await window.dispatchMusicPlay(track, {
+                                    source: 'proactive',
+                                    turnId: result.turn_id || '',
+                                    sourceType: 'music'
+                                });
 
                                 // 仅在明确成功派发时标记；'queued' 仍是等待态，不应提前隐藏链接
                                 if (dispatchResult === true) {
