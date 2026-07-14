@@ -1,0 +1,1258 @@
+"""Feedback event sink for proactive recommendation observations.
+
+This module records what the user did after a proactive recommendation was
+delivered. It keeps raw event types separate from report-only scores so future
+calibration can recompute scores without losing the original signal.
+"""
+from __future__ import annotations
+
+from collections import Counter, defaultdict, deque
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+import json
+import logging
+import os
+from pathlib import Path
+import time
+from typing import Any
+
+
+logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
+
+FEEDBACK_LOG_FILENAME = "proactive_recommendation_feedback.jsonl"
+FEEDBACK_SCORE_VERSION = "report_score_v1"
+DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024
+REPLY_FAST_SECONDS = 60
+REPLY_WINDOW_SECONDS = 10 * 60
+
+_FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
+    "user_reply_fast": ("generic_engagement", 0.25, "medium"),
+    "user_reply": ("generic_engagement", 0.15, "medium"),
+    "user_continue": ("generic_engagement", 0.35, "medium"),
+    "ignored": ("generic_engagement", -0.05, "low"),
+    "proactive_disabled_after": ("settings", -0.70, "high"),
+    "source_disabled_after": ("settings", -0.35, "medium"),
+    "music_played_through": ("music", 0.90, "high"),
+    "music_high_completion": ("music", 0.65, "high"),
+    "music_mid_completion": ("music", 0.25, "medium"),
+    "music_normal_close": ("music", 0.05, "low"),
+    "music_early_close": ("music", -0.35, "medium"),
+    "music_hard_skip": ("music", -0.70, "high"),
+    "music_not_started": ("music", 0.00, "low"),
+    "music_error": ("music", 0.00, "low"),
+    "autoplay_blocked": ("music", 0.00, "low"),
+    "mini_game_accept": ("mini_game", 0.90, "high"),
+    "mini_game_later": ("mini_game", 0.20, "medium"),
+    "mini_game_decline": ("mini_game", -0.35, "high"),
+    "mini_game_ignored": ("mini_game", -0.05, "low"),
+}
+
+_TOP_LEVEL_KEYS = {
+    "ts",
+    "lanlan_name",
+    "turn_id",
+    "source_type",
+    "candidate_id",
+    "event_type",
+    "event_group",
+    "report_score_v1",
+    "confidence",
+    "metadata",
+    "score_version",
+}
+_METADATA_KEYS = {
+    "reply_latency_seconds",
+    "reply_length",
+    "reply_length_bucket",
+    "played_wall_ms",
+    "audio_current_time_sec",
+    "audio_duration_sec",
+    "completion_ratio",
+    "mini_game_choice",
+    "game_type",
+    "reason",
+}
+_FORBIDDEN_EVENT_KEYS = {
+    "payload",
+    "source_links",
+    "raw_data",
+    "screenshot",
+    "screenshot_b64",
+    "prompt",
+    "messages",
+    "chat_text",
+    "raw_text",
+    "text",
+}
+_SETTING_SOURCE_FIELDS = {
+    "proactiveNewsChatEnabled": ("news", "web"),
+    "proactiveVideoChatEnabled": ("video",),
+    "proactivePersonalChatEnabled": ("personal",),
+    "proactiveMusicEnabled": ("music",),
+    "proactiveMemeEnabled": ("meme",),
+    "proactiveMiniGameInviteEnabled": ("mini_game",),
+    "proactiveVisionChatEnabled": ("vision", "window"),
+}
+_SOURCE_ALIASES = {
+    "web": "web",
+    "news": "news",
+    "home": "web",
+    "personal": "personal",
+    "video": "video",
+    "music": "music",
+    "meme": "meme",
+    "topic_hook": "topic_hook",
+    "vision": "vision",
+    "window": "window",
+    "mini_game": "mini_game",
+}
+_WEAK_NEGATIVE_EVENT_TYPES = {"ignored", "mini_game_ignored"}
+_MUSIC_PLAYED_THROUGH_EVENT_TYPE = "music_played_through"
+_MUSIC_ACTIONABLE_PLAYED_THROUGH_MIN = 3
+_MUSIC_ACTIONABLE_AVERAGE_MIN = 0.50
+
+
+@dataclass(slots=True)
+class PendingRecommendationFeedback:
+    lanlan_name: str
+    turn_id: str
+    source_type: str
+    candidate_id: str | None = None
+    delivered_at: float = field(default_factory=time.time)
+    log_mode: str = "off"
+    config_dir: str | os.PathLike[str] | None = None
+    seen_groups: set[str] = field(default_factory=set)
+    seen_event_types: set[str] = field(default_factory=set)
+    reply_seen: bool = False
+    continue_seen: bool = False
+
+
+_pending_feedback: dict[tuple[str, str], PendingRecommendationFeedback] = {}
+
+
+def clear_pending_recommendation_feedback() -> None:
+    """Test helper: clear in-memory pending feedback state."""
+    _pending_feedback.clear()
+
+
+def has_forbidden_feedback_fields(payload: Mapping[str, Any]) -> bool:
+    return _contains_forbidden_keys(payload)
+
+
+def build_feedback_event(
+    *,
+    lanlan_name: Any,
+    turn_id: Any,
+    event_type: str,
+    source_type: Any = None,
+    candidate_id: Any = None,
+    metadata: Mapping[str, Any] | None = None,
+    ts: float | None = None,
+) -> dict[str, Any]:
+    """Build one sanitized feedback event with report-only v1 score fields."""
+    event_name = str(event_type or "").strip()
+    event_group, score, confidence = _FEEDBACK_EVENT_SCORES.get(
+        event_name,
+        ("unknown", 0.0, "low"),
+    )
+    return sanitize_recommendation_feedback_event(
+        {
+            "ts": time.time() if ts is None else float(ts),
+            "lanlan_name": _clean_text(lanlan_name),
+            "turn_id": _clean_text(turn_id),
+            "source_type": _normalize_source_type(source_type),
+            "candidate_id": _clean_text(candidate_id) or None,
+            "event_type": event_name,
+            "event_group": event_group,
+            "report_score_v1": round(float(score), 3),
+            "confidence": confidence,
+            "metadata": sanitize_feedback_metadata(metadata or {}),
+            "score_version": FEEDBACK_SCORE_VERSION,
+        }
+    )
+
+
+def sanitize_recommendation_feedback_event(event: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key in _TOP_LEVEL_KEYS:
+        if key not in event:
+            continue
+        if key == "metadata":
+            safe[key] = sanitize_feedback_metadata(event.get(key))
+        else:
+            safe[key] = _json_safe_scalar(event.get(key))
+    return safe
+
+
+def sanitize_feedback_metadata(metadata: Any) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        return {}
+    safe: dict[str, Any] = {}
+    for key in _METADATA_KEYS:
+        if key not in metadata:
+            continue
+        safe[key] = _json_safe_scalar(metadata.get(key))
+    return safe
+
+
+def append_recommendation_feedback_jsonl(
+    event: Mapping[str, Any],
+    *,
+    log_mode: str = "off",
+    path: str | os.PathLike[str] | None = None,
+    config_dir: str | os.PathLike[str] | None = None,
+    rotate_bytes: int = DEFAULT_ROTATE_BYTES,
+) -> bool:
+    if log_mode != "jsonl":
+        return False
+    target = _resolve_feedback_path(path=path, config_dir=config_dir)
+    if target is None:
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_if_needed(target, rotate_bytes=rotate_bytes)
+        safe = sanitize_recommendation_feedback_event(event)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(safe, ensure_ascii=False, sort_keys=True) + "\n")
+        return True
+    except Exception as exc:
+        logger.debug("proactive recommendation feedback append failed: %s", exc)
+        return False
+
+
+def load_recommendation_feedback_jsonl(
+    path: str | os.PathLike[str],
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    rows: deque[dict[str, Any]] | list[dict[str, Any]]
+    rows = deque(maxlen=limit) if limit and limit > 0 else []
+    try:
+        with target.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    item = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, Mapping):
+                    rows.append(sanitize_recommendation_feedback_event(item))
+    except Exception as exc:
+        logger.debug("proactive recommendation feedback read failed: %s", exc)
+        return []
+    return list(rows)
+
+
+def register_pending_feedback_from_observation(
+    observation: Mapping[str, Any],
+    *,
+    log_mode: str = "off",
+    config_dir: str | os.PathLike[str] | None = None,
+) -> PendingRecommendationFeedback | None:
+    if not isinstance(observation, Mapping) or observation.get("delivered") is not True:
+        return None
+    lanlan_name = _clean_text(observation.get("lanlan_name"))
+    turn_id = _clean_text(observation.get("turn_id"))
+    if not lanlan_name or not turn_id:
+        return None
+    source_type = _normalize_source_type(
+        observation.get("actual_primary_channel")
+        or observation.get("shadow_selected_source_type")
+    )
+    candidate_id = None
+    if observation.get("matched_actual_material") is True:
+        candidate_id = _clean_text(observation.get("shadow_selected_candidate_id")) or None
+    return register_pending_feedback(
+        lanlan_name=lanlan_name,
+        turn_id=turn_id,
+        source_type=source_type,
+        candidate_id=candidate_id,
+        delivered_at=_number(observation.get("ts"), time.time()),
+        log_mode=log_mode,
+        config_dir=config_dir,
+    )
+
+
+def register_pending_feedback(
+    *,
+    lanlan_name: Any,
+    turn_id: Any,
+    source_type: Any,
+    candidate_id: Any = None,
+    delivered_at: float | None = None,
+    log_mode: str = "off",
+    config_dir: str | os.PathLike[str] | None = None,
+) -> PendingRecommendationFeedback | None:
+    name = _clean_text(lanlan_name)
+    tid = _clean_text(turn_id)
+    if not name or not tid:
+        return None
+    pending = PendingRecommendationFeedback(
+        lanlan_name=name,
+        turn_id=tid,
+        source_type=_normalize_source_type(source_type),
+        candidate_id=_clean_text(candidate_id) or None,
+        delivered_at=time.time() if delivered_at is None else float(delivered_at),
+        log_mode=log_mode,
+        config_dir=config_dir,
+    )
+    _pending_feedback[(name, tid)] = pending
+    _prune_pending_feedback(now=pending.delivered_at)
+    return pending
+
+
+def record_feedback_event(
+    *,
+    lanlan_name: Any,
+    turn_id: Any,
+    event_type: str,
+    source_type: Any = None,
+    candidate_id: Any = None,
+    metadata: Mapping[str, Any] | None = None,
+    log_mode: str | None = None,
+    config_dir: str | os.PathLike[str] | None = None,
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    name = _clean_text(lanlan_name)
+    tid = _clean_text(turn_id)
+    if not name or not tid:
+        return None
+    pending = _pending_feedback.get((name, tid))
+    event = build_feedback_event(
+        lanlan_name=name,
+        turn_id=tid,
+        event_type=event_type,
+        source_type=source_type if source_type is not None else (pending.source_type if pending else None),
+        candidate_id=candidate_id if candidate_id is not None else (pending.candidate_id if pending else None),
+        metadata=metadata,
+        ts=ts,
+    )
+    if not event.get("event_type"):
+        return None
+    if pending is not None:
+        pending.seen_event_types.add(str(event["event_type"]))
+        pending.seen_groups.add(str(event.get("event_group") or ""))
+    wrote = append_recommendation_feedback_jsonl(
+        event,
+        log_mode=log_mode if log_mode is not None else (pending.log_mode if pending else "off"),
+        config_dir=config_dir if config_dir is not None else (pending.config_dir if pending else None),
+    )
+    if wrote:
+        _maybe_auto_apply_tuning_after_feedback(
+            config_dir=config_dir if config_dir is not None else (pending.config_dir if pending else None),
+        )
+    return event
+
+
+def note_user_turn_for_feedback(
+    lanlan_name: str,
+    *,
+    timestamp: float,
+    had_text: bool,
+    text_allowed: bool = False,
+    text: str | None = None,
+) -> dict[str, Any] | None:
+    if not had_text:
+        return None
+    pending = _latest_pending_for_lanlan(lanlan_name, now=timestamp)
+    if pending is None:
+        return None
+    latency = max(0.0, float(timestamp) - float(pending.delivered_at))
+    metadata: dict[str, Any] = {"reply_latency_seconds": round(latency, 3)}
+    if text_allowed and text:
+        metadata["reply_length"] = len(text)
+        metadata["reply_length_bucket"] = _reply_length_bucket(len(text))
+    if pending.reply_seen and not pending.continue_seen:
+        pending.continue_seen = True
+        return record_feedback_event(
+            lanlan_name=pending.lanlan_name,
+            turn_id=pending.turn_id,
+            event_type="user_continue",
+            metadata=metadata,
+            ts=timestamp,
+        )
+    if not pending.reply_seen:
+        pending.reply_seen = True
+        event_type = "user_reply_fast" if latency <= REPLY_FAST_SECONDS else "user_reply"
+        return record_feedback_event(
+            lanlan_name=pending.lanlan_name,
+            turn_id=pending.turn_id,
+            event_type=event_type,
+            metadata=metadata,
+            ts=timestamp,
+        )
+    return None
+
+
+def record_recent_setting_feedback(
+    *,
+    lanlan_name: str,
+    disabled_fields: Iterable[str],
+    log_mode: str = "off",
+    config_dir: str | os.PathLike[str] | None = None,
+    ts: float | None = None,
+) -> list[dict[str, Any]]:
+    current = time.time() if ts is None else float(ts)
+    pending = _latest_pending_for_lanlan(lanlan_name, now=current)
+    if pending is None:
+        return []
+    disabled = list(disabled_fields)
+    if "proactiveChatEnabled" in disabled:
+        event = record_feedback_event(
+            lanlan_name=pending.lanlan_name,
+            turn_id=pending.turn_id,
+            event_type="proactive_disabled_after",
+            metadata={"reason": "proactiveChatEnabled"},
+            log_mode=log_mode or pending.log_mode,
+            config_dir=config_dir if config_dir is not None else pending.config_dir,
+            ts=current,
+        )
+        return [event] if event else []
+    events: list[dict[str, Any]] = []
+    pending_source = _normalize_source_type(pending.source_type)
+    for field_name in disabled:
+        source_types = _SETTING_SOURCE_FIELDS.get(field_name, ())
+        if pending_source and pending_source not in source_types:
+            continue
+        event = record_feedback_event(
+            lanlan_name=pending.lanlan_name,
+            turn_id=pending.turn_id,
+            event_type="source_disabled_after",
+            source_type=pending_source,
+            metadata={"reason": field_name},
+            log_mode=log_mode or pending.log_mode,
+            config_dir=config_dir if config_dir is not None else pending.config_dir,
+            ts=current,
+        )
+        if event:
+            events.append(event)
+    return events
+
+
+class ProactiveRecommendationFeedbackTurnSink:
+    def note_turn(self, event: Any) -> None:
+        try:
+            if getattr(event, "actor", None) != "user":
+                return
+            note_user_turn_for_feedback(
+                str(getattr(event, "lanlan_name", "") or ""),
+                timestamp=float(getattr(event, "timestamp", time.time())),
+                had_text=bool(getattr(event, "had_text", False)),
+                text_allowed=bool(getattr(event, "text_allowed", False)),
+                text=getattr(event, "text", None),
+            )
+        except Exception:
+            logger.debug("proactive recommendation feedback turn sink failed", exc_info=True)
+
+
+def music_feedback_event_type(
+    *,
+    played_wall_ms: Any = None,
+    completion_ratio: Any = None,
+    started: bool = True,
+    error: bool = False,
+    autoplay_blocked: bool = False,
+    played_through: bool = False,
+) -> str:
+    if played_through:
+        return "music_played_through"
+    if error:
+        return "music_error"
+    if autoplay_blocked:
+        return "autoplay_blocked"
+    if not started:
+        return "music_not_started"
+    ratio = _number(completion_ratio, -1.0)
+    if ratio >= 0.70:
+        return "music_high_completion"
+    if ratio >= 0.30:
+        return "music_mid_completion"
+    wall = _number(played_wall_ms, -1.0)
+    if wall >= 0 and wall <= 3000:
+        return "music_hard_skip"
+    if wall >= 0 and wall < 15000:
+        return "music_early_close"
+    return "music_normal_close"
+
+
+def summarize_recommendation_feedback(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> dict[str, Any]:
+    current = time.time() if now is None else float(now)
+    samples = _calibration_observation_samples(
+        observations,
+        now=current,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    events_by_turn: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for event in feedback_events:
+        if not isinstance(event, Mapping):
+            continue
+        safe = sanitize_recommendation_feedback_event(event)
+        key = (_clean_text(safe.get("lanlan_name")), _clean_text(safe.get("turn_id")))
+        if key[0] and key[1]:
+            events_by_turn[key].append(safe)
+
+    feedback_scores: list[float] = []
+    source_scores: dict[str, list[float]] = defaultdict(list)
+    event_counts: Counter[str] = Counter()
+    high_positive = 0
+    high_negative = 0
+    missing = 0
+    positive = 0
+    negative = 0
+    neutral = 0
+
+    for row in samples:
+        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        events = list(events_by_turn.get(key, ()))
+        if not events and row.get("delivered") is True:
+            ts = _number(row.get("ts"), -1.0)
+            if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
+                events = [
+                    build_feedback_event(
+                        lanlan_name=key[0],
+                        turn_id=key[1],
+                        event_type="ignored",
+                        source_type=row.get("actual_primary_channel") or row.get("shadow_selected_source_type"),
+                        ts=current,
+                    )
+                ]
+        if not events:
+            missing += 1
+            continue
+        selected = _select_feedback_events_for_turn(events)
+        score = _clamp(sum(_number(event.get("report_score_v1"), 0.0) for event in selected), -1.0, 1.0)
+        feedback_scores.append(score)
+        source_type = _normalize_source_type(
+            row.get("actual_primary_channel") or row.get("shadow_selected_source_type")
+        )
+        source_scores[source_type].append(score)
+        if score > 0:
+            positive += 1
+        elif score < 0:
+            negative += 1
+        else:
+            neutral += 1
+        for event in selected:
+            event_counts[str(event.get("event_type") or "unknown")] += 1
+            confidence = str(event.get("confidence") or "")
+            event_score = _number(event.get("report_score_v1"), 0.0)
+            if confidence == "high" and event_score > 0:
+                high_positive += 1
+            if confidence == "high" and event_score < 0:
+                high_negative += 1
+
+    count = len(feedback_scores)
+    return {
+        "feedback_sample_count": count,
+        "average_turn_feedback_score": round(sum(feedback_scores) / count, 3) if count else None,
+        "positive_rate": _rate(positive, count),
+        "negative_rate": _rate(negative, count),
+        "neutral_rate": _rate(neutral, count),
+        "score_by_source_type": {
+            source: round(sum(values) / len(values), 3)
+            for source, values in sorted(source_scores.items())
+            if values
+        },
+        "event_type_distribution": dict(sorted(event_counts.items())),
+        "high_confidence_positive_count": high_positive,
+        "high_confidence_negative_count": high_negative,
+        "feedback_missing_count": missing,
+        "sample_count": len(samples),
+        "sample_window_seconds": int(window_seconds),
+        "sample_limit": int(sample_limit),
+        "score_version": FEEDBACK_SCORE_VERSION,
+    }
+
+
+def join_observations_with_feedback(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Join recent recommendation observations with compact feedback scores."""
+    current = time.time() if now is None else float(now)
+    samples = _calibration_observation_samples(
+        observations,
+        now=current,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    events_by_turn = _feedback_events_by_turn(feedback_events)
+    joined: list[dict[str, Any]] = []
+    for row in samples:
+        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        events = list(events_by_turn.get(key, ()))
+        if not events and row.get("delivered") is True:
+            ts = _number(row.get("ts"), -1.0)
+            if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
+                events = [
+                    build_feedback_event(
+                        lanlan_name=key[0],
+                        turn_id=key[1],
+                        event_type="ignored",
+                        source_type=row.get("actual_primary_channel") or row.get("shadow_selected_source_type"),
+                        ts=current,
+                    )
+                ]
+        selected = _select_feedback_events_for_turn(events) if events else []
+        feedback_missing = not selected
+        turn_feedback_score = None
+        if selected:
+            turn_feedback_score = round(
+                _clamp(
+                    sum(_number(event.get("report_score_v1"), 0.0) for event in selected),
+                    -1.0,
+                    1.0,
+                ),
+                3,
+            )
+        top1_source_type = _top1_source_type(row)
+        shadow_score = _shadow_selected_score(row)
+        joined.append(
+            {
+                "turn_id": key[1],
+                "lanlan_name": key[0],
+                "source_type": top1_source_type,
+                "shadow_selected_score": shadow_score,
+                "top1_source_type": top1_source_type,
+                "actual_primary_channel": _normalize_source_type(row.get("actual_primary_channel")),
+                "matched_actual_source": row.get("matched_actual_source") is True,
+                "matched_actual_material": row.get("matched_actual_material") is True,
+                "turn_feedback_score": turn_feedback_score,
+                "feedback_event_types": [
+                    str(event.get("event_type") or "unknown")
+                    for event in selected
+                ],
+                "feedback_missing": feedback_missing,
+                "score_bucket": _score_bucket(shadow_score),
+            }
+        )
+    return joined
+
+
+def summarize_feedback_calibration(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> dict[str, Any]:
+    """Report whether recommendation scores align with later user feedback."""
+    joined = join_observations_with_feedback(
+        observations,
+        feedback_events,
+        now=now,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    scored = [
+        row
+        for row in joined
+        if row.get("feedback_missing") is not True
+        and isinstance(row.get("turn_feedback_score"), (int, float))
+    ]
+    feedback_joined_count = len(scored)
+    feedback_scores = [float(row["turn_feedback_score"]) for row in scored]
+    positive_count = sum(1 for score in feedback_scores if score > 0)
+    negative_count = sum(1 for score in feedback_scores if score < 0)
+
+    source_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    high_score_source_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    mid_low_source_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    top1_counts: Counter[str] = Counter()
+    for row in joined:
+        source = _normalize_source_type(row.get("source_type"))
+        if source:
+            top1_counts[source] += 1
+        if row.get("feedback_missing") is True or not isinstance(row.get("turn_feedback_score"), (int, float)):
+            continue
+        source_rows[source].append(row)
+        bucket = row.get("score_bucket")
+        if bucket == "high":
+            high_score_source_rows[source].append(row)
+        elif bucket in {"mid", "low"}:
+            mid_low_source_rows[source].append(row)
+
+    score_by_source_type = {
+        source: _average_joined_feedback(rows)
+        for source, rows in sorted(source_rows.items())
+        if rows
+    }
+    bucket_feedback = _score_bucket_feedback(scored)
+
+    over_scored_sources = sorted(
+        source
+        for source, rows in high_score_source_rows.items()
+        if rows and _average_joined_feedback(rows) < 0
+    )
+    under_scored_sources = sorted(
+        source
+        for source, rows in mid_low_source_rows.items()
+        if rows and _average_joined_feedback(rows) >= 0.25
+    )
+
+    dominant_low_feedback_sources = _dominant_low_feedback_sources(
+        joined,
+        score_by_source_type,
+        top1_counts,
+    )
+    feedback_signal_summary = _feedback_signal_summary(scored)
+    source_feedback_pressure = _source_feedback_pressure(feedback_signal_summary)
+    suggested_weight_adjustments = _suggest_feedback_weight_adjustments(
+        over_scored_sources=over_scored_sources,
+        under_scored_sources=under_scored_sources,
+        dominant_low_feedback_sources=dominant_low_feedback_sources,
+        source_feedback_pressure=source_feedback_pressure,
+    )
+    feedback_actionable_suggestions = _feedback_actionable_suggestions(
+        score_by_source_type=score_by_source_type,
+        signal_summary=feedback_signal_summary,
+        source_feedback_pressure=source_feedback_pressure,
+    )
+    active_ready_reasons = _feedback_active_ready_reasons(
+        feedback_joined_count=feedback_joined_count,
+        average_feedback_score=_average(feedback_scores),
+        top1_positive_rate=_rate(positive_count, feedback_joined_count),
+        top1_negative_rate=_rate(negative_count, feedback_joined_count),
+        bucket_feedback=bucket_feedback,
+        dominant_low_feedback_sources=dominant_low_feedback_sources,
+    )
+
+    return {
+        "sample_count": len(joined),
+        "feedback_joined_count": feedback_joined_count,
+        "feedback_missing_count": len(joined) - feedback_joined_count,
+        "average_feedback_score": _average(feedback_scores),
+        "top1_positive_rate": _rate(positive_count, feedback_joined_count),
+        "top1_negative_rate": _rate(negative_count, feedback_joined_count),
+        "score_by_source_type": score_by_source_type,
+        "score_bucket_feedback": bucket_feedback,
+        "over_scored_sources": over_scored_sources,
+        "under_scored_sources": under_scored_sources,
+        "suggested_weight_adjustments": suggested_weight_adjustments,
+        "feedback_signal_summary": feedback_signal_summary,
+        "source_feedback_pressure": source_feedback_pressure,
+        "feedback_actionable_suggestions": feedback_actionable_suggestions,
+        "manual_tuning_preview": _manual_tuning_preview(feedback_actionable_suggestions),
+        "active_ready_by_feedback": not active_ready_reasons,
+        "active_ready_reasons": active_ready_reasons,
+        "sample_window_seconds": int(window_seconds),
+        "sample_limit": int(sample_limit),
+        "score_version": FEEDBACK_SCORE_VERSION,
+    }
+
+
+def _feedback_events_by_turn(
+    feedback_events: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    events_by_turn: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for event in feedback_events:
+        if not isinstance(event, Mapping):
+            continue
+        safe = sanitize_recommendation_feedback_event(event)
+        key = (_clean_text(safe.get("lanlan_name")), _clean_text(safe.get("turn_id")))
+        if key[0] and key[1]:
+            events_by_turn[key].append(safe)
+    return events_by_turn
+
+
+def _top1_source_type(row: Mapping[str, Any]) -> str:
+    candidates = row.get("top_candidates")
+    if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                source = _normalize_source_type(candidate.get("source_type"))
+                if source:
+                    return source
+    return _normalize_source_type(row.get("shadow_selected_source_type"))
+
+
+def _shadow_selected_score(row: Mapping[str, Any]) -> float | None:
+    score = _number(row.get("shadow_selected_score"), float("nan"))
+    if score == score:
+        return round(score, 3)
+    candidates = row.get("top_candidates")
+    if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                score = _number(candidate.get("score"), float("nan"))
+                if score == score:
+                    return round(score, 3)
+    return None
+
+
+def _score_bucket(score: Any) -> str | None:
+    value = _number(score, float("nan"))
+    if value != value:
+        return None
+    if value >= 0.75:
+        return "high"
+    if value >= 0.50:
+        return "mid"
+    return "low"
+
+
+def _average(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 3)
+
+
+def _average_joined_feedback(rows: Sequence[Mapping[str, Any]]) -> float:
+    scores = [
+        float(row["turn_feedback_score"])
+        for row in rows
+        if isinstance(row.get("turn_feedback_score"), (int, float))
+    ]
+    average = _average(scores)
+    return 0.0 if average is None else average
+
+
+def _score_bucket_feedback(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for bucket in ("high", "mid", "low"):
+        bucket_rows = [row for row in rows if row.get("score_bucket") == bucket]
+        scores = [
+            float(row["turn_feedback_score"])
+            for row in bucket_rows
+            if isinstance(row.get("turn_feedback_score"), (int, float))
+        ]
+        positive = sum(1 for score in scores if score > 0)
+        negative = sum(1 for score in scores if score < 0)
+        result[bucket] = {
+            "count": len(scores),
+            "average_feedback_score": _average(scores),
+            "positive_rate": _rate(positive, len(scores)),
+            "negative_rate": _rate(negative, len(scores)),
+        }
+    return result
+
+
+def _dominant_low_feedback_sources(
+    joined: Sequence[Mapping[str, Any]],
+    score_by_source_type: Mapping[str, float],
+    top1_counts: Counter[str],
+) -> list[str]:
+    total = len(joined)
+    if total <= 0:
+        return []
+    return sorted(
+        source
+        for source, count in top1_counts.items()
+        if _rate(count, total) is not None
+        and float(_rate(count, total) or 0.0) >= 0.60
+        and float(score_by_source_type.get(source, 0.0)) < 0.10
+    )
+
+
+def _suggest_feedback_weight_adjustments(
+    *,
+    over_scored_sources: Sequence[str],
+    under_scored_sources: Sequence[str],
+    dominant_low_feedback_sources: Sequence[str],
+    source_feedback_pressure: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    suggestions: dict[str, dict[str, Any]] = {}
+    pressure = source_feedback_pressure or {}
+
+    def add(source: str, adjustment: float, reason: str) -> None:
+        entry = suggestions.setdefault(
+            source,
+            {"adjustment": adjustment, "reasons": []},
+        )
+        if abs(adjustment) > abs(float(entry.get("adjustment", 0.0))):
+            entry["adjustment"] = adjustment
+        reasons = entry.setdefault("reasons", [])
+        if reason not in reasons:
+            reasons.append(reason)
+
+    for source in over_scored_sources:
+        if _is_weak_ignored_only_pressure(source, pressure):
+            continue
+        add(source, -0.05, "over_scored_high_score_low_feedback")
+    for source in under_scored_sources:
+        add(source, 0.03, "under_scored_positive_feedback")
+    for source in dominant_low_feedback_sources:
+        if _is_weak_ignored_only_pressure(source, pressure):
+            continue
+        add(source, -0.05, "dominant_low_feedback_source")
+    return {
+        source: {
+            "adjustment": round(float(entry["adjustment"]), 3),
+            "reasons": list(entry["reasons"]),
+        }
+        for source, entry in sorted(suggestions.items())
+    }
+
+
+def _is_weak_ignored_only_pressure(
+    source: str,
+    source_feedback_pressure: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    pressure = source_feedback_pressure.get(source)
+    if not isinstance(pressure, Mapping):
+        return False
+    return (
+        pressure.get("level") == "weak_ignored_pressure"
+        and int(pressure.get("weak_negative_count") or 0) > 0
+        and int(pressure.get("high_confidence_negative_count") or 0) == 0
+        and int(pressure.get("strong_positive_count") or 0) == 0
+    )
+
+
+def _feedback_signal_summary(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    stats: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "feedback_count": 0,
+            "strong_positive_count": 0,
+            "weak_negative_count": 0,
+            "ignored_count": 0,
+            "played_through_count": 0,
+            "high_confidence_negative_count": 0,
+        }
+    )
+    for row in rows:
+        source = _normalize_source_type(row.get("source_type"))
+        if not source:
+            continue
+        bucket = stats[source]
+        bucket["feedback_count"] += 1
+        event_types = row.get("feedback_event_types")
+        if not isinstance(event_types, Sequence) or isinstance(event_types, (str, bytes)):
+            continue
+        for raw_event_type in event_types:
+            event_type = str(raw_event_type or "unknown")
+            _, score, confidence = _FEEDBACK_EVENT_SCORES.get(
+                event_type,
+                ("unknown", 0.0, "low"),
+            )
+            if confidence == "high" and score > 0:
+                bucket["strong_positive_count"] += 1
+            if confidence == "high" and score < 0:
+                bucket["high_confidence_negative_count"] += 1
+            if event_type in _WEAK_NEGATIVE_EVENT_TYPES:
+                bucket["weak_negative_count"] += 1
+            if event_type == "ignored":
+                bucket["ignored_count"] += 1
+            if event_type == _MUSIC_PLAYED_THROUGH_EVENT_TYPE:
+                bucket["played_through_count"] += 1
+
+    result: dict[str, dict[str, Any]] = {}
+    for source, bucket in sorted(stats.items()):
+        denominator = (
+            int(bucket["strong_positive_count"])
+            + int(bucket["high_confidence_negative_count"])
+            + int(bucket["weak_negative_count"])
+        )
+        result[source] = {
+            "feedback_count": int(bucket["feedback_count"]),
+            "strong_positive_count": int(bucket["strong_positive_count"]),
+            "weak_negative_count": int(bucket["weak_negative_count"]),
+            "ignored_count": int(bucket["ignored_count"]),
+            "played_through_count": int(bucket["played_through_count"]),
+            "high_confidence_negative_count": int(bucket["high_confidence_negative_count"]),
+            "confidence_positive_rate": _rate(
+                int(bucket["strong_positive_count"]),
+                denominator,
+            ),
+        }
+    return result
+
+
+def _source_feedback_pressure(
+    signal_summary: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    pressure: dict[str, dict[str, Any]] = {}
+    for source, stats in sorted(signal_summary.items()):
+        ignored_count = int(stats.get("ignored_count") or 0)
+        weak_negative_count = int(stats.get("weak_negative_count") or 0)
+        high_negative_count = int(stats.get("high_confidence_negative_count") or 0)
+        strong_positive_count = int(stats.get("strong_positive_count") or 0)
+        if high_negative_count > 0:
+            level = "high_confidence_negative_pressure"
+        elif weak_negative_count > 0:
+            level = "weak_ignored_pressure"
+        else:
+            level = "none"
+        pressure[source] = {
+            "level": level,
+            "ignored_count": ignored_count,
+            "weak_negative_count": weak_negative_count,
+            "high_confidence_negative_count": high_negative_count,
+            "strong_positive_count": strong_positive_count,
+        }
+    return pressure
+
+
+def _feedback_actionable_suggestions(
+    *,
+    score_by_source_type: Mapping[str, float],
+    signal_summary: Mapping[str, Mapping[str, Any]],
+    source_feedback_pressure: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    suggestions: dict[str, dict[str, Any]] = {}
+
+    def add(source: str, adjustment: float, reason: str, confidence: str) -> None:
+        entry = suggestions.setdefault(
+            source,
+            {"adjustment": adjustment, "reasons": [], "confidence": confidence},
+        )
+        if abs(adjustment) > abs(float(entry.get("adjustment", 0.0))):
+            entry["adjustment"] = adjustment
+            entry["confidence"] = confidence
+        reasons = entry.setdefault("reasons", [])
+        if reason not in reasons:
+            reasons.append(reason)
+
+    music_stats = signal_summary.get("music") or {}
+    music_average = score_by_source_type.get("music")
+    if (
+        int(music_stats.get("played_through_count") or 0) >= _MUSIC_ACTIONABLE_PLAYED_THROUGH_MIN
+        and isinstance(music_average, (int, float))
+        and float(music_average) >= _MUSIC_ACTIONABLE_AVERAGE_MIN
+    ):
+        add("music", 0.03, "strong_music_positive_feedback", "high")
+
+    for source, pressure in sorted(source_feedback_pressure.items()):
+        level = str(pressure.get("level") or "")
+        average = score_by_source_type.get(source)
+        if level == "weak_ignored_pressure":
+            add(source, 0.0, "weak_ignored_pressure", "low")
+        elif (
+            level == "high_confidence_negative_pressure"
+            and isinstance(average, (int, float))
+            and float(average) < 0
+        ):
+            add(source, -0.05, "high_confidence_negative_feedback", "high")
+
+    return {
+        source: {
+            "adjustment": round(float(entry["adjustment"]), 3),
+            "reasons": list(entry["reasons"]),
+            "confidence": str(entry.get("confidence") or "low"),
+        }
+        for source, entry in sorted(suggestions.items())
+    }
+
+
+def _manual_tuning_preview(
+    feedback_actionable_suggestions: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    preview: dict[str, dict[str, Any]] = {}
+    for source, suggestion in sorted(feedback_actionable_suggestions.items()):
+        adjustment = round(_number(suggestion.get("adjustment"), 0.0), 3)
+        preview[source] = {
+            "current_adjustment": 0.0,
+            "suggested_delta": adjustment,
+            "preview_adjustment": adjustment,
+            "reasons": list(suggestion.get("reasons") or []),
+            "confidence": str(suggestion.get("confidence") or "low"),
+            "write_mode": "manual_review_only",
+        }
+    return preview
+
+
+def _feedback_active_ready_reasons(
+    *,
+    feedback_joined_count: int,
+    average_feedback_score: float | None,
+    top1_positive_rate: float | None,
+    top1_negative_rate: float | None,
+    bucket_feedback: Mapping[str, Mapping[str, Any]],
+    dominant_low_feedback_sources: Sequence[str],
+) -> list[str]:
+    reasons: list[str] = []
+    if feedback_joined_count < 30:
+        reasons.append("feedback_sample_count_below_threshold")
+    if average_feedback_score is None or average_feedback_score <= 0:
+        reasons.append("average_feedback_score_not_positive")
+    high = bucket_feedback.get("high", {}).get("average_feedback_score")
+    mid = bucket_feedback.get("mid", {}).get("average_feedback_score")
+    low = bucket_feedback.get("low", {}).get("average_feedback_score")
+    if not all(isinstance(value, (int, float)) for value in (high, mid, low)):
+        reasons.append("score_bucket_feedback_insufficient")
+    elif not (float(high) > float(mid) >= float(low)):
+        reasons.append("score_bucket_feedback_not_monotonic")
+    if top1_positive_rate is None or top1_positive_rate < 0.35:
+        reasons.append("top1_positive_rate_below_threshold")
+    if top1_negative_rate is None or top1_negative_rate > 0.20:
+        reasons.append("top1_negative_rate_above_threshold")
+    if dominant_low_feedback_sources:
+        reasons.append("dominant_low_feedback_source")
+    return reasons
+
+
+def _select_feedback_events_for_turn(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    by_group: dict[str, dict[str, Any]] = {}
+    for raw in events:
+        event = sanitize_recommendation_feedback_event(raw)
+        group = str(event.get("event_group") or "unknown")
+        previous = by_group.get(group)
+        if previous is None or abs(_number(event.get("report_score_v1"), 0.0)) > abs(_number(previous.get("report_score_v1"), 0.0)):
+            by_group[group] = event
+    return list(by_group.values())
+
+
+def _maybe_auto_apply_tuning_after_feedback(
+    *,
+    config_dir: str | os.PathLike[str] | None,
+) -> None:
+    if config_dir is None:
+        return
+    try:
+        from config import PROACTIVE_RECOMMENDATION_TUNING_MODE
+        from main_logic.proactive_recommendation_tuning import (
+            maybe_auto_apply_recommendation_tuning_from_logs,
+            maybe_update_recommendation_tuning_health_from_logs,
+        )
+
+        result = maybe_auto_apply_recommendation_tuning_from_logs(
+            mode=PROACTIVE_RECOMMENDATION_TUNING_MODE,
+            config_dir=config_dir,
+        )
+        if not result.get("applied") and not result.get("rollback_applied"):
+            maybe_update_recommendation_tuning_health_from_logs(
+                mode=PROACTIVE_RECOMMENDATION_TUNING_MODE,
+                config_dir=config_dir,
+            )
+    except Exception as exc:
+        logger.debug("proactive recommendation tuning auto-apply failed: %s", exc)
+
+
+def _latest_pending_for_lanlan(lanlan_name: str, *, now: float) -> PendingRecommendationFeedback | None:
+    _prune_pending_feedback(now=now)
+    candidates = [
+        pending
+        for pending in _pending_feedback.values()
+        if pending.lanlan_name == lanlan_name
+        and 0 <= now - pending.delivered_at <= REPLY_WINDOW_SECONDS
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.delivered_at)
+
+
+def _prune_pending_feedback(*, now: float) -> None:
+    expired = [
+        key
+        for key, pending in _pending_feedback.items()
+        if now - pending.delivered_at > REPLY_WINDOW_SECONDS * 2
+    ]
+    for key in expired:
+        _pending_feedback.pop(key, None)
+
+
+def _calibration_observation_samples(
+    observations: Iterable[Mapping[str, Any]],
+    *,
+    now: float,
+    window_seconds: int,
+    sample_limit: int,
+) -> list[dict[str, Any]]:
+    rows = [
+        dict(row)
+        for row in observations
+        if isinstance(row, Mapping)
+    ]
+    recent = [
+        row
+        for row in rows
+        if 0 <= now - _number(row.get("ts"), -1.0) <= max(0, int(window_seconds))
+    ]
+    limit = max(0, int(sample_limit))
+    return recent[-limit:] if limit else []
+
+
+def _resolve_feedback_path(
+    *,
+    path: str | os.PathLike[str] | None,
+    config_dir: str | os.PathLike[str] | None,
+) -> Path | None:
+    if path is not None:
+        return Path(path)
+    if config_dir is None:
+        return None
+    return Path(config_dir) / FEEDBACK_LOG_FILENAME
+
+
+def _rotate_if_needed(path: Path, *, rotate_bytes: int) -> None:
+    if rotate_bytes <= 0:
+        return
+    try:
+        if path.exists() and path.stat().st_size > rotate_bytes:
+            os.replace(path, path.parent / (path.name + ".1"))
+    except OSError as exc:
+        logger.debug("proactive recommendation feedback rotate failed: %s", exc)
+
+
+def _contains_forbidden_keys(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in _FORBIDDEN_EVENT_KEYS:
+                return True
+            if _contains_forbidden_keys(item):
+                return True
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_contains_forbidden_keys(item) for item in value)
+    return False
+
+
+def _normalize_source_type(value: Any) -> str:
+    raw = _clean_text(value).lower()
+    return _SOURCE_ALIASES.get(raw, raw or "unknown")
+
+
+def _reply_length_bucket(length: int) -> str:
+    if length < 20:
+        return "short"
+    if length < 120:
+        return "medium"
+    return "long"
+
+
+def _json_safe_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_json_safe_scalar(item) for item in value]
+    return str(value)
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _number(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 3)
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
