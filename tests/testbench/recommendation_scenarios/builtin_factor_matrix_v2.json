@@ -1,0 +1,84 @@
+[
+  {
+    "schema_version": 2, "id": "risk_topic_pair", "name": "Topic risk isolated pair",
+    "description": "Two topic hooks share relevance and freshness; only risk differs.",
+    "tags": ["risk", "single_factor"], "stage": "source", "kind": "single",
+    "factor_under_test": "risk", "controlled_fields": ["relevance", "freshness", "source_type", "activity_state"],
+    "context": {
+      "lanlan_name": "test-character", "enabled_modes": [], "source_weights": {}, "source_type_adjustments": {},
+      "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+      "activity_state": "idle", "topic_materials": [
+        {"interest": "safe controlled topic", "relevance": 80, "risk": 10},
+        {"interest": "risky controlled topic", "relevance": 80, "risk": 80}
+      ], "mini_game_available": false
+    },
+    "inputs": {"sources": {}, "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+               "selected_meme_link": null, "vision_content": null, "active_channels": []},
+    "oracle": {"relevance": {"topic_hook:c1573d6dee91": 3, "topic_hook:2d0083704ed8": 1},
+               "expected_top1_candidate_id": "topic_hook:c1573d6dee91", "acceptable_top1_sources": ["topic_hook"], "forbidden_sources": [],
+               "must_filter_candidate_ids": [], "expected_filter_reasons": {}, "expected_empty": false,
+               "active_bias_expected": null}
+  },
+  {
+    "schema_version": 2, "id": "active_bias_no_candidate", "name": "Active bias no candidate fallback",
+    "description": "Empty Phase-1 material decision must return no_candidate.",
+    "tags": ["active_bias", "fallback"], "stage": "material", "kind": "single",
+    "factor_under_test": "active_bias_fallback", "controlled_fields": ["empty_material_inputs"],
+    "context": {"lanlan_name": "test-character", "enabled_modes": [], "source_weights": {}, "source_type_adjustments": {},
+                "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+                "activity_state": "idle", "topic_materials": [], "mini_game_available": false},
+    "inputs": {"sources": {}, "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+               "selected_meme_link": null, "vision_content": null, "active_channels": []},
+    "oracle": {"relevance": {}, "acceptable_top1_sources": [], "forbidden_sources": [], "must_filter_candidate_ids": [],
+               "expected_filter_reasons": {}, "expected_empty": true, "active_bias_expected": false,
+               "expected_active_bias_reason": "no_candidate"}
+  },
+  {
+    "schema_version": 2, "id": "active_bias_unsupported_vision", "name": "Active bias unsupported source fallback",
+    "description": "Vision can rank first but cannot map to a Phase-2 active source tag.",
+    "tags": ["active_bias", "fallback"], "stage": "material", "kind": "single",
+    "factor_under_test": "active_bias_fallback", "controlled_fields": ["vision_only"],
+    "context": {"lanlan_name": "test-character", "enabled_modes": ["vision"], "source_weights": {}, "source_type_adjustments": {},
+                "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+                "activity_state": "idle", "topic_materials": [], "mini_game_available": false},
+    "inputs": {"sources": {}, "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+               "selected_meme_link": null, "vision_content": {"window_title": "Controlled editor"}, "active_channels": ["vision"]},
+    "oracle": {"relevance": {"vision:4ecb63edfeb0": 3}, "acceptable_top1_sources": ["vision"], "forbidden_sources": [], "must_filter_candidate_ids": [],
+               "expected_filter_reasons": {}, "expected_empty": false, "active_bias_expected": false,
+               "expected_active_bias_reason": "unsupported_source"}
+  },
+  {
+    "schema_version": 2, "id": "active_bias_missing_material_link", "name": "Active bias missing link fallback",
+    "description": "Fallback web topic has no material link.",
+    "tags": ["active_bias", "fallback"], "stage": "material", "kind": "single",
+    "factor_under_test": "active_bias_fallback", "controlled_fields": ["web_topic_without_link"],
+    "context": {"lanlan_name": "test-character", "enabled_modes": ["news"], "source_weights": {}, "source_type_adjustments": {},
+                "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+                "activity_state": "idle", "topic_materials": [], "mini_game_available": false},
+    "inputs": {"sources": {}, "phase1_topics": [["web", "controlled fallback topic"]], "selected_web_link": null,
+               "selected_music_link": null, "selected_meme_link": null, "vision_content": null, "active_channels": ["web"]},
+    "oracle": {"relevance": {"news:28db4424b676": 3}, "acceptable_top1_sources": ["news"], "forbidden_sources": [], "must_filter_candidate_ids": [],
+               "expected_filter_reasons": {}, "expected_empty": false, "active_bias_expected": false,
+               "expected_active_bias_reason": "missing_material_link"}
+  },
+  {
+    "schema_version": 2, "id": "sequence_restricted_context_preference", "name": "Restricted context preference sequence",
+    "description": "The candidate set is fixed while activity context changes.",
+    "tags": ["context", "sequence"], "stage": "source", "kind": "sequence",
+    "factor_under_test": "context_preference", "controlled_fields": ["base_inputs", "privacy_state", "weights"],
+    "base_context": {"lanlan_name": "test-character", "enabled_modes": ["news", "vision"], "source_weights": {"news": 1},
+      "source_type_adjustments": {}, "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [],
+      "privacy_state": "open", "activity_state": "idle", "topic_materials": [], "mini_game_available": false},
+    "base_inputs": {"sources": {
+        "news": {"links": [{"title": "controlled context news", "url": "https://example.test/news/context", "source": "testbench"}]},
+        "vision": {"window_title": "Controlled editor", "screenshot_b64": "frozen-test-marker"}
+      }, "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+      "selected_meme_link": null, "vision_content": null, "active_channels": []},
+    "oracle": {},
+    "steps": [
+      {"id": "idle", "context_patch": {"activity_state": "idle"}, "oracle": {"expected_top1_source": "news"}},
+      {"id": "restricted", "context_patch": {"activity_state": "restricted_screen_only"},
+       "oracle": {"expected_top1_source": "vision", "score_directions_from_previous": {"news": "down", "vision": "up"}}}
+    ]
+  }
+]

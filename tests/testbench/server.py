@@ -42,6 +42,7 @@ from tests.testbench.routers import (
     config_router,
     diagnostics_router,
     external_event_router,
+    recommendation_router,
     health_router,
     judge_router,
     memory_router,
@@ -174,6 +175,7 @@ def create_app() -> FastAPI:
     app.include_router(diagnostics_router.router)
     app.include_router(security_router.router)
     app.include_router(external_event_router.router)
+    app.include_router(recommendation_router.router)
 
     # ── Log retention background task (P19) ─────────────────────────────
     # Three triggers keep the JSONL log directory bounded:

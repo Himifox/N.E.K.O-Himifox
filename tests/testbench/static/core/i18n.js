@@ -79,6 +79,7 @@ export const I18N = {
       },
     },
     tabs: {
+      recommendation: 'Recommendation 推荐',
       setup: 'Setup 准备',
       chat: 'Chat 对话',
       evaluation: 'Evaluation 评分',

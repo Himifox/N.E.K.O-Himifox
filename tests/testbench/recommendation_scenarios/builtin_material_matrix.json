@@ -1,0 +1,346 @@
+[
+  {
+    "schema_version": 1,
+    "id": "material_news_preferred",
+    "name": "Material news preferred",
+    "description": "Curated golden case: material_news_preferred; one controlled input combination.",
+    "tags": [
+      "material",
+      "competition"
+    ],
+    "stage": "material",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme",
+        "vision"
+      ],
+      "source_weights": {
+        "news": 1
+      },
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {},
+      "phase1_topics": [
+        [
+          "web",
+          "frozen web topic"
+        ],
+        [
+          "music",
+          "frozen music topic"
+        ],
+        [
+          "meme",
+          "frozen meme topic"
+        ]
+      ],
+      "selected_web_link": {
+        "title": "Frozen news",
+        "url": "https://example.test/news/material-2"
+      },
+      "selected_music_link": {
+        "title": "Frozen song",
+        "artist": "Test",
+        "url": "https://example.test/music/material-2"
+      },
+      "selected_meme_link": {
+        "title": "Frozen meme",
+        "url": "https://example.test/meme/material-2"
+      },
+      "vision_content": {
+        "window_title": "Frozen editor"
+      },
+      "active_channels": [
+        "web",
+        "music",
+        "meme",
+        "vision"
+      ]
+    },
+    "oracle": {
+      "relevance": {
+        "news:81f9cf0b1c61": 3,
+        "music:ca0ad91baf94": 1,
+        "meme:06ce3447e915": 1,
+        "vision:d2c36090a38a": 1
+      },
+      "acceptable_top1_sources": [
+        "news"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": false,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "material_music_preferred",
+    "name": "Material music preferred",
+    "description": "Curated golden case: material_music_preferred; one controlled input combination.",
+    "tags": [
+      "material",
+      "competition"
+    ],
+    "stage": "material",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme",
+        "vision"
+      ],
+      "source_weights": {
+        "music": 1
+      },
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {},
+      "phase1_topics": [
+        [
+          "web",
+          "frozen web topic"
+        ],
+        [
+          "music",
+          "frozen music topic"
+        ],
+        [
+          "meme",
+          "frozen meme topic"
+        ]
+      ],
+      "selected_web_link": {
+        "title": "Frozen news",
+        "url": "https://example.test/news/material-0"
+      },
+      "selected_music_link": {
+        "title": "Frozen song",
+        "artist": "Test",
+        "url": "https://example.test/music/material-0"
+      },
+      "selected_meme_link": {
+        "title": "Frozen meme",
+        "url": "https://example.test/meme/material-0"
+      },
+      "vision_content": {
+        "window_title": "Frozen editor"
+      },
+      "active_channels": [
+        "web",
+        "music",
+        "meme",
+        "vision"
+      ]
+    },
+    "oracle": {
+      "relevance": {
+        "music:7de4261afdc6": 3,
+        "meme:42e5ec2f87d0": 1,
+        "news:40c9cdb67ef9": 1,
+        "vision:d2c36090a38a": 1
+      },
+      "acceptable_top1_sources": [
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": true,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "material_meme_preferred",
+    "name": "Material meme preferred",
+    "description": "Curated golden case: material_meme_preferred; one controlled input combination.",
+    "tags": [
+      "material",
+      "competition"
+    ],
+    "stage": "material",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme",
+        "vision"
+      ],
+      "source_weights": {
+        "meme": 1
+      },
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {},
+      "phase1_topics": [
+        [
+          "web",
+          "frozen web topic"
+        ],
+        [
+          "music",
+          "frozen music topic"
+        ],
+        [
+          "meme",
+          "frozen meme topic"
+        ]
+      ],
+      "selected_web_link": {
+        "title": "Frozen news",
+        "url": "https://example.test/news/material-1"
+      },
+      "selected_music_link": {
+        "title": "Frozen song",
+        "artist": "Test",
+        "url": "https://example.test/music/material-1"
+      },
+      "selected_meme_link": {
+        "title": "Frozen meme",
+        "url": "https://example.test/meme/material-1"
+      },
+      "vision_content": {
+        "window_title": "Frozen editor"
+      },
+      "active_channels": [
+        "web",
+        "music",
+        "meme",
+        "vision"
+      ]
+    },
+    "oracle": {
+      "relevance": {
+        "meme:d5e6a49e904a": 3,
+        "music:b00f954c8faf": 1,
+        "news:5f9f541faa8d": 1,
+        "vision:d2c36090a38a": 1
+      },
+      "acceptable_top1_sources": [
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": true,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "material_vision_preferred",
+    "name": "Material vision preferred",
+    "description": "Curated golden case: material_vision_preferred; one controlled input combination.",
+    "tags": [
+      "material",
+      "competition"
+    ],
+    "stage": "material",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme",
+        "vision"
+      ],
+      "source_weights": {
+        "vision": 1
+      },
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {},
+      "phase1_topics": [
+        [
+          "web",
+          "frozen web topic"
+        ],
+        [
+          "music",
+          "frozen music topic"
+        ],
+        [
+          "meme",
+          "frozen meme topic"
+        ]
+      ],
+      "selected_web_link": {
+        "title": "Frozen news",
+        "url": "https://example.test/news/material-3"
+      },
+      "selected_music_link": {
+        "title": "Frozen song",
+        "artist": "Test",
+        "url": "https://example.test/music/material-3"
+      },
+      "selected_meme_link": {
+        "title": "Frozen meme",
+        "url": "https://example.test/meme/material-3"
+      },
+      "vision_content": {
+        "window_title": "Frozen editor"
+      },
+      "active_channels": [
+        "web",
+        "music",
+        "meme",
+        "vision"
+      ]
+    },
+    "oracle": {
+      "relevance": {
+        "vision:d2c36090a38a": 3,
+        "music:81cc517f9ea7": 1,
+        "meme:26c6ec37d268": 1,
+        "news:0fc6d53e6376": 1
+      },
+      "acceptable_top1_sources": [
+        "vision"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": false,
+      "expected_empty": false
+    }
+  }
+]

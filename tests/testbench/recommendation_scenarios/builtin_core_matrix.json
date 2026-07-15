@@ -1,0 +1,982 @@
+[
+  {
+    "schema_version": 1,
+    "id": "privacy_01",
+    "name": "privacy scenario 1",
+    "description": "Curated golden case: privacy_01; one controlled input combination.",
+    "tags": [
+      "privacy"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "vision",
+        "news"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "closed",
+      "activity_state": "unknown",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "vision": {
+          "window_title": "frozen test window"
+        },
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 1",
+              "url": "https://example.test/news/1",
+              "source": "testbench"
+            }
+          ]
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:e1d2caa6b3ec": 3
+      },
+      "acceptable_top1_sources": [
+        "news"
+      ],
+      "forbidden_sources": [
+        "vision"
+      ],
+      "must_filter_candidate_ids": [
+        "vision:8046abe7ade0"
+      ],
+      "expected_filter_reasons": {
+        "vision:8046abe7ade0": "privacy_sensitive"
+      },
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "privacy_04",
+    "name": "privacy scenario 4",
+    "description": "Curated golden case: privacy_04; one controlled input combination.",
+    "tags": [
+      "privacy"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "vision",
+        "news"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "unknown",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "vision": {
+          "window_title": "frozen test window"
+        },
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 4",
+              "url": "https://example.test/news/4",
+              "source": "testbench"
+            }
+          ]
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:aa2444d39067": 3,
+        "vision:8046abe7ade0": 1
+      },
+      "acceptable_top1_sources": [
+        "news"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "activity_07",
+    "name": "activity scenario 7",
+    "description": "Curated golden case: activity_07; one controlled input combination.",
+    "tags": [
+      "activity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "busy",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 7",
+              "url": "https://example.test/news/7",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {},
+      "acceptable_top1_sources": [
+        "news",
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [
+        "meme:c7a172af8c4a",
+        "music:1948d86f3220",
+        "news:78777d4eb8b0"
+      ],
+      "expected_filter_reasons": {
+        "meme:c7a172af8c4a": "activity_busy",
+        "music:1948d86f3220": "activity_busy",
+        "news:78777d4eb8b0": "activity_busy"
+      },
+      "active_bias_expected": null,
+      "expected_empty": true
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "activity_08",
+    "name": "activity scenario 8",
+    "description": "Curated golden case: activity_08; one controlled input combination.",
+    "tags": [
+      "activity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "gaming",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 8",
+              "url": "https://example.test/news/8",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:7476339be2a7": 1,
+        "meme:c7a172af8c4a": 3,
+        "music:1948d86f3220": 3
+      },
+      "acceptable_top1_sources": [
+        "meme",
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "activity_09",
+    "name": "activity scenario 9",
+    "description": "Curated golden case: activity_09; one controlled input combination.",
+    "tags": [
+      "activity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "focused_work",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 9",
+              "url": "https://example.test/news/9",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:f14b45958ead": 3,
+        "meme:c7a172af8c4a": 3,
+        "music:1948d86f3220": 1
+      },
+      "acceptable_top1_sources": [
+        "news",
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "activity_10",
+    "name": "activity scenario 10",
+    "description": "Curated golden case: activity_10; one controlled input combination.",
+    "tags": [
+      "activity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "away",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 10",
+              "url": "https://example.test/news/10",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {},
+      "acceptable_top1_sources": [
+        "meme",
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [
+        "meme:c7a172af8c4a",
+        "music:1948d86f3220",
+        "news:e6061ae1a67b"
+      ],
+      "expected_filter_reasons": {
+        "meme:c7a172af8c4a": "activity_busy",
+        "music:1948d86f3220": "activity_busy",
+        "news:e6061ae1a67b": "activity_busy"
+      },
+      "active_bias_expected": null,
+      "expected_empty": true
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "competition_15",
+    "name": "competition scenario 15",
+    "description": "Curated golden case: competition_15; one controlled input combination.",
+    "tags": [
+      "competition"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 15",
+              "url": "https://example.test/news/15",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:1711bfc3f6ae": 3,
+        "music:1948d86f3220": 1
+      },
+      "acceptable_top1_sources": [
+        "news"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "competition_16",
+    "name": "competition scenario 16",
+    "description": "Curated golden case: competition_16; one controlled input combination.",
+    "tags": [
+      "competition"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "meme",
+        "news"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        },
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 16",
+              "url": "https://example.test/news/16",
+              "source": "testbench"
+            }
+          ]
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:f5059d6b8b76": 1,
+        "meme:c7a172af8c4a": 3
+      },
+      "acceptable_top1_sources": [
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "competition_17",
+    "name": "competition scenario 17",
+    "description": "Curated golden case: competition_17; one controlled input combination.",
+    "tags": [
+      "competition"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "music:1948d86f3220": 3,
+        "meme:c7a172af8c4a": 1
+      },
+      "acceptable_top1_sources": [
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "competition_18",
+    "name": "competition scenario 18",
+    "description": "Curated golden case: competition_18; one controlled input combination.",
+    "tags": [
+      "competition"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "meme",
+        "music"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 18",
+              "url": "https://example.test/news/18",
+              "source": "testbench"
+            }
+          ]
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:ddc045d5c516": 3,
+        "music:1948d86f3220": 3,
+        "meme:c7a172af8c4a": 3
+      },
+      "acceptable_top1_sources": [
+        "news",
+        "meme",
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "diversity_23",
+    "name": "diversity scenario 23",
+    "description": "Curated golden case: diversity_23; one controlled input combination.",
+    "tags": [
+      "diversity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [
+        "news",
+        "news"
+      ],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 23",
+              "url": "https://example.test/news/23",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "music:1948d86f3220": 3,
+        "meme:c7a172af8c4a": 3,
+        "news:642225fb0be6": 1
+      },
+      "acceptable_top1_sources": [
+        "music",
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "diversity_24",
+    "name": "diversity scenario 24",
+    "description": "Curated golden case: diversity_24; one controlled input combination.",
+    "tags": [
+      "diversity"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music",
+        "meme"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [
+        "music",
+        "music"
+      ],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "idle",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 24",
+              "url": "https://example.test/news/24",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        },
+        "meme": {
+          "placeholder": true,
+          "note": "frozen meme candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:ed48f8dce8e6": 3,
+        "meme:c7a172af8c4a": 3,
+        "music:1948d86f3220": 1
+      },
+      "acceptable_top1_sources": [
+        "news",
+        "meme"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "edge_35",
+    "name": "edge scenario 35",
+    "description": "Curated golden case: edge_35; one controlled input combination.",
+    "tags": [
+      "edge"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "unknown",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {},
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {},
+      "acceptable_top1_sources": [],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": true
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "edge_36",
+    "name": "edge scenario 36",
+    "description": "Curated golden case: edge_36; one controlled input combination.",
+    "tags": [
+      "edge"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "unknown",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 36",
+              "url": "https://example.test/news/36",
+              "source": "testbench"
+            }
+          ]
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:2dbb2f3633cd": 3
+      },
+      "acceptable_top1_sources": [
+        "news"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  },
+  {
+    "schema_version": 1,
+    "id": "edge_37",
+    "name": "edge scenario 37",
+    "description": "Curated golden case: edge_37; one controlled input combination.",
+    "tags": [
+      "edge"
+    ],
+    "stage": "source",
+    "context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": [
+        "news",
+        "music"
+      ],
+      "source_weights": {},
+      "source_type_adjustments": {},
+      "recent_sources": [],
+      "recent_shadow_sources": [],
+      "recent_candidate_ids": [],
+      "privacy_state": "open",
+      "activity_state": "unknown",
+      "topic_materials": [],
+      "mini_game_available": false
+    },
+    "inputs": {
+      "sources": {
+        "news": {
+          "links": [
+            {
+              "title": "news frozen candidate 37",
+              "url": "https://example.test/news/37",
+              "source": "testbench"
+            }
+          ]
+        },
+        "music": {
+          "placeholder": true,
+          "note": "frozen music candidate"
+        }
+      },
+      "phase1_topics": [],
+      "selected_web_link": null,
+      "selected_music_link": null,
+      "selected_meme_link": null,
+      "vision_content": null,
+      "active_channels": []
+    },
+    "oracle": {
+      "relevance": {
+        "news:3d57051410cb": 3,
+        "music:1948d86f3220": 3
+      },
+      "acceptable_top1_sources": [
+        "news",
+        "music"
+      ],
+      "forbidden_sources": [],
+      "must_filter_candidate_ids": [],
+      "expected_filter_reasons": {},
+      "active_bias_expected": null,
+      "expected_empty": false
+    }
+  }
+]

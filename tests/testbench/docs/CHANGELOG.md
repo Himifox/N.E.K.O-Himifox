@@ -616,3 +616,13 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
 - 测试人员入门手册: [`testbench_USER_MANUAL.md`](./testbench_USER_MANUAL.md).
 - 外部事件注入详细字段表: [`external_events_guide.md`](./external_events_guide.md).
 - 代码架构与设计原则: [`testbench_ARCHITECTURE_OVERVIEW.md`](./testbench_ARCHITECTURE_OVERVIEW.md).
+# v1.10.0 — Recommendation semantic testbench (2026-07-15)
+
+- Added a session-independent Recommendation workspace with frozen source/material scenarios, baseline variants, deterministic replay, quality/diversity gates, Shadow dataset calibration, and JSON/Markdown exports.
+- Added 44 builtin scenarios and P41/P42 backend/UI contract smokes. Runs are offline-only and never mutate production tuning.
+## Recommendation Shadow annotation and P44 gates
+
+- Added Shadow dataset audits for linkage, duplicates, invalid records, source/activity distribution, and algorithm-version mixing.
+- Added human annotation/review APIs and Calibration workspace controls.
+- Added guarded `shadow_golden` promotion; datasets below the P44 sample, annotation, review, privacy, or version gates are rejected.
+- Added P44 smoke coverage without treating synthetic fixtures as real-data acceptance.

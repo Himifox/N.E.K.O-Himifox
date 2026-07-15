@@ -90,7 +90,7 @@ from pathlib import Path
 #      testers can tell at a glance how fresh the build is without
 #      cross-referencing CHANGELOG.md.
 
-TESTBENCH_VERSION: str = "1.9.4"
+TESTBENCH_VERSION: str = "1.10.0"
 TESTBENCH_PHASE: str = "记忆分析系统 · 系统概况 (自动排查 + 体检报告)"
 TESTBENCH_LAST_UPDATED: str = "2026-06-30"
 
@@ -115,10 +115,17 @@ AUTOSAVE_DIR: Path = SAVED_SESSIONS_DIR / "_autosave"
 USER_SCHEMAS_DIR: Path = DATA_DIR / "scoring_schemas"
 USER_DIALOG_TEMPLATES_DIR: Path = DATA_DIR / "dialog_templates"
 EXPORTS_DIR: Path = DATA_DIR / "exports"
+RECOMMENDATION_DATA_DIR: Path = DATA_DIR / "recommendation"
+USER_RECOMMENDATION_SCENARIOS_DIR: Path = RECOMMENDATION_DATA_DIR / "scenarios"
+RECOMMENDATION_DATASETS_DIR: Path = RECOMMENDATION_DATA_DIR / "datasets"
+RECOMMENDATION_RUNS_DIR: Path = RECOMMENDATION_DATA_DIR / "runs"
+RECOMMENDATION_EXPORTS_DIR: Path = RECOMMENDATION_DATA_DIR / "exports"
+RECOMMENDATION_BASELINES_DIR: Path = RECOMMENDATION_DATA_DIR / "baselines"
 
 # Code-side builtin asset directories.
 BUILTIN_SCHEMAS_DIR: Path = CODE_DIR / "scoring_schemas"
 BUILTIN_DIALOG_TEMPLATES_DIR: Path = CODE_DIR / "dialog_templates"
+BUILTIN_RECOMMENDATION_SCENARIOS_DIR: Path = CODE_DIR / "recommendation_scenarios"
 
 # Docs (always under code dir, committed).
 DOCS_DIR: Path = CODE_DIR / "docs"
@@ -237,6 +244,12 @@ def ensure_data_dirs() -> None:
         USER_SCHEMAS_DIR,
         USER_DIALOG_TEMPLATES_DIR,
         EXPORTS_DIR,
+        RECOMMENDATION_DATA_DIR,
+        USER_RECOMMENDATION_SCENARIOS_DIR,
+        RECOMMENDATION_DATASETS_DIR,
+        RECOMMENDATION_RUNS_DIR,
+        RECOMMENDATION_EXPORTS_DIR,
+        RECOMMENDATION_BASELINES_DIR,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +269,7 @@ def ensure_code_support_dirs() -> None:
         STATIC_DIR,
         BUILTIN_SCHEMAS_DIR,
         BUILTIN_DIALOG_TEMPLATES_DIR,
+        BUILTIN_RECOMMENDATION_SCENARIOS_DIR,
     ):
         directory.mkdir(parents=True, exist_ok=True)
         keep = directory / ".gitkeep"

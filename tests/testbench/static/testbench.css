@@ -6785,3 +6785,16 @@ button.is-dirty {
 .mov-verdict.rel-duplicate { border-left: 3px solid var(--warn); }
 .mov-verdict-rel { font-weight: 600; }
 .mov-verdict-pair { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Recommendation semantic testbench */
+.recommendation-list { display: grid; gap: 12px; margin-top: 12px; }
+.recommendation-editor { width: 100%; min-height: 320px; font-family: ui-monospace, monospace; margin: 12px 0; }
+.recommendation-json { max-height: 420px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+.recommendation-status-failed, .recommendation-status-regressed { border-left: 3px solid #ef5350; }
+.recommendation-status-passed { border-left: 3px solid #4caf50; }
+.recommendation-status-passed_with_warnings { border-left: 3px solid #ffb300; }
+.recommendation-score-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.recommendation-score-table th, .recommendation-score-table td { padding: 7px 9px; border-bottom: 1px solid rgba(255,255,255,.1); text-align: left; vertical-align: top; }
+.recommendation-score-top1 { background: rgba(76,175,80,.12); }
+.recommendation-score-filtered { opacity: .68; }
+.recommendation-score-section { margin: 12px 0; }
+.recommendation-result-detail { margin-top: 10px; }

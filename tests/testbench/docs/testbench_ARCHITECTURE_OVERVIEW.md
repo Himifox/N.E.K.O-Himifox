@@ -919,3 +919,6 @@ p26_docs_endpoint_smoke.py            # /docs/{name} 公开白名单 + heading i
 | `AGENT_NOTES.md` | 历史档 | AI agent | 踩坑复盘 |
 | `LESSONS_LEARNED.md` | 跨项目 | 任何 AI 辅助开发项目 | 经验沉淀 |
 | `PLAN.md` | 活动 | 项目开发 | 未决 / 待办 |
+# Recommendation workspace addendum (v1.10.0)
+
+Recommendation is a session-independent semantic-contract laboratory. `pipeline/recommendation_adapter.py` lazily imports the production proactive recommendation pure helpers; frozen builtin/user scenarios feed source or material ranking, and immutable run snapshots capture variants, score breakdowns, gates, metrics, hashes, and Git revision. Network fetch, LLM generation, delivery queues, cooldowns, and production tuning writes remain outside the Testbench boundary.

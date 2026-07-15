@@ -1,0 +1,101 @@
+[
+  {
+    "schema_version": 2,
+    "id": "sequence_news_source_repeat",
+    "name": "News source repeat sequence",
+    "description": "Only recent_sources changes across steps.",
+    "tags": ["diversity", "sequence"],
+    "stage": "source",
+    "kind": "sequence",
+    "factor_under_test": "source_repeat",
+    "controlled_fields": ["inputs", "activity_state", "privacy_state", "recent_candidate_ids"],
+    "base_context": {
+      "lanlan_name": "test-character",
+      "enabled_modes": ["news", "music", "meme"],
+      "source_weights": {}, "source_type_adjustments": {},
+      "recent_sources": [], "recent_shadow_sources": [], "recent_candidate_ids": [],
+      "privacy_state": "open", "activity_state": "idle", "topic_materials": [], "mini_game_available": false
+    },
+    "base_inputs": {
+      "sources": {
+        "news": {"links": [{"title": "sequence news", "url": "https://example.test/news/sequence", "source": "testbench"}]},
+        "music": {"placeholder": true, "note": "sequence music"},
+        "meme": {"placeholder": true, "note": "sequence meme"}
+      },
+      "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+      "selected_meme_link": null, "vision_content": null, "active_channels": []
+    },
+    "oracle": {},
+    "steps": [
+      {"id": "initial", "context_patch": {"recent_sources": []}, "oracle": {"expected_top1_source": "news"}},
+      {"id": "news_once", "context_patch": {"recent_sources": ["news"]},
+       "oracle": {"score_directions_from_previous": {"news": "down", "music": "same", "meme": "same"}}},
+      {"id": "news_twice", "context_patch": {"recent_sources": ["news", "news"]},
+       "oracle": {"score_directions_from_previous": {"news": "down", "music": "same", "meme": "same"},
+                  "expected_top1_source": "music"}}
+    ]
+  },
+  {
+    "schema_version": 2,
+    "id": "sequence_news_candidate_repeat",
+    "name": "News candidate repeat sequence",
+    "description": "Only recent_candidate_ids changes across steps.",
+    "tags": ["diversity", "sequence"],
+    "stage": "source",
+    "kind": "sequence",
+    "factor_under_test": "candidate_repeat",
+    "controlled_fields": ["inputs", "activity_state", "privacy_state", "recent_sources"],
+    "base_context": {
+      "lanlan_name": "test-character", "enabled_modes": ["news", "music"],
+      "source_weights": {}, "source_type_adjustments": {}, "recent_sources": [],
+      "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+      "activity_state": "idle", "topic_materials": [], "mini_game_available": false
+    },
+    "base_inputs": {
+      "sources": {
+        "news": {"links": [{"title": "candidate repeat news", "url": "https://example.test/news/candidate-repeat", "source": "testbench"}]},
+        "music": {"placeholder": true, "note": "candidate repeat music"}
+      },
+      "phase1_topics": [], "selected_web_link": null, "selected_music_link": null,
+      "selected_meme_link": null, "vision_content": null, "active_channels": []
+    },
+    "oracle": {},
+    "steps": [
+      {"id": "initial", "context_patch": {"recent_candidate_ids": []}, "oracle": {"expected_top1_source": "news"}},
+      {"id": "repeated", "context_patch": {"recent_candidate_ids": ["news:6c6751bb8f53"]},
+       "oracle": {"score_directions_from_previous": {"news": "down", "music": "same"}}}
+    ]
+  },
+  {
+    "schema_version": 2,
+    "id": "sequence_active_bias_boundary",
+    "name": "Active bias gap boundary",
+    "description": "The same material decision is tested immediately below and above its observed score gap.",
+    "tags": ["material", "active_bias", "sequence"],
+    "stage": "material",
+    "kind": "sequence",
+    "factor_under_test": "active_bias_boundary",
+    "controlled_fields": ["base_context", "base_inputs"],
+    "base_context": {
+      "lanlan_name": "test-character", "enabled_modes": ["news", "music", "meme", "vision"],
+      "source_weights": {"news": 1}, "source_type_adjustments": {}, "recent_sources": [],
+      "recent_shadow_sources": [], "recent_candidate_ids": [], "privacy_state": "open",
+      "activity_state": "idle", "topic_materials": [], "mini_game_available": false
+    },
+    "base_inputs": {
+      "sources": {},
+      "phase1_topics": [["web", "frozen web topic"], ["music", "frozen music topic"], ["meme", "frozen meme topic"]],
+      "selected_web_link": {"title": "Frozen news", "url": "https://example.test/news/material-boundary"},
+      "selected_music_link": {"title": "Frozen song", "artist": "Test", "url": "https://example.test/music/material-boundary"},
+      "selected_meme_link": {"title": "Frozen meme", "url": "https://example.test/meme/material-boundary"},
+      "vision_content": {"window_title": "Frozen editor"}, "active_channels": ["web", "music", "meme", "vision"]
+    },
+    "oracle": {},
+    "steps": [
+      {"id": "threshold_below_gap", "variant_patch": {"active_min_score_gap": 0.041},
+       "oracle": {"active_bias_expected": true}},
+      {"id": "threshold_above_gap", "variant_patch": {"active_min_score_gap": 0.043},
+       "oracle": {"active_bias_expected": false, "expected_active_bias_reason": "score_gap_too_small"}}
+    ]
+  }
+]
