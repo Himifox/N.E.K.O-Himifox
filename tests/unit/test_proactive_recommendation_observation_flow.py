@@ -1,9 +1,11 @@
 import json
 
 from main_logic.proactive_recommendation import (
+    PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
     ProactiveCandidate,
     ProactiveRecommendationDecision,
     build_active_source_bias,
+    build_recommendation_review_context,
 )
 from main_logic.proactive_recommendation_observer import (
     OBSERVATION_LOG_FILENAME,
@@ -70,6 +72,8 @@ def test_system_router_records_recommendation_observation_to_jsonl(tmp_path):
         observation_log_mode="jsonl",
         config_dir=tmp_path,
         ts=123.0,
+        activity_state="gaming",
+        activity_propensity="restricted",
     )
 
     rows = load_recommendation_observations_jsonl(tmp_path / OBSERVATION_LOG_FILENAME)
@@ -84,12 +88,15 @@ def test_system_router_records_recommendation_observation_to_jsonl(tmp_path):
     assert rows == [observation]
     assert rows[0]["recommendation_mode"] == "active_source"
     assert rows[0]["shadow_selected_source_type"] == "music"
+    assert rows[0]["activity_state"] == "gaming"
+    assert rows[0]["activity_propensity"] == "restricted"
+    assert rows[0]["algorithm_version"] == PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
     assert rows[0]["top_candidates"][0] == {
         "rank": 1,
         "id": "music:1",
         "source_type": "music",
         "family": "music",
-        "topic": "music topic",
+        "topic_usable": True,
         "score": 0.91,
     }
     assert "payload" not in dumped
@@ -121,4 +128,126 @@ def test_system_router_observation_flow_does_not_write_when_jsonl_disabled(tmp_p
     assert observation["delivered"] is False
     assert observation["actual_rank"] is None
     assert observation["actual_reason_code"] == "PASS_MODEL_PASS"
+    assert "review_context" not in observation
     assert not (tmp_path / OBSERVATION_LOG_FILENAME).exists()
+
+
+def test_system_router_generates_turn_id_and_persists_same_id_for_pass(tmp_path):
+    response_body = {
+        "action": "pass",
+        "reason_code": "PASS_MODEL_PASS",
+    }
+
+    observation = _record_proactive_recommendation_observation(
+        _decision(_material_candidate("news")),
+        lanlan_name="neko",
+        response_body=response_body,
+        recommendation_mode="shadow",
+        observation_log_mode="jsonl",
+        config_dir=tmp_path,
+        ts=789.0,
+        activity_state="away",
+        activity_propensity="restricted",
+    )
+    rows = load_recommendation_observations_jsonl(tmp_path / OBSERVATION_LOG_FILENAME)
+
+    assert observation["turn_id"]
+    assert response_body["turn_id"] == observation["turn_id"]
+    assert rows[0]["turn_id"] == observation["turn_id"]
+
+
+def test_system_router_preserves_existing_turn_id():
+    response_body = {
+        "action": "pass",
+        "reason_code": "PASS_MODEL_PASS",
+        "turn_id": "existing-turn",
+    }
+
+    observation = _record_proactive_recommendation_observation(
+        _decision(_material_candidate("meme")),
+        lanlan_name="neko",
+        response_body=response_body,
+        recommendation_mode="shadow",
+        observation_log_mode="off",
+        ts=790.0,
+    )
+
+    assert response_body["turn_id"] == "existing-turn"
+    assert observation["turn_id"] == "existing-turn"
+
+
+def test_system_router_records_review_context_only_in_explicit_shadow_review_mode(tmp_path):
+    response_body = {
+        "action": "chat",
+        "reason_code": "CHAT_DELIVERED",
+        "turn_id": "review-turn",
+    }
+    observation = _record_proactive_recommendation_observation(
+        _decision(_material_candidate("music")),
+        lanlan_name="neko",
+        response_body=response_body,
+        recommendation_mode="shadow",
+        observation_log_mode="jsonl",
+        config_dir=tmp_path,
+        ts=800.0,
+        activity_state="focused_work",
+        activity_propensity="restricted",
+        review_context_mode="shadow_review",
+        delivered_text="这是一段用于复核的短投递文本 https://example.test/?token=secret",
+    )
+    rows = load_recommendation_observations_jsonl(tmp_path / OBSERVATION_LOG_FILENAME)
+
+    assert rows == [observation]
+    assert observation["review_context"]["activity_state"] == "focused_work"
+    assert observation["review_context"]["candidate_labels"][0]["id"] == "music:1"
+    assert "example.test" not in json.dumps(observation["review_context"], ensure_ascii=False)
+
+
+def test_review_context_omits_raw_vision_and_personal_text():
+    vision = ProactiveCandidate(
+        id="vision:1",
+        source_type="vision",
+        family="screen_context",
+        topic="Private Window Title",
+        summary="Full private screen text",
+        score=0.7,
+    )
+    personal = ProactiveCandidate(
+        id="personal:1",
+        source_type="personal",
+        family="personal",
+        topic="Private personal dynamic",
+        summary="Private conversation detail",
+        score=0.6,
+    )
+    context = build_recommendation_review_context(
+        _decision(vision, personal),
+        mode="testbench",
+        activity_state="idle",
+    )
+    dumped = json.dumps(context, ensure_ascii=False)
+
+    assert "Private Window Title" not in dumped
+    assert "Full private screen text" not in dumped
+    assert "Private personal dynamic" not in dumped
+    assert "Private conversation detail" not in dumped
+    assert "vision_text_omitted" in context["redaction_notes"]
+    assert "personal_text_omitted" in context["redaction_notes"]
+
+
+def test_shadow_review_mode_does_not_attach_context_to_active_source_observation():
+    observation = _record_proactive_recommendation_observation(
+        _decision(_material_candidate("news")),
+        lanlan_name="neko",
+        response_body={
+            "action": "chat",
+            "reason_code": "CHAT_DELIVERED",
+            "turn_id": "active-no-review",
+        },
+        recommendation_mode="active_source",
+        observation_log_mode="off",
+        review_context_mode="shadow_review",
+        delivered_text="must not be exported in active mode",
+    )
+
+    assert "review_context" not in observation

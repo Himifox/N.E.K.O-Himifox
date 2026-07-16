@@ -9,7 +9,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
+import os
 from typing import Any
+
+from config.application import APP_VERSION
 
 
 _PRIVACY_CLOSED_STATES = {"closed", "private", "privacy", "privacy_closed"}
@@ -30,6 +33,18 @@ _SOURCE_TYPE_SCORE_ADJUSTMENTS = {
     # samples while actual delivery often chose chat/music/meme instead.
     "news": -0.05,
 }
+
+PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION = (
+    f"{APP_VERSION}:proactive-recommendation-observation-v2"
+)
+# Build environments may inject a revision once at process start. Never shell
+# out per observation: logging must remain cheap and work in packaged builds.
+PROACTIVE_RECOMMENDATION_GIT_REVISION = str(
+    os.getenv("NEKO_GIT_REVISION") or os.getenv("GIT_REVISION") or ""
+).strip()
+_REVIEW_CONTEXT_MODES = {"shadow_review", "testbench"}
+_REVIEW_CONTEXT_MAX_CANDIDATES = 3
+_REVIEW_SENSITIVE_SOURCE_TYPES = {"personal", "topic_hook", "vision", "window"}
 
 
 @dataclass(slots=True)
@@ -138,6 +153,11 @@ def build_recommendation_observation(
     ts: Any = None,
     lanlan_name: Any = None,
     turn_id: Any = None,
+    activity_state: Any = None,
+    activity_propensity: Any = None,
+    algorithm_version: Any = None,
+    git_revision: Any = None,
+    review_context: Mapping[str, Any] | None = None,
     top_n: int = 3,
 ) -> dict[str, Any]:
     shadow_source = decision.shadow_selected_source_type
@@ -187,6 +207,15 @@ def build_recommendation_observation(
         "ts": _number(ts, 0.0) if ts is not None else None,
         "lanlan_name": _text(lanlan_name) or None,
         "turn_id": _text(turn_id) or None,
+        "activity_state": _text(activity_state) or "unknown",
+        "activity_propensity": _text(activity_propensity) or "unknown",
+        "algorithm_version": (
+            _text(algorithm_version) or PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
+        ),
+        "git_revision": (
+            _text(git_revision) or PROACTIVE_RECOMMENDATION_GIT_REVISION or None
+        ),
+        "review_context": dict(review_context) if isinstance(review_context, Mapping) else None,
         "recommendation_mode": _text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,
         "candidate_count": decision.candidate_count,
@@ -214,6 +243,55 @@ def build_recommendation_observation(
         "active_preferred_candidate_id": active_bias_info.get("preferred_candidate_id"),
         "active_bias_fallback_reason": active_bias_info.get("fallback_reason"),
         "active_model_followed_preference": active_model_followed_preference,
+    }
+
+
+def build_recommendation_review_context(
+    decision: ProactiveRecommendationDecision,
+    *,
+    mode: Any = "off",
+    activity_state: Any = None,
+    delivered_text: Any = None,
+) -> dict[str, Any] | None:
+    """Build transient review input; the observer sanitizer is authoritative.
+
+    Sensitive screen/personal candidates never expose their raw topic or
+    summary. Other candidate text is still treated as untrusted and is passed
+    through the review-context sanitizer before persistence.
+    """
+    normalized_mode = _text(mode)
+    if normalized_mode not in _REVIEW_CONTEXT_MODES:
+        return None
+
+    labels: list[dict[str, Any]] = []
+    redaction_notes: list[str] = []
+    for candidate in decision.ranked_candidates[:_REVIEW_CONTEXT_MAX_CANDIDATES]:
+        sensitive = candidate.source_type in _REVIEW_SENSITIVE_SOURCE_TYPES
+        if sensitive:
+            safe_title = candidate.family or candidate.source_type
+            safe_summary = ""
+            note = "vision_text_omitted" if candidate.source_type in {"vision", "window"} else "personal_text_omitted"
+            if note not in redaction_notes:
+                redaction_notes.append(note)
+        else:
+            safe_title = candidate.topic
+            safe_summary = candidate.summary
+        labels.append(
+            {
+                "id": candidate.id,
+                "source_type": candidate.source_type,
+                "safe_title": safe_title,
+                "safe_summary": safe_summary,
+                "score": round(float(candidate.score), 3),
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "candidate_labels": labels,
+        "activity_state": _text(activity_state) or "unknown",
+        "delivered_excerpt": _text(delivered_text),
+        "redaction_notes": redaction_notes,
     }
 
 

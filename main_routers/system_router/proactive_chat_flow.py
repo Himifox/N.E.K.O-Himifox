@@ -149,13 +149,17 @@ from config import (
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_MODE,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
 from main_logic.proactive_recommendation import (
+    PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+    PROACTIVE_RECOMMENDATION_GIT_REVISION,
     ProactiveRecommendationContext,
     build_active_source_bias,
     build_phase1_material_shadow_decision,
     build_recommendation_observation,
+    build_recommendation_review_context,
     build_shadow_recommendation_decision,
     reorder_phase1_topics_for_bias,
 )
@@ -166,6 +170,7 @@ from main_logic.proactive_recommendation_feedback import (
 )
 from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
+    sanitize_recommendation_observation,
 )
 from main_logic.proactive_recommendation_tuning import (
     load_recommendation_tuning,
@@ -319,25 +324,51 @@ def _record_proactive_recommendation_observation(
     observation_log_mode: str = "off",
     config_dir: Any | None = None,
     ts: float | None = None,
+    activity_state: Any = None,
+    activity_propensity: Any = None,
+    review_context_mode: str = "off",
+    delivered_text: Any = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist the finalized recommendation observation."""
     if decision is None:
         return None
-    observation = build_recommendation_observation(
+    turn_id = str(response_body.get("turn_id") or "").strip()
+    if not turn_id:
+        turn_id = str(uuid4())
+        response_body["turn_id"] = turn_id
+    effective_review_mode = "off"
+    if review_context_mode == "testbench":
+        effective_review_mode = "testbench"
+    elif recommendation_mode == "shadow" and review_context_mode == "shadow_review":
+        effective_review_mode = "shadow_review"
+    review_context = build_recommendation_review_context(
         decision,
-        recommendation_mode=recommendation_mode,
-        active_bias=active_bias,
-        action=response_body.get("action"),
-        reason_code=response_body.get("reason_code"),
-        stage=response_body.get("stage"),
-        source_mode=response_body.get("source_mode"),
-        channel=response_body.get("channel"),
-        source_tag=response_body.get("source_tag"),
-        active_channels=response_body.get("active_channels"),
-        source_links=response_body.get("source_links"),
-        ts=time.time() if ts is None else ts,
-        lanlan_name=lanlan_name,
-        turn_id=response_body.get("turn_id"),
+        mode=effective_review_mode,
+        activity_state=activity_state,
+        delivered_text=delivered_text,
+    )
+    observation = sanitize_recommendation_observation(
+        build_recommendation_observation(
+            decision,
+            recommendation_mode=recommendation_mode,
+            active_bias=active_bias,
+            action=response_body.get("action"),
+            reason_code=response_body.get("reason_code"),
+            stage=response_body.get("stage"),
+            source_mode=response_body.get("source_mode"),
+            channel=response_body.get("channel"),
+            source_tag=response_body.get("source_tag"),
+            active_channels=response_body.get("active_channels"),
+            source_links=response_body.get("source_links"),
+            ts=time.time() if ts is None else ts,
+            lanlan_name=lanlan_name,
+            turn_id=turn_id,
+            activity_state=activity_state,
+            activity_propensity=activity_propensity,
+            algorithm_version=PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+            git_revision=PROACTIVE_RECOMMENDATION_GIT_REVISION,
+            review_context=review_context,
+        )
     )
     logger.info(
         "[%s] proactive recommendation observation: %s",
@@ -675,6 +706,7 @@ async def proactive_chat(request: Request):
         shadow_recommendation_decision = None
         material_recommendation_decision = None
         active_recommendation_bias = None
+        _review_delivered_text = None
 
         async def _end_proactive(resp: JSONResponse) -> JSONResponse:
             """Wraps every normal/short-circuit proactive exit: idempotently fires PROACTIVE_DONE.
@@ -709,6 +741,22 @@ async def proactive_chat(request: Request):
                         active_bias=active_recommendation_bias,
                         observation_log_mode=PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
                         config_dir=getattr(get_config_manager(), "config_dir", None),
+                        activity_state=(
+                            getattr(activity_snapshot, "state", "unknown")
+                            if activity_snapshot is not None
+                            else "unknown"
+                        ),
+                        activity_propensity=(
+                            getattr(activity_snapshot, "propensity", "unknown")
+                            if activity_snapshot is not None
+                            else "unknown"
+                        ),
+                        review_context_mode=(
+                            "shadow_review"
+                            if PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE == "shadow_review"
+                            else "off"
+                        ),
+                        delivered_text=_review_delivered_text,
                     )
                 except Exception as _rec_err:
                     logger.debug("[%s] proactive recommendation observation failed: %s", lanlan_name, _rec_err)
@@ -3277,6 +3325,8 @@ async def proactive_chat(request: Request):
                 "lanlan_name": lanlan_name,
                 "turn_id": mgr.current_speech_id,
             }))
+
+        _review_delivered_text = response_text
 
         # 记录主动搭话
         _record_proactive_chat(lanlan_name, response_text, primary_channel)

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 import main_routers.proactive_router as proactive_router
 from config import AUTOSTART_CSRF_TOKEN
+from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
 from main_logic.proactive_recommendation_feedback import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
@@ -36,6 +37,7 @@ def _observation(**overrides):
         "ts": time.time(),
         "lanlan_name": "neko",
         "turn_id": "turn-1",
+        "algorithm_version": PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
         "decision_stage": "phase1_material",
         "candidate_count": 2,
         "shadow_selected_source_type": "music",
@@ -380,7 +382,9 @@ def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     assert feedback["score_by_source_type"]["meme"] == -0.05
     feedback_calibration = payload["feedback_calibration"]
     assert feedback_calibration["sample_count"] == 2
-    assert feedback_calibration["feedback_joined_count"] == 2
+    assert feedback_calibration["feedback_joined_count"] == 1
+    assert feedback_calibration["feedback_inferred_count"] == 1
+    assert feedback_calibration["feedback_scored_count"] == 2
     assert feedback_calibration["score_bucket_feedback"]["high"]["average_feedback_score"] == 0.425
     assert feedback_calibration["top1_positive_rate"] == 0.5
     assert feedback_calibration["top1_negative_rate"] == 0.5

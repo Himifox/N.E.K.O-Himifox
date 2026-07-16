@@ -45,6 +45,7 @@ from fastapi import APIRouter, Request
 from config import (
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
 from main_logic.proactive_recommendation_feedback import (
@@ -70,6 +71,7 @@ from main_logic.proactive_recommendation_observer import (
     load_recommendation_observations_jsonl,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
+    summarize_recommendation_review_context,
     summarize_recommendation_validation,
 )
 from main_logic.proactive_recommendation_tuning import (
@@ -436,6 +438,9 @@ async def get_proactive_recommendation_summary(
         window_seconds=CALIBRATION_WINDOW_SECONDS,
         sample_limit=CALIBRATION_SAMPLE_LIMIT,
     )
+    review_context_validation = summarize_recommendation_review_context(
+        calibration_samples
+    )
     try:
         tuning_config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
@@ -451,6 +456,7 @@ async def get_proactive_recommendation_summary(
         "validation": validation,
         "feedback": feedback,
         "feedback_calibration": feedback_calibration,
+        "review_context_validation": review_context_validation,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
         "tuning": tuning_public_status(tuning),
         "sample_count": calibration["sample_count"],
@@ -468,6 +474,7 @@ async def get_proactive_recommendation_summary(
             "feedback_missing": feedback_missing,
             "feedback_log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
             "tuning_mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
+            "review_context_mode": PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
         },
     }
     if include_examples:
