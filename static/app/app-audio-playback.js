@@ -801,11 +801,13 @@
     // ======================== Lip-sync smoothing (module-local) ========================
     let _lastMouthOpen = 0;
     let _lipSyncSkipCounter = 0;
-    const LIP_SYNC_EVERY_N_FRAMES = 2;
+    const LIP_SYNC_EVERY_N_FRAMES = 1;
     // Web Audio 静音帧仍会有量化噪声。先移除噪声地板，再把常见 TTS RMS
     // 归一化到完整开口范围，避免 YUI 在闭嘴时因极小非零值而抖动。
     const LIP_SYNC_NOISE_FLOOR = 0.012;
     const LIP_SYNC_FULL_OPEN_RMS = 0.060;
+    // 将低到中等能量帧压向闭嘴，避免整段语音始终维持半张口。
+    const LIP_SYNC_CLOSE_THRESHOLD = 0.18;
     const LIP_SYNC_MIN_VISIBLE_OPEN = 0.020;
 
     // ======================== Audio queue management ========================
@@ -935,6 +937,9 @@
 
     function startLipSync(model, analyser) {
         console.log('[LipSync] 开始口型同步', { hasModel: !!model, hasAnalyser: !!analyser });
+        if (window.live2dManager && typeof window.live2dManager.setLipSyncActive === 'function') {
+            window.live2dManager.setLipSyncActive(true);
+        }
         if (S.animationFrameId) {
             cancelAnimationFrame(S.animationFrameId);
         }
@@ -963,9 +968,14 @@
             var normalized = Math.max(0, Math.min(1,
                 (rms - LIP_SYNC_NOISE_FLOOR) / (LIP_SYNC_FULL_OPEN_RMS - LIP_SYNC_NOISE_FLOOR)
             ));
-            var targetMouthOpen = normalized === 0 ? 0 : Math.pow(normalized, 0.72);
-            // 提升张口时的响应，较快收口；二者均不保留静音底噪。
-            var smoothing = targetMouthOpen > _lastMouthOpen ? 0.65 : 0.45;
+            var targetMouthOpen = normalized <= LIP_SYNC_CLOSE_THRESHOLD
+                ? 0
+                : Math.pow(
+                    (normalized - LIP_SYNC_CLOSE_THRESHOLD) / (1 - LIP_SYNC_CLOSE_THRESHOLD),
+                    1.45
+                );
+            // 逐帧采样并提高开合速度；特别是收口要足够快，才能跟上音节间的停顿。
+            var smoothing = targetMouthOpen > _lastMouthOpen ? 0.78 : 0.82;
             var mouthOpen = _lastMouthOpen * (1 - smoothing) + targetMouthOpen * smoothing;
             if (mouthOpen < LIP_SYNC_MIN_VISIBLE_OPEN) mouthOpen = 0;
             _lastMouthOpen = mouthOpen;
@@ -983,6 +993,9 @@
         if (S.animationFrameId) {
             cancelAnimationFrame(S.animationFrameId);
             S.animationFrameId = null;
+        }
+        if (window.live2dManager && typeof window.live2dManager.setLipSyncActive === 'function') {
+            window.live2dManager.setLipSyncActive(false);
         }
         if (window.LanLan1 && typeof window.LanLan1.setMouth === 'function') {
             window.LanLan1.setMouth(0);

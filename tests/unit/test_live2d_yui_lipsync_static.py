@@ -32,6 +32,8 @@ def test_yui_mouth_form_is_not_registered_as_an_audio_lipsync_parameter():
     assert "    'ParamMouthForm'," not in core_source
     assert "ParamMouthForm', 'ParamMouthOpen" not in model_source
     assert "ParamMouthForm 是嘴形/微笑参数" in model_source
+    assert "let mouthFormIndex" in model_source
+    assert "this._lipSyncActive" in model_source
 
 
 def test_audio_lipsync_removes_silence_noise_and_normalizes_tts_levels():
@@ -39,6 +41,13 @@ def test_audio_lipsync_removes_silence_noise_and_normalizes_tts_levels():
 
     assert "const LIP_SYNC_NOISE_FLOOR = 0.012;" in source
     assert "const LIP_SYNC_FULL_OPEN_RMS = 0.060;" in source
+    assert "const LIP_SYNC_EVERY_N_FRAMES = 1;" in source
+    assert "const LIP_SYNC_CLOSE_THRESHOLD = 0.18;" in source
     assert "const LIP_SYNC_MIN_VISIBLE_OPEN = 0.020;" in source
     assert "(rms - LIP_SYNC_NOISE_FLOOR) / (LIP_SYNC_FULL_OPEN_RMS - LIP_SYNC_NOISE_FLOOR)" in source
+    assert "normalized <= LIP_SYNC_CLOSE_THRESHOLD" in source
+    assert "                    1.45" in source
+    assert "var smoothing = targetMouthOpen > _lastMouthOpen ? 0.78 : 0.82;" in source
     assert "if (mouthOpen < LIP_SYNC_MIN_VISIBLE_OPEN) mouthOpen = 0;" in source
+    assert "window.live2dManager.setLipSyncActive(true);" in source
+    assert "window.live2dManager.setLipSyncActive(false);" in source

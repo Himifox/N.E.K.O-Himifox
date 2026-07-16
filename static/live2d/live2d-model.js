@@ -107,6 +107,7 @@ Live2DManager.prototype.removeModel = async function(options = {}) {
     this._mouthOverrideInstalled = false;
     this._origCoreModelUpdate = null;
     this._coreModelRef = null;
+    this._lipSyncActive = false;
     this._temporaryPoseOverride = null;
     this._temporaryPoseOverrides = new Map();
 
@@ -2336,6 +2337,34 @@ Live2DManager.prototype.installMouthOverride = function() {
             if (idx >= 0) mouthParamIndices[id] = idx;
         } catch (_) {}
     }
+    // YUI 将嘴形和张口拆分为 ParamMouthForm / ParamMouthOpenY。
+    // 说话期间固定前者的默认嘴形，而不是用音量驱动它，避免 idle motion 与口型互相抢写。
+    let mouthFormIndex = -1;
+    let mouthFormDefaultValue = 0;
+    try {
+        mouthFormIndex = coreModel.getParameterIndex('ParamMouthForm');
+        if (mouthFormIndex >= 0) {
+            const defaultValue = this._getCoreParameterDefaultValue(coreModel, mouthFormIndex);
+            if (Number.isFinite(defaultValue)) mouthFormDefaultValue = defaultValue;
+        }
+    } catch (_) {}
+    const applyLipSyncMouthParameters = (targetCoreModel) => {
+        if (!targetCoreModel) return;
+        if (this._lipSyncActive) {
+            for (const idx of Object.values(mouthParamIndices)) {
+                try { targetCoreModel.setParameterValueByIndex(idx, this.mouthValue); } catch (_) {}
+            }
+            if (mouthFormIndex >= 0) {
+                try { targetCoreModel.setParameterValueByIndex(mouthFormIndex, mouthFormDefaultValue); } catch (_) {}
+            }
+            return;
+        }
+        if (!this._isMouthDrivenByMotion || this.mouthValue > LIPSYNC_OVERRIDE_THRESHOLD) {
+            for (const idx of Object.values(mouthParamIndices)) {
+                try { targetCoreModel.setParameterValueByIndex(idx, this.mouthValue); } catch (_) {}
+            }
+        }
+    };
     console.log('[Live2D MouthOverride] 找到的口型参数:', Object.keys(mouthParamIndices).join(', ') || '无');
     const getCurrentPersistentParamIds = () => {
         try {
@@ -2573,13 +2602,7 @@ Live2DManager.prototype.installMouthOverride = function() {
                     }
 
                     // 口型参数：lipsync 在响（mouthValue > 0）时强制覆盖 motion；静默时让位给 motion 自带的嘴部动画
-                    if (!this._isMouthDrivenByMotion || this.mouthValue > LIPSYNC_OVERRIDE_THRESHOLD) {
-                        for (const [id, idx] of Object.entries(mouthParamIndices)) {
-                            try {
-                                coreModel.setParameterValueByIndex(idx, this.mouthValue);
-                            } catch (_) {}
-                        }
-                    }
+                    applyLipSyncMouthParameters(coreModel);
 
                     // 过渡完成：清除 fade 状态，恢复正常覆写逻辑
                     if (linearProgress >= 1) {
@@ -2673,13 +2696,7 @@ Live2DManager.prototype.installMouthOverride = function() {
             // === 注入点 2（渲染前）：口型 + 眨眼 ===
             // 这是渲染前的最后一步，强制命令，绝对优先级
             // 口型参数：lipsync 在响（mouthValue > 0）时强制覆盖 motion；静默时让位给 motion 自带的嘴部动画
-            if (!this._isMouthDrivenByMotion || this.mouthValue > LIPSYNC_OVERRIDE_THRESHOLD) {
-                for (const [id, idx] of Object.entries(mouthParamIndices)) {
-                    try {
-                        currentCoreModel.setParameterValueByIndex(idx, this.mouthValue);
-                    } catch (_) {}
-                }
-            }
+            applyLipSyncMouthParameters(currentCoreModel);
             // 眨眼更新（仅当 Motion 未接管且未暂停时）
             if (this._autoEyeBlinkEnabled
                 && !this._suspendEyeBlinkOverride
@@ -2782,6 +2799,10 @@ Live2DManager.prototype.installMouthOverride = function() {
 };
 
 // 设置嘴巴开合值（0~1），用于口型同步
+Live2DManager.prototype.setLipSyncActive = function(active) {
+    this._lipSyncActive = active === true;
+};
+
 Live2DManager.prototype.setMouth = function(value) {
     const v = Math.max(0, Math.min(1, Number(value) || 0));
     this.mouthValue = v;
