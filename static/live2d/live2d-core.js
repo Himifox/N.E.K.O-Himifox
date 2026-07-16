@@ -34,7 +34,6 @@ const isMobileWidth = () => !window.__LANLAN_IS_ELECTRON_PET__ && window.innerWi
 // 这些参数用于控制模型的嘴部动作，在处理表情和常驻表情时需要跳过，以避免覆盖实时的口型同步
 window.LIPSYNC_PARAMS = [
     'ParamMouthOpenY',
-    'ParamMouthForm',
     'ParamMouthOpen',
     'ParamA',
     'ParamI',

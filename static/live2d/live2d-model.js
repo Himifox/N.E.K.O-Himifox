@@ -368,7 +368,7 @@ Live2DManager.prototype._isRuntimeManagedAppearanceParam = function(paramId, res
 
     const lipSyncParams = typeof window !== 'undefined' && Array.isArray(window.LIPSYNC_PARAMS)
         ? window.LIPSYNC_PARAMS
-        : ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
+        : ['ParamMouthOpenY', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
     const runtimeParamIds = new Set([
         ...lipSyncParams,
         'ParamAngleX', 'ParamAngleY', 'ParamAngleZ',
@@ -2323,8 +2323,9 @@ Live2DManager.prototype.installMouthOverride = function() {
         this._origCoreModelUpdate = null;
     }
 
-    // 口型参数列表（这些参数不会被常驻表情覆盖）- 使用文件顶部定义的 LIPSYNC_PARAMS 常量
-    const lipSyncParams = window.LIPSYNC_PARAMS || ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
+    // 只驱动“开合”参数；ParamMouthForm 是嘴形/微笑参数，必须交给 motion 和表情控制。
+    // YUI 的 idle motion 会持续修改 ParamMouthForm，把它当作音量参数会在静音边缘造成明显抖动。
+    const lipSyncParams = window.LIPSYNC_PARAMS || ['ParamMouthOpenY', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
     const visibilityParams = ['ParamOpacity', 'ParamVisibility'];
     
     // 缓存参数索引，避免每帧查询
@@ -2798,10 +2799,9 @@ Live2DManager.prototype.setMouth = function(value) {
             if (!this._cachedMouthIndices || this._cachedMouthIndicesModel !== coreModel) {
                 this._cachedMouthIndices = [];
                 this._cachedMouthIndicesModel = coreModel;
-                const mouthIds = window.LIPSYNC_PARAMS || ['ParamMouthOpenY', 'ParamMouthForm', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
+                const mouthIds = window.LIPSYNC_PARAMS || ['ParamMouthOpenY', 'ParamMouthOpen', 'ParamA', 'ParamI', 'ParamU', 'ParamE', 'ParamO'];
 
                 for (const id of mouthIds) {
-                    if (id === 'ParamMouthForm') continue; // 忽略嘴型（非张合）参数
                     try {
                         const idx = coreModel.getParameterIndex(id);
                         if (idx !== -1) this._cachedMouthIndices.push(idx);

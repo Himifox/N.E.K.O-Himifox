@@ -802,6 +802,11 @@
     let _lastMouthOpen = 0;
     let _lipSyncSkipCounter = 0;
     const LIP_SYNC_EVERY_N_FRAMES = 2;
+    // Web Audio 静音帧仍会有量化噪声。先移除噪声地板，再把常见 TTS RMS
+    // 归一化到完整开口范围，避免 YUI 在闭嘴时因极小非零值而抖动。
+    const LIP_SYNC_NOISE_FLOOR = 0.012;
+    const LIP_SYNC_FULL_OPEN_RMS = 0.060;
+    const LIP_SYNC_MIN_VISIBLE_OPEN = 0.020;
 
     // ======================== Audio queue management ========================
 
@@ -955,8 +960,14 @@
             }
             var rms = Math.sqrt(sum / dataArray.length);
 
-            var mouthOpen = Math.min(1, rms * 10);
-            mouthOpen = _lastMouthOpen * 0.5 + mouthOpen * 0.5;
+            var normalized = Math.max(0, Math.min(1,
+                (rms - LIP_SYNC_NOISE_FLOOR) / (LIP_SYNC_FULL_OPEN_RMS - LIP_SYNC_NOISE_FLOOR)
+            ));
+            var targetMouthOpen = normalized === 0 ? 0 : Math.pow(normalized, 0.72);
+            // 提升张口时的响应，较快收口；二者均不保留静音底噪。
+            var smoothing = targetMouthOpen > _lastMouthOpen ? 0.65 : 0.45;
+            var mouthOpen = _lastMouthOpen * (1 - smoothing) + targetMouthOpen * smoothing;
+            if (mouthOpen < LIP_SYNC_MIN_VISIBLE_OPEN) mouthOpen = 0;
             _lastMouthOpen = mouthOpen;
 
             if (window.LanLan1 && typeof window.LanLan1.setMouth === 'function') {
