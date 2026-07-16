@@ -129,6 +129,7 @@ from utils.tokenize import count_tokens
 from ..shared_state import get_config_manager, get_session_manager
 from main_logic.omni_realtime_client import OmniRealtimeClient
 from config import (
+    APP_VERSION,
     MEMORY_SERVER_PORT,
     focus_extra_body,
     leaks_thinking_in_content,
@@ -319,10 +320,17 @@ def _record_proactive_recommendation_observation(
     observation_log_mode: str = "off",
     config_dir: Any | None = None,
     ts: float | None = None,
+    activity_state: Any = None,
+    activity_propensity: Any = None,
+    algorithm_version: str | None = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist the finalized recommendation observation."""
     if decision is None:
         return None
+    turn_id = str(response_body.get("turn_id") or "").strip() or str(uuid4())
+    # Keep the response and observation on the same identifier so later UI
+    # feedback can always join to the row, including pass/short-circuit exits.
+    response_body["turn_id"] = turn_id
     observation = build_recommendation_observation(
         decision,
         recommendation_mode=recommendation_mode,
@@ -337,7 +345,10 @@ def _record_proactive_recommendation_observation(
         source_links=response_body.get("source_links"),
         ts=time.time() if ts is None else ts,
         lanlan_name=lanlan_name,
-        turn_id=response_body.get("turn_id"),
+        turn_id=turn_id,
+        activity_state=activity_state,
+        activity_propensity=activity_propensity,
+        algorithm_version=algorithm_version or f"{APP_VERSION}:proactive-recommendation-observation-v2",
     )
     logger.info(
         "[%s] proactive recommendation observation: %s",
@@ -709,6 +720,9 @@ async def proactive_chat(request: Request):
                         active_bias=active_recommendation_bias,
                         observation_log_mode=PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
                         config_dir=getattr(get_config_manager(), "config_dir", None),
+                        activity_state=getattr(activity_snapshot, "state", "unknown") if activity_snapshot is not None else "unknown",
+                        activity_propensity=getattr(activity_snapshot, "propensity", "unknown") if activity_snapshot is not None else "unknown",
+                        algorithm_version=f"{APP_VERSION}:proactive-recommendation-observation-v2",
                     )
                 except Exception as _rec_err:
                     logger.debug("[%s] proactive recommendation observation failed: %s", lanlan_name, _rec_err)

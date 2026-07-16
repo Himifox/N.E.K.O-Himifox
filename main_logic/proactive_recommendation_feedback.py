@@ -598,7 +598,8 @@ def join_observations_with_feedback(
     for row in samples:
         key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
         events = list(events_by_turn.get(key, ()))
-        if not events and row.get("delivered") is True:
+        feedback_inferred = False
+        if key[0] and key[1] and not events and row.get("delivered") is True:
             ts = _number(row.get("ts"), -1.0)
             if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
                 events = [
@@ -610,6 +611,7 @@ def join_observations_with_feedback(
                         ts=current,
                     )
                 ]
+                feedback_inferred = True
         selected = _select_feedback_events_for_turn(events) if events else []
         feedback_missing = not selected
         turn_feedback_score = None
@@ -640,6 +642,7 @@ def join_observations_with_feedback(
                     for event in selected
                 ],
                 "feedback_missing": feedback_missing,
+                "feedback_inferred": feedback_inferred,
                 "score_bucket": _score_bucket(shadow_score),
             }
         )
@@ -668,7 +671,9 @@ def summarize_feedback_calibration(
         if row.get("feedback_missing") is not True
         and isinstance(row.get("turn_feedback_score"), (int, float))
     ]
-    feedback_joined_count = len(scored)
+    feedback_scored_count = len(scored)
+    feedback_inferred_count = sum(bool(row.get("feedback_inferred")) for row in scored)
+    feedback_joined_count = feedback_scored_count - feedback_inferred_count
     feedback_scores = [float(row["turn_feedback_score"]) for row in scored]
     positive_count = sum(1 for score in feedback_scores if score > 0)
     negative_count = sum(1 for score in feedback_scores if score < 0)
@@ -729,8 +734,8 @@ def summarize_feedback_calibration(
     active_ready_reasons = _feedback_active_ready_reasons(
         feedback_joined_count=feedback_joined_count,
         average_feedback_score=_average(feedback_scores),
-        top1_positive_rate=_rate(positive_count, feedback_joined_count),
-        top1_negative_rate=_rate(negative_count, feedback_joined_count),
+        top1_positive_rate=_rate(positive_count, feedback_scored_count),
+        top1_negative_rate=_rate(negative_count, feedback_scored_count),
         bucket_feedback=bucket_feedback,
         dominant_low_feedback_sources=dominant_low_feedback_sources,
     )
@@ -738,10 +743,12 @@ def summarize_feedback_calibration(
     return {
         "sample_count": len(joined),
         "feedback_joined_count": feedback_joined_count,
+        "feedback_inferred_count": feedback_inferred_count,
+        "feedback_scored_count": feedback_scored_count,
         "feedback_missing_count": len(joined) - feedback_joined_count,
         "average_feedback_score": _average(feedback_scores),
-        "top1_positive_rate": _rate(positive_count, feedback_joined_count),
-        "top1_negative_rate": _rate(negative_count, feedback_joined_count),
+        "top1_positive_rate": _rate(positive_count, feedback_scored_count),
+        "top1_negative_rate": _rate(negative_count, feedback_scored_count),
         "score_by_source_type": score_by_source_type,
         "score_bucket_feedback": bucket_feedback,
         "over_scored_sources": over_scored_sources,

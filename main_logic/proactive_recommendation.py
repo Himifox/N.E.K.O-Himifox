@@ -138,6 +138,9 @@ def build_recommendation_observation(
     ts: Any = None,
     lanlan_name: Any = None,
     turn_id: Any = None,
+    activity_state: Any = None,
+    activity_propensity: Any = None,
+    algorithm_version: Any = None,
     top_n: int = 3,
 ) -> dict[str, Any]:
     shadow_source = decision.shadow_selected_source_type
@@ -187,6 +190,9 @@ def build_recommendation_observation(
         "ts": _number(ts, 0.0) if ts is not None else None,
         "lanlan_name": _text(lanlan_name) or None,
         "turn_id": _text(turn_id) or None,
+        "activity_state": _text(activity_state) or "unknown",
+        "activity_propensity": _text(activity_propensity) or "unknown",
+        "algorithm_version": _text(algorithm_version) or "unknown",
         "recommendation_mode": _text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,
         "candidate_count": decision.candidate_count,
