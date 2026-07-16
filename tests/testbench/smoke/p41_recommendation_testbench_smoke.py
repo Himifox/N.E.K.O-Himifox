@@ -20,10 +20,22 @@ from tests.testbench.pipeline.recommendation_suite import verify_builtin_manifes
 from tests.testbench.pipeline.recommendation_baseline import signoff_canonical_baseline, validate_known_regression
 from tests.testbench.pipeline.recommendation_personalization import run_personalization_trace
 from tests.testbench.pipeline.recommendation_coverage import build_coverage_report
+from tests.testbench.pipeline.recommendation_evaluator import aggregate_variant, evaluate_case
 from main_logic.proactive_recommendation_feedback import build_feedback_event
 
 
 def main() -> int:
+    negative = evaluate_case(
+        {"oracle": {"should_recommend": False, "relevance": {"news:x": 0}}},
+        {"ranked_candidates": [{"id": "news:x", "source_type": "news"}]},
+        deterministic=True,
+    )
+    assert negative["hit1"] is None and negative["ndcg3"] is None
+    negative_metrics = aggregate_variant([{"evaluation": negative, "violations": []}])
+    assert negative_metrics["transparent_metrics"]["positive_case_hit_at_1"]["denominator"] == 0
+    assert negative_metrics["transparent_metrics"]["false_interruption_rate"] == {
+        "numerator": 1, "denominator": 1, "value": 1.0,
+    }
     scenarios = list_scenarios()
     builtins = [row for row in scenarios if row["source"] == "builtin"]
     assert len(builtins) >= 27, len(builtins)
@@ -124,6 +136,10 @@ def main() -> int:
         assert standard["data_quality_status"] == "passed" and standard["quality_gate"] == "rejected"
         transparent = standard["metrics"]["production_default"]["transparent_metrics"]
         assert transparent["hit_at_1"]["denominator"] == standard["selection"]["ranking_eligible"]
+        assert transparent["positive_case_hit_at_1"] == transparent["hit_at_1"]
+        assert transparent["positive_case_ndcg_at_3"] == transparent["ndcg_at_3"]
+        assert transparent["decision_accuracy_with_noop"]["denominator"] == 23
+        assert set(transparent["gate_confusion_matrix"]) == {"tp", "fp", "tn", "fn"}
         assert standard["selection"]["builtin_selected"] == len(builtins)
         assert standard["selection"]["user_selected"] == 0
 

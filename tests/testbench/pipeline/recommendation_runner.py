@@ -141,11 +141,13 @@ def _status(metrics: dict[str, dict[str, Any]], baseline_id: str,
 
 def _selection_summary(scenarios: list[dict[str, Any]], suite_mode: str) -> dict[str, Any]:
     modes = [_scenario_mode(row) for row in scenarios]
+    ranking_eligible = sum(_positive_rank_label(row) for row in scenarios)
     return {"suite_mode": suite_mode,
             "builtin_selected": sum(row.get("_source") == "builtin" for row in scenarios),
             "user_selected": sum(row.get("_source") == "user" for row in scenarios),
-            "ranking_eligible": modes.count("ranking"),
+            "ranking_eligible": ranking_eligible,
             "relevance_labeled": sum(bool((row.get("oracle") or {}).get("relevance")) for row in scenarios),
+            "positive_relevance_labeled": ranking_eligible,
             "contract_only": modes.count("contract"), "sequence_cases": modes.count("sequence"),
             "no_candidate_cases": sum((row.get("oracle") or {}).get("expected_empty") is True for row in scenarios),
             "partially_or_fully_filtered_cases": sum(bool((row.get("oracle") or {}).get("must_filter_candidate_ids")) for row in scenarios)}
@@ -157,13 +159,25 @@ def _scenario_mode(scenario: dict[str, Any]) -> str:
                                                      else "contract"))
 
 
+def _positive_rank_label(scenario: dict[str, Any]) -> bool:
+    oracle = scenario.get("oracle") or {}
+    relevance = oracle.get("relevance") or {}
+    if not relevance or max((int(value) for value in relevance.values()), default=0) <= 0:
+        return False
+    should_recommend = oracle.get("should_recommend")
+    if isinstance(should_recommend, bool):
+        return should_recommend
+    expected_empty = oracle.get("expected_empty")
+    return expected_empty is not True
+
+
 def _layered_status(metrics: dict[str, dict[str, Any]], baseline_id: str,
                     comparisons: dict[str, dict[str, Any]], manifest_check: dict[str, Any],
                     selection: dict[str, Any]) -> dict[str, Any]:
     execution_failed = any(metric.get("errored") for metric in metrics.values())
     contract_failed = any(metric.get("hard_violation_count") for metric in metrics.values())
     data_reasons = list(manifest_check.get("errors") or [])
-    if selection["ranking_eligible"] != selection["relevance_labeled"]:
+    if selection["ranking_eligible"] != selection["positive_relevance_labeled"]:
         data_reasons.append("ranking_annotation_coverage_below_100_percent")
     quality_reasons = []
     base = metrics[baseline_id]

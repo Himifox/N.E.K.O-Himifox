@@ -5,7 +5,7 @@ import math
 from collections import Counter
 from typing import Any
 
-RECOMMENDATION_EVALUATOR_VERSION = "2"
+RECOMMENDATION_EVALUATOR_VERSION = "3"
 
 
 def evaluate_case(scenario: dict[str, Any], snapshot: dict[str, Any], deterministic: bool) -> dict[str, Any]:
@@ -51,12 +51,30 @@ def evaluate_case(scenario: dict[str, Any], snapshot: dict[str, Any], determinis
     unknown_relevance = sorted(set(relevance) - set(ids))
     if unknown_relevance:
         violations.append({"code": "unknown_relevance_candidate_ids", "candidate_ids": unknown_relevance})
-    rels = [int(relevance[cid]) for cid in ids if cid in relevance]
-    best = max(relevance.values()) if relevance else None
-    hit1 = bool(ids and ids[0] in relevance and relevance[ids[0]] == best)
-    hit3 = bool(best is not None and any(relevance.get(cid) == best for cid in ids[:3]))
-    acceptable_top1 = (None if expected_empty is True and not ids
-                       else top1 in acceptable if acceptable else None)
+    explicit_should_recommend = oracle.get("should_recommend")
+    if isinstance(explicit_should_recommend, bool):
+        should_recommend = explicit_should_recommend
+    elif isinstance(expected_empty, bool):
+        should_recommend = not expected_empty
+    elif any(int(value) > 0 for value in relevance.values()):
+        # Compatibility for ranking fixtures created before an explicit gate
+        # label existed. All-zero relevance never implies a positive decision.
+        should_recommend = True
+    else:
+        should_recommend = None
+    predicted_recommend = bool(ids)
+    gate_eligible = isinstance(should_recommend, bool)
+    decision_correct = predicted_recommend == should_recommend if gate_eligible else None
+    false_interruption = predicted_recommend and should_recommend is False if gate_eligible else None
+    missed_opportunity = not predicted_recommend and should_recommend is True if gate_eligible else None
+
+    best = max((int(value) for value in relevance.values()), default=None)
+    positive_case_eligible = should_recommend is True and best is not None and best > 0
+    hit1 = (bool(ids and ids[0] in relevance and int(relevance[ids[0]]) == best)
+            if positive_case_eligible else None)
+    hit3 = (bool(any(int(relevance.get(cid, 0)) == best for cid in ids[:3]))
+            if positive_case_eligible else None)
+    acceptable_top1 = (top1 in acceptable if positive_case_eligible and acceptable else None)
     quality_failures = []
     expected_candidate = oracle.get("expected_top1_candidate_id")
     if expected_candidate is not None and (ids[0] if ids else None) != expected_candidate:
@@ -65,33 +83,43 @@ def evaluate_case(scenario: dict[str, Any], snapshot: dict[str, Any], determinis
     if acceptable_top1 is False:
         quality_failures.append({"code": "unacceptable_top1_source", "actual": top1,
                                  "acceptable": sorted(acceptable)})
-    mrr = 0.0
-    for rank, cid in enumerate(ids, 1):
-        if relevance.get(cid, 0) >= 2:
-            mrr = 1.0 / rank
-            break
-    dcg = sum((2 ** relevance.get(cid, 0) - 1) / math.log2(rank + 1) for rank, cid in enumerate(ids[:3], 1))
-    ideal = sorted((int(v) for v in relevance.values()), reverse=True)[:3]
-    idcg = sum((2 ** rel - 1) / math.log2(rank + 1) for rank, rel in enumerate(ideal, 1))
+    mrr = None
+    ndcg3 = None
+    if positive_case_eligible:
+        mrr = 0.0
+        for rank, cid in enumerate(ids, 1):
+            if int(relevance.get(cid, 0)) > 0:
+                mrr = 1.0 / rank
+                break
+        dcg = sum((2 ** int(relevance.get(cid, 0)) - 1) / math.log2(rank + 1)
+                  for rank, cid in enumerate(ids[:3], 1))
+        ideal = sorted((int(v) for v in relevance.values()), reverse=True)[:3]
+        idcg = sum((2 ** rel - 1) / math.log2(rank + 1) for rank, rel in enumerate(ideal, 1))
+        ndcg3 = round(dcg / idcg, 4) if idcg else None
     return {"violations": violations, "quality_failures": quality_failures,
             "passed": not violations and not quality_failures,
             "evaluation_mode": evaluation_mode, "relevance_mode": relevance_mode,
-            "hit1": hit1 if relevance else None, "hit3": hit3 if relevance else None,
-            "acceptable_top1": acceptable_top1, "mrr": round(mrr, 4), "ndcg3": round(dcg / idcg, 4) if idcg else None,
+            "gate_eligible": gate_eligible, "should_recommend": should_recommend,
+            "predicted_recommend": predicted_recommend, "decision_correct": decision_correct,
+            "false_interruption": false_interruption, "missed_opportunity": missed_opportunity,
+            "positive_case_eligible": positive_case_eligible,
+            "hit1": hit1, "hit3": hit3, "acceptable_top1": acceptable_top1,
+            "mrr": round(mrr, 4) if mrr is not None else None, "ndcg3": ndcg3,
             "top1_source": top1, "top1_candidate_id": ids[0] if ids else None, "score_gap": snapshot.get("score_gap")}
 
 
 def aggregate_variant(cases: list[dict[str, Any]]) -> dict[str, Any]:
     evaluations = [row["evaluation"] for row in cases if not row.get("error")]
-    ranking = [row for row in evaluations if row.get("evaluation_mode") == "ranking"]
+    ranking = [row for row in evaluations if row.get("positive_case_eligible")]
+    gate = [row for row in evaluations if row.get("gate_eligible")]
     def avg(key: str, rows=ranking):
         values = [float(row[key]) for row in rows if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)]
         return round(sum(values) / len(values), 4) if values else None
     def rate(key: str, rows=ranking):
         values = [row[key] for row in rows if isinstance(row.get(key), bool)]
         return round(sum(bool(v) for v in values) / len(values), 4) if values else None
-    def fraction(key: str):
-        values = [row[key] for row in ranking if isinstance(row.get(key), bool)]
+    def fraction(key: str, rows=ranking):
+        values = [row[key] for row in rows if isinstance(row.get(key), bool)]
         numerator = sum(bool(v) for v in values)
         return {"numerator": numerator, "denominator": len(values),
                 "value": round(numerator / len(values), 4) if values else None}
@@ -104,6 +132,16 @@ def aggregate_variant(cases: list[dict[str, Any]]) -> dict[str, Any]:
     error_count = sum(bool(row.get("error")) for row in cases)
     hard_count = sum(len(row.get("violations") or []) for row in evaluations)
     ndcg_values = [float(row["ndcg3"]) for row in ranking if isinstance(row.get("ndcg3"), (int, float))]
+    gate_tp = sum(row.get("predicted_recommend") is True and row.get("should_recommend") is True for row in gate)
+    gate_fp = sum(row.get("predicted_recommend") is True and row.get("should_recommend") is False for row in gate)
+    gate_tn = sum(row.get("predicted_recommend") is False and row.get("should_recommend") is False for row in gate)
+    gate_fn = sum(row.get("predicted_recommend") is False and row.get("should_recommend") is True for row in gate)
+    precision_denominator = gate_tp + gate_fp
+    recall_denominator = gate_tp + gate_fn
+    precision = gate_tp / precision_denominator if precision_denominator else None
+    recall = gate_tp / recall_denominator if recall_denominator else None
+    false_interruption_denominator = gate_fp + gate_tn
+    missed_opportunity_denominator = gate_fn + gate_tp
     return {"case_count": len(cases), "errored": error_count,
             "hard_violation_count": hard_count,
             "hit1": rate("hit1"), "hit3": rate("hit3"), "acceptable_top1_rate": rate("acceptable_top1"),
@@ -111,14 +149,38 @@ def aggregate_variant(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "source_distribution": shares, "max_source_exposure": max(shares.values(), default=0.0),
             "source_hhi": hhi, "candidate_repeat_rate": repeat_rate,
             "transparent_metrics": {
-                "hit_at_1": fraction("hit1"), "hit_at_3": fraction("hit3"),
+                "decision_accuracy_with_noop": fraction("decision_correct", gate),
+                "gate_precision": {"numerator": gate_tp, "denominator": precision_denominator,
+                                   "value": round(precision, 4) if precision is not None else None},
+                "gate_recall": {"numerator": gate_tp, "denominator": recall_denominator,
+                                "value": round(recall, 4) if recall is not None else None},
+                "gate_f1": {"numerator": 2 * gate_tp,
+                            "denominator": 2 * gate_tp + gate_fp + gate_fn,
+                            "value": round((2 * gate_tp) / (2 * gate_tp + gate_fp + gate_fn), 4)
+                            if 2 * gate_tp + gate_fp + gate_fn else None},
+                "false_interruption_rate": {"numerator": gate_fp,
+                                            "denominator": false_interruption_denominator,
+                                            "value": round(gate_fp / false_interruption_denominator, 4)
+                                            if false_interruption_denominator else None},
+                "missed_opportunity_rate": {"numerator": gate_fn,
+                                           "denominator": missed_opportunity_denominator,
+                                           "value": round(gate_fn / missed_opportunity_denominator, 4)
+                                           if missed_opportunity_denominator else None},
+                "gate_confusion_matrix": {"tp": gate_tp, "fp": gate_fp, "tn": gate_tn, "fn": gate_fn},
+                "positive_case_hit_at_1": fraction("hit1"),
+                "positive_case_hit_at_3": fraction("hit3"),
                 "acceptable_top1": fraction("acceptable_top1"),
+                "positive_case_ndcg_at_3": {"sum": round(sum(ndcg_values), 4), "denominator": len(ndcg_values),
+                                             "value": round(sum(ndcg_values) / len(ndcg_values), 4) if ndcg_values else None},
+                # Compatibility aliases keep the old response shape with the
+                # corrected positive-case denominator.
+                "hit_at_1": fraction("hit1"), "hit_at_3": fraction("hit3"),
                 "ndcg_at_3": {"sum": round(sum(ndcg_values), 4), "denominator": len(ndcg_values),
                                "value": round(sum(ndcg_values) / len(ndcg_values), 4) if ndcg_values else None},
                 "hard_constraints": {"violations": hard_count, "evaluated_cases": len(evaluations)},
                 "execution_errors": {"errors": error_count, "executed_cases": len(cases)},
             },
-            "ranking_eligible_count": len(ranking)}
+            "gate_eligible_count": len(gate), "ranking_eligible_count": len(ranking)}
 
 
 def compare_variants(baseline_cases: list[dict[str, Any]], candidate_cases: list[dict[str, Any]]) -> dict[str, Any]:
@@ -130,7 +192,7 @@ def compare_variants(baseline_cases: list[dict[str, Any]], candidate_cases: list
         if not other or row.get("error") or other.get("error"):
             continue
         current, baseline = row["evaluation"], other["evaluation"]
-        if current.get("evaluation_mode") != "ranking" or baseline.get("evaluation_mode") != "ranking":
+        if not current.get("positive_case_eligible") or not baseline.get("positive_case_eligible"):
             not_comparable.append({"scenario_id": row["scenario_id"], "reason": "not_ranking_eligible"})
             continue
         a = _quality_tuple(current)
