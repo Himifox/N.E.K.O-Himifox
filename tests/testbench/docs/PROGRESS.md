@@ -1545,3 +1545,33 @@ flowchart LR
 Production recommendation pure helpers are exposed through a thin lazy adapter. The standalone Recommendation workspace covers scenario preview, multi-variant runs, results/export, and sanitized Shadow calibration without requiring an active session, network, LLM, or production tuning writes. P44 remains a real-data acceptance activity.
 
 P44 infrastructure now includes dataset quality audits, field-level human annotation validation, review coverage tracking, readiness gates, isolated personalization traces over production auto-safe tuning, and guarded promotion to traceable `shadow_golden` datasets. Real-data acceptance is intentionally still pending: synthetic smoke data verifies the workflow but does not satisfy the required 100 real observations and 30 linked feedback events.
+
+## P44-E / P44-F1 · Adjudicated dataset and offline threshold scan · done (2026-07-20)
+
+The real Shadow collection gate is complete. Primary review, blind second review, and disagreement adjudication produced an immutable Golden Candidate containing 128 eligible observations and 9 excluded abstentions. This dataset is suitable for exploratory offline candidate analysis, but remains a single-cohort Golden Candidate rather than a high-confidence production Golden benchmark.
+
+P44-F1 now provides a reproducible offline PASS/NOOP threshold scan. Its primary model is an incremental safety gate (`production_delivered AND top1_score >= threshold`); a score-only curve is retained as a diagnostic and is not treated as a production counterfactual.
+
+Current result: score ROC-AUC is 0.5628. The production baseline is 57.81% accurate with 50.98% false interruption and 36.36% missed opportunity. A guarded 0.342 what-if threshold removes one false interruption but creates two missed opportunities and lowers accuracy to 57.03%. The unconstrained accuracy optimum at 0.396 reaches 60.16% accuracy but raises missed opportunity to 44.16%, outside the 5-point guardrail.
+
+Therefore P44-F1 has no promotable universal score threshold. The next analysis stage should evaluate timing/fatigue, repetition penalties, and source diversity before proposing any production change. Production weights, thresholds, and tuning remain unchanged.
+
+## P44-F2-A · Timing schema-v3 Testbench contract · done (2026-07-20)
+
+The Testbench now audits the five production timing observation fields without
+using them to change recommendation behavior. It distinguishes observation
+schema generations from the application version, preserves legacy v2 data for
+P44-F1, and prevents legacy/unknown/malformed records from entering a future
+timing strategy scan.
+
+The dataset audit reports schema coverage, field presence, field-level issues,
+elapsed/delivery-density/unanswered buckets, pilot readiness, and the formal
+P44-F2 gate. Formal readiness requires at least 100 valid v3 observations, 30
+explicitly joined feedback turns, three sources, three activities, and basic
+timing-bucket diversity.
+
+P47 covers strict numeric bounds, required fields, semantic count consistency,
+legacy compatibility, invalid-v3 rejection, the production-sanitizer
+compatibility bridge, and the no-production-write contract. The next external
+step is a 10–20 observation v3 pilot collection; P44-F2 strategy simulation
+must not begin until that pilot passes.

@@ -18,6 +18,10 @@ from tests.testbench.pipeline.recommendation_runner import RecommendationRunErro
 from tests.testbench.pipeline.recommendation_scenario import RecommendationScenarioError, delete_user_scenario, duplicate_scenario, list_scenarios, read_scenario, save_user_scenario, validate_scenario_dict
 from tests.testbench.pipeline.recommendation_personalization import PersonalizationTraceError, run_personalization_trace
 from tests.testbench.pipeline.recommendation_shadow import annotation_summary, audit_shadow_dataset, p44_readiness, validate_annotations
+from tests.testbench.pipeline.recommendation_timing_audit import (
+    prepare_observation_for_timing_import,
+    timing_analysis_readiness,
+)
 from tests.testbench.pipeline.recommendation_coverage import build_coverage_report
 from tests.testbench.pipeline.recommendation_baseline import BaselineSignoffError, list_baselines, read_baseline, signoff_canonical_baseline, validate_known_regression
 
@@ -143,8 +147,22 @@ def datasets_import(body: ImportBody):
     if len(body.observations) + len(body.feedback) > MAX_IMPORT_RECORDS: raise HTTPException(422, detail={"error_type": "RecommendationDatasetLimit", "message": "maximum 1000 records"})
     from main_logic.proactive_recommendation_observer import sanitize_recommendation_observation
     from main_logic.proactive_recommendation_feedback import has_forbidden_feedback_fields, sanitize_recommendation_feedback_event
-    observations = [sanitize_recommendation_observation(row) for row in body.observations]
-    feedback, rejected = [], []
+    observations, rejected = [], []
+    for index, row in enumerate(body.observations):
+        prepared = prepare_observation_for_timing_import(
+            row,
+            sanitize_recommendation_observation,
+        )
+        if not prepared["accepted"]:
+            rejected.append({
+                "kind": "observation",
+                "index": index,
+                "reason": prepared["reason"],
+                "errors": prepared["errors"],
+            })
+            continue
+        observations.append(prepared["observation"])
+    feedback = []
     for index, row in enumerate(body.feedback):
         if has_forbidden_feedback_fields(row): rejected.append({"kind": "feedback", "index": index, "reason": "forbidden_sensitive_fields"})
         else: feedback.append(sanitize_recommendation_feedback_event(row))
@@ -192,7 +210,13 @@ def _read_annotations(dataset_id: str):
 def dataset_quality(dataset_id: str):
     dataset = datasets_read(dataset_id); annotations = _read_annotations(dataset_id)
     return {"dataset_id": dataset_id, "audit": audit_shadow_dataset(dataset),
-            "annotation": annotation_summary(dataset, annotations), "readiness": p44_readiness(dataset, annotations)}
+            "annotation": annotation_summary(dataset, annotations), "readiness": p44_readiness(dataset, annotations),
+            "timing_readiness": timing_analysis_readiness(dataset)}
+
+@router.get("/datasets/{dataset_id}/timing-audit")
+def dataset_timing_audit(dataset_id: str):
+    dataset = datasets_read(dataset_id)
+    return {"dataset_id": dataset_id, **timing_analysis_readiness(dataset)}
 
 @router.get("/datasets/{dataset_id}/annotations")
 def annotations_read(dataset_id: str):

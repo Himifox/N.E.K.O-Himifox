@@ -626,3 +626,27 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
 - Added human annotation/review APIs and Calibration workspace controls.
 - Added guarded `shadow_golden` promotion; datasets below the P44 sample, annotation, review, privacy, or version gates are rejected.
 - Added P44 smoke coverage without treating synthetic fixtures as real-data acceptance.
+
+## P44-E / P44-F1 · Human review and offline threshold analysis (2026-07-20)
+
+- Completed primary review, blind second review, disagreement adjudication, and immutable review-history preservation for the 137-item Shadow review set.
+- Produced an adjudicated Golden Candidate with 128 eligible observations and 9 explicit exclusions.
+- Added a pure offline PASS/NOOP threshold analyzer, report CLI, Pareto/source-impact diagnostics, and P46 smoke coverage.
+- The P44-F1 scan found no universal non-zero score threshold that preserves or improves decision accuracy, false interruption, and missed opportunity at the same time.
+- Production recommendation weights, thresholds, and automatic tuning remain unchanged.
+
+## P44-F2-A · Timing observation contract (2026-07-20)
+
+- Added schema-v3 timing inspection without changing recommendation behavior.
+- Added strict validation for configured interval, elapsed time, 30m/2h delivery
+  counts, and consecutive unanswered deliveries.
+- Legacy v2 observations remain readable but are explicitly ineligible for
+  timing/fatigue analysis; unknown or malformed v3 records are surfaced with
+  field-level issue codes.
+- Added timing bucket distributions, pilot/formal readiness gates, a dedicated
+  dataset timing-audit API, Calibration UI output, and P47 smoke coverage.
+- The import bridge continues to call the production observation sanitizer and
+  only preserves a separately validated v3 timing context while the production
+  and Testbench branches are developed independently.
+- Production recommendation intervals, weights, decisions, and tuning remain
+  unchanged.

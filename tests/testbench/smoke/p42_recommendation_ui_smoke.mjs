@@ -17,6 +17,7 @@ if (!run.includes('button.disabled=true') || run.includes('AbortController')) th
 if (!calibration.includes("accept: '.json,.jsonl'") || !calibration.includes('/datasets/import')) throw new Error('Calibration import contract missing');
 if (!calibration.includes('/personalization/trace') || !calibration.includes('Run personalization trace') || !calibration.includes('不会写入生产')) throw new Error('Personalization trace contract missing');
 if (!calibration.includes('Audit P44 readiness') || !calibration.includes('Load annotation tasks') || !calibration.includes('Promote to shadow_golden')) throw new Error('P44 annotation workspace contract missing');
+if (!calibration.includes('/timing-audit') || !calibration.includes('Timing schema v3 审计') || !calibration.includes('不会进入 timing/fatigue 分析')) throw new Error('P44-F2 timing audit workspace contract missing');
 if (!scores.includes('最高分') || !scores.includes('Top-1') || !scores.includes('source_scores')) throw new Error('Resource score table contract missing');
 if (!results.includes('资源权重变化轨迹') || !results.includes('未写入生产配置')) throw new Error('Weight trace contract missing');
 if (!results.includes('Quality gate') || !results.includes('Data quality') || !results.includes('逐场景配对变化')) throw new Error('Layered gate/paired detail contract missing');

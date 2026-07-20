@@ -1,6 +1,43 @@
 import { api } from '../../core/api.js';
 import { el } from '../_dom.js';
 
+function renderTimingAudit(target, data) {
+  const audit = data?.audit || {};
+  const coverage = Number(audit.timing_coverage_rate || 0);
+  target.innerHTML = '';
+  target.append(
+    el('h3', {}, 'Timing schema v3 审计'),
+    el('p', { className: 'hint' },
+      'v2 数据继续保留，但不会进入 timing/fatigue 分析；本页不会修改生产间隔、权重或 tuning。'),
+  );
+  const table = el('table', { className: 'recommendation-score-table' });
+  const rows = [
+    ['Schema 分布', JSON.stringify(audit.schema_distribution || {})],
+    ['v3 observation', audit.v3_observation_count ?? 0],
+    ['Timing 有效', audit.timing_valid_count ?? 0],
+    ['Timing 无效', audit.timing_invalid_count ?? 0],
+    ['v2/legacy 不可分析', audit.timing_unavailable_legacy_count ?? 0],
+    ['未知版本', audit.timing_unknown_version_count ?? 0],
+    ['未来版本暂不支持', audit.timing_unsupported_future_count ?? 0],
+    ['v3 字段覆盖率', `${(coverage * 100).toFixed(2)}%`],
+    ['显式关联 feedback', data.feedback_joined_count ?? 0],
+    ['试采契约', data.pilot_contract_ready ? '通过' : '未通过'],
+    ['策略扫描门禁', data.ready_for_timing_strategy_scan ? '通过' : '未通过'],
+    ['阻塞原因', (data.blockers || []).join(', ') || '无'],
+  ];
+  const body = el('tbody');
+  for (const [name, value] of rows) body.append(
+    el('tr', {}, el('th', {}, name), el('td', {}, String(value))),
+  );
+  table.append(body);
+  target.append(
+    table,
+    el('h4', {}, 'Timing 分桶'),
+    el('pre', { className: 'recommendation-json' },
+      JSON.stringify(audit.bucket_distribution || {}, null, 2)),
+  );
+}
+
 function renderTrace(target, data) {
   target.innerHTML = '';
   target.append(el('div', { className: 'empty-state' },
@@ -37,6 +74,7 @@ export async function renderRecommendationCalibration(host) {
   const datasets = el('select');
   const traceHost = el('section');
   const auditHost = el('pre', { className: 'recommendation-json' });
+  const timingAuditHost = el('section');
   const annotationEditor = el('textarea', { className: 'recommendation-json', rows: 16,
     placeholder: '加载标注任务后，在此编辑 annotations JSON 数组。' });
   const refresh = async () => {
@@ -73,7 +111,20 @@ export async function renderRecommendationCalibration(host) {
     if (!datasets.value) return;
     const res = await api.get(`/api/recommendation-testbench/datasets/${datasets.value}/quality`);
     auditHost.textContent = res.ok ? JSON.stringify(res.data, null, 2) : res.error.message;
+    if (res.ok && res.data?.timing_readiness) {
+      renderTimingAudit(timingAuditHost, res.data.timing_readiness);
+    }
   } }, 'Audit P44 readiness');
+  const auditTiming = el('button', { onClick: async () => {
+    if (!datasets.value) return;
+    const res = await api.get(
+      `/api/recommendation-testbench/datasets/${datasets.value}/timing-audit`,
+    );
+    if (res.ok) renderTimingAudit(timingAuditHost, res.data);
+    else timingAuditHost.replaceChildren(
+      el('pre', { className: 'recommendation-json' }, res.error.message),
+    );
+  } }, 'Audit timing schema v3');
   const loadTasks = el('button', { onClick: async () => {
     if (!datasets.value) return;
     const res = await api.get(`/api/recommendation-testbench/datasets/${datasets.value}/annotations`);
@@ -100,6 +151,7 @@ export async function renderRecommendationCalibration(host) {
     auditHost.textContent = res.ok ? JSON.stringify(res.data, null, 2) : JSON.stringify(res.error, null, 2);
     if (res.ok) await refresh();
   } }, 'Promote to shadow_golden');
-  host.append(input, datasets, runCalibration, runTrace, audit, loadTasks, saveAnnotations, promote,
-    status, traceHost, el('h3', {}, '人工标注复核'), annotationEditor, auditHost); await refresh();
+  host.append(input, datasets, runCalibration, runTrace, audit, auditTiming,
+    loadTasks, saveAnnotations, promote, status, traceHost, timingAuditHost,
+    el('h3', {}, '人工标注复核'), annotationEditor, auditHost); await refresh();
 }
