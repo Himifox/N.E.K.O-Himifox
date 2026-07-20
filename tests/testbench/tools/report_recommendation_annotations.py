@@ -29,6 +29,8 @@ def main() -> int:
     stem = source.stem.replace("-annotation-template", "-analysis")
     if stem == source.stem:
         stem = f"{source.stem}-analysis"
+    if stem == source.stem:
+        stem = f"{source.stem}-analysis"
     json_path = output_dir / f"{stem}.json"
     markdown_path = output_dir / f"{stem}.md"
     atomic_write_json(json_path, report)

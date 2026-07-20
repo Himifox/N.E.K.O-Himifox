@@ -195,11 +195,13 @@ def _annotate(
         "primary_review_status": "pending",
         "primary_reviewer_id": "",
         "primary_reviewed_at": "",
+        "primary_abstain_reason": "",
         "second_review": {
             "required": False,
             "status": "not_required",
             "reviewer_id": "",
             "reviewed_at": "",
+            "abstain_reason": "",
             "should_recommend": None,
             "relevance": {},
             "comment": "",
@@ -348,11 +350,28 @@ def main() -> int:
     output = dict(template)
     output["created_at"] = datetime.now(timezone.utc).isoformat()
     output["quality_preview"] = dict(freeze.get("quality_preview") or {})
+    instructions = dict(output.get("instructions") or {})
+    instructions.update({
+        "causal_order": "resource candidates and scores exist before delivered text generation",
+        "delivered_excerpt_usage": (
+            "delivery-realization audit only; never use delivered text to infer candidate "
+            "relevance, source preference, or a missing candidate"
+        ),
+        "relevance_evidence": (
+            "candidate metadata, pre-delivery context, repeat/filter evidence, and explicit "
+            "candidate-linked feedback only"
+        ),
+    })
+    output["instructions"] = instructions
     output["annotation_provenance"] = {
         "method": "codex_assisted_first_pass",
-        "policy_version": 5,
+        "policy_version": 6,
         "human_review_required": True,
         "semantic_limit": "safe review_context and explicit event metadata only; no private conversation or screen text",
+        "causal_review_rule": (
+            "candidate-first: delivered text is downstream evidence and cannot be used "
+            "as the oracle for candidate relevance or source ranking"
+        ),
         "confidence_distribution": dict(sorted(confidence_counts.items())),
         "repeat_policy": {
             "identity": "candidate_id OR normalized source_type + safe_title",
@@ -417,8 +436,15 @@ def main() -> int:
                 "should_recommend": "boolean",
                 "relevance": "integer 0-3 for every candidate",
                 "reviewer_id": "required",
-                "status": "set to completed after filling all labels",
+                "reviewed_at": "required ISO-8601 timestamp with timezone",
+                "status": "completed after filling labels, or abstained when evidence is insufficient",
+                "abstain_reason": "required when status is abstained",
                 "blindness": "first-pass and primary-review labels are intentionally omitted",
+                "causal_order": "resource candidates and scores exist before delivered text generation",
+                "delivered_excerpt_usage": (
+                    "delivery-realization audit only; never use delivered text to infer "
+                    "candidate relevance, source preference, or a missing candidate"
+                ),
             },
             "reviews": blind_rows,
         }

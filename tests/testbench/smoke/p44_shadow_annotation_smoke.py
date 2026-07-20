@@ -85,6 +85,28 @@ def main() -> int:
     assert not missing_second_result["ok"]
     assert any(error["path"].endswith("second_review.reviewed_at")
                for error in missing_second_result["errors"])
+    primary_abstained = dict(
+        annotations[0],
+        primary_review_status="abstained",
+        primary_abstain_reason="insufficient_review_context",
+    )
+    primary_abstained_result = validate_annotations(dataset, [primary_abstained])
+    assert primary_abstained_result["ok"], primary_abstained_result["errors"]
+    missing_abstain_reason = dict(primary_abstained, primary_abstain_reason="")
+    missing_abstain_result = validate_annotations(dataset, [missing_abstain_reason])
+    assert not missing_abstain_result["ok"]
+    assert any(error["path"].endswith("primary_abstain_reason")
+               for error in missing_abstain_result["errors"])
+    second_abstained = dict(annotations[0])
+    second_abstained["second_review"] = dict(
+        annotations[0]["second_review"],
+        status="abstained",
+        abstain_reason="privacy_redaction",
+        should_recommend=None,
+        relevance={},
+    )
+    second_abstained_result = validate_annotations(dataset, [second_abstained])
+    assert second_abstained_result["ok"], second_abstained_result["errors"]
     ready = p44_readiness(dataset, result["normalized"])
     assert ready["ready_for_weight_candidates"], ready["blockers"]
     report = build_annotation_report({
@@ -93,11 +115,26 @@ def main() -> int:
     })
     assert report["summary"]["feedback_joined_count"] == 30
     assert report["summary"]["human_confirmed_count"] == 100
+    assert report["summary"]["primary_handled_count"] == 100
+    assert report["summary"]["primary_abstained_count"] == 0
     assert report["summary"]["second_review_completed_count"] == 20
     assert report["summary"]["positive_case_hit_at_1"] == {
         "numerator": 100, "denominator": 100, "value": 1.0,
     }
     assert "feedback_joined_count_not_available_or_below_30" not in report["weight_candidate_gate"]["blockers"]
+    report_annotations = list(annotations)
+    report_annotations[0] = primary_abstained
+    abstained_report = build_annotation_report({
+        "annotations": report_annotations,
+        "quality_preview": {"feedback_joined_count": 30},
+    })
+    assert abstained_report["summary"]["primary_handled_count"] == 100
+    assert abstained_report["summary"]["human_confirmed_count"] == 99
+    assert abstained_report["summary"]["primary_abstained_count"] == 1
+    assert abstained_report["summary"]["metric_eligible_count"] == 99
+    assert abstained_report["summary"]["decision_accuracy_with_noop"]["denominator"] == 99
+    assert abstained_report["summary"]["positive_case_hit_at_1"]["denominator"] == 99
+    assert "primary_human_review_incomplete" not in abstained_report["weight_candidate_gate"]["blockers"]
     negative = dict(annotations[0], should_recommend=False,
                     relevance={"music:0": 0})
     negative["context_for_review"] = {

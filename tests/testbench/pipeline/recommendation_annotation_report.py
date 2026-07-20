@@ -19,11 +19,30 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
     ndcgs: list[float] = []
     top1_sources: Counter[str] = Counter()
     gate = Counter()
+    metric_scenario_count = 0
 
     for annotation in annotations:
+        primary_status = str(annotation.get("primary_review_status") or "pending")
+        adjudication_status = str(annotation.get("adjudication_status") or "")
+        use_adjudicated = adjudication_status in {
+            "completed",
+            "retain_primary_low_confidence",
+            "retain_primary_minor_difference",
+        }
+        metric_eligible = (
+            primary_status != "abstained"
+            and adjudication_status != "excluded_abstention"
+        )
+        if metric_eligible:
+            metric_scenario_count += 1
         context = annotation.get("context_for_review") or {}
         candidates = list(context.get("candidates") or [])
-        relevance = dict(annotation.get("relevance") or {})
+        relevance = dict(
+            annotation.get("adjudicated_relevance")
+            if use_adjudicated
+            else annotation.get("relevance")
+            or {}
+        )
         ranked = []
         best = max((int(value) for value in relevance.values()), default=None)
         first_relevant_rank = None
@@ -40,18 +59,31 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
                 "human_relevance": human,
             }
             ranked.append(row)
-            source_rows[source].append(row)
+            if metric_eligible:
+                source_rows[source].append(row)
             if first_relevant_rank is None and isinstance(human, int) and human > 0:
                 first_relevant_rank = rank
         top1 = ranked[0] if ranked else None
-        if top1:
+        if top1 and metric_eligible:
             top1_sources[top1["resource"]] += 1
-        should_recommend = annotation.get("should_recommend")
-        delivered = context.get("delivered")
+        should_recommend = (
+            annotation.get("adjudicated_should_recommend")
+            if use_adjudicated
+            else annotation.get("should_recommend")
+        )
+        realization = annotation.get("realization_review_context") or {}
+        delivered = (
+            context.get("delivered")
+            if isinstance(context.get("delivered"), bool)
+            else realization.get("delivered")
+        )
+        delivery_reason = context.get("reason") or realization.get("reason")
         predicted_recommend = delivered if isinstance(delivered, bool) else None
-        if isinstance(should_recommend, bool) and isinstance(predicted_recommend, bool):
+        if metric_eligible and isinstance(should_recommend, bool) and isinstance(predicted_recommend, bool):
             gate[(predicted_recommend, should_recommend)] += 1
-        positive_case_eligible = should_recommend is True and best is not None and best > 0
+        positive_case_eligible = (
+            metric_eligible and should_recommend is True and best is not None and best > 0
+        )
         hit = (bool(top1 and top1["human_relevance"] == best)
                if positive_case_eligible else None)
         ndcg = None
@@ -78,9 +110,13 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
             "turn_id": annotation.get("turn_id"),
             "activity": context.get("activity"),
             "should_recommend": annotation.get("should_recommend"),
-            "delivered": context.get("delivered"),
-            "delivery_reason": context.get("reason"),
+            "delivered": delivered,
+            "delivery_reason": delivery_reason,
             "predicted_recommend": predicted_recommend,
+            "primary_review_status": primary_status,
+            "adjudication_status": adjudication_status or None,
+            "label_source": "adjudicated" if use_adjudicated else "primary",
+            "metric_eligible": metric_eligible,
             "positive_case_eligible": positive_case_eligible,
             "top1_hit": hit,
             "acceptable_top1": acceptable_top1,
@@ -106,7 +142,8 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
             "resource": source,
             "candidate_count": len(rows),
             "top1_count": top1_sources[source],
-            "top1_exposure": round(top1_sources[source] / scenario_count, 4) if scenario_count else 0.0,
+            "top1_exposure": round(top1_sources[source] / metric_scenario_count, 4)
+                             if metric_scenario_count else 0.0,
             "average_production_score": round(mean_score, 4) if mean_score is not None else None,
             "average_human_relevance": round(mean_relevance, 4) if mean_relevance is not None else None,
             "normalized_human_relevance": round(normalized_relevance, 4) if normalized_relevance is not None else None,
@@ -120,9 +157,20 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
         and bool(annotation.get("primary_reviewer_id"))
         and bool(annotation.get("primary_reviewed_at")) for annotation in annotations
     )
+    primary_abstained = sum(
+        annotation.get("primary_review_status") == "abstained"
+        and bool(annotation.get("primary_abstain_reason"))
+        and bool(annotation.get("primary_reviewer_id"))
+        and bool(annotation.get("primary_reviewed_at")) for annotation in annotations
+    )
+    primary_handled = human_confirmed + primary_abstained
+    adjudication_status_distribution = dict(Counter(
+        annotation.get("adjudication_status") or "not_adjudicated"
+        for annotation in annotations
+    ))
     second_required = [annotation for annotation in annotations
                        if (annotation.get("second_review") or {}).get("required")]
-    second_completed = sum((annotation.get("second_review") or {}).get("status") == "completed"
+    second_completed = sum((annotation.get("second_review") or {}).get("status") in {"completed", "abstained"}
                            and bool((annotation.get("second_review") or {}).get("reviewed_at"))
                            for annotation in second_required)
     tp = gate[(True, True)]; fp = gate[(True, False)]
@@ -137,7 +185,7 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
         blockers.append("observation_count_below_100")
     if not isinstance(feedback_joined_count, int) or feedback_joined_count < 30:
         blockers.append("feedback_joined_count_not_available_or_below_30")
-    if human_confirmed < scenario_count:
+    if primary_handled < scenario_count:
         blockers.append("primary_human_review_incomplete")
     if len(second_required) < math.ceil(scenario_count * 0.2):
         blockers.append("second_review_sample_below_20_percent")
@@ -148,6 +196,10 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
         "source_dataset": bundle.get("source_dataset"),
         "summary": {
             "scenario_count": scenario_count,
+            "metric_eligible_count": metric_scenario_count,
+            "metric_excluded_abstained_count": (
+                scenario_count - metric_scenario_count
+            ),
             "candidate_count": sum(len(row["resources"]) for row in scenarios),
             "gate_eligible_count": gate_count,
             "positive_case_count": positive_case_count,
@@ -165,11 +217,16 @@ def build_annotation_report(bundle: dict[str, Any]) -> dict[str, Any]:
             "hit_at_1": round(hits / positive_case_count, 4) if positive_case_count else None,
             "mrr": round(sum(reciprocal_ranks) / len(reciprocal_ranks), 4) if reciprocal_ranks else None,
             "ndcg_at_3": round(sum(ndcgs) / len(ndcgs), 4) if ndcgs else None,
-            "should_recommend_rate": round(sum(row["should_recommend"] is True for row in scenarios) / scenario_count, 4)
-                                     if scenario_count else None,
+            "should_recommend_rate": round(
+                sum(row["metric_eligible"] and row["should_recommend"] is True for row in scenarios)
+                / metric_scenario_count, 4
+            ) if metric_scenario_count else None,
             "human_confirmed_count": human_confirmed,
+            "primary_abstained_count": primary_abstained,
+            "primary_handled_count": primary_handled,
             "second_review_required_count": len(second_required),
             "second_review_completed_count": second_completed,
+            "adjudication_status_distribution": adjudication_status_distribution,
             "feedback_joined_count": feedback_joined_count,
             "diagnosis_distribution": dict(Counter(row["score_diagnosis"] for row in scenarios)),
             "issue_layer_distribution": dict(Counter(row["issue_layer"] for row in scenarios)),
@@ -194,8 +251,11 @@ def build_annotation_report_markdown(report: dict[str, Any]) -> str:
     ndcg = summary["positive_case_ndcg_at_3"]
     lines = ["# Recommendation Shadow 人工标注分析", "",
              f"- 场景：{summary['scenario_count']}", f"- 候选：{summary['candidate_count']}",
+             f"- 指标有效场景：{summary['metric_eligible_count']}",
+             f"- 人工弃权排除：{summary['metric_excluded_abstained_count']}",
              f"- 显式 joined feedback turn：{summary['feedback_joined_count']}",
-             f"- 人工主审确认：{summary['human_confirmed_count']} / {summary['scenario_count']}",
+             f"- 人工主审处理：{summary['primary_handled_count']} / {summary['scenario_count']}"
+             f"（确认 {summary['human_confirmed_count']}，弃权 {summary['primary_abstained_count']}）",
              f"- 二审完成：{summary['second_review_completed_count']} / {summary['second_review_required_count']}",
              f"- Decision accuracy (含 PASS)：{decision['value']} ({decision['numerator']}/{decision['denominator']})",
              f"- False interruption rate：{interruption['value']} ({interruption['numerator']}/{interruption['denominator']})",
@@ -215,7 +275,8 @@ def build_annotation_report_markdown(report: dict[str, Any]) -> str:
     for row in report["scenarios"]:
         lines.extend([f"### {row['turn_id']}", "",
                       f"Activity: `{row['activity']}` · Should recommend: `{row['should_recommend']}` · "
-                      f"Delivered: `{row['predicted_recommend']}` · Positive rank case: `{row['positive_case_eligible']}` · "
+                      f"Delivered: `{row['predicted_recommend']}` · Metric eligible: `{row['metric_eligible']}` · "
+                      f"Positive rank case: `{row['positive_case_eligible']}` · "
                       f"Top-1 hit: `{row['top1_hit']}` · nDCG@3: `{row['ndcg_at_3']}`", "",
                       "| 排名 | 资源 | 标题 | 生产分 | 人工分 |", "|---:|---|---|---:|---:|"])
         for resource in row["resources"]:
