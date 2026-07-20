@@ -6,14 +6,24 @@ from datetime import datetime
 import math
 from typing import Any
 
+from tests.testbench.pipeline.recommendation_timing_audit import (
+    audit_timing_dataset,
+)
+
 ANNOTATION_VERSION = 1
 ISSUE_LAYERS = {"candidate", "filter", "score", "bias", "data", "none"}
 INTERRUPTION_LEVELS = {"acceptable", "borderline", "interruptive", "none"}
 PRIVACY_RISKS = {"none", "low", "medium", "high"}
 SCORE_DIAGNOSES = {"missing_candidate", "not_enough_context", "over_scored", "reasonable",
                     "under_scored", "wrong_source"}
-PRIMARY_REVIEW_STATUSES = {"pending", "accepted", "corrected"}
-SECOND_REVIEW_STATUSES = {"not_required", "pending", "completed"}
+PRIMARY_REVIEW_STATUSES = {"pending", "accepted", "corrected", "abstained"}
+SECOND_REVIEW_STATUSES = {"not_required", "pending", "completed", "abstained"}
+ABSTAIN_REASONS = {
+    "insufficient_review_context",
+    "privacy_redaction",
+    "ambiguous_delivery_outcome",
+    "other",
+}
 ENUM_ALIASES = {
     "interruption_level": {"disturbing": "interruptive", "severe": "interruptive"},
     "privacy_risk": {"suspected": "medium", "violation": "high"},
@@ -40,6 +50,7 @@ def audit_shadow_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
     versions = Counter(str(row.get("algorithm_version") or "unknown") for row in observations)
     revisions = Counter(str(row.get("git_revision") or "unknown") for row in observations)
     joined = len(valid_turns & feedback_turns)
+    timing = audit_timing_dataset(dataset)
     return {
         "observation_count": len(observations), "feedback_count": len(feedback),
         "feedback_joined_count": joined,
@@ -53,6 +64,7 @@ def audit_shadow_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
         "algorithm_versions": dict(sorted(versions.items())),
         "mixed_algorithm_versions": len(versions) > 1,
         "git_revisions": dict(sorted(revisions.items())),
+        "timing": timing,
     }
 
 
@@ -90,15 +102,20 @@ def validate_annotations(dataset: dict[str, Any], annotations: list[dict[str, An
                            "message": f"must be one of {sorted(PRIMARY_REVIEW_STATUSES)}"})
         primary_reviewer_id = str(raw.get("primary_reviewer_id") or "")[:64]
         primary_reviewed_at = str(raw.get("primary_reviewed_at") or "")[:64]
-        if primary_review_status in {"accepted", "corrected"} and not primary_reviewer_id:
+        primary_abstain_reason = str(raw.get("primary_abstain_reason") or "")[:64]
+        primary_handled = primary_review_status in {"accepted", "corrected", "abstained"}
+        if primary_handled and not primary_reviewer_id:
             errors.append({"path": f"{path}.primary_reviewer_id",
-                           "message": "is required after human acceptance or correction"})
-        if primary_review_status in {"accepted", "corrected"} and not primary_reviewed_at:
+                           "message": "is required after human review"})
+        if primary_handled and not primary_reviewed_at:
             errors.append({"path": f"{path}.primary_reviewed_at",
-                           "message": "is required after human acceptance or correction"})
+                           "message": "is required after human review"})
         elif primary_reviewed_at and not _is_aware_iso8601(primary_reviewed_at):
             errors.append({"path": f"{path}.primary_reviewed_at",
                            "message": "must be an ISO-8601 timestamp with timezone"})
+        if primary_review_status == "abstained" and primary_abstain_reason not in ABSTAIN_REASONS:
+            errors.append({"path": f"{path}.primary_abstain_reason",
+                           "message": f"must be one of {sorted(ABSTAIN_REASONS)} after abstention"})
         second_review = _validate_second_review(
             raw.get("second_review"), candidate_ids, path, errors
         )
@@ -115,8 +132,9 @@ def validate_annotations(dataset: dict[str, Any], annotations: list[dict[str, An
                            "primary_review_status": primary_review_status,
                            "primary_reviewer_id": primary_reviewer_id,
                            "primary_reviewed_at": primary_reviewed_at,
+                           "primary_abstain_reason": primary_abstain_reason,
                            "second_review": second_review,
-                           "reviewed": second_review["status"] == "completed",
+                           "reviewed": second_review["status"] in {"completed", "abstained"},
                            "reviewer_id": second_review["reviewer_id"]})
     return {"ok": not errors, "errors": errors, "normalized": normalized if not errors else None}
 
@@ -128,17 +146,27 @@ def annotation_summary(dataset: dict[str, Any], annotations: list[dict[str, Any]
         and bool(row.get("primary_reviewer_id"))
         and _is_aware_iso8601(row.get("primary_reviewed_at")) for row in annotations
     )
+    primary_abstained = sum(
+        row.get("primary_review_status") == "abstained"
+        and row.get("primary_abstain_reason") in ABSTAIN_REASONS
+        and bool(row.get("primary_reviewer_id"))
+        and _is_aware_iso8601(row.get("primary_reviewed_at")) for row in annotations
+    )
+    primary_handled = human_confirmed + primary_abstained
     required_second = [row for row in annotations if (row.get("second_review") or {}).get("required")]
-    reviewed = sum((row.get("second_review") or {}).get("status") == "completed"
+    reviewed = sum((row.get("second_review") or {}).get("status") in {"completed", "abstained"}
                    and _is_aware_iso8601((row.get("second_review") or {}).get("reviewed_at"))
                    for row in required_second)
     sensitive = [row for row in annotations if row.get("privacy_risk") not in {None, "none"}]
-    sensitive_reviewed = sum((row.get("second_review") or {}).get("status") == "completed"
+    sensitive_reviewed = sum((row.get("second_review") or {}).get("status") in {"completed", "abstained"}
                              and _is_aware_iso8601((row.get("second_review") or {}).get("reviewed_at"))
                              for row in sensitive)
     return {"total": total, "annotated": annotated, "completion_rate": round(annotated / total, 4) if total else 0.0,
             "human_confirmed": human_confirmed,
             "human_confirmation_rate": round(human_confirmed / total, 4) if total else 0.0,
+            "primary_abstained": primary_abstained,
+            "primary_handled": primary_handled,
+            "primary_handled_rate": round(primary_handled / total, 4) if total else 0.0,
             "second_review_required": len(required_second), "second_reviewed": reviewed,
             "second_review_completion_rate": round(reviewed / len(required_second), 4) if required_second else 0.0,
             "sensitive_count": len(sensitive), "sensitive_reviewed": sensitive_reviewed,
@@ -154,7 +182,7 @@ def p44_readiness(dataset: dict[str, Any], annotations: list[dict[str, Any]]) ->
     if quality["invalid_observation_indexes"] or quality["invalid_feedback_indexes"]: blockers.append("invalid_records")
     if quality["mixed_algorithm_versions"]: blockers.append("mixed_algorithm_versions")
     if annotation["completion_rate"] < 1.0: blockers.append("annotation_incomplete")
-    if annotation["human_confirmation_rate"] < 1.0: blockers.append("primary_human_review_incomplete")
+    if annotation["primary_handled_rate"] < 1.0: blockers.append("primary_human_review_incomplete")
     if annotation["second_review_required"] < math.ceil(max(annotation["total"], 1) * 0.2):
         blockers.append("second_review_sample_below_20_percent")
     elif annotation["second_review_completion_rate"] < 1.0:
@@ -197,20 +225,26 @@ def _validate_second_review(value: Any, candidate_ids: set[str], path: str,
                        "message": f"must be one of {sorted(SECOND_REVIEW_STATUSES)}"})
     reviewer_id = str(raw.get("reviewer_id") or "")[:64]
     reviewed_at = str(raw.get("reviewed_at") or "")[:64]
+    abstain_reason = str(raw.get("abstain_reason") or "")[:64]
     second_relevance = raw.get("relevance") or {}
-    if status == "completed":
+    if status in {"completed", "abstained"}:
         if not required:
             errors.append({"path": f"{path}.second_review.required",
-                           "message": "must be true for a completed second review"})
+                           "message": "must be true for a handled second review"})
         if not reviewer_id:
             errors.append({"path": f"{path}.second_review.reviewer_id",
-                           "message": "is required for a completed second review"})
+                           "message": "is required for a handled second review"})
         if not reviewed_at:
             errors.append({"path": f"{path}.second_review.reviewed_at",
-                           "message": "is required for a completed second review"})
+                           "message": "is required for a handled second review"})
         elif not _is_aware_iso8601(reviewed_at):
             errors.append({"path": f"{path}.second_review.reviewed_at",
                            "message": "must be an ISO-8601 timestamp with timezone"})
+    if status == "abstained":
+        if abstain_reason not in ABSTAIN_REASONS:
+            errors.append({"path": f"{path}.second_review.abstain_reason",
+                           "message": f"must be one of {sorted(ABSTAIN_REASONS)} after abstention"})
+    elif status == "completed":
         if not isinstance(raw.get("should_recommend"), bool):
             errors.append({"path": f"{path}.second_review.should_recommend",
                            "message": "must be boolean for a completed second review"})
@@ -223,6 +257,7 @@ def _validate_second_review(value: Any, candidate_ids: set[str], path: str,
                                "message": "must be integer 0-3"})
     return {"required": required, "status": status, "reviewer_id": reviewer_id,
             "reviewed_at": reviewed_at,
+            "abstain_reason": abstain_reason,
             "should_recommend": raw.get("should_recommend"),
             "relevance": dict(second_relevance),
             "comment": str(raw.get("comment") or "")[:500]}
