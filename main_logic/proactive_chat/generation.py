@@ -35,6 +35,7 @@ from config.prompts.prompts_directives import (
     render_regen_avoid_instruction,
 )
 from utils.llm_client import HumanMessage, ThinkingStreamStripper
+from utils.logger_config import get_module_logger
 from utils.tokenize import count_tokens
 
 from .contracts import (
@@ -52,8 +53,7 @@ from .state import (
     _proactive_material_key,
 )
 
-
-logger = logging.getLogger(__name__)
+logger = get_module_logger(__name__, "Main")
 
 
 @dataclass(frozen=True, slots=True)

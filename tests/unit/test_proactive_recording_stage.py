@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 
-from main_logic.proactive_chat import contracts, service
+from main_logic.proactive_chat import contracts
+from main_logic.proactive_chat import delivery as service
 
 
 class _ActivityTracker:

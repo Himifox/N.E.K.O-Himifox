@@ -18,12 +18,12 @@
 import asyncio
 import difflib
 import hashlib
-import logging
 import re
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+
 from config import (
     PROACTIVE_CHAT_HISTORY_MAX,
     PROACTIVE_SOURCE_FORGET_P,
@@ -31,17 +31,18 @@ from config import (
     PROACTIVE_SOURCE_HALF_LIFE_DEFAULT,
     PROACTIVE_SOURCE_HARD_SKIP_SECONDS,
 )
-from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_proactive import (
-    RECENT_PROACTIVE_CHATS_HEADER, RECENT_PROACTIVE_CHATS_FOOTER,
-    RECENT_PROACTIVE_TIME_LABELS,
     RECENT_PROACTIVE_CHANNEL_LABELS,
+    RECENT_PROACTIVE_CHATS_FOOTER,
+    RECENT_PROACTIVE_CHATS_HEADER,
+    RECENT_PROACTIVE_TIME_LABELS,
 )
+from config.prompts.prompts_sys import _loc
 from utils.config_manager import get_config_manager
 from utils.file_utils import atomic_write_json_async, read_json
+from utils.logger_config import get_module_logger
 
-
-logger = logging.getLogger(__name__)
+logger = get_module_logger(__name__, "Main")
 
 
 # --- Global source decay history (cross-character, persisted) ---

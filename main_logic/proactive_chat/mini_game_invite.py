@@ -15,20 +15,32 @@
 
 """Mini-game invite state, policy, delivery and keyword handling."""
 
-import logging
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from .state import (
-    _ensure_proactive_chat_totals_loaded,
-    _get_proactive_chat_total,
-    _record_invite_delivery_persistent,
-    _record_proactive_chat,
-    _was_invite_ever_delivered,
+from config import (
+    MINI_GAME_INVITE_AVAILABLE_GAMES,
+    MINI_GAME_INVITE_COOLDOWN_AFTER_ACCEPT_SECONDS,
+    MINI_GAME_INVITE_COOLDOWN_AFTER_DECLINE_SECONDS,
+    MINI_GAME_INVITE_COOLDOWN_CHATS,
+    MINI_GAME_INVITE_ENABLED,
+    MINI_GAME_INVITE_FORCE_GAME_TYPE,
+    MINI_GAME_INVITE_LATER_SUPPRESS_SECONDS,
+    MINI_GAME_INVITE_NEW_USER_FORCE_AT,
+    MINI_GAME_INVITE_TRIGGER_PROBABILITY,
+    MINI_GAME_LAUNCH_URL_BY_GAME,
 )
+from config.prompts.prompts_proactive import (
+    MINI_GAME_INVITE_KEYWORDS,
+    MINI_GAME_INVITE_LINES_BY_GAME,
+    MINI_GAME_INVITE_OPTION_LABELS,
+)
+from config.prompts.prompts_sys import _loc
+from utils.logger_config import get_module_logger
+
 from .contracts import (
     PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
@@ -37,26 +49,15 @@ from .contracts import (
     _proactive_chat_body,
     _proactive_pass_body,
 )
-from config import (
-    MINI_GAME_INVITE_ENABLED,
-    MINI_GAME_INVITE_FORCE_GAME_TYPE,
-    MINI_GAME_INVITE_TRIGGER_PROBABILITY,
-    MINI_GAME_INVITE_COOLDOWN_AFTER_ACCEPT_SECONDS,
-    MINI_GAME_INVITE_COOLDOWN_AFTER_DECLINE_SECONDS,
-    MINI_GAME_INVITE_COOLDOWN_CHATS,
-    MINI_GAME_INVITE_NEW_USER_FORCE_AT,
-    MINI_GAME_INVITE_AVAILABLE_GAMES,
-    MINI_GAME_INVITE_LATER_SUPPRESS_SECONDS,
-    MINI_GAME_LAUNCH_URL_BY_GAME,
-)
-from config.prompts.prompts_sys import _loc
-from config.prompts.prompts_proactive import (
-    MINI_GAME_INVITE_LINES_BY_GAME, MINI_GAME_INVITE_OPTION_LABELS,
-    MINI_GAME_INVITE_KEYWORDS,
+from .state import (
+    _ensure_proactive_chat_totals_loaded,
+    _get_proactive_chat_total,
+    _record_invite_delivery_persistent,
+    _record_proactive_chat,
+    _was_invite_ever_delivered,
 )
 
-
-logger = logging.getLogger(__name__)
+logger = get_module_logger(__name__, "Main")
 
 
 @dataclass(frozen=True, slots=True)
@@ -905,7 +906,9 @@ def _maybe_apply_mini_game_invite_keyword(
 # on identity, so the explicit wiring in ``app/runtime_bindings.py`` is a
 # no-op once we've fired here.
 try:
-    from main_logic.agent_event_bus import register_text_user_message_hook as _register_text_hook
+    from main_logic.agent_event_bus import (
+        register_text_user_message_hook as _register_text_hook,
+    )
     _register_text_hook(_maybe_apply_mini_game_invite_keyword)
 except Exception as _exc:
     # Same discriminator pattern as plugin/core/state.py: only

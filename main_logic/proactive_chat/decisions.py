@@ -15,20 +15,21 @@
 
 """Framework-independent proactive-chat entry and source decisions."""
 
-import logging
 import math
 import random
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from utils.logger_config import get_module_logger
+
 from .contracts import (
     PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
     PROACTIVE_REASON_PASS_BUSY,
     PROACTIVE_REASON_PASS_DISABLED,
     PROACTIVE_REASON_PASS_PRIVACY,
-    PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
     PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
+    PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
     PROACTIVE_REASON_PASS_SOURCE_EMPTY,
     PROACTIVE_REASON_PASS_THROTTLED,
     ProactiveChatCommand,
@@ -36,7 +37,6 @@ from .contracts import (
     _proactive_error_body,
     _proactive_pass_body,
 )
-
 from .state import (
     _RECENT_CHAT_MAX_AGE_SECONDS,
     _get_source_history_entry,
@@ -46,8 +46,7 @@ from .state import (
     _source_skip_probability,
 )
 
-
-logger = logging.getLogger(__name__)
+logger = get_module_logger(__name__, "Main")
 
 
 def build_proactive_response(source_tag: str, ctx: dict) -> tuple[str, list]:
