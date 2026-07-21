@@ -18,13 +18,16 @@
 import math
 import random
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from .contracts import (
     PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
     PROACTIVE_REASON_PASS_BUSY,
     PROACTIVE_REASON_PASS_DISABLED,
+    PROACTIVE_REASON_PASS_PRIVACY,
     PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
+    PROACTIVE_REASON_PASS_THROTTLED,
     ProactiveChatResult,
     _proactive_error_body,
     _proactive_pass_body,
@@ -111,6 +114,116 @@ def _should_use_voice_fast_path(
 ) -> bool:
     """Select the voice entry path without depending on its session class."""
     return voice_mode and manager_active and realtime_session
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityScheduleDecision:
+    """Scheduling effects derived from an activity snapshot."""
+
+    fixed_mode: bool = False
+    base_interval: float = 0.0
+    jitter_max: float = 0.0
+    has_must_fire: bool = False
+
+
+def _should_fetch_activity_snapshot(privacy_mode: bool) -> bool:
+    """Privacy mode disables activity inspection and falls back to open policy."""
+    return not privacy_mode
+
+
+def _decide_closed_activity_gate(
+    activity_snapshot: Any,
+    *,
+    debug_force_invite: bool,
+) -> ProactiveChatResult | None:
+    """Stop before source work when the activity tracker closes propensity."""
+    if (
+        debug_force_invite
+        or activity_snapshot is None
+        or activity_snapshot.propensity != "closed"
+    ):
+        return None
+    return ProactiveChatResult(
+        body=_proactive_pass_body(
+            PROACTIVE_REASON_PASS_PRIVACY,
+            message=(
+                f"user state={activity_snapshot.state} "
+                "→ closed (privacy lockdown)"
+            ),
+        )
+    )
+
+
+def _decide_activity_schedule(
+    activity_snapshot: Any,
+    *,
+    base_interval_seconds: Any,
+) -> ActivityScheduleDecision:
+    """Derive fixed scheduling and bounded jitter without sleeping."""
+    if (
+        activity_snapshot is None
+        or activity_snapshot.propensity != "restricted_screen_only"
+    ):
+        return ActivityScheduleDecision()
+
+    has_must_fire = (
+        activity_snapshot.anti_slack_pending is not None
+        or activity_snapshot.work_break_pending is not None
+    )
+    if has_must_fire:
+        return ActivityScheduleDecision(
+            fixed_mode=True,
+            has_must_fire=True,
+        )
+    try:
+        base_interval = (
+            float(base_interval_seconds)
+            if base_interval_seconds is not None
+            else 0.0
+        )
+    except (TypeError, ValueError):
+        base_interval = 0.0
+    jitter_max = (
+        min(base_interval * 0.5, 60.0)
+        if base_interval > 0
+        else 0.0
+    )
+    return ActivityScheduleDecision(
+        fixed_mode=True,
+        base_interval=base_interval,
+        jitter_max=jitter_max,
+        has_must_fire=False,
+    )
+
+
+def _decide_probabilistic_activity_gate(
+    activity_snapshot: Any,
+    *,
+    debug_force_invite: bool,
+    random_value: float | None = None,
+) -> ProactiveChatResult | None:
+    """Apply the activity skip roll while preserving unfinished-thread priority."""
+    if (
+        debug_force_invite
+        or activity_snapshot is None
+        or activity_snapshot.skip_probability <= 0
+        or activity_snapshot.unfinished_thread is not None
+    ):
+        return None
+    if random_value is None:
+        random_value = random.random()
+    if random_value >= activity_snapshot.skip_probability:
+        return None
+    return ProactiveChatResult(
+        body=_proactive_pass_body(
+            PROACTIVE_REASON_PASS_THROTTLED,
+            message=(
+                f"probabilistic skip: state={activity_snapshot.state} "
+                f"intensity={activity_snapshot.game_intensity} "
+                f"skip_prob={activity_snapshot.skip_probability:.2f}"
+            ),
+        )
+    )
 
 
 def _should_skip_source(url_hash: str) -> bool:

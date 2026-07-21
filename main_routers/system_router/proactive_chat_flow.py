@@ -78,10 +78,8 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_PASS_DUPLICATE,
     PROACTIVE_REASON_PASS_GENERATION_EMPTY,
     PROACTIVE_REASON_PASS_MODEL_PASS,
-    PROACTIVE_REASON_PASS_PRIVACY,
     PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
     PROACTIVE_REASON_PASS_SOURCE_EMPTY,
-    PROACTIVE_REASON_PASS_THROTTLED,
     _ensure_proactive_reason_code,
     _proactive_chat_body,
     _proactive_error_body,
@@ -97,10 +95,14 @@ from main_logic.proactive_chat.generation import (
 )
 from main_logic.proactive_chat.decisions import (
     _compute_source_weights,
+    _decide_activity_schedule,
     _decide_busy_entry_guard,
+    _decide_closed_activity_gate,
     _decide_game_route_entry_guard,
     _decide_manager_entry_guard,
+    _decide_probabilistic_activity_gate,
     _filter_sources_by_weight,
+    _should_fetch_activity_snapshot,
     _should_skip_source,
     _should_use_voice_fast_path,
 )
@@ -660,7 +662,7 @@ async def proactive_chat(request: Request):
                 f"[{lanlan_name}] privacy mode check failed, defaulting to enabled: {_pm_err}",
             )
             privacy_mode = True
-        if privacy_mode:
+        if not _should_fetch_activity_snapshot(privacy_mode):
             print(f"[{lanlan_name}] 隐私模式开启，跳过 activity tracker，按无限制策略搭话")
             activity_snapshot = None
         else:
@@ -726,18 +728,16 @@ async def proactive_chat(request: Request):
         # look. Bypassed for the unfinished_thread override is
         # deliberate: if the AI just asked a question, hanging on it
         # mid-private is rude. closed > thread.
-        if (
-            not _debug_force_invite
-            and activity_snapshot is not None
-            and activity_snapshot.propensity == 'closed'
-        ):
+        activity_result = _decide_closed_activity_gate(
+            activity_snapshot,
+            debug_force_invite=_debug_force_invite,
+        )
+        if activity_result is not None:
             print(f"[{lanlan_name}] propensity=closed (state={activity_snapshot.state}), 跳过本轮 proactive")
-            return await _end_proactive(JSONResponse({
-                "success": True,
-                "action": "pass",
-                "reason_code": PROACTIVE_REASON_PASS_PRIVACY,
-                "message": f"user state={activity_snapshot.state} → closed (privacy lockdown)",
-            }))
+            return await _end_proactive(JSONResponse(
+                activity_result.body,
+                status_code=activity_result.status_code,
+            ))
 
         # ========== Screen-only：固定间隔 + 后端抖动 ==========
         # 用户处于 gaming / focused_work（propensity=restricted_screen_only）
@@ -757,31 +757,22 @@ async def proactive_chat(request: Request):
         # next_schedule_fixed_mode=False，前端误切回 tier backoff，让用户
         # 离开 must-fire 状态后又被退避机制吞掉一段时间。
         # Codex P2 + CodeRabbit Major review。
-        if (
-            activity_snapshot is not None
-            and activity_snapshot.propensity == 'restricted_screen_only'
-        ):
-            _next_schedule_fixed_mode = True
-            _has_must_fire = (
-                activity_snapshot.anti_slack_pending is not None
-                or activity_snapshot.work_break_pending is not None
-            )
-            if _has_must_fire:
+        activity_schedule = _decide_activity_schedule(
+            activity_snapshot,
+            base_interval_seconds=command.base_interval_seconds,
+        )
+        _next_schedule_fixed_mode = activity_schedule.fixed_mode
+        if activity_schedule.fixed_mode:
+            if activity_schedule.has_must_fire:
                 print(f"[{lanlan_name}] propensity=restricted_screen_only 但有 must-fire 提醒待发，跳过本轮抖动 sleep")
-            else:
-                try:
-                    _base_interval_raw = command.base_interval_seconds
-                    _base_interval = float(_base_interval_raw) if _base_interval_raw is not None else 0.0
-                except (TypeError, ValueError):
-                    _base_interval = 0.0
-                # 上限兜底：base 过大时把 0.5*base 截到 60s，避免极端配置
-                # （比如 user 把 proactiveChatInterval 调到 300s）让后端
-                # 单请求占连接十分钟。
-                if _base_interval > 0:
-                    _jitter_max = min(_base_interval * 0.5, 60.0)
-                    _jitter = random.uniform(0.0, _jitter_max)
-                    print(f"[{lanlan_name}] propensity=restricted_screen_only, 后端注入 {_jitter:.2f}s 间隔抖动（base={_base_interval:.1f}s）")
-                    await asyncio.sleep(_jitter)
+            elif activity_schedule.jitter_max > 0:
+                _jitter = random.uniform(0.0, activity_schedule.jitter_max)
+                print(
+                    f"[{lanlan_name}] propensity=restricted_screen_only, "
+                    f"后端注入 {_jitter:.2f}s 间隔抖动"
+                    f"（base={activity_schedule.base_interval:.1f}s）"
+                )
+                await asyncio.sleep(_jitter)
 
         # ========== Must-fire: break-reminder branches ==========
         # Anti-slack outranks water-break (transition trigger more
@@ -1040,29 +1031,20 @@ async def proactive_chat(request: Request):
         # back to something, we honour that promise regardless of
         # how silenced the user wanted us. The thread mechanism's
         # 2-followup hard cap already prevents harassment.
-        if (
-            not _debug_force_invite
-            and activity_snapshot is not None
-            and activity_snapshot.skip_probability > 0
-            and activity_snapshot.unfinished_thread is None
-        ):
-            import random as _random
-            if _random.random() < activity_snapshot.skip_probability:
-                print(
-                    f"[{lanlan_name}] skip_probability={activity_snapshot.skip_probability:.2f} "
-                    f"rolled (state={activity_snapshot.state} intensity={activity_snapshot.game_intensity} "
-                    f"genre={activity_snapshot.game_genre})，本轮跳过"
-                )
-                return await _end_proactive(JSONResponse({
-                    "success": True,
-                    "action": "pass",
-                    "reason_code": PROACTIVE_REASON_PASS_THROTTLED,
-                    "message": (
-                        f"probabilistic skip: state={activity_snapshot.state} "
-                        f"intensity={activity_snapshot.game_intensity} "
-                        f"skip_prob={activity_snapshot.skip_probability:.2f}"
-                    ),
-                }))
+        activity_result = _decide_probabilistic_activity_gate(
+            activity_snapshot,
+            debug_force_invite=_debug_force_invite,
+        )
+        if activity_result is not None:
+            print(
+                f"[{lanlan_name}] skip_probability={activity_snapshot.skip_probability:.2f} "
+                f"rolled (state={activity_snapshot.state} intensity={activity_snapshot.game_intensity} "
+                f"genre={activity_snapshot.game_genre})，本轮跳过"
+            )
+            return await _end_proactive(JSONResponse(
+                activity_result.body,
+                status_code=activity_result.status_code,
+            ))
 
         # ========== 解析 enabled_modes ==========
         # 兼容旧版前端：``enabled_modes`` 字段缺席 → 根据其它字段推断；显式传 ``[]``
