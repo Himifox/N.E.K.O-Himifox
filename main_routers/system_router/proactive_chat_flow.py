@@ -27,14 +27,15 @@ from .break_reminders import (
     _render_work_break_prompt,
 )
 from main_logic.proactive_chat.mini_game_invite import (
+    _advance_mini_game_invite_entry,
     _build_mini_game_invite_options_payload,
-    _maybe_deliver_mini_game_invite,
-    _mini_game_invite_advance_response,
+    _last_user_message_at_from_activity,
     _mini_game_invite_count_post_response_chat,
     _mini_game_invite_get_state,
     _mini_game_invite_record_delivered,
     _pick_mini_game_type,
     _push_mini_game_invite_resolved,
+    _run_mini_game_invite_short_circuit,
 )
 from main_logic.proactive_chat.music_recommendation import (
     _append_music_recommendations,
@@ -114,7 +115,6 @@ import asyncio
 import json
 import random
 import re
-import time
 from typing import Any
 from uuid import uuid4
 from fastapi import Request
@@ -223,6 +223,20 @@ async def _safe_fire_proactive_done(scope: dict) -> None:
         await mgr.state.fire(se.PROACTIVE_DONE)
     except Exception as err:  # 状态机不该抛，但兜底 swallow
         logger.warning("safe_fire_proactive_done 异常: %s", err)
+
+
+async def _push_mini_game_invite_options(mgr: Any, payload: dict) -> None:
+    """Send an invite-options payload from the Router/WebSocket boundary."""
+    try:
+        websocket = getattr(mgr, "websocket", None)
+        if websocket is None or not hasattr(websocket, "send_json"):
+            return
+        client_state = getattr(websocket, "client_state", None)
+        if client_state is not None and client_state != client_state.CONNECTED:
+            return
+        await websocket.send_json(payload)
+    except Exception as exc:
+        logger.warning("mini-game invite options WS push failed: %s", exc)
 
 
 _PHASE1_FETCH_PER_SOURCE = PROACTIVE_PHASE1_FETCH_PER_SOURCE  # Phase 1 每个信息源固定抓取条数
@@ -484,16 +498,16 @@ async def proactive_chat(request: Request):
             # 用户随后点「现在不想玩」落到 expired、真正的 5h decline 起不来、邀请
             # 5min 后反复重来。改用真消息时间戳后，纯点按钮（不说话）的用户活动
             # 时间不会越过 delivered_at，pending 一直留到用户显式点按钮 / 说话。
-            _voice_advance_outcome = _mini_game_invite_advance_response(
+            _voice_entry_advance = _advance_mini_game_invite_entry(
                 lanlan_name, getattr(mgr, 'last_user_message_time', None),
             )
             # advance 触发了隐式 dismiss → 推 WS 让前端清掉 prompt UI（cross-window
             # 一致性）。codex P2 指出非按钮路径漏推 WS 让 UI 挂着。
-            if _voice_advance_outcome and _voice_advance_outcome.get('session_id'):
+            if _voice_entry_advance is not None:
                 await _push_mini_game_invite_resolved(
                     mgr,
-                    session_id=_voice_advance_outcome['session_id'],
-                    action=_voice_advance_outcome.get('action', 'suppress'),
+                    session_id=_voice_entry_advance.session_id,
+                    action=_voice_entry_advance.action,
                 )
             can_start_proactive = mgr.state.can_start_proactive(
                 session=probe_session
@@ -679,20 +693,18 @@ async def proactive_chat(request: Request):
         # 否则 cooldown 永远卡在 pending。Text path 从 activity_snapshot 反推
         # last_user_msg_at；voice fast path 在上面的 voice block 内独立调一次
         # （用 mgr.last_user_activity_time），两边对称。
-        _text_last_user_msg_at: float | None = None
-        if activity_snapshot is not None:
-            _secs = getattr(activity_snapshot, 'seconds_since_user_msg', None)
-            if _secs is not None:
-                _text_last_user_msg_at = time.time() - float(_secs)
-        _text_advance_outcome = _mini_game_invite_advance_response(
+        _text_last_user_msg_at = _last_user_message_at_from_activity(
+            activity_snapshot,
+        )
+        _text_entry_advance = _advance_mini_game_invite_entry(
             lanlan_name, _text_last_user_msg_at,
         )
         # 隐式 dismiss 推 WS（同 voice fast path 对称，codex P2）
-        if _text_advance_outcome and _text_advance_outcome.get('session_id'):
+        if _text_entry_advance is not None:
             await _push_mini_game_invite_resolved(
                 mgr,
-                session_id=_text_advance_outcome['session_id'],
-                action=_text_advance_outcome.get('action', 'suppress'),
+                session_id=_text_entry_advance.session_id,
+                action=_text_entry_advance.action,
             )
 
         # 用户级 toggle：前端 CHAT_MODE_CONFIG 里的 ``proactiveMiniGameInviteEnabled``
@@ -1087,7 +1099,7 @@ async def proactive_chat(request: Request):
             invite_lang = 'zh'
         # _user_invite_toggle 已经在上面 _debug_force_invite 计算前算过——把
         # toggle 关时旗标也连带禁用，保证早退 gate 不被绕过。
-        invite_outcome = await _maybe_deliver_mini_game_invite(
+        invite_short_circuit = await _run_mini_game_invite_short_circuit(
             lanlan_name=lanlan_name,
             mgr=mgr,
             activity_snapshot=activity_snapshot,
@@ -1095,8 +1107,16 @@ async def proactive_chat(request: Request):
             master_name=master_name_current,
             user_toggle_enabled=_user_invite_toggle,
         )
-        if invite_outcome is not None:
-            return await _end_proactive(JSONResponse(invite_outcome))
+        if invite_short_circuit is not None:
+            if invite_short_circuit.options_payload is not None:
+                await _push_mini_game_invite_options(
+                    mgr,
+                    invite_short_circuit.options_payload,
+                )
+            return await _end_proactive(JSONResponse(
+                invite_short_circuit.result.body,
+                status_code=invite_short_circuit.result.status_code,
+            ))
 
         # 用户把所有 source toggle 都关了（仅留 mini-game 邀请独立 toggle 触发本轮
         # 请求），mini-game 短路又没命中：没什么可聊。直接 pass 而不是落到下面源
