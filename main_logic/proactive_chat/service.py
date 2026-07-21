@@ -27,6 +27,7 @@ from .contracts import (
     PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
     ProactiveChatResult,
+    _ensure_proactive_reason_code,
     _proactive_chat_body,
     _proactive_pass_body,
 )
@@ -44,6 +45,77 @@ from .state import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class ProactiveLifecycle:
+    """Explicit owner of normal and exceptional proactive-turn finalization."""
+
+    mgr: Any
+    state_event: Any
+    lanlan_name: str
+    log: logging.Logger | None = None
+    done_emitted: bool = False
+    next_schedule_fixed_mode: bool = False
+    focus_phase2_reached: bool = False
+    focus_episode_token: Any = None
+    focus_turn_token: Any = None
+
+    @property
+    def _logger(self) -> logging.Logger:
+        return self.log or logger
+
+    def set_fixed_schedule(self, enabled: bool) -> None:
+        self.next_schedule_fixed_mode = enabled
+
+    def mark_phase2(self, snapshot: dict[str, Any]) -> None:
+        self.focus_phase2_reached = True
+        self.focus_episode_token = snapshot.get("focus_episode_id")
+        self.focus_turn_token = snapshot.get("focus_turn_count")
+
+    async def safe_done(self) -> None:
+        """Fire DONE at most once without applying normal-exit side effects."""
+        if self.done_emitted:
+            return
+        self.done_emitted = True
+        try:
+            await self.mgr.state.fire(self.state_event)
+        except Exception as exc:
+            self._logger.warning(
+                "[%s] PROACTIVE_DONE fire 异常: %s",
+                self.lanlan_name,
+                exc,
+            )
+
+    async def finalize(self, result: ProactiveChatResult) -> ProactiveChatResult:
+        """Apply the legacy normal-exit DONE, Focus, and schedule semantics."""
+        await self.safe_done()
+        body = _ensure_proactive_reason_code(dict(result.body))
+        replied = body.get("action") == "chat"
+        if not replied:
+            self._logger.info(
+                "[%s] 主动搭话本轮未发起：%s",
+                self.lanlan_name,
+                body.get("message") or body.get("error") or "(无原因说明)",
+            )
+        if self.focus_phase2_reached:
+            try:
+                await self.mgr._focus_idle_cooldown(
+                    replied=replied,
+                    episode_token=self.focus_episode_token,
+                    turn_token=self.focus_turn_token,
+                )
+            except Exception as exc:
+                self._logger.debug(
+                    "[%s] focus idle cooldown failed: %s",
+                    self.lanlan_name,
+                    exc,
+                )
+        body.setdefault(
+            "next_schedule_fixed_mode",
+            self.next_schedule_fixed_mode,
+        )
+        return ProactiveChatResult(body=body, status_code=result.status_code)
 
 
 @dataclass(frozen=True, slots=True)

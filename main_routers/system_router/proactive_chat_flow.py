@@ -58,11 +58,13 @@ from main_logic.proactive_chat.state import (
     _record_invite_delivery_persistent,
 )
 from main_logic.proactive_chat.service import (
+    ProactiveLifecycle,
     _commit_proactive_delivery,
     _record_committed_delivery,
 )
 from main_logic.proactive_chat.contracts import (
     ProactiveChatCommand,
+    ProactiveChatResult,
     PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
     PROACTIVE_REASON_ERROR_INTERNAL,
@@ -73,7 +75,6 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_PASS_DISABLED,
     PROACTIVE_REASON_PASS_GENERATION_EMPTY,
     PROACTIVE_REASON_PASS_MODEL_PASS,
-    _ensure_proactive_reason_code,
     _proactive_chat_body,
     _proactive_error_body,
     _proactive_pass_body,
@@ -181,25 +182,6 @@ def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
             *chat_retry_error_types(),
         )
     return _PROACTIVE_LLM_RETRY_ERROR_TYPES
-
-
-async def _safe_fire_proactive_done(scope: dict) -> None:
-    """Safely reset the state machine from proactive_chat's exception-handling path.
-
-    The exception may occur before PROACTIVE_START (mgr unbound, _SE not imported)
-    or after it; look everything up via the locals() dict to avoid NameError. The
-    state-machine fire itself is idempotent: when the state is already IDLE,
-    PROACTIVE_DONE is just a no-op.
-    """
-    mgr = scope.get("mgr")
-    se = scope.get("_SE")
-    emitted = scope.get("_proactive_done_emitted", False)
-    if mgr is None or se is None or emitted:
-        return
-    try:
-        await mgr.state.fire(se.PROACTIVE_DONE)
-    except Exception as err:  # 状态机不该抛，但兜底 swallow
-        logger.warning("safe_fire_proactive_done 异常: %s", err)
 
 
 async def _push_mini_game_invite_options(mgr: Any, payload: dict) -> None:
@@ -359,6 +341,7 @@ async def proactive_chat(request: Request):
     if validation_error is not None:
         return validation_error
 
+    lifecycle: ProactiveLifecycle | None = None
     try:
         _config_manager = get_config_manager()
         session_manager = get_session_manager()
@@ -501,6 +484,12 @@ async def proactive_chat(request: Request):
         # IDLE→PHASE1 + 订阅派发，避免并发请求双双通过 can_start_proactive 后
         # 各自 fire(PROACTIVE_START) 导致两路 proactive 同时进入 PHASE1。
         from main_logic.session_state import SessionEvent as _SE
+        lifecycle = ProactiveLifecycle(
+            mgr=mgr,
+            state_event=_SE.PROACTIVE_DONE,
+            lanlan_name=lanlan_name,
+            log=logger,
+        )
         proactive_started = await mgr.state.try_start_proactive(
             session=probe_session
         )
@@ -514,75 +503,26 @@ async def proactive_chat(request: Request):
                 entry_result.body,
                 status_code=entry_result.status_code,
             )
-        _proactive_done_emitted = False
-        # Set after activity snapshot fetch — tells the frontend scheduler
-        # to skip the regular tier backoff and use a flat baseInterval on
-        # the next round (the backend will then inject a uniform
-        # [0, 0.5*baseInterval] sleep to provide the jitter). See the
-        # screen-only delay block further down and the matching
-        # ``S.proactiveFixedScheduleMode`` branch in static/app/app-proactive.js.
-        _next_schedule_fixed_mode = False
-
-        # Focus idle cooldown bookkeeping (read by _end_proactive via closure).
-        # Set only when the flow reaches the Phase-2 idle Focus decision, so
-        # short-circuit replies (mini-game invite, break-reminder, must-fire)
-        # that return before Phase 2 never spend Focus charge. The episode token
-        # pins the decay to the episode the thinking decision observed.
-        _focus_phase2_reached = False
-        _focus_episode_token = None
-        _focus_turn_token = None
-
         async def _end_proactive(resp: JSONResponse) -> JSONResponse:
-            """Wraps every normal/short-circuit proactive exit: idempotently fires PROACTIVE_DONE.
-
-            Also injects ``next_schedule_fixed_mode`` into the response body; the
-            frontend reads it to decide whether the next round of scheduling uses
-            tier backoff or the fixed base interval. The injection happens at this
-            unified exit, so newly added response paths need no individual changes.
-            """
-            nonlocal _proactive_done_emitted
-            if not _proactive_done_emitted:
-                _proactive_done_emitted = True
-                try:
-                    await mgr.state.fire(_SE.PROACTIVE_DONE)
-                except Exception as _done_err:
-                    logger.warning("[%s] PROACTIVE_DONE fire 异常: %s", lanlan_name, _done_err)
+            """Adapt the domain lifecycle result back to the HTTP response."""
             try:
                 body = json.loads(resp.body)
             except Exception:
+                await lifecycle.safe_done()
                 return resp
             if not isinstance(body, dict):
+                await lifecycle.safe_done()
                 return resp
-            body = _ensure_proactive_reason_code(body)
-            # text-mode 占坑后的所有出口都经过这里。本轮最终没把话说出来
-            # （action != "chat"：各种 guard/skip/内容为空/被用户接管）就在
-            # info 留一条带原因的日志，原因取响应体 message（无则 error）。
-            # 散落各分支无需各自记；排查"她这轮为什么没主动说话"看这条即可。
-            # 占坑前的早退（游戏路由 / voice 与 text 的 409 并发拒绝）不经过
-            # 本出口，各自就地补了同前缀（"主动搭话本轮未发起："）的 info。
-            _replied = body.get("action") == "chat"
-            if not _replied:
-                logger.info(
-                    "[%s] 主动搭话本轮未发起：%s",
-                    lanlan_name,
-                    body.get("message") or body.get("error") or "(无原因说明)",
+            finalized = await lifecycle.finalize(
+                ProactiveChatResult(
+                    body=body,
+                    status_code=resp.status_code,
                 )
-            # Idle Focus cooldown — only for turns that reached the Phase-2 idle
-            # Focus decision (short-circuit replies never set the flag, so they
-            # don't spend Focus). A proactive turn never raises the charge; it
-            # decays — faster when it delivered a reply (_replied) than when
-            # Phase 2 produced nothing. count_turn=False + episode-token guard
-            # live inside _focus_idle_cooldown.
-            if _focus_phase2_reached:
-                try:
-                    await mgr._focus_idle_cooldown(
-                        replied=_replied, episode_token=_focus_episode_token,
-                        turn_token=_focus_turn_token,
-                    )
-                except Exception as _focus_err:
-                    logger.debug("[%s] focus idle cooldown failed: %s", lanlan_name, _focus_err)
-            body.setdefault('next_schedule_fixed_mode', _next_schedule_fixed_mode)
-            return JSONResponse(body, status_code=resp.status_code)
+            )
+            return JSONResponse(
+                finalized.body,
+                status_code=finalized.status_code,
+            )
 
         def _proactive_preempted_json(where: str) -> dict:
             # 细粒度的 state 快照留 debug；面向排查的"本轮未发起 + 原因"由统一
@@ -721,7 +661,7 @@ async def proactive_chat(request: Request):
             activity_snapshot,
             base_interval_seconds=command.base_interval_seconds,
         )
-        _next_schedule_fixed_mode = activity_schedule.fixed_mode
+        lifecycle.set_fixed_schedule(activity_schedule.fixed_mode)
         if activity_schedule.fixed_mode:
             if activity_schedule.has_must_fire:
                 print(f"[{lanlan_name}] propensity=restricted_screen_only 但有 must-fire 提醒待发，跳过本轮抖动 sleep")
@@ -2188,10 +2128,7 @@ async def proactive_chat(request: Request):
         # focus state it observed (episode id + turn count) — _end_proactive
         # applies the cooldown only for such turns, and only if still in this
         # exact episode/turn (race guard: a no-op if inline moved it since).
-        _focus_phase2_reached = True
-        _focus_phase2_snap = mgr.state.snapshot()
-        _focus_episode_token = _focus_phase2_snap.get("focus_episode_id")
-        _focus_turn_token = _focus_phase2_snap.get("focus_turn_count")
+        lifecycle.mark_phase2(mgr.state.snapshot())
 
         # --- 构建 LLM + messages (static/dynamic 分离) ---
         phase2_use_vision = bool(screenshot_b64_for_phase2 and has_vision_model)
@@ -2327,7 +2264,8 @@ async def proactive_chat(request: Request):
 
     except asyncio.TimeoutError:
         logger.error("主动搭话超时")
-        await _safe_fire_proactive_done(locals())
+        if lifecycle is not None:
+            await lifecycle.safe_done()
         return JSONResponse(
             _proactive_error_body(
                 PROACTIVE_REASON_ERROR_TIMEOUT,
@@ -2337,7 +2275,8 @@ async def proactive_chat(request: Request):
         )
     except Exception as e:
         logger.error(f"主动搭话接口异常: {e}")
-        await _safe_fire_proactive_done(locals())
+        if lifecycle is not None:
+            await lifecycle.safe_done()
         return JSONResponse(
             _proactive_error_body(
                 PROACTIVE_REASON_ERROR_INTERNAL,

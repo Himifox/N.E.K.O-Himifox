@@ -358,12 +358,13 @@ def test_proactive_phase2_abort_reasons_stay_specific():
 @pytest.mark.unit
 def test_end_proactive_rewrites_body_after_reason_stage_fallback():
     import inspect
-    import main_routers.system_router as system_router
+    from main_logic.proactive_chat.service import ProactiveLifecycle
 
-    src = inspect.getsource(system_router.proactive_chat)
-    assert "body = _ensure_proactive_reason_code(body)" in src
-    assert "body.setdefault('next_schedule_fixed_mode', _next_schedule_fixed_mode)" in src
-    assert "if 'next_schedule_fixed_mode' in body:\n                return resp" not in src
+    src = inspect.getsource(ProactiveLifecycle.finalize)
+    assert "body = _ensure_proactive_reason_code(dict(result.body))" in src
+    assert 'body.setdefault(' in src
+    assert '"next_schedule_fixed_mode"' in src
+    assert "return result" not in src
 
 
 @pytest.mark.unit

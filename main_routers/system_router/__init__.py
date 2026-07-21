@@ -296,7 +296,6 @@ from .break_reminders import (  # noqa: F401
 )
 from .proactive_chat_flow import (  # noqa: F401
     _proactive_llm_retry_error_types,
-    _safe_fire_proactive_done,
     _PHASE1_FETCH_PER_SOURCE,
     _PHASE1_TOTAL_TOPIC_TARGET,
     _open_threads_for_activity_state,
