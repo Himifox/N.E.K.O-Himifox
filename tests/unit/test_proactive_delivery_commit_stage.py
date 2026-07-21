@@ -164,7 +164,6 @@ async def test_unpreempted_delivery_error_clears_tts_and_returns_failed() -> Non
         == contracts.PROACTIVE_REASON_DELIVERY_FAILED
     )
 
-
 @pytest.mark.asyncio
 async def test_preempted_delivery_error_does_not_clear_user_tts() -> None:
     mgr = _FakeManager(
@@ -182,4 +181,3 @@ async def test_preempted_delivery_error_does_not_clear_user_tts() -> None:
         committed.result.body["reason_code"]
         == contracts.PROACTIVE_REASON_DELIVERY_FAILED
     )
-
