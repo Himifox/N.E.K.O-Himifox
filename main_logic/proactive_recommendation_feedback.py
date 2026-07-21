@@ -135,6 +135,39 @@ def clear_pending_recommendation_feedback() -> None:
     _pending_feedback.clear()
 
 
+def consecutive_unanswered_recommendation_deliveries(
+    lanlan_name: Any,
+    *,
+    now: float | None = None,
+) -> int:
+    """Count newest recommendation deliveries without an explicit user reply.
+
+    This is an observation-only, process-local fatigue signal. It never changes
+    delivery behavior and only considers pending turns retained by the existing
+    feedback reply window.
+    """
+    name = _clean_text(lanlan_name)
+    if not name:
+        return 0
+    current = time.time() if now is None else float(now)
+    _prune_pending_feedback(now=current)
+    pending_rows = sorted(
+        (
+            pending
+            for pending in _pending_feedback.values()
+            if pending.lanlan_name == name and pending.delivered_at <= current
+        ),
+        key=lambda pending: pending.delivered_at,
+        reverse=True,
+    )
+    count = 0
+    for pending in pending_rows:
+        if pending.reply_seen:
+            break
+        count += 1
+    return count
+
+
 def has_forbidden_feedback_fields(payload: Mapping[str, Any]) -> bool:
     return _contains_forbidden_keys(payload)
 

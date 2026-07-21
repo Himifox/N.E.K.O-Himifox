@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import math
 import re
 import time
 from typing import Any
@@ -50,6 +51,7 @@ _TOP_LEVEL_KEYS = {
     "algorithm_version",
     "git_revision",
     "review_context",
+    "decision_context",
     "recommendation_mode",
     "decision_stage",
     "candidate_count",
@@ -136,11 +138,47 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             review_context = sanitize_recommendation_review_context(observation.get(key))
             if review_context:
                 safe[key] = review_context
+        elif key == "decision_context":
+            decision_context = sanitize_recommendation_decision_context(observation.get(key))
+            if decision_context:
+                safe[key] = decision_context
         elif key == "active_channels":
             safe[key] = _clean_string_list(observation.get(key))
         else:
             safe[key] = _json_safe_scalar(observation.get(key))
     return safe
+
+
+def sanitize_recommendation_decision_context(value: Any) -> dict[str, Any]:
+    """Return the bounded, observation-only context allowed for offline gates."""
+    if not isinstance(value, Mapping):
+        return {}
+    timing = value.get("timing")
+    if not isinstance(timing, Mapping):
+        return {}
+
+    safe_timing = {
+        "configured_interval_seconds": _bounded_optional_number(
+            timing.get("configured_interval_seconds"),
+            lower=0.0,
+            upper=86_400.0,
+        ),
+        "elapsed_since_last_delivery_seconds": _bounded_optional_number(
+            timing.get("elapsed_since_last_delivery_seconds"),
+            lower=0.0,
+            upper=31_536_000.0,
+        ),
+        "recent_delivery_count_30m": _bounded_nonnegative_int(
+            timing.get("recent_delivery_count_30m")
+        ),
+        "recent_delivery_count_2h": _bounded_nonnegative_int(
+            timing.get("recent_delivery_count_2h")
+        ),
+        "consecutive_unanswered_deliveries": _bounded_nonnegative_int(
+            timing.get("consecutive_unanswered_deliveries")
+        ),
+    }
+    return {"timing": safe_timing}
 
 
 def sanitize_recommendation_review_context(value: Any) -> dict[str, Any]:
@@ -851,6 +889,33 @@ def _number(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bounded_optional_number(
+    value: Any,
+    *,
+    lower: float,
+    upper: float,
+) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(max(lower, min(upper, number)), 3)
+
+
+def _bounded_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(1_000_000, number))
 
 
 def _example_from_observation(row: Mapping[str, Any]) -> dict[str, Any]:

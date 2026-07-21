@@ -35,7 +35,7 @@ _SOURCE_TYPE_SCORE_ADJUSTMENTS = {
 }
 
 PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION = (
-    f"{APP_VERSION}:proactive-recommendation-observation-v2"
+    f"{APP_VERSION}:proactive-recommendation-observation-v3"
 )
 # Build environments may inject a revision once at process start. Never shell
 # out per observation: logging must remain cheap and work in packaged builds.
@@ -158,6 +158,7 @@ def build_recommendation_observation(
     algorithm_version: Any = None,
     git_revision: Any = None,
     review_context: Mapping[str, Any] | None = None,
+    decision_context: Mapping[str, Any] | None = None,
     top_n: int = 3,
 ) -> dict[str, Any]:
     shadow_source = decision.shadow_selected_source_type
@@ -216,6 +217,9 @@ def build_recommendation_observation(
             _text(git_revision) or PROACTIVE_RECOMMENDATION_GIT_REVISION or None
         ),
         "review_context": dict(review_context) if isinstance(review_context, Mapping) else None,
+        "decision_context": (
+            dict(decision_context) if isinstance(decision_context, Mapping) else None
+        ),
         "recommendation_mode": _text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,
         "candidate_count": decision.candidate_count,

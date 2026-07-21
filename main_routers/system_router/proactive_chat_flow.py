@@ -164,9 +164,13 @@ from main_logic.proactive_recommendation import (
     reorder_phase1_topics_for_bias,
 )
 from main_logic.proactive_recommendation_feedback import (
+    consecutive_unanswered_recommendation_deliveries,
     music_feedback_event_type,
     record_feedback_event,
     register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation_timing import (
+    proactive_delivery_timing_snapshot,
 )
 from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
@@ -328,6 +332,7 @@ def _record_proactive_recommendation_observation(
     activity_propensity: Any = None,
     review_context_mode: str = "off",
     delivered_text: Any = None,
+    decision_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist the finalized recommendation observation."""
     if decision is None:
@@ -368,6 +373,7 @@ def _record_proactive_recommendation_observation(
             algorithm_version=PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
             git_revision=PROACTIVE_RECOMMENDATION_GIT_REVISION,
             review_context=review_context,
+            decision_context=decision_context,
         )
     )
     logger.info(
@@ -566,6 +572,21 @@ async def proactive_chat(request: Request):
         
         data = await request.json()
         lanlan_name = data.get('lanlan_name') or her_name_current
+        _timing_snapshot_at = time.time()
+        _recommendation_timing_context = proactive_delivery_timing_snapshot(
+            lanlan_name,
+            configured_interval_seconds=data.get('base_interval_seconds'),
+            now=_timing_snapshot_at,
+        )
+        _recommendation_timing_context["consecutive_unanswered_deliveries"] = (
+            consecutive_unanswered_recommendation_deliveries(
+                lanlan_name,
+                now=_timing_snapshot_at,
+            )
+        )
+        _recommendation_decision_context = {
+            "timing": _recommendation_timing_context,
+        }
         is_playing_music = data.get('is_playing_music', False)
         current_track = data.get('current_track', None)
         music_cooldown = data.get('music_cooldown', False)
@@ -757,6 +778,7 @@ async def proactive_chat(request: Request):
                             else "off"
                         ),
                         delivered_text=_review_delivered_text,
+                        decision_context=_recommendation_decision_context,
                     )
                 except Exception as _rec_err:
                     logger.debug("[%s] proactive recommendation observation failed: %s", lanlan_name, _rec_err)
