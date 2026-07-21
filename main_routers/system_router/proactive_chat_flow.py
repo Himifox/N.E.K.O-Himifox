@@ -78,8 +78,6 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_PASS_DUPLICATE,
     PROACTIVE_REASON_PASS_GENERATION_EMPTY,
     PROACTIVE_REASON_PASS_MODEL_PASS,
-    PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
-    PROACTIVE_REASON_PASS_SOURCE_EMPTY,
     _ensure_proactive_reason_code,
     _proactive_chat_body,
     _proactive_error_body,
@@ -94,14 +92,15 @@ from main_logic.proactive_chat.generation import (
     _text_is_pass_sentinel,
 )
 from main_logic.proactive_chat.decisions import (
-    _compute_source_weights,
     _decide_activity_schedule,
     _decide_busy_entry_guard,
     _decide_closed_activity_gate,
+    _decide_empty_source_gate,
     _decide_game_route_entry_guard,
     _decide_manager_entry_guard,
     _decide_probabilistic_activity_gate,
-    _filter_sources_by_weight,
+    _select_source_modes,
+    _select_weighted_sources,
     _should_fetch_activity_snapshot,
     _should_skip_source,
     _should_use_voice_fast_path,
@@ -1051,55 +1050,28 @@ async def proactive_chat(request: Request):
         # 表示新版客户端"用户把所有 source toggle 都关了"，不能再走 BC fallback
         # 退化到 home/trending（否则 mini-game 邀请 toggle 单独开启的场景下 dice
         # miss 会让 home 兜底打破 toggle 契约——codex P1）。
-        if command.enabled_modes_provided:
-            enabled_modes = command.enabled_modes or []
-        else:
-            content_type = command.content_type
-            screenshot_data = command.screenshot_data
-            if screenshot_data and isinstance(screenshot_data, str):
-                enabled_modes = ['vision']
-            elif command.use_window_search:
-                enabled_modes = ['window']
-            elif content_type == 'news':
-                enabled_modes = ['news']
-            elif content_type == 'video':
-                enabled_modes = ['video']
-            elif command.use_personal_dynamic:
-                enabled_modes = ['personal']
-            else:
-                enabled_modes = ['home']
-
-        # 是否有 5 分钟内未收尾话题。若有，restricted_screen_only / sources 空
-        # 这两个早退分支都让步——AI 能基于 conversation history 接续旧话题，
-        # 不需要任何外部素材。
-        _has_unfinished_thread = (
-            activity_snapshot is not None
-            and activity_snapshot.unfinished_thread is not None
+        source_mode_selection = _select_source_modes(
+            command,
+            activity_snapshot,
+            debug_force_invite=_debug_force_invite,
         )
+        enabled_modes = source_mode_selection.enabled_modes
+        _has_unfinished_thread = source_mode_selection.has_unfinished_thread
 
         # restricted_screen_only：用户处于 gaming / focused_work，仅允许屏幕通道。
         # 把 enabled_modes 收紧到只剩 vision。如果前端这一轮根本没启用 vision，
         # 直接 pass —— 没东西可看，又不让聊外部，没必要继续。
         # 例外：有未收尾话题（5min 内 AI 提的问题用户还没回）→ 即使没 vision
         # 也允许跑下去，跟进上一个问题不需要外部素材。
-        if (
-            not _debug_force_invite
-            and activity_snapshot is not None
-            and activity_snapshot.propensity == 'restricted_screen_only'
-        ):
-            if 'vision' in enabled_modes:
-                enabled_modes = ['vision']
-                print(f"[{lanlan_name}] propensity=restricted_screen_only, 收紧 enabled_modes 到仅 vision")
-            elif _has_unfinished_thread:
-                enabled_modes = []
-                print(f"[{lanlan_name}] propensity=restricted_screen_only 但有未收尾话题，允许 text-only 跟进")
-            else:
-                return await _end_proactive(JSONResponse({
-                    "success": True,
-                    "action": "pass",
-                    "reason_code": PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
-                    "message": f"user state={activity_snapshot.state} restricts proactive to screen-only, but vision not enabled this round",
-                }))
+        if source_mode_selection.restricted_to_vision:
+            print(f"[{lanlan_name}] propensity=restricted_screen_only, 收紧 enabled_modes 到仅 vision")
+        elif source_mode_selection.text_only_followup:
+            print(f"[{lanlan_name}] propensity=restricted_screen_only 但有未收尾话题，允许 text-only 跟进")
+        elif source_mode_selection.result is not None:
+            return await _end_proactive(JSONResponse(
+                source_mode_selection.result.body,
+                status_code=source_mode_selection.result.status_code,
+            ))
 
         print(f"[{lanlan_name}] 启用的搭话模式: {enabled_modes}")
 
@@ -1132,14 +1104,16 @@ async def proactive_chat(request: Request):
         # 话题 → 让 Phase 2 走 text-only 跟进路径（与 sources={} 但 thread 在的兜
         # 底语义对齐）。codex P1 指出：BC fallback 已经按 "字段缺席 vs 显式 []" 分
         # 流，这里对显式空清晰退出。
-        if not enabled_modes and not _has_unfinished_thread:
+        source_result = _decide_empty_source_gate(
+            enabled_modes,
+            has_unfinished_thread=_has_unfinished_thread,
+        )
+        if source_result is not None:
             print(f"[{lanlan_name}] enabled_modes 空 + mini-game miss + 无 unfinished_thread → pass")
-            return await _end_proactive(JSONResponse({
-                "success": True,
-                "action": "pass",
-                "reason_code": PROACTIVE_REASON_PASS_SOURCE_EMPTY,
-                "message": "no source modes enabled and mini-game invite did not fire",
-            }))
+            return await _end_proactive(JSONResponse(
+                source_result.body,
+                status_code=source_result.status_code,
+            ))
 
         # 全局 source 衰减历史：进入 picking 前确保已惰性加载到内存（首次为线程池
         # IO，后续是 O(1) flag 检查）。同步 picking loop 后续直接读 dict。
@@ -1657,13 +1631,15 @@ async def proactive_chat(request: Request):
         # suppressed 集合，本轮就跳过 followup_topics_prompt（per-reflection
         # cooldown 在 reflection.py 那侧另算，这里是 channel 级别的兜底）。
         # ============================================================
-        non_vision_modes = [m for m in enabled_modes if m != 'vision' and m in sources]
-        weight_candidates = list(non_vision_modes)
-        if _surfaced_reflection_ids:
-            weight_candidates.append('reminiscence')
-        if weight_candidates:
-            source_weights = _compute_source_weights(lanlan_name, weight_candidates)
-            suppressed = _filter_sources_by_weight(source_weights)
+        source_weight_selection = _select_weighted_sources(
+            lanlan_name,
+            enabled_modes,
+            sources,
+            has_reminiscence=bool(_surfaced_reflection_ids),
+        )
+        if source_weight_selection.weights:
+            source_weights = source_weight_selection.weights
+            suppressed = source_weight_selection.suppressed
             weight_str = ' '.join(f"{ch}={w:.3f}" for ch, w in source_weights.items())
             logger.debug(f"[{lanlan_name}] 来源权重: {weight_str} | 剔除: {suppressed or '无'}")
 

@@ -27,7 +27,10 @@ from .contracts import (
     PROACTIVE_REASON_PASS_DISABLED,
     PROACTIVE_REASON_PASS_PRIVACY,
     PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
+    PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
+    PROACTIVE_REASON_PASS_SOURCE_EMPTY,
     PROACTIVE_REASON_PASS_THROTTLED,
+    ProactiveChatCommand,
     ProactiveChatResult,
     _proactive_error_body,
     _proactive_pass_body,
@@ -223,6 +226,128 @@ def _decide_probabilistic_activity_gate(
                 f"skip_prob={activity_snapshot.skip_probability:.2f}"
             ),
         )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceModeSelection:
+    """Initial source modes plus activity-based restrictions."""
+
+    enabled_modes: Any
+    has_unfinished_thread: bool
+    result: ProactiveChatResult | None = None
+    restricted_to_vision: bool = False
+    text_only_followup: bool = False
+
+
+def _select_source_modes(
+    command: ProactiveChatCommand,
+    activity_snapshot: Any,
+    *,
+    debug_force_invite: bool,
+) -> SourceModeSelection:
+    """Resolve legacy source fields and apply restricted-screen policy."""
+    if command.enabled_modes_provided:
+        enabled_modes = command.enabled_modes or []
+    elif command.screenshot_data and isinstance(command.screenshot_data, str):
+        enabled_modes = ["vision"]
+    elif command.use_window_search:
+        enabled_modes = ["window"]
+    elif command.content_type == "news":
+        enabled_modes = ["news"]
+    elif command.content_type == "video":
+        enabled_modes = ["video"]
+    elif command.use_personal_dynamic:
+        enabled_modes = ["personal"]
+    else:
+        enabled_modes = ["home"]
+
+    has_unfinished_thread = (
+        activity_snapshot is not None
+        and activity_snapshot.unfinished_thread is not None
+    )
+    restricted = (
+        not debug_force_invite
+        and activity_snapshot is not None
+        and activity_snapshot.propensity == "restricted_screen_only"
+    )
+    if not restricted:
+        return SourceModeSelection(
+            enabled_modes=enabled_modes,
+            has_unfinished_thread=has_unfinished_thread,
+        )
+    if "vision" in enabled_modes:
+        return SourceModeSelection(
+            enabled_modes=["vision"],
+            has_unfinished_thread=has_unfinished_thread,
+            restricted_to_vision=True,
+        )
+    if has_unfinished_thread:
+        return SourceModeSelection(
+            enabled_modes=[],
+            has_unfinished_thread=True,
+            text_only_followup=True,
+        )
+    return SourceModeSelection(
+        enabled_modes=enabled_modes,
+        has_unfinished_thread=False,
+        result=ProactiveChatResult(
+            body=_proactive_pass_body(
+                PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
+                message=(
+                    f"user state={activity_snapshot.state} restricts proactive "
+                    "to screen-only, but vision not enabled this round"
+                ),
+            )
+        ),
+    )
+
+
+def _decide_empty_source_gate(
+    enabled_modes: Any,
+    *,
+    has_unfinished_thread: bool,
+) -> ProactiveChatResult | None:
+    """Pass after the mini-game opportunity when no source or thread remains."""
+    if enabled_modes or has_unfinished_thread:
+        return None
+    return ProactiveChatResult(
+        body=_proactive_pass_body(
+            PROACTIVE_REASON_PASS_SOURCE_EMPTY,
+            message="no source modes enabled and mini-game invite did not fire",
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceWeightSelection:
+    """Computed source weights and channels suppressed for this round."""
+
+    weights: dict[str, float]
+    suppressed: set[str]
+
+
+def _select_weighted_sources(
+    lanlan_name: str,
+    enabled_modes: Any,
+    available_channels: Any,
+    *,
+    has_reminiscence: bool,
+) -> SourceWeightSelection:
+    """Apply source-history decay without mutating fetched source payloads."""
+    candidates = [
+        mode
+        for mode in enabled_modes
+        if mode != "vision" and mode in available_channels
+    ]
+    if has_reminiscence:
+        candidates.append("reminiscence")
+    if not candidates:
+        return SourceWeightSelection(weights={}, suppressed=set())
+    weights = _compute_source_weights(lanlan_name, candidates)
+    return SourceWeightSelection(
+        weights=weights,
+        suppressed=_filter_sources_by_weight(weights),
     )
 
 
