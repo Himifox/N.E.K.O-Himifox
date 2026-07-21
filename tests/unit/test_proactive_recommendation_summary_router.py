@@ -126,6 +126,10 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, t
     assert payload["validation"]["issues"] == []
     assert payload["feedback_calibration"]["sample_count"] == 0
     assert payload["feedback_calibration"]["feedback_joined_count"] == 0
+    assert payload["reward_score_v2_preview"]["preview_only"] is True
+    assert payload["reward_score_v2_preview"]["ranking_consumed"] is False
+    assert payload["reward_score_v2_preview"]["tuning_consumed"] is False
+    assert payload["reward_score_v2_preview"]["reward_scored_count"] == 0
     assert payload["sample_count"] == 0
     assert str(tmp_path) not in json.dumps(payload, ensure_ascii=False)
 

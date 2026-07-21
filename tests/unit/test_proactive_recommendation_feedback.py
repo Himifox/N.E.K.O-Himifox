@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
 
 from main_logic.proactive_recommendation_feedback import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
     build_feedback_event,
+    build_reward_score_v2_preview,
     clear_pending_recommendation_feedback,
+    join_observations_with_reward_score_v2_preview,
     load_recommendation_feedback_jsonl,
     music_feedback_event_type,
     note_user_turn_for_feedback,
@@ -13,6 +16,7 @@ from main_logic.proactive_recommendation_feedback import (
     join_observations_with_feedback,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
+    summarize_reward_score_v2_preview,
 )
 
 
@@ -84,6 +88,182 @@ def test_feedback_event_sanitizes_sensitive_fields_and_scores_later_positive():
     assert "payload" not in event
     assert "source_links" not in event
     assert "must-not-leak" not in dumped
+
+
+def test_reward_score_v2_preview_keeps_reply_speed_neutral_and_deduplicated():
+    fast_reply = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="turn-1",
+        event_type="user_reply_fast",
+        source_type="music",
+    )
+    slow_reply = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="turn-2",
+        event_type="user_reply",
+        source_type="music",
+    )
+    continued = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="turn-1",
+        event_type="user_continue",
+        source_type="music",
+    )
+
+    fast = build_reward_score_v2_preview([fast_reply])
+    slow = build_reward_score_v2_preview([slow_reply])
+    combined = build_reward_score_v2_preview([fast_reply, fast_reply, continued])
+
+    assert fast["reward_score_v2_preview"] == 0.2
+    assert slow["reward_score_v2_preview"] == 0.2
+    assert fast["components"]["relative_speed"] == 0.0
+    assert slow["components"]["relative_speed"] == 0.0
+    assert fast["relative_speed_status"] == "pending_personal_baseline"
+    assert combined["reward_score_v2_preview"] == 0.55
+    assert combined["event_types"] == ["user_reply_fast", "user_continue"]
+    assert combined["ranking_consumed"] is False
+    assert combined["tuning_consumed"] is False
+
+
+def test_reward_score_v2_preview_treats_technical_failures_as_zero():
+    for event_type in ("music_error", "autoplay_blocked"):
+        event = build_feedback_event(
+            lanlan_name="neko",
+            turn_id=f"turn-{event_type}",
+            event_type=event_type,
+            source_type="music",
+        )
+
+        preview = build_reward_score_v2_preview([event])
+
+        assert preview["reward_score_v2_preview"] == 0.0
+        assert preview["components"]["consumption"] == 0.0
+        assert preview["technical_zero_event_types"] == [event_type]
+
+
+def test_reward_score_v2_preview_does_not_score_unknown_events():
+    event = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="turn-unknown",
+        event_type="future_unknown_event",
+        source_type="music",
+    )
+
+    preview = build_reward_score_v2_preview([event])
+
+    assert preview["reward_score_v2_preview"] is None
+    assert preview["recognized_event_types"] == []
+    assert preview["unknown_event_types"] == ["future_unknown_event"]
+
+
+def test_reward_score_v2_preview_requires_valid_delivery_attribution():
+    observations = [
+        _observation(
+            turn_id="good",
+            ts=9_999.0,
+            shadow_selected_candidate_id="music:1",
+        ),
+        _observation(
+            turn_id="technical",
+            ts=9_998.0,
+            shadow_selected_candidate_id="music:1",
+        ),
+        _observation(
+            turn_id="source-mismatch",
+            ts=9_997.0,
+            shadow_selected_source_type="news",
+            actual_primary_channel="news",
+            shadow_selected_candidate_id="news:1",
+        ),
+        _observation(
+            turn_id="inferred",
+            ts=9_000.0,
+            shadow_selected_source_type="meme",
+            actual_primary_channel="meme",
+            shadow_selected_candidate_id="meme:1",
+        ),
+    ]
+    events = [
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id="good",
+            event_type="user_reply",
+            source_type="music",
+            candidate_id="music:1",
+            ts=10_000.0,
+        ),
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id="good",
+            event_type="user_continue",
+            source_type="music",
+            candidate_id="music:1",
+            ts=10_001.0,
+        ),
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id="technical",
+            event_type="music_error",
+            source_type="music",
+            candidate_id="music:1",
+            ts=10_000.0,
+        ),
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id="source-mismatch",
+            event_type="user_reply",
+            source_type="music",
+            ts=10_000.0,
+        ),
+    ]
+
+    joined = join_observations_with_reward_score_v2_preview(
+        observations,
+        events,
+        now=10_000.0,
+        window_seconds=3600,
+        sample_limit=50,
+    )
+    summary = summarize_reward_score_v2_preview(
+        observations,
+        events,
+        now=10_000.0,
+        window_seconds=3600,
+        sample_limit=50,
+    )
+
+    by_turn = {row["turn_id"]: row for row in joined}
+    assert by_turn["good"]["reward_score_v2_preview"] == 0.55
+    assert by_turn["technical"]["reward_score_v2_preview"] == 0.0
+    assert by_turn["source-mismatch"]["reward_score_v2_preview"] is None
+    assert by_turn["source-mismatch"]["attribution_issue"] == "source_mismatch"
+    assert by_turn["inferred"]["reward_score_v2_preview"] == -0.05
+    assert by_turn["inferred"]["feedback_inferred"] is True
+    assert summary["reward_scored_count"] == 3
+    assert summary["explicit_reward_scored_count"] == 2
+    assert summary["inferred_reward_scored_count"] == 1
+    assert summary["feedback_joined_count"] == 2
+    assert summary["feedback_inferred_count"] == 1
+    assert summary["attribution_issue_distribution"] == {"source_mismatch": 1}
+    assert summary["average_reward_score_v2_preview"] == 0.275
+    assert summary["average_all_reward_score_v2_preview"] == 0.167
+    assert summary["average_inferred_reward_score_v2_preview"] == -0.05
+    assert summary["inferred_ignored_reported_separately"] is True
+    assert summary["relative_speed_neutral_count"] == 1
+    assert summary["technical_zero_event_count"] == 1
+    assert summary["ranking_consumed"] is False
+
+
+def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
+    project_root = Path(__file__).parents[2]
+    policy_sources = (
+        project_root / "main_logic" / "proactive_recommendation.py",
+        project_root / "main_logic" / "proactive_recommendation_tuning.py",
+        project_root / "main_routers" / "system_router" / "proactive_chat_flow.py",
+    )
+
+    for source_path in policy_sources:
+        assert "reward_score_v2_preview" not in source_path.read_text(encoding="utf-8")
 
 
 def test_music_feedback_threshold_mapping():

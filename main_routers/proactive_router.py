@@ -57,6 +57,7 @@ from main_logic.proactive_recommendation_feedback import (
     sanitize_feedback_metadata,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
+    summarize_reward_score_v2_preview,
 )
 from main_logic.proactive_recommendation_observer import (
     CALIBRATION_SAMPLE_LIMIT,
@@ -70,6 +71,7 @@ from main_logic.proactive_recommendation_observer import (
     load_recommendation_observations_jsonl,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
+    summarize_recommendation_review_context,
     summarize_recommendation_validation,
 )
 from main_logic.proactive_recommendation_tuning import (
@@ -436,6 +438,16 @@ async def get_proactive_recommendation_summary(
         window_seconds=CALIBRATION_WINDOW_SECONDS,
         sample_limit=CALIBRATION_SAMPLE_LIMIT,
     )
+    reward_score_v2_preview = summarize_reward_score_v2_preview(
+        calibration_samples,
+        feedback_events,
+        now=now,
+        window_seconds=CALIBRATION_WINDOW_SECONDS,
+        sample_limit=CALIBRATION_SAMPLE_LIMIT,
+    )
+    review_context_validation = summarize_recommendation_review_context(
+        calibration_samples
+    )
     try:
         tuning_config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
@@ -451,6 +463,8 @@ async def get_proactive_recommendation_summary(
         "validation": validation,
         "feedback": feedback,
         "feedback_calibration": feedback_calibration,
+        "reward_score_v2_preview": reward_score_v2_preview,
+        "review_context_validation": review_context_validation,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
         "tuning": tuning_public_status(tuning),
         "sample_count": calibration["sample_count"],

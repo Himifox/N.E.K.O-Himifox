@@ -4,7 +4,7 @@
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
 > 最近更新：2026-07-22
-> 当前阶段：P44-G0 Testbench 合同同步已完成；后续候选仍需单独立项
+> 当前阶段：P44-G0 Testbench 合同同步已完成；`reward_score_v2_preview` 与 `feedback_state_preview` 均保持 preview-only
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -17,7 +17,9 @@
 5. P44-F2-B 已完成连续变量关联分析；因为同 cohort 人工 `should_recommend` 标签为 0，误打扰和错失机会均不可计算，正式结论为 `no_candidate`。
 6. `recent_delivery_count_30m` 与显式反馈分数在本 cohort 中存在稳定相关，但这只是观察性辅助证据，不能替代人工决策标签，也没有生成疲劳公式或候选模拟。
 7. 生产推荐权重、调度曲线和投递行为保持不变；`PROACTIVE_RECOMMENDATION_TUNING_MODE=off`。
-8. `active_source`、自动调权和在线探索均为 **HOLD**；P44-G0 仅同步 MVP 的 `feedback_state_preview` 到 Testbench，`reward_score_v2_preview` 仍由 MVP 计算且不在 Testbench 复制，preview 未接入生产推荐。
+8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
+9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
+10. P44-G0 只允许从原始 feedback event 重算 turn-level `reward_score_v2_preview`，并将 MVP 的 `feedback_state_preview` 合同同步到 Testbench；Testbench 不复制 reward 公式，两类 preview 均不进入排序、tuning 或生产推荐。
 
 正式 timing-v3 baseline：
 
@@ -54,6 +56,7 @@
 - 对 music、news、video、meme、vision 等当前安全候选进行确定性排序。
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
+- 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示。
 
 ### 3.2 暂不允许
 
@@ -62,6 +65,7 @@
 - 新增推荐层时间硬门控或再次实现调度回退。
 - 把 `backoff_level`、`backoff_tier`、scheduler policy 等调度内部状态加入推荐画像。
 - 将一次回复、一次播放或一次快速响应持久化为长期兴趣。
+- 让 `reward_score_v2_preview` 影响候选分数、PASS、投递、tuning，或在个人回复速度基线完成前给 `user_reply_fast` 额外奖励。
 - 引入 MMR、DPP、向量数据库、Feature Store、MABWiser/Mab2Rec、OBP 或其他新运行时依赖。
 - 启用 epsilon exploration、contextual bandit、OPE 或多用户 Canary。
 - 要求本轮覆盖 `gaming`；`away`/`busy` 只在自然出现时记录。
@@ -117,6 +121,31 @@ P44-F2 的两侧工作均已结束：
 - 若要重启 timing/fatigue 研究，必须先单独决定是否为同 cohort 补充合规人工决策标签或重新采集带标签数据；
 - 任何新方向都需要新的目标、分支归属和验收门禁，不沿用 P44-F2 的授权。
 
+### 5.1 第一轮选择与第二轮 MVP 收口
+
+第一轮在同一冻结数据上比较 `baseline`、`source_calibration`、`delivered_history` 和 `combined`。三个候选虽然改善部分排序指标，但均触发 HHI 与最大来源曝光护栏，因此正式结论为 `baseline_retained`。第二轮不是新一轮调参，而是把该结论落实为可安全试用的 MVP：
+
+1. 修正活动状态接线，推荐器读取真实 `activity_snapshot.state`，不再误用压缩后的 `propensity`。
+2. `active_source` 只接受进程启动时的开发者环境配置；不存在运行时提升接口。
+3. 暴露非敏感的 configured/effective mode 状态，便于确认实际运行模式。
+4. 提供进程内单向回退到 `shadow`；回退不写配置，重启后仍以启动配置为准。
+5. 保持 PASS、搭话调度、投递去重、来源权重和 `PROACTIVE_RECOMMENDATION_TUNING_MODE=off` 不变。
+
+第二轮完成只代表“原基线可供开发者 opt-in 验证”，不代表候选调参通过、普通用户放量或生产效果得到多用户证明。
+
+### 5.2 P44-G0-A：反馈奖励预览
+
+P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的第一步，仅冻结奖励语义和可审计输出：
+
+1. 原始 feedback event 与 `report_score_v1` 保持不变，v2 preview 始终可从原始事件重算。
+2. `user_reply_fast` 与 `user_reply` 获得相同基础回复分；个人速度基线尚未建立，因此 relative-speed component 固定为 0。
+3. `user_continue`、音乐完成/播完、明确关闭等事件按独立 component 计算；`ignored` 仅为低置信弱负向，推断 ignored 与显式 reward 主指标分开报告。
+4. `music_error` 与 `autoplay_blocked` 明确计 0，不得污染偏好。
+5. feedback 必须通过 `lanlan_name + turn_id` 与已投递 observation 关联，并校验来源及可验证的 candidate ID；归因失败的事件不计 reward。
+6. 输出仅进入 `/api/proactive/recommendation/summary` 的独立 preview 字段；推荐排序、生产权重、PASS、投递和 tuning 均不读取它。
+
+个人回复速度统计、临时状态、持久聚合画像、衰减以及 reward 对排序的影响仍属于后续 P44-G0-B/G1，不在本步骤授权内。
+
 ## 6. Testbench 准入原则
 
 硬门禁：
@@ -154,7 +183,7 @@ P44-F2 的两侧工作均已结束：
 
 - 个体回复时延基线；
 - 临时兴趣与衰减持久兴趣；
-- `reward_score_v2`；
+- `reward_score_v2` 对画像或排序的实际消费（G0-A 仅批准 preview）；
 - semantic repeat、MMR 与单候选恢复；
 - propensity 日志、contextual bandit 与 OPE；
 - 多用户 A/B、Canary 和自动 tuning。
