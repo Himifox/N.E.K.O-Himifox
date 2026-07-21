@@ -366,7 +366,7 @@ def _pick_mini_game_type(lanlan_name: str | None = None) -> str | None:
     return _random.choice(candidates)
 
 
-async def _maybe_deliver_mini_game_invite(
+async def _attempt_mini_game_invite_delivery(
     *,
     lanlan_name: str,
     mgr,
@@ -374,8 +374,9 @@ async def _maybe_deliver_mini_game_invite(
     invite_lang: str,
     master_name: str,
     user_toggle_enabled: bool = True,
+    push_options_compat: bool,
 ) -> dict | None:
-    """On a hit, deliver the mini-game invite and return the JSON dict for _end_proactive; returns None on no hit.
+    """Deliver an eligible invite for either the legacy or staged caller.
 
     Short-circuit conditions (any one unmet → return None and the caller
     continues the original Phase1/2 pipeline):
@@ -550,6 +551,24 @@ async def _maybe_deliver_mini_game_invite(
         # 埋点失败不能影响邀请投递
         pass
 
+    if push_options_compat:
+        options_payload = _build_mini_game_invite_options_payload(
+            invite_lang=invite_lang,
+            game_type=game_type,
+            session_id=invite_session_id,
+        )
+        try:
+            if mgr.websocket and hasattr(mgr.websocket, 'send_json'):
+                client_state = getattr(mgr.websocket, 'client_state', None)
+                if client_state is None or client_state == client_state.CONNECTED:
+                    await mgr.websocket.send_json(options_payload)
+        except Exception as exc:
+            logger.warning(
+                "[%s] mini-game invite options WS push failed: %s",
+                lanlan_name,
+                exc,
+            )
+
     print(
         f"[{lanlan_name}] Mini-game invite delivered "
         f"(game={game_type}, force_first={force_first}, "
@@ -567,6 +586,27 @@ async def _maybe_deliver_mini_game_invite(
     )
 
 
+async def _maybe_deliver_mini_game_invite(
+    *,
+    lanlan_name: str,
+    mgr,
+    activity_snapshot,
+    invite_lang: str,
+    master_name: str,
+    user_toggle_enabled: bool = True,
+) -> dict | None:
+    """Preserve the pre-stage-5.5 direct delivery behavior and signature."""
+    return await _attempt_mini_game_invite_delivery(
+        lanlan_name=lanlan_name,
+        mgr=mgr,
+        activity_snapshot=activity_snapshot,
+        invite_lang=invite_lang,
+        master_name=master_name,
+        user_toggle_enabled=user_toggle_enabled,
+        push_options_compat=True,
+    )
+
+
 async def _run_mini_game_invite_short_circuit(
     *,
     lanlan_name: str,
@@ -577,13 +617,14 @@ async def _run_mini_game_invite_short_circuit(
     user_toggle_enabled: bool = True,
 ) -> MiniGameInviteShortCircuit | None:
     """Run the invite attempt and expose framework-neutral short-circuit data."""
-    body = await _maybe_deliver_mini_game_invite(
+    body = await _attempt_mini_game_invite_delivery(
         lanlan_name=lanlan_name,
         mgr=mgr,
         activity_snapshot=activity_snapshot,
         invite_lang=invite_lang,
         master_name=master_name,
         user_toggle_enabled=user_toggle_enabled,
+        push_options_compat=False,
     )
     if body is None:
         return None

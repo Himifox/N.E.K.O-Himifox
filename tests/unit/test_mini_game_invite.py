@@ -1539,6 +1539,33 @@ async def test_invite_short_circuit_returns_options_for_router(monkeypatch):
     assert isinstance(payload['options'], list) and len(payload['options']) == 3
     choices = [opt['choice'] for opt in payload['options']]
     assert choices == ['accept', 'decline', 'later']
+
+
+@pytest.mark.asyncio
+async def test_direct_invite_delivery_preserves_options_websocket_compat(monkeypatch):
+    """The pre-5.5 direct helper still pushes its options event exactly once."""
+    monkeypatch.setattr(sr, 'MINI_GAME_INVITE_TRIGGER_PROBABILITY', 1.0)
+    mgr = _make_mgr()
+    mgr.websocket = MagicMock()
+    mgr.websocket.send_json = AsyncMock()
+    fake_state = MagicMock()
+    fake_state.CONNECTED = fake_state
+    mgr.websocket.client_state = fake_state
+
+    out = await sr._maybe_deliver_mini_game_invite(
+        lanlan_name=LANLAN,
+        mgr=mgr,
+        activity_snapshot=_make_snapshot(),
+        invite_lang='zh',
+        master_name=MASTER,
+    )
+
+    assert out is not None and out['action'] == 'chat'
+    mgr.websocket.send_json.assert_awaited_once()
+    payload = mgr.websocket.send_json.await_args.args[0]
+    assert payload['type'] == 'mini_game_invite_options'
+    assert payload['session_id'] == out['invite_session_id']
+    assert payload['game_type'] == out['game_type']
     # state 同步存了 pending_session_id
     state = sr._mini_game_invite_state[LANLAN]
     assert state['pending_session_id'] == out['invite_session_id']

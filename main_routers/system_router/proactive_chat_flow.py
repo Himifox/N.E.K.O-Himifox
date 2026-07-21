@@ -439,12 +439,13 @@ async def proactive_chat(request: Request):
         
         # 获取session manager
         mgr = session_manager.get(lanlan_name)
+        manager_exists = bool(mgr)
         entry_result = _decide_manager_entry_guard(
             lanlan_name,
-            manager_exists=bool(mgr),
+            manager_exists=manager_exists,
             goodbye_silent=(
                 getattr(mgr, "is_goodbye_silent", lambda: False)()
-                if mgr
+                if manager_exists
                 else False
             ),
         )
@@ -479,10 +480,23 @@ async def proactive_chat(request: Request):
         # ========== Voice mode fast path ==========
         # 语音模式下不走 Phase1/Phase2，不占 SM 的 proactive phase；先用只读
         # can_start_proactive 做 409 判定即可。
+        # Preserve the original short-circuit evaluation order: a text request
+        # must not re-read manager/session properties solely to decide the voice
+        # path, and an inactive manager must not read ``mgr.session`` here.
+        if command.voice_mode:
+            manager_active = mgr.is_active
+            realtime_session = (
+                isinstance(mgr.session, OmniRealtimeClient)
+                if manager_active
+                else False
+            )
+        else:
+            manager_active = False
+            realtime_session = False
         use_voice_fast_path = _should_use_voice_fast_path(
             voice_mode=command.voice_mode,
-            manager_active=mgr.is_active,
-            realtime_session=isinstance(mgr.session, OmniRealtimeClient),
+            manager_active=manager_active,
+            realtime_session=realtime_session,
         )
         if use_voice_fast_path:
             # Mini-game invite 状态机推进：voice fast path 不走 activity tracker，

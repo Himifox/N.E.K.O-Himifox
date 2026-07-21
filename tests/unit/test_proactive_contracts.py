@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from main_logic.proactive_chat import contracts
+from main_routers.system_router import proactive_chat_flow
 
 
 @pytest.mark.parametrize(
@@ -152,6 +157,40 @@ def test_proactive_chat_command_distinguishes_missing_and_explicit_modes() -> No
 
 
 @pytest.mark.parametrize("payload", (None, [], "not-an-object", 1))
-def test_proactive_chat_command_rejects_non_mapping_payload(payload) -> None:
-    with pytest.raises(TypeError, match="must be a mapping"):
+def test_proactive_chat_command_preserves_legacy_non_mapping_failure(payload) -> None:
+    """Malformed JSON keeps the pre-refactor ``.get`` failure/wire detail."""
+    with pytest.raises(AttributeError, match="has no attribute 'get'"):
         contracts.ProactiveChatCommand.from_payload(payload)
+
+
+@pytest.mark.asyncio
+async def test_non_mapping_request_preserves_legacy_error_detail(monkeypatch) -> None:
+    config_manager = SimpleNamespace(
+        aget_character_data=AsyncMock(
+            return_value=("博士", "Yui", None, None, None, {}, None, None, None),
+        ),
+    )
+    request = SimpleNamespace(json=AsyncMock(return_value=[]))
+
+    monkeypatch.setattr(
+        proactive_chat_flow,
+        "_validate_local_mutation_request",
+        lambda request: None,
+    )
+    monkeypatch.setattr(
+        proactive_chat_flow,
+        "get_config_manager",
+        lambda: config_manager,
+    )
+    monkeypatch.setattr(
+        proactive_chat_flow,
+        "get_session_manager",
+        lambda: SimpleNamespace(),
+    )
+
+    response = await proactive_chat_flow.proactive_chat(request)
+
+    assert response.status_code == 500
+    body = json.loads(response.body)
+    assert body["reason_code"] == contracts.PROACTIVE_REASON_ERROR_INTERNAL
+    assert body["detail"] == "'list' object has no attribute 'get'"
