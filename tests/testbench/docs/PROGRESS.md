@@ -1542,19 +1542,23 @@ flowchart LR
 - **2026-04-19** **中后期文档整理 + 存档 checkpoint (P00-P16 完结, 16/24 阶段 done, ≈67%)**. 产出: (a) 新增 `AGENT_NOTES.md §3A 横切设计原则索引 (P00-P16 淬炼)` — 把 §4 的 67 条散点案例提炼为 19 条横切原则, 分 5 组 (A 后端架构 A1-A9 / B 前端状态驱动 B1-B6 / C CSS & DOM C1-C4 / D 异步 & 生命周期 D1-D3 / E 测试策略 E1-E2), 每条回指 §4 具体案例编号; (b) 新增 `PROGRESS.md` 的"中后期回顾与展望"章节 (5 小节: 已交付能力全景 14 域对照表 + 12 条已冻结设计决策 + P17-P24 依赖图与工作量估算 + 10 条技术债/UX sweep 清单 + 5 步新 Agent 入场须知); (c) 新增 `PLAN.md` 的"当前快照 (2026-04-19, P16 完成)"章节 (高浓度摘要: 8 大可用闭环 / 12 条冻结约定 / 7 条剩余阶段推荐顺序 P17→P19→P18→P20→P21→P22→P23→P24 / 未解事项指针); (d) 编号冲突修正: 初版 `## 3.5 横切设计原则索引` 与 §3 内已存在的 `### 3.5 目标模型无状态` 撞号, 改为独立二级章节 `## 3A`, 同步更新 PROGRESS/PLAN 中 7 处交叉引用. 核心动机: 开发进入中后期, 把零散经验提炼成可复用原则, 避免 P17+ 新 Agent 要通读 67 条案例才能上手; 同时为"每次 server 重启就想到哪做到哪"的模式画出一张全局地图, 让后续阶段的价值/依赖/工作量选择有据可依. **今日到此存档, 等待用户指示进入 P17**.
 ## P41–P43 · Recommendation semantic testbench — done (2026-07-15)
 
-Production recommendation pure helpers are exposed through a thin lazy adapter. The standalone Recommendation workspace covers scenario preview, multi-variant runs, results/export, and sanitized Shadow calibration without requiring an active session, network, LLM, or production tuning writes. P44 remains a real-data acceptance activity.
+Current Recommendation boundaries and the post-P44-F2 stop decision are kept in
+[`RECOMMENDATION_CURRENT_SCOPE.md`](./RECOMMENDATION_CURRENT_SCOPE.md). This
+section and all earlier “next step” statements are historical delivery records.
 
-P44 infrastructure now includes dataset quality audits, field-level human annotation validation, review coverage tracking, readiness gates, isolated personalization traces over production auto-safe tuning, and guarded promotion to traceable `shadow_golden` datasets. Real-data acceptance is intentionally still pending: synthetic smoke data verifies the workflow but does not satisfy the required 100 real observations and 30 linked feedback events.
+Production recommendation pure helpers are exposed through a thin lazy adapter. The standalone Recommendation workspace covers scenario preview, multi-variant runs, results/export, and sanitized Shadow calibration without requiring an active session, network, LLM, or production tuning writes. At this 2026-07-15 checkpoint, P44 remained a real-data acceptance activity.
+
+At this 2026-07-15 checkpoint, real-data acceptance was still pending: synthetic smoke data did not satisfy the required 100 real observations and 30 linked feedback events. Later P44-E/P44-E2 work completed that collection, human review and adjudication; the following sections supersede this historical status. P44 infrastructure includes dataset quality audits, field-level human annotation validation, review coverage tracking, readiness gates, read-only personalization previews, and guarded promotion to traceable `shadow_golden` datasets; none of these writes production tuning.
 
 ## P44-E / P44-F1 · Adjudicated dataset and offline threshold scan · done (2026-07-20)
 
 The real Shadow collection gate is complete. Primary review, blind second review, and disagreement adjudication produced an immutable Golden Candidate containing 128 eligible observations and 9 excluded abstentions. This dataset is suitable for exploratory offline candidate analysis, but remains a single-cohort Golden Candidate rather than a high-confidence production Golden benchmark.
 
-P44-F1 now provides a reproducible offline PASS/NOOP threshold scan. Its primary model is an incremental safety gate (`production_delivered AND top1_score >= threshold`); a score-only curve is retained as a diagnostic and is not treated as a production counterfactual.
+P44-F1 now provides a reproducible offline PASS/NOOP threshold scan. Its primary model is a Testbench-only incremental counterfactual (`production_delivered AND top1_score >= threshold`); it is not a new production PASS gate. A score-only curve is retained as a diagnostic and is not treated as a production counterfactual.
 
 Current result: score ROC-AUC is 0.5628. The production baseline is 57.81% accurate with 50.98% false interruption and 36.36% missed opportunity. A guarded 0.342 what-if threshold removes one false interruption but creates two missed opportunities and lowers accuracy to 57.03%. The unconstrained accuracy optimum at 0.396 reaches 60.16% accuracy but raises missed opportunity to 44.16%, outside the 5-point guardrail.
 
-Therefore P44-F1 has no promotable universal score threshold. The next analysis stage should evaluate timing/fatigue, repetition penalties, and source diversity before proposing any production change. Production weights, thresholds, and tuning remain unchanged.
+Therefore P44-F1 has no promotable universal score threshold. Timing/fatigue was evaluated next and later closed as `no_candidate`; repetition penalties and source diversity are not automatic follow-on work and remain `HOLD` until independently scoped. Production weights, thresholds, and tuning remain unchanged.
 
 ## P44-F2-A · Timing schema-v3 Testbench contract · done (2026-07-20)
 
@@ -1566,12 +1570,38 @@ timing strategy scan.
 
 The dataset audit reports schema coverage, field presence, field-level issues,
 elapsed/delivery-density/unanswered buckets, pilot readiness, and the formal
-P44-F2 gate. Formal readiness requires at least 100 valid v3 observations, 30
-explicitly joined feedback turns, three sources, three activities, and basic
-timing-bucket diversity.
+P44-F2 gate. The historical P47 strategy-scan eligibility check requires at
+least 100 valid v3 observations, 30 explicitly joined feedback turns, three
+sources, three recorded activity values, and unanswered-delivery diversity.
+This is a Testbench scan-coverage rule, not an MVP, Golden, or production gate;
+it does not require `gaming`, and `unknown` must not be presented as meaningful
+personalization coverage. Absolute 5/10/30-minute elapsed buckets are
+descriptive only and are not a gate.
 
 P47 covers strict numeric bounds, required fields, semantic count consistency,
 legacy compatibility, invalid-v3 rejection, the production-sanitizer
-compatibility bridge, and the no-production-write contract. The next external
-step is a 10–20 observation v3 pilot collection; P44-F2 strategy simulation
-must not begin until that pilot passes.
+compatibility bridge, and the no-production-write contract.
+
+## P44-F2-B · Frozen timing/fatigue association analysis · done (2026-07-21)
+
+The Testbench froze the timing-v3 baseline at 105 observations and 30
+explicit-feedback joins, then ran a pure association analysis across all five
+timing fields. The report uses continuous elapsed seconds, deterministic
+bootstrap confidence intervals, temporal split checks, and leave-one-source-out
+checks. It does not introduce a fatigue formula or change any production
+behavior.
+
+The result is `no_candidate`. Although `recent_delivery_count_30m` has a
+stable association with explicit-feedback score in this cohort, the freeze
+contains no same-cohort human `should_recommend` labels. Therefore false
+interruption and missed opportunity are unavailable; delivery and feedback
+cannot stand in for them. Per the P44-F2 boundary, no Testbench fatigue
+simulation is run, and the stage closes without a scheduler, router,
+recommender, timing-v4, persistent-state, weight, or tuning change.
+
+P48 provides a reproducible smoke path for both the `candidate_for_shadow`
+synthetic positive control and the unlabeled real-cohort `no_candidate` path.
+The real timing cohort covers idle 76 / chatting 10 / unknown 19. It has no
+`focused_work`; that limitation is reported rather than used to reopen P44-F2.
+`gaming` is not a target, while away/busy are recorded only if they occur
+naturally. No subsequent Recommendation phase is automatically authorized.

@@ -165,6 +165,8 @@ def main() -> int:
     readiness = timing_analysis_readiness(dataset)
     assert readiness["ready_for_timing_strategy_scan"], readiness["blockers"]
     assert readiness["pilot_contract_ready"]
+    assert "min_elapsed_buckets" not in readiness["requirements"]
+    assert "elapsed_bucket_diversity_below_3" not in readiness["blockers"]
     assert readiness["production_config_modified"] is False
     assert readiness["tuning_modified"] is False
 

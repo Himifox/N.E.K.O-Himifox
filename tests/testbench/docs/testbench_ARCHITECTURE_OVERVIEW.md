@@ -919,6 +919,28 @@ p26_docs_endpoint_smoke.py            # /docs/{name} 公开白名单 + heading i
 | `AGENT_NOTES.md` | 历史档 | AI agent | 踩坑复盘 |
 | `LESSONS_LEARNED.md` | 跨项目 | 任何 AI 辅助开发项目 | 经验沉淀 |
 | `PLAN.md` | 活动 | 项目开发 | 未决 / 待办 |
+| `RECOMMENDATION_CURRENT_SCOPE.md` | 当前 | Recommendation 开发/评审 | 跨分支边界、证据范围与停止点 |
+
 # Recommendation workspace addendum (v1.10.0)
 
 Recommendation is a session-independent semantic-contract laboratory. `pipeline/recommendation_adapter.py` lazily imports the production proactive recommendation pure helpers; frozen builtin/user scenarios feed source or material ranking, and immutable run snapshots capture variants, score breakdowns, gates, metrics, hashes, and Git revision. Network fetch, LLM generation, delivery queues, cooldowns, and production tuning writes remain outside the Testbench boundary.
+
+The current operational boundary is normative in
+[`RECOMMENDATION_CURRENT_SCOPE.md`](./RECOMMENDATION_CURRENT_SCOPE.md). In
+particular:
+
+| Layer | Owner | Recommendation Testbench boundary |
+|---|---|---|
+| Opportunity timing and backoff | Production scheduler/router | Observe sanitized timing v3 fields only; do not reproduce or write scheduler state |
+| Privacy/activity/source gates | Production route and source adapters | Replay frozen outcomes and validate contracts; do not bypass hard constraints |
+| Safe-candidate ranking | Production recommender | Compare deterministic variants offline; do not apply weights, thresholds, or a production PASS gate |
+| Final text deduplication and delivery | Production delivery path | Report recorded delivery outcomes; do not send content or treat technical failure as preference |
+| Evidence and acceptance | Recommendation Testbench | Freeze, audit, replay and report; never auto-promote a simulation to MVP or production |
+| Tuning | Production configuration | Must remain `off`; Testbench has no production-write path |
+
+P44-F2 closed as `no_candidate`: the 105/30 timing cohort has no same-cohort
+human `should_recommend` labels, so false interruption and missed opportunity
+are unavailable. No timing-v4 field, fatigue formula, real-cohort candidate
+simulation, persistent profile, scheduler change, production weight, interval,
+or tuning change follows from that result. Repetition, source diversity, MMR,
+bandit/OPE and Canary work remain independently reviewed backlog items.

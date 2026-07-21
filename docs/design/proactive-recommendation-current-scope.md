@@ -1,0 +1,169 @@
+# 主动搭话推荐系统：当前设计边界与应用范围
+
+> 状态：**当前规范（Normative / Single Source of Truth）**
+> 文档与生产实现归属分支：`feat/recommend-MVP`
+> 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
+> 最近更新：2026-07-21
+> 当前阶段：P44-F2 已以 `no_candidate` 结项；当前没有自动获准的下一开发阶段
+
+本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
+
+## 1. 当前结论
+
+1. 推荐系统的隐私、过滤、日志和反馈关联契约已经可用。
+2. P44-E2 裁决后的 Golden Candidate 有效样本为 128，语义校验和 Validator 通过；它支持离线评估，不足以证明生产个性化已经改善。
+3. P44-F1 得出 `no_universal_threshold_candidate`：不得把统一分数阈值直接写入生产。
+4. timing observation schema v3 已完成只读观测，并冻结首个正式 baseline：105 条有效 observation、30 个显式关联 feedback turn、0 条 timing 契约错误。
+5. P44-F2-B 已完成连续变量关联分析；因为同 cohort 人工 `should_recommend` 标签为 0，误打扰和错失机会均不可计算，正式结论为 `no_candidate`。
+6. `recent_delivery_count_30m` 与显式反馈分数在本 cohort 中存在稳定相关，但这只是观察性辅助证据，不能替代人工决策标签，也没有生成疲劳公式或候选模拟。
+7. 生产推荐权重、调度曲线和投递行为保持不变；`PROACTIVE_RECOMMENDATION_TUNING_MODE=off`。
+8. `active_source`、自动调权、持久个性化和在线探索均为 **HOLD**。
+
+正式 timing-v3 baseline：
+
+- 文件：`shadow-p44f2-timing-v3-baseline-20260721-103709.json`
+- SHA-256：`E79E2B3258E55A29109525CDBB00E511EE7B4142E0A204EC40DF8E2961A88BD7`
+- 截点：2026-07-21 10:33:52（Asia/Shanghai）
+- 分析报告：`shadow-p44f2-timing-v3-baseline-20260721-103709-analysis.md`
+- 分析输入摘要：`692c19ef7092ac6b82894fd0f20144909491e0ede56511aa2232a702a7d43fdf`
+
+## 2. 组件边界
+
+| 组件 | 当前职责 | 明确不负责 |
+|---|---|---|
+| 前端调度器与主动搭话路由 | 决定何时产生一次搭话机会；执行曲线回退、抖动、输入放缓、固定模式及 privacy/activity 等硬门控 | 不向推荐器暴露 backoff level 作为兴趣信号；不由推荐器重复实现时间调度 |
+| 推荐器 | 对已经通过硬约束的安全候选做确定性、可解释排序；在 Shadow 中记录候选和分数 | 不新增第二套调度器；不根据 timing v3 直接改变生产排序；不新增生产 `PASS` 阈值 |
+| 投递层 | 执行最终内容生成、文本相似度/BM25 去重、投递和现有退出路径 | 不把技术失败当成用户负反馈 |
+| Observation / Feedback | 保存脱敏白名单字段；通过 `turn_id` 关联显式反馈；提供 point-in-time 快照 | 不保存完整对话、屏幕原文、截图、私人 URL、token/cookie；不自动写权重 |
+| Recommendation Testbench | 重放冻结数据、模拟候选规则、计算 Gate/Rank/Product 指标和准入结论 | 不写生产配置；不把模拟结果自动应用到 MVP；不以缺少标注的指标宣称提升 |
+| Tuning | 当前只允许 `off`；历史 preview 只作诊断 | 不启用 `manual`/`auto_safe`，不自动调权、暂停或回滚生产策略 |
+
+边界原则：
+
+- 调度器回答“什么时候产生搭话机会”。
+- 推荐器回答“这个机会下哪个安全候选更合适”。
+- 路由现有的 skip/pass 继续负责是否实际投递；`should_recommend`/`PASS` 当前只作为 Testbench 评价维度。
+- 同一风险只保留一层主要软惩罚和一层最终硬保护，禁止在调度、推荐和投递三层重复扣分。
+
+## 3. 当前推荐器应用范围
+
+### 3.1 允许
+
+- 开发者知情环境中的 `shadow` 数据采集。
+- Recommendation Testbench 中的离线回放、审计和候选模拟。
+- 对 music、news、video、meme、vision 等当前安全候选进行确定性排序。
+- 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
+- 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
+
+### 3.2 暂不允许
+
+- 将候选结果写入生产权重或开启 `active_source`。
+- 在没有新立项的情况下继续修改 `feat/recommend-MVP` 或 `feat/recommend-testbench` 的推荐策略、调度或反馈行为。
+- 新增推荐层时间硬门控或再次实现调度回退。
+- 把 `backoff_level`、`backoff_tier`、scheduler policy 等调度内部状态加入推荐画像。
+- 将一次回复、一次播放或一次快速响应持久化为长期兴趣。
+- 引入 MMR、DPP、向量数据库、Feature Store、MABWiser/Mab2Rec、OBP 或其他新运行时依赖。
+- 启用 epsilon exploration、contextual bandit、OPE 或多用户 Canary。
+- 要求本轮覆盖 `gaming`；`away`/`busy` 只在自然出现时记录。
+- 为了重新分批而删除、归档或轮转现有 observation/feedback 日志；批次只用 immutable freeze/cutoff 划分。
+
+### 3.3 证据适用范围
+
+- 当前数据主要来自单一开发者/本地角色，不代表多用户总体效果。
+- 现有 timing-v3 cohort 的有意义 activity 主要是 `idle` 和 `chatting`；`unknown` 不得算作个性化覆盖。
+- `focused_work` 缺失或样本不足时，只能报告限制，不能外推该状态效果。
+- 显式反馈稀疏；`inferred ignored` 不能计入显式反馈门槛，也不能直接作为强负例。
+
+## 4. timing v3 的准确语义
+
+当前 observation 的 `decision_context.timing` 子对象只允许以下字段：
+
+```json
+{
+  "decision_context": {
+    "timing": {
+      "configured_interval_seconds": 60,
+      "elapsed_since_last_delivery_seconds": 143,
+      "recent_delivery_count_30m": 2,
+      "recent_delivery_count_2h": 5,
+      "consecutive_unanswered_deliveries": 1
+    }
+  }
+}
+```
+
+- `configured_interval_seconds` 是用户设置的基础间隔；当前 UI 常规范围为 10–120 秒。
+- `elapsed_since_last_delivery_seconds` 是实际成功投递间隔，可能因曲线回退、跳过或运行状态而超过 120 秒。
+- 30 分钟/2 小时计数描述全局主动投递负载，不等同于仅由 Recommendation 产生的曝光。
+- 连续未回应数只统计 Recommendation pending feedback 窗口内尚未收到显式回复的投递。
+- 这些字段目前只用于观测和 Testbench；生产排序不得读取它们。
+
+不新增 schema v4 调度字段。若未来需要独立审计调度器，应建立调度器自己的测试契约，不扩张 Recommendation observation。
+
+## 5. P44-F2 结项与当前停止点
+
+P44-F2 的两侧工作均已结束：
+
+1. MVP 侧完成五个 timing v3 只读字段，没有改变调度或排序。
+2. Testbench 侧删除了 `5/10/30` 分钟绝对间隔桶门禁，改用连续秒数关联分析。
+3. 105/30 freeze 可复现，P48 同时覆盖有标签的 synthetic positive control 与真实无标签 cohort。
+4. 真实 timing cohort 没有同批人工 `should_recommend` 标签，因此不能计算误打扰或错失机会，也不能据此提出 production/Shadow fatigue candidate。
+5. 正式状态为 `no_candidate`；没有生成候选公式，没有运行真实 cohort 候选模拟，也没有生产写入。
+
+当前停止点：
+
+- 不因为 `no_candidate` 自动转入重复惩罚、来源多样性、个人回复时延或持久兴趣；
+- 不为了得到候选而用 `delivered`、feedback join 或缺失反馈替代人工标签；
+- 若要重启 timing/fatigue 研究，必须先单独决定是否为同 cohort 补充合规人工决策标签或重新采集带标签数据；
+- 任何新方向都需要新的目标、分支归属和验收门禁，不沿用 P44-F2 的授权。
+
+## 6. Testbench 准入原则
+
+硬门禁：
+
+- forbidden/privacy/URL/secret/candidate alignment/version 错误为 0；
+- execution error 和 hard constraint violation 为 0；
+- observation timing 字段有效；
+- 反馈只按有效 `turn_id` 显式关联；
+- baseline 与 candidate 使用同一 freeze 配对比较；
+- production config、weights 和 tuning 均未修改。
+
+质量判断：
+
+- Gate 与 Rank 分开报告；负例不计算排序命中。
+- 必须同时报告分子、分母和样本不足限制。
+- 当前小样本不使用缺少功效依据的 `+2pp`、`-0.01` 等伪精确生产阈值。
+- 候选若减少误打扰但明显增加 missed opportunity，应判定为 HOLD/NO-GO。
+- 没有稳定改善证据时结论是 HOLD，不是“未观察到退化即通过”。
+
+## 7. 进入 MVP 修改的条件
+
+只有同时满足以下条件，Testbench 候选才可申请单独的 MVP 变更：
+
+1. 候选公式、参数范围和适用 activity 已冻结。
+2. 在同一 Golden/freeze 上相对基线有可解释改善，且隐私、执行、硬约束和排序护栏不退化。
+3. 改动只涉及一个职责清晰的机制，可通过 feature flag 或常量回滚。
+4. 新代码先保持 Shadow/preview，不立即改变实际投递。
+5. 新 Shadow cohort 复核后，再单独决定是否进入开发者 opt-in。
+
+通过这些条件只代表“允许提交一个最小 MVP 候选”，不等于允许自动调权或全量上线。
+
+## 8. 研究 Backlog（未批准实施）
+
+以下项目保留研究价值，但不是当前或默认下一阶段：
+
+- 个体回复时延基线；
+- 临时兴趣与衰减持久兴趣；
+- `reward_score_v2`；
+- semantic repeat、MMR 与单候选恢复；
+- propensity 日志、contextual bandit 与 OPE；
+- 多用户 A/B、Canary 和自动 tuning。
+
+每一项必须基于新的证据和独立设计评审立项，不能因出现在研究路线文档中而自动进入开发计划。
+
+## 9. 文档角色
+
+- 本文：当前事实、设计边界、应用范围和停止点。
+- `proactive-recommendation-mvp-p0-p1-plan.md`：历史 P0/P1/P44 执行与决策记录，不再作为当前计划。
+- `shadow-round-2-structure-audit.md`：不可变历史审计快照。
+- `proactive-recommendation-academic-technical-route.md`：远期研究依据与 Backlog，不构成实施授权。

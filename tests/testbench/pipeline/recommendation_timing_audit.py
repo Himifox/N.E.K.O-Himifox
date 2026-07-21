@@ -389,9 +389,6 @@ def timing_analysis_readiness(
         blockers.append("source_coverage_below_3")
     if len(activities) < 3:
         blockers.append("activity_coverage_below_3")
-    elapsed_buckets = audit["bucket_distribution"]["elapsed_since_last_delivery"]
-    if sum(count > 0 for count in elapsed_buckets.values()) < 3:
-        blockers.append("elapsed_bucket_diversity_below_3")
     unanswered_buckets = audit["bucket_distribution"]["consecutive_unanswered"]
     if sum(count > 0 for count in unanswered_buckets.values()) < 3:
         blockers.append("unanswered_bucket_diversity_below_3")
@@ -407,7 +404,6 @@ def timing_analysis_readiness(
             "min_joined_feedback": min_joined_feedback,
             "min_sources": 3,
             "min_activities": 3,
-            "min_elapsed_buckets": 3,
             "min_unanswered_buckets": 3,
         },
         "feedback_joined_count": joined,

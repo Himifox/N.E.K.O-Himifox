@@ -650,3 +650,31 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
   and Testbench branches are developed independently.
 - Production recommendation intervals, weights, decisions, and tuning remain
   unchanged.
+
+## P44-F2-B · Frozen timing/fatigue baseline analysis (2026-07-21)
+
+- Added a pure offline P44-F2 analyzer and reproducible JSON/Markdown report
+  CLI. It analyzes all five schema-v3 timing fields against production
+  delivery, explicit-feedback join/score, false interruption, and missed
+  opportunity when those human-label outcomes are available.
+- Replaced the former 5/10/30-minute absolute elapsed-time bucket readiness
+  gate with continuous-seconds association analysis. Bucket distributions
+  remain descriptive only.
+- Added deterministic bootstrap confidence intervals, temporal split checks,
+  and leave-one-source-out stability checks; feedback is supporting evidence
+  and never a substitute for human `should_recommend` labels.
+- The frozen 105-observation / 30-explicit-feedback baseline concludes
+  `no_candidate`: it has no same-cohort human timing labels, so false
+  interruption and missed opportunity cannot be estimated. No fatigue formula
+  or simulation is emitted.
+- Added P48 smoke coverage. No MVP, scheduler, routing, production weight,
+  interval, or tuning configuration was changed.
+- Frozen evidence is identified by
+  `shadow-p44f2-timing-v3-baseline-20260721-103709.json`, SHA-256
+  `E79E2B3258E55A29109525CDBB00E511EE7B4142E0A204EC40DF8E2961A88BD7`,
+  cutoff 2026-07-21 10:33:52 Asia/Shanghai. The meaningful activity coverage
+  is idle/chatting; `gaming` is not a target, and missing focused_work is a
+  reported limitation rather than a production gate.
+- P44-F2 is closed. Repetition, source diversity, persistent personalization,
+  bandit/OPE, Canary, and automatic tuning are not automatic next stages; see
+  [`RECOMMENDATION_CURRENT_SCOPE.md`](./RECOMMENDATION_CURRENT_SCOPE.md).

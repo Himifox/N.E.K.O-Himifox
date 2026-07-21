@@ -7,7 +7,7 @@
 本手册按你**实际打开 testbench 后看到的界面**自上而下组织:
 
 1. [准备事项](#1-准备事项-启动-配置-首次打开) — 启动命令 / 端口 / 数据目录 / api_keys.json
-2. [Workspace 导航](#2-workspace-导航-顶栏-stage-chip-timeline-chip) — 6 个 workspace 切换 + 顶栏两个 chip (含 记忆系统分析 → 系统概况 / 记忆溯源 / 向量空间)
+2. [Workspace 导航](#2-workspace-导航-顶栏-stage-chip-timeline-chip) — 7 个 workspace 切换 + 顶栏两个 chip（含 Recommendation 与记忆系统分析）
 3. [Chat 对话区](#3-chat-对话区-四种模式-外部事件模拟) — Manual / SimUser / Script / Auto 四模式 + 外部事件 (avatar / agent_callback / proactive)
 4. [Memory 记忆编辑](#4-memory-记忆编辑-setup-workspace-memory-子组) — recent / facts / reflections / persona + 5 ops + 预览
 5. [Evaluation 评分](#5-evaluation-评分-schemas-run-results-aggregate) — 四子页完整工作流
@@ -81,15 +81,16 @@ API key 存在**另一处**: `tests/api_keys.json` (整仓共享, 主程序单�
 
 ## 2. Workspace 导航 + 顶栏 Stage chip / Timeline chip
 
-### 2.1 6 个 Workspace
+### 2.1 7 个 workspace
 
-![顶栏 6 个 workspace 切换按钮 + chip](images/02_workspace_topbar.png)
+![顶栏 workspace 切换按钮 + chip](images/02_workspace_topbar.png)
 
 | Workspace | 主要用途 |
 |---|---|
 | **Setup** | 8 个子页: Persona / Import (Persona 导入) / Virtual Clock / Scripts + Memory 组下 Recent / Facts / Reflections / Persona |
 | **Chat** | 和 AI 对话, 触发外部事件, 右侧 Prompt Preview |
 | **Evaluation** | Schemas / Run / Results / Aggregate 四子页 |
+| **Recommendation** | Scenarios / Run / Results / Calibration 四子页；对冻结场景与 Shadow 数据做离线重放、审计和候选比较，不写生产权重、interval、scheduler 或 tuning。当前 Recommendation 边界见 [`RECOMMENDATION_CURRENT_SCOPE.md`](./RECOMMENDATION_CURRENT_SCOPE.md) |
 | **Memory Analysis 记忆系统分析** | 记忆分析系统, 左侧子页菜单, 三个子页: **系统概况** (默认入口, 只读聚合溯源+向量空间的一屏图景: 概览卡片 + 自动发现问题 + 一键下钻 + 可选 LLM 体检/矛盾裁决) + **记忆溯源** (只读记忆来源可视化图: 把当前角色记忆按"对话 → recent 摘要 → 事实 → 反思 → 人设"分层画成节点流水线) + **向量空间** (只读分析每条记忆的向量嵌入 embedding: PCA 2D 散点看聚类、最近邻、语义源 vs 结构源) (详见 §2.5) |
 | **Diagnostics** | Errors / Logs / Snapshots / Paths / Reset 五子页 |
 | **Settings** | Models / API Keys / Providers / Autosave / UI / About 六子页 |
