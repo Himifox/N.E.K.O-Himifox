@@ -65,6 +65,7 @@ from main_logic.proactive_chat.state import (
     _record_reminiscence_usage,
 )
 from main_logic.proactive_chat.contracts import (
+    ProactiveChatCommand,
     PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
@@ -290,7 +291,23 @@ def _render_followup_topic_hooks(
     return prompt, surfaced_reflection_ids
 
 
-def _resolve_proactive_locale(data: dict, mgr) -> str:
+def _command_language_candidates(
+    command_or_data: ProactiveChatCommand | dict,
+) -> tuple[Any, Any, Any]:
+    """Read locale aliases from the new command or the compatibility dict."""
+    if isinstance(command_or_data, ProactiveChatCommand):
+        return command_or_data.language_candidates
+    return (
+        command_or_data.get('language'),
+        command_or_data.get('lang'),
+        command_or_data.get('i18n_language'),
+    )
+
+
+def _resolve_proactive_locale(
+    command_or_data: ProactiveChatCommand | dict,
+    mgr,
+) -> str:
     """Resolve the active user locale for proactive chat flows.
 
     Request data wins first, websocket session language is the second source of
@@ -298,7 +315,10 @@ def _resolve_proactive_locale(data: dict, mgr) -> str:
     keeps proactive invite copy and Phase 1-2 LLM output aligned with the live
     session whenever frontend i18n has already reported the user's language.
     """
-    request_lang = data.get('language') or data.get('lang') or data.get('i18n_language')
+    request_lang = next(
+        (value for value in _command_language_candidates(command_or_data) if value),
+        None,
+    )
     # 与 ``main_routers/game_router._absorb_request_language`` 同形：第三方客户端 /
     # corrupted localStorage 可能传 ``'undefined'`` / ``'estonian'`` 等 garbage，
     # ``normalize_language_code`` 对未识别值默认回退 ``'en'``——必须先用公共白名单
@@ -315,12 +335,15 @@ def _resolve_proactive_locale(data: dict, mgr) -> str:
     return get_global_language() or 'en'
 
 
-def _resolve_topic_hook_locale(data: dict, mgr, *, fallback: str) -> str:
+def _resolve_topic_hook_locale(
+    command_or_data: ProactiveChatCommand | dict,
+    mgr,
+    *,
+    fallback: str,
+) -> str:
     """Resolve the locale for topic-hook prompts without collapsing zh-TW."""
     for raw_lang in (
-        data.get('language'),
-        data.get('lang'),
-        data.get('i18n_language'),
+        *_command_language_candidates(command_or_data),
         getattr(mgr, 'user_language', None),
     ):
         if raw_lang and is_supported_language_code(raw_lang):
@@ -391,10 +414,11 @@ async def proactive_chat(request: Request):
         master_name_current, her_name_current, _, _, _, lanlan_prompt_map, _, _, _ = await _config_manager.aget_character_data()
         
         data = await request.json()
-        lanlan_name = data.get('lanlan_name') or her_name_current
-        is_playing_music = data.get('is_playing_music', False)
-        current_track = data.get('current_track', None)
-        music_cooldown = data.get('music_cooldown', False)
+        command = ProactiveChatCommand.from_payload(data)
+        lanlan_name = command.lanlan_name or her_name_current
+        is_playing_music = command.is_playing_music
+        current_track = command.current_track
+        music_cooldown = command.music_cooldown
         
         # 获取session manager
         mgr = session_manager.get(lanlan_name)
@@ -437,7 +461,7 @@ async def proactive_chat(request: Request):
         # ========== Voice mode fast path ==========
         # 语音模式下不走 Phase1/Phase2，不占 SM 的 proactive phase；先用只读
         # can_start_proactive 做 409 判定即可。
-        if data.get('voice_mode') and mgr.is_active and isinstance(mgr.session, OmniRealtimeClient):
+        if command.voice_mode and mgr.is_active and isinstance(mgr.session, OmniRealtimeClient):
             # Mini-game invite 状态机推进：voice fast path 不走 activity tracker，
             # 直接用 session 自己跟踪的「用户最后一次真实消息时间」喂给
             # advance_response。否则纯 voice 用户收到 mini-game 邀请回应后，
@@ -664,7 +688,7 @@ async def proactive_chat(request: Request):
         # CodeRabbit Major review 指出原版只在 _maybe_deliver_mini_game_invite
         # 入口拦 user toggle，旗标已经把上游 gate 绕过 → 进 _maybe_deliver
         # 又被 toggle 拦 None → caller 走普通 source picking，封禁场景仍然漏过。
-        _user_invite_toggle = bool(data.get('mini_game_invite_enabled', True))
+        _user_invite_toggle = command.mini_game_invite_enabled
 
         # 调试旗标 ``MINI_GAME_INVITE_FORCE_GAME_TYPE`` 非 None 时绕开本函数所有
         # 上游早退 gate（closed / skip_probability / restricted_screen_only），
@@ -732,7 +756,7 @@ async def proactive_chat(request: Request):
                 print(f"[{lanlan_name}] propensity=restricted_screen_only 但有 must-fire 提醒待发，跳过本轮抖动 sleep")
             else:
                 try:
-                    _base_interval_raw = data.get('base_interval_seconds')
+                    _base_interval_raw = command.base_interval_seconds
                     _base_interval = float(_base_interval_raw) if _base_interval_raw is not None else 0.0
                 except (TypeError, ValueError):
                     _base_interval = 0.0
@@ -762,7 +786,7 @@ async def proactive_chat(request: Request):
             )
         ):
             try:
-                _break_lang = _resolve_proactive_locale(data, mgr)
+                _break_lang = _resolve_proactive_locale(command, mgr)
             except Exception:
                 _break_lang = 'zh'
 
@@ -1031,20 +1055,20 @@ async def proactive_chat(request: Request):
         # 表示新版客户端"用户把所有 source toggle 都关了"，不能再走 BC fallback
         # 退化到 home/trending（否则 mini-game 邀请 toggle 单独开启的场景下 dice
         # miss 会让 home 兜底打破 toggle 契约——codex P1）。
-        if 'enabled_modes' in data:
-            enabled_modes = data.get('enabled_modes') or []
+        if command.enabled_modes_provided:
+            enabled_modes = command.enabled_modes or []
         else:
-            content_type = data.get('content_type', None)
-            screenshot_data = data.get('screenshot_data')
+            content_type = command.content_type
+            screenshot_data = command.screenshot_data
             if screenshot_data and isinstance(screenshot_data, str):
                 enabled_modes = ['vision']
-            elif data.get('use_window_search', False):
+            elif command.use_window_search:
                 enabled_modes = ['window']
             elif content_type == 'news':
                 enabled_modes = ['news']
             elif content_type == 'video':
                 enabled_modes = ['video']
-            elif data.get('use_personal_dynamic', False):
+            elif command.use_personal_dynamic:
                 enabled_modes = ['personal']
             else:
                 enabled_modes = ['home']
@@ -1090,7 +1114,7 @@ async def proactive_chat(request: Request):
         # 不再掷骰。activity_snapshot is None（隐私模式 / tracker 不可用）保守
         # 不发——无法判断是否在工作状态。
         try:
-            invite_lang = _resolve_proactive_locale(data, mgr)
+            invite_lang = _resolve_proactive_locale(command, mgr)
         except Exception:
             invite_lang = 'zh'
         # _user_invite_toggle 已经在上面 _debug_force_invite 计算前算过——把
@@ -1126,10 +1150,10 @@ async def proactive_chat(request: Request):
         await _ensure_source_history_loaded()
 
         # ========== 0. 并行获取所有信息源内容（无 LLM） ==========
-        screenshot_data = data.get('screenshot_data')
+        screenshot_data = command.screenshot_data
         has_screenshot = bool(screenshot_data) and isinstance(screenshot_data, str)
         # Avatar 位置元数据（前端截图时捕获的归一化坐标）
-        avatar_position = data.get('avatar_position')
+        avatar_position = command.avatar_position
         
         async def _fetch_source(mode: str) -> tuple:
             """
@@ -1138,7 +1162,7 @@ async def proactive_chat(request: Request):
             if mode == 'vision':
                 if not has_screenshot:
                     raise ValueError("无截图数据（screenshot_data 为空或类型不正确）")
-                window_title = data.get('window_title', '')
+                window_title = command.window_title
                 # ⚠️ Phase 1 不调用 vision_model 分析截图！
                 # 截图将在 Phase 2 由 vision_model 直接读取原图，这里只做压缩。
                 compressed_b64 = ''
@@ -1322,10 +1346,14 @@ async def proactive_chat(request: Request):
         # 与 mini-game 邀请短路同源：request body → mgr.user_language → 全局缓存。
         # 见 _resolve_proactive_locale 的 docstring。
         try:
-            proactive_lang = _resolve_proactive_locale(data, mgr)
+            proactive_lang = _resolve_proactive_locale(command, mgr)
         except Exception:
             proactive_lang = 'zh'
-        topic_hook_lang = _resolve_topic_hook_locale(data, mgr, fallback=proactive_lang)
+        topic_hook_lang = _resolve_topic_hook_locale(
+            command,
+            mgr,
+            fallback=proactive_lang,
+        )
         
         # ========== 3. 注入近期搭话记录 ==========
         proactive_chat_history_prompt = _format_recent_proactive_chats(lanlan_name, proactive_lang)
