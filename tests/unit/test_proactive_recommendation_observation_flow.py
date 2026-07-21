@@ -74,6 +74,15 @@ def test_system_router_records_recommendation_observation_to_jsonl(tmp_path):
         ts=123.0,
         activity_state="gaming",
         activity_propensity="restricted",
+        decision_context={
+            "timing": {
+                "configured_interval_seconds": 300,
+                "elapsed_since_last_delivery_seconds": 420.25,
+                "recent_delivery_count_30m": 2,
+                "recent_delivery_count_2h": 5,
+                "consecutive_unanswered_deliveries": 1,
+            }
+        },
     )
 
     rows = load_recommendation_observations_jsonl(tmp_path / OBSERVATION_LOG_FILENAME)
@@ -90,6 +99,13 @@ def test_system_router_records_recommendation_observation_to_jsonl(tmp_path):
     assert rows[0]["shadow_selected_source_type"] == "music"
     assert rows[0]["activity_state"] == "gaming"
     assert rows[0]["activity_propensity"] == "restricted"
+    assert rows[0]["decision_context"]["timing"] == {
+        "configured_interval_seconds": 300.0,
+        "elapsed_since_last_delivery_seconds": 420.25,
+        "recent_delivery_count_30m": 2,
+        "recent_delivery_count_2h": 5,
+        "consecutive_unanswered_deliveries": 1,
+    }
     assert rows[0]["algorithm_version"] == PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
     assert rows[0]["top_candidates"][0] == {
         "rank": 1,

@@ -14,6 +14,7 @@ from main_logic.proactive_recommendation_observer import (
     get_recommendation_calibration_samples,
     load_recommendation_observations_jsonl,
     sanitize_recommendation_observation,
+    sanitize_recommendation_decision_context,
     sanitize_recommendation_review_context,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
@@ -196,6 +197,33 @@ def test_sanitize_observation_never_persists_candidate_topic_or_nested_context()
     assert "window_title" not in dumped
     assert "raw_text" not in dumped
     assert "url" not in dumped
+
+
+def test_decision_context_sanitizer_keeps_only_bounded_timing_features():
+    safe = sanitize_recommendation_decision_context(
+        {
+            "timing": {
+                "configured_interval_seconds": "300",
+                "elapsed_since_last_delivery_seconds": 12.34567,
+                "recent_delivery_count_30m": "2",
+                "recent_delivery_count_2h": -3,
+                "consecutive_unanswered_deliveries": True,
+                "private_text": "must-not-leak",
+            },
+            "raw_context": {"messages": ["must-not-leak"]},
+        }
+    )
+
+    assert safe == {
+        "timing": {
+            "configured_interval_seconds": 300.0,
+            "elapsed_since_last_delivery_seconds": 12.346,
+            "recent_delivery_count_30m": 2,
+            "recent_delivery_count_2h": 0,
+            "consecutive_unanswered_deliveries": 0,
+        }
+    }
+    assert "must-not-leak" not in json.dumps(safe, ensure_ascii=False)
 
 
 def test_review_context_sanitizer_removes_forbidden_fields_urls_and_bounds_text():
