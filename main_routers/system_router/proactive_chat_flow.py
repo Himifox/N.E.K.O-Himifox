@@ -85,6 +85,7 @@ from main_logic.proactive_chat.contracts import (
     _proactive_pass_body,
 )
 from main_logic.proactive_chat.generation import (
+    _decide_phase1_channels,
     _extract_links_from_raw,
     _lookup_link_by_title,
     _parse_unified_phase1_result,
@@ -2004,15 +2005,15 @@ async def proactive_chat(request: Request):
             else:
                 logger.warning(f"[{lanlan_name}] Phase 1 表情包数据为空，跳过表情包话题")
         
+        phase1_decision = _decide_phase1_channels(
+            phase1_topics,
+            vision_content,
+            has_unfinished_thread=_has_unfinished_thread,
+        )
+        if phase1_decision.result is not None:
+            print(f"[{lanlan_name}] Phase 1 所有通道均无可用话题")
+            return await _end_proactive(JSONResponse(phase1_decision.result.body))
         if not phase1_topics and not vision_content:
-            if not _has_unfinished_thread:
-                print(f"[{lanlan_name}] Phase 1 所有通道均无可用话题")
-                return await _end_proactive(JSONResponse({
-                    "success": True,
-                    "action": "pass",
-                    "reason_code": PROACTIVE_REASON_PASS_MODEL_PASS,
-                    "message": "所有信息源筛选后均不值得搭话"
-                }))
             print(f"[{lanlan_name}] Phase 1 无话题但有未收尾话题，进入 text-only 跟进 Phase 2")
 
         # Phase 1 preempt check：topic assembly 完，进入 Phase 2 前最后一次瞄
@@ -2020,18 +2021,11 @@ async def proactive_chat(request: Request):
             return await _end_proactive(JSONResponse(_proactive_preempted_json("phase1_pre_phase2")))
         
         # 收集各通道结果
-        active_channels = [ch for ch, _ in phase1_topics]
+        active_channels = phase1_decision.active_channels
         print(f"[{lanlan_name}] Phase 1 结果: phase1_topics={phase1_topics}, vision_content={'有' if vision_content else '无'}")
-        web_topic = None
-        music_topic = None
-        for channel, topic in phase1_topics:
-            if channel == 'web':
-                web_topic = topic
-            elif channel == 'music':
-                music_topic = topic
-        if vision_content:
-            active_channels.append('vision')
-        primary_channel = 'vision' if vision_content else (active_channels[0] if active_channels else 'unknown')
+        web_topic = phase1_decision.web_topic
+        music_topic = phase1_decision.music_topic
+        primary_channel = phase1_decision.primary_channel
         print(f"[{lanlan_name}] Phase 1 可用通道: {active_channels}，主通道: {primary_channel}")
         
         # ================================================================

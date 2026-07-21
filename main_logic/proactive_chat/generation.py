@@ -17,9 +17,78 @@
 
 import logging
 import re
+from dataclasses import dataclass
+
+from .contracts import (
+    PROACTIVE_REASON_PASS_MODEL_PASS,
+    ProactiveChatResult,
+    _proactive_pass_body,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class Phase1Decision:
+    """The channel decision handed from Phase 1 to Phase 2.
+
+    ``result`` is populated only when Phase 1 terminates the proactive turn.
+    A text-only unfinished-thread continuation is therefore represented by an
+    empty channel list and ``primary_channel='unknown'``, matching the legacy
+    Router flow.
+    """
+
+    result: ProactiveChatResult | None
+    active_channels: list[str]
+    primary_channel: str
+    web_topic: str | None
+    music_topic: str | None
+
+
+def _decide_phase1_channels(
+    phase1_topics: list[tuple[str, str]],
+    vision_content: str | None,
+    *,
+    has_unfinished_thread: bool,
+) -> Phase1Decision:
+    """Finalize Phase 1 without changing source order or continuation rules."""
+    if not phase1_topics and not vision_content and not has_unfinished_thread:
+        return Phase1Decision(
+            result=ProactiveChatResult(
+                body=_proactive_pass_body(
+                    PROACTIVE_REASON_PASS_MODEL_PASS,
+                    message="所有信息源筛选后均不值得搭话",
+                )
+            ),
+            active_channels=[],
+            primary_channel="unknown",
+            web_topic=None,
+            music_topic=None,
+        )
+
+    active_channels = [channel for channel, _topic in phase1_topics]
+    web_topic = None
+    music_topic = None
+    for channel, topic in phase1_topics:
+        if channel == "web":
+            web_topic = topic
+        elif channel == "music":
+            music_topic = topic
+    if vision_content:
+        active_channels.append("vision")
+    primary_channel = (
+        "vision"
+        if vision_content
+        else (active_channels[0] if active_channels else "unknown")
+    )
+    return Phase1Decision(
+        result=None,
+        active_channels=active_channels,
+        primary_channel=primary_channel,
+        web_topic=web_topic,
+        music_topic=music_topic,
+    )
 
 
 def _extract_links_from_raw(mode: str, raw_data: dict) -> list[dict]:
