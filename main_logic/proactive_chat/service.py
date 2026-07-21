@@ -284,7 +284,7 @@ def _command_language_candidates(
 
 
 def _resolve_proactive_locale(
-    command_or_data: ProactiveChatCommand | dict,
+    data: ProactiveChatCommand | dict,
     mgr,
 ) -> str:
     """Resolve the active user locale for proactive chat flows.
@@ -295,7 +295,7 @@ def _resolve_proactive_locale(
     session whenever frontend i18n has already reported the user's language.
     """
     request_lang = next(
-        (value for value in _command_language_candidates(command_or_data) if value),
+        (value for value in _command_language_candidates(data) if value),
         None,
     )
     # 与 ``main_routers/game_router._absorb_request_language`` 同形：第三方客户端 /
@@ -315,14 +315,14 @@ def _resolve_proactive_locale(
 
 
 def _resolve_topic_hook_locale(
-    command_or_data: ProactiveChatCommand | dict,
+    data: ProactiveChatCommand | dict,
     mgr,
     *,
     fallback: str,
 ) -> str:
     """Resolve the locale for topic-hook prompts without collapsing zh-TW."""
     for raw_lang in (
-        *_command_language_candidates(command_or_data),
+        *_command_language_candidates(data),
         getattr(mgr, "user_language", None),
     ):
         if raw_lang and is_supported_language_code(raw_lang):

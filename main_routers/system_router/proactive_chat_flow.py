@@ -45,6 +45,7 @@ __all__ = [
     "_PHASE1_TOTAL_TOPIC_TARGET",
     "_open_threads_for_activity_state",
     "_proactive_llm_retry_error_types",
+    "_safe_fire_proactive_done",
     "_push_mini_game_invite_options",
     "_render_followup_topic_hooks",
     "_resolve_proactive_locale",
@@ -65,6 +66,19 @@ _open_threads_for_activity_state = proactive_service._open_threads_for_activity_
 _render_followup_topic_hooks = proactive_service._render_followup_topic_hooks
 _resolve_proactive_locale = proactive_service._resolve_proactive_locale
 _resolve_topic_hook_locale = proactive_service._resolve_topic_hook_locale
+
+
+async def _safe_fire_proactive_done(scope: dict) -> None:
+    """Preserve the legacy exception-path DONE compatibility helper."""
+    mgr = scope.get("mgr")
+    state_event = scope.get("_SE")
+    emitted = scope.get("_proactive_done_emitted", False)
+    if mgr is None or state_event is None or emitted:
+        return
+    try:
+        await mgr.state.fire(state_event.PROACTIVE_DONE)
+    except Exception as exc:
+        logger.warning("safe_fire_proactive_done 异常: %s", exc)
 
 
 async def _push_mini_game_invite_options(mgr: Any, payload: dict) -> None:

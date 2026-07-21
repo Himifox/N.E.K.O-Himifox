@@ -10,7 +10,7 @@ import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -320,3 +320,78 @@ async def test_service_missing_manager_returns_domain_result() -> None:
 def test_compatibility_helpers_preserve_object_identity(name, canonical) -> None:
     assert getattr(proactive_chat_flow, name) is canonical
     assert getattr(system_router_facade, name) is canonical
+
+
+def test_locale_helpers_accept_legacy_data_keyword_from_all_import_paths() -> None:
+    mgr = SimpleNamespace(user_language="zh-CN")
+
+    for resolver in (
+        service._resolve_proactive_locale,
+        proactive_chat_flow._resolve_proactive_locale,
+        system_router_facade._resolve_proactive_locale,
+    ):
+        assert resolver(data={"language": "en"}, mgr=mgr) == "en"
+
+    for resolver in (
+        service._resolve_topic_hook_locale,
+        proactive_chat_flow._resolve_topic_hook_locale,
+        system_router_facade._resolve_topic_hook_locale,
+    ):
+        assert resolver(data={"language": "zh-TW"}, mgr=mgr, fallback="zh") == "zh-TW"
+
+
+def test_safe_fire_proactive_done_is_exported_from_legacy_paths() -> None:
+    assert (
+        system_router_facade._safe_fire_proactive_done
+        is proactive_chat_flow._safe_fire_proactive_done
+    )
+
+
+@pytest.mark.asyncio
+async def test_safe_fire_proactive_done_preserves_legacy_scope_contract() -> None:
+    done_event = object()
+    fire = AsyncMock()
+    scope = {
+        "mgr": SimpleNamespace(state=SimpleNamespace(fire=fire)),
+        "_SE": SimpleNamespace(PROACTIVE_DONE=done_event),
+    }
+
+    await proactive_chat_flow._safe_fire_proactive_done(scope)
+
+    fire.assert_awaited_once_with(done_event)
+
+
+@pytest.mark.asyncio
+async def test_safe_fire_proactive_done_noops_before_start_or_after_done() -> None:
+    fire = AsyncMock()
+    populated_scope = {
+        "mgr": SimpleNamespace(state=SimpleNamespace(fire=fire)),
+        "_SE": SimpleNamespace(PROACTIVE_DONE=object()),
+        "_proactive_done_emitted": True,
+    }
+
+    await proactive_chat_flow._safe_fire_proactive_done({})
+    await proactive_chat_flow._safe_fire_proactive_done(populated_scope)
+
+    fire.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_safe_fire_proactive_done_swallows_and_logs_fire_errors(
+    monkeypatch,
+) -> None:
+    warning = MagicMock()
+    monkeypatch.setattr(proactive_chat_flow.logger, "warning", warning)
+    scope = {
+        "mgr": SimpleNamespace(
+            state=SimpleNamespace(
+                fire=AsyncMock(side_effect=RuntimeError("done failed")),
+            )
+        ),
+        "_SE": SimpleNamespace(PROACTIVE_DONE=object()),
+    }
+
+    await proactive_chat_flow._safe_fire_proactive_done(scope)
+
+    warning.assert_called_once()
+    assert warning.call_args.args[0] == "safe_fire_proactive_done 异常: %s"
