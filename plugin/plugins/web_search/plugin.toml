@@ -27,4 +27,4 @@ enabled = false
 
 [search]
 max_results = 8
-timeout_seconds = 15
+timeout_seconds = 4

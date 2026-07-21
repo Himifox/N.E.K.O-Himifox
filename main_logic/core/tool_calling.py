@@ -31,6 +31,11 @@ from config.prompts.prompts_memory import (
     RECALL_MEMORY_TOOL_NO_RESULT_LOOSEN,
     RECALL_MEMORY_TOOL_FOUND_HEADER,
 )
+from main_logic.moegirl_knowledge_tool import (
+    PUBLIC_MEME_KNOWLEDGE_QUERY_DESCRIPTION,
+    PUBLIC_MEME_KNOWLEDGE_TOOL_DESCRIPTION,
+    handle_public_meme_knowledge_call,
+)
 from utils.language_utils import normalize_language_code
 from ._shared import logger
 
@@ -165,6 +170,25 @@ class ToolCallingMixin:
             metadata={"source": "builtin"},
         )
         self.tool_registry.register(recall_tool, replace=True)
+        public_knowledge_parameters = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": _loc(PUBLIC_MEME_KNOWLEDGE_QUERY_DESCRIPTION, _lang),
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 3},
+            },
+            "required": ["query"],
+        }
+        public_knowledge_tool = ToolDefinition(
+            name="search_public_meme_knowledge",
+            description=_loc(PUBLIC_MEME_KNOWLEDGE_TOOL_DESCRIPTION, _lang),
+            parameters=public_knowledge_parameters,
+            handler=lambda arguments: handle_public_meme_knowledge_call(arguments, language=_lang),
+            metadata={"source": "builtin", "domain": "public_knowledge"},
+        )
+        self.tool_registry.register(public_knowledge_tool, replace=True)
 
     async def _handle_recall_memory_call(self, arguments: dict) -> str:
         """Handler for ``recall_memory`` — calls memory_server's

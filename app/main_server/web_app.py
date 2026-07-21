@@ -165,6 +165,7 @@ from main_routers.icebreaker_router import router as icebreaker_router  # noqa
 from main_routers.jukebox_router import router as jukebox_router  # noqa
 from main_routers.live2d_router import router as live2d_router  # noqa
 from main_routers.memory_router import router as memory_router  # noqa
+from main_routers.moegirl_knowledge_router import router as moegirl_knowledge_router  # noqa
 from main_routers.mmd_router import router as mmd_router  # noqa
 from main_routers.music_router import router as music_router  # noqa
 from main_routers.pages_router import router as pages_router  # noqa
@@ -308,6 +309,7 @@ app.include_router(pngtuber_router)
 app.include_router(jukebox_router)
 app.include_router(workshop_router)
 app.include_router(memory_router)
+app.include_router(moegirl_knowledge_router)
 app.include_router(cloudsave_router)
 app.include_router(storage_location_router)
 # 注意：pages_router 含 /{lanlan_name} 兜底路由，应最后挂载

@@ -1,0 +1,122 @@
+"""Offline importer for the bundled CHIME Chinese Internet-meme dataset."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from importlib.resources import files
+from typing import Any
+
+from ..filters import normalize_meme_phrase, normalize_search_text
+from ..models import MoegirlKnowledgeEntry
+
+
+CHIME_COMMIT = "865ef186a0e797ec5ac242524a3c45b30a429542"
+CHIME_DATASET_URL = (
+    "https://github.com/yuboxie/chime/blob/"
+    f"{CHIME_COMMIT}/data/chime_full.json"
+)
+CHIME_LICENSE = "MIT (CHIME dataset; Copyright (c) 2025 Yubo Xie)"
+CHIME_SHA256 = "8514b8b3fef6fc2961a191c6fd815f35f3cfa3aebcd6eef3985ded48723a3c26"
+CHIME_ENTRY_COUNT = 1_458
+
+
+@dataclass(frozen=True, slots=True)
+class ChimeDataset:
+    """Validated bundled records and immutable provenance metadata."""
+
+    entries: tuple[MoegirlKnowledgeEntry, ...]
+    sha256: str
+    commit: str
+
+
+def load_bundled_chime_dataset() -> ChimeDataset:
+    """Load one fixed JSON asset without executing third-party code or networking."""
+    raw = files("knowledge.moegirl_knowledge.data").joinpath("chime_full.json").read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != CHIME_SHA256:
+        raise ValueError("bundled CHIME dataset hash mismatch")
+    try:
+        records = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("bundled CHIME dataset is not valid UTF-8 JSON") from exc
+    if not isinstance(records, list) or len(records) != CHIME_ENTRY_COUNT:
+        raise ValueError("bundled CHIME dataset has an unexpected record count")
+
+    synced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    entries: list[MoegirlKnowledgeEntry] = []
+    seen_ids: set[str] = set()
+    for record_index, record in enumerate(records):
+        entry = _entry_from_record(record, record_index=record_index, synced_at=synced_at)
+        if entry.id in seen_ids:
+            raise ValueError("bundled CHIME dataset has duplicate record identifiers")
+        seen_ids.add(entry.id)
+        entries.append(entry)
+    return ChimeDataset(entries=tuple(entries), sha256=digest, commit=CHIME_COMMIT)
+
+
+def _entry_from_record(record: Any, *, record_index: int, synced_at: str) -> MoegirlKnowledgeEntry:
+    if not isinstance(record, dict):
+        raise ValueError("bundled CHIME record is not an object")
+    meme = _required_text(record, "meme")
+    meaning = _required_text(record, "meaning")
+    origin = _optional_text(record.get("origin"))
+    examples = _text_values(record.get("examples"))
+    type_cn = _optional_text(record.get("type_cn"))
+    normalized = normalize_search_text(meme)
+    if not normalized:
+        raise ValueError("bundled CHIME record has an invalid meme term")
+    content_sections = [f"含义：{meaning}"]
+    if origin:
+        content_sections.append(f"出处：{origin}")
+    if examples:
+        content_sections.append("例句：\n" + "\n".join(f"- {example}" for example in examples))
+    tags = ["source:chime", "scope:public"]
+    if type_cn:
+        tags.append(f"type:{type_cn}")
+    if record.get("profanity") is True:
+        tags.append("risk:profanity")
+    if record.get("offense") is True:
+        tags.append("risk:offense")
+    phrase_alias = normalize_meme_phrase(meme)
+    aliases = (phrase_alias,) if phrase_alias and phrase_alias != normalized else ()
+    content = "\n\n".join(content_sections)
+    # Aliases participate in FTS/index updates.  Include them in the fixed
+    # asset's hash so a manual/startup reimport upgrades existing local rows.
+    entry_hash = hashlib.sha256(
+        (content + "\0" + "\0".join(aliases)).encode("utf-8")
+    ).hexdigest()
+    return MoegirlKnowledgeEntry(
+        # A displayed term can legitimately have multiple dataset definitions.
+        # Keep each fixed source record distinct instead of guessing that they
+        # are aliases with the same meaning.
+        id=f"chime:{hashlib.sha256(f'{record_index}:{normalized}'.encode('utf-8')).hexdigest()}",
+        title=meme,
+        content=content,
+        summary=meaning,
+        source_url=CHIME_DATASET_URL,
+        source_license=CHIME_LICENSE,
+        aliases=aliases,
+        tags=tuple(tags),
+        content_hash=entry_hash,
+        synced_at=synced_at,
+    )
+
+
+def _required_text(record: dict[str, Any], key: str) -> str:
+    value = _optional_text(record.get(key))
+    if not value:
+        raise ValueError(f"bundled CHIME record is missing {key}")
+    return value
+
+
+def _optional_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _text_values(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
