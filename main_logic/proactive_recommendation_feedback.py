@@ -21,6 +21,7 @@ logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
 
 FEEDBACK_LOG_FILENAME = "proactive_recommendation_feedback.jsonl"
 FEEDBACK_SCORE_VERSION = "report_score_v1"
+REWARD_SCORE_V2_PREVIEW_VERSION = "reward_score_v2_preview_v1"
 DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024
 REPLY_FAST_SECONDS = 60
 REPLY_WINDOW_SECONDS = 10 * 60
@@ -46,6 +47,47 @@ _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "mini_game_decline": ("mini_game", -0.35, "high"),
     "mini_game_ignored": ("mini_game", -0.05, "low"),
 }
+
+# Shadow-only reward semantics.  These values are intentionally separate from
+# ``report_score_v1`` so the original event stream remains replayable.  Reply
+# speed is neutral until a later, independently reviewed personal baseline is
+# available; ``user_reply_fast`` and ``user_reply`` therefore share the same
+# base reward in this first G0 preview.
+_REWARD_V2_PREVIEW_EVENT_COMPONENTS: dict[str, tuple[str, float]] = {
+    "user_reply_fast": ("reply", 0.20),
+    "user_reply": ("reply", 0.20),
+    "user_continue": ("continue", 0.35),
+    "ignored": ("interrupt", -0.05),
+    "proactive_disabled_after": ("settings", -0.70),
+    "source_disabled_after": ("settings", -0.35),
+    "music_played_through": ("consumption", 0.90),
+    "music_high_completion": ("consumption", 0.65),
+    "music_mid_completion": ("consumption", 0.25),
+    "music_normal_close": ("consumption", 0.05),
+    "music_early_close": ("consumption", -0.35),
+    "music_hard_skip": ("consumption", -0.70),
+    "music_not_started": ("consumption", 0.00),
+    "music_error": ("consumption", 0.00),
+    "autoplay_blocked": ("consumption", 0.00),
+    "mini_game_accept": ("interaction", 0.90),
+    "mini_game_later": ("interaction", 0.20),
+    "mini_game_decline": ("interaction", -0.35),
+    "mini_game_ignored": ("interaction", -0.05),
+}
+_REWARD_V2_PREVIEW_COMPONENT_ORDER = (
+    "reply",
+    "continue",
+    "consumption",
+    "relative_speed",
+    "interrupt",
+    "settings",
+    "interaction",
+)
+_REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS = {
+    "music_error",
+    "autoplay_blocked",
+}
+_REWARD_V2_PREVIEW_REPLY_EVENTS = {"user_reply_fast", "user_reply"}
 
 _TOP_LEVEL_KEYS = {
     "ts",
@@ -226,6 +268,79 @@ def sanitize_feedback_metadata(metadata: Any) -> dict[str, Any]:
             continue
         safe[key] = _json_safe_scalar(metadata.get(key))
     return safe
+
+
+def build_reward_score_v2_preview(
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    feedback_inferred: bool = False,
+) -> dict[str, Any]:
+    """Build a deterministic, non-production reward preview for one turn.
+
+    Events are deduplicated by event type.  When multiple events affect the
+    same component, the strongest absolute signal wins, except that reply and
+    continuation remain separate components.  No personal state is read and
+    the result is never consumed by ranking or tuning.
+    """
+    event_types: list[str] = []
+    seen_event_types: set[str] = set()
+    components = {
+        component: 0.0
+        for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER
+    }
+    recognized_event_types: list[str] = []
+    technical_zero_events: list[str] = []
+    unknown_events: list[str] = []
+
+    for raw_event in feedback_events:
+        if not isinstance(raw_event, Mapping):
+            continue
+        event = sanitize_recommendation_feedback_event(raw_event)
+        event_type = _clean_text(event.get("event_type")) or "unknown"
+        if event_type in seen_event_types:
+            continue
+        seen_event_types.add(event_type)
+        event_types.append(event_type)
+
+        component_score = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(event_type)
+        if component_score is None:
+            unknown_events.append(event_type)
+            continue
+        recognized_event_types.append(event_type)
+        component, score = component_score
+        previous = float(components.get(component, 0.0))
+        if abs(float(score)) > abs(previous):
+            components[component] = float(score)
+        if event_type in _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS:
+            technical_zero_events.append(event_type)
+
+    has_reply = any(
+        event_type in _REWARD_V2_PREVIEW_REPLY_EVENTS
+        for event_type in event_types
+    )
+    reward = _clamp(sum(components.values()), -1.0, 1.0)
+    return {
+        "version": REWARD_SCORE_V2_PREVIEW_VERSION,
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "personalization_state_consumed": False,
+        "reward_score_v2_preview": (
+            round(reward, 3) if recognized_event_types else None
+        ),
+        "components": {
+            component: round(float(components[component]), 3)
+            for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER
+        },
+        "event_types": event_types,
+        "recognized_event_types": recognized_event_types,
+        "feedback_inferred": bool(feedback_inferred),
+        "relative_speed_status": (
+            "pending_personal_baseline" if has_reply else "not_applicable"
+        ),
+        "technical_zero_event_types": technical_zero_events,
+        "unknown_event_types": unknown_events,
+    }
 
 
 def append_recommendation_feedback_jsonl(
@@ -691,6 +806,199 @@ def join_observations_with_feedback(
             }
         )
     return joined
+
+
+def join_observations_with_reward_score_v2_preview(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Join feedback into a point-in-time, attribution-checked v2 preview."""
+    current = time.time() if now is None else float(now)
+    samples = _calibration_observation_samples(
+        observations,
+        now=current,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    events_by_turn = _feedback_events_by_turn(feedback_events)
+    joined: list[dict[str, Any]] = []
+    for row in samples:
+        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        events = list(events_by_turn.get(key, ()))
+        feedback_inferred = False
+        if key[0] and key[1] and not events and row.get("delivered") is True:
+            ts = _number(row.get("ts"), -1.0)
+            if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
+                events = [
+                    build_feedback_event(
+                        lanlan_name=key[0],
+                        turn_id=key[1],
+                        event_type="ignored",
+                        source_type=(
+                            row.get("actual_primary_channel")
+                            or row.get("shadow_selected_source_type")
+                        ),
+                        ts=current,
+                    )
+                ]
+                feedback_inferred = True
+
+        preview = build_reward_score_v2_preview(
+            events,
+            feedback_inferred=feedback_inferred,
+        )
+        attribution_issue = (
+            _reward_v2_preview_attribution_issue(row, events)
+            if events
+            else None
+        )
+        attribution_valid = None if not events else attribution_issue is None
+        reward_score = preview.get("reward_score_v2_preview")
+        if attribution_valid is not True:
+            reward_score = None
+        expected_candidate_id = (
+            _clean_text(row.get("shadow_selected_candidate_id")) or None
+            if row.get("matched_actual_material") is True
+            else None
+        )
+        joined.append(
+            {
+                "turn_id": key[1],
+                "lanlan_name": key[0],
+                "source_type": _normalize_source_type(
+                    row.get("actual_primary_channel")
+                    or row.get("shadow_selected_source_type")
+                ),
+                "candidate_id": expected_candidate_id,
+                "reward_score_v2_preview": reward_score,
+                "reward_components_v2_preview": dict(preview["components"]),
+                "feedback_event_types": list(preview["event_types"]),
+                "feedback_missing": not events,
+                "feedback_inferred": feedback_inferred,
+                "attribution_valid": attribution_valid,
+                "attribution_issue": attribution_issue,
+                "relative_speed_status": preview["relative_speed_status"],
+                "technical_zero_event_types": list(
+                    preview["technical_zero_event_types"]
+                ),
+                "unknown_event_types": list(preview["unknown_event_types"]),
+            }
+        )
+    return joined
+
+
+def summarize_reward_score_v2_preview(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> dict[str, Any]:
+    """Summarize v2 preview without mutating ranking, tuning, or profiles."""
+    joined = join_observations_with_reward_score_v2_preview(
+        observations,
+        feedback_events,
+        now=now,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    scored = [
+        row
+        for row in joined
+        if row.get("attribution_valid") is True
+        and isinstance(row.get("reward_score_v2_preview"), (int, float))
+    ]
+    explicit_scored = [
+        row for row in scored if row.get("feedback_inferred") is not True
+    ]
+    inferred_scored = [
+        row for row in scored if row.get("feedback_inferred") is True
+    ]
+    rewards = [
+        float(row["reward_score_v2_preview"])
+        for row in explicit_scored
+    ]
+    inferred_rewards = [
+        float(row["reward_score_v2_preview"])
+        for row in inferred_scored
+    ]
+    all_rewards = [float(row["reward_score_v2_preview"]) for row in scored]
+    source_rewards: dict[str, list[float]] = defaultdict(list)
+    component_values: dict[str, list[float]] = defaultdict(list)
+    for row in explicit_scored:
+        source_rewards[_normalize_source_type(row.get("source_type"))].append(
+            float(row["reward_score_v2_preview"])
+        )
+        components = row.get("reward_components_v2_preview")
+        if isinstance(components, Mapping):
+            for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER:
+                component_values[component].append(
+                    _number(components.get(component), 0.0)
+                )
+
+    attribution_issues = Counter(
+        str(row.get("attribution_issue"))
+        for row in joined
+        if row.get("attribution_issue")
+    )
+    positive_count = sum(1 for reward in rewards if reward > 0)
+    negative_count = sum(1 for reward in rewards if reward < 0)
+    neutral_count = sum(1 for reward in rewards if reward == 0)
+    return {
+        "version": REWARD_SCORE_V2_PREVIEW_VERSION,
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "personalization_state_consumed": False,
+        "sample_count": len(joined),
+        "reward_scored_count": len(scored),
+        "explicit_reward_scored_count": len(explicit_scored),
+        "inferred_reward_scored_count": len(inferred_scored),
+        "feedback_joined_count": len(explicit_scored),
+        "feedback_inferred_count": len(inferred_scored),
+        "feedback_missing_count": sum(
+            1 for row in joined if row.get("feedback_missing") is True
+        ),
+        "attribution_issue_count": sum(attribution_issues.values()),
+        "attribution_issue_distribution": dict(sorted(attribution_issues.items())),
+        "average_reward_score_v2_preview": _average(rewards),
+        "average_all_reward_score_v2_preview": _average(all_rewards),
+        "average_inferred_reward_score_v2_preview": _average(inferred_rewards),
+        "positive_rate": _rate(positive_count, len(rewards)),
+        "negative_rate": _rate(negative_count, len(rewards)),
+        "neutral_rate": _rate(neutral_count, len(rewards)),
+        "score_by_source_type": {
+            source: _average(values)
+            for source, values in sorted(source_rewards.items())
+            if values
+        },
+        "average_components": {
+            component: _average(component_values.get(component, []))
+            for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER
+        },
+        "relative_speed_neutral_count": sum(
+            1
+            for row in explicit_scored
+            if row.get("relative_speed_status") == "pending_personal_baseline"
+        ),
+        "technical_zero_event_count": sum(
+            len(row.get("technical_zero_event_types") or [])
+            for row in explicit_scored
+        ),
+        "unknown_event_count": sum(
+            len(row.get("unknown_event_types") or [])
+            for row in explicit_scored
+        ),
+        "score_population": "valid_turn_id_joined_explicit_only",
+        "inferred_ignored_reported_separately": True,
+        "window_seconds": int(window_seconds),
+        "sample_limit": int(sample_limit),
+    }
 
 
 def summarize_feedback_calibration(
@@ -1167,6 +1475,41 @@ def _select_feedback_events_for_turn(events: Sequence[Mapping[str, Any]]) -> lis
         if previous is None or abs(_number(event.get("report_score_v1"), 0.0)) > abs(_number(previous.get("report_score_v1"), 0.0)):
             by_group[group] = event
     return list(by_group.values())
+
+
+def _reward_v2_preview_attribution_issue(
+    observation: Mapping[str, Any],
+    feedback_events: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Validate that feedback belongs to the material actually delivered."""
+    if observation.get("delivered") is not True:
+        return "observation_not_delivered"
+    expected_source = _normalize_source_type(
+        observation.get("actual_primary_channel")
+        or observation.get("shadow_selected_source_type")
+    )
+    expected_candidate_id = (
+        _clean_text(observation.get("shadow_selected_candidate_id")) or None
+        if observation.get("matched_actual_material") is True
+        else None
+    )
+    for raw_event in feedback_events:
+        event = sanitize_recommendation_feedback_event(raw_event)
+        event_source = _normalize_source_type(event.get("source_type"))
+        if (
+            event_source != "unknown"
+            and expected_source != "unknown"
+            and event_source != expected_source
+        ):
+            return "source_mismatch"
+        event_candidate_id = _clean_text(event.get("candidate_id")) or None
+        if event_candidate_id is None:
+            continue
+        if expected_candidate_id is None:
+            return "candidate_unverifiable"
+        if event_candidate_id != expected_candidate_id:
+            return "candidate_mismatch"
+    return None
 
 
 def _maybe_auto_apply_tuning_after_feedback(
