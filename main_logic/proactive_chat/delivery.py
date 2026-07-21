@@ -17,6 +17,7 @@
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from config import MEMORY_SERVER_PORT
@@ -350,12 +351,16 @@ async def _record_committed_delivery(
     selected_meme_topic_key: str | None,
     meme_content: dict[str, Any] | None,
     memory_server_port: int = MEMORY_SERVER_PORT,
+    memory_dir: str | Path | None = None,
     log: logging.Logger | None = None,
 ) -> ProactiveChatResult:
     """Record post-commit history and return the successful chat contract."""
     active_logger = log or logger
     primary_channel = delivery.primary_channel
     source_links = delivery.source_links
+    state_storage_kwargs = (
+        {"memory_dir": memory_dir} if memory_dir is not None else {}
+    )
 
     _record_proactive_chat(lanlan_name, response_text, primary_channel)
     _record_proactive_material(
@@ -368,7 +373,7 @@ async def _record_committed_delivery(
         ),
     )
     _mini_game_invite_count_post_response_chat(lanlan_name)
-    await _increment_proactive_chat_total(lanlan_name)
+    await _increment_proactive_chat_total(lanlan_name, **state_storage_kwargs)
     if surfaced_reflection_ids:
         _record_reminiscence_usage(lanlan_name)
 
@@ -413,6 +418,7 @@ async def _record_committed_delivery(
             url=web_link.get("url", "") or "",
             kind="web",
             title=web_title,
+            **state_storage_kwargs,
         )
         print(
             f"[{lanlan_name}] 已记录 Web source 衰减历史: {selected_web_topic_key[:16]}"
@@ -429,6 +435,7 @@ async def _record_committed_delivery(
             url=music_link.get("url", "") or "",
             kind="music",
             title=music_title,
+            **state_storage_kwargs,
         )
         print(
             f"[{lanlan_name}] 已记录音乐 source 衰减历史: "
@@ -443,6 +450,7 @@ async def _record_committed_delivery(
             url=(selected_meme_link or {}).get("url", "") or "",
             kind="image",
             title=(selected_meme_link or {}).get("title", "") or "",
+            **state_storage_kwargs,
         )
         print(
             f"[{lanlan_name}] 已记录表情包 source 衰减历史: "

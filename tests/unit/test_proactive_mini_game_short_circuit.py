@@ -1,6 +1,7 @@
 """Tests for mini-game invite entry and short-circuit orchestration."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -129,6 +130,26 @@ async def test_short_circuit_returns_none_when_invite_does_not_fire(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_short_circuit_forwards_injected_persistence_root(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    attempt = AsyncMock(return_value=None)
+    monkeypatch.setattr(invites, "_attempt_mini_game_invite_delivery", attempt)
+
+    await invites._run_mini_game_invite_short_circuit(
+        lanlan_name="Yui",
+        mgr=object(),
+        activity_snapshot=object(),
+        invite_lang="zh",
+        master_name="Master",
+        memory_dir=tmp_path,
+    )
+
+    assert attempt.await_args.kwargs["memory_dir"] == tmp_path
+
+
+@pytest.mark.asyncio
 async def test_router_adapter_sends_options_payload() -> None:
     send_json = AsyncMock()
     mgr = SimpleNamespace(
@@ -219,6 +240,7 @@ async def test_router_adapter_propagates_send_errors_to_business_caller() -> Non
 async def test_router_short_circuit_returns_chat_and_pushes_options_once(
     monkeypatch,
     send_error,
+    tmp_path: Path,
 ) -> None:
     """The real Router wiring adapts one short circuit into HTTP + one WS event."""
     payload = contracts._proactive_chat_body(
@@ -282,6 +304,7 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
         is_goodbye_silent=lambda: False,
     )
     config_manager = SimpleNamespace(
+        memory_dir=tmp_path,
         aget_character_data=AsyncMock(
             return_value=("博士", "Yui", None, None, None, {}, None, None, None),
         ),
@@ -318,10 +341,11 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
         "ais_privacy_mode_enabled",
         AsyncMock(return_value=False),
     )
+    invite_runner = AsyncMock(return_value=short_circuit)
     monkeypatch.setattr(
         proactive_chat_flow,
         "_run_mini_game_invite_short_circuit",
-        AsyncMock(return_value=short_circuit),
+        invite_runner,
     )
     monkeypatch.setattr(proactive_service.logger, "warning", warning)
 
@@ -333,6 +357,7 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
     assert body["invite_session_id"] == "invite-1"
     assert body["next_schedule_fixed_mode"] is False
     send_json.assert_awaited_once_with(short_circuit.options_payload)
+    assert invite_runner.await_args.kwargs["memory_dir"] == tmp_path
     if send_error is not None:
         warning.assert_any_call(
             "[%s] mini-game invite options WS push failed: %s",

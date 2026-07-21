@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -260,6 +261,50 @@ async def test_optional_and_unselected_side_effects_are_skipped(
     assert result.body["source_mode"] == "vision"
     assert result.body["source_tag"] == "VISION"
     assert result.body["source_links"] == delivery.source_links
+
+
+@pytest.mark.asyncio
+async def test_recording_stage_forwards_injected_persistence_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    events: list[tuple[Any, ...]] = []
+    _install_recorders(monkeypatch, events)
+    increment_total = AsyncMock(return_value=1)
+    record_source = AsyncMock()
+    monkeypatch.setattr(service, "_increment_proactive_chat_total", increment_total)
+    monkeypatch.setattr(service, "_record_source_used", record_source)
+    web = _web_link()
+    delivery = service.CommittedDelivery(
+        primary_channel="web",
+        source_links=[web],
+        delivered_tag="CHAT",
+        delivered_music_link=None,
+        is_music_used=False,
+        action_note="",
+        vision_screenshot_b64=None,
+    )
+
+    await _record(
+        delivery,
+        _Manager(events),
+        memory_dir=tmp_path,
+        active_channels=["web"],
+        has_unfinished_thread=False,
+        surfaced_reflection_ids=[],
+        selected_web_link=web,
+        selected_music_topic_key=None,
+        selected_meme_topic_key=None,
+    )
+
+    assert increment_total.await_count == 1
+    assert increment_total.await_args.kwargs == {"memory_dir": tmp_path}
+    record_source.assert_awaited_once_with(
+        url=web["url"],
+        kind="web",
+        title=web["title"],
+        memory_dir=tmp_path,
+    )
 
 
 @pytest.mark.asyncio

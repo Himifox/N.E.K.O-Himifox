@@ -401,6 +401,13 @@ async def handle_proactive_chat(
                 status_code=entry_result.status_code,
             )
 
+        state_memory_dir = getattr(_config_manager, "memory_dir", None)
+        state_storage_kwargs = (
+            {"memory_dir": state_memory_dir}
+            if state_memory_dir is not None
+            else {}
+        )
+
         # 检查能否发起新一轮主动搭话：状态机统一把 "AI 正在响应"（_is_responding）、
         # "另一轮 proactive 在跑"（phase != IDLE）两个信号收拢到 O(1) 判定。
         # mgr.is_active 仅用于判断 session 是否已实例化，故仍需保留。
@@ -471,7 +478,9 @@ async def handle_proactive_chat(
                 # 与 text path 在 _record_proactive_chat 之后调 count 对称。
                 _mini_game_invite_count_post_response_chat(lanlan_name)
                 # 持久化"累计成功投递的主动搭话总数"，给 force-first 用。
-                await _increment_proactive_chat_total(lanlan_name)
+                await _increment_proactive_chat_total(
+                    lanlan_name, **state_storage_kwargs
+                )
             else:
                 logger.info(
                     "[%s] 主动搭话本轮未发起：语音 nudge 被 guard 跳过", lanlan_name
@@ -763,7 +772,9 @@ async def handle_proactive_chat(
                     # since user responded" gate. No-op when no prior
                     # invite is pending. Codex/CodeRabbit Minor: PR #1226.
                     _mini_game_invite_count_post_response_chat(lanlan_name)
-                    await _increment_proactive_chat_total(lanlan_name)
+                    await _increment_proactive_chat_total(
+                        lanlan_name, **state_storage_kwargs
+                    )
                     return await _end_proactive(
                         ProactiveChatResult(
                             body={
@@ -852,7 +863,9 @@ async def handle_proactive_chat(
                     # already does the +1, so plain counter is only the fallback.
                     _persist_ok = False
                     try:
-                        await _record_invite_delivery_persistent(lanlan_name)
+                        await _record_invite_delivery_persistent(
+                            lanlan_name, **state_storage_kwargs
+                        )
                         _persist_ok = True
                     except Exception as _persist_err:
                         logger.warning(
@@ -899,7 +912,9 @@ async def handle_proactive_chat(
                         # Persistence path failed → counter wasn't bumped.
                         # Fall back to the plain in-memory increment so the
                         # round still counts toward proactive_chat totals.
-                        await _increment_proactive_chat_total(lanlan_name)
+                        await _increment_proactive_chat_total(
+                            lanlan_name, **state_storage_kwargs
+                        )
                     return await _end_proactive(
                         ProactiveChatResult(
                             body={
@@ -955,7 +970,9 @@ async def handle_proactive_chat(
                     )
                 # Same chats-since-response counter as anti_slack branch.
                 _mini_game_invite_count_post_response_chat(lanlan_name)
-                await _increment_proactive_chat_total(lanlan_name)
+                await _increment_proactive_chat_total(
+                    lanlan_name, **state_storage_kwargs
+                )
                 return await _end_proactive(
                     ProactiveChatResult(
                         body={
@@ -1063,6 +1080,7 @@ async def handle_proactive_chat(
             invite_lang=invite_lang,
             master_name=master_name_current,
             user_toggle_enabled=_user_invite_toggle,
+            **state_storage_kwargs,
         )
         if invite_short_circuit is not None:
             if invite_short_circuit.options_payload is not None:
@@ -1107,7 +1125,7 @@ async def handle_proactive_chat(
 
         # 全局 source 衰减历史：进入 picking 前确保已惰性加载到内存（首次为线程池
         # IO，后续是 O(1) flag 检查）。同步 picking loop 后续直接读 dict。
-        await _ensure_source_history_loaded()
+        await _ensure_source_history_loaded(**state_storage_kwargs)
 
         # ========== 0. 并行获取所有信息源内容（无 LLM） ==========
         screenshot_data = command.screenshot_data
@@ -2156,6 +2174,7 @@ async def handle_proactive_chat(
                             url=meme_url,
                             kind="image",
                             title=meme_title,
+                            **state_storage_kwargs,
                         )
                         logger.info(
                             "[%s]- 已记录被 moderation 拦截的表情包 source 衰减历史: url_hash=%s",
@@ -2619,6 +2638,7 @@ async def handle_proactive_chat(
             response_text=response_text,
             source_tag=source_tag,
             active_channels=active_channels,
+            **state_storage_kwargs,
             has_unfinished_thread=_has_unfinished_thread,
             surfaced_reflection_ids=_surfaced_reflection_ids,
             selected_web_link=selected_web_link,
