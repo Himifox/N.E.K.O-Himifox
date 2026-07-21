@@ -90,6 +90,14 @@ class ProactiveChatCommand:
         return self.language, self.lang, self.i18n_language
 
 
+@dataclass(frozen=True, slots=True)
+class ProactiveChatResult:
+    """Framework-independent result adapted to HTTP by the Router."""
+
+    body: dict[str, Any]
+    status_code: int = 200
+
+
 PROACTIVE_REASON_CHAT_DELIVERED = "CHAT_DELIVERED"
 PROACTIVE_REASON_PASS_BUSY = "PASS_BUSY"
 PROACTIVE_REASON_PASS_ACTIVITY_BUSY = "PASS_ACTIVITY_BUSY"

@@ -13,11 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Framework-independent proactive-chat source decisions."""
+"""Framework-independent proactive-chat entry and source decisions."""
 
 import math
 import random
 import time
+from typing import Any
+
+from .contracts import (
+    PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
+    PROACTIVE_REASON_PASS_BUSY,
+    PROACTIVE_REASON_PASS_DISABLED,
+    PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
+    ProactiveChatResult,
+    _proactive_error_body,
+    _proactive_pass_body,
+)
 
 from .state import (
     _RECENT_CHAT_MAX_AGE_SECONDS,
@@ -27,6 +38,79 @@ from .state import (
     _reminiscence_usage_entries,
     _source_skip_probability,
 )
+
+
+def _decide_manager_entry_guard(
+    lanlan_name: Any,
+    *,
+    manager_exists: bool,
+    goodbye_silent: bool = False,
+) -> ProactiveChatResult | None:
+    """Reject missing characters or sessions silenced by a goodbye."""
+    if not manager_exists:
+        return ProactiveChatResult(
+            body=_proactive_error_body(
+                PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
+                error=f"角色 {lanlan_name} 不存在",
+            ),
+            status_code=404,
+        )
+    if goodbye_silent:
+        return ProactiveChatResult(
+            body=_proactive_pass_body(
+                PROACTIVE_REASON_PASS_DISABLED,
+                message="goodbye silent; proactive skipped",
+            )
+        )
+    return None
+
+
+def _decide_game_route_entry_guard(
+    game_route_active: bool | None,
+) -> ProactiveChatResult | None:
+    """Fail closed when the game-route ownership check is active or unavailable."""
+    if game_route_active is False:
+        return None
+    message = (
+        "game route active; ordinary proactive skipped"
+        if game_route_active
+        else "game route guard unavailable; ordinary proactive skipped"
+    )
+    return ProactiveChatResult(
+        body=_proactive_pass_body(
+            PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
+            message=message,
+        )
+    )
+
+
+def _decide_busy_entry_guard(
+    can_start: bool,
+    *,
+    state_snapshot: Any,
+) -> ProactiveChatResult | None:
+    """Return the stable 409 contract when a proactive turn cannot start."""
+    if can_start:
+        return None
+    return ProactiveChatResult(
+        body=_proactive_error_body(
+            PROACTIVE_REASON_PASS_BUSY,
+            error="AI正在响应中，无法主动搭话",
+            message="请等待当前响应完成",
+            state=state_snapshot,
+        ),
+        status_code=409,
+    )
+
+
+def _should_use_voice_fast_path(
+    *,
+    voice_mode: bool,
+    manager_active: bool,
+    realtime_session: bool,
+) -> bool:
+    """Select the voice entry path without depending on its session class."""
+    return voice_mode and manager_active and realtime_session
 
 
 def _should_skip_source(url_hash: str) -> bool:

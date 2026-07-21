@@ -69,7 +69,6 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
-    PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
     PROACTIVE_REASON_ERROR_INTERNAL,
     PROACTIVE_REASON_ERROR_SOURCE_FETCH_FAILED,
     PROACTIVE_REASON_ERROR_TIMEOUT,
@@ -81,7 +80,6 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_PASS_MODEL_PASS,
     PROACTIVE_REASON_PASS_PRIVACY,
     PROACTIVE_REASON_PASS_RESTRICTED_SCREEN_ONLY,
-    PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
     PROACTIVE_REASON_PASS_SOURCE_EMPTY,
     PROACTIVE_REASON_PASS_THROTTLED,
     _ensure_proactive_reason_code,
@@ -99,8 +97,12 @@ from main_logic.proactive_chat.generation import (
 )
 from main_logic.proactive_chat.decisions import (
     _compute_source_weights,
+    _decide_busy_entry_guard,
+    _decide_game_route_entry_guard,
+    _decide_manager_entry_guard,
     _filter_sources_by_weight,
     _should_skip_source,
+    _should_use_voice_fast_path,
 )
 from main_logic.proactive_chat.state import (
     _ensure_source_history_loaded,
@@ -422,36 +424,37 @@ async def proactive_chat(request: Request):
         
         # 获取session manager
         mgr = session_manager.get(lanlan_name)
-        if not mgr:
+        entry_result = _decide_manager_entry_guard(
+            lanlan_name,
+            manager_exists=bool(mgr),
+            goodbye_silent=(
+                getattr(mgr, "is_goodbye_silent", lambda: False)()
+                if mgr
+                else False
+            ),
+        )
+        if entry_result is not None:
+            if entry_result.body.get("reason_code") == PROACTIVE_REASON_PASS_DISABLED:
+                logger.info("[%s] 主动搭话本轮未发起：goodbye silent", lanlan_name)
             return JSONResponse(
-                _proactive_error_body(
-                    PROACTIVE_REASON_ERROR_CHARACTER_NOT_FOUND,
-                    error=f"角色 {lanlan_name} 不存在",
-                ),
-                status_code=404,
+                entry_result.body,
+                status_code=entry_result.status_code,
             )
-
-        if getattr(mgr, "is_goodbye_silent", lambda: False)():
-            logger.info("[%s] 主动搭话本轮未发起：goodbye silent", lanlan_name)
-            return JSONResponse(_proactive_pass_body(
-                PROACTIVE_REASON_PASS_DISABLED,
-                message="goodbye silent; proactive skipped",
-            ))
 
         try:
             from main_routers.game_router import is_game_route_active
-            if is_game_route_active(lanlan_name):
-                logger.info("[%s] 主动搭话本轮未发起：游戏路由 active", lanlan_name)
-                return JSONResponse(_proactive_pass_body(
-                    PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
-                    message="game route active; ordinary proactive skipped",
-                ))
+            game_route_active = bool(is_game_route_active(lanlan_name))
         except Exception as game_route_err:
             logger.warning("[%s] proactive game-route guard failed closed: %s", lanlan_name, game_route_err)
-            return JSONResponse(_proactive_pass_body(
-                PROACTIVE_REASON_PASS_ROUTE_ACTIVE,
-                message="game route guard unavailable; ordinary proactive skipped",
-            ))
+            game_route_active = None
+        entry_result = _decide_game_route_entry_guard(game_route_active)
+        if entry_result is not None:
+            if game_route_active:
+                logger.info("[%s] 主动搭话本轮未发起：游戏路由 active", lanlan_name)
+            return JSONResponse(
+                entry_result.body,
+                status_code=entry_result.status_code,
+            )
         
         # 检查能否发起新一轮主动搭话：状态机统一把 "AI 正在响应"（_is_responding）、
         # "另一轮 proactive 在跑"（phase != IDLE）两个信号收拢到 O(1) 判定。
@@ -461,7 +464,12 @@ async def proactive_chat(request: Request):
         # ========== Voice mode fast path ==========
         # 语音模式下不走 Phase1/Phase2，不占 SM 的 proactive phase；先用只读
         # can_start_proactive 做 409 判定即可。
-        if command.voice_mode and mgr.is_active and isinstance(mgr.session, OmniRealtimeClient):
+        use_voice_fast_path = _should_use_voice_fast_path(
+            voice_mode=command.voice_mode,
+            manager_active=mgr.is_active,
+            realtime_session=isinstance(mgr.session, OmniRealtimeClient),
+        )
+        if use_voice_fast_path:
             # Mini-game invite 状态机推进：voice fast path 不走 activity tracker，
             # 直接用 session 自己跟踪的「用户最后一次真实消息时间」喂给
             # advance_response。否则纯 voice 用户收到 mini-game 邀请回应后，
@@ -486,16 +494,20 @@ async def proactive_chat(request: Request):
                     session_id=_voice_advance_outcome['session_id'],
                     action=_voice_advance_outcome.get('action', 'suppress'),
                 )
-            if not mgr.state.can_start_proactive(session=probe_session):
+            can_start_proactive = mgr.state.can_start_proactive(
+                session=probe_session
+            )
+            entry_result = _decide_busy_entry_guard(
+                can_start_proactive,
+                state_snapshot=(
+                    None if can_start_proactive else mgr.state.snapshot()
+                ),
+            )
+            if entry_result is not None:
                 logger.info("[%s] 主动搭话本轮未发起：语音模式 AI 正在响应中（409）", lanlan_name)
                 return JSONResponse(
-                    _proactive_error_body(
-                        PROACTIVE_REASON_PASS_BUSY,
-                        error="AI正在响应中，无法主动搭话",
-                        message="请等待当前响应完成",
-                        state=mgr.state.snapshot(),
-                    ),
-                    status_code=409,
+                    entry_result.body,
+                    status_code=entry_result.status_code,
                 )
             delivered = await mgr.trigger_voice_proactive_nudge()
             if delivered:
@@ -525,16 +537,18 @@ async def proactive_chat(request: Request):
         # IDLE→PHASE1 + 订阅派发，避免并发请求双双通过 can_start_proactive 后
         # 各自 fire(PROACTIVE_START) 导致两路 proactive 同时进入 PHASE1。
         from main_logic.session_state import SessionEvent as _SE
-        if not await mgr.state.try_start_proactive(session=probe_session):
+        proactive_started = await mgr.state.try_start_proactive(
+            session=probe_session
+        )
+        entry_result = _decide_busy_entry_guard(
+            proactive_started,
+            state_snapshot=(None if proactive_started else mgr.state.snapshot()),
+        )
+        if entry_result is not None:
             logger.info("[%s] 主动搭话本轮未发起：AI 正在响应或已有一轮在跑（409）", lanlan_name)
             return JSONResponse(
-                _proactive_error_body(
-                    PROACTIVE_REASON_PASS_BUSY,
-                    error="AI正在响应中，无法主动搭话",
-                    message="请等待当前响应完成",
-                    state=mgr.state.snapshot(),
-                ),
-                status_code=409,
+                entry_result.body,
+                status_code=entry_result.status_code,
             )
         _proactive_done_emitted = False
         # Set after activity snapshot fetch — tells the frontend scheduler
