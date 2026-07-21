@@ -38,7 +38,6 @@ from main_logic.proactive_chat.mini_game_invite import (
     _run_mini_game_invite_short_circuit,
 )
 from main_logic.proactive_chat.music_recommendation import (
-    _append_music_recommendations,
     _build_music_dynamic_context,
     _build_music_playing_hint,
     _fetch_music_with_fallback,
@@ -62,10 +61,10 @@ from main_logic.proactive_chat.state import (
     _record_proactive_material,
     _record_reminiscence_usage,
 )
+from main_logic.proactive_chat.service import _commit_proactive_delivery
 from main_logic.proactive_chat.contracts import (
     ProactiveChatCommand,
     PROACTIVE_REASON_CHAT_DELIVERED,
-    PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
     PROACTIVE_REASON_ERROR_INTERNAL,
     PROACTIVE_REASON_ERROR_SOURCE_FETCH_FAILED,
@@ -92,6 +91,7 @@ from main_logic.proactive_chat.generation import (
     _text_is_pass_sentinel,
 )
 from main_logic.proactive_chat.decisions import (
+    build_proactive_response,
     _decide_activity_schedule,
     _decide_busy_entry_guard,
     _decide_closed_activity_gate,
@@ -150,7 +150,6 @@ from config.prompts.prompts_proactive import (
     MEME_SECTION_HEADER,
     MEME_SECTION_FOOTER, get_meme_topic_line,
     PROACTIVE_SOURCE_LABELS,
-    build_proactive_action_note,
 )
 from utils.screenshot_utils import (
     decode_and_compress_screenshot_b64,
@@ -350,48 +349,6 @@ def _resolve_topic_hook_locale(
     if global_lang:
         return global_lang
     return fallback
-
-
-# ================================================================
-# 主动搭话响应构建 (Response builder pure function)
-# ================================================================
-def build_proactive_response(source_tag: str, ctx: dict) -> tuple[str, list]:
-    primary_channel = 'unknown'
-    source_links = []
-    lan_name = ctx.get('lanlan_name', 'System')
-    
-    match source_tag:
-        case 'CHAT':
-            primary_channel = 'chat'
-        case 'WEB':
-            # 使用细粒度 web 子通道（news/video/home/personal），fallback 到 'web'
-            web_link = ctx.get('selected_web_link')
-            primary_channel = web_link.get('mode', 'web') if web_link else 'web'
-            if web_link:
-                source_links.append(web_link)
-                logger.debug(f"[{lan_name}] Phase 2 确定选择 WEB (子通道: {primary_channel})，已添加链接")
-        case 'MUSIC':
-            primary_channel = 'music'
-            if ctx.get('selected_music_link'):
-                source_links.append(ctx['selected_music_link'])
-                logger.debug(f"[{lan_name}] Phase 2 确定选择 MUSIC，已添加链接")
-        case 'MEME':
-            primary_channel = 'meme'
-            if ctx.get('selected_meme_link'):
-                source_links.append(ctx['selected_meme_link'])
-                logger.debug(f"[{lan_name}] Phase 2 确定选择 MEME，已添加相关链接")
-            else:
-                logger.warning(f"[{lan_name}] Phase 2 AI 选择 MEME 但无可用表情包链接，回退处理")
-                if ctx.get('selected_web_link'):
-                    primary_channel = ctx['selected_web_link'].get('mode', 'web')
-                    source_links.append(ctx['selected_web_link'])
-                    logger.debug(f"[{lan_name}] Phase 2 回退到 WEB 通道 (子通道: {primary_channel})")
-                elif ctx.get('vision_content'):
-                    primary_channel = 'vision'
-                    logger.debug(f"[{lan_name}] Phase 2 回退到 VISION 通道")
-                else:
-                    logger.debug(f"[{lan_name}] Phase 2 MEME 无表情包且无回退通道，将跳过链接展示")
-    return primary_channel, source_links
 
 
 @router.post('/proactive_chat')
@@ -2316,124 +2273,37 @@ async def proactive_chat(request: Request):
         selected_music_link = guarded_output.selected_music_link
         music_content = guarded_output.music_content
         is_music_used = guarded_output.is_music_used
-        has_music_topic = 'music' in active_channels
-
-        # 使用纯函数构建响应
-        primary_channel, source_links = build_proactive_response(source_tag, {
-            'lanlan_name': lanlan_name,
-            'is_music_used': is_music_used,
-            'selected_web_link': selected_web_link,
-            'selected_music_link': selected_music_link,
-            'selected_meme_link': selected_meme_link,
-            'vision_content': vision_content
-        })
-
-        # 兜底：当最终主通道已经落到 music，或当前实际上只剩音乐通道时，
-        # 【逻辑加固】如果 active_channels 里包含 meme 且 primary_channel 是 meme，不触发 fallback
-        should_try_music_fallback = not is_playing_music and not music_cooldown and (
-            primary_channel == 'music'
-            or (has_music_topic and not any(ch in ('vision', 'web', 'meme') for ch in active_channels))
-        )
-        if should_try_music_fallback:
-            if source_links is None:
-                source_links = []
-            if _append_music_recommendations(source_links, music_content) > 0:
-                is_music_used = True
-
-        if is_music_used:
-            # 此处不再二次调用，因为 should_try_music_fallback 已经处理了 append
-            # 或者如果 is_music_used 为 True 但 haven't appended yet, do it.
-            # 实际上 supports_music_fallback 已经 append 了。
-            # 为了稳妥，我们只在尚未 append 时调用。
-            music_already_appended = any(link.get('source') == '音乐推荐' for link in source_links)
-            if not music_already_appended:
-                _append_music_recommendations(source_links, music_content)
-
-        # anti-repeat / 素材去重按"真实投递的 channel"归类，而非模型原始 source_tag
-        # （此处 primary_channel 已由 build_proactive_response 按实际 source_links 定下，
-        # 比 gate 的 Phase-1 预测更准）（Codex P2）：
-        # - is_music_used（含模型出 [CHAT] 但 should_try_music_fallback 追加了曲目）
-        #   或 primary_channel=='music' → 实际投递音乐 → MUSIC：否则模板 intro 会被
-        #   按 CHAT 录进 BM25 corpus、且曲目 key 不记，重新引入 fallback 推歌污染。
-        # - 仅当 primary_channel=='meme' 且确有表情包链接（selected_meme_link 非空，
-        #   build_proactive_response 此时才真 append 图）才算 MEME 投递；模型出 [MEME]
-        #   但选空时它已回退别的 channel（甚至 primary 仍是 'meme' 但无链接），不能按
-        #   MEME 记——否则模板文案漏录 corpus，且把没发出的关键词记成已投递，害得之后
-        #   同关键词的真表情包被当复读跳过。
-        # - 其余落到非豁免 CHAT（WEB/vision 同样非豁免，对 anti-repeat 等价）。
-        if is_music_used or primary_channel == 'music':
-            _delivered_tag = 'MUSIC'
-        elif primary_channel == 'meme' and selected_meme_link is not None:
-            _delivered_tag = 'MEME'
-        else:
-            _delivered_tag = 'CHAT'
-        # 曲目优先取 selected_music_link；regen 把 tag 降级 CHAT 时它已被清空，则从已
-        # 追加的 source_links（source=='音乐推荐'）里取首条。
-        _delivered_music_link = selected_music_link
-        if _delivered_tag == 'MUSIC' and not _delivered_music_link:
-            _delivered_music_link = next(
-                (l for l in (source_links or []) if isinstance(l, dict) and l.get('source') == '音乐推荐'),
-                None,
-            )
-
-        # 一次性投递完整文本 + 记录历史 + TTS end + turn end
-        # 传 proactive_sid：若 Phase 2 流结束到这里之间用户已打断（换了 sid），
-        # finish 内部会跳过所有写入，避免 proactive 文本污染用户当前轮次。
-        # action_note：把"放了什么歌 / 分享了哪条内容 / 来源"作为元数据追加到
-        # AIMessage 历史，否则下一轮被反问"刚才放的什么"时 LLM 完全无从作答
-        # （只看得到自己说过的话，看不到自己实际投递了什么素材）。模板里对人
-        # 的称呼一律用 master_name 实名展开，不写"主人"这类物化称呼。
-        action_note = build_proactive_action_note(
-            primary_channel=primary_channel,
-            source_links=source_links,
-            language=proactive_lang,
+        delivery_commit = await _commit_proactive_delivery(
+            mgr=mgr,
+            proactive_sid=proactive_sid,
+            lanlan_name=lanlan_name,
+            response_text=response_text,
+            source_tag=source_tag,
+            active_channels=active_channels,
+            selected_web_link=selected_web_link,
+            selected_music_link=selected_music_link,
+            selected_meme_link=selected_meme_link,
+            music_content=music_content,
+            is_music_used=is_music_used,
+            is_playing_music=is_playing_music,
+            music_cooldown=music_cooldown,
+            vision_content=vision_content,
+            phase2_use_vision=phase2_use_vision,
+            screenshot_b64=screenshot_b64_for_phase2,
+            proactive_lang=proactive_lang,
             master_name=master_name_current,
+            log=logger,
         )
-        # 只要本轮后端拿到了截图、且有可用 vision 模型（phase2_use_vision 同时
-        # 蕴含 screenshot_b64_for_phase2 非空），就缓存最后这张主动搭话截图，等
-        # 用户下一条 text 回复时注入——不按最终投递通道筛（哪怕这轮文案落到了
-        # music/web，屏幕仍是这轮看过的画面，留着供用户追问）。截图在
-        # finish_proactive_delivery 内 commit 成功后才真正落 session：新一轮主动
-        # 搭话产生即覆盖/清掉旧缓存（非 vision 轮传 None 清），session 侧再用 2
-        # 分钟 TTL 兜底过期。
-        _stage_vision_screenshot = screenshot_b64_for_phase2 if phase2_use_vision else None
-        try:
-            await mgr.feed_tts_chunk(response_text, expected_speech_id=proactive_sid)
-            committed = await mgr.finish_proactive_delivery(
-                response_text,
-                expected_speech_id=proactive_sid,
-                action_note=action_note,
-                source_tag=_delivered_tag,
-                vision_screenshot_b64=_stage_vision_screenshot,
-            )
-        except Exception as exc:
-            logger.warning("[%s] buffered proactive delivery failed: %s", lanlan_name, exc)
-            if not mgr.state.is_proactive_preempted(proactive_sid):
-                await mgr.handle_new_message()
-            else:
-                logger.info("[%s] buffered delivery failed after user takeover; skip TTS cleanup", lanlan_name)
-            return await _end_proactive(JSONResponse({
-                "success": True,
-                "action": "pass",
-                "reason_code": PROACTIVE_REASON_DELIVERY_FAILED,
-                "message": "Phase 2 buffered delivery failed",
-            }))
-        if not committed:
-            # Proactive 内容未真正落库（用户已接管本轮），所有下游副作用必须跳过：
-            # 否则 _record_proactive_chat 会把未送达内容计入去重历史、topic usage
-            # 会误记已用，前端拿到 "chat" action 会以为搭话成功。
-            logger.info(
-                "[%s] 主动搭话被用户接管，短路下游写入（topic/memory/response）",
-                lanlan_name,
-            )
-            return await _end_proactive(JSONResponse({
-                "success": True,
-                "action": "pass",
-                "reason_code": PROACTIVE_REASON_DELIVERY_PREEMPTED,
-                "message": "proactive delivery skipped: user took over turn",
-                "lanlan_name": lanlan_name,
-                "turn_id": mgr.current_speech_id,
-            }))
+        if delivery_commit.result is not None:
+            return await _end_proactive(JSONResponse(delivery_commit.result.body))
+        committed_delivery = delivery_commit.delivery
+        if committed_delivery is None:  # Defensive: the stage contract is exhaustive.
+            raise RuntimeError("delivery commit returned neither result nor delivery")
+        primary_channel = committed_delivery.primary_channel
+        source_links = committed_delivery.source_links
+        _delivered_tag = committed_delivery.delivered_tag
+        _delivered_music_link = committed_delivery.delivered_music_link
+        is_music_used = committed_delivery.is_music_used
 
         # 记录主动搭话
         _record_proactive_chat(lanlan_name, response_text, primary_channel)
