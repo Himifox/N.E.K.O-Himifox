@@ -36,10 +36,17 @@ from main_logic.proactive_chat.mini_game_invite import (
     _pick_mini_game_type,
     _push_mini_game_invite_resolved,
 )
-from .proactive_content import (
+from main_logic.proactive_chat.music_recommendation import (
     _append_music_recommendations,
+    _build_music_dynamic_context,
+    _build_music_playing_hint,
+    _fetch_music_with_fallback,
     _format_music_content,
     _log_music_content,
+    _record_music_played_through,
+    _select_music_recommendation,
+)
+from .proactive_content import (
     _log_news_content,
     _log_personal_dynamics,
     _log_trending_content,
@@ -47,7 +54,6 @@ from .proactive_content import (
 )
 from main_logic.proactive_chat.state import (
     _PROACTIVE_SIMILARITY_THRESHOLD,
-    _clear_channel_from_proactive_history,
     _format_recent_proactive_chats,
     _increment_proactive_chat_total,
     _is_recent_proactive_material,
@@ -151,10 +157,7 @@ from config import (
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_directives import render_regen_avoid_instruction, render_format_fix_instruction
 from config.prompts.prompts_proactive import (
-    get_proactive_generate_prompt, get_proactive_music_playing_hint,
-    get_proactive_music_unknown_track_name,
-    get_proactive_music_failsafe_hint,
-    get_proactive_music_strict_constraint,
+    get_proactive_generate_prompt,
     get_proactive_format_sections,
     get_screen_section_header,
     get_screen_section_footer, get_screen_img_hint, BEGIN_GENERATE,
@@ -163,7 +166,7 @@ from config.prompts.prompts_proactive import (
     MUSIC_SECTION_FOOTER,
     MEME_SECTION_HEADER,
     MEME_SECTION_FOOTER, get_meme_topic_line,
-    PROACTIVE_SOURCE_LABELS, PROACTIVE_MUSIC_TAG_INSTRUCTIONS,
+    PROACTIVE_SOURCE_LABELS,
     build_proactive_action_note,
 )
 from utils.screenshot_utils import (
@@ -179,7 +182,6 @@ from utils.web_scraper import (
     fetch_news_content, format_news_content,
     fetch_personal_dynamics, format_personal_dynamics,
 )
-from utils.music_crawlers import fetch_music_content
 from utils.meme_fetcher import fetch_meme_content
 from utils.meme_moderation import moderate_meme_image_url
 
@@ -1804,20 +1806,6 @@ async def proactive_chat(request: Request):
         music_keyword = unified_parsed.get('music_keyword')
         meme_keyword = unified_parsed.get('meme_keyword')
 
-        async def _fetch_music_with_fallback(kw: str):
-            """Search music with the LLM keyword; falls back to a random recommendation on failure."""
-            try:
-                raw = await fetch_music_content(keyword=kw, limit=5)
-                if raw and raw.get('success'):
-                    return raw
-            except Exception as e:
-                logger.warning(f"[{lanlan_name}] 音乐关键词 '{kw}' 搜索异常: {e}")
-            logger.warning(f"[{lanlan_name}] 音乐关键词 '{kw}' 搜索失败，尝试随机推荐")
-            try:
-                return await fetch_music_content(keyword="", limit=5)
-            except Exception:
-                return None
-
         async def _fetch_meme_with_fallback(kw: str):
             """Search memes with the LLM keyword; falls back to random hot words on failure.
 
@@ -1853,7 +1841,9 @@ async def proactive_chat(request: Request):
 
         if has_music_task and not unified_parsed.get('music_pass'):
             kw = music_keyword or ""
-            fetch_tasks_p1.append(_fetch_music_with_fallback(kw))
+            fetch_tasks_p1.append(
+                _fetch_music_with_fallback(kw, lanlan_name=lanlan_name)
+            )
             fetch_labels.append('music')
         elif has_music_task:
             print(f"[{lanlan_name}] Phase 1 音乐通道明确 PASS，跳过后置 fetch")
@@ -1894,67 +1884,24 @@ async def proactive_chat(request: Request):
         # 与 web/meme 对偶：超取 N 条后逐条概率 skip，遇命中瞬移到下一条。
         # 全部命中则清空 music_content 让通道整体降级。
         # ============================================================
-        if music_content and music_content.get('formatted_content'):
-            music_topic = music_content['formatted_content']
-            if music_topic:
-                music_tracks = music_content.get('raw_data', {}).get('data', [])
-                if music_tracks:
-                    picked_track: dict | None = None
-                    picked_key: str = ''
-                    for candidate_track in music_tracks:
-                        track_url = candidate_track.get('url', '')
-                        track_name = candidate_track.get('name', '')
-                        track_artist = candidate_track.get('artist', '')
-                        candidate_key = _source_hash(
-                            track_url, f"{track_name} - {track_artist}"
-                        )
-                        if candidate_key and _should_skip_source(candidate_key):
-                            print(f"[{lanlan_name}]- Phase 1 音乐候选去重命中，跳过: {track_name}")
-                            continue
-                        picked_track = candidate_track
-                        picked_key = candidate_key
-                        break
-                    if picked_track is None:
-                        print(f"[{lanlan_name}]- Phase 1 所有音乐候选均被衰减 skip，整体清空通道")
-                        music_content = None
-                    else:
-                        # 选中非首条时，把 raw_data['data'] 砍到 picked 起始位置并重 format —
-                        # 否则 music_topic 文本仍以被 skip 掉的首条为头条，与
-                        # selected_music_link 的归因脱节，下游 _append_music_recommendations
-                        # 也会把已 skip 的首条作为推荐项暴露给前端。
-                        picked_idx = music_tracks.index(picked_track)
-                        if picked_idx > 0:
-                            raw = music_content.get('raw_data') or {}
-                            raw_trimmed = {**raw, 'data': music_tracks[picked_idx:]}
-                            new_topic = _format_music_content(raw_trimmed, proactive_lang)
-                            if new_topic:
-                                music_topic = new_topic
-                                music_content['formatted_content'] = music_topic
-                                music_content['raw_data'] = raw_trimmed
-                        track_name = picked_track.get('name', '')
-                        track_artist = picked_track.get('artist', '')
-                        track_url = picked_track.get('url', '')
-                        track_cover = picked_track.get('cover', '')
-                        logger.debug(f"[{lanlan_name}]- Phase 1 音乐话题已添加 (topic_len={len(music_topic)})")
-                        print(f"[{lanlan_name}]- Phase 1 音乐话题: {music_topic[:100]}")
-                        selected_music_link = {
-                            'title': track_name,
-                            'artist': track_artist,
-                            'url': track_url,
-                            'cover': track_cover,
-                            'source': '音乐推荐',
-                            'type': 'music'
-                        }
-                        selected_music_topic_key = picked_key
-                        phase1_topics.append(('music', music_topic))
-                else:
-                    # formatted_content 非空时 _format_music_content 必已输出至少一条
-                    # 曲目，所以这里实际不可达；保留为防御兜底，并与上面 picked_track
-                    # is None 路径对偶：没有可播曲目就不进 active_channels，守住
-                    # "music ∈ active_channels ⟺ selected_music_link 非空" 这条不变量，
-                    # 避免 Phase 2 出现音乐素材却无歌可投（发了 [MUSIC] 转译不出）。
-                    logger.debug(f"[{lanlan_name}] Phase 1 音乐 formatted_content 非空但无曲目数据，跳过音乐通道")
-                    music_content = None
+        music_selection = _select_music_recommendation(
+            music_content,
+            lang=proactive_lang,
+            source_hash=_source_hash,
+            should_skip_source=_should_skip_source,
+            lanlan_name=lanlan_name,
+        )
+        music_content = music_selection.content
+        if music_selection.link:
+            music_topic = music_selection.topic
+            selected_music_link = music_selection.link
+            selected_music_topic_key = music_selection.topic_key
+            logger.debug(
+                f"[{lanlan_name}]- Phase 1 音乐话题已添加 "
+                f"(topic_len={len(music_topic)})"
+            )
+            print(f"[{lanlan_name}]- Phase 1 音乐话题: {music_topic[:100]}")
+            phase1_topics.append(('music', music_topic))
 
         # ============================================================
         # 表情包话题组装（遍历候选 → 去重 → 限1张）
@@ -2156,10 +2103,12 @@ async def proactive_chat(request: Request):
         # 无 tag gate 只在前者生效，否则会把 _of_none 模式的合法纯文本搭话误判为
         # 格式泄漏 drop（Codex P1）。
         _expects_source_tag = bool(external_section) or bool(music_section) or bool(meme_section)
-        music_playing_hint = ""
-        if is_playing_music and current_track:
-            track_name = current_track.get('name') or get_proactive_music_unknown_track_name(proactive_lang)
-            music_playing_hint = get_proactive_music_playing_hint(track_name, master_name_current, proactive_lang)
+        music_playing_hint = _build_music_playing_hint(
+            is_playing_music=is_playing_music,
+            current_track=current_track,
+            master_name=master_name_current,
+            lang=proactive_lang,
+        )
 
         # 把活动快照渲染成 prompt 段。snapshot 缺失时退化为空串——decision frame
         # 里的 A) 看「用户当前状态」分支会自动走到"其它状态：所有切入点都可用"。
@@ -2229,19 +2178,13 @@ async def proactive_chat(request: Request):
             source_instruction=source_instruction,
             output_format_section=output_format_section,
         )
-        dynamic_context_for_phase2 = ""
-        # 同 music_section：[MUSIC] tag 强制指令只在真有可播曲目时注入。
-        if selected_music_link:
-            dynamic_context_for_phase2 += PROACTIVE_MUSIC_TAG_INSTRUCTIONS.get(
-                proactive_lang,
-                PROACTIVE_MUSIC_TAG_INSTRUCTIONS.get('en', PROACTIVE_MUSIC_TAG_INSTRUCTIONS['zh']),
-            )
-            raw_data = music_content.get('raw_data', {}) if music_content else {}
-            if raw_data.get('best_match', {}).get('status') == 'fuzzy':
-                dynamic_context_for_phase2 += get_proactive_music_failsafe_hint(master_name_current, proactive_lang)
-
-        if is_playing_music:
-            dynamic_context_for_phase2 += get_proactive_music_strict_constraint(proactive_lang)
+        dynamic_context_for_phase2 = _build_music_dynamic_context(
+            selected_music_link=selected_music_link,
+            music_content=music_content,
+            is_playing_music=is_playing_music,
+            master_name=master_name_current,
+            lang=proactive_lang,
+        )
         # music_cooldown 时不再注入 strict_constraint —— 此时 music 通道已被前端/后端
         # 完全剔除，不应向模型暴露任何音乐相关指令，以免干扰其他 source 的选择。
         print(f"[{lanlan_name}] Phase 2 prompt 长度: {len(generate_prompt)}, 动态上下文: {len(dynamic_context_for_phase2)} 字符")
@@ -3235,7 +3178,5 @@ async def proactive_music_played_through(request: Request):
     lanlan_name = (data.get('lanlan_name') or her_name_default or '').strip()
     if not lanlan_name:
         return JSONResponse({"success": False, "error": "lanlan_name missing"}, status_code=400)
-    cleared = _clear_channel_from_proactive_history(lanlan_name, 'music')
-    if cleared:
-        logger.info(f"[{lanlan_name}] 音乐完整播放，重置 music 通道权重衰减（清空 {cleared} 条）")
+    cleared = _record_music_played_through(lanlan_name)
     return JSONResponse({"success": True, "cleared": cleared, "lanlan_name": lanlan_name})
