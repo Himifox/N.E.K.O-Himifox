@@ -147,7 +147,6 @@ from config import (
     MINI_GAME_INVITE_FORCE_GAME_TYPE,
     PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
-    PROACTIVE_RECOMMENDATION_MODE,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
     PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
@@ -180,6 +179,9 @@ from main_logic.proactive_recommendation_observer import (
 from main_logic.proactive_recommendation_tuning import (
     load_recommendation_tuning,
     tuning_public_status,
+)
+from main_logic.proactive_recommendation_runtime import (
+    get_recommendation_runtime_mode,
 )
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_directives import render_regen_avoid_instruction, render_format_fix_instruction
@@ -599,6 +601,7 @@ async def proactive_chat(request: Request):
         master_name_current, her_name_current, _, _, _, lanlan_prompt_map, _, _, _ = await _config_manager.aget_character_data()
         
         data = await request.json()
+        recommendation_mode = get_recommendation_runtime_mode()
         lanlan_name = data.get('lanlan_name') or her_name_current
         _timing_snapshot_at = time.time()
         _recommendation_timing_context = proactive_delivery_timing_snapshot(
@@ -780,13 +783,13 @@ async def proactive_chat(request: Request):
                 return resp
             body = _ensure_proactive_reason_code(body)
             final_recommendation_decision = material_recommendation_decision or shadow_recommendation_decision
-            if PROACTIVE_RECOMMENDATION_MODE != "off" and final_recommendation_decision is not None:
+            if recommendation_mode != "off" and final_recommendation_decision is not None:
                 try:
                     _record_proactive_recommendation_observation(
                         final_recommendation_decision,
                         lanlan_name=lanlan_name,
                         response_body=body,
-                        recommendation_mode=PROACTIVE_RECOMMENDATION_MODE,
+                        recommendation_mode=recommendation_mode,
                         active_bias=active_recommendation_bias,
                         observation_log_mode=PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
                         config_dir=getattr(get_config_manager(), "config_dir", None),
@@ -1986,7 +1989,7 @@ async def proactive_chat(request: Request):
         # 合并 Phase 1 LLM 调用：web 筛选 + music 关键词 + meme 关键词
         # 一次 LLM 调用完成所有任务，降低 RPM
         # ============================================================
-        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+        if recommendation_mode in ("shadow", "active_source"):
             try:
                 shadow_ctx = ProactiveRecommendationContext(
                     lanlan_name=lanlan_name,
@@ -2353,7 +2356,7 @@ async def proactive_chat(request: Request):
         
         # 收集各通道结果
         active_channels = [ch for ch, _ in phase1_topics]
-        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+        if recommendation_mode in ("shadow", "active_source"):
             try:
                 material_ctx = ProactiveRecommendationContext(
                     lanlan_name=lanlan_name,
@@ -2380,7 +2383,7 @@ async def proactive_chat(request: Request):
                     vision_content=vision_content,
                     active_channels=active_channels,
                 )
-                if PROACTIVE_RECOMMENDATION_MODE == "active_source":
+                if recommendation_mode == "active_source":
                     active_recommendation_bias = build_active_source_bias(
                         material_recommendation_decision,
                         min_score_gap=PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,

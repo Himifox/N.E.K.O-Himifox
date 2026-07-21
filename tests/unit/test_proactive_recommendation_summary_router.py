@@ -89,6 +89,23 @@ def _client(monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=1
         "PROACTIVE_RECOMMENDATION_TUNING_MODE",
         tuning_mode,
     )
+    monkeypatch.setattr(
+        proactive_router,
+        "get_recommendation_runtime_status",
+        lambda: {
+            "configured_mode": "shadow",
+            "effective_mode": "shadow",
+            "active_source_enabled": False,
+            "activation_source": "startup_environment_only",
+            "runtime_activation_allowed": False,
+            "rollback_available": False,
+            "rollback_target": "shadow",
+            "rollback_count": 0,
+            "last_rollback_at": None,
+            "last_rollback_reason": None,
+            "restart_restores_configured_mode": False,
+        },
+    )
     monkeypatch.setattr(proactive_router.time, "time", lambda: now)
     app = FastAPI()
     app.include_router(proactive_router.router)
@@ -128,8 +145,49 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, t
     assert payload["validation"]["issues"] == []
     assert payload["feedback_calibration"]["sample_count"] == 0
     assert payload["feedback_calibration"]["feedback_joined_count"] == 0
+    assert payload["runtime"]["effective_mode"] == "shadow"
+    assert payload["runtime"]["runtime_activation_allowed"] is False
     assert payload["sample_count"] == 0
     assert str(tmp_path) not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_recommendation_runtime_status_and_rollback_contract(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        proactive_router,
+        "rollback_recommendation_runtime",
+        lambda *, reason: {
+            "applied": True,
+            "previous_mode": "active_source",
+            "status": {
+                "configured_mode": "active_source",
+                "effective_mode": "shadow",
+                "active_source_enabled": False,
+                "runtime_activation_allowed": False,
+                "rollback_count": 1,
+                "last_rollback_reason": reason,
+            },
+        },
+    )
+
+    read = client.get("/api/proactive/recommendation/runtime")
+    denied = client.post("/api/proactive/recommendation/runtime/rollback", json={})
+    accepted = client.post(
+        "/api/proactive/recommendation/runtime/rollback",
+        headers={
+            "Origin": "http://testserver",
+            "X-CSRF-Token": AUTOSTART_CSRF_TOKEN,
+        },
+        json={"reason": "unit_test"},
+    )
+
+    assert read.status_code == 200
+    assert read.json()["runtime"]["effective_mode"] == "shadow"
+    assert denied.status_code == 403
+    assert accepted.status_code == 200
+    assert accepted.json()["applied"] is True
+    assert accepted.json()["status"]["effective_mode"] == "shadow"
+    assert accepted.json()["status"]["last_rollback_reason"] == "unit_test"
 
 
 def test_recommendation_summary_uses_recent_hour_window_and_ignores_limit(monkeypatch, tmp_path):
