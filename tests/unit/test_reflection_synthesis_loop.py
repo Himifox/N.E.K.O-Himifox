@@ -346,13 +346,13 @@ def test_proactive_reason_codes_have_stage_mapping():
 @pytest.mark.unit
 def test_proactive_phase2_abort_reasons_stay_specific():
     import inspect
-    import main_routers.system_router as system_router
+    from main_logic.proactive_chat import generation
 
-    src = inspect.getsource(system_router.proactive_chat)
+    src = inspect.getsource(generation._generate_phase2_stream)
     assert "abort_reason_code" in src
     assert "PROACTIVE_REASON_DELIVERY_PREEMPTED" in src
     assert "PROACTIVE_REASON_PASS_MODEL_PASS" in src
-    assert "final_abort_reason_code = abort_reason_code or PROACTIVE_REASON_PASS_GENERATION_EMPTY" in src
+    assert "final_reason = abort_reason_code or PROACTIVE_REASON_PASS_GENERATION_EMPTY" in src
 
 
 @pytest.mark.unit
