@@ -8,6 +8,7 @@ import pytest
 
 from main_logic.proactive_chat import contracts
 from main_logic.proactive_chat import mini_game_invite as invites
+from main_logic.proactive_chat import service as proactive_service
 from main_logic.session_state import SessionEvent
 from main_routers import game_router
 from main_routers.system_router import proactive_chat_flow
@@ -144,8 +145,80 @@ async def test_router_adapter_sends_options_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_adapter_skips_falsey_websocket() -> None:
+    class FalseyWebSocket(SimpleNamespace):
+        def __bool__(self) -> bool:
+            return False
+
+    send_json = AsyncMock()
+    mgr = SimpleNamespace(
+        websocket=FalseyWebSocket(send_json=send_json, client_state=None),
+    )
+
+    await proactive_chat_flow._push_mini_game_invite_options(mgr, {"type": "x"})
+
+    send_json.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_router_adapter_skips_unavailable_websockets() -> None:
+    disconnected_state = SimpleNamespace(CONNECTED=object())
+    disconnected_send = AsyncMock()
+    managers = (
+        SimpleNamespace(websocket=None),
+        SimpleNamespace(websocket=SimpleNamespace()),
+        SimpleNamespace(
+            websocket=SimpleNamespace(
+                send_json=disconnected_send,
+                client_state=disconnected_state,
+            )
+        ),
+    )
+
+    for mgr in managers:
+        await proactive_chat_flow._push_mini_game_invite_options(
+            mgr,
+            {"type": "x"},
+        )
+
+    disconnected_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_router_adapter_preserves_missing_websocket_attribute_error() -> None:
+    with pytest.raises(AttributeError):
+        await proactive_chat_flow._push_mini_game_invite_options(
+            SimpleNamespace(),
+            {"type": "x"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_adapter_propagates_send_errors_to_business_caller() -> None:
+    send_error = RuntimeError("send failed")
+    mgr = SimpleNamespace(
+        websocket=SimpleNamespace(
+            send_json=AsyncMock(side_effect=send_error),
+            client_state=None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await proactive_chat_flow._push_mini_game_invite_options(
+            mgr,
+            {"type": "x"},
+        )
+
+
+@pytest.mark.parametrize(
+    "send_error",
+    (None, RuntimeError("send failed")),
+    ids=("send-ok", "send-failed"),
+)
+@pytest.mark.asyncio
 async def test_router_short_circuit_returns_chat_and_pushes_options_once(
     monkeypatch,
+    send_error,
 ) -> None:
     """The real Router wiring adapts one short circuit into HTTP + one WS event."""
     payload = contracts._proactive_chat_body(
@@ -163,7 +236,8 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
             "options": [],
         },
     )
-    send_json = AsyncMock()
+    send_json = AsyncMock(side_effect=send_error)
+    warning = MagicMock()
     state = SimpleNamespace(
         try_start_proactive=AsyncMock(return_value=True),
         fire=AsyncMock(),
@@ -249,6 +323,7 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
         "_run_mini_game_invite_short_circuit",
         AsyncMock(return_value=short_circuit),
     )
+    monkeypatch.setattr(proactive_service.logger, "warning", warning)
 
     response = await proactive_chat_flow.proactive_chat(request)
 
@@ -258,6 +333,12 @@ async def test_router_short_circuit_returns_chat_and_pushes_options_once(
     assert body["invite_session_id"] == "invite-1"
     assert body["next_schedule_fixed_mode"] is False
     send_json.assert_awaited_once_with(short_circuit.options_payload)
+    if send_error is not None:
+        warning.assert_any_call(
+            "[%s] mini-game invite options WS push failed: %s",
+            "Yui",
+            send_error,
+        )
     state.fire.assert_awaited_once_with(SessionEvent.PROACTIVE_DONE)
     assert mgr.bool_reads == 1
     assert mgr.active_reads == 1

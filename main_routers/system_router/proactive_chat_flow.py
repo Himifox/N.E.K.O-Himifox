@@ -83,16 +83,13 @@ async def _safe_fire_proactive_done(scope: dict) -> None:
 
 async def _push_mini_game_invite_options(mgr: Any, payload: dict) -> None:
     """Send invite options at the Router/WebSocket boundary."""
-    try:
-        websocket = getattr(mgr, "websocket", None)
-        if websocket is None or not hasattr(websocket, "send_json"):
-            return
-        client_state = getattr(websocket, "client_state", None)
-        if client_state is not None and client_state != client_state.CONNECTED:
-            return
-        await websocket.send_json(payload)
-    except Exception as exc:
-        logger.warning("mini-game invite options WS push failed: %s", exc)
+    websocket = mgr.websocket
+    if not websocket or not hasattr(websocket, "send_json"):
+        return
+    client_state = getattr(websocket, "client_state", None)
+    if client_state is not None and client_state != client_state.CONNECTED:
+        return
+    await websocket.send_json(payload)
 
 
 def _game_route_active_for(lanlan_name: str) -> bool:

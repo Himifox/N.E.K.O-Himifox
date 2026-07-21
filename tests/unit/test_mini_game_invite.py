@@ -1571,6 +1571,40 @@ async def test_direct_invite_delivery_preserves_options_websocket_compat(monkeyp
     assert state['pending_session_id'] == out['invite_session_id']
 
 
+@pytest.mark.asyncio
+async def test_direct_invite_delivery_swallows_options_websocket_failure(monkeypatch):
+    """The legacy direct helper keeps its pre-refactor best-effort WS contract."""
+    monkeypatch.setattr(sr, 'MINI_GAME_INVITE_TRIGGER_PROBABILITY', 1.0)
+    send_error = RuntimeError("send failed")
+    warning = MagicMock()
+    mgr = _make_mgr()
+    mgr.websocket = MagicMock()
+    mgr.websocket.send_json = AsyncMock(side_effect=send_error)
+    fake_state = MagicMock()
+    fake_state.CONNECTED = fake_state
+    mgr.websocket.client_state = fake_state
+    monkeypatch.setattr(sr.logger, "warning", warning)
+
+    out = await sr._maybe_deliver_mini_game_invite(
+        lanlan_name=LANLAN,
+        mgr=mgr,
+        activity_snapshot=_make_snapshot(),
+        invite_lang='zh',
+        master_name=MASTER,
+    )
+
+    assert out is not None and out['action'] == 'chat'
+    assert any(
+        logged.args
+        == (
+            "[%s] mini-game invite options WS push failed: %s",
+            LANLAN,
+            send_error,
+        )
+        for logged in warning.call_args_list
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # i18n 完整性
 # ─────────────────────────────────────────────────────────────────────────────

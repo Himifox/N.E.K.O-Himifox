@@ -1066,10 +1066,17 @@ async def handle_proactive_chat(
         )
         if invite_short_circuit is not None:
             if invite_short_circuit.options_payload is not None:
-                await push_mini_game_invite_options(
-                    mgr,
-                    invite_short_circuit.options_payload,
-                )
+                try:
+                    await push_mini_game_invite_options(
+                        mgr,
+                        invite_short_circuit.options_payload,
+                    )
+                except Exception as _ws_err:
+                    logger.warning(
+                        "[%s] mini-game invite options WS push failed: %s",
+                        lanlan_name,
+                        _ws_err,
+                    )
             return await _end_proactive(
                 ProactiveChatResult(
                     body=invite_short_circuit.result.body,
