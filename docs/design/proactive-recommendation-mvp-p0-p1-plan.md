@@ -321,3 +321,28 @@ Golden cohort 只接受通过安全校验并带 `review_context` 的 observation
 5. **P44-E 人工标注与复核（待 P44-D 通过）**：只对 `annotation_ready=true` 的新数据标注是否该推荐、Top-1、relevance 0–3、打扰、隐私风险和分数偏差原因。
 
 P44-B/C 不改变排序、来源选择、投递或 tuning；`PROACTIVE_RECOMMENDATION_TUNING_MODE` 继续保持 `off`。
+
+### P44-F2 MVP timing observation schema v3（2026-07-20，代码完成）
+
+P44-F1 已证明不存在可直接采用的统一分数阈值，因此 MVP 先补时间/疲劳观测，不实现新的 PASS/no-op 规则。observation 合约升级为 `proactive-recommendation-observation-v3`，新增白名单字段：
+
+```json
+{
+  "decision_context": {
+    "timing": {
+      "configured_interval_seconds": 300,
+      "elapsed_since_last_delivery_seconds": 540,
+      "recent_delivery_count_30m": 2,
+      "recent_delivery_count_2h": 5,
+      "consecutive_unanswered_deliveries": 1
+    }
+  }
+}
+```
+
+- `configured_interval_seconds` 来自本轮 `/proactive_chat` 请求中的用户基础间隔。
+- 投递间隔与窗口计数来自进程内真实主动搭话投递历史，覆盖普通搭话、休息提醒和小游戏邀请等实际投递。
+- 连续未回复数只统计 Recommendation feedback pending 窗口内、尚未收到显式用户回复的推荐投递。
+- 快照在本轮可能发生投递前冻结；当前投递不会反向污染自己的 timing context。
+- sanitizer 仅允许上述低基数数值字段，丢弃其他嵌套数据。
+- 新字段只写 observation；排序、投递、生产权重和 tuning 均不读取它们，现有行为不变。
