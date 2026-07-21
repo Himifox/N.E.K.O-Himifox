@@ -89,6 +89,19 @@ class ProactiveRecommendationContext:
     mini_game_available: bool = False
 
 
+def resolve_recommendation_activity_state(activity_snapshot: Any) -> str:
+    """Return the inferred activity state, never its collapsed propensity.
+
+    Ranking owns state-sensitive costs (for example ``away`` and
+    ``focused_work``).  ``propensity`` belongs to the upstream router and
+    deliberately collapses several states, so substituting it here silently
+    disables those ranking branches.
+    """
+    if activity_snapshot is None:
+        return "unknown"
+    return _text(getattr(activity_snapshot, "state", None)) or "unknown"
+
+
 @dataclass(slots=True)
 class ProactiveRecommendationDecision:
     candidate_count: int

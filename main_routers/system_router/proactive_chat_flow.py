@@ -162,6 +162,7 @@ from main_logic.proactive_recommendation import (
     build_recommendation_review_context,
     build_shadow_recommendation_decision,
     reorder_phase1_topics_for_bias,
+    resolve_recommendation_activity_state,
 )
 from main_logic.proactive_recommendation_feedback import (
     consecutive_unanswered_recommendation_deliveries,
@@ -2000,7 +2001,7 @@ async def proactive_chat(request: Request):
                     recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
                     recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
                     privacy_state="open" if activity_snapshot is not None else "unknown",
-                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    activity_state=resolve_recommendation_activity_state(activity_snapshot),
                     mini_game_available=MINI_GAME_INVITE_ENABLED,
                 )
                 shadow_recommendation_decision = build_shadow_recommendation_decision(
@@ -2367,7 +2368,7 @@ async def proactive_chat(request: Request):
                     recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
                     recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
                     privacy_state="open" if activity_snapshot is not None else "unknown",
-                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    activity_state=resolve_recommendation_activity_state(activity_snapshot),
                     mini_game_available=MINI_GAME_INVITE_ENABLED,
                 )
                 material_recommendation_decision = build_phase1_material_shadow_decision(
