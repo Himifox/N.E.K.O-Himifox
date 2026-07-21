@@ -55,13 +55,12 @@ from .proactive_content import (
 from main_logic.proactive_chat.state import (
     _format_recent_proactive_chats,
     _increment_proactive_chat_total,
-    _proactive_material_key,
     _record_invite_delivery_persistent,
-    _record_proactive_chat,
-    _record_proactive_material,
-    _record_reminiscence_usage,
 )
-from main_logic.proactive_chat.service import _commit_proactive_delivery
+from main_logic.proactive_chat.service import (
+    _commit_proactive_delivery,
+    _record_committed_delivery,
+)
 from main_logic.proactive_chat.contracts import (
     ProactiveChatCommand,
     PROACTIVE_REASON_CHAT_DELIVERED,
@@ -2299,146 +2298,32 @@ async def proactive_chat(request: Request):
         committed_delivery = delivery_commit.delivery
         if committed_delivery is None:  # Defensive: the stage contract is exhaustive.
             raise RuntimeError("delivery commit returned neither result nor delivery")
-        primary_channel = committed_delivery.primary_channel
-        source_links = committed_delivery.source_links
-        _delivered_tag = committed_delivery.delivered_tag
-        _delivered_music_link = committed_delivery.delivered_music_link
-        is_music_used = committed_delivery.is_music_used
-
-        # 记录主动搭话
-        _record_proactive_chat(lanlan_name, response_text, primary_channel)
-        # 记录本轮实际投递的"素材标识"（曲目 / 搜索关键词），供下次同 channel 的
-        # 素材级去重。按"真实投递 channel"_delivered_tag/_delivered_music_link 归类
-        # （含模型出 CHAT 但 fallback 追加了曲目的情形），key 为空则不记录。
-        _record_proactive_material(
-            lanlan_name,
-            _delivered_tag,
-            _proactive_material_key(_delivered_tag, _delivered_music_link, meme_content),
+        recorded_result = await _record_committed_delivery(
+            mgr=mgr,
+            delivery=committed_delivery,
+            lanlan_name=lanlan_name,
+            response_text=response_text,
+            source_tag=source_tag,
+            active_channels=active_channels,
+            has_unfinished_thread=_has_unfinished_thread,
+            surfaced_reflection_ids=_surfaced_reflection_ids,
+            selected_web_link=selected_web_link,
+            selected_web_topic_key=selected_web_topic_key,
+            web_parsed=web_parsed,
+            selected_music_link=selected_music_link,
+            selected_music_topic_key=selected_music_topic_key,
+            selected_meme_link=selected_meme_link,
+            selected_meme_topic_key=selected_meme_topic_key,
+            meme_content=meme_content,
+            memory_server_port=MEMORY_SERVER_PORT,
+            log=logger,
         )
-        # Mini-game 邀请冷却 counter 推进：spec 是"被回应后再 10 次搭话才解禁"，
-        # 任何 channel 的成功投递都算一次，pending 期间（responded_at=None）函数
-        # 内部自然 no-op，不靠"邀请自身"提前耗 counter。
-        _mini_game_invite_count_post_response_chat(lanlan_name)
-        # 持久化"累计成功投递的主动搭话总数"，给 force-first 用——新用户在第 N
-        # 次成功投递时强制走 mini-game 邀请，跨重启计数。
-        await _increment_proactive_chat_total(lanlan_name)
-        # Reminiscence usage：本轮 surfaced 了 pending reflection（不管 AI 最终
-        # 用了什么标签，followup 都出现在 prompt 里）→ 记一次 reminiscence 用量。
-        # 用独立 buffer (_reminiscence_usage_history) 而不是把同一条 message
-        # 二次写进 _proactive_chat_history——后者还驱动 _format_recent_proactive_chats
-        # 和 _is_similar_to_recent_proactive_chat，二次写会让 dedup / 相似度
-        # 检查把这条 proactive 跟自己撞上、虚高 score。_compute_source_weights
-        # 直接读这个独立 buffer 把 reminiscence 当一档 channel 衰减。
-        if _surfaced_reflection_ids:
-            _record_reminiscence_usage(lanlan_name)
-
-        # Unfinished-thread 跟进计数：仅当 AI 本轮真的产出 [CHAT]（即没有选
-        # WEB/MUSIC/MEME 这类外部素材）时才 +1。早先版本是"snapshot 里有未收尾
-        # 话题就计数"，理由是想防"AI 反复忽略 override 也烧光配额"——但
-        # UNFINISHED_THREAD_WINDOW_SECONDS=300 的自动过期已经兜底了 thread 的总
-        # 暴露时间，再多算曝光只会让两次外部素材轮把真正的续接配额提前烧光。
-        # source_tag == 'CHAT' / primary_channel == 'chat' 是 build_proactive_response
-        # 后唯一可靠的 "AI 走了文本路径" 信号；无 tag 但出过文本时上游会兜底
-        # 设成 CHAT。[PASS] 已在 4079 早 return，不会走到这里。
-        if _has_unfinished_thread and (source_tag == 'CHAT' or primary_channel == 'chat'):
-            try:
-                mgr._activity_tracker.mark_unfinished_thread_used()
-                print(f"[{lanlan_name}] 跟进未收尾话题：mark_used")
-            except Exception as _ut_err:
-                logger.warning(f"[{lanlan_name}] mark_unfinished_thread_used failed: {_ut_err}")
-
-        # 后台长期记忆维护（通过 memory_server API）：复用 internal_http_client 单例
-        try:
-            from utils.internal_http_client import get_internal_http_client
-            _mem_base = f"http://127.0.0.1:{MEMORY_SERVER_PORT}"
-            _mem_client = get_internal_http_client()
-            # 保存本次搭话实际提及的 pending 反思 ID（供下次 /process 做反馈检查）
-            if _surfaced_reflection_ids:
-                await _mem_client.post(
-                    f"{_mem_base}/record_surfaced/{lanlan_name}",
-                    json={"reflection_ids": _surfaced_reflection_ids},
-                    timeout=5.0,
-                )
-                print(f"[{lanlan_name}] 记录 surfaced 反思: {len(_surfaced_reflection_ids)} 条")
-
-            # 记录 persona 提及次数（疲劳跟踪） — persona 文件由 memory_server 管理
-            # record_mentions 已在 memory_server 的 _run_post_turn_signals 中调用
-        except Exception as e:
-            logger.debug(f"[{lanlan_name}] 长期记忆后处理失败（不影响主流程）: {e}")
-
-        # 【逻辑优化】精准的话题去重记录：仅当链接真正被加入 source_links 时才记录已使用
-        def _is_link_selected(selected_link):
-            if not selected_link:
-                return False
-
-            target_url = (selected_link.get('url') or '').strip()
-            if target_url:
-                # 存在有效 URL 时，按 URL 对比
-                return any((link.get('url') or '').strip() == target_url for link in source_links if link)
-
-            # URL 为空（如音乐降级记录），按元数据签名对比
-            target_sig = (
-                (selected_link.get('title') or '').strip(),
-                (selected_link.get('artist') or '').strip(),
-                (selected_link.get('source') or '').strip(),
+        return await _end_proactive(
+            JSONResponse(
+                recorded_result.body,
+                status_code=recorded_result.status_code,
             )
-            return any(
-                (
-                    (link.get('title') or '').strip(),
-                    (link.get('artist') or '').strip(),
-                    (link.get('source') or '').strip(),
-                ) == target_sig
-                for link in source_links if link
-            )
-
-        # title-only 的 web topic（LLM 在 over-fetch 列表外编出来的标题）也写入衰减历史，
-        # 否则下一轮可能再次被 surface。matched 时仍按链接是否成功登卡（_is_link_selected）
-        # 把关；非 matched 时绕过链接卡片检查。
-        if selected_web_topic_key and (
-            selected_web_link is None or _is_link_selected(selected_web_link)
-        ):
-            _wl = selected_web_link or {}
-            _web_title_dbg = (
-                _wl.get('title', '')
-                or (web_parsed.get('title', '') if web_parsed else '')
-            )
-            await _record_source_used(
-                url=_wl.get('url', '') or '',
-                kind='web',
-                title=_web_title_dbg,
-            )
-            print(f"[{lanlan_name}] 已记录 Web source 衰减历史: {selected_web_topic_key[:16]}")
-
-        if selected_music_topic_key and (is_music_used or _is_link_selected(selected_music_link)):
-            _ml = selected_music_link or {}
-            _music_title_dbg = f"{_ml.get('title', '')} - {_ml.get('artist', '')}".strip(' -')
-            await _record_source_used(
-                url=_ml.get('url', '') or '',
-                kind='music',
-                title=_music_title_dbg,
-            )
-            print(f"[{lanlan_name}] 已记录音乐 source 衰减历史: {selected_music_topic_key[:16]}")
-
-        if selected_meme_topic_key and _is_link_selected(selected_meme_link):
-            await _record_source_used(
-                url=(selected_meme_link or {}).get('url', '') or '',
-                kind='image',
-                title=(selected_meme_link or {}).get('title', '') or '',
-            )
-            print(f"[{lanlan_name}] 已记录表情包 source 衰减历史: {selected_meme_topic_key[:16]}")
-
-        return await _end_proactive(JSONResponse({
-            "success": True,
-            "action": "chat",
-            "reason_code": PROACTIVE_REASON_CHAT_DELIVERED,
-            "message": "主动搭话已发送",
-            "lanlan_name": lanlan_name,
-            "source_mode": primary_channel.lower(),
-            "source_tag": source_tag or "unknown",
-            "active_channels": active_channels,
-            "source_links": source_links,
-            "turn_id": mgr.current_speech_id
-        }))
+        )
 
     except asyncio.TimeoutError:
         logger.error("主动搭话超时")

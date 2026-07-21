@@ -19,16 +19,28 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from config import MEMORY_SERVER_PORT
 from config.prompts.prompts_proactive import build_proactive_action_note
 
 from .contracts import (
+    PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
     ProactiveChatResult,
+    _proactive_chat_body,
     _proactive_pass_body,
 )
 from .decisions import build_proactive_response
+from .mini_game_invite import _mini_game_invite_count_post_response_chat
 from .music_recommendation import _append_music_recommendations
+from .state import (
+    _increment_proactive_chat_total,
+    _proactive_material_key,
+    _record_proactive_chat,
+    _record_proactive_material,
+    _record_reminiscence_usage,
+    _record_source_used,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +65,44 @@ class DeliveryCommit:
 
     result: ProactiveChatResult | None
     delivery: CommittedDelivery | None
+
+
+def _get_internal_http_client():
+    """Keep the memory-server client import lazy, as in the legacy handler."""
+    from utils.internal_http_client import get_internal_http_client
+
+    return get_internal_http_client()
+
+
+def _is_link_selected(
+    selected_link: dict[str, Any] | None,
+    source_links: list[dict[str, Any]],
+) -> bool:
+    """Match a selected candidate against links that were actually delivered."""
+    if not selected_link:
+        return False
+    target_url = (selected_link.get("url") or "").strip()
+    if target_url:
+        return any(
+            (link.get("url") or "").strip() == target_url
+            for link in source_links
+            if link
+        )
+    target_signature = (
+        (selected_link.get("title") or "").strip(),
+        (selected_link.get("artist") or "").strip(),
+        (selected_link.get("source") or "").strip(),
+    )
+    return any(
+        (
+            (link.get("title") or "").strip(),
+            (link.get("artist") or "").strip(),
+            (link.get("source") or "").strip(),
+        )
+        == target_signature
+        for link in source_links
+        if link
+    )
 
 
 async def _commit_proactive_delivery(
@@ -208,4 +258,142 @@ async def _commit_proactive_delivery(
             action_note=action_note,
             vision_screenshot_b64=staged_screenshot,
         ),
+    )
+
+
+async def _record_committed_delivery(
+    *,
+    mgr: Any,
+    delivery: CommittedDelivery,
+    lanlan_name: str,
+    response_text: str,
+    source_tag: str,
+    active_channels: list[str],
+    has_unfinished_thread: bool,
+    surfaced_reflection_ids: list[Any],
+    selected_web_link: dict[str, Any] | None,
+    selected_web_topic_key: str | None,
+    web_parsed: dict[str, Any] | None,
+    selected_music_link: dict[str, Any] | None,
+    selected_music_topic_key: str | None,
+    selected_meme_link: dict[str, Any] | None,
+    selected_meme_topic_key: str | None,
+    meme_content: dict[str, Any] | None,
+    memory_server_port: int = MEMORY_SERVER_PORT,
+    log: logging.Logger | None = None,
+) -> ProactiveChatResult:
+    """Record post-commit history and return the successful chat contract."""
+    active_logger = log or logger
+    primary_channel = delivery.primary_channel
+    source_links = delivery.source_links
+
+    _record_proactive_chat(lanlan_name, response_text, primary_channel)
+    _record_proactive_material(
+        lanlan_name,
+        delivery.delivered_tag,
+        _proactive_material_key(
+            delivery.delivered_tag,
+            delivery.delivered_music_link,
+            meme_content,
+        ),
+    )
+    _mini_game_invite_count_post_response_chat(lanlan_name)
+    await _increment_proactive_chat_total(lanlan_name)
+    if surfaced_reflection_ids:
+        _record_reminiscence_usage(lanlan_name)
+
+    if has_unfinished_thread and (
+        source_tag == "CHAT" or primary_channel == "chat"
+    ):
+        try:
+            mgr._activity_tracker.mark_unfinished_thread_used()
+            print(f"[{lanlan_name}] 跟进未收尾话题：mark_used")
+        except Exception as exc:
+            active_logger.warning(
+                "[%s] mark_unfinished_thread_used failed: %s",
+                lanlan_name,
+                exc,
+            )
+
+    try:
+        memory_base = f"http://127.0.0.1:{memory_server_port}"
+        memory_client = _get_internal_http_client()
+        if surfaced_reflection_ids:
+            await memory_client.post(
+                f"{memory_base}/record_surfaced/{lanlan_name}",
+                json={"reflection_ids": surfaced_reflection_ids},
+                timeout=5.0,
+            )
+            print(
+                f"[{lanlan_name}] 记录 surfaced 反思: "
+                f"{len(surfaced_reflection_ids)} 条"
+            )
+    except Exception as exc:
+        active_logger.debug(
+            "[%s] 长期记忆后处理失败（不影响主流程）: %s",
+            lanlan_name,
+            exc,
+        )
+
+    if selected_web_topic_key and (
+        selected_web_link is None
+        or _is_link_selected(selected_web_link, source_links)
+    ):
+        web_link = selected_web_link or {}
+        web_title = web_link.get("title", "") or (
+            web_parsed.get("title", "") if web_parsed else ""
+        )
+        await _record_source_used(
+            url=web_link.get("url", "") or "",
+            kind="web",
+            title=web_title,
+        )
+        print(
+            f"[{lanlan_name}] 已记录 Web source 衰减历史: "
+            f"{selected_web_topic_key[:16]}"
+        )
+
+    if selected_music_topic_key and (
+        delivery.is_music_used
+        or _is_link_selected(selected_music_link, source_links)
+    ):
+        music_link = selected_music_link or {}
+        music_title = (
+            f"{music_link.get('title', '')} - {music_link.get('artist', '')}"
+        ).strip(" -")
+        await _record_source_used(
+            url=music_link.get("url", "") or "",
+            kind="music",
+            title=music_title,
+        )
+        print(
+            f"[{lanlan_name}] 已记录音乐 source 衰减历史: "
+            f"{selected_music_topic_key[:16]}"
+        )
+
+    if selected_meme_topic_key and _is_link_selected(
+        selected_meme_link,
+        source_links,
+    ):
+        await _record_source_used(
+            url=(selected_meme_link or {}).get("url", "") or "",
+            kind="image",
+            title=(selected_meme_link or {}).get("title", "") or "",
+        )
+        print(
+            f"[{lanlan_name}] 已记录表情包 source 衰减历史: "
+            f"{selected_meme_topic_key[:16]}"
+        )
+
+    return ProactiveChatResult(
+        body=_proactive_chat_body(
+            PROACTIVE_REASON_CHAT_DELIVERED,
+            message="主动搭话已发送",
+            lanlan_name=lanlan_name,
+            source_mode=primary_channel.lower(),
+            source_tag=source_tag or "unknown",
+            active_channels=active_channels,
+            source_links=source_links,
+            turn_id=mgr.current_speech_id,
+        )
     )
