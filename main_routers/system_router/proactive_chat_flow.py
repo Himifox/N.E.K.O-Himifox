@@ -26,7 +26,7 @@ from .break_reminders import (
     _render_work_break_game_invite_prompt,
     _render_work_break_prompt,
 )
-from .mini_game_invite import (
+from main_logic.proactive_chat.mini_game_invite import (
     _build_mini_game_invite_options_payload,
     _maybe_deliver_mini_game_invite,
     _mini_game_invite_advance_response,
@@ -45,7 +45,7 @@ from .proactive_content import (
     _log_trending_content,
     _log_video_content,
 )
-from .proactive_history import (
+from main_logic.proactive_chat.state import (
     _PROACTIVE_SIMILARITY_THRESHOLD,
     _clear_channel_from_proactive_history,
     _format_recent_proactive_chats,
@@ -58,7 +58,7 @@ from .proactive_history import (
     _record_proactive_material,
     _record_reminiscence_usage,
 )
-from .proactive_parsing import (
+from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_CHAT_DELIVERED,
     PROACTIVE_REASON_DELIVERY_FAILED,
     PROACTIVE_REASON_DELIVERY_PREEMPTED,
@@ -78,22 +78,26 @@ from .proactive_parsing import (
     PROACTIVE_REASON_PASS_SOURCE_EMPTY,
     PROACTIVE_REASON_PASS_THROTTLED,
     _ensure_proactive_reason_code,
-    _extract_links_from_raw,
-    _lookup_link_by_title,
-    _parse_unified_phase1_result,
     _proactive_chat_body,
     _proactive_error_body,
     _proactive_pass_body,
+)
+from main_logic.proactive_chat.generation import (
+    _extract_links_from_raw,
+    _lookup_link_by_title,
+    _parse_unified_phase1_result,
     _strip_proactive_intent_label_leak,
     _strip_proactive_screen_tag_leak,
     _text_is_pass_sentinel,
 )
-from .proactive_sources import (
+from main_logic.proactive_chat.decisions import (
     _compute_source_weights,
-    _ensure_source_history_loaded,
     _filter_sources_by_weight,
-    _record_source_used,
     _should_skip_source,
+)
+from main_logic.proactive_chat.state import (
+    _ensure_source_history_loaded,
+    _record_source_used,
     _source_hash,
 )
 import asyncio
