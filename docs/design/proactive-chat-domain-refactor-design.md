@@ -474,7 +474,8 @@ git diff --check
 2026-07-22 的 6.1 本地验证记录：
 
 - 修改过的 Python 文件通过 AST 解析和 Ruff check。
-- 直接执行现有 Phase 2 streaming 6 项和 output guard 5 项回归函数，共 11 项通过。
+- 直接执行 Phase 2 streaming 6 项回归函数通过；拆分过程中另有 5 项 output guard 临时验证通过，但其阶段性测试文件未保留在最终 PR。
+- 最终只新增保留服务兼容边界、显式持久化根目录、小游戏 WebSocket 边界和 Phase 2 streaming 四组关键回归测试；其余拆分步骤测试由现有集成测试与人工 review 覆盖，不随 PR 提交。
 - 项目 `.venv` 固定到已经从本机移除的 Python 3.11；用可用 Python 3.12 复用 site-packages 时，Pillow/greenlet 等 3.11 二进制扩展 ABI 不兼容，标准 pytest 收集无法作为有效结果。不得把该环境阻断误记为“完整测试通过”。
 - 完整测试仍需在项目配置的 Python 3.11 + uv 环境中执行；当前静态和直接函数验证只覆盖本次移动的关键生成保护，不替代完整回归。
 
