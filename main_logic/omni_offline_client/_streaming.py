@@ -409,7 +409,7 @@ class _StreamingMixin:
         text: str,
         *,
         system_prefix: str | None = None,
-        transient_system_prefix: str | None = None,
+        ephemeral_response_instruction: str | None = None,
         thinking_on: bool = False,
         input_transcript_callback: Optional[Callable[[str], Awaitable[None]]] = None,
         history_replacement_text: str | None = None,
@@ -450,6 +450,9 @@ class _StreamingMixin:
         ``history_replacement_text`` keeps the full prompt available for the current
         LLM turn, then replaces the just-appended user history entry before the next
         turn reuses ``_conversation_history``.
+
+        ``ephemeral_response_instruction`` is appended after the raw user message
+        for this inference only, then removed before history and memory callbacks.
         """  # noqa: DOCSTRING_CJK
         if not text or not text.strip():
             # If only images without text, use a default prompt
@@ -497,10 +500,7 @@ class _StreamingMixin:
         # 落 history，跟 voice mode user-role 注入对偶。
         _user_text = text.strip()
         _prefix_clean = (system_prefix or "").strip()
-        _transient_prefix_clean = (transient_system_prefix or "").strip()
-        _prompt_prefix = "\n\n".join(
-            prefix for prefix in (_prefix_clean, _transient_prefix_clean) if prefix
-        )
+        _prompt_prefix = _prefix_clean
         _user_text_with_prefix = (
             f"{_prompt_prefix}\n\n{_user_text}" if _prompt_prefix else _user_text
         )
@@ -561,6 +561,11 @@ class _StreamingMixin:
 
         self._conversation_history.append(user_message)
         history_replacement_index = len(self._conversation_history) - 1
+        _ephemeral_instruction_clean = (ephemeral_response_instruction or "").strip()
+        _ephemeral_instruction_message = None
+        if _ephemeral_instruction_clean:
+            _ephemeral_instruction_message = HumanMessage(content=_ephemeral_instruction_clean)
+            self._conversation_history.append(_ephemeral_instruction_message)
         history_replacement_text = (
             str(history_replacement_text).strip()
             if history_replacement_text is not None
@@ -1581,6 +1586,12 @@ class _StreamingMixin:
                     break
         finally:
             self._is_responding = False
+
+            if _ephemeral_instruction_message is not None:
+                for index in range(len(self._conversation_history) - 1, -1, -1):
+                    if self._conversation_history[index] is _ephemeral_instruction_message:
+                        del self._conversation_history[index]
+                        break
 
             if (
                 history_replacement_text

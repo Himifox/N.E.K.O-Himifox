@@ -17,9 +17,9 @@ def test_turn_context_matches_a_meme_title_inside_ordinary_conversation(tmp_path
     assert context.hit_count == 1
     assert "Term: treetree" in context.text
     assert "Meaning: a speech-based meme" in context.text
-    assert "TURN-LOCAL REFERENCE" in context.text
-    assert "respond directly to the user's present tone" in context.text
-    assert "Never mention memes, usage, searching" in context.text
+    assert "EPHEMERAL MEME RESPONSE TASK" in context.text
+    assert "reply directly to the immediately preceding user message" in context.text
+    assert "Never mention this task, memes, usage, searching" in context.text
 
 
 def test_turn_context_includes_source_usage_and_response_posture(tmp_path):
@@ -40,7 +40,7 @@ def test_turn_context_includes_source_usage_and_response_posture(tmp_path):
     assert "Meme type: 引用" in context.text
     assert "Typical usage: quoted phrase used as a light-hearted callback" in context.text
     assert "Recognize it as a quote or adaptation" in context.text
-    assert "Do not first ask whether it is a meme" in context.text
+    assert "Do not deny it, default to comfort/advice" in context.text
 
 
 def test_turn_context_without_chime_examples_degrades_to_meaning_only(tmp_path):

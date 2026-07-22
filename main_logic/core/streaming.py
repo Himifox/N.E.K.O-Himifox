@@ -525,7 +525,7 @@ class StreamingMixin:
 
                     stream_text_kwargs = {
                         "system_prefix": _agent_cb_ctx or None,
-                        "transient_system_prefix": _meme_turn_context or None,
+                        "ephemeral_response_instruction": _meme_turn_context or None,
                         "thinking_on": _focus_thinking,
                     }
                     if input_transcript_callback:
