@@ -1,9 +1,12 @@
 # N.E.K.O. 主动搭话推荐系统：技术路线、开源依据与产品化评估方案
 
-> 文档状态：技术评审稿（Design Review）
-> 适用分支：`feat/recommend-MVP`
+> 文档状态：**研究路线与远期 Backlog（非当前实施规范）**
+> 文档与生产实现归属分支：`feat/recommend-MVP`
+> 最近完成离线工作分支：`feat/recommend-testbench`
 > 编制日期：2026-07-16
-> 评审结论：**允许继续开发 P44-F/P44-G；当前不允许直接开启生产自动调权或无约束在线探索。**
+> 最近复核：2026-07-21
+> 当前实施规范：[`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)
+> 评审结论：**P44-F2 已在 Recommendation Testbench 以 `no_candidate` 结项；当前没有自动获准的下一开发阶段。本文其余公式、框架和阶段均不构成开发授权。**
 
 ## 摘要
 
@@ -16,13 +19,13 @@ N.E.K.O. 的主动搭话不是传统的“用户打开页面后，从固定商�
 5. 用户的稳定兴趣和当前会话兴趣需要分开建模；
 6. 排序质量、来源多样性、重复疲劳和安全性必须同时满足，而不能只优化点击或回复。
 
-本文将该问题形式化为一个**安全门控约束下的上下文推荐问题**，并提出分阶段技术路线：
+本文将该问题形式化为一个**安全门控约束下的上下文推荐问题**，并保留以下远期研究路线：
 
-> **硬约束与时间门控 → `PASS/no-op` 决策 → 可解释候选排序 → 长短期个性化 → 多样性重排 → 显式反馈归因 → Shadow/OPE/小流量评估 → 受约束 contextual bandit。**
+> **现有硬约束与调度 → 可解释候选排序 → 显式反馈归因 → 经独立评审的个性化/多样性候选 → 数据充分后的 Shadow/OPE/受约束 contextual bandit。**
 
 学术上，该路线以 contextual bandit、长短期用户建模、延迟反馈、MMR/DPP 多样性和 off-policy evaluation 为依据；工程上，以 [Mab2Rec](https://github.com/fidelity/mab2rec)、[MABWiser](https://github.com/fidelity/mabwiser)、[River](https://github.com/online-ml/river)、[Open Bandit Pipeline](https://github.com/sb-ai-lab/sb-obp)、[Recommenders](https://github.com/recommenders-team/recommenders) 和 [Feast](https://github.com/feast-dev/feast) 为主要参考。
 
-当前系统的安全采集与结构可用性已经得到验证：Recommendation Testbench 契约测试通过，最终 P44-E cohort 为 137 条 annotation-ready observation、30 个显式关联 feedback turn，隐私/契约错误为 0。但是，现有 v5 结果仍属于 Codex 辅助预标注，尚未完成人工确认；因此当前证据只能支持“继续实现和评估”，不能支持“个性化策略已经改善生产效果”。
+当前系统的安全采集与结构可用性已经得到验证。P44-E2 已完成人工主审、28/28 盲二审和轻量裁决，得到 128 条有效评估样本；P44-F1 的结论为 `no_universal_threshold_candidate`。随后 timing v3 baseline 已在首个 105 observation / 30 显式关联 feedback turn 截点冻结，timing 契约错误为 0。P44-F2-B 因同 cohort 缺少人工 `should_recommend` 标签而结论为 `no_candidate`，没有生成疲劳公式或模拟。当前证据仍不能证明个性化策略已经改善生产效果。
 
 ---
 
@@ -75,6 +78,18 @@ N.E.K.O. 的主动搭话不是传统的“用户打开页面后，从固定商�
 - 不要求本轮覆盖 `gaming`；该状态缺乏可靠实测条件，保持内置契约覆盖即可；
 - `away`、`busy` 只在自然出现时记录，不作为当前 Golden cohort 的阻塞门槛。
 
+### 1.4 当前组件边界
+
+当前产品边界以 [`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md) 为准：
+
+- 前端调度器与主动搭话路由负责何时产生机会、曲线回退、抖动、固定模式和硬门控；
+- 推荐器只对已经安全的候选做确定性排序，不重复实现调度和时间硬门控；
+- `PASS/no-op` 当前是 Testbench 的 Gate 评价维度，不是新增的生产 bandit arm 或第二套路由 gate；
+- timing v3 只用于观测和离线分析，不进入生产排序；
+- Testbench 只模拟和验收，不写生产配置、权重或 tuning。
+
+任何跨越上述边界的机制必须单独立项，不能因为出现在本文中而自动进入 MVP。
+
 ---
 
 ## 2. 当前系统基线与证据
@@ -106,14 +121,14 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 
 [`main_logic/proactive_recommendation_observer.py`](../../main_logic/proactive_recommendation_observer.py) 已实现：
 
-- observation schema v2；
+- observation schema v3；
 - 安全 `review_context`；
 - 候选 ID 对齐；
 - URL/secret 清除；
 - 标题、摘要、投递摘录长度上限；
 - 缺少安全复核上下文时禁止人工 relevance 标注。
 
-前端已通过 [`static/app/app-proactive.js`](../../static/app/app-proactive.js) 把 `base_interval_seconds` 发送给后端，但目前主要用于 `restricted_screen_only` 抖动，没有进入推荐排序、用户疲劳和个性化时间模型。
+前端通过 [`static/app/app-proactive.js`](../../static/app/app-proactive.js) 把 `base_interval_seconds` 发送给后端；timing v3 已将基础间隔、实际投递间隔、30 分钟/2 小时投递计数和连续未回应数写入 `decision_context.timing`。这些字段目前只作观测和 Testbench 分析，不进入推荐排序，也不改变调度器现有曲线回退。
 
 ### 2.2 已完成的技术门禁
 
@@ -128,7 +143,7 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 
 历史 Testbench 使用过 44 个 builtin 场景；最新 `recommendation_builtin_v2` manifest 已收敛为 **27 个 canonical 场景**，版本为 `2.0.0`，并包含 contract、ranking、sequence、privacy、diversity 和 active-bias 边界。历史 run 与 v2 canonical suite 必须分开报告，不能混用分母。
 
-### 2.3 P44-E 最终数据状态
+### 2.3 P44-E 原始冻结与后续裁决状态
 
 正式冻结产物：
 
@@ -142,6 +157,8 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 - mixed algorithm version：false；
 - 算法版本：`0.8.3:proactive-recommendation-observation-v2`。
 
+上述 137/30 是人工裁决前的原始 P44-E 冻结。后续已完成 137/137 主审、28/28 盲二审和 P44-E2 轻量裁决；排除弃权后有效指标样本为 128，Validator 与 readiness 通过。两批数据的用途不同，不得把原始 freeze、裁决后的 Golden 和 timing-v3 baseline 混用分母。
+
 分布如下：
 
 | 维度 | 分布 |
@@ -150,7 +167,7 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 | Activity | idle 110、chatting 18、transitioning 9 |
 | 显式反馈 | music_error 8、music_high_completion 1、music_played_through 7、user_continue 4、user_reply 5、user_reply_fast 9 |
 
-局限：最终 cohort 没有形成 `focused_work` 有效样本，因此后续可以先批准 idle/chatting 策略，而 `focused_work` 必须保持独立 Shadow/灰度门禁。`gaming` 明确不属于本轮覆盖目标。
+局限：最终 cohort 没有形成 `focused_work` 有效样本。未来若某个候选通过独立评审，其证据适用范围最多先限于 idle/chatting；这不构成当前生产策略授权。`focused_work` 只能单独积累证据，`gaming` 明确不属于本轮覆盖目标。
 
 ### 2.4 已有离线实验说明了什么
 
@@ -162,7 +179,7 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 
 因此该候选维持 **NO-GO**。这证明当前门禁能够阻止“分布看起来更均衡、但相关性实际下降”的调参进入生产。
 
-### 2.5 Codex 辅助预标注不是产品效果结论
+### 2.5 Codex 辅助预标注是历史中间产物
 
 `codex-first-pass-v5` 给出的预览为：Hit@1 `0.854`、MRR `0.1983`、nDCG@3 `0.9262`、应推荐率 `0.3869`。这些结果只能作为人工 review 的工作底稿，原因包括：
 
@@ -171,9 +188,11 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 3. 当前 Hit@1 在“所有候选 relevance 都为 0”时仍可能把任意 Top-1 视为并列最优，导致数值虚高；
 4. Hit@1 高而 MRR 低，正说明“是否该搭话”和“正例中的候选排序”尚未被彻底分离。
 
-因此，当前产品状态应定义为：
+这些限制解释了为什么后来必须进行人工主审、盲二审和裁决。它们不再描述当前标注进度，但仍是数据治理的历史依据。
 
-> **安全与数据链路：已通过；个性化排序效果：证据不足；进入开发：GO；进入生产 active_source：HOLD。**
+当前产品状态应定义为：
+
+> **安全与数据链路：已通过；人工裁决 Golden：可用于离线评估；统一阈值候选：不存在；P44-F2 timing 候选：不存在；生产 active_source：HOLD。**
 
 ---
 
@@ -239,13 +258,15 @@ MMR 的核心是同时优化相关性与新颖性，减少结果间冗余；DPP 
 
 [Open Bandit Dataset and Pipeline](https://datasets-benchmarks-proceedings.neurips.cc/paper_files/paper/2021/hash/33e75ff09dd601bbe69f351039152189-Abstract-round2.html) 提供了 logged bandit feedback 与 OPE 的标准化流程。其关键启示是：没有行为策略的动作概率，就不能仅凭确定性历史日志无偏估计另一策略的效果。
 
-因此，当前 137/30 cohort 可用于人工监督评估和同输入重放，但不能宣称已经完成有效的 bandit OPE。
+因此，当前裁决后的 128 条有效 Golden 可用于人工监督评估和同输入重放；timing 分析另使用 105/30 baseline freeze。两者都不能被宣称为有效的 bandit OPE。
 
 ---
 
-## 4. 建议技术路线
+## 4. 研究候选技术路线（非当前 MVP 规格）
 
 ### 4.1 总体架构
+
+下图描述可能的长期形态，不表示所有层应同时实现。当前批准范围止于现有硬约束、确定性候选排序、显式反馈归因和 Testbench 离线分析。
 
 ```mermaid
 flowchart TD
@@ -263,69 +284,29 @@ flowchart TD
     I --> L["Testbench / OPE / 健康门禁"]
 ```
 
-### 4.2 第一层：安全与时间门控
+### 4.2 第一层：复用现有调度与硬门控
 
-先执行不可学习的硬约束：
-
-1. 主动搭话总开关；
-2. 来源级开关；
-3. privacy/restricted 状态；
-4. forbidden risk flags；
-5. 候选可用性；
-6. exact duplicate cooldown；
-7. 最短时间间隔；
-8. 当前是否存在更高优先级 must-fire reminder。
+当前系统已经在调度器和主动搭话路由中执行总开关、来源开关、privacy/activity、候选可用性、重复保护、曲线回退、抖动和更高优先级提醒等控制。Recommendation MVP 不再实现第二套时间硬门控。
 
 must-fire reminder 属于独立提醒链路，不参与推荐兴趣学习，避免把工作休息提醒误当成素材偏好。
 
-#### 时间模型
+#### 时间特征仅作为离线研究变量
 
-令：
+timing v3 提供基础间隔、实际投递间隔、近期投递计数和连续未回应数。Testbench 可以研究这些连续变量与误打扰/显式反馈的关系，但不得把 `Δt / 基础间隔` 当成实际调度状态，也不得据此直接增加生产 `eligible` gate：实际间隔还受到曲线回退、跳过、固定模式和运行状态影响。
 
-- `B_u`：用户选择的基础主动搭话间隔；
-- `Δt`：距离最近一次成功主动投递的时间；
-- `r_t = Δt / B_u`：相对间隔；
-- `F_t`：近期投递疲劳。
+若离线结果支持某个简单的临时疲劳候选，应先形成独立设计和 Shadow preview，再决定是否进入 MVP。本文原有指数恢复、指数衰减及其参数只保留为研究假设，不是已批准公式。
 
-用户选择的短间隔只表示“最早可再次考虑”，不表示系统必须按该频率搭话：
+### 4.3 `PASS/no-op` 进入评价，不新增生产决策门
 
-\[
-eligible_t = \mathbb{1}(r_t\ge 1)\land hard\_constraints_t.
-\]
+主动搭话系统不能只评价“哪一个候选最好”，还必须评价“这次是否根本不该搭话”。当前将 `should_recommend`/`PASS` 作为 Testbench Gate 标签，与正例上的候选排序指标分开。
 
-通过门控后，时间准备度为：
-
-\[
-T_t=1-\exp\left(-\frac{\max(0,r_t-1)}{\tau}\right).
-\]
-
-近期疲劳可使用指数衰减：
-
-\[
-F_t=\sum_{i\in recent\ deliveries}\exp\left(-\frac{t-t_i}{h}\right).
-\]
-
-最终时间项：
-
-\[
-s_{time}=\beta_T T_t-\beta_F F_t.
-\]
-
-这样，即使用户选择 20 秒间隔，连续投递也会因疲劳预算受到抑制；长时间没有主动搭话时，时间准备度才逐步恢复。
-
-### 4.3 `PASS/no-op` 必须进入正式评价
-
-主动搭话系统不能只回答“哪一个候选最好”，还必须回答“这些候选是否都不该发”。因此端到端动作空间应为：
-
-\[
-A'_t=A_t\cup\{PASS\}.
-\]
-
-第一阶段先用可解释 gate 判断 `should_recommend`；数据充分后，可把 `PASS` 作为 bandit arm，但仍受硬约束控制。
+生产路由已经存在多种 skip/pass 出口。当前不在推荐器中新增统一阈值或第二套 `PASS` gate；只有未来数据和独立设计证明必要时，才重新讨论将 `PASS` 纳入策略动作空间。
 
 ### 4.4 第二层：可解释候选评分
 
-建议下一版保持当前线性评分的可解释性，并扩展为：
+以下展开项是**彼此独立的研究候选**，不是要求下一版一次性叠加的 MVP 公式。任何候选都必须先在固定输入上单变量评估，再由独立设计决定是否进入生产排序。
+
+长期可研究在当前线性评分上增加：
 
 \[
 \begin{aligned}
@@ -338,6 +319,8 @@ s(c,t)={}&s_{base}(c,t)+s_{time}(t)+b_{persistent}(u,c)\\
 所有新增项必须进入 `score_breakdown`，不得只记录最终分。
 
 ### 4.5 个体回复速度
+
+> 状态：P44-G0-B 的 Shadow-only 相对回复速度 preview 已完成；固定 60 秒事件标签仍保留为原始事实，preview 不进入排序、PASS、投递或 tuning。生产消费继续 `HOLD`。
 
 当前固定 `REPLY_FAST_SECONDS=60` 会把慢回复用户系统性判为低兴趣。建议拆成两个信号：
 
@@ -362,6 +345,8 @@ b_{speed}=b_{max}\cdot sigmoid(z_{speed}).
 - 按 activity 分层统计可作为后续扩展，但当前样本不足时先使用全局个人基线。
 
 ### 4.6 临时状态与持久状态
+
+> 状态：P44-G0-C/D 已实现 2 小时临时状态与来源级持久证据 preview；它们只用于审计，不是生产画像。衰减、删除治理及排序消费继续 `HOLD`。
 
 #### 临时状态（内存，TTL 建议 2 小时）
 
@@ -404,7 +389,9 @@ affinity_{u,s}=\frac{\alpha_0+positive_{u,s}}{\alpha_0+\beta_0+positive_{u,s}+ne
 
 ### 4.7 反馈与奖励
 
-建议定义新的 `reward_score_v2`，保留原始 event type，以便重算：
+> 状态：P44-G0-A 的 `reward_score_v2_preview` 已完成，原始 feedback event 与既有生产逻辑保持不变。将 preview 作为生产 reward 或排序输入继续 `HOLD`。
+
+未来若证据充分，可评估新的 `reward_score_v2`，并保留原始 event type 以便重算：
 
 \[
 R_t=clip(R_{reply}+R_{continue}+R_{consumption}+R_{relative\_speed}-P_{interrupt}-P_{settings},-1,1).
@@ -427,9 +414,11 @@ R_t=clip(R_{reply}+R_{continue}+R_{consumption}+R_{relative\_speed}-P_{interrupt
 
 ### 4.8 重复、meme 与单候选恢复
 
+> 状态：研究候选，`HOLD`。当前 MVP 继续使用推荐器已有的 candidate/source/streak 软惩罚，以及投递层的文本相似度/BM25 硬去重；不得在同一阶段再叠加 semantic repeat、分次硬过滤和 recovery。
+
 #### 普通素材重复
 
-候选身份优先使用 `candidate_id`；必要时使用规范化的 `source_type + safe_title`。建议：
+候选身份优先使用 `candidate_id`；必要时使用规范化的 `source_type + safe_title`。未来可分别评估：
 
 - 第二次相同素材：显著降分；
 - 第三次及以后：在 cooldown 内硬过滤；
@@ -451,10 +440,10 @@ R_t=clip(R_{reply}+R_{continue}+R_{consumption}+R_{relative\_speed}-P_{interrupt
 
 #### 单候选恢复
 
-该规则适用于所有来源，不只 vision：
+若现有简单惩罚在 Golden 上仍造成显著 missed opportunity，未来可单独评估适用于所有来源的恢复规则，而不只针对 vision：
 
 - 只有一个安全候选且之前因多样性/重复软约束被抑制；
-- 已满足时间门控；
+- 调度器已产生搭话机会，且现有硬约束均已通过；
 - 没有明确负反馈、隐私风险或来源关闭；
 - 可以给予有上限的 recovery bonus，使系统偶尔恢复候选；
 - 投递后重置该来源的 suppressed counter；
@@ -464,7 +453,9 @@ R_t=clip(R_{reply}+R_{continue}+R_{consumption}+R_{relative\_speed}-P_{interrupt
 
 ### 4.9 多样性重排
 
-在基础分之后使用 MMR 风格重排：
+> 状态：远期候选，`HOLD`。当前候选列表短且主要投递 Top-1，先验证已有 source/candidate/streak penalty；只有简单方法不能满足门禁时才评估 MMR。
+
+未来可在基础分之后评估 MMR 风格重排：
 
 \[
 MMR(c)=\lambda s(c)-(1-\lambda)\max_{j\in selected}sim(c,j)-exposurePenalty(c).
@@ -482,10 +473,12 @@ MMR(c)=\lambda s(c)-(1-\lambda)\max_{j\in selected}sim(c,j)-exposurePenalty(c).
 
 ### 4.10 Contextual bandit 的进入位置
 
+> 状态：远期研究，`HOLD`。当前 30 个显式反馈不足以训练或验收生产 bandit，本节不产生 MVP 工程项。
+
 当数据达到要求后，MABWiser/Mab2Rec policy 只替换“安全候选的个性化选择”部分：
 
 ```text
-hard gate → time gate → safe candidate set
+existing hard gate/scheduler → safe candidate set
           → contextual policy score
           → diversity rerank
           → confidence gate
@@ -510,7 +503,9 @@ hard gate → time gate → safe candidate set
 
 ### 4.11 日志与 OPE 契约
 
-observation 建议新增：
+> 状态：远期研究，`HOLD`。以下是安全随机化获批后的候选契约，不得加入当前 observation v3，也不得为 OPE 提前扩张 MVP。
+
+未来 observation 可考虑新增：
 
 ```json
 {
@@ -568,16 +563,15 @@ Testbench 应同时报告：
 
 ### 5.3 标注质量
 
-现有 137 条 Codex 预标注必须全部经过人工 accept/correct，不能只复核 28 条后把其余自动升级为 Golden。
+P44-E2 已完成 137/137 主审、28/28 盲二审和 11/11 A 级轻量裁决；排除 9 个弃权后，有效指标样本为 128，Validator 与 readiness 通过。该结果是当前离线 Golden 候选，不再把 Codex 预标注视为未完成任务。
 
-最低要求：
+后续扩充 Golden 时继续遵守：
 
-1. 137/137 完成人工确认；
-2. 固定 28 条（20%）做盲法第二次复核；
-3. 有独立第二审核者时，二元标签报告 Cohen's kappa，0–3 relevance 报告 weighted kappa；
-4. 只有单审核者时，报告间隔复核的 intra-rater agreement，不冒充 inter-rater reliability；
-5. weighted kappa 建议不低于 `0.60`；低于该值则必须修订标注指南并重新复核；
-6. 所有 `privacy_risk=violation` 必须逐条仲裁，不能通过平均分抵消。
+1. 新样本必须人工 accept/correct，不能把辅助预标注自动升级为 Golden；
+2. 按预先固定的抽样规则做盲法复核，并报告实际分母；
+3. 有独立第二审核者时，二元标签报告 Cohen's kappa，0–3 relevance 报告 weighted kappa；只有单审核者时，报告 intra-rater agreement；
+4. 分歧较大的样本进入裁决或标为低置信/弃权，不以工程 readiness 冒充高一致性；
+5. 所有 `privacy_risk=violation` 必须逐条仲裁，不能通过平均分抵消。
 
 ### 5.4 离线指标
 
@@ -632,7 +626,7 @@ Testbench 应同时报告：
 
 ### 5.6 离线准入门槛
 
-下表是工程准入阈值，不是学术定理；后续可根据功效分析修订，但不得在看到候选结果后临时放宽。
+当前无待准入的生产候选。隐私、契约、执行错误和硬约束是现行确定性门禁；下表其余质量阈值仅是**未来候选的初始评审模板**，不是 P44-F2 readiness，也不能单凭达到某个点估计就授权改生产。
 
 | 维度 | 准入条件 |
 |---|---|
@@ -647,9 +641,13 @@ Testbench 应同时报告：
 | 校准 | 高分桶反馈不得低于中分桶；无法形成有效分桶时 HOLD |
 | 性能 | 推荐排序层 p95 新增耗时建议 <20 ms，且不得延长 LLM/投递关键路径 |
 
+未来立项时应基于固定 Golden、候选目标和统计功效预注册适用阈值；若样本不足则报告区间与 `HOLD`，不得把上表的示例数值当作永久产品 SLA。
+
 ### 5.7 Shadow 验证
 
-完成离线门禁后，建议新建一个不改变生产投递的 Shadow cohort：
+> 状态：未来候选通过离线门禁后的验证模板，不是当前采集任务。
+
+未来完成离线门禁后，可新建一个不改变生产投递的 Shadow cohort。`200/50/7 日` 是早期容量建议，正式样本量应由候选风险、基线率和最小可检测效果确定：
 
 - 至少 200 条新的 annotation-ready decision；
 - 至少 50 个显式 joined feedback turn；
@@ -661,6 +659,8 @@ Testbench 应同时报告：
 - 同时运行 baseline 与 candidate，记录相同输入下的配对差异。
 
 ### 5.8 在线 Canary/A-B
+
+> 状态：远期发布方案，`HOLD`；当前单用户开发样本不支持百分比分桶。
 
 仅在人工标注、离线和 Shadow 全部通过后执行：
 
@@ -682,6 +682,8 @@ Testbench 应同时报告：
 
 ### 5.9 Contextual bandit 准入
 
+> 状态：远期研究前置条件，不属于当前 MVP 或 Testbench P44-F2。
+
 建议满足以下数据条件后再评估真实 bandit：
 
 - 至少 500 个可归因显式 feedback turn；
@@ -698,83 +700,40 @@ Testbench 应同时报告：
 
 ## 6. 分阶段开发计划
 
-### P44-F：时间上下文与 `PASS` 评估
+### 已完成：P44-F2 timing/fatigue 离线分析
 
-产物：
+P44-F2 已在 Recommendation Testbench 结项：
 
-- observation 增加 `timing_context`；
-- 明确最短间隔与 fatigue；
-- Testbench 增加时间穿越与 point-in-time 泄漏测试；
-- 增加 gate/no-op 指标；
-- 保持生产排序结果不变，只输出 preview。
+- 使用冻结的 timing v3 `105 observation / 30 explicit feedback` baseline；
+- 五个 timing 字段、point-in-time 正确性和固定输入可复现性通过；
+- 绝对 `5/10/30` 分钟桶已降为描述项，不再作为 readiness 门禁；
+- 连续变量分析发现 `recent_delivery_count_30m` 与显式反馈分数存在稳定相关，但这只是观察性辅助证据；
+- 同 cohort 人工 `should_recommend` 标签为 0，误打扰和错失机会不可计算；
+- 正式结论为 `no_candidate`，没有生成 fatigue 公式或运行真实 cohort 候选模拟。
 
-验收：时间字段可复现、无未来数据、最低间隔违规为 0。
+该结论关闭 P44-F2 授权，不自动打开重复、来源多样性或其他研究阶段。生产配置、权重、调度和 tuning 均未修改。
 
-### P44-G0：个人回复时延基线
+### 已完成的评估基础
 
-产物：
+- P44-E2：人工 Golden 裁决完成，有效样本 128；
+- P44-F1：统一 PASS/no-op 阈值分析完成，结论为 `no_universal_threshold_candidate`；
+- timing v3：生产只读观测字段与首个 105/30 baseline freeze 完成。
+- P44-F2-B：连续变量关联分析完成，结论为 `no_candidate`。
+- P44-G0：reward、个人相对回复速度及临时/持久聚合状态 preview 已完成；MVP 与 Testbench 的 `feedback_state_preview` 契约已同步，生产行为不变。
 
-- 回复 latency 聚合统计；
-- 冷启动中性策略；
-- 慢回复用户、极端值、跨重启、隐私与损坏恢复测试。
+### 已完成 Preview 基础后的未来候选：全部 `HOLD`，逐项单独立项
 
-验收：不再用固定 60 秒决定兴趣；原始 latency 明细不进入持久画像。
+| 候选 | 当前边界 | 进入 MVP 的最低前置条件 |
+|---|---|---|
+| 个人回复速度的生产消费 | 已有 point-in-time preview，不进入排序 | 独立候选、固定输入配对评估及增量证据 |
+| 临时/持久兴趣的生产消费 | 已有有界 preview，不作为生产画像 | 明确衰减/删除治理，并通过离线非劣结果 |
+| 重复与来源多样性 | 继续使用现有软惩罚与投递硬去重 | 现有简单机制被证明确有缺口；一次只测试一层 |
+| MMR/单候选恢复 | 不进入当前 Top-1 路径 | 简单惩罚无法满足门禁，且 missed opportunity 有可靠标签 |
+| Shadow candidate | 当前不新开 200/50/7 日采集任务 | 某一具体离线候选已通过预注册门禁 |
+| Canary/自动 tuning | 保持 `off` | 多用户 opt-in、监控/回滚和候选发布评审完成 |
+| Bandit/OPE | 不扩张 observation v3，不引入运行时依赖 | 反馈规模、有效 propensity、安全随机化与独立 ADR 全部满足 |
 
-### P44-G1：反馈兴趣与长短期分离
-
-产物：
-
-- `reward_score_v2`；
-- 临时 source/candidate boost；
-- 衰减 persistent affinity；
-- turn/candidate/source 精确归因；
-- 技术错误不进入偏好。
-
-验收：同一事件重放幂等；临时状态到期；长期状态有界；用户显式关闭优先级最高。
-
-### P44-G2：重复、多样性与单候选恢复
-
-产物：
-
-- 普通素材二次/三次重复策略；
-- meme source fatigue；
-- MMR 风格重排；
-- 通用于所有来源的单候选恢复；
-- exact/semantic/source-streak 指标。
-
-验收：重复率不高于 baseline，来源集中度改善不以相关性下降为代价。
-
-### P44-G3：正式 Testbench 准入
-
-产物：
-
-- human-reviewed Golden；
-- 正负场景分开的排序指标；
-- 95% CI 与配对比较；
-- canonical suite 固定 hash；
-- policy/action/propensity 契约；
-- MABWiser/Mab2Rec 隔离 benchmark；
-- OBP synthetic/contract spike。
-
-验收：本报告第 5.6 节全部通过。
-
-### P44-H：Shadow candidate
-
-产物：200/50 新 cohort、7 日覆盖、idle/chatting 正式结果；`focused_work` 独立状态报告。
-
-验收：安全门禁全通过，主指标达到非劣/改善要求。
-
-### P44-I：开发者 Canary
-
-产物：稳定分桶、在线监控、自动暂停和一键回滚；tuning 仍先保持 manual/off。
-
-验收：在线主指标与护栏通过后逐级扩大。
-
-### P44-J：受约束 contextual bandit
-
-产物：来源级 LinUCB/LinTS/Thompson benchmark、有效 propensity、OPE 报告和 opt-in exploration。
-
-验收：相对于已批准可解释策略有统计支持的收益，且安全与打扰指标不退化。
+Testbench 的指标/Validator/固定 hash 可按需要维护，但不得借“正式准入”名义提前实现 MABWiser、Mab2Rec 或 OBP 集成。
 
 ---
 
@@ -785,8 +744,8 @@ Testbench 应同时报告：
 | 维度 | 评价 | 依据 |
 |---|---|---|
 | 候选与硬过滤 | 高 | 当前纯函数推荐器、隐私/重复/activity 过滤已存在 |
-| 安全可观测性 | 高 | schema v2、review_context、137/30 freeze、0 隐私校验失败 |
-| 时间感知 | 高 | 前端已有 base interval，新增状态与公式复杂度低 |
+| 安全可观测性 | 高 | schema v3、review_context、人工裁决 Golden 与 timing 105/30 freeze 均可复现 |
+| 时间感知分析 | 高 | timing v3 五字段已存在且只读；当前只需在 Testbench 分析，不新增调度公式 |
 | 回复个性化 | 高 | 已有 turn_id、delivered_at、reply latency；主要是统计与状态分层缺失 |
 | 长短期兴趣 | 中高 | 可用有界聚合状态实现；需要防止反馈稀疏与一次事件过拟合 |
 | 多样性重排 | 高 | 当前已有 source/candidate penalty，MMR 是渐进扩展 |
@@ -800,7 +759,7 @@ Testbench 应同时报告：
 
 | 改动 | 最可能改善的指标 | 置信度 |
 |---|---|---|
-| 时间门控 + fatigue | false interruption、每会话过量投递 | 中高 |
+| 离线 timing/fatigue 候选 | 识别 false interruption 与近期全局投递负载的关系 | 当前无候选；缺少同 cohort 人工决策标签 |
 | 个人回复时延基线 | 慢回复用户的误判、score calibration | 中 |
 | 临时/持久兴趣分离 | 短期话题适配、长期来源稳定性 | 中 |
 | 精确反馈归因 | source/candidate affinity 的可信度 | 高（数据质量） |
@@ -813,13 +772,14 @@ Testbench 应同时报告：
 当前结论分三层：
 
 1. **作为 Shadow 数据与安全管线：符合。** 契约、隐私和关联门禁已通过。
-2. **作为下一轮开发基础：符合。** 时间、反馈和状态扩展可以在现有架构上增量实现。
-3. **作为已经证明有效的生产个性化推荐：不符合。** 人工 Golden 尚未完成，activity 覆盖偏 idle，显式反馈只有 30 条，且没有有效 OPE propensity。
+2. **作为 P44-F2 离线分析基础：符合且已完成。** timing v3 baseline 可复现，但与人工裁决 Golden 不是同一 cohort，不能跨批次拼接标签。
+3. **作为已经证明有效的生产个性化推荐：不符合。** 当前没有通过门禁的生产候选，activity 覆盖仍偏 idle，也没有多用户或有效 OPE 证据。
 
 因此正式决策为：
 
-- **GO**：P44-F、P44-G0/G1/G2/G3；
-- **HOLD**：`active_source` 全量、自动调权、在线 bandit exploration；
+- **COMPLETE / NO CANDIDATE**：P44-F2 timing/fatigue 离线分析；
+- **COMPLETE / NO-BEHAVIOR-CHANGE**：P44-G0 Shadow-only feedback state preview 与 Testbench 契约同步；
+- **HOLD**：P44-G1/G2/G3、重复/来源多样性、MMR/恢复、生产个性化消费、普通用户 `active_source`、自动调权、Canary 和在线 bandit exploration；
 - **NO-GO**：`News -0.02` 历史候选、把 Codex v5 预标注直接当 Golden、把固定 60 秒当通用回复速度、强制 meme 标签服从正态分布。
 
 ---
@@ -844,18 +804,18 @@ Testbench 应同时报告：
 
 最适合 N.E.K.O. 的不是纯协同过滤、纯深度顺序模型，也不是直接让 bandit 控制所有主动搭话，而是：
 
-> **Guarded Hybrid Recommender：以隐私/时间/重复为不可学习硬门禁，以可解释线性排序完成近期产品化，以长短期状态实现个性化，在数据和 propensity 成熟后让 contextual bandit 只负责安全候选中的选择。**
+> **边界清晰的 Guarded Recommender：调度器负责产生机会和曲线回退，路由负责硬约束，推荐器只排序安全候选，投递层负责文本去重，Testbench 负责离线证据。个性化状态与 bandit 只有在独立立项后才可能进入这条链路。**
 
 该路线的优势是：
 
 - 与现有代码结构兼容；
 - 能逐阶段验证，每一步都可回滚；
-- 可复用 Mab2Rec/MABWiser/OBP 等成熟能力；
+- 可在数据成熟后隔离参考 Mab2Rec/MABWiser/OBP，而不把它们变成当前运行时依赖；
 - 不要求当前小样本直接训练大型模型；
 - 将“不打扰”和隐私置于模型收益之前；
 - 能用正式指标判断何时可以进入产品，而不是以主观体验代替证据。
 
-下一项正式工作应是 **P44-F：时间上下文、`PASS/no-op` 与指标修正**，同时完成人工 review；随后再进入个人回复时延和长短期兴趣。生产 tuning 在人工 Golden、离线门禁和新 Shadow cohort 通过前继续保持关闭。
+P44-F2 已正式得到 `no_candidate` 并停止。当前没有默认“下一项”：不得为了推动阶段而新增 scheduler 字段、补造标签、直接转做重复/多样性或调权。若产品决定继续，应先在“为 timing cohort 补充合规人工决策标签”与“另立一个独立研究问题”之间重新立项；个人回复时延、长短期兴趣、重复增强、MMR 和 bandit 均继续留在研究 Backlog，生产 tuning 保持关闭。
 
 ---
 
@@ -879,6 +839,7 @@ Testbench 应同时报告：
 
 ## 11. 本地证据索引
 
+- [`docs/design/proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)：当前唯一实施范围、组件边界与准入条件。
 - [`docs/design/proactive-recommendation-mvp-p0-p1-plan.md`](./proactive-recommendation-mvp-p0-p1-plan.md)：P0/P1 基线、历史候选与门禁记录。
 - [`docs/design/shadow-round-2-structure-audit.md`](./shadow-round-2-structure-audit.md)：P44 早期结构审计。
 - [`main_logic/proactive_recommendation.py`](../../main_logic/proactive_recommendation.py)：当前候选、硬过滤、评分、多样性与 active bias。

@@ -1,5 +1,11 @@
 # Shadow Round 2 结构审计报告
 
+> 文档状态：**历史不可变审计快照（非当前计划）**
+> 审计数据截点：2026-07-15
+> 当前实施范围：[`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)
+>
+> 本文的数量、分布、哈希和当时结论保持原样，便于复现。后续 P44-B/C、P44-E2 人工裁决和 timing v3 baseline 已完成；本文不能用于判断当前 Golden readiness，也不能恢复当时的采集任务。
+
 ## 审计范围
 
 - 数据冻结：`shadow-round-2-freeze.json`
@@ -32,6 +38,8 @@ Observation schema v2 结构健康：
 | chatting | 2 | 2.35% |
 
 本轮已经覆盖 `idle`、`focused_work` 和 `chatting`。`away`、`gaming` 尚无真实 Shadow 样本，可继续由 builtin 场景提供契约覆盖，等待后续真实采集补齐。
+
+后续范围说明（不修改上述历史审计结论）：`gaming` 后来被明确排除在本轮真实覆盖目标外，由 builtin 场景保留契约覆盖即可；`away`、`busy` 只在自然出现时记录。现行规则见 [`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)。
 
 ## 推荐来源分布
 
@@ -88,6 +96,6 @@ Observation schema v2 结构健康：
 - 不得用基于该模板的空白或猜测性评分形成 Golden 数据。
 - 只有通过 P44-B/C 安全导出并包含有效 `review_context` 的新 observation，才允许进入 P44-E。
 
-## 阶段结论
+## 阶段结论（历史）
 
-P44-A/B/C 已完成，Shadow round 2 在结构层收口，安全 `review_context` 契约与 annotation-ready 门禁已经落地。下一步由用户开启 review 模式并重新采集 20–30 条小样本；在新样本通过安全校验前继续停止人工 relevance 标注。
+P44-A/B/C 当时已完成，Shadow round 2 在结构层收口，安全 `review_context` 契约与 annotation-ready 门禁已经落地。随后要求的 review 模式重采、人工主审、盲二审和轻量裁决均已完成；排除弃权后的有效 Golden 样本为 128。因此这里的“停止人工 relevance 标注”和“重采 20–30 条”只属于当时的正确阻断与行动记录，不再是当前下一步。

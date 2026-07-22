@@ -1,7 +1,19 @@
-# 主动搭话推荐系统 MVP：P0/P1 收口计划
+# 主动搭话推荐系统 MVP：P0/P1/P44 历史执行记录
 
-状态：执行中（P0 已签核；P1 待真实 Shadow 数据）
+状态：**历史记录（已归档，不作为当前实施计划）**
 适用分支：`feat/recommend-MVP`
+当前实施范围：[`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)
+
+> 本文保留各阶段当时的目标、门禁和实验结果，便于审计；后文出现的“待执行”“下一步”和旧 GO/HOLD 条件均按其原始时间点理解。若与当前范围文档冲突，以当前范围文档为准。
+
+当前收口状态（2026-07-22）：
+
+- P44-E2 人工裁决已完成，有效指标样本 128；
+- P44-F1 已完成，结论为 `no_universal_threshold_candidate`；
+- timing v3 首个 baseline 已冻结为 105 observation / 30 个显式关联 feedback turn，契约错误为 0；
+- P44-F2-B 已完成，因同 cohort 缺少人工 `should_recommend` 标签而结论为 `no_candidate`；没有生成疲劳公式或模拟；
+- P44-G0 Shadow-only feedback preview 与 Testbench 契约同步已完成，不改变生产行为；
+- P44-G1 仍需独立立项和离线候选评审；生产排序、调度、权重和 tuning 保持不变。
 
 ## 目标
 
@@ -84,7 +96,7 @@ P0/P1 的目标不是建设测试平台，而是让当前推荐实现具备两�
 - 真实主程序完成一轮 Shadow 闭环。
 - Shadow 对现有主动搭话行为零干预。
 
-## P1：直接采集真实 Shadow 数据
+## P1：直接采集真实 Shadow 数据（历史阶段）
 
 ### P1.1 运行配置
 
@@ -144,6 +156,8 @@ PROACTIVE_RECOMMENDATION_TUNING_MODE=off
 
 ### P1 完成与决策
 
+> 以下是 P1 当时的采集决策标准，已被 P44 annotation-ready Golden、裁决和候选准入流程取代。达到这些数量只表示可进入离线候选分析，不再直接表示可制定 `active_source` 灰度。
+
 达到样本目标后只做一次阶段决策：
 
 - **GO**：数据质量可靠，分数与反馈基本正相关，可以制定 `active_source` 小流量灰度。
@@ -167,9 +181,9 @@ GO 的最低条件：
 | 3 | 修复 observation topic 隐私项 | 已完成 | topic 原文移除；隐私与完整回归通过 |
 | 4 | Recommendation Testbench 契约冒烟 | 已完成 | P41/P42 通过；45 场景；0 错误；0 硬约束违规 |
 | 5 | P0 sign-off | 已完成 | 运行、隐私、过滤和 UI/后端契约通过 |
-| 6 | 开启隔离 Shadow 采集 | 待执行 | 首批真实日志 |
-| 7 | 达到样本目标并复核质量 | 待执行 | summary 指标 |
-| 8 | GO/HOLD/NO-GO | 待执行 | 阶段结论 |
+| 6 | 开启隔离 Shadow 采集 | 已完成 | P44-E 正式 freeze |
+| 7 | 达到样本目标并复核质量 | 已完成 | P44-E2 有效样本 128；timing v3 baseline 105/30 |
+| 8 | GO/HOLD/NO-GO | 已完成 | 仅可进入离线候选分析；生产 `active_source`/tuning 维持 HOLD |
 
 ## 执行记录
 
@@ -234,7 +248,7 @@ GO 的最低条件：
 
 - `passed_with_warnings` 不升级为生产准入通过。
 - `News -0.02` 继续维持 **NO-GO**；生产默认权重保持不变。
-- 后续离线准入必须固定为 44 个 builtin 场景，用户副本不得进入 canonical run。
+- 历史规则：后续离线准入当时要求固定 44 个 builtin 场景、排除用户副本；该规则已被 `recommendation_builtin_v2` 的 27 场景 manifest（v2.0.0）取代。
 - 在 relevance 黄金标注补齐前，离线报告只能验证契约、稳定性、硬约束和分布变化，不能用于宣称排序质量提升。
 
 ### P1 黄金标注子集复测（2026-07-15，候选确认淘汰）
@@ -272,7 +286,7 @@ GO 的最低条件：
 - inferred ignored 不再为缺少 turn ID 的 observation 生成；active-ready 的 30 条门槛只使用显式关联数。
 - 受影响测试 60 passed；全部主动推荐与音乐反馈回归 433 passed。仅有既有弃用警告。
 
-部署验收尚待执行：保留首轮 22 条为 `diagnostic-round-1 / observation-schema-v1`，归档或轮转旧日志后重启，以 schema v2 新采集 10 条并核对 ID、activity、algorithm version、显式关联数和隐私字段；通过后再开始 100 条正式 Shadow 采集。
+历史部署指令（已完成且不再适用）：当时要求将首轮 22 条标为 `diagnostic-round-1 / observation-schema-v1`，再以 schema v2 采集核对。旧的轮转指令已经作废；现行日志分批规则见 [`proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)。
 
 ### P44 Shadow review 收口与正式采集门禁（2026-07-16）
 
@@ -285,14 +299,14 @@ P44-A/B/C 已完成：结构审计、默认关闭的安全 `review_context`、�
 - 权重压力只用于诊断；`Ready=false`，没有修改生产配置，也没有生成可应用权重。
 - freeze 快照为 85 observations、15 条显式关联 feedback；`inferred ignored` 不计入反馈门槛。
 
-当前仅保留两个正式门禁：
+该阶段当时仅保留两个正式门禁（后被 annotation-ready Golden 门禁取代）：
 
 1. observation ≥ 100。
 2. 通过有效 turn ID 关联的显式 feedback ≥ 30。
 
 执行状态转入 P44-D 正常采集。达到两个门槛前保持 `PROACTIVE_RECOMMENDATION_TUNING_MODE=off`，不应用权重候选；继续监控 schema、隐私、orphan feedback 和来源/activity 覆盖，但这些诊断项不替代上述两个样本门槛。
 
-### P44-E 正式 freeze 与 Golden cohort 门禁（2026-07-16）
+### P44-E 正式 freeze 与 Golden cohort 门禁（2026-07-16，历史阶段已完成）
 
 - 正式 freeze：`shadow-p44e-freeze-20260716-123009.json`。
 - SHA-256：`68FC12864472E9540C6EE32A0A3909CE261EF7F3A884483819ECDDD1CD4B9E5D`，已复核一致。
@@ -302,13 +316,13 @@ P44-A/B/C 已完成：结构审计、默认关闭的安全 `review_context`、�
 
 Golden cohort 只接受通过安全校验并带 `review_context` 的 observation。正式 freeze 中 annotation-ready observation 为 84，相关显式 joined feedback turn 为 21；85 条旧 observation 不做追溯式语义标注。
 
-新的正式门禁：
+该阶段当时的新正式门禁（后续均已达成）：
 
-1. annotation-ready observation ≥ 100（当前尚差 16）。
-2. 与 annotation-ready observation 通过有效 turn ID 显式关联的 feedback turn ≥ 30（当前尚差 9）。
-3. 达标后冻结只含 annotation-ready cohort，完成标注并至少复核 20%，才允许设计第一组离线权重候选。
+1. annotation-ready observation ≥ 100（当时尚差 16）。
+2. 与 annotation-ready observation 通过有效 turn ID 显式关联的 feedback turn ≥ 30（当时尚差 9）。
+3. 达标后冻结只含 annotation-ready cohort，完成标注并至少复核 20%，才允许设计第一组离线权重候选；这只表示可进入离线分析，不授权写生产权重。
 
-采集覆盖重点：当前 ready cohort activity 为 idle 83、chatting 1；后续优先覆盖 `focused_work`。现阶段不具备可靠测试 `gaming` 的条件，因此将其明确排除在本轮覆盖要求外；`away`、`busy` 只做机会性记录，没有覆盖也不阻塞 Golden cohort 的 100/30 门禁。生产 tuning 继续保持关闭。
+当时的采集覆盖重点：ready cohort activity 为 idle 83、chatting 1，后续优先覆盖 `focused_work`。当时已将 `gaming` 明确排除在本轮覆盖要求外；`away`、`busy` 只做机会性记录，没有覆盖也不阻塞 Golden cohort 的 100/30 门禁。生产 tuning 始终保持关闭。
 
 ### P44 可复核上下文优先（修订计划）
 
@@ -317,8 +331,8 @@ Golden cohort 只接受通过安全校验并带 `review_context` 的 observation
 1. **P44-A 结构审计（已完成）**：冻结 85 条 observation、21 条 feedback；显式 join 15，orphan feedback turn ID 2 个；报告见 `docs/design/shadow-round-2-structure-audit.md`。当前数据明确禁止进入语义 relevance 标注。
 2. **P44-B 安全 review_context（已完成）**：增加 schema v1 的候选安全标签、activity、投递短摘录和 redaction notes；默认关闭，仅允许 `shadow_review` 或显式 `testbench` 模式。
 3. **P44-C 安全导出与校验（已完成）**：observer 使用白名单、URL/secret 清除和长度上限；vision/personal 原文不导出；候选 ID/来源必须与 top candidates 对齐；没有 review_context 时 `annotation_ready=false`。
-4. **P44-D 小样本重采（待用户启动）**：开启 `PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE=shadow_review` 后采集 20–30 条 observation、约 10 条 feedback，覆盖 music/news/meme/vision 及 idle/focused_work/chatting。
-5. **P44-E 人工标注与复核（待 P44-D 通过）**：只对 `annotation_ready=true` 的新数据标注是否该推荐、Top-1、relevance 0–3、打扰、隐私风险和分数偏差原因。
+4. **P44-D 小样本重采（已完成）**：使用 `PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE=shadow_review` 形成合规的 annotation-ready cohort；`gaming` 不属于本轮覆盖目标，`away`/`busy` 只自然记录。
+5. **P44-E/P44-E2 人工标注、盲二审与裁决（已完成）**：137/137 主审、28/28 盲二审和轻量裁决完成；排除 9 个弃权后有效指标样本为 128，Validator/readiness 通过。
 
 P44-B/C 不改变排序、来源选择、投递或 tuning；`PROACTIVE_RECOMMENDATION_TUNING_MODE` 继续保持 `off`。
 
@@ -330,7 +344,7 @@ P44-F1 已证明不存在可直接采用的统一分数阈值，因此 MVP 先�
 {
   "decision_context": {
     "timing": {
-      "configured_interval_seconds": 300,
+      "configured_interval_seconds": 60,
       "elapsed_since_last_delivery_seconds": 540,
       "recent_delivery_count_30m": 2,
       "recent_delivery_count_2h": 5,
@@ -341,8 +355,23 @@ P44-F1 已证明不存在可直接采用的统一分数阈值，因此 MVP 先�
 ```
 
 - `configured_interval_seconds` 来自本轮 `/proactive_chat` 请求中的用户基础间隔。
-- 投递间隔与窗口计数来自进程内真实主动搭话投递历史，覆盖普通搭话、休息提醒和小游戏邀请等实际投递。
+- 投递间隔与窗口计数来自进程内真实主动搭话投递历史，覆盖普通搭话、休息提醒和小游戏邀请等实际投递；因此它们表示**全局主动搭话打扰负载**，不是 Recommendation 来源自身的曝光计数。
 - 连续未回复数只统计 Recommendation feedback pending 窗口内、尚未收到显式用户回复的推荐投递。
 - 快照在本轮可能发生投递前冻结；当前投递不会反向污染自己的 timing context。
 - sanitizer 仅允许上述低基数数值字段，丢弃其他嵌套数据。
 - 新字段只写 observation；排序、投递、生产权重和 tuning 均不读取它们，现有行为不变。
+
+首个 timing v3 baseline 已冻结：
+
+- 文件：`shadow-p44f2-timing-v3-baseline-20260721-103709.json`；
+- 截点：2026-07-21 10:33:52（Asia/Shanghai）；
+- 样本：105 observation / 30 个显式关联 feedback turn；
+- SHA-256：`E79E2B3258E55A29109525CDBB00E511EE7B4142E0A204EC40DF8E2961A88BD7`；
+- 绝对时间桶只作描述，不作为 readiness 门禁；不再新增 scheduler 回退阶段或 timing v4 字段。
+
+后续 Testbench P44-F2-B 使用该 freeze 做连续变量关联分析：
+
+- 同 cohort 人工 `should_recommend` 标签为 0，误打扰与错失机会不可计算；
+- `recent_delivery_count_30m` 与显式反馈分数存在稳定相关，但不足以形成生产或 Shadow 候选；
+- 正式结论为 `no_candidate`，没有运行真实 cohort fatigue simulation；
+- P44-F2 至此结项，不自动转入重复、来源多样性或其他研究阶段。
