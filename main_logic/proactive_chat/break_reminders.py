@@ -52,6 +52,16 @@ logger = get_module_logger(__name__, "Main")
 # a pending exists (must-fire semantics).
 
 
+def _compose_break_system_prompt(
+    character_prompt: str,
+    env_notice: str,
+) -> str:
+    """Prepend the resolved character prompt to a break reminder."""
+    if not character_prompt:
+        return env_notice
+    return f"{character_prompt}\n\n{env_notice}"
+
+
 def _resolve_break_reminder_label(
     canonical: str | None,
     lang: str,

@@ -28,12 +28,8 @@ from config import (
     PROACTIVE_EXTERNAL_TOTAL_MAX_TOKENS,
     PROACTIVE_PHASE1_FETCH_PER_SOURCE,
     PROACTIVE_PHASE1_TOTAL_TOPICS,
-    PROACTIVE_PHASE1_UNIFIED_MAX_TOKENS,
-    PROACTIVE_PHASE2_GENERATE_MAX_TOKENS,
-    focus_extra_body,
 )
 from config.prompts.prompts_proactive import (
-    BEGIN_GENERATE,
     EXTERNAL_TOPIC_FOOTER,
     EXTERNAL_TOPIC_HEADER,
     MEME_SECTION_FOOTER,
@@ -44,7 +40,6 @@ from config.prompts.prompts_proactive import (
     SCREEN_WINDOW_TITLE,
     get_meme_topic_line,
     get_proactive_format_sections,
-    get_proactive_generate_prompt,
     get_screen_img_hint,
     get_screen_section_footer,
     get_screen_section_header,
@@ -88,12 +83,14 @@ from main_logic.proactive_chat.delivery import (
     _record_committed_delivery,
 )
 from main_logic.proactive_chat.generation import (
+    Phase2PromptContext,
+    ProactiveModelConfig,
     _decide_phase1_channels,
-    _extract_links_from_raw,
-    _generate_phase2_stream,
-    _guard_phase2_output,
+    _fetch_phase1_followups,
     _lookup_link_by_title,
-    _parse_unified_phase1_result,
+    _proactive_llm_retry_error_types,
+    _run_phase2_generation,
+    _run_unified_phase1,
 )
 from main_logic.proactive_chat.mini_game_invite import (
     _advance_mini_game_invite_entry,
@@ -107,9 +104,6 @@ from main_logic.proactive_chat.mini_game_invite import (
 from main_logic.proactive_chat.music_recommendation import (
     _build_music_dynamic_context,
     _build_music_playing_hint,
-    _fetch_music_with_fallback,
-    _format_music_content,
-    _log_music_content,
     _select_music_recommendation,
 )
 from main_logic.proactive_chat.state import (
@@ -120,50 +114,21 @@ from main_logic.proactive_chat.state import (
     _record_source_used,
     _source_hash,
 )
+from main_logic.proactive_chat.sources import collect_proactive_sources
 from utils.language_utils import (
     get_global_language,
     get_global_language_full,
     is_supported_language_code,
     normalize_language_code,
 )
-from utils.llm_client import (
-    HumanMessage,
-    SystemMessage,
-    chat_retry_error_types,
-    create_chat_llm_async,
-)
 from utils.logger_config import get_module_logger
-from utils.meme_fetcher import fetch_meme_content
 from utils.meme_moderation import moderate_meme_image_url
-from utils.screenshot_utils import (
-    COMPRESS_JPEG_QUALITY,
-    COMPRESS_TARGET_HEIGHT,
-    decode_and_compress_screenshot_b64,
-)
-from utils.web_scraper import (
-    fetch_news_content,
-    fetch_personal_dynamics,
-    fetch_trending_content,
-    fetch_video_content,
-    fetch_window_context_content,
-    format_news_content,
-    format_personal_dynamics,
-    format_trending_content,
-    format_video_content,
-    format_window_context_content,
-)
-
 from .break_reminders import (
+    _compose_break_system_prompt,
     _deliver_break_reminder_via_llm,
     _render_anti_slack_prompt,
     _render_work_break_game_invite_prompt,
     _render_work_break_prompt,
-)
-from .content_logging import (
-    _log_news_content,
-    _log_personal_dynamics,
-    _log_trending_content,
-    _log_video_content,
 )
 
 __all__ = [
@@ -179,21 +144,7 @@ __all__ = [
 logger = get_module_logger(__name__, "Main")
 
 
-# 惰性缓存（None = 尚未构建）：openai/anthropic SDK 已从启动 import 链移除（见
-# utils/llm_client），模块级立即展开会把两个 SDK 拉回 main_server 端口就绪路径。
-# 首次求值发生在 LLM 调用的异常处理处，彼时 SDK 必已随 client 构造加载。
-_PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
 _MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
-
-
-def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
-    global _PROACTIVE_LLM_RETRY_ERROR_TYPES
-    if _PROACTIVE_LLM_RETRY_ERROR_TYPES is None:
-        _PROACTIVE_LLM_RETRY_ERROR_TYPES = (
-            asyncio.TimeoutError,
-            *chat_retry_error_types(),
-        )
-    return _PROACTIVE_LLM_RETRY_ERROR_TYPES
 
 
 _PHASE1_FETCH_PER_SOURCE = (
@@ -735,11 +686,6 @@ async def handle_proactive_chat(
                     "{LANLAN_NAME}", lanlan_name
                 ).replace("{MASTER_NAME}", master_name_current)
 
-            def _compose_break_system_prompt(env_notice: str) -> str:
-                if not _break_character_prompt:
-                    return env_notice
-                return f"{_break_character_prompt}\n\n{env_notice}"
-
             # Anti-slack first — single-behavior 'back to work' nudge.
             if activity_snapshot.anti_slack_pending is not None:
                 anti_pending = activity_snapshot.anti_slack_pending
@@ -755,7 +701,10 @@ async def handle_proactive_chat(
                     lanlan_name=lanlan_name,
                     mgr=mgr,
                     config_manager=break_config_manager_provider(),
-                    system_prompt=_compose_break_system_prompt(anti_prompt),
+                    system_prompt=_compose_break_system_prompt(
+                        _break_character_prompt,
+                        anti_prompt,
+                    ),
                     channel="anti_slack",
                     lang=_break_lang,
                 )
@@ -847,7 +796,10 @@ async def handle_proactive_chat(
                     lanlan_name=lanlan_name,
                     mgr=mgr,
                     config_manager=break_config_manager_provider(),
-                    system_prompt=_compose_break_system_prompt(gi_prompt),
+                    system_prompt=_compose_break_system_prompt(
+                        _break_character_prompt,
+                        gi_prompt,
+                    ),
                     channel="work_break_game_invite",
                     lang=_break_lang,
                 )
@@ -957,7 +909,10 @@ async def handle_proactive_chat(
                 lanlan_name=lanlan_name,
                 mgr=mgr,
                 config_manager=break_config_manager_provider(),
-                system_prompt=_compose_break_system_prompt(wb_prompt),
+                system_prompt=_compose_break_system_prompt(
+                    _break_character_prompt,
+                    wb_prompt,
+                ),
                 channel="work_break",
                 lang=_break_lang,
             )
@@ -1130,193 +1085,13 @@ async def handle_proactive_chat(
         await _ensure_source_history_loaded(**state_storage_kwargs)
 
         # ========== 0. 并行获取所有信息源内容（无 LLM） ==========
-        screenshot_data = command.screenshot_data
-        has_screenshot = bool(screenshot_data) and isinstance(screenshot_data, str)
-        # Avatar 位置元数据（前端截图时捕获的归一化坐标）
+        sources = await collect_proactive_sources(
+            command=command,
+            enabled_modes=enabled_modes,
+            lanlan_name=lanlan_name,
+            log=logger,
+        )
         avatar_position = command.avatar_position
-
-        async def _fetch_source(mode: str) -> tuple:
-            """
-            Fetch a single source; returns (mode, content_dict) or raises an exception.
-            """
-            if mode == "vision":
-                if not has_screenshot:
-                    raise ValueError("无截图数据（screenshot_data 为空或类型不正确）")
-                window_title = command.window_title
-                # ⚠️ Phase 1 不调用 vision_model 分析截图！
-                # 截图将在 Phase 2 由 vision_model 直接读取原图，这里只做压缩。
-                compressed_b64 = ""
-                try:
-                    b64_raw = (
-                        screenshot_data.split(",", 1)[1]
-                        if "," in screenshot_data
-                        else screenshot_data
-                    )
-                    compressed_b64 = await asyncio.to_thread(
-                        decode_and_compress_screenshot_b64,
-                        b64_raw,
-                        COMPRESS_TARGET_HEIGHT,
-                        COMPRESS_JPEG_QUALITY,
-                    )
-                    # 叠加 Avatar 文字注解（_fetch_source 内部 proactive_lang
-                    # 尚未解析，Phase 1 使用全局语言；Phase 2 会用请求级别的 proactive_lang）
-                    if avatar_position and isinstance(avatar_position, dict):
-                        try:
-                            from utils.language_utils import get_global_language_full
-                            from utils.screenshot_utils import overlay_avatar_annotation
-
-                            compressed_b64 = await asyncio.to_thread(
-                                overlay_avatar_annotation,
-                                compressed_b64,
-                                avatar_position,
-                                lanlan_name,
-                                get_global_language_full(),
-                            )
-                        except Exception as ann_err:
-                            logger.warning(
-                                f"[{lanlan_name}] Phase 1 avatar annotation failed: {ann_err}"
-                            )
-                    jpg_size_kb = len(compressed_b64) * 3 // 4 // 1024
-                    print(
-                        f"[{lanlan_name}] Vision 通道: 截图压缩完成 {jpg_size_kb}KB (Phase 2 将直接分析)"
-                    )
-                except Exception as compress_err:
-                    logger.warning(
-                        f"[{lanlan_name}] 截图压缩失败（Phase 2 将无法使用截图）: {compress_err}"
-                    )
-                return (
-                    mode,
-                    {"window_title": window_title, "screenshot_b64": compressed_b64},
-                )
-
-            elif mode == "news":
-                news_content = await fetch_news_content(limit=_PHASE1_FETCH_PER_SOURCE)
-                if not news_content["success"]:
-                    raise ValueError(f"获取新闻失败: {news_content.get('error')}")
-                formatted = format_news_content(news_content)
-                _log_news_content(lanlan_name, news_content)
-                # 提取链接信息
-                links = _extract_links_from_raw(mode, news_content)
-                return (
-                    mode,
-                    {
-                        "formatted_content": formatted,
-                        "raw_data": news_content,
-                        "links": links,
-                    },
-                )
-
-            elif mode == "video":
-                video_content = await fetch_video_content(
-                    limit=_PHASE1_FETCH_PER_SOURCE
-                )
-                if not video_content["success"]:
-                    raise ValueError(f"获取视频失败: {video_content.get('error')}")
-                formatted = format_video_content(video_content)
-                _log_video_content(lanlan_name, video_content)
-                links = _extract_links_from_raw(mode, video_content)
-                return (
-                    mode,
-                    {
-                        "formatted_content": formatted,
-                        "raw_data": video_content,
-                        "links": links,
-                    },
-                )
-
-            elif mode == "window":
-                window_context_content = await fetch_window_context_content(limit=5)
-                if not window_context_content["success"]:
-                    raise ValueError(
-                        f"获取窗口上下文失败: {window_context_content.get('error')}"
-                    )
-                formatted = format_window_context_content(window_context_content)
-                raw_title = window_context_content.get("window_title", "")
-                sanitized_title = (
-                    raw_title[:30] + "..." if len(raw_title) > 30 else raw_title
-                )
-                print(f"[{lanlan_name}] 成功获取窗口上下文: {sanitized_title}")
-                return (
-                    mode,
-                    {
-                        "formatted_content": formatted,
-                        "raw_data": window_context_content,
-                        "links": [],
-                    },
-                )
-
-            elif mode == "home":
-                trending_content = await fetch_trending_content(
-                    bilibili_limit=_PHASE1_FETCH_PER_SOURCE,
-                    weibo_limit=_PHASE1_FETCH_PER_SOURCE,
-                )
-                if not trending_content["success"]:
-                    raise ValueError(
-                        f"获取首页推荐失败: {trending_content.get('error')}"
-                    )
-                formatted = format_trending_content(trending_content)
-                _log_trending_content(lanlan_name, trending_content)
-                links = _extract_links_from_raw(mode, trending_content)
-                return (
-                    mode,
-                    {
-                        "formatted_content": formatted,
-                        "raw_data": trending_content,
-                        "links": links,
-                    },
-                )
-
-            elif mode == "personal":
-                personal_dynamics = await fetch_personal_dynamics(
-                    limit=_PHASE1_FETCH_PER_SOURCE
-                )
-                if not personal_dynamics["success"]:
-                    raise ValueError(
-                        f"获取个人动态失败: {personal_dynamics.get('error')}"
-                    )
-                formatted = format_personal_dynamics(personal_dynamics)
-                _log_personal_dynamics(lanlan_name, personal_dynamics)
-                links = _extract_links_from_raw(mode, personal_dynamics)
-                return (
-                    mode,
-                    {
-                        "formatted_content": formatted,
-                        "raw_data": personal_dynamics,
-                        "links": links,
-                    },
-                )
-
-            elif mode == "music":
-                return (
-                    mode,
-                    {"placeholder": True, "note": "关键词将在 Phase 1 开始前生成"},
-                )
-
-            elif mode == "meme":
-                # meme 关键词将由合并 LLM 调用生成，此处仅占位
-                return (
-                    mode,
-                    {"placeholder": True, "note": "关键词将由合并 Phase 1 LLM 生成"},
-                )
-
-            else:
-                raise ValueError(f"未知模式: {mode}")
-
-        # 并行获取所有信息源
-        fetch_tasks = [_fetch_source(m) for m in enabled_modes]
-        fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-
-        # 收集成功的信息源
-        sources: dict[str, dict] = {}
-        for i, result in enumerate(fetch_results):
-            if isinstance(result, Exception):
-                failed_mode = enabled_modes[i]
-                logger.warning(
-                    f"[{lanlan_name}] 信息源 [{failed_mode}] 获取失败: {result}"
-                )
-                continue
-            mode, content = result
-            sources[mode] = content
 
         if not sources:
             # 例外：未收尾话题模式下 enabled_modes 可能本就被清空（restricted_screen_only
@@ -1506,9 +1281,7 @@ async def handle_proactive_chat(
         try:
             conversation_config = _config_manager.get_model_api_config("conversation")
             conversation_model = conversation_config.get("model")
-            conversation_base_url = conversation_config.get("base_url")
             conversation_api_key = conversation_config.get("api_key")
-            conversation_provider_type = conversation_config.get("provider_type")
 
             if not conversation_model or not conversation_api_key:
                 logger.error("对话模型配置缺失: model或api_key未设置")
@@ -1525,12 +1298,17 @@ async def handle_proactive_chat(
                 )
 
             vision_config = _config_manager.get_model_api_config("vision")
-            vision_model_name = vision_config.get("model", "")
-            vision_base_url = vision_config.get("base_url", "")
-            vision_api_key = vision_config.get("api_key", "")
-            vision_provider_type = vision_config.get("provider_type")
-            has_vision_model = bool(vision_model_name and vision_api_key)
-            if not has_vision_model:
+            model_config = ProactiveModelConfig(
+                conversation_model=conversation_model,
+                conversation_base_url=conversation_config.get("base_url"),
+                conversation_api_key=conversation_api_key,
+                conversation_provider_type=conversation_config.get("provider_type"),
+                vision_model=vision_config.get("model", ""),
+                vision_base_url=vision_config.get("base_url", ""),
+                vision_api_key=vision_config.get("api_key", ""),
+                vision_provider_type=vision_config.get("provider_type"),
+            )
+            if not model_config.has_vision_model:
                 logger.info("Vision 模型未配置，Phase 2 将退回使用对话模型")
         except Exception as e:
             logger.error(f"获取模型配置失败: {e}")
@@ -1545,117 +1323,6 @@ async def handle_proactive_chat(
                     status_code=500,
                 )
             )
-
-        async def _make_llm(
-            temperature: float = 1.0,
-            max_completion_tokens: int = PROACTIVE_PHASE2_GENERATE_MAX_TOKENS,
-            use_vision: bool = False,
-            disable_thinking: bool = True,
-        ):
-            """
-            Create an LLM instance. use_vision=True uses the vision model;
-            when disable_thinking=False (Focus thinking-on) the provider's
-            thinking-disable extras are stripped while other auto-resolved
-            extras (e.g. web_search) are preserved.
-            """
-            if use_vision and has_vision_model:
-                m, bu, ak = vision_model_name, vision_base_url, vision_api_key
-                provider_type = vision_provider_type
-            else:
-                m, bu, ak = (
-                    conversation_model,
-                    conversation_base_url,
-                    conversation_api_key,
-                )
-                provider_type = conversation_provider_type
-            from config import DIALOG_LLM_STREAM_TIMEOUT_SECONDS
-
-            kw: dict = dict(
-                temperature=temperature,
-                max_completion_tokens=max_completion_tokens,
-                streaming=True,
-                timeout=DIALOG_LLM_STREAM_TIMEOUT_SECONDS,  # hang-guard for the streaming call
-                provider_type=provider_type,
-            )
-            if not disable_thinking:
-                # Focus thinking-on: strip ONLY the thinking-disable keys from
-                # the provider's auto-resolved extra_body, KEEP the rest. Setting
-                # extra_body=None would skip all auto-resolved extras and
-                # silently drop e.g. step-2-mini's built-in web_search on focused
-                # proactive Phase-2 generations (对偶 inline path
-                # OmniOfflineClient._focus_stream_overrides → focus_extra_body).
-                kw["extra_body"] = focus_extra_body(m)
-            return await create_chat_llm_async(m, bu, ak, **kw)  # noqa: LLM_OUTPUT_BUDGET  # budget + timeout set in kw above (splat invisible to the lint).
-
-        async def _llm_call_with_retry(
-            system_prompt: str,
-            label: str,
-            *,
-            temperature: float = 1.0,
-            max_completion_tokens: int = PROACTIVE_PHASE1_UNIFIED_MAX_TOKENS,
-            timeout: float = 16.0,
-            use_vision: bool = False,
-            disable_thinking: bool = True,
-            image_b64: str = "",
-            dynamic_context: str = "",
-        ) -> str:
-            """
-            LLM call with retry. When image_b64 is non-empty, the screenshot is sent multimodally.
-            dynamic_context: dynamic context injected into the HumanMessage so the SystemMessage stays cacheable.
-            """
-            begin_text = _loc(BEGIN_GENERATE, proactive_lang)
-            human_text = (
-                f"{dynamic_context}\n\n{begin_text}" if dynamic_context else begin_text
-            )
-            if image_b64:
-                human_content = [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                    {"type": "text", "text": human_text},
-                ]
-            else:
-                human_content = human_text
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_content),
-            ]
-
-            from utils.token_tracker import set_call_type
-
-            set_call_type("proactive")
-            max_retries = 3
-            retry_delays = [1, 2]
-            for attempt in range(max_retries):
-                try:
-                    # 使用 async with 确保 ChatOpenAI (AsyncOpenAI) 实例被正确关闭
-                    async with await _make_llm(
-                        temperature=temperature,
-                        max_completion_tokens=max_completion_tokens,
-                        use_vision=use_vision,
-                        disable_thinking=disable_thinking,
-                    ) as llm:
-                        response = await asyncio.wait_for(
-                            llm.ainvoke(messages), timeout=timeout
-                        )
-                        # [临时调试]
-                        print(
-                            f"\n[PROACTIVE-DEBUG] LLM output [{label}]: {response.content[:500]}...\n"
-                        )
-                        return response.content.strip()
-                except _proactive_llm_retry_error_types() as e:
-                    if attempt < max_retries - 1:
-                        logger.warning(
-                            f"[{lanlan_name}] LLM [{label}] 调用失败 (尝试 {attempt + 1}/{max_retries}): {e}"
-                        )
-                        await asyncio.sleep(retry_delays[attempt])
-                    else:
-                        logger.error(
-                            f"[{lanlan_name}] LLM [{label}] 调用失败，已达最大重试: {e}"
-                        )
-                        raise
-            raise RuntimeError("Unexpected")
 
         # ================================================================
         # Phase 1: 合并 LLM 调用（web 筛选 + music 关键词 + meme 关键词）
@@ -1908,13 +1575,6 @@ async def handle_proactive_chat(
         has_meme_task = bool(meme_content and meme_content.get("placeholder"))
         has_web_task = bool(merged_web_content)
 
-        # 只要有至少一个任务就发起 LLM 调用
-        unified_parsed: dict = {
-            "web": None,
-            "music_keyword": None,
-            "meme_keyword": None,
-        }
-        # 先定义 enriched_memory_context 保证后续引用不报 UnboundLocalError
         enriched_memory_context = memory_context
         if followup_topics_prompt:
             enriched_memory_context = memory_context + "\n" + followup_topics_prompt
@@ -1928,46 +1588,18 @@ async def handle_proactive_chat(
                         body=_proactive_preempted_json("phase1_pre_llm")
                     )
                 )
-            try:
-                from config.prompts.prompts_proactive import build_unified_phase1_prompt
-
-                unified_prompt = build_unified_phase1_prompt(
-                    proactive_lang,
-                    merged_content=merged_web_content if has_web_task else None,
-                    memory_context=enriched_memory_context,
-                    recent_chats_section=proactive_chat_history_prompt,
-                    music_ctx={
-                        "lanlan_name": lanlan_name,
-                        "master_name": master_name_current,
-                    }
-                    if has_music_task
-                    else None,
-                    meme_enabled=has_meme_task,
-                    lanlan_name=lanlan_name,
-                    master_name=master_name_current,
-                )
-                unified_result_text = await _llm_call_with_retry(
-                    unified_prompt, "unified_phase1"
-                )
-                print(
-                    f"[{lanlan_name}] Phase 1 合并 LLM 结果: {unified_result_text[:500]}"
-                )
-                unified_parsed = _parse_unified_phase1_result(unified_result_text)
-                logger.debug(
-                    f"[{lanlan_name}] Phase 1 解析: web={'有' if unified_parsed.get('web') else '无'}, "
-                    f"music_kw={unified_parsed.get('music_keyword', 'N/A')}, "
-                    f"meme_kw={unified_parsed.get('meme_keyword', 'N/A')}"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"[{lanlan_name}] Phase 1 合并 LLM 调用异常: {type(e).__name__}: {e}，降级处理"
-                )
-                # LLM 失败：各通道降级
-                unified_parsed = {
-                    "web": None,
-                    "music_keyword": None,
-                    "meme_keyword": None,
-                }
+        unified_parsed = await _run_unified_phase1(
+            model_config=model_config,
+            proactive_lang=proactive_lang,
+            lanlan_name=lanlan_name,
+            master_name=master_name_current,
+            merged_web_content=merged_web_content,
+            memory_context=enriched_memory_context,
+            recent_chats_section=proactive_chat_history_prompt,
+            has_music_task=has_music_task,
+            has_meme_task=has_meme_task,
+            log=logger,
+        )
 
         # ============================================================
         # 解析 web 结果 → 链接匹配 → 去重
@@ -2012,60 +1644,14 @@ async def handle_proactive_chat(
         # ============================================================
         # 并行后置 fetch：music + meme（使用 LLM 生成的关键词）
         # ============================================================
-        music_keyword = unified_parsed.get("music_keyword")
-        meme_keyword = unified_parsed.get("meme_keyword")
-
-        async def _fetch_meme_with_fallback(kw: str):
-            """Search memes with the LLM keyword; falls back to random hot words on failure.
-
-            ``effective_keyword`` marks the search term actually in effect this
-            time: on a keyword hit it is kw (it describes the meme content, and
-            the downstream topic carries it); on the random hot-word fallback it
-            is blanked, to avoid falsely claiming "this image is about X".
-            """
-            try:
-                raw = await asyncio.wait_for(
-                    fetch_meme_content(keyword=kw, limit=_PHASE1_FETCH_PER_SOURCE),
-                    timeout=12.0,
-                )
-                if raw and raw.get("success"):
-                    raw["effective_keyword"] = kw
-                    return raw
-            except Exception as e:
-                logger.warning(f"[{lanlan_name}] 表情包关键词 '{kw}' 搜索异常: {e}")
-            logger.warning(
-                f"[{lanlan_name}] 表情包关键词 '{kw}' 搜索失败，尝试随机热词"
-            )
-            try:
-                raw = await asyncio.wait_for(
-                    fetch_meme_content(keyword="", limit=_PHASE1_FETCH_PER_SOURCE),
-                    timeout=12.0,
-                )
-                if raw:
-                    raw["effective_keyword"] = ""
-                return raw
-            except Exception:
-                return None
-
-        fetch_tasks_p1: list = []
-        fetch_labels: list[str] = []
-
-        if has_music_task and not unified_parsed.get("music_pass"):
-            kw = music_keyword or ""
-            fetch_tasks_p1.append(
-                _fetch_music_with_fallback(kw, lanlan_name=lanlan_name)
-            )
-            fetch_labels.append("music")
-        elif has_music_task:
+        if has_music_task and unified_parsed.get("music_pass"):
             print(f"[{lanlan_name}] Phase 1 音乐通道明确 PASS，跳过后置 fetch")
-        if has_meme_task and not unified_parsed.get("meme_pass"):
-            kw = meme_keyword or ""
-            fetch_tasks_p1.append(_fetch_meme_with_fallback(kw))
-            fetch_labels.append("meme")
-        elif has_meme_task:
+        if has_meme_task and unified_parsed.get("meme_pass"):
             print(f"[{lanlan_name}] Phase 1 表情包通道明确 PASS，跳过后置 fetch")
-
-        if fetch_tasks_p1:
+        needs_phase1_followups = (
+            has_music_task and not unified_parsed.get("music_pass")
+        ) or (has_meme_task and not unified_parsed.get("meme_pass"))
+        if needs_phase1_followups:
             # Phase 1 preempt check：unified LLM 刚回，music/meme 后置 fetch 前再瞄
             if mgr.state.is_proactive_preempted():
                 return await _end_proactive(
@@ -2073,34 +1659,16 @@ async def handle_proactive_chat(
                         body=_proactive_preempted_json("phase1_post_llm")
                     )
                 )
-            fetch_results_p1 = await asyncio.gather(
-                *fetch_tasks_p1, return_exceptions=True
-            )
-            for label_p1, result_p1 in zip(fetch_labels, fetch_results_p1):
-                if isinstance(result_p1, Exception):
-                    logger.warning(
-                        f"[{lanlan_name}] Phase 1 后置 fetch [{label_p1}] 异常: {result_p1}"
-                    )
-                    continue
-                if label_p1 == "music" and result_p1 and result_p1.get("success"):
-                    _log_music_content(lanlan_name, result_p1)
-                    music_content = {
-                        "formatted_content": _format_music_content(
-                            result_p1, proactive_lang
-                        ),
-                        "raw_data": result_p1,
-                    }
-                elif label_p1 == "meme" and result_p1 and result_p1.get("success"):
-                    meme_content = {
-                        "success": True,
-                        "data": result_p1.get("data", []),
-                        "raw_data": result_p1,
-                        "source": result_p1.get("source", "表情包"),
-                        "keyword": result_p1.get("effective_keyword", ""),
-                    }
-                    print(
-                        f"[{lanlan_name}] 成功获取 {len(result_p1.get('data', []))} 个表情包 (来源: {result_p1.get('source', '?')})"
-                    )
+        music_content, meme_content = await _fetch_phase1_followups(
+            parsed=unified_parsed,
+            has_music_task=has_music_task,
+            has_meme_task=has_meme_task,
+            music_content=music_content,
+            meme_content=meme_content,
+            proactive_lang=proactive_lang,
+            lanlan_name=lanlan_name,
+            log=logger,
+        )
 
         # ============================================================
         # 音乐话题组装（遍历候选 → 衰减 skip → 暂存链接）
@@ -2308,7 +1876,7 @@ async def handle_proactive_chat(
 
         # --- 向前端请求最新截图，替换 Phase 1 时拿到的旧截图 ---
         screenshot_b64_for_phase2 = ""
-        if vision_content and has_vision_model:
+        if vision_content and model_config.has_vision_model:
             fresh_b64 = await mgr.request_fresh_screenshot(timeout=3.0)
             if fresh_b64:
                 # 如果 request_fresh_screenshot 走了 WebSocket 路径，screenshot_response
@@ -2473,13 +2041,8 @@ async def handle_proactive_chat(
         if followup_topics_prompt:
             phase2_memory_context = memory_context + "\n" + followup_topics_prompt
 
-        generate_prompt = get_proactive_generate_prompt(
-            proactive_lang,
-            music_playing_hint,
-            has_music=bool(music_section),
-            has_meme=bool(meme_section),
-            master_name=master_name_current,
-        ).format(
+        phase2_prompt_context = Phase2PromptContext(
+            music_playing_hint=music_playing_hint,
             character_prompt=character_prompt,
             inner_thoughts=inner_thoughts,
             state_section=state_section,
@@ -2489,7 +2052,6 @@ async def handle_proactive_chat(
             external_section=external_section,
             music_section=music_section,
             meme_section=meme_section,
-            master_name=master_name_current,
             source_instruction=source_instruction,
             output_format_section=output_format_section,
         )
@@ -2500,12 +2062,16 @@ async def handle_proactive_chat(
             master_name=master_name_current,
             lang=proactive_lang,
         )
+        phase2_system_prompt = phase2_prompt_context.render(
+            proactive_lang=proactive_lang,
+            master_name=master_name_current,
+        )
         # music_cooldown 时不再注入 strict_constraint —— 此时 music 通道已被前端/后端
         # 完全剔除，不应向模型暴露任何音乐相关指令，以免干扰其他 source 的选择。
         print(
-            f"[{lanlan_name}] Phase 2 prompt 长度: {len(generate_prompt)}, 动态上下文: {len(dynamic_context_for_phase2)} 字符"
+            f"[{lanlan_name}] Phase 2 prompt 长度: {len(phase2_system_prompt)}, "
+            f"动态上下文: {len(dynamic_context_for_phase2)} 字符"
         )
-
         # Phase 1 preempt check (final)：request_fresh_screenshot 最多 await 3s，
         # 是 prepare_proactive_delivery 之前唯一剩下的可打断窗口。若此处用户已
         # 接管，继续走 prepare 会让其内部的 `current_speech_id = uuid4()` 覆盖
@@ -2553,73 +2119,18 @@ async def handle_proactive_chat(
         # exact episode/turn (race guard: a no-op if inline moved it since).
         lifecycle.mark_phase2(mgr.state.snapshot())
 
-        # --- 构建 LLM + messages (static/dynamic 分离) ---
-        phase2_use_vision = bool(screenshot_b64_for_phase2 and has_vision_model)
-        # Vision guard: a vision model + thinking reliably times out (see the
-        # Phase-2 注释 above), so Focus thinking-on is suppressed whenever this
-        # round feeds a screenshot. Single source of truth for all three
-        # Phase-2 generate sites.
-        phase2_disable_thinking = phase2_use_vision or not _focus_phase2_thinking
-
-        begin_text = _loc(BEGIN_GENERATE, proactive_lang)
-        human_text = (
-            f"{dynamic_context_for_phase2}\n\n{begin_text}"
-            if dynamic_context_for_phase2
-            else begin_text
-        )
-        if phase2_use_vision:
-            human_content = [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{screenshot_b64_for_phase2}"
-                    },
-                },
-                {"type": "text", "text": human_text},
-            ]
-        else:
-            human_content = human_text
-        messages = [
-            SystemMessage(content=generate_prompt),
-            HumanMessage(content=human_content),
-        ]
-
-        actual_model = vision_model_name if phase2_use_vision else conversation_model
-        print(
-            f"\n{'=' * 60}\n[PROACTIVE-DEBUG] Phase 2 STREAM: model={actual_model} | vision={phase2_use_vision} | img={'yes' if phase2_use_vision else 'no'}\n{'=' * 60}\n{generate_prompt}\n{'=' * 60}\n"
-        )
-
-        phase2_generation = await _generate_phase2_stream(
+        guarded_output = await _run_phase2_generation(
             mgr=mgr,
             proactive_sid=proactive_sid,
+            model_config=model_config,
             lanlan_name=lanlan_name,
-            messages=messages,
-            make_llm=_make_llm,
-            phase2_use_vision=phase2_use_vision,
-            phase2_disable_thinking=phase2_disable_thinking,
-            conversation_model=conversation_model,
-            expects_source_tag=_expects_source_tag,
             proactive_lang=proactive_lang,
             master_name=master_name_current,
-            human_text=human_text,
+            system_prompt=phase2_system_prompt,
+            dynamic_context=dynamic_context_for_phase2,
             screenshot_b64=screenshot_b64_for_phase2,
-            log=logger,
-        )
-        if phase2_generation.result is not None:
-            return await _end_proactive(
-                ProactiveChatResult(body=phase2_generation.result.body)
-            )
-        full_text = phase2_generation.full_text
-        response_text = phase2_generation.response_text
-        source_tag = phase2_generation.source_tag
-
-        guarded_output = await _guard_phase2_output(
-            mgr=mgr,
-            proactive_sid=proactive_sid,
-            lanlan_name=lanlan_name,
-            response_text=response_text,
-            full_text=full_text,
-            source_tag=source_tag,
+            focus_thinking=_focus_phase2_thinking,
+            expects_source_tag=_expects_source_tag,
             active_channels=active_channels,
             selected_music_link=selected_music_link,
             selected_meme_link=selected_meme_link,
@@ -2627,27 +2138,20 @@ async def handle_proactive_chat(
             meme_content=meme_content,
             is_playing_music=is_playing_music,
             music_cooldown=music_cooldown,
-            expects_source_tag=_expects_source_tag,
-            make_llm=_make_llm,
-            messages=messages,
-            human_text=human_text,
-            screenshot_b64=screenshot_b64_for_phase2,
-            phase2_use_vision=phase2_use_vision,
-            phase2_disable_thinking=phase2_disable_thinking,
-            proactive_lang=proactive_lang,
-            master_name=master_name_current,
             log=logger,
         )
         if guarded_output.result is not None:
             return await _end_proactive(
                 ProactiveChatResult(body=guarded_output.result.body)
             )
-        full_text = guarded_output.full_text
         response_text = guarded_output.response_text
         source_tag = guarded_output.source_tag
         selected_music_link = guarded_output.selected_music_link
         music_content = guarded_output.music_content
         is_music_used = guarded_output.is_music_used
+        phase2_use_vision = bool(
+            screenshot_b64_for_phase2 and model_config.has_vision_model
+        )
         delivery_commit = await _commit_proactive_delivery(
             mgr=mgr,
             proactive_sid=proactive_sid,
