@@ -183,6 +183,7 @@ logger = get_module_logger(__name__, "Main")
 # utils/llm_client），模块级立即展开会把两个 SDK 拉回 main_server 端口就绪路径。
 # 首次求值发生在 LLM 调用的异常处理处，彼时 SDK 必已随 client 构造加载。
 _PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
+_MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
 
 
 def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
@@ -346,6 +347,7 @@ async def handle_proactive_chat(
     run_mini_game_invite_short_circuit: Any,
     push_mini_game_invite_options: Any,
     push_mini_game_invite_resolved: Any,
+    meme_proxy_candidate_fetchable: Any | None = None,
 ) -> ProactiveChatResult:
     """
     Proactive chat: two-phase architecture — Phase 1 merged LLM (web screening + music/meme keywords, 1 call), Phase 2 persona-aware chat generation.
@@ -2130,6 +2132,7 @@ async def handle_proactive_chat(
         if meme_content and meme_content.get("success") and meme_content.get("data"):
             meme_data = meme_content.get("data", [])
             if meme_data:
+                proxy_checked_count = 0
                 for candidate_meme in meme_data:
                     meme_title = candidate_meme.get("title", "")
                     meme_url = candidate_meme.get("url", "")
@@ -2182,6 +2185,48 @@ async def handle_proactive_chat(
                             meme_topic_key[:16],
                         )
                         continue
+                    if meme_proxy_candidate_fetchable is not None:
+                        if (
+                            proxy_checked_count
+                            >= _MEME_PROXY_CANDIDATE_CHECK_LIMIT
+                        ):
+                            logger.info(
+                                "[%s]- Phase 1 表情包代理预检达到上限(%d)，"
+                                "跳过本轮 meme 通道",
+                                lanlan_name,
+                                _MEME_PROXY_CANDIDATE_CHECK_LIMIT,
+                            )
+                            break
+                        if mgr.state.is_proactive_preempted():
+                            return await _end_proactive(
+                                ProactiveChatResult(
+                                    body=_proactive_preempted_json(
+                                        "phase1_pre_meme_proxy_check"
+                                    )
+                                )
+                            )
+                        proxy_checked_count += 1
+                        proxy_ok, proxy_reason = (
+                            await meme_proxy_candidate_fetchable(meme_url)
+                        )
+                        if mgr.state.is_proactive_preempted():
+                            return await _end_proactive(
+                                ProactiveChatResult(
+                                    body=_proactive_preempted_json(
+                                        "phase1_post_meme_proxy_check"
+                                    )
+                                )
+                            )
+                        if not proxy_ok:
+                            logger.info(
+                                "[%s]- Phase 1 表情包代理不可取，跳过候选: "
+                                "reason=%s title=%s url=%s",
+                                lanlan_name,
+                                proxy_reason,
+                                meme_title[:30],
+                                meme_url[:100],
+                            )
+                            continue
                     single_meme_topic = get_meme_topic_line(
                         proactive_lang,
                         keyword=meme_content.get("keyword", ""),

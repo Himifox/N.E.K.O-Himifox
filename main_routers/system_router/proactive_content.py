@@ -8,6 +8,7 @@ from main_logic.proactive_chat.content_logging import (
     _log_personal_dynamics,
     _log_trending_content,
     _log_video_content,
+    _tieba_log_title,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "_log_personal_dynamics",
     "_log_trending_content",
     "_log_video_content",
+    "_tieba_log_title",
 ]

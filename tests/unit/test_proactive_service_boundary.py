@@ -181,6 +181,10 @@ async def test_router_adapts_service_status_and_body_verbatim(
         kwargs["break_config_manager_provider"]
         is proactive_chat_flow.get_config_manager
     )
+    assert (
+        kwargs["meme_proxy_candidate_fetchable"]
+        is proactive_chat_flow._meme_proxy_candidate_fetchable
+    )
 
 
 @pytest.mark.asyncio

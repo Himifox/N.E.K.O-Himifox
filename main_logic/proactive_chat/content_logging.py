@@ -33,7 +33,18 @@ __all__ = [
     "_log_personal_dynamics",
     "_log_trending_content",
     "_log_video_content",
+    "_tieba_log_title",
 ]
+
+
+def _tieba_log_title(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("title", "topic_name", "word"):
+        title = str(item.get(key, "") or "").strip()
+        if title:
+            return title
+    return ""
 
 
 def _log_news_content(lanlan_name: str, news_content: dict):
@@ -50,6 +61,30 @@ def _log_news_content(lanlan_name: str, news_content: dict):
             print(f"[{lanlan_name}] 成功获取{source}:")
             for word in words:
                 print(f"  - {word}")
+    xhh_data = news_content.get("xhh") or {}
+    if xhh_data.get("success"):
+        posts = xhh_data.get("posts") or []
+        titles = [post.get("title", "") for post in posts[:5]]
+        if titles:
+            print(f"[{lanlan_name}] 成功获取小黑盒首页内容:")
+            for title in titles:
+                print(f"  - {title}")
+
+    tieba_data = news_content.get("tieba", {}) or {}
+    if tieba_data.get("success"):
+        nested = tieba_data.get("tieba", {}) or {}
+        posts = tieba_data.get("posts", []) or nested.get("posts", [])
+        topics = tieba_data.get("topics", []) or nested.get("topics", [])
+        tieba_items = list(posts or []) + list(topics or [])
+        titles = [
+            title
+            for item in tieba_items
+            if (title := _tieba_log_title(item))
+        ][:5]
+        if titles:
+            print(f"[{lanlan_name}] 成功获取贴吧资源池: {len(tieba_items)} 条")
+            for title in titles:
+                print(f"  - {title}")
 
 
 def _log_video_content(lanlan_name: str, video_content: dict):
@@ -59,20 +94,20 @@ def _log_video_content(lanlan_name: str, video_content: dict):
     region = video_content.get("region", "china")
     video_data = video_content.get("video", {})
     if video_data.get("success"):
-        if region == "china":
-            videos = video_data.get("videos", [])
-            titles = [video.get("title", "") for video in videos[:5]]
-            if titles:
-                print(f"[{lanlan_name}] 成功获取B站视频:")
-                for title in titles:
-                    print(f"  - {title}")
-        else:
-            posts = video_data.get("posts", [])
-            titles = [post.get("title", "") for post in posts[:5]]
-            if titles:
-                print(f"[{lanlan_name}] 成功获取Reddit热门帖子:")
-                for title in titles:
-                    print(f"  - {title}")
+        videos = video_data.get("videos", [])
+        titles = [video.get("title", "") for video in videos[:5]]
+        if titles:
+            if region == "china":
+                source = "B站视频"
+            elif video_data.get("source") == "mixed":
+                source = "Twitch 与 YouTube 视频"
+            elif video_data.get("source") == "twitch":
+                source = "Twitch 直播"
+            else:
+                source = "YouTube视频"
+            print(f"[{lanlan_name}] 成功获取{source}:")
+            for title in titles:
+                print(f"  - {title}")
 
 
 def _log_trending_content(lanlan_name: str, trending_content: dict):

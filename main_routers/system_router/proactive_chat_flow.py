@@ -44,6 +44,7 @@ __all__ = [
     "_PHASE1_FETCH_PER_SOURCE",
     "_PHASE1_TOTAL_TOPIC_TARGET",
     "_open_threads_for_activity_state",
+    "_meme_proxy_candidate_fetchable",
     "_proactive_llm_retry_error_types",
     "_safe_fire_proactive_done",
     "_push_mini_game_invite_options",
@@ -66,6 +67,34 @@ _open_threads_for_activity_state = proactive_service._open_threads_for_activity_
 _render_followup_topic_hooks = proactive_service._render_followup_topic_hooks
 _resolve_proactive_locale = proactive_service._resolve_proactive_locale
 _resolve_topic_hook_locale = proactive_service._resolve_topic_hook_locale
+
+_MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
+_MEME_PROXY_CANDIDATE_TIMEOUT_SECONDS = 6.0
+
+
+async def _meme_proxy_candidate_fetchable(url: str) -> tuple[bool, str]:
+    """Return whether the existing meme proxy can fetch this candidate now."""
+    if not url:
+        return False, "missing_url"
+    try:
+        from .meme_proxy import fetch_meme_image_response
+
+        response = await asyncio.wait_for(
+            fetch_meme_image_response(url, write_cache=False),
+            timeout=_MEME_PROXY_CANDIDATE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        return False, type(exc).__name__
+
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if status_code < 200 or status_code >= 300:
+        return False, f"proxy_status_{status_code}"
+    media_type = str(getattr(response, "media_type", "") or "").lower()
+    if not media_type.startswith("image/"):
+        return False, f"proxy_media_type:{media_type or 'missing'}"
+    if not (getattr(response, "body", b"") or b""):
+        return False, "proxy_empty_body"
+    return True, media_type
 
 
 async def _safe_fire_proactive_done(scope: dict) -> None:
@@ -150,6 +179,7 @@ async def proactive_chat(request: Request):
             run_mini_game_invite_short_circuit=(_run_mini_game_invite_short_circuit),
             push_mini_game_invite_options=_push_mini_game_invite_options,
             push_mini_game_invite_resolved=_push_mini_game_invite_resolved,
+            meme_proxy_candidate_fetchable=_meme_proxy_candidate_fetchable,
         )
         return _adapt_result(result)
     except asyncio.TimeoutError:
