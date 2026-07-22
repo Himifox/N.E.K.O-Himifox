@@ -1,12 +1,13 @@
 # 主动搭话领域模块化重构技术设计
 
-状态：第一阶段后端重构已完成。本文最初基于 2026-07-15 的仓库结构制定计划，并于 2026-07-21 按实际落地结果同步模块结构、兼容边界和验收状态；前端内部拆分仍不在本阶段范围内。
+状态：第一阶段后端重构及 6.1 模块化复审收口已完成。本文最初基于 2026-07-15 的仓库结构制定计划，并于 2026-07-22 按实际落地结果同步模块结构、兼容边界和验收状态；前端内部拆分仍不在本阶段范围内。
 
-一句话结论：将当前已经拆入 `main_routers/system_router/` 的主动搭话领域逻辑继续下沉到 `main_logic/proactive_chat/`；Router 只保留 HTTP、CSRF、请求解析和响应适配；通用采集能力继续留在 `utils/`；Prompt 继续留在 `config/prompts/prompts_proactive.py`；第一阶段保持 `static/app/app-proactive.js` 及全部现有前端和插件协议兼容。
+一句话结论：主动搭话领域逻辑已下沉到 `main_logic/proactive_chat/`；Router 只保留 HTTP、CSRF、请求解析、组装副作用和响应适配；通用采集能力继续留在 `utils/`；Prompt 模板继续留在 `config/prompts/prompts_proactive.py`；第一阶段保持 `static/app/app-proactive.js` 及全部现有前端和插件协议兼容。
 
-## 实施状态（2026-07-21）
+## 实施状态（2026-07-22）
 
 - 迁移路线 0～6 已完成：协议、状态、决策、生成、小游戏邀请、音乐推荐、分阶段编排和薄 Router 均已落地。
+- 6.1 模块化收口已完成：新增 `sources.py`，闭合 generation 的模型调用入口，消除领域模块导入时注册 hook 的副作用，并将旧音乐 helper 兼容导出退回 Router。
 - 主流程 canonical owner 已从 Router 移至 `main_logic/proactive_chat/service.py`；Router 通过显式 collaborator 注入框架能力。
 - 对照重构前分支完成了行为兼容修复：保留旧 helper 关键字调用和旧导出、恢复 WebSocket 的 falsey/异常传播与业务日志语义、恢复 Router 注入的 `memory_dir`。
 - `state.py` 仍是可变状态、锁和持久化算法的唯一所有者；旧 Router 路径只保留同对象 re-export 或注入兼容薄包装，不存在双份状态或双写。
@@ -74,6 +75,7 @@ main_logic/proactive_chat/
   music_recommendation.py    # 音乐推荐、严格约束、链接和播放完成反馈
   break_reminders.py         # anti-slack、休息提醒和组合邀请子流程
   content_logging.py         # 主动搭话 source 内容日志辅助
+  sources.py                 # source 获取、并发收集、原始链接归一化
   service.py                 # 主流程编排，不依赖 FastAPI 对象
 ```
 
@@ -115,7 +117,7 @@ Router adapters
 Router 必须完成请求读取、CSRF/本地变更校验和 HTTP 响应适配，再把与框架无关的命令交给 service。目标形态如下：
 
 ```python
-@router.post('/proactive_chat')
+@router.post("/proactive_chat")
 async def proactive_chat(request: Request):
     _validate_local_mutation_request(request)
     data = await _read_json_object(request)
@@ -350,6 +352,78 @@ Service 稳定后：
 - 清理 `system_router/__init__.py` 中不再需要的内部 re-export。
 - 对仍需过渡的 re-export 建立清单和删除条件。
 
+### 6.1 模块化复审收口（已完成）
+
+2026-07-22 按“更加模块化”而非“仅完成跨目录迁移”的标准复审后，确认外层依赖方向已经正确，但内部仍存在来源抓取、模型调用和兼容副作用混在编排中的问题。本轮只完成以下四项收口，不横向增加更多领域模块，也不调整业务策略。
+
+#### 6.1.1 来源获取编排
+
+新增 `main_logic/proactive_chat/sources.py`，迁移 service 内部的 `_fetch_source`、来源并发任务组装、原始链接提取和结果归一化：
+
+- 底层仍调用 `utils.web_scraper`、`utils.screenshot_utils` 等既有实现。
+- 不拥有来源权重、概率、PASS 或去重策略；这些继续属于 `decisions.py` 和 `state.py`。
+- 并发顺序、timeout、异常降级、结果 shape、source mode 和 service 日志命名空间保持不变。
+- `service.py` 不再直接 import news、video、home、personal、window 等具体抓取函数。
+- 旧 `_extract_links_from_raw` 路径由 Router 兼容门面改为指向 `sources.py`，调用签名保持兼容。
+
+#### 6.1.2 Generation 阶段所有权
+
+在现有 `generation.py` 中收口模型相关实现，不新增 `phase1.py`、`phase2.py` 或 `model_runtime.py`：
+
+- `ProactiveModelConfig` 只承载每轮已经解析出的 conversation/vision 配置；不读取全局配置，不改变模型 tier。
+- `_make_proactive_llm()` 与 `_llm_call_with_retry()` 顶层化，保持 streaming、timeout、token budget、Focus thinking extra body 和 3 次重试语义。
+- `_run_unified_phase1()` 拥有 unified prompt 构造、模型调用、结果解析和失败降级。
+- `_fetch_phase1_followups()` 拥有关键词驱动的 music/meme 并发后置获取；service 在调用前保留原有用户抢占检查。
+- `Phase2PromptContext` 在 generation 内拥有既有模板渲染；service 只组装有界字段并在原有时序调用渲染，以保持 prompt 长度日志和最终抢占检查的先后关系。
+- `_run_phase2_generation()` 拥有模型消息构造、vision/thinking 选择、主 stream、格式自救和 BM25/output guard。
+- service 继续组装来源、回忆、活动、屏幕和素材等业务上下文；generation 不反向读取 Router、HTTP 或最终投递状态。
+
+该边界刻意保留 `handle_proactive_chat()` 内的 `_end_proactive`、抢占响应体和 memory 响应解析局部 helper：它们依赖本轮生命周期或局部解析上下文，不属于 source/LLM 能力；仅为缩短函数而继续拆分会增加参数搬运和间接层。
+
+#### 6.1.3 消除领域模块导入副作用
+
+`main_logic/proactive_chat/mini_game_invite.py` 提供幂等的 `install_mini_game_invite_hooks()`，由 `main_routers/system_router/mini_game_invite.py` 在 Router 组装时调用：
+
+- 单独 import 领域模块不再修改全局 event bus。
+- 注册仍使用既有 callback identity 去重，不改变 hook 顺序、first-hit-wins 或异常处理语义。
+- Router 本来就承担路由注册等应用组装副作用，因此该调用不下沉到 `app/`，本轮没有扩大高风险模块审查范围。
+
+#### 6.1.4 兼容导出退回 Router
+
+`content_logging.py` 只保留自身实现的 news/video/trending/personal logger；旧 `main_routers/system_router/proactive_content.py` 分别从 `content_logging.py` 和 `music_recommendation.py` 导入并维持原导出表：
+
+- 旧调用方 import 路径和符号不变。
+- 新领域模块之间不为旧 Router 文件布局建立兼容依赖。
+- 本阶段不删除 `system_router/__init__.py` 的既有 re-export。
+
+#### 6.1.5 收口边界与验收结果
+
+- 相对 `upstream/main`，非测试改动文件为 20 个；本轮只新增 `sources.py`，未超过仓库“20 个非测试文件”的不拆分说明门槛。
+- 本轮修改 `main_logic/` 和 Router 兼容门面；没有修改 `app/` 或 `memory/`。
+- `handle_proactive_chat()` 不再定义 source 或 LLM 嵌套 helper，文件净减少约 500 行；不设置机械行数目标。
+- `main_logic/proactive_chat/` 仍不导入 FastAPI 或 `main_routers.system_router`，包内无反向 Router 依赖。
+- Prompt 文案、来源概率、去重阈值、抢占时序、持久化目录、HTTP、WebSocket、插件、小游戏和音乐播放语义均未调整。
+- action note 泄漏、`MEME]` 关键词污染和外部 TLS/302 等问题不属于本模块化收口，需单独立项并说明行为变化。
+
+收口后的主流程仍由 service 清晰串联：
+
+```text
+entry / voice fast path
+activity and schedule gate
+break / mini-game short-circuit
+collect sources
+prepare bounded context
+run Phase 1
+preemption check
+run Phase 1 follow-up fetches
+prepare Phase 2 context
+run Phase 2
+commit and record delivery
+finalize lifecycle
+```
+
+验收依据是职责和依赖，而不是把同一段逻辑切成更多小函数。由于涉及 `main_logic/`，自动检查不能替代人工 review；人工审核重点见下方回归报告。
+
 ### 7. 前端后续拆分（独立排期，未纳入本阶段）
 
 前端拆分不作为第一阶段验收条件。后续如需拆分 `static/app/app-proactive.js`，建议在 `static/app/proactive/` 下建立内部模块：
@@ -397,41 +471,49 @@ uv run python scripts/check_llm_budget.py
 git diff --check
 ```
 
-2026-07-21 本地验收记录：
+2026-07-22 的 6.1 本地验证记录：
 
-- 持久化注入、投递记录、小游戏短路和 Service/Router 边界定向集共 56 项通过。
-- 除 `test_proactive_agent_trigger.py` 外的主动搭话测试共收集 506 项；拆批执行前 502 项通过，剩余 4 项被既有 vision screenshot commit 测试在当前 Python 3.12 兼容运行环境中挂起阻断。
-- `test_proactive_agent_trigger.py` 因当前环境缺少为 Python 3.11 构建的 `ormsgpack` 二进制扩展而无法收集；该文件和上述 vision 测试均不在本轮修改范围内。
-- 前端 Node 契约、API 尾斜杠、Prompt hygiene、LLM budget、Ruff、语法编译和 diff whitespace 检查通过。
-
-如相关检查脚本的实际 CLI 需要额外参数，以仓库脚本帮助信息为准，但不得跳过对应检查类别。
-
-应补充的测试：
-
-- 参数化覆盖全部 `reason_code -> stage/action` 映射。
-- 路由级验证 HTTP 状态码、CSRF、本地请求限制和 no-store header。
-- 小游戏 HTTP 与 WebSocket payload 契约测试。
-- `PROACTIVE_START/PROACTIVE_DONE` 在正常、PASS、异常、超时、抢占路径上的配对测试。
-- 并发投递抢占、SID 不匹配、用户打断和 delivery commit 失败测试。
-- 状态 canonical owner 和兼容 re-export 身份一致性测试。
+- 修改过的 Python 文件通过 AST 解析和 Ruff check。
+- 直接执行现有 Phase 2 streaming 6 项和 output guard 5 项回归函数，共 11 项通过。
+- 项目 `.venv` 固定到已经从本机移除的 Python 3.11；用可用 Python 3.12 复用 site-packages 时，Pillow/greenlet 等 3.11 二进制扩展 ABI 不兼容，标准 pytest 收集无法作为有效结果。不得把该环境阻断误记为“完整测试通过”。
+- 完整测试仍需在项目配置的 Python 3.11 + uv 环境中执行；当前静态和直接函数验证只覆盖本次移动的关键生成保护，不替代完整回归。
 
 ## 验收标准与结果
 
-以下第一阶段验收项均已由实现和定向回归覆盖；兼容门面清理与前端拆分不阻塞本阶段完成：
-
-- Router 不再拥有主动搭话领域状态和策略。
+- Router 不拥有主动搭话领域状态和策略。
 - `main_logic/proactive_chat/` 不导入 FastAPI 或 `main_routers.system_router`。
-- 所有主动搭话 `reason_code`、`stage`、`action` 保持稳定。
-- `/api/proactive_chat` 的 pass、chat、error、timeout、preempted 行为不变。
-- HTTP 状态码、CSRF、no-store header 和无末尾斜杠契约不变。
-- 并发抢占、用户打断、delivery busy、route active、voice fast path 行为不变。
+- `service.py` 不直接依赖具体 source fetcher，也不在 `handle_proactive_chat()` 中定义 source/LLM 嵌套 helper。
+- Phase 1 的 prompt、模型调用和解析，以及 Phase 2 的 messages、模型 stream 和 output guard 均由 generation 顶层入口拥有。
+- 单独 import `mini_game_invite.py` 不注册全局 hook；Router 组装时仍完成幂等注册。
+- `content_logging.py` 不依赖 `music_recommendation.py`；旧 Router 导出保持不变。
+- 所有主动搭话 `reason_code`、`stage`、`action`、HTTP、WebSocket 和插件协议保持稳定。
+- 并发抢占、用户打断、delivery busy、route active、voice fast path、持久化和投递语义保持不变。
 - 音乐完整播放反馈仍只清理 music channel 标记，不删除历史文本。
 - 小游戏邀请仍只在成功投递后计入主动搭话历史和计数。
-- 小游戏反馈路由和 `mini_game_invite_options/resolved` 事件流不变。
 - 前端仍通过原有 `window.*` API 调度主动搭话。
-- 插件 `proactive_message` 事件流不变。
 - 状态、锁和持久化加载器不存在新旧两份实现。
-- 可在当前环境完成的目标测试、Node 测试、项目检查和 `git diff --check` 通过；环境阻断项按上方本地验收记录保留，不误记为通过。
+- 当前可用环境内的静态检查和定向直接回归通过；完整 pytest 环境阻断按上方记录保留，待有效 Python 3.11 + uv 环境复验。
+
+## `main_logic` 人工回归报告
+
+该 PR 修改了 `main_logic/`，必须人工 review。下表按 canonical owner 说明改动、必要性、前后表现和潜在回归：
+
+| 文件 | 改动与必要性 | 前后表现 | 人工审核重点 |
+|---|---|---|---|
+| `contracts.py` | 集中命令、结果、reason/stage/action 契约。 | 旧 Router 导出继续可用，wire shape 不变。 | reason 到 stage/action 映射、HTTP status。 |
+| `state.py` | 统一历史、计数、锁和持久化所有权。 | 旧 facade 与新模块引用同一状态；显式使用注入的 `memory_dir`。 | 根目录注入、原子读写、无双份状态。 |
+| `decisions.py` | 迁移入口 gate、activity/source 选择等纯决策。 | 概率、优先级和 PASS 条件不变。 | gate 顺序、随机调用次数、source 权重。 |
+| `generation.py` | 集中 Phase 1/2 解析、模型请求、stream 和输出保护。 | 模型 tier、Prompt、timeout、重试、vision/thinking、PASS 和去重语义不变。 | 消息 shape、重试异常集合、格式/BM25 regen、action note 清理边界。 |
+| `delivery.py` | 集中投递提交、成功后记录和生命周期结束。 | WebSocket/TTS/plugin 的提交顺序与失败降级不变。 | SID 抢占、falsey websocket、异常传播和日志。 |
+| `mini_game_invite.py` | 迁移邀请状态机，并将 hook 注册改为显式安装。 | 关键词、概率、冷却、按钮和 payload 不变；单独 import 无副作用。 | Router 启动是否必经安装、identity 去重、first-hit-wins。 |
+| `music_recommendation.py` | 集中搜索 fallback、选择、播放完成和动态约束。 | 推荐概率、链接、播放中/冷却拦截和历史语义不变。 | fallback、完整播放仅清 music 标记、数据级锁。 |
+| `break_reminders.py` | 迁移 anti-slack、休息提醒和组合邀请子流程。 | Router 注入与原短路顺序不变。 | 模型参数、短路返回、小游戏组合 payload。 |
+| `content_logging.py` | 只保留本模块实现的 source 内容日志。 | 日志内容不变；音乐 helper 从其 canonical 模块导入。 | logger namespace、旧 facade 导出。 |
+| `sources.py` | 新增来源抓取、并发收集和链接归一化。 | fetch 顺序、limit、timeout、异常降级和 result shape 不变。 | screenshot/avatar 处理、各来源 links 顺序、失败日志。 |
+| `service.py` | 作为框架无关编排器串联 gate、source、Phase 1/2、投递和记录。 | HTTP/WS 由 Router 适配，业务退出与生命周期仍统一收口。 | 阶段顺序、抢占点、模型配置注入、最终 commit/record。 |
+| `__init__.py` | 定义领域包并避免不必要的聚合副作用。 | 不新增业务行为。 | 不应在包 import 时触发 Router 或 hook 注册。 |
+
+`app/` 与 `memory/` 在 6.1 收口中没有代码修改，因此本轮不新增这两个高风险模块的人工审核项。
 
 ## PR 切分与回滚
 
@@ -467,7 +549,7 @@ git diff --check
 
 | 维度 | 重构前 | 重构后 |
 |---|---|---|
-| 主流程可读性 | Router 已按领域拆包，但主动搭话主流程仍集中在约 2933 行的 `proactive_chat_flow.py`。 | Router 只保留协议适配；`service.py` 串联显式阶段。 |
+| 主流程可读性 | Router 已按领域拆包，但主动搭话主流程仍集中在约 2933 行的 `proactive_chat_flow.py`。 | Router 只保留协议适配；service 串联具名阶段，不再内嵌 source/LLM helper。 |
 | 职责边界 | Router 子模块仍同时承担 HTTP、领域状态、策略和生成编排。 | Router、领域逻辑、通用工具、Prompt、投递阶段和状态机各自归位。 |
 | 状态所有权 | 历史和 source 模块之间存在对可变全局状态的直接引用。 | `state.py` 是唯一所有者；主流程显式传递持久化根目录，旧 facade 共享同一状态对象。 |
 | 子能力规模 | 小游戏路由、状态、业务规则和 WebSocket payload 集中在同一 Router 文件。 | 小游戏、音乐、休息提醒、内容日志和投递阶段拥有具名领域模块，Router 只做协议适配。 |
@@ -476,4 +558,4 @@ git diff --check
 | 前端兼容 | `static/app/app-proactive.js` 承担调度、采集、传输和兼容 API。 | 第一阶段保持不变；后续内部拆分仍由原文件导出 `window.*` API。 |
 | 回滚成本 | 主流程移动容易牵动多个 Router 子模块和共享状态。 | 按 canonical owner 小步迁移，每个 PR 可独立回滚且不双写状态。 |
 
-整体效果：用户侧行为和全部外部协议保持不变；维护侧从“在 Router 子模块和大流程中定位分支”转为“按主动搭话领域模块定位契约、状态、决策、生成、具名子能力和编排”。
+整体效果：用户侧行为和全部外部协议保持不变；维护侧从“在 Router 子模块和大流程中定位分支”转为“按主动搭话领域模块定位契约、状态、决策、来源、生成、具名子能力和编排”。
