@@ -165,8 +165,12 @@ from main_logic.proactive_recommendation_feedback import (
     record_feedback_event,
     register_pending_feedback_from_observation,
 )
+from main_logic.proactive_recommendation_feedback_state import (
+    get_feedback_state_preview,
+)
 from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
+    sanitize_recommendation_observation,
 )
 from main_logic.proactive_recommendation_tuning import (
     load_recommendation_tuning,
@@ -331,7 +335,8 @@ def _record_proactive_recommendation_observation(
     # Keep the response and observation on the same identifier so later UI
     # feedback can always join to the row, including pass/short-circuit exits.
     response_body["turn_id"] = turn_id
-    observation = build_recommendation_observation(
+    observation_ts = time.time() if ts is None else ts
+    raw_observation = build_recommendation_observation(
         decision,
         recommendation_mode=recommendation_mode,
         active_bias=active_bias,
@@ -343,13 +348,22 @@ def _record_proactive_recommendation_observation(
         source_tag=response_body.get("source_tag"),
         active_channels=response_body.get("active_channels"),
         source_links=response_body.get("source_links"),
-        ts=time.time() if ts is None else ts,
+        ts=observation_ts,
         lanlan_name=lanlan_name,
         turn_id=turn_id,
         activity_state=activity_state,
         activity_propensity=activity_propensity,
         algorithm_version=algorithm_version or f"{APP_VERSION}:proactive-recommendation-observation-v2",
     )
+    if recommendation_mode == "shadow" and config_dir is not None:
+        try:
+            raw_observation["feedback_state_preview"] = get_feedback_state_preview(
+                config_dir=config_dir,
+                now=observation_ts,
+            )
+        except Exception as exc:
+            logger.debug("feedback state preview snapshot failed: %s", exc)
+    observation = sanitize_recommendation_observation(raw_observation)
     logger.info(
         "[%s] proactive recommendation observation: %s",
         lanlan_name,

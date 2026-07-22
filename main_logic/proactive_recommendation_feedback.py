@@ -11,20 +11,29 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 import json
 import logging
+import math
 import os
 from pathlib import Path
+from statistics import median
 import time
 from typing import Any
+
+from main_logic.proactive_recommendation_feedback_state import (
+    update_feedback_state_preview,
+)
 
 
 logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
 
 FEEDBACK_LOG_FILENAME = "proactive_recommendation_feedback.jsonl"
 FEEDBACK_SCORE_VERSION = "report_score_v1"
-REWARD_SCORE_V2_PREVIEW_VERSION = "reward_score_v2_preview_v1"
+REWARD_SCORE_V2_PREVIEW_VERSION = "reward_score_v2_preview_v2"
 DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024
 REPLY_FAST_SECONDS = 60
 REPLY_WINDOW_SECONDS = 10 * 60
+REPLY_SPEED_BASELINE_MIN_SAMPLES = 5
+REPLY_SPEED_BONUS_MAX = 0.05
+REPLY_SPEED_LOG_SCALE_FLOOR = 0.25
 
 _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "user_reply_fast": ("generic_engagement", 0.25, "medium"),
@@ -163,6 +172,7 @@ class PendingRecommendationFeedback:
     delivered_at: float = field(default_factory=time.time)
     log_mode: str = "off"
     config_dir: str | os.PathLike[str] | None = None
+    recommendation_mode: str = "off"
     seen_groups: set[str] = field(default_factory=set)
     seen_event_types: set[str] = field(default_factory=set)
     reply_seen: bool = False
@@ -241,13 +251,15 @@ def build_reward_score_v2_preview(
     feedback_events: Iterable[Mapping[str, Any]],
     *,
     feedback_inferred: bool = False,
+    relative_speed_preview: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic, non-production reward preview for one turn.
 
     Events are deduplicated by event type.  When multiple events affect the
     same component, the strongest absolute signal wins, except that reply and
-    continuation remain separate components.  No personal state is read and
-    the result is never consumed by ranking or tuning.
+    continuation remain separate components.  An optional point-in-time speed
+    preview may add a small non-negative bonus.  The result is never consumed
+    by ranking or tuning.
     """
     event_types: list[str] = []
     seen_event_types: set[str] = set()
@@ -285,6 +297,24 @@ def build_reward_score_v2_preview(
         event_type in _REWARD_V2_PREVIEW_REPLY_EVENTS
         for event_type in event_types
     )
+    relative_speed_status = "not_applicable"
+    relative_speed_baseline_sample_count = 0
+    if has_reply:
+        relative_speed_status = "pending_personal_baseline"
+        if isinstance(relative_speed_preview, Mapping):
+            relative_speed_status = (
+                _clean_text(relative_speed_preview.get("status"))
+                or "pending_personal_baseline"
+            )
+            relative_speed_baseline_sample_count = max(
+                0,
+                int(_number(relative_speed_preview.get("baseline_sample_count"), 0.0)),
+            )
+            components["relative_speed"] = _clamp(
+                _number(relative_speed_preview.get("bonus"), 0.0),
+                0.0,
+                REPLY_SPEED_BONUS_MAX,
+            )
     reward = _clamp(sum(components.values()), -1.0, 1.0)
     return {
         "version": REWARD_SCORE_V2_PREVIEW_VERSION,
@@ -302,8 +332,9 @@ def build_reward_score_v2_preview(
         "event_types": event_types,
         "recognized_event_types": recognized_event_types,
         "feedback_inferred": bool(feedback_inferred),
-        "relative_speed_status": (
-            "pending_personal_baseline" if has_reply else "not_applicable"
+        "relative_speed_status": relative_speed_status,
+        "relative_speed_baseline_sample_count": (
+            relative_speed_baseline_sample_count
         ),
         "technical_zero_event_types": technical_zero_events,
         "unknown_event_types": unknown_events,
@@ -390,6 +421,7 @@ def register_pending_feedback_from_observation(
         delivered_at=_number(observation.get("ts"), time.time()),
         log_mode=log_mode,
         config_dir=config_dir,
+        recommendation_mode=_clean_text(observation.get("recommendation_mode")),
     )
 
 
@@ -402,6 +434,7 @@ def register_pending_feedback(
     delivered_at: float | None = None,
     log_mode: str = "off",
     config_dir: str | os.PathLike[str] | None = None,
+    recommendation_mode: str = "off",
 ) -> PendingRecommendationFeedback | None:
     name = _clean_text(lanlan_name)
     tid = _clean_text(turn_id)
@@ -415,6 +448,7 @@ def register_pending_feedback(
         delivered_at=time.time() if delivered_at is None else float(delivered_at),
         log_mode=log_mode,
         config_dir=config_dir,
+        recommendation_mode=_clean_text(recommendation_mode),
     )
     _pending_feedback[(name, tid)] = pending
     _prune_pending_feedback(now=pending.delivered_at)
@@ -449,18 +483,51 @@ def record_feedback_event(
     )
     if not event.get("event_type"):
         return None
+    duplicate_event = False
+    duplicate_group = False
     if pending is not None:
+        duplicate_event = str(event["event_type"]) in pending.seen_event_types
+        duplicate_group = str(event.get("event_group") or "") in pending.seen_groups
         pending.seen_event_types.add(str(event["event_type"]))
         pending.seen_groups.add(str(event.get("event_group") or ""))
+    effective_log_mode = (
+        log_mode if log_mode is not None else (pending.log_mode if pending else "off")
+    )
+    effective_config_dir = (
+        config_dir if config_dir is not None else (pending.config_dir if pending else None)
+    )
     wrote = append_recommendation_feedback_jsonl(
         event,
-        log_mode=log_mode if log_mode is not None else (pending.log_mode if pending else "off"),
-        config_dir=config_dir if config_dir is not None else (pending.config_dir if pending else None),
+        log_mode=effective_log_mode,
+        config_dir=effective_config_dir,
     )
     if wrote:
         _maybe_auto_apply_tuning_after_feedback(
-            config_dir=config_dir if config_dir is not None else (pending.config_dir if pending else None),
+            config_dir=effective_config_dir,
         )
+        if (
+            pending is not None
+            and pending.recommendation_mode == "shadow"
+            and not duplicate_event
+        ):
+            component = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(
+                str(event.get("event_type") or "")
+            )
+            score = float(component[1]) if component is not None else 0.0
+            try:
+                update_feedback_state_preview(
+                    config_dir=effective_config_dir,
+                    source_type=event.get("source_type"),
+                    score=score,
+                    persistent_eligible=(
+                        not duplicate_group
+                        and event.get("confidence") in {"medium", "high"}
+                        and score != 0
+                    ),
+                    now=_number(event.get("ts"), time.time()),
+                )
+            except Exception as exc:
+                logger.debug("feedback state preview update failed: %s", exc)
     return event
 
 
@@ -781,6 +848,10 @@ def join_observations_with_reward_score_v2_preview(
         sample_limit=sample_limit,
     )
     events_by_turn = _feedback_events_by_turn(feedback_events)
+    relative_speed_by_turn = _relative_reply_speed_previews(
+        samples,
+        events_by_turn,
+    )
     joined: list[dict[str, Any]] = []
     for row in samples:
         key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
@@ -806,6 +877,7 @@ def join_observations_with_reward_score_v2_preview(
         preview = build_reward_score_v2_preview(
             events,
             feedback_inferred=feedback_inferred,
+            relative_speed_preview=relative_speed_by_turn.get(key),
         )
         attribution_issue = (
             _reward_v2_preview_attribution_issue(row, events)
@@ -838,6 +910,9 @@ def join_observations_with_reward_score_v2_preview(
                 "attribution_valid": attribution_valid,
                 "attribution_issue": attribution_issue,
                 "relative_speed_status": preview["relative_speed_status"],
+                "relative_speed_baseline_sample_count": preview[
+                    "relative_speed_baseline_sample_count"
+                ],
                 "technical_zero_event_types": list(
                     preview["technical_zero_event_types"]
                 ),
@@ -940,7 +1015,32 @@ def summarize_reward_score_v2_preview(
         "relative_speed_neutral_count": sum(
             1
             for row in explicit_scored
-            if row.get("relative_speed_status") == "pending_personal_baseline"
+            if row.get("relative_speed_status")
+            in {
+                "pending_personal_baseline",
+                "insufficient_personal_baseline",
+                "baseline_ready_no_bonus",
+                "missing_reply_latency",
+            }
+        ),
+        "relative_speed_bonus_count": sum(
+            1
+            for row in explicit_scored
+            if _number(
+                (row.get("reward_components_v2_preview") or {}).get(
+                    "relative_speed"
+                )
+                if isinstance(row.get("reward_components_v2_preview"), Mapping)
+                else None,
+                0.0,
+            )
+            > 0
+        ),
+        "personal_reply_speed_baseline_ready_count": sum(
+            1
+            for row in explicit_scored
+            if row.get("relative_speed_status")
+            in {"baseline_ready_bonus", "baseline_ready_no_bonus"}
         ),
         "technical_zero_event_count": sum(
             len(row.get("technical_zero_event_types") or [])
@@ -1086,6 +1186,103 @@ def _feedback_events_by_turn(
         if key[0] and key[1]:
             events_by_turn[key].append(safe)
     return events_by_turn
+
+
+def _relative_reply_speed_previews(
+    observations: Sequence[Mapping[str, Any]],
+    events_by_turn: Mapping[tuple[str, str], Sequence[Mapping[str, Any]]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build per-turn speed previews from earlier, valid replies only."""
+    records: list[tuple[tuple[str, str], float, float | None]] = []
+    for observation in observations:
+        key = (
+            _clean_text(observation.get("lanlan_name")),
+            _clean_text(observation.get("turn_id")),
+        )
+        events = list(events_by_turn.get(key, ()))
+        if not key[0] or not key[1] or not events:
+            continue
+        if _reward_v2_preview_attribution_issue(observation, events) is not None:
+            continue
+        replies = [
+            event
+            for event in events
+            if _clean_text(event.get("event_type")) in _REWARD_V2_PREVIEW_REPLY_EVENTS
+        ]
+        if not replies:
+            continue
+        reply = min(
+            replies,
+            key=lambda event: _number(event.get("ts"), float("inf")),
+        )
+        event_ts = _number(
+            reply.get("ts"),
+            _number(observation.get("ts"), float("inf")),
+        )
+        latency = _reply_latency_seconds(reply)
+        records.append((key, event_ts, latency))
+
+    valid_history = [record for record in records if record[2] is not None]
+    previews: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, event_ts, latency in records:
+        prior_latencies = [
+            float(previous_latency)
+            for _, previous_ts, previous_latency in valid_history
+            if previous_ts < event_ts
+            and previous_latency is not None
+        ]
+        previews[key] = _relative_reply_speed_preview(
+            latency,
+            prior_latencies,
+        )
+    return previews
+
+
+def _reply_latency_seconds(event: Mapping[str, Any]) -> float | None:
+    metadata = event.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    latency = _number(metadata.get("reply_latency_seconds"), float("nan"))
+    if (
+        not math.isfinite(latency)
+        or latency < 0
+        or latency > REPLY_WINDOW_SECONDS
+    ):
+        return None
+    return latency
+
+
+def _relative_reply_speed_preview(
+    latency: float | None,
+    prior_latencies: Sequence[float],
+) -> dict[str, Any]:
+    sample_count = len(prior_latencies)
+    if latency is None:
+        return {
+            "status": "missing_reply_latency",
+            "baseline_sample_count": sample_count,
+            "bonus": 0.0,
+        }
+    if sample_count < REPLY_SPEED_BASELINE_MIN_SAMPLES:
+        return {
+            "status": "insufficient_personal_baseline",
+            "baseline_sample_count": sample_count,
+            "bonus": 0.0,
+        }
+
+    logged = [math.log1p(value) for value in prior_latencies]
+    center = float(median(logged))
+    mad = float(median(abs(value - center) for value in logged))
+    scale = max(1.4826 * mad, REPLY_SPEED_LOG_SCALE_FLOOR)
+    faster_z = max(0.0, (center - math.log1p(latency)) / scale)
+    bonus = min(REPLY_SPEED_BONUS_MAX, faster_z * 0.02)
+    return {
+        "status": (
+            "baseline_ready_bonus" if bonus > 0 else "baseline_ready_no_bonus"
+        ),
+        "baseline_sample_count": sample_count,
+        "bonus": round(bonus, 3),
+    }
 
 
 def _top1_source_type(row: Mapping[str, Any]) -> str:
