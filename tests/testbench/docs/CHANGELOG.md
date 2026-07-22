@@ -678,3 +678,40 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
 - P44-F2 is closed. Repetition, source diversity, persistent personalization,
   bandit/OPE, Canary, and automatic tuning are not automatic next stages; see
   [`RECOMMENDATION_CURRENT_SCOPE.md`](./RECOMMENDATION_CURRENT_SCOPE.md).
+
+## P44-F2-R0 · Timing Evidence Restart preflight (2026-07-21)
+
+- Added an immutable, SHA-bound blind annotation manifest for the existing
+  timing-v3 freeze; no observation or feedback log is rewritten.
+- Reviewer items expose only sanitized candidate metadata, activity state and
+  redaction notes. Production score/rank/source, delivery outcome/text,
+  feedback, inferred ignored and timing values are rejected by a blindness
+  validator.
+- Added primary label, confidence/reason, deterministic stratified blind
+  second review, disagreement adjudication, and four-cell readiness gates.
+- The existing freeze passes structural preflight: 105 reviewable items and
+  101 analysis-eligible items after excluding four technical exits. It remains
+  `hold` until human review fills the required delivered/pass × true/false
+  cells; no new collection is implied.
+- Added P49 smoke coverage. No MVP, scheduler, production weight, interval or
+  tuning configuration changed.
+
+## P44-G0 · MVP feedback-state preview sync (2026-07-22)
+
+- Synced the MVP `feedback_state_preview` sanitizer into the Testbench import
+  contract. It retains only bounded source aggregates, forces preview-only
+  flags, and removes private or unknown fields; Testbench does not copy the
+  MVP `reward_score_v2_preview` formula.
+- Added P52 coverage for 2-hour TTL / 3-event gate preservation, privacy
+  boundaries, atomic import round-trip, and baseline rank non-consumption.
+
+## P44-G1 · 主动搭话接受度离线报告 (2026-07-22)
+
+- 新增可复现的 JSON/Markdown 分析：所有主动搭话共享聊天反馈，music 在同一
+  `turn_id` 上额外合并播放行为。
+- news、meme、vision、music 等素材按来源展示聊天接受度，但不会把普通回复
+  自动写成长期来源偏好。
+- 报告区分显式反馈、inferred ignored、技术错误、未知事件与归因失败，并保证
+  不修改生产权重、排序、投递、scheduler 或 tuning。
+- 首份真实 freeze 为 260 条 preview observation / 161 个投递 encounter；结论为
+  `descriptive_only`，未生成调度或权重候选。

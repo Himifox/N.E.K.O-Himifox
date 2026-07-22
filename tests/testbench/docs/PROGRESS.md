@@ -1605,3 +1605,52 @@ The real timing cohort covers idle 76 / chatting 10 / unknown 19. It has no
 `focused_work`; that limitation is reported rather than used to reopen P44-F2.
 `gaming` is not a target, while away/busy are recorded only if they occur
 naturally. No subsequent Recommendation phase is automatically authorized.
+
+## P44-F2-R0 · Timing Evidence Restart preflight · ready for human review (2026-07-21)
+
+P44-F2-R0 is a separately approved Testbench-only evidence step, not a new
+timing strategy. It preserves the 105-observation freeze and creates a distinct
+manifest linked by turn ID and the immutable file SHA-256. The first preflight
+finds 105 structurally reviewable contexts; after excluding three delivery
+preemptions and one generation-empty technical exit, the maximum analysis
+cohort is 101.
+
+The manifest is blind by construction: it retains only sanitized candidate
+metadata, activity state and redaction notes. It omits production score/rank,
+selected source, delivered outcome/text, feedback, inferred ignored and all
+timing values. Primary review records `should_recommend`, confidence and
+reason; a deterministic stratified >=20% sample receives independent blind
+second review, with disagreements preserved and adjudicated separately.
+
+Readiness remains `hold` until review completes and all four qualified cells
+(`delivered/pass` × `should=true/false`) contain at least 8 observations, with
+at least 20 qualified samples on each delivery side. P49 proves both the blind
+manifest and a synthetic `ready_for_f2_rerun` control. A successful gate only
+permits re-running the existing association analysis; it does not permit a
+candidate formula, new collection, MVP change or tuning.
+
+## P44-G0 · MVP feedback-state preview sync · complete (2026-07-22)
+
+P44-G0 does not create another interest reducer. It synchronizes the MVP
+`feedback_state_preview_v1` observation contract into Testbench import:
+2-hour temporary TTL, 3 explicit-evidence threshold before persistent affinity
+preview, bounded source aggregates and forced preview-only / ranking-off /
+tuning-off flags. `reward_score_v2_preview_v2` remains an MVP-owned diagnostic
+formula and is not copied into Testbench.
+
+P52 verifies sanitizer boundaries and atomic import round-trip, then confirms
+the production-default ranking does not consume preview state.
+
+## P44-G1 · proactive encounter acceptance analysis · implemented (2026-07-22)
+
+G1 directly calls the MVP `reward_score_v2_preview_v2` join/summary helpers and
+adds deterministic JSON/Markdown analysis. Every delivered encounter shares
+conversation feedback; material sources remain visible as descriptive groups,
+while music adds playback behavior to the same turn. Material grouping never
+writes source affinity. P53 covers replay, feedback dedupe, music combination,
+cross-source attribution failure, technical-zero isolation, point-in-time
+cutoff and static non-consumption contracts. The first real freeze contains
+260 preview observations and 161 delivered encounters. Its conclusion is
+`descriptive_only`: 41 explicit conversation-feedback turns are positive,
+none are negative, and music has only 6 conversation-feedback turns. G2, G3
+and OPE/bandit remain HOLD.

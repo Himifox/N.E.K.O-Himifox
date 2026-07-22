@@ -3,8 +3,8 @@
 > 状态：**Testbench 当前操作规范**
 > 所在分支：`feat/recommend-testbench`
 > 产品/MVP 边界归属：`feat/recommend-MVP`
-> 最近更新：2026-07-21
-> 当前阶段：P44-F2 已以 `no_candidate` 结项；没有自动获准的下一阶段
+> 最近更新：2026-07-22
+> 当前阶段：P44-G1 首份真实接受度报告已完成；结论为 `descriptive_only`
 
 本文是 Recommendation Testbench 的当前操作说明。产品组件边界仍由 MVP 的 [`proactive-recommendation-current-scope.md`](../../../docs/design/proactive-recommendation-current-scope.md) 决定；`PROGRESS.md`、`CHANGELOG.md` 和 `tests/testbench_data/recommendation/exports/` 中的文件分别是历史记录、版本记录和不可变运行产物，不能覆盖本文的当前结论。
 
@@ -14,6 +14,8 @@
 - P44-F1：`no_universal_threshold_candidate`。
 - P44-F2 timing-v3 freeze：105 observation / 30 个显式 joined feedback turn / 0 个 timing 契约错误。
 - P44-F2-B：`no_candidate`。
+- P44-F2-R0：`HOLD / no_candidate`；不再打开新的人工标注轮次。
+- P44-G0：已完成 MVP `feedback_state_preview` 的 Testbench sanitizer、校验与安全导入往返；不复制 `reward_score_v2_preview` 公式，也不接入排序。
 - 生产权重、阈值、interval、scheduler、routing、投递与 tuning 均未修改。
 - `active_source` 与所有自动 tuning 继续保持 `HOLD/off`。
 
@@ -83,17 +85,46 @@ P44-F2-B 已完成以下工作：
 - 写入 MVP 权重、interval、生产配置或 tuning；
 - 为了重新分批而删除、归档或轮转 observation/feedback 日志；只能使用 immutable freeze/cutoff。
 
-## 6. 研究 Backlog（全部 `HOLD`）
+## 6. P44-G0：已完成的合同同步
+
+G0 的唯一 MVP 语义来源、sanitizer、验证门禁和后续阶段边界见
+[`P44_G0_PERSONALIZED_INTEREST_FOUNDATION.md`](./P44_G0_PERSONALIZED_INTEREST_FOUNDATION.md)。
+它只建立无行为影响的反馈证据基础；不会修改候选分数、权重、投递、scheduler 或
+tuning。
+
+## 7. P44-G1：主动搭话接受度离线分析
+
+G1 已获授权并在 Testbench 中实现，规范见
+[`P44_G1_ENCOUNTER_ACCEPTANCE.md`](./P44_G1_ENCOUNTER_ACCEPTANCE.md)。所有实际
+投递 encounter 都共享聊天反馈；music 另加播放行为。news、meme、vision 等素材
+按来源展示接受度，但普通回复不会自动写成来源长期偏好。首份 260 observation / 161
+投递 encounter 报告结论为 `descriptive_only`：共同聊天显式反馈 41 条均为正向，
+music 仅 6 条共同聊天反馈，不满足候选门禁。生产权重、排序、投递、scheduler 与
+tuning 均未改变。报告同时记录 preview-v1 尚未把 music 的共同聊天状态与播放资源
+状态拆开；该合同缺口只作后续评审输入，不在 Testbench 反向修改 MVP。
+
+## 8. P44-F2-R0：历史收口
+
+R0 不是新的策略阶段，也不撤销 P44-F2 的 `no_candidate`。它只判断现有
+105 条 timing freeze 是否有足够的安全 `review_context` 供新的独立盲标 cohort
+使用。具体协议和四格 delivered/pass × should-recommend 门禁见
+[`P44_F2_R0_TIMING_EVIDENCE_RESTART.md`](./P44_F2_R0_TIMING_EVIDENCE_RESTART.md)。
+
+R0 后仍必须遵守：若 readiness 为 `hold`，不默认重新采集、不写公式；若为
+`ready_for_f2_rerun`，也只重跑关联分析。任何候选模拟、MVP 或调度改动仍需
+再次单独授权。
+
+## 9. 研究 Backlog（其余全部 `HOLD`）
 
 - 为 timing cohort 补充合规人工决策标签或重新采集带标签 cohort；
 - 个体回复时延基线；
-- 临时/持久兴趣与 `reward_score_v2`；
+- G1 证据充分后的 scheduler/routing Shadow 候选评审；
 - 新的重复惩罚、来源多样性、semantic repeat、MMR、单候选恢复；
 - propensity、contextual bandit、OPE、Canary 和自动 tuning。
 
 每一项都需要独立目标、证据、分支归属与验收门禁。当前没有默认下一项。
 
-## 7. 文档角色
+## 10. 文档角色
 
 - 本文：Recommendation Testbench 当前边界、证据适用范围和停止点。
 - `testbench_ARCHITECTURE_OVERVIEW.md`：长期架构与模块关系。

@@ -4,7 +4,7 @@
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
 > 最近更新：2026-07-22
-> 当前阶段：P44-G0 Testbench 合同同步已完成；`reward_score_v2_preview` 与 `feedback_state_preview` 均保持 preview-only
+> 当前阶段：P44-G1 Testbench 主动搭话接受度首份真实报告已完成，结论为 `descriptive_only`
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -20,6 +20,7 @@
 8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
 10. P44-G0 只允许从原始 feedback event 重算 turn-level `reward_score_v2_preview`，并将 MVP 的 `feedback_state_preview` 合同同步到 Testbench；Testbench 不复制 reward 公式，两类 preview 均不进入排序、tuning 或生产推荐。
+11. P44-G1 以一次主动搭话 encounter 为单位；所有素材共享聊天反馈，music 另加播放行为。素材来源仅作描述性分组，不因普通回复自动形成长期来源偏好。
 
 正式 timing-v3 baseline：
 
@@ -118,7 +119,7 @@ P44-F2 的两侧工作均已结束：
 
 - 不因为 `no_candidate` 自动转入重复惩罚、来源多样性、个人回复时延或持久兴趣；
 - 不为了得到候选而用 `delivered`、feedback join 或缺失反馈替代人工标签；
-- 若要重启 timing/fatigue 研究，必须先单独决定是否为同 cohort 补充合规人工决策标签或重新采集带标签数据；
+- 已单独批准的 P44-F2-R0 先为同 cohort 建立引用 freeze SHA 的独立盲标 manifest，审计现有 review context；只有该路径整体不足时，才另行决定是否重新采集；
 - 任何新方向都需要新的目标、分支归属和验收门禁，不沿用 P44-F2 的授权。
 
 ### 5.1 第一轮选择与第二轮 MVP 收口
