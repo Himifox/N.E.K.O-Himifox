@@ -15,6 +15,7 @@ from main_logic.proactive_recommendation_observer import (
     load_recommendation_observations_jsonl,
     sanitize_recommendation_observation,
     sanitize_recommendation_decision_context,
+    sanitize_recommendation_feedback_state_preview,
     sanitize_recommendation_review_context,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
@@ -74,6 +75,52 @@ def _observation(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_feedback_state_preview_sanitizer_keeps_only_bounded_aggregates():
+    safe = sanitize_recommendation_feedback_state_preview(
+        {
+            "version": "feedback_state_preview_v1",
+            "temporary": {
+                "ttl_seconds": 7_200,
+                "sources": {
+                    "music": {
+                        "interest_preview": 0.4,
+                        "positive_evidence_count": 2,
+                        "negative_evidence_count": 0,
+                        "expires_in_seconds": 6_000,
+                        "reply_latency_seconds": 12.5,
+                        "title": "private",
+                    }
+                },
+            },
+            "persistent": {
+                "min_explicit_evidence": 3,
+                "sources": {
+                    "music": {
+                        "positive_evidence_count": 2,
+                        "negative_evidence_count": 0,
+                        "updated_at": 100.0,
+                        "affinity_preview": 0.0,
+                        "url": "https://private.example/token=secret",
+                    }
+                },
+            },
+            "messages": ["private"],
+        }
+    )
+
+    dumped = json.dumps(safe, ensure_ascii=False)
+    assert safe["ranking_consumed"] is False
+    assert safe["temporary"]["sources"]["music"] == {
+        "positive_evidence_count": 2,
+        "negative_evidence_count": 0,
+        "interest_preview": 0.4,
+        "expires_in_seconds": 6_000.0,
+    }
+    assert "private" not in dumped
+    assert "latency" not in dumped
+    assert "url" not in dumped.lower()
 
 
 def test_writer_off_does_not_create_file(tmp_path):

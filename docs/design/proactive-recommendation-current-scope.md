@@ -3,8 +3,8 @@
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
-> 最近更新：2026-07-21
-> 当前阶段：Recommendation MVP 第二轮与 P44-G0-A Shadow-only `reward_score_v2_preview` 已完成
+> 最近更新：2026-07-22
+> 当前阶段：Recommendation MVP 第二轮与 P44-G0-A～D Shadow-only feedback preview 已完成
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -19,7 +19,7 @@
 7. 生产推荐权重、调度曲线和投递行为保持不变；`PROACTIVE_RECOMMENDATION_TUNING_MODE=off`。
 8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
-10. P44-G0-A 只允许从原始 feedback event 重算 turn-level `reward_score_v2_preview`；该 preview 不进入排序、tuning 或个性化状态。
+10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；它们不进入排序、PASS、投递或 tuning。
 
 正式 timing-v3 baseline：
 
@@ -57,7 +57,8 @@
 - 对 music、news、video、meme、vision 等当前安全候选进行确定性排序。
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
-- 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示。
+- 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示个人相对回复速度 bonus。
+- 在 Shadow 中保存来源级临时/持久聚合 preview，并把决策前快照写入后续 observation。
 
 ### 3.2 暂不允许
 
@@ -67,7 +68,7 @@
 - 新增推荐层时间硬门控或再次实现调度回退。
 - 把 `backoff_level`、`backoff_tier`、scheduler policy 等调度内部状态加入推荐画像。
 - 将一次回复、一次播放或一次快速响应持久化为长期兴趣。
-- 让 `reward_score_v2_preview` 影响候选分数、PASS、投递、tuning，或在个人回复速度基线完成前给 `user_reply_fast` 额外奖励。
+- 让 `reward_score_v2_preview` 或相对回复速度 bonus 影响候选分数、PASS、投递、tuning 或持久画像。
 - 引入 MMR、DPP、向量数据库、Feature Store、MABWiser/Mab2Rec、OBP 或其他新运行时依赖。
 - 启用 epsilon exploration、contextual bandit、OPE 或多用户 Canary。
 - 要求本轮覆盖 `gaming`；`away`/`busy` 只在自然出现时记录。
@@ -140,13 +141,34 @@ P44-F2 的两侧工作均已结束：
 P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的第一步，仅冻结奖励语义和可审计输出：
 
 1. 原始 feedback event 与 `report_score_v1` 保持不变，v2 preview 始终可从原始事件重算。
-2. `user_reply_fast` 与 `user_reply` 获得相同基础回复分；个人速度基线尚未建立，因此 relative-speed component 固定为 0。
+2. `user_reply_fast` 与 `user_reply` 获得相同基础回复分；固定 60 秒标签不直接代表兴趣。
 3. `user_continue`、音乐完成/播完、明确关闭等事件按独立 component 计算；`ignored` 仅为低置信弱负向，推断 ignored 与显式 reward 主指标分开报告。
 4. `music_error` 与 `autoplay_blocked` 明确计 0，不得污染偏好。
 5. feedback 必须通过 `lanlan_name + turn_id` 与已投递 observation 关联，并校验来源及可验证的 candidate ID；归因失败的事件不计 reward。
 6. 输出仅进入 `/api/proactive/recommendation/summary` 的独立 preview 字段；推荐排序、生产权重、PASS、投递和 tuning 均不读取它。
 
-个人回复速度统计、临时状态、持久聚合画像、衰减以及 reward 对排序的影响仍属于后续 P44-G0-B/G1，不在本步骤授权内。
+### 5.3 P44-G0-B：个人相对回复速度预览
+
+P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事件、排序或投递：
+
+1. 基线从当前日志窗口内、归因有效且早于本次回复的历史延迟重放，不新增画像文件或逐条延迟副本。
+2. 少于 5 次有效历史回复时，relative-speed component 保持 0。
+3. 达到 5 次后，对 `log(1+latency)` 使用中位数与 MAD；只对快于本人历史分布的回复给最高 `+0.05` bonus。
+4. 与本人基线相同或更慢时不扣分；因此慢性子不会因超过固定 60 秒而被判为低兴趣。
+5. 结果继续只在 summary 中审计，`personalization_state_consumed=false`，生产排序、PASS、投递、tuning 和持久画像均不读取。
+
+临时/持久状态的生产消费、衰减以及 reward 对排序的影响仍属于后续独立步骤，不在 P44-G0-B 授权内。
+
+### 5.4 P44-G0-C/D：临时/持久状态与 observation preview
+
+1. 临时兴趣只在进程内保存，TTL 为 2 小时；不同显式反馈可累积，但过期后自动删除。
+2. 持久文件 `proactive_recommendation_feedback_state_preview.json` 只保存来源级正/负证据计数和更新时间，不保存 turn ID、回复正文、标题、URL 或逐条 latency。
+3. 单条显式证据只改变临时兴趣；持久证据少于 3 条时 `affinity_preview=0`。同一 turn 的同组反馈不重复累计持久证据。
+4. 状态仅由成功写入 JSONL、可归因到已投递 Shadow observation 的 feedback 更新；孤儿反馈、技术零分和 `active_source` 不更新状态。
+5. 每条新的 Shadow observation 记录决策前 `feedback_state_preview`；字段经过独立白名单与数值边界清洗。
+6. preview 不进入候选 `score_breakdown`，推荐排序、PASS、投递、tuning 和生产权重均不读取，因此当前 baseline 排序不变。
+
+实际个性化消费、持久 affinity 衰减及生产启用仍需独立候选评估，不在 P44-G0-C/D 授权内。
 
 ## 6. Testbench 准入原则
 
@@ -183,9 +205,8 @@ P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的
 
 以下项目保留研究价值，但不是当前或默认下一阶段：
 
-- 个体回复时延基线；
-- 临时兴趣与衰减持久兴趣；
-- `reward_score_v2` 对画像或排序的实际消费（G0-A 仅批准 preview）；
+- 临时/持久 preview 的实际消费与持久 affinity 衰减；
+- `reward_score_v2` 对画像或排序的实际消费（G0-A～D 仅批准 preview）；
 - semantic repeat、MMR 与单候选恢复；
 - propensity 日志、contextual bandit 与 OPE；
 - 多用户 A/B、Canary 和自动 tuning。

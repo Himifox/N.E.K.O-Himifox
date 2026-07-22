@@ -11,12 +11,19 @@ from main_logic.proactive_recommendation_feedback import (
     load_recommendation_feedback_jsonl,
     music_feedback_event_type,
     note_user_turn_for_feedback,
+    record_feedback_event,
     register_pending_feedback,
     sanitize_recommendation_feedback_event,
     join_observations_with_feedback,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
+)
+from main_logic.proactive_recommendation_feedback_state import (
+    FEEDBACK_STATE_PREVIEW_FILENAME,
+    TEMPORARY_INTEREST_TTL_SECONDS,
+    clear_temporary_feedback_state_preview,
+    get_feedback_state_preview,
 )
 
 
@@ -254,6 +261,52 @@ def test_reward_score_v2_preview_requires_valid_delivery_attribution():
     assert summary["ranking_consumed"] is False
 
 
+def test_reward_score_v2_preview_uses_point_in_time_personal_reply_speed():
+    latencies = [100.0, 105.0, 110.0, 115.0, 120.0, 70.0, 130.0]
+    observations = [
+        _observation(turn_id=f"reply-{index}", ts=9_000.0 + index)
+        for index in range(len(latencies))
+    ]
+    events = [
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id=f"reply-{index}",
+            event_type="user_reply",
+            source_type="music",
+            metadata={"reply_latency_seconds": latency},
+            ts=9_100.0 + index,
+        )
+        for index, latency in enumerate(latencies)
+    ]
+
+    joined = join_observations_with_reward_score_v2_preview(
+        observations,
+        events,
+        now=10_000.0,
+    )
+    summary = summarize_reward_score_v2_preview(
+        observations,
+        events,
+        now=10_000.0,
+    )
+    by_turn = {row["turn_id"]: row for row in joined}
+
+    assert by_turn["reply-4"]["relative_speed_status"] == (
+        "insufficient_personal_baseline"
+    )
+    assert by_turn["reply-4"]["relative_speed_baseline_sample_count"] == 4
+    assert by_turn["reply-5"]["relative_speed_status"] == "baseline_ready_bonus"
+    assert 0.2 < by_turn["reply-5"]["reward_score_v2_preview"] <= 0.25
+    assert by_turn["reply-6"]["relative_speed_status"] == (
+        "baseline_ready_no_bonus"
+    )
+    assert by_turn["reply-6"]["reward_score_v2_preview"] == 0.2
+    assert summary["personal_reply_speed_baseline_ready_count"] == 2
+    assert summary["relative_speed_bonus_count"] == 1
+    assert summary["ranking_consumed"] is False
+    assert summary["personalization_state_consumed"] is False
+
+
 def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
     project_root = Path(__file__).parents[2]
     policy_sources = (
@@ -264,6 +317,95 @@ def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
 
     for source_path in policy_sources:
         assert "reward_score_v2_preview" not in source_path.read_text(encoding="utf-8")
+
+
+def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_path):
+    clear_temporary_feedback_state_preview()
+
+    for index in range(3):
+        register_pending_feedback(
+            lanlan_name="neko",
+            turn_id=f"state-{index}",
+            source_type="music",
+            delivered_at=1_000.0 + index,
+            log_mode="jsonl",
+            config_dir=tmp_path,
+            recommendation_mode="shadow",
+        )
+        record_feedback_event(
+            lanlan_name="neko",
+            turn_id=f"state-{index}",
+            event_type="user_reply",
+            ts=1_010.0 + index,
+        )
+        if index == 0:
+            record_feedback_event(
+                lanlan_name="neko",
+                turn_id="state-0",
+                event_type="user_continue",
+                ts=1_011.0,
+            )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=1_020.0)
+    temporary = preview["temporary"]["sources"]["music"]
+    persistent = preview["persistent"]["sources"]["music"]
+    stored = json.loads(
+        (tmp_path / FEEDBACK_STATE_PREVIEW_FILENAME).read_text(encoding="utf-8")
+    )
+
+    assert temporary["interest_preview"] == 0.95
+    assert temporary["positive_evidence_count"] == 4
+    assert persistent["positive_evidence_count"] == 3
+    assert persistent["negative_evidence_count"] == 0
+    assert persistent["affinity_preview"] == 0.2
+    assert set(stored["sources"]["music"]) == {
+        "positive_evidence_count",
+        "negative_evidence_count",
+        "updated_at",
+    }
+    dumped = json.dumps(stored, ensure_ascii=False).lower()
+    for forbidden in ("turn_id", "reply_latency_seconds", "title", "url"):
+        assert forbidden not in dumped
+
+    expired = get_feedback_state_preview(
+        config_dir=tmp_path,
+        now=1_020.0 + TEMPORARY_INTEREST_TTL_SECONDS,
+    )
+    assert expired["temporary"]["sources"] == {}
+    assert expired["persistent"]["sources"]["music"]["affinity_preview"] == 0.2
+
+
+def test_feedback_state_preview_does_not_update_outside_shadow(tmp_path):
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="active-state",
+        source_type="news",
+        delivered_at=2_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="active_source",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="active-state",
+        event_type="user_reply",
+        ts=2_010.0,
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=2_020.0)
+    assert preview["temporary"]["sources"] == {}
+    assert preview["persistent"]["sources"] == {}
+    assert not (tmp_path / FEEDBACK_STATE_PREVIEW_FILENAME).exists()
+
+
+def test_feedback_state_preview_is_not_consumed_by_ranking_or_tuning():
+    project_root = Path(__file__).parents[2]
+    for source_path in (
+        project_root / "main_logic" / "proactive_recommendation.py",
+        project_root / "main_logic" / "proactive_recommendation_tuning.py",
+    ):
+        assert "feedback_state_preview" not in source_path.read_text(encoding="utf-8")
 
 
 def test_music_feedback_threshold_mapping():

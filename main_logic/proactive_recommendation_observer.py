@@ -52,6 +52,7 @@ _TOP_LEVEL_KEYS = {
     "git_revision",
     "review_context",
     "decision_context",
+    "feedback_state_preview",
     "recommendation_mode",
     "decision_stage",
     "candidate_count",
@@ -142,6 +143,12 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             decision_context = sanitize_recommendation_decision_context(observation.get(key))
             if decision_context:
                 safe[key] = decision_context
+        elif key == "feedback_state_preview":
+            state_preview = sanitize_recommendation_feedback_state_preview(
+                observation.get(key)
+            )
+            if state_preview:
+                safe[key] = state_preview
         elif key == "active_channels":
             safe[key] = _clean_string_list(observation.get(key))
         else:
@@ -179,6 +186,84 @@ def sanitize_recommendation_decision_context(value: Any) -> dict[str, Any]:
         ),
     }
     return {"timing": safe_timing}
+
+
+def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]:
+    """Keep only bounded source-level aggregates used for offline review."""
+    if not isinstance(value, Mapping):
+        return {}
+    temporary = value.get("temporary")
+    persistent = value.get("persistent")
+    if not isinstance(temporary, Mapping) or not isinstance(persistent, Mapping):
+        return {}
+    return {
+        "version": str(value.get("version") or "")[:64],
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "temporary": {
+            "ttl_seconds": _bounded_nonnegative_int(temporary.get("ttl_seconds")),
+            "sources": _sanitize_feedback_state_sources(
+                temporary.get("sources"),
+                persistent=False,
+            ),
+        },
+        "persistent": {
+            "min_explicit_evidence": _bounded_nonnegative_int(
+                persistent.get("min_explicit_evidence")
+            ),
+            "sources": _sanitize_feedback_state_sources(
+                persistent.get("sources"),
+                persistent=True,
+            ),
+        },
+    }
+
+
+def _sanitize_feedback_state_sources(
+    value: Any,
+    *,
+    persistent: bool,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    safe: dict[str, dict[str, Any]] = {}
+    for raw_source, raw_bucket in list(value.items())[:16]:
+        source = str(raw_source or "").strip().lower()
+        if not source.replace("_", "").isalnum() or not isinstance(raw_bucket, Mapping):
+            continue
+        bucket = {
+            "positive_evidence_count": _bounded_nonnegative_int(
+                raw_bucket.get("positive_evidence_count")
+            ),
+            "negative_evidence_count": _bounded_nonnegative_int(
+                raw_bucket.get("negative_evidence_count")
+            ),
+        }
+        if persistent:
+            bucket["updated_at"] = _bounded_optional_number(
+                raw_bucket.get("updated_at"),
+                lower=0.0,
+                upper=32_503_680_000.0,
+            )
+            bucket["affinity_preview"] = _bounded_optional_number(
+                raw_bucket.get("affinity_preview"),
+                lower=-1.0,
+                upper=1.0,
+            )
+        else:
+            bucket["interest_preview"] = _bounded_optional_number(
+                raw_bucket.get("interest_preview"),
+                lower=-1.0,
+                upper=1.0,
+            )
+            bucket["expires_in_seconds"] = _bounded_optional_number(
+                raw_bucket.get("expires_in_seconds"),
+                lower=0.0,
+                upper=86_400.0,
+            )
+        safe[source] = bucket
+    return safe
 
 
 def sanitize_recommendation_review_context(value: Any) -> dict[str, Any]:
