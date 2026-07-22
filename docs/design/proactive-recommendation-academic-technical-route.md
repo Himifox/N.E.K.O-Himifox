@@ -777,7 +777,8 @@ Testbench 的指标/Validator/固定 hash 可按需要维护，但不得借“�
 因此正式决策为：
 
 - **COMPLETE / NO CANDIDATE**：P44-F2 timing/fatigue 离线分析；
-- **HOLD**：所有未单独立项的后续工作，包括 P44-G0/G1/G2、重复/来源多样性、MMR/恢复、Shadow candidate、`active_source`、自动调权、Canary 和在线 bandit exploration；
+- **COMPLETE / NO-BEHAVIOR-CHANGE**：P44-G0 已同步 MVP 的 `feedback_state_preview` 到 Testbench；`reward_score_v2_preview` 不在 Testbench 复制，不接入排序、投递或 tuning；
+- **HOLD**：P44-G1/G2/G3、重复/来源多样性、MMR/恢复、Shadow candidate、`active_source`、自动调权、Canary 和在线 bandit exploration；
 - **NO-GO**：`News -0.02` 历史候选、把 Codex v5 预标注直接当 Golden、把固定 60 秒当通用回复速度、强制 meme 标签服从正态分布。
 
 ---

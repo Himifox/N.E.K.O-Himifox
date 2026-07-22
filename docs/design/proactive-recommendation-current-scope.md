@@ -3,8 +3,8 @@
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
-> 最近更新：2026-07-21
-> 当前阶段：P44-F2 已以 `no_candidate` 结项；当前没有自动获准的下一开发阶段
+> 最近更新：2026-07-22
+> 当前阶段：P44-G0 Testbench 合同同步已完成；后续候选仍需单独立项
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -17,7 +17,7 @@
 5. P44-F2-B 已完成连续变量关联分析；因为同 cohort 人工 `should_recommend` 标签为 0，误打扰和错失机会均不可计算，正式结论为 `no_candidate`。
 6. `recent_delivery_count_30m` 与显式反馈分数在本 cohort 中存在稳定相关，但这只是观察性辅助证据，不能替代人工决策标签，也没有生成疲劳公式或候选模拟。
 7. 生产推荐权重、调度曲线和投递行为保持不变；`PROACTIVE_RECOMMENDATION_TUNING_MODE=off`。
-8. `active_source`、自动调权、持久个性化和在线探索均为 **HOLD**。
+8. `active_source`、自动调权和在线探索均为 **HOLD**；P44-G0 仅同步 MVP 的 `feedback_state_preview` 到 Testbench，`reward_score_v2_preview` 仍由 MVP 计算且不在 Testbench 复制，preview 未接入生产推荐。
 
 正式 timing-v3 baseline：
 

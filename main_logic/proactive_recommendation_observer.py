@@ -9,6 +9,7 @@ from collections import Counter, deque
 from collections.abc import Iterable, Mapping, Sequence
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -50,6 +51,7 @@ _TOP_LEVEL_KEYS = {
     "algorithm_version",
     "git_revision",
     "review_context",
+    "feedback_state_preview",
     "recommendation_mode",
     "decision_stage",
     "candidate_count",
@@ -138,10 +140,60 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             review_context = sanitize_recommendation_review_context(observation.get(key))
             if review_context:
                 safe[key] = review_context
+        elif key == "feedback_state_preview":
+            state_preview = sanitize_recommendation_feedback_state_preview(observation.get(key))
+            if state_preview:
+                safe[key] = state_preview
         elif key == "active_channels":
             safe[key] = _clean_string_list(observation.get(key))
         else:
             safe[key] = _json_safe_scalar(observation.get(key))
+    return safe
+
+
+def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]:
+    """Keep MVP preview aggregates while dropping raw/private state."""
+    if not isinstance(value, Mapping):
+        return {}
+    temporary = value.get("temporary")
+    persistent = value.get("persistent")
+    if not isinstance(temporary, Mapping) or not isinstance(persistent, Mapping):
+        return {}
+    return {
+        "version": str(value.get("version") or "")[:64],
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "temporary": {
+            "ttl_seconds": _bounded_nonnegative_int(temporary.get("ttl_seconds")),
+            "sources": _sanitize_feedback_state_sources(temporary.get("sources"), persistent=False),
+        },
+        "persistent": {
+            "min_explicit_evidence": _bounded_nonnegative_int(persistent.get("min_explicit_evidence")),
+            "sources": _sanitize_feedback_state_sources(persistent.get("sources"), persistent=True),
+        },
+    }
+
+
+def _sanitize_feedback_state_sources(value: Any, *, persistent: bool) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    safe: dict[str, dict[str, Any]] = {}
+    for raw_source, raw_bucket in list(value.items())[:16]:
+        source = str(raw_source or "").strip().lower()
+        if not source.replace("_", "").isalnum() or not isinstance(raw_bucket, Mapping):
+            continue
+        bucket = {
+            "positive_evidence_count": _bounded_nonnegative_int(raw_bucket.get("positive_evidence_count")),
+            "negative_evidence_count": _bounded_nonnegative_int(raw_bucket.get("negative_evidence_count")),
+        }
+        if persistent:
+            bucket["updated_at"] = _bounded_optional_number(raw_bucket.get("updated_at"), lower=0.0, upper=32_503_680_000.0)
+            bucket["affinity_preview"] = _bounded_optional_number(raw_bucket.get("affinity_preview"), lower=-1.0, upper=1.0)
+        else:
+            bucket["interest_preview"] = _bounded_optional_number(raw_bucket.get("interest_preview"), lower=-1.0, upper=1.0)
+            bucket["expires_in_seconds"] = _bounded_optional_number(raw_bucket.get("expires_in_seconds"), lower=0.0, upper=86_400.0)
+        safe[source] = bucket
     return safe
 
 
@@ -842,6 +894,28 @@ def _number(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bounded_optional_number(value: Any, *, lower: float, upper: float) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(max(lower, min(upper, number)), 3)
+
+
+def _bounded_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(1_000_000, number))
 
 
 def _example_from_observation(row: Mapping[str, Any]) -> dict[str, Any]:
