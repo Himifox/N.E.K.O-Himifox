@@ -131,4 +131,43 @@ def run_calibration(dataset: dict[str, Any], variant: dict[str, Any] | None = No
     }
 
 
-__all__ = ["run_active_bias", "run_calibration", "run_material_stage", "run_source_stage"]
+def run_reward_score_v2_preview(
+    observations: list[dict[str, Any]],
+    feedback: list[dict[str, Any]],
+    *,
+    now: float,
+    window_seconds: int,
+    sample_limit: int,
+) -> dict[str, Any]:
+    """Call the production reward preview contract without copying its formula."""
+    from main_logic.proactive_recommendation_feedback import (
+        join_observations_with_reward_score_v2_preview,
+        summarize_reward_score_v2_preview,
+    )
+
+    kwargs = {
+        "now": now,
+        "window_seconds": window_seconds,
+        "sample_limit": sample_limit,
+    }
+    return {
+        "joined": join_observations_with_reward_score_v2_preview(
+            observations,
+            feedback,
+            **kwargs,
+        ),
+        "summary": summarize_reward_score_v2_preview(
+            observations,
+            feedback,
+            **kwargs,
+        ),
+    }
+
+
+__all__ = [
+    "run_active_bias",
+    "run_calibration",
+    "run_material_stage",
+    "run_reward_score_v2_preview",
+    "run_source_stage",
+]
