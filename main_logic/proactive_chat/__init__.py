@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Domain modules for proactive chat.
+"""
+Domain modules for proactive chat.
 
 HTTP adapters remain in :mod:`main_routers.system_router`; this package owns
 framework-independent proactive-chat contracts and business behavior.

@@ -13,22 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Formatters / loggers for proactive content payloads (news,
-video, trending, music, personal dynamics).
+"""Loggers for proactive content payloads (news, video and feeds).
 
 Owned by the proactive-chat domain layer.
 """
 
-from main_logic.proactive_chat.music_recommendation import (
-    _append_music_recommendations,
-    _format_music_content,
-    _log_music_content,
-)
-
 __all__ = [
-    "_append_music_recommendations",
-    "_format_music_content",
-    "_log_music_content",
     "_log_news_content",
     "_log_personal_dynamics",
     "_log_trending_content",
