@@ -23,6 +23,7 @@ import asyncio
 import json
 import struct
 import time
+from pathlib import Path
 from websockets import exceptions as web_exceptions
 from utils.screenshot_utils import overlay_avatar_annotation
 from main_logic.omni_realtime_client import OmniRealtimeClient
@@ -63,6 +64,31 @@ class StreamingMixin:
             if self.websocket and hasattr(self.websocket, 'client_state') and self.websocket.client_state == self.websocket.client_state.CONNECTED:
                 self._fire_task(self.websocket.send_json({'type': 'system', 'data': 'turn end'}))
         return True
+
+    async def _build_public_meme_turn_context(self, user_text: str) -> str:
+        """Resolve turn-local public-meme context from the local database only."""
+        try:
+            from config.moegirl_knowledge_settings import (
+                MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
+                MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+            )
+            if not MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
+                return ""
+            from knowledge.moegirl_knowledge.turn_context import build_meme_turn_context
+            from utils.config_manager import get_config_manager
+
+            database_path = Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
+            result = await asyncio.to_thread(
+                build_meme_turn_context,
+                user_text,
+                database_path,
+                limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+            )
+            logger.info("[moegirl-knowledge] automatic turn context hits=%d", result.hit_count)
+            return result.text
+        except Exception as exc:
+            logger.warning("[moegirl-knowledge] automatic turn context failed: %s", type(exc).__name__)
+            return ""
     
     async def _flush_pending_input_data(self):
         """Send the cached input data to the session"""
@@ -477,6 +503,7 @@ class StreamingMixin:
                     # read a hidden scaffold prompt (e.g. avatar-drop file
                     # contents) the user never typed, mismatching the cadence
                     # signal and entering Focus on evidence the user didn't author.
+                    _meme_turn_context = await self._build_public_meme_turn_context(record_data)
                     _focus_thinking = await self._focus_inline_decision(record_data)
                     input_transcript_callback = None
                     if memory_text:
@@ -498,6 +525,7 @@ class StreamingMixin:
 
                     stream_text_kwargs = {
                         "system_prefix": _agent_cb_ctx or None,
+                        "transient_system_prefix": _meme_turn_context or None,
                         "thinking_on": _focus_thinking,
                     }
                     if input_transcript_callback:

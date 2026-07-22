@@ -24,7 +24,7 @@ import json
 import re
 import time
 from collections import deque
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from datetime import datetime
 from fastapi import WebSocketDisconnect
 from main_logic.omni_realtime_client import OmniRealtimeClient
@@ -51,6 +51,28 @@ from ._shared import (
 # those names here: a from-import snapshots the value at import time and the
 # facade patch would no longer reach this module's methods.
 from main_logic import core as _core_facade
+
+
+_POST_REPLY_HOOKS: set[Callable[[], None]] = set()
+
+
+def register_post_reply_hook(callback: Callable[[], None]) -> Callable[[], None]:
+    """Register non-blocking work that may start only after a reply is delivered."""
+    _POST_REPLY_HOOKS.add(callback)
+
+    def _remove() -> None:
+        _POST_REPLY_HOOKS.discard(callback)
+
+    return _remove
+
+
+def _notify_post_reply_hooks() -> None:
+    """Run observers after turn end without allowing them to delay the user."""
+    for callback in tuple(_POST_REPLY_HOOKS):
+        try:
+            callback()
+        except Exception as exc:
+            logger.debug("post-reply observer failed: %s", type(exc).__name__)
 
 
 class TurnMixin:
@@ -370,6 +392,7 @@ class TurnMixin:
                 logger.warning(f"⚠️ 发送TTS结束信号失败: {e}")
         try:
             await self._emit_turn_end(active_request_id)
+            _notify_post_reply_hooks()
         finally:
             # Compare-and-clear：仅在共享字段仍是本轮快照时才清空，避免
             # 抹掉用户在 turn end 发出前提交的新轮 request_id。

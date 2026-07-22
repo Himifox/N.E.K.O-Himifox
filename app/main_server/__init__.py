@@ -868,6 +868,13 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
                     f"Token tracker initialization failed (non-critical): {e}"
                 )
 
+            try:
+                from .moegirl_knowledge_runtime import start_moegirl_knowledge_sync
+
+                await start_moegirl_knowledge_sync(_config_manager, logger)
+            except Exception as e:
+                logger.warning("Moegirl knowledge runtime startup failed: %s", type(e).__name__)
+
             logger.info(
                 "Startup 初始化完成，后台正在预加载音频模块... (reason=%s)", reason
             )
@@ -1051,6 +1058,12 @@ async def on_shutdown():
     """Clean up resources at server shutdown"""
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
+        try:
+            from .moegirl_knowledge_runtime import stop_moegirl_knowledge_sync
+
+            await stop_moegirl_knowledge_sync()
+        except Exception as e:
+            logger.debug("Moegirl knowledge runtime cleanup failed: %s", type(e).__name__)
         cleanup()
         try:
             # join_sync_connector_threads 内部已经 gather 并行 join，直接 await

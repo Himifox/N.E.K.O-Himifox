@@ -409,6 +409,7 @@ class _StreamingMixin:
         text: str,
         *,
         system_prefix: str | None = None,
+        transient_system_prefix: str | None = None,
         thinking_on: bool = False,
         input_transcript_callback: Optional[Callable[[str], Awaitable[None]]] = None,
         history_replacement_text: str | None = None,
@@ -496,8 +497,12 @@ class _StreamingMixin:
         # 落 history，跟 voice mode user-role 注入对偶。
         _user_text = text.strip()
         _prefix_clean = (system_prefix or "").strip()
+        _transient_prefix_clean = (transient_system_prefix or "").strip()
+        _prompt_prefix = "\n\n".join(
+            prefix for prefix in (_prefix_clean, _transient_prefix_clean) if prefix
+        )
         _user_text_with_prefix = (
-            f"{_prefix_clean}\n\n{_user_text}" if _prefix_clean else _user_text
+            f"{_prompt_prefix}\n\n{_user_text}" if _prompt_prefix else _user_text
         )
 
         # Prepare user message content
