@@ -19,7 +19,9 @@ CHIME_DATASET_URL = (
     f"{CHIME_COMMIT}/data/chime_full.json"
 )
 CHIME_LICENSE = "MIT (CHIME dataset; Copyright (c) 2025 Yubo Xie)"
-CHIME_SHA256 = "8514b8b3fef6fc2961a191c6fd815f35f3cfa3aebcd6eef3985ded48723a3c26"
+# The bundled JSON is checked out with LF line endings by Git.  Keep the
+# integrity check aligned with the bytes the application actually packages.
+CHIME_SHA256 = "dc438bcb0083918bb074fdbf8dbe275ce355b62cffe96f13a48f8b2fc51de3ec"
 CHIME_ENTRY_COUNT = 1_458
 
 
