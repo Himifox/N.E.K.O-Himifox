@@ -18,8 +18,44 @@ def test_turn_context_matches_a_meme_title_inside_ordinary_conversation(tmp_path
     assert "Term: treetree" in context.text
     assert "Meaning: a speech-based meme" in context.text
     assert "TURN-LOCAL REFERENCE" in context.text
-    assert "acknowledge its figurative meme meaning" in context.text
-    assert "never mention a meme, its usage, searching" in context.text
+    assert "respond directly to the user's present tone" in context.text
+    assert "Never mention memes, usage, searching" in context.text
+
+
+def test_turn_context_includes_source_usage_and_response_posture(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(MoegirlKnowledgeEntry(
+        id="chime:quote", title="quoted phrase", content=(
+            "Meaning: a playful quotation.\n\n"
+            "Examples:\n- quoted phrase used as a light-hearted callback"
+        ),
+        summary="a playful quotation", source_url="https://example.test/chime",
+        source_license="MIT", tags=("source:chime", "type:引用"),
+    ))
+
+    context = build_meme_turn_context("That quoted phrase again", database_path)
+
+    assert "Meaning: a playful quotation" in context.text
+    assert "Meme type: 引用" in context.text
+    assert "Typical usage: quoted phrase used as a light-hearted callback" in context.text
+    assert "Recognize it as a quote or adaptation" in context.text
+    assert "Do not first ask whether it is a meme" in context.text
+
+
+def test_turn_context_without_chime_examples_degrades_to_meaning_only(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(MoegirlKnowledgeEntry(
+        id="moegirl:plain", title="plain reference", content="A sourced explanation.",
+        summary="A sourced explanation.", source_url="https://example.test/moegirl",
+        source_license="CC", tags=("moegirl",),
+    ))
+
+    context = build_meme_turn_context("A plain reference appears here", database_path)
+
+    assert "Meaning: A sourced explanation." in context.text
+    assert "Typical usage:" not in context.text
 
 
 def test_turn_context_stays_empty_when_no_meme_title_is_mentioned(tmp_path):

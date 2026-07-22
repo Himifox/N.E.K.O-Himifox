@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 import main_logic.moegirl_knowledge_tool as knowledge_tool
-from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
+from knowledge.moegirl_knowledge import (
+    MoegirlKnowledgeEntry,
+    MoegirlKnowledgeRetriever,
+    MoegirlKnowledgeStore,
+)
 from knowledge.moegirl_knowledge.sources import SourcePage
 
 
@@ -27,6 +31,31 @@ async def test_local_miss_uses_encyclopedia_then_escalates_to_plugin(monkeypatch
 
     assert "local database or encyclopedia sources" in result
     assert "enabled web_search plugin" in result
+
+
+@pytest.mark.asyncio
+async def test_local_tool_result_includes_chime_type_and_usage(monkeypatch, tmp_path):
+    knowledge_root = tmp_path / "knowledge"
+    database_path = knowledge_root / "moegirl-knowledge" / "knowledge.db"
+    database_path.parent.mkdir(parents=True)
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(MoegirlKnowledgeEntry(
+        id="chime:quote", title="quoted phrase", content=(
+            "Meaning: a playful quotation.\n\n"
+            "Examples:\n- quoted phrase used as a light-hearted callback"
+        ),
+        summary="a playful quotation", source_url="https://example.test/chime",
+        source_license="MIT", tags=("source:chime", "type:引用"),
+    ))
+    monkeypatch.setattr(knowledge_tool, "get_config_manager", lambda: SimpleNamespace(knowledge_dir=knowledge_root))
+
+    result = await knowledge_tool.handle_moegirl_knowledge_call(
+        {"query": "quoted phrase"}, language="en"
+    )
+
+    assert "Type: 引用" in result
+    assert "Typical usage: quoted phrase used as a light-hearted callback" in result
+    assert "Source: CHIME (MIT dataset)" in result
 
 
 def test_knowledge_sources_do_not_embed_a_general_web_search_adapter():

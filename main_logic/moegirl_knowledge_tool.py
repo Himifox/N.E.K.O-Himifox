@@ -11,6 +11,7 @@ from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowle
 from knowledge.moegirl_knowledge.filters import is_relevant_source_page
 from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry
 from knowledge.moegirl_knowledge.sources import ChineseWikipediaApiSource, MoegirlWikiApiSource
+from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
 from config.moegirl_knowledge_settings import (
     MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_FALLBACK_ENABLED,
     MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_TIMEOUT_SECONDS,
@@ -113,6 +114,8 @@ async def handle_moegirl_knowledge_call(
         entry = hit.entry
         summary = entry.summary or entry.content[:420]
         summary = summary.replace("\n", " ").strip()[:500]
+        meme_type = get_meme_type(entry)
+        usage_example = get_meme_usage_example(entry)
         if "source:chime" in entry.tags:
             source_name = "CHIME (MIT dataset)"
         elif "wikipedia" in entry.tags:
@@ -122,10 +125,16 @@ async def handle_moegirl_knowledge_call(
         risk_note = " | caution: may include profane or offensive usage" if any(
             tag in {"risk:profanity", "risk:offense"} for tag in entry.tags
         ) else ""
-        lines.append(
-            f"- {entry.title}: {summary}\n"
-            f"  Source: {source_name} | {entry.source_url} | synced: {entry.synced_at or 'unknown'}{risk_note}"
+        details = f"- {entry.title}: {summary}"
+        if meme_type:
+            details += f"\n  Type: {meme_type}"
+        if usage_example:
+            details += f"\n  Typical usage: {usage_example}"
+        details += (
+            f"\n  Source: {source_name} | {entry.source_url} | "
+            f"synced: {entry.synced_at or 'unknown'}{risk_note}"
         )
+        lines.append(details)
     return "\n".join(lines)
 
 
