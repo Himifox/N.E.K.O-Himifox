@@ -19,6 +19,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from config import (
@@ -26,16 +27,32 @@ from config import (
     ANTI_REPEAT_EXEMPT_SOURCE_TAGS,
     ANTI_REPEAT_INJECT_TOP_K,
     ANTI_REPEAT_REGEN_THRESHOLD,
+    PROACTIVE_PHASE1_FETCH_PER_SOURCE,
+    PROACTIVE_PHASE1_UNIFIED_MAX_TOKENS,
     PROACTIVE_PHASE2_GENERATE_MAX_TOKENS,
     PROACTIVE_PHASE2_OUTPUT_MAX_TOKENS,
+    focus_extra_body,
     leaks_thinking_in_content,
 )
 from config.prompts.prompts_directives import (
     render_format_fix_instruction,
     render_regen_avoid_instruction,
 )
-from utils.llm_client import HumanMessage, ThinkingStreamStripper
+from config.prompts.prompts_proactive import (
+    BEGIN_GENERATE,
+    build_unified_phase1_prompt,
+    get_proactive_generate_prompt,
+)
+from config.prompts.prompts_sys import _loc
+from utils.llm_client import (
+    HumanMessage,
+    SystemMessage,
+    ThinkingStreamStripper,
+    chat_retry_error_types,
+    create_chat_llm_async,
+)
 from utils.logger_config import get_module_logger
+from utils.meme_fetcher import fetch_meme_content
 from utils.tokenize import count_tokens
 
 from .contracts import (
@@ -46,6 +63,11 @@ from .contracts import (
     ProactiveChatResult,
     _proactive_pass_body,
 )
+from .music_recommendation import (
+    _fetch_music_with_fallback,
+    _format_music_content,
+    _log_music_content,
+)
 from .state import (
     _PROACTIVE_SIMILARITY_THRESHOLD,
     _is_recent_proactive_material,
@@ -54,6 +76,189 @@ from .state import (
 )
 
 logger = get_module_logger(__name__, "Main")
+
+
+_PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProactiveModelConfig:
+    """Resolved conversation and optional vision model settings for one turn."""
+
+    conversation_model: str
+    conversation_base_url: str | None
+    conversation_api_key: str
+    conversation_provider_type: str | None
+    vision_model: str = ""
+    vision_base_url: str | None = ""
+    vision_api_key: str = ""
+    vision_provider_type: str | None = None
+
+    @property
+    def has_vision_model(self) -> bool:
+        return bool(self.vision_model and self.vision_api_key)
+
+
+@dataclass(frozen=True, slots=True)
+class Phase2PromptContext:
+    """Bounded business context used to render the existing Phase 2 prompt."""
+
+    music_playing_hint: str
+    character_prompt: str
+    inner_thoughts: str
+    state_section: str
+    memory_context: str
+    recent_chats_section: str
+    screen_section: str
+    external_section: str
+    music_section: str
+    meme_section: str
+    source_instruction: str
+    output_format_section: str
+
+    def render(self, *, proactive_lang: str, master_name: str) -> str:
+        return get_proactive_generate_prompt(
+            proactive_lang,
+            self.music_playing_hint,
+            has_music=bool(self.music_section),
+            has_meme=bool(self.meme_section),
+            master_name=master_name,
+        ).format(
+            character_prompt=self.character_prompt,
+            inner_thoughts=self.inner_thoughts,
+            state_section=self.state_section,
+            memory_context=self.memory_context,
+            recent_chats_section=self.recent_chats_section,
+            screen_section=self.screen_section,
+            external_section=self.external_section,
+            music_section=self.music_section,
+            meme_section=self.meme_section,
+            master_name=master_name,
+            source_instruction=self.source_instruction,
+            output_format_section=self.output_format_section,
+        )
+
+
+def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
+    """Lazily resolve optional provider exception types."""
+    global _PROACTIVE_LLM_RETRY_ERROR_TYPES
+    if _PROACTIVE_LLM_RETRY_ERROR_TYPES is None:
+        _PROACTIVE_LLM_RETRY_ERROR_TYPES = (
+            asyncio.TimeoutError,
+            *chat_retry_error_types(),
+        )
+    return _PROACTIVE_LLM_RETRY_ERROR_TYPES
+
+
+async def _make_proactive_llm(
+    model_config: ProactiveModelConfig,
+    *,
+    temperature: float = 1.0,
+    max_completion_tokens: int = PROACTIVE_PHASE2_GENERATE_MAX_TOKENS,
+    use_vision: bool = False,
+    disable_thinking: bool = True,
+):
+    """Create the configured proactive-chat model without owning lifecycle state."""
+    if use_vision and model_config.has_vision_model:
+        model = model_config.vision_model
+        base_url = model_config.vision_base_url
+        api_key = model_config.vision_api_key
+        provider_type = model_config.vision_provider_type
+    else:
+        model = model_config.conversation_model
+        base_url = model_config.conversation_base_url
+        api_key = model_config.conversation_api_key
+        provider_type = model_config.conversation_provider_type
+
+    from config import DIALOG_LLM_STREAM_TIMEOUT_SECONDS
+
+    kwargs: dict[str, Any] = {
+        "temperature": temperature,
+        "max_completion_tokens": max_completion_tokens,
+        "streaming": True,
+        "timeout": DIALOG_LLM_STREAM_TIMEOUT_SECONDS,
+        "provider_type": provider_type,
+    }
+    if not disable_thinking:
+        kwargs["extra_body"] = focus_extra_body(model)
+    return await create_chat_llm_async(  # noqa: LLM_OUTPUT_BUDGET
+        model,
+        base_url,
+        api_key,
+        **kwargs,
+    )
+
+
+async def _llm_call_with_retry(
+    *,
+    model_config: ProactiveModelConfig,
+    proactive_lang: str,
+    lanlan_name: str,
+    system_prompt: str,
+    label: str,
+    temperature: float = 1.0,
+    max_completion_tokens: int = PROACTIVE_PHASE1_UNIFIED_MAX_TOKENS,
+    timeout: float = 16.0,
+    use_vision: bool = False,
+    disable_thinking: bool = True,
+    image_b64: str = "",
+    dynamic_context: str = "",
+    log: logging.Logger | None = None,
+) -> str:
+    """Call the proactive model with the established retry and message shape."""
+    active_logger = log or logger
+    begin_text = _loc(BEGIN_GENERATE, proactive_lang)
+    human_text = f"{dynamic_context}\n\n{begin_text}" if dynamic_context else begin_text
+    if image_b64:
+        human_content: Any = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+            },
+            {"type": "text", "text": human_text},
+        ]
+    else:
+        human_content = human_text
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=human_content),
+    ]
+
+    from utils.token_tracker import set_call_type
+
+    set_call_type("proactive")
+    retry_delays = [1, 2]
+    for attempt in range(3):
+        try:
+            async with await _make_proactive_llm(
+                model_config,
+                temperature=temperature,
+                max_completion_tokens=max_completion_tokens,
+                use_vision=use_vision,
+                disable_thinking=disable_thinking,
+            ) as llm:
+                response = await asyncio.wait_for(
+                    llm.ainvoke(messages),
+                    timeout=timeout,
+                )
+                print(
+                    f"\n[PROACTIVE-DEBUG] LLM output [{label}]: "
+                    f"{response.content[:500]}...\n"
+                )
+                return response.content.strip()
+        except _proactive_llm_retry_error_types() as exc:
+            if attempt < 2:
+                active_logger.warning(
+                    f"[{lanlan_name}] LLM [{label}] 调用失败 "
+                    f"(尝试 {attempt + 1}/3): {exc}"
+                )
+                await asyncio.sleep(retry_delays[attempt])
+            else:
+                active_logger.error(
+                    f"[{lanlan_name}] LLM [{label}] 调用失败，已达最大重试: {exc}"
+                )
+                raise
+    raise RuntimeError("Unexpected")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +299,284 @@ class Phase2GuardedOutput:
     selected_music_link: dict[str, Any] | None = None
     music_content: dict[str, Any] | None = None
     is_music_used: bool = False
+
+
+async def _run_unified_phase1(
+    *,
+    model_config: ProactiveModelConfig,
+    proactive_lang: str,
+    lanlan_name: str,
+    master_name: str,
+    merged_web_content: str,
+    memory_context: str,
+    recent_chats_section: str,
+    has_music_task: bool,
+    has_meme_task: bool,
+    log: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """Build, call, and parse the unified Phase 1 model request."""
+    active_logger = log or logger
+    empty_result = {
+        "web": None,
+        "music_keyword": None,
+        "meme_keyword": None,
+    }
+    has_web_task = bool(merged_web_content)
+    if not (has_web_task or has_music_task or has_meme_task):
+        return empty_result
+
+    try:
+        prompt = build_unified_phase1_prompt(
+            proactive_lang,
+            merged_content=merged_web_content if has_web_task else None,
+            memory_context=memory_context,
+            recent_chats_section=recent_chats_section,
+            music_ctx={
+                "lanlan_name": lanlan_name,
+                "master_name": master_name,
+            }
+            if has_music_task
+            else None,
+            meme_enabled=has_meme_task,
+            lanlan_name=lanlan_name,
+            master_name=master_name,
+        )
+        result_text = await _llm_call_with_retry(
+            model_config=model_config,
+            proactive_lang=proactive_lang,
+            lanlan_name=lanlan_name,
+            system_prompt=prompt,
+            label="unified_phase1",
+            log=active_logger,
+        )
+        print(f"[{lanlan_name}] Phase 1 合并 LLM 结果: {result_text[:500]}")
+        parsed = _parse_unified_phase1_result(result_text)
+        active_logger.debug(
+            f"[{lanlan_name}] Phase 1 解析: "
+            f"web={'有' if parsed.get('web') else '无'}, "
+            f"music_kw={parsed.get('music_keyword', 'N/A')}, "
+            f"meme_kw={parsed.get('meme_keyword', 'N/A')}"
+        )
+        return parsed
+    except Exception as exc:
+        active_logger.warning(
+            f"[{lanlan_name}] Phase 1 合并 LLM 调用异常: "
+            f"{type(exc).__name__}: {exc}，降级处理"
+        )
+        return empty_result
+
+
+async def _fetch_meme_with_fallback(
+    keyword: str,
+    *,
+    lanlan_name: str,
+    log: logging.Logger | None = None,
+) -> dict[str, Any] | None:
+    """Fetch a keyword meme, then preserve the legacy random fallback."""
+    active_logger = log or logger
+    try:
+        raw = await asyncio.wait_for(
+            fetch_meme_content(
+                keyword=keyword,
+                limit=PROACTIVE_PHASE1_FETCH_PER_SOURCE,
+            ),
+            timeout=12.0,
+        )
+        if raw and raw.get("success"):
+            raw["effective_keyword"] = keyword
+            return raw
+    except Exception as exc:
+        active_logger.warning(
+            f"[{lanlan_name}] 表情包关键词 '{keyword}' 搜索异常: {exc}"
+        )
+    active_logger.warning(
+        f"[{lanlan_name}] 表情包关键词 '{keyword}' 搜索失败，尝试随机热词"
+    )
+    try:
+        raw = await asyncio.wait_for(
+            fetch_meme_content(
+                keyword="",
+                limit=PROACTIVE_PHASE1_FETCH_PER_SOURCE,
+            ),
+            timeout=12.0,
+        )
+        if raw:
+            raw["effective_keyword"] = ""
+        return raw
+    except Exception:
+        return None
+
+
+async def _fetch_phase1_followups(
+    *,
+    parsed: dict[str, Any],
+    has_music_task: bool,
+    has_meme_task: bool,
+    music_content: dict[str, Any] | None,
+    meme_content: dict[str, Any] | None,
+    proactive_lang: str,
+    lanlan_name: str,
+    log: logging.Logger | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Run the Phase 1 keyword-dependent music and meme fetches concurrently."""
+    active_logger = log or logger
+    fetch_tasks: list[Any] = []
+    fetch_labels: list[str] = []
+
+    if has_music_task and not parsed.get("music_pass"):
+        fetch_tasks.append(
+            _fetch_music_with_fallback(
+                parsed.get("music_keyword") or "",
+                lanlan_name=lanlan_name,
+            )
+        )
+        fetch_labels.append("music")
+
+    if has_meme_task and not parsed.get("meme_pass"):
+        fetch_tasks.append(
+            _fetch_meme_with_fallback(
+                parsed.get("meme_keyword") or "",
+                lanlan_name=lanlan_name,
+                log=active_logger,
+            )
+        )
+        fetch_labels.append("meme")
+
+    if not fetch_tasks:
+        return music_content, meme_content
+
+    results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    for label, result in zip(fetch_labels, results):
+        if isinstance(result, Exception):
+            active_logger.warning(
+                f"[{lanlan_name}] Phase 1 后置 fetch [{label}] 异常: {result}"
+            )
+            continue
+        if label == "music" and result and result.get("success"):
+            _log_music_content(lanlan_name, result)
+            music_content = {
+                "formatted_content": _format_music_content(
+                    result,
+                    proactive_lang,
+                ),
+                "raw_data": result,
+            }
+        elif label == "meme" and result and result.get("success"):
+            meme_content = {
+                "success": True,
+                "data": result.get("data", []),
+                "raw_data": result,
+                "source": result.get("source", "表情包"),
+                "keyword": result.get("effective_keyword", ""),
+            }
+            print(
+                f"[{lanlan_name}] 成功获取 {len(result.get('data', []))} 个表情包 "
+                f"(来源: {result.get('source', '?')})"
+            )
+    return music_content, meme_content
+
+
+async def _run_phase2_generation(
+    *,
+    mgr: Any,
+    proactive_sid: Any,
+    model_config: ProactiveModelConfig,
+    lanlan_name: str,
+    proactive_lang: str,
+    master_name: str,
+    system_prompt: str,
+    dynamic_context: str,
+    screenshot_b64: str | None,
+    focus_thinking: bool,
+    expects_source_tag: bool,
+    active_channels: list[str],
+    selected_music_link: dict[str, Any] | None,
+    selected_meme_link: dict[str, Any] | None,
+    music_content: dict[str, Any] | None,
+    meme_content: dict[str, Any] | None,
+    is_playing_music: bool,
+    music_cooldown: bool,
+    log: logging.Logger | None = None,
+) -> Phase2GuardedOutput:
+    """Own Phase 2 messages, model stream, and output guards."""
+    active_logger = log or logger
+    use_vision = bool(screenshot_b64 and model_config.has_vision_model)
+    disable_thinking = use_vision or not focus_thinking
+    begin_text = _loc(BEGIN_GENERATE, proactive_lang)
+    human_text = (
+        f"{dynamic_context}\n\n{begin_text}" if dynamic_context else begin_text
+    )
+    if use_vision:
+        human_content: Any = [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{screenshot_b64}"
+                },
+            },
+            {"type": "text", "text": human_text},
+        ]
+    else:
+        human_content = human_text
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=human_content),
+    ]
+    actual_model = (
+        model_config.vision_model if use_vision else model_config.conversation_model
+    )
+    print(
+        f"\n{'=' * 60}\n[PROACTIVE-DEBUG] Phase 2 STREAM: "
+        f"model={actual_model} | vision={use_vision} | "
+        f"img={'yes' if use_vision else 'no'}\n{'=' * 60}\n"
+        f"{system_prompt}\n{'=' * 60}\n"
+    )
+
+    make_llm = partial(_make_proactive_llm, model_config)
+    generated = await _generate_phase2_stream(
+        mgr=mgr,
+        proactive_sid=proactive_sid,
+        lanlan_name=lanlan_name,
+        messages=messages,
+        make_llm=make_llm,
+        phase2_use_vision=use_vision,
+        phase2_disable_thinking=disable_thinking,
+        conversation_model=model_config.conversation_model,
+        expects_source_tag=expects_source_tag,
+        proactive_lang=proactive_lang,
+        master_name=master_name,
+        human_text=human_text,
+        screenshot_b64=screenshot_b64,
+        log=active_logger,
+    )
+    if generated.result is not None:
+        return Phase2GuardedOutput(result=generated.result)
+
+    return await _guard_phase2_output(
+        mgr=mgr,
+        proactive_sid=proactive_sid,
+        lanlan_name=lanlan_name,
+        response_text=generated.response_text,
+        full_text=generated.full_text,
+        source_tag=generated.source_tag,
+        active_channels=active_channels,
+        selected_music_link=selected_music_link,
+        selected_meme_link=selected_meme_link,
+        music_content=music_content,
+        meme_content=meme_content,
+        is_playing_music=is_playing_music,
+        music_cooldown=music_cooldown,
+        expects_source_tag=expects_source_tag,
+        make_llm=make_llm,
+        messages=messages,
+        human_text=human_text,
+        screenshot_b64=screenshot_b64,
+        phase2_use_vision=use_vision,
+        phase2_disable_thinking=disable_thinking,
+        proactive_lang=proactive_lang,
+        master_name=master_name,
+        log=active_logger,
+    )
 
 
 def _decide_phase1_channels(
@@ -872,150 +1355,6 @@ async def _guard_phase2_output(
         source_tag = "CHAT"
 
     return _output(is_music_used=is_music_used)
-
-
-def _interleave_link_groups(candidate_groups: list[list[dict]]) -> list[dict]:
-    """Interleave non-empty link groups row by row until all are exhausted."""
-    groups = [group for group in candidate_groups if group]
-    links: list[dict] = []
-    row = 0
-    while any(row < len(group) for group in groups):
-        for group in groups:
-            if row < len(group):
-                links.append(group[row])
-        row += 1
-    return links
-
-
-def _extract_links_from_raw(mode: str, raw_data: dict) -> list[dict]:
-    """
-    Extract a list of link info entries from raw web data.
-    args:
-    - mode: data mode; supports 'news', 'video', 'home', 'personal', 'music'
-    - raw_data: raw web data
-    returns:
-    - list[dict]: list of link info entries, each containing 'title', 'url' and 'source' fields
-    """
-    links = []
-    try:
-        if mode == 'news':
-            news = raw_data.get('news', {})
-            weibo_or_twitter: list[dict] = []
-            for item in (news.get('trending', []) or []):
-                title = item.get('word', '') or item.get('name', '')
-                url = item.get('url', '')
-                if title and url:
-                    weibo_or_twitter.append({
-                        'title': title,
-                        'url': url,
-                        'source': '微博' if raw_data.get('region', 'china') == 'china' else 'Twitter',
-                    })
-            xhh_links: list[dict] = []
-            for post in (raw_data.get('xhh', {}).get('posts', []) or []):
-                title = post.get('title', '')
-                url = post.get('url', '')
-                if title and url:
-                    xhh_links.append({'title': title, 'url': url, 'source': '小黑盒'})
-
-            tieba_links: list[dict] = []
-            tieba = raw_data.get('tieba', {}) or {}
-            posts = tieba.get('posts', []) or (tieba.get('tieba', {}) or {}).get('posts', [])
-            topics = tieba.get('topics', []) or (tieba.get('tieba', {}) or {}).get('topics', [])
-            for item in list(posts or []) + list(topics or []):
-                title = item.get('title', '') or item.get('topic_name', '') or item.get('word', '')
-                url = item.get('url', '')
-                if title and url:
-                    tieba_links.append({'title': title, 'url': url, 'source': '贴吧'})
-
-            links.extend(
-                _interleave_link_groups(
-                    [weibo_or_twitter, xhh_links, tieba_links]
-                )
-            )
-
-        elif mode == 'video':
-            video = raw_data.get('video', {})
-            items = video.get('videos', []) or video.get('posts', [])
-            for item in items:
-                title = item.get('title', '')
-                url = item.get('url', '')
-                if title and url:
-                    default_source = 'B站' if raw_data.get('region', 'china') == 'china' else 'YouTube'
-                    links.append({
-                        'title': title,
-                        'url': url,
-                        'source': item.get('source') or default_source,
-                    })
-
-        elif mode == 'home':
-            bilibili = raw_data.get('bilibili', {})
-            for v in (bilibili.get('videos', []) or []):
-                if v.get('title') and v.get('url'):
-                    links.append({'title': v['title'], 'url': v['url'], 'source': 'B站'})
-
-            weibo = raw_data.get('weibo', {})
-            for w in (weibo.get('trending', []) or []):
-                if w.get('word') and w.get('url'):
-                    links.append({'title': w['word'], 'url': w['url'], 'source': '微博'})
-
-            reddit = raw_data.get('reddit', {})
-            for r in (reddit.get('posts', []) or []):
-                if r.get('title') and r.get('url'):
-                    links.append({'title': r['title'], 'url': r['url'], 'source': 'Reddit'})
-
-            twitter = raw_data.get('twitter', {})
-            for t in (twitter.get('trending', []) or []):
-                title = t.get('name', '') or t.get('word', '')
-                if title and t.get('url'):
-                    links.append({'title': title, 'url': t['url'], 'source': 'Twitter'})
-
-        elif mode == 'personal':
-            region = raw_data.get('region', 'china')
-            platform_specs = (
-                [
-                    ('bilibili_dynamic', 'dynamics', ('content',), 'B站'),
-                    ('weibo_dynamic', 'statuses', ('content',), '微博'),
-                    ('douyin_dynamic', 'dynamics', ('content',), '抖音'),
-                    ('kuaishou_dynamic', 'dynamics', ('content',), '快手'),
-                ]
-                if region == 'china'
-                else [
-                    ('reddit_dynamic', 'posts', ('title', 'content'), 'Reddit'),
-                    ('twitter_dynamic', 'tweets', ('content',), 'Twitter'),
-                ]
-            )
-            platform_links: list[list[dict]] = []
-            for data_key, items_key, title_keys, source_name in platform_specs:
-                group: list[dict] = []
-                for item in (raw_data.get(data_key, {}).get(items_key, []) or []):
-                    title = next(
-                        (item.get(key, '') for key in title_keys if item.get(key)),
-                        '',
-                    )
-                    url = item.get('url', '')
-                    if title and url:
-                        group.append({
-                            'title': title,
-                            'url': url,
-                            'source': source_name,
-                        })
-                if group:
-                    platform_links.append(group)
-
-            links.extend(_interleave_link_groups(platform_links))
-
-        elif mode == 'music':
-            items = raw_data.get('data', [])
-            for item in items:
-                title = item.get('name', '')
-                artist = item.get('artist', '')
-                url = item.get('url', '')
-                if title and url:
-                    links.append({'title': f"{title} - {artist}", 'url': url, 'source': '音乐推荐'})
-
-    except Exception as e:
-        logger.warning(f"提取链接失败 [{mode}]: {e}")
-    return links
 
 
 def _parse_web_screening_result(text: str) -> dict | None:

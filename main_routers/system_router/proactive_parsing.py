@@ -59,7 +59,6 @@ from main_logic.proactive_chat.generation import (  # noqa: F401
     _PROACTIVE_LEGAL_SOURCE_TAGS,
     _PROACTIVE_LEGAL_TAG_RE,
     _PROACTIVE_SCREEN_TAG_LEAKS,
-    _extract_links_from_raw,
     _lookup_link_by_title,
     _parse_unified_phase1_result,
     _parse_web_screening_result,
@@ -67,3 +66,4 @@ from main_logic.proactive_chat.generation import (  # noqa: F401
     _strip_proactive_screen_tag_leak,
     _text_is_pass_sentinel,
 )
+from main_logic.proactive_chat.sources import _extract_links_from_raw  # noqa: F401
