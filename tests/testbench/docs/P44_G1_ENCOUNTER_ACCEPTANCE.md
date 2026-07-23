@@ -82,3 +82,13 @@ bandit 继续 HOLD，不因 G1 报告自动启动。
 没有形成时间前后方向一致的关系，而且 preview-v1 仍把 music 的聊天与播放证据
 放在同一通道状态中，不能完整表达“所有主动搭话共享聊天反馈”。因此本轮不生成
 “降低主动搭话”、来源权重或 scheduler Shadow 候选，也不在本分支修改 MVP schema。
+
+## 7. v2 只读同步
+
+2026-07-23 起，Testbench importer 和派生安全视图同时识别
+`feedback_state_preview_v1` / `feedback_state_preview_v2`。现有 preview-v1 freeze、
+Golden、人工 annotation、分析报告和原始 JSONL 不迁移、不重写，也不据此重新解释
+本报告结论。
+
+v2 只读同步只用于后续新数据的安全导入和导出验证。它不让 preview 进入 baseline
+排名，不启动新的 G1 候选分析，也不修改生产权重、scheduler 或 tuning。
