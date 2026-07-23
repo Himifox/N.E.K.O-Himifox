@@ -3,8 +3,8 @@
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
-> 最近更新：2026-07-22
-> 当前阶段：P44-G1 Testbench 主动搭话接受度首份真实报告已完成，结论为 `descriptive_only`
+> 最近更新：2026-07-23
+> 当前阶段：P44-G1 feedback preview v2 语义拆分；Testbench 只读同步单独提交
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -21,6 +21,7 @@
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
 10. P44-G0 只允许从原始 feedback event 重算 turn-level `reward_score_v2_preview`，并将 MVP 的 `feedback_state_preview` 合同同步到 Testbench；Testbench 不复制 reward 公式，两类 preview 均不进入排序、tuning 或生产推荐。
 11. P44-G1 以一次主动搭话 encounter 为单位；所有素材共享聊天反馈，music 另加播放行为。素材来源仅作描述性分组，不因普通回复自动形成长期来源偏好。
+12. `feedback_state_preview_v2` 将全局搭话接受度与可验证素材来源偏好分开；v1 历史状态和 observation 不迁移、不重写。
 
 正式 timing-v3 baseline：
 
@@ -58,6 +59,7 @@
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
 - 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示。
+- 在 Shadow observation 中只读记录 v2 全局搭话接受度和已验证素材来源 affinity 的决策前快照。
 
 ### 3.2 暂不允许
 
@@ -66,6 +68,7 @@
 - 新增推荐层时间硬门控或再次实现调度回退。
 - 把 `backoff_level`、`backoff_tier`、scheduler policy 等调度内部状态加入推荐画像。
 - 将一次回复、一次播放或一次快速响应持久化为长期兴趣。
+- 将通用回复、继续对话或 inferred ignored 解释为 Music、News、Meme 或 Vision 来源偏好。
 - 让 `reward_score_v2_preview` 影响候选分数、PASS、投递、tuning，或在个人回复速度基线完成前给 `user_reply_fast` 额外奖励。
 - 引入 MMR、DPP、向量数据库、Feature Store、MABWiser/Mab2Rec、OBP 或其他新运行时依赖。
 - 启用 epsilon exploration、contextual bandit、OPE 或多用户 Canary。
@@ -145,7 +148,21 @@ P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的
 5. feedback 必须通过 `lanlan_name + turn_id` 与已投递 observation 关联，并校验来源及可验证的 candidate ID；归因失败的事件不计 reward。
 6. 输出仅进入 `/api/proactive/recommendation/summary` 的独立 preview 字段；推荐排序、生产权重、PASS、投递和 tuning 均不读取它。
 
-个人回复速度统计、临时状态、持久聚合画像、衰减以及 reward 对排序的影响仍属于后续 P44-G0-B/G1，不在本步骤授权内。
+### 5.3 P44-G0-B～D：回复速度与状态 preview
+
+1. 个人相对回复速度只从当前日志窗口中早于本次回复的有效历史计算，不新增逐条延迟副本；少于 5 条样本时 bonus 为 0。
+2. 临时状态 TTL 为 2 小时，持久状态至少需要 3 条合格显式证据；同一 turn 的同组反馈不重复累计。
+3. 历史 v1 文件保持只读；v2 使用独立状态文件，原始 JSONL 不删除、不重写。
+4. 状态只进入 observation preview，不进入排名、PASS、投递、tuning 或生产权重。
+
+### 5.4 P44-G1：feedback preview v2 语义边界
+
+1. `conversation_acceptance` 只描述用户是否接受主动搭话；通用回复、继续对话和关闭主动搭话只更新该状态。
+2. `source_affinity` 只接受实际投递素材的可验证来源行为；当前支持带 candidate ID 的 Music 行为及明确来源关闭事件。
+3. inferred ignored、技术零分、孤儿反馈和未实际投递的 Shadow 候选均不更新状态。
+4. v1 不迁移为 v2，v2 从独立冷状态开始；两版都保持 `ranking_consumed=false` 与 `tuning_consumed=false`。
+
+本阶段不包含个性化调整公式、Shadow 重排、News/Meme/Vision 推断偏好、持久衰减或新反馈 UI。
 
 ## 6. Testbench 准入原则
 
@@ -182,8 +199,7 @@ P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的
 
 以下项目保留研究价值，但不是当前或默认下一阶段：
 
-- 个体回复时延基线；
-- 临时兴趣与衰减持久兴趣；
+- 临时/持久 preview 的生产消费与持久 affinity 衰减；
 - `reward_score_v2` 对画像或排序的实际消费（G0-A 仅批准 preview）；
 - semantic repeat、MMR 与单候选恢复；
 - propensity 日志、contextual bandit 与 OPE；

@@ -21,6 +21,7 @@ from main_logic.proactive_recommendation_feedback import (
 )
 from main_logic.proactive_recommendation_feedback_state import (
     FEEDBACK_STATE_PREVIEW_FILENAME,
+    LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME,
     TEMPORARY_INTEREST_TTL_SECONDS,
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
@@ -319,7 +320,7 @@ def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
         assert "reward_score_v2_preview" not in source_path.read_text(encoding="utf-8")
 
 
-def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_path):
+def test_shadow_feedback_state_separates_conversation_from_source_affinity(tmp_path):
     clear_temporary_feedback_state_preview()
 
     for index in range(3):
@@ -327,6 +328,7 @@ def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_p
             lanlan_name="neko",
             turn_id=f"state-{index}",
             source_type="music",
+            candidate_id=f"music:{index}",
             delivered_at=1_000.0 + index,
             log_mode="jsonl",
             config_dir=tmp_path,
@@ -347,8 +349,8 @@ def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_p
             )
 
     preview = get_feedback_state_preview(config_dir=tmp_path, now=1_020.0)
-    temporary = preview["temporary"]["sources"]["music"]
-    persistent = preview["persistent"]["sources"]["music"]
+    temporary = preview["conversation_acceptance"]["temporary"]
+    persistent = preview["conversation_acceptance"]["persistent"]
     stored = json.loads(
         (tmp_path / FEEDBACK_STATE_PREVIEW_FILENAME).read_text(encoding="utf-8")
     )
@@ -357,8 +359,11 @@ def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_p
     assert temporary["positive_evidence_count"] == 4
     assert persistent["positive_evidence_count"] == 3
     assert persistent["negative_evidence_count"] == 0
-    assert persistent["affinity_preview"] == 0.2
-    assert set(stored["sources"]["music"]) == {
+    assert persistent["acceptance_preview"] == 0.2
+    assert preview["source_affinity"]["temporary"]["sources"] == {}
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
+    assert stored["schema_version"] == 2
+    assert set(stored["conversation_acceptance"]) == {
         "positive_evidence_count",
         "negative_evidence_count",
         "updated_at",
@@ -371,8 +376,197 @@ def test_shadow_feedback_state_separates_temporary_and_persistent_evidence(tmp_p
         config_dir=tmp_path,
         now=1_020.0 + TEMPORARY_INTEREST_TTL_SECONDS,
     )
-    assert expired["temporary"]["sources"] == {}
-    assert expired["persistent"]["sources"]["music"]["affinity_preview"] == 0.2
+    assert expired["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
+    assert expired["conversation_acceptance"]["persistent"]["acceptance_preview"] == 0.2
+
+
+def test_shadow_music_material_events_update_only_verified_source_affinity(tmp_path):
+    clear_temporary_feedback_state_preview()
+    for index in range(3):
+        register_pending_feedback(
+            lanlan_name="neko",
+            turn_id=f"music-state-{index}",
+            source_type="music",
+            candidate_id=f"music:{index}",
+            delivered_at=1_000.0 + index,
+            log_mode="jsonl",
+            config_dir=tmp_path,
+            recommendation_mode="shadow",
+        )
+        record_feedback_event(
+            lanlan_name="neko",
+            turn_id=f"music-state-{index}",
+            event_type="music_played_through",
+            ts=1_010.0 + index,
+        )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=1_020.0)
+    temporary = preview["source_affinity"]["temporary"]["sources"]["music"]
+    persistent = preview["source_affinity"]["persistent"]["sources"]["music"]
+
+    assert temporary["interest_preview"] == 1.0
+    assert temporary["positive_evidence_count"] == 3
+    assert persistent["positive_evidence_count"] == 3
+    assert persistent["affinity_preview"] == 0.2
+    assert preview["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
+    assert preview["conversation_acceptance"]["persistent"]["acceptance_preview"] == 0.0
+
+
+def test_shadow_turn_can_update_conversation_and_source_groups_independently(tmp_path):
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="conversation-and-music",
+        source_type="music",
+        candidate_id="music:both",
+        delivered_at=1_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="conversation-and-music",
+        event_type="user_reply",
+        ts=1_010.0,
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="conversation-and-music",
+        event_type="music_played_through",
+        ts=1_011.0,
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=1_020.0)
+    assert preview["conversation_acceptance"]["persistent"]["positive_evidence_count"] == 1
+    assert (
+        preview["source_affinity"]["persistent"]["sources"]["music"]
+        ["positive_evidence_count"]
+        == 1
+    )
+
+
+def test_shadow_source_affinity_rejects_unverified_and_technical_events(tmp_path):
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="unverified-music",
+        source_type="music",
+        delivered_at=1_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="unverified-music",
+        event_type="music_played_through",
+        ts=1_010.0,
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="mismatched-music",
+        source_type="music",
+        candidate_id="music:expected",
+        delivered_at=1_015.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="mismatched-music",
+        event_type="music_played_through",
+        source_type="news",
+        candidate_id="music:other",
+        ts=1_018.0,
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="technical-music",
+        source_type="music",
+        candidate_id="music:technical",
+        delivered_at=1_020.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="technical-music",
+        event_type="music_error",
+        ts=1_030.0,
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="ignored-chat",
+        source_type="chat",
+        delivered_at=1_040.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="ignored-chat",
+        event_type="ignored",
+        ts=1_050.0,
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=1_060.0)
+    assert preview["source_affinity"]["temporary"]["sources"] == {}
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
+    assert preview["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
+
+
+def test_feedback_state_preview_v1_starts_v2_cold_without_migration(tmp_path):
+    clear_temporary_feedback_state_preview()
+    legacy_path = tmp_path / LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME
+    legacy_bytes = json.dumps(
+        {
+            "schema_version": 1,
+            "sources": {
+                "music": {
+                    "positive_evidence_count": 99,
+                    "negative_evidence_count": 0,
+                    "updated_at": 100.0,
+                }
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf-8")
+    legacy_path.write_bytes(legacy_bytes)
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="v2-cold-start",
+        source_type="chat",
+        delivered_at=190.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    record_feedback_event(
+        lanlan_name="neko",
+        turn_id="v2-cold-start",
+        event_type="user_reply",
+        ts=200.0,
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=200.0)
+
+    assert preview["version"] == "feedback_state_preview_v2"
+    assert (
+        preview["conversation_acceptance"]["persistent"]["positive_evidence_count"]
+        == 1
+    )
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
+    assert legacy_path.read_bytes() == legacy_bytes
+    stored_v2 = json.loads(
+        (tmp_path / FEEDBACK_STATE_PREVIEW_FILENAME).read_text(encoding="utf-8")
+    )
+    assert stored_v2["schema_version"] == 2
+    assert stored_v2["conversation_acceptance"]["positive_evidence_count"] == 1
 
 
 def test_feedback_state_preview_does_not_update_outside_shadow(tmp_path):
@@ -394,8 +588,9 @@ def test_feedback_state_preview_does_not_update_outside_shadow(tmp_path):
     )
 
     preview = get_feedback_state_preview(config_dir=tmp_path, now=2_020.0)
-    assert preview["temporary"]["sources"] == {}
-    assert preview["persistent"]["sources"] == {}
+    assert preview["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
+    assert preview["source_affinity"]["temporary"]["sources"] == {}
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
     assert not (tmp_path / FEEDBACK_STATE_PREVIEW_FILENAME).exists()
 
 

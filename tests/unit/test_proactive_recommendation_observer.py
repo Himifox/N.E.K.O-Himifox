@@ -6,6 +6,7 @@ from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
     get_recommendation_calibration_samples,
     load_recommendation_observations_jsonl,
+    sanitize_recommendation_feedback_state_preview,
     sanitize_recommendation_observation,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
@@ -59,6 +60,99 @@ def _observation(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_feedback_state_preview_sanitizer_keeps_only_bounded_v2_aggregates():
+    safe = sanitize_recommendation_feedback_state_preview(
+        {
+            "version": "feedback_state_preview_v2",
+            "conversation_acceptance": {
+                "temporary": {
+                    "ttl_seconds": 7_200,
+                    "interest_preview": 0.6,
+                    "positive_evidence_count": 3,
+                    "negative_evidence_count": 0,
+                    "expires_in_seconds": 6_000,
+                    "messages": ["private"],
+                },
+                "persistent": {
+                    "min_explicit_evidence": 3,
+                    "positive_evidence_count": 3,
+                    "negative_evidence_count": 0,
+                    "updated_at": 100.0,
+                    "acceptance_preview": 0.2,
+                },
+            },
+            "source_affinity": {
+                "temporary": {
+                    "ttl_seconds": 7_200,
+                    "sources": {
+                        "music": {
+                            "interest_preview": 0.4,
+                            "positive_evidence_count": 2,
+                            "negative_evidence_count": 0,
+                            "expires_in_seconds": 6_000,
+                            "reply_latency_seconds": 12.5,
+                            "title": "private",
+                        }
+                    },
+                },
+                "persistent": {
+                    "min_explicit_evidence": 3,
+                    "sources": {
+                        "music": {
+                            "positive_evidence_count": 2,
+                            "negative_evidence_count": 0,
+                            "updated_at": 100.0,
+                            "affinity_preview": 0.0,
+                            "url": "https://private.example/token=secret",
+                        }
+                    },
+                },
+            },
+        }
+    )
+
+    dumped = json.dumps(safe, ensure_ascii=False)
+    assert safe["ranking_consumed"] is False
+    assert safe["conversation_acceptance"]["temporary"]["interest_preview"] == 0.6
+    assert safe["conversation_acceptance"]["persistent"]["acceptance_preview"] == 0.2
+    assert safe["source_affinity"]["temporary"]["sources"]["music"] == {
+        "interest_preview": 0.4,
+        "positive_evidence_count": 2,
+        "negative_evidence_count": 0,
+        "expires_in_seconds": 6_000,
+    }
+    assert "private" not in dumped
+    assert "latency" not in dumped
+    assert "url" not in dumped.lower()
+
+
+def test_feedback_state_preview_sanitizer_keeps_v1_read_only():
+    safe = sanitize_recommendation_feedback_state_preview(
+        {
+            "version": "feedback_state_preview_v1",
+            "temporary": {
+                "ttl_seconds": 7_200,
+                "sources": {
+                    "music": {
+                        "interest_preview": 0.5,
+                        "positive_evidence_count": 2,
+                        "negative_evidence_count": 0,
+                        "expires_in_seconds": 60,
+                    }
+                },
+            },
+            "persistent": {
+                "min_explicit_evidence": 3,
+                "sources": {},
+            },
+        }
+    )
+
+    assert safe["version"] == "feedback_state_preview_v1"
+    assert safe["ranking_consumed"] is False
+    assert safe["temporary"]["sources"]["music"]["interest_preview"] == 0.5
 
 
 def test_writer_off_does_not_create_file(tmp_path):

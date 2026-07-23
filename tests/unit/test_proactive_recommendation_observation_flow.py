@@ -11,7 +11,7 @@ from main_logic.proactive_recommendation_observer import (
 )
 from main_logic.proactive_recommendation_feedback_state import (
     clear_temporary_feedback_state_preview,
-    update_feedback_state_preview,
+    update_source_affinity_preview,
 )
 from main_routers.system_router import _record_proactive_recommendation_observation
 
@@ -104,7 +104,7 @@ def test_system_router_records_recommendation_observation_to_jsonl(tmp_path):
 
 def test_shadow_observation_records_feedback_state_preview_without_reranking(tmp_path):
     clear_temporary_feedback_state_preview()
-    update_feedback_state_preview(
+    update_source_affinity_preview(
         config_dir=tmp_path,
         source_type="music",
         score=0.2,
@@ -135,8 +135,17 @@ def test_shadow_observation_records_feedback_state_preview_without_reranking(tmp
     assert preview["preview_only"] is True
     assert preview["ranking_consumed"] is False
     assert preview["tuning_consumed"] is False
-    assert preview["temporary"]["sources"]["music"]["interest_preview"] == 0.2
-    assert preview["persistent"]["sources"]["music"]["affinity_preview"] == 0.0
+    assert (
+        preview["source_affinity"]["temporary"]["sources"]["music"]
+        ["interest_preview"]
+        == 0.2
+    )
+    assert (
+        preview["source_affinity"]["persistent"]["sources"]["music"]
+        ["affinity_preview"]
+        == 0.0
+    )
+    assert preview["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
     assert decision.selected_candidate.score == 0.91
     assert decision.score_breakdown == {}
 
