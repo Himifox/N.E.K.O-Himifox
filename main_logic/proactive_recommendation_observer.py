@@ -189,15 +189,88 @@ def sanitize_recommendation_decision_context(value: Any) -> dict[str, Any]:
 
 
 def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]:
-    """Keep only bounded source-level aggregates used for offline review."""
+    """Keep only bounded v2 conversation and source aggregates."""
     if not isinstance(value, Mapping):
         return {}
+    if value.get("version") == "feedback_state_preview_v1":
+        return _sanitize_legacy_feedback_state_preview(value)
+    if value.get("version") != "feedback_state_preview_v2":
+        return {}
+    conversation = value.get("conversation_acceptance")
+    source_affinity = value.get("source_affinity")
+    if not isinstance(conversation, Mapping) or not isinstance(source_affinity, Mapping):
+        return {}
+    conversation_temporary = conversation.get("temporary")
+    conversation_persistent = conversation.get("persistent")
+    source_temporary = source_affinity.get("temporary")
+    source_persistent = source_affinity.get("persistent")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (
+            conversation_temporary,
+            conversation_persistent,
+            source_temporary,
+            source_persistent,
+        )
+    ):
+        return {}
+    return {
+        "version": "feedback_state_preview_v2",
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "conversation_acceptance": {
+            "temporary": {
+                "ttl_seconds": _bounded_nonnegative_int(
+                    conversation_temporary.get("ttl_seconds")
+                ),
+                **_sanitize_feedback_state_bucket(
+                    conversation_temporary,
+                    persistent=False,
+                ),
+            },
+            "persistent": {
+                "min_explicit_evidence": _bounded_nonnegative_int(
+                    conversation_persistent.get("min_explicit_evidence")
+                ),
+                **_sanitize_feedback_state_bucket(
+                    conversation_persistent,
+                    persistent=True,
+                    score_key="acceptance_preview",
+                ),
+            },
+        },
+        "source_affinity": {
+            "temporary": {
+                "ttl_seconds": _bounded_nonnegative_int(
+                    source_temporary.get("ttl_seconds")
+                ),
+                "sources": _sanitize_feedback_state_sources(
+                    source_temporary.get("sources"),
+                    persistent=False,
+                ),
+            },
+            "persistent": {
+                "min_explicit_evidence": _bounded_nonnegative_int(
+                    source_persistent.get("min_explicit_evidence")
+                ),
+                "sources": _sanitize_feedback_state_sources(
+                    source_persistent.get("sources"),
+                    persistent=True,
+                ),
+            },
+        },
+    }
+
+
+def _sanitize_legacy_feedback_state_preview(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve safe historical v1 snapshots without migrating their semantics."""
     temporary = value.get("temporary")
     persistent = value.get("persistent")
     if not isinstance(temporary, Mapping) or not isinstance(persistent, Mapping):
         return {}
     return {
-        "version": str(value.get("version") or "")[:64],
+        "version": "feedback_state_preview_v1",
         "preview_only": True,
         "ranking_consumed": False,
         "tuning_consumed": False,
@@ -220,6 +293,45 @@ def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]
     }
 
 
+def _sanitize_feedback_state_bucket(
+    value: Mapping[str, Any],
+    *,
+    persistent: bool,
+    score_key: str = "affinity_preview",
+) -> dict[str, Any]:
+    bucket = {
+        "positive_evidence_count": _bounded_nonnegative_int(
+            value.get("positive_evidence_count")
+        ),
+        "negative_evidence_count": _bounded_nonnegative_int(
+            value.get("negative_evidence_count")
+        ),
+    }
+    if persistent:
+        bucket["updated_at"] = _bounded_optional_number(
+            value.get("updated_at"),
+            lower=0.0,
+            upper=32_503_680_000.0,
+        )
+        bucket[score_key] = _bounded_optional_number(
+            value.get(score_key),
+            lower=-1.0,
+            upper=1.0,
+        )
+    else:
+        bucket["interest_preview"] = _bounded_optional_number(
+            value.get("interest_preview"),
+            lower=-1.0,
+            upper=1.0,
+        )
+        bucket["expires_in_seconds"] = _bounded_optional_number(
+            value.get("expires_in_seconds"),
+            lower=0.0,
+            upper=86_400.0,
+        )
+    return bucket
+
+
 def _sanitize_feedback_state_sources(
     value: Any,
     *,
@@ -232,37 +344,10 @@ def _sanitize_feedback_state_sources(
         source = str(raw_source or "").strip().lower()
         if not source.replace("_", "").isalnum() or not isinstance(raw_bucket, Mapping):
             continue
-        bucket = {
-            "positive_evidence_count": _bounded_nonnegative_int(
-                raw_bucket.get("positive_evidence_count")
-            ),
-            "negative_evidence_count": _bounded_nonnegative_int(
-                raw_bucket.get("negative_evidence_count")
-            ),
-        }
-        if persistent:
-            bucket["updated_at"] = _bounded_optional_number(
-                raw_bucket.get("updated_at"),
-                lower=0.0,
-                upper=32_503_680_000.0,
-            )
-            bucket["affinity_preview"] = _bounded_optional_number(
-                raw_bucket.get("affinity_preview"),
-                lower=-1.0,
-                upper=1.0,
-            )
-        else:
-            bucket["interest_preview"] = _bounded_optional_number(
-                raw_bucket.get("interest_preview"),
-                lower=-1.0,
-                upper=1.0,
-            )
-            bucket["expires_in_seconds"] = _bounded_optional_number(
-                raw_bucket.get("expires_in_seconds"),
-                lower=0.0,
-                upper=86_400.0,
-            )
-        safe[source] = bucket
+        safe[source] = _sanitize_feedback_state_bucket(
+            raw_bucket,
+            persistent=persistent,
+        )
     return safe
 
 

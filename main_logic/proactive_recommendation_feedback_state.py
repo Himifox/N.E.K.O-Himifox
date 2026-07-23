@@ -10,13 +10,20 @@ import time
 from typing import Any
 
 
-FEEDBACK_STATE_PREVIEW_FILENAME = "proactive_recommendation_feedback_state_preview.json"
-FEEDBACK_STATE_PREVIEW_VERSION = "feedback_state_preview_v1"
+LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME = (
+    "proactive_recommendation_feedback_state_preview.json"
+)
+FEEDBACK_STATE_PREVIEW_FILENAME = (
+    "proactive_recommendation_feedback_state_preview_v2.json"
+)
+FEEDBACK_STATE_PREVIEW_VERSION = "feedback_state_preview_v2"
 TEMPORARY_INTEREST_TTL_SECONDS = 2 * 60 * 60
 PERSISTENT_INTEREST_MIN_EVIDENCE = 3
 PERSISTENT_AFFINITY_MAX = 0.20
 
-_temporary_state: dict[tuple[str, str], dict[str, Any]] = {}
+_CONVERSATION_SCOPE = "conversation_acceptance"
+_SOURCE_SCOPE = "source_affinity"
+_temporary_state: dict[tuple[str, str, str], dict[str, Any]] = {}
 _state_lock = threading.RLock()
 
 
@@ -26,7 +33,25 @@ def clear_temporary_feedback_state_preview() -> None:
         _temporary_state.clear()
 
 
-def update_feedback_state_preview(
+def update_conversation_acceptance_preview(
+    *,
+    config_dir: str | os.PathLike[str] | None,
+    score: float,
+    persistent_eligible: bool,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Apply one generic conversation signal to the global preview."""
+    return _update_feedback_state_preview(
+        config_dir=config_dir,
+        scope=_CONVERSATION_SCOPE,
+        subject="",
+        score=score,
+        persistent_eligible=persistent_eligible,
+        now=now,
+    )
+
+
+def update_source_affinity_preview(
     *,
     config_dir: str | os.PathLike[str] | None,
     source_type: Any,
@@ -34,23 +59,40 @@ def update_feedback_state_preview(
     persistent_eligible: bool,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Apply one sanitized signal and return the resulting preview snapshot."""
-    root = _config_root(config_dir)
+    """Apply one verified material signal to a source-level preview."""
     source = _source_name(source_type)
+    if not source:
+        return get_feedback_state_preview(config_dir=config_dir, now=now)
+    return _update_feedback_state_preview(
+        config_dir=config_dir,
+        scope=_SOURCE_SCOPE,
+        subject=source,
+        score=score,
+        persistent_eligible=persistent_eligible,
+        now=now,
+    )
+
+
+def _update_feedback_state_preview(
+    *,
+    config_dir: str | os.PathLike[str] | None,
+    scope: str,
+    subject: str,
+    score: float,
+    persistent_eligible: bool,
+    now: float | None,
+) -> dict[str, Any]:
+    root = _config_root(config_dir)
     current = time.time() if now is None else float(now)
     signal = _clamp(float(score), -1.0, 1.0)
-    if root is None or not source or signal == 0:
+    if root is None or signal == 0:
         return get_feedback_state_preview(config_dir=config_dir, now=current)
 
     with _state_lock:
-        key = (str(root), source)
+        key = (str(root), scope, subject)
         previous = _temporary_state.get(key)
         if previous is None or float(previous.get("expires_at", 0.0)) <= current:
-            previous = {
-                "interest_preview": 0.0,
-                "positive_evidence_count": 0,
-                "negative_evidence_count": 0,
-            }
+            previous = _empty_evidence_bucket()
         temporary = {
             "interest_preview": round(
                 _clamp(float(previous["interest_preview"]) + signal, -1.0, 1.0),
@@ -67,14 +109,7 @@ def update_feedback_state_preview(
 
         if persistent_eligible:
             state = _load_persistent_state(root)
-            bucket = state["sources"].setdefault(
-                source,
-                {
-                    "positive_evidence_count": 0,
-                    "negative_evidence_count": 0,
-                    "updated_at": current,
-                },
-            )
+            bucket = _persistent_bucket(state, scope, subject, current)
             count_key = (
                 "positive_evidence_count" if signal > 0 else "negative_evidence_count"
             )
@@ -109,55 +144,82 @@ def _snapshot(root: Path, now: float) -> dict[str, Any]:
     for key in expired:
         _temporary_state.pop(key, None)
 
-    temporary_sources = {
-        source: {
-            "interest_preview": float(value["interest_preview"]),
-            "positive_evidence_count": int(value["positive_evidence_count"]),
-            "negative_evidence_count": int(value["negative_evidence_count"]),
-            "expires_in_seconds": round(
-                max(0.0, float(value["expires_at"]) - now),
-                3,
-            ),
-        }
-        for (config_key, source), value in sorted(_temporary_state.items())
-        if config_key == root_key
+    conversation_temporary = _temporary_state.get(
+        (root_key, _CONVERSATION_SCOPE, ""),
+        _empty_evidence_bucket(),
+    )
+    source_temporary = {
+        subject: _temporary_snapshot(bucket, now)
+        for (config_key, scope, subject), bucket in sorted(_temporary_state.items())
+        if config_key == root_key and scope == _SOURCE_SCOPE
     }
-    persistent_sources = {
+    persistent = _load_persistent_state(root)
+    conversation_persistent = persistent["conversation_acceptance"]
+    source_persistent = {
         source: {
             **bucket,
-            "affinity_preview": _persistent_affinity(bucket),
+            "affinity_preview": _persistent_score(bucket),
         }
-        for source, bucket in sorted(_load_persistent_state(root)["sources"].items())
+        for source, bucket in sorted(persistent["source_affinity"].items())
     }
     return {
         "version": FEEDBACK_STATE_PREVIEW_VERSION,
         "preview_only": True,
         "ranking_consumed": False,
         "tuning_consumed": False,
-        "temporary": {
-            "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
-            "sources": temporary_sources,
+        "conversation_acceptance": {
+            "temporary": {
+                "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
+                **_temporary_snapshot(conversation_temporary, now),
+            },
+            "persistent": {
+                "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
+                **conversation_persistent,
+                "acceptance_preview": _persistent_score(conversation_persistent),
+            },
         },
-        "persistent": {
-            "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
-            "sources": persistent_sources,
+        "source_affinity": {
+            "temporary": {
+                "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
+                "sources": source_temporary,
+            },
+            "persistent": {
+                "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
+                "sources": source_persistent,
+            },
         },
     }
 
 
 def _empty_snapshot() -> dict[str, Any]:
+    empty = _empty_evidence_bucket()
     return {
         "version": FEEDBACK_STATE_PREVIEW_VERSION,
         "preview_only": True,
         "ranking_consumed": False,
         "tuning_consumed": False,
-        "temporary": {
-            "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
-            "sources": {},
+        "conversation_acceptance": {
+            "temporary": {
+                "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
+                **_temporary_snapshot(empty, 0.0),
+            },
+            "persistent": {
+                "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
+                "positive_evidence_count": 0,
+                "negative_evidence_count": 0,
+                "updated_at": 0.0,
+                "acceptance_preview": 0.0,
+            },
         },
-        "persistent": {
-            "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
-            "sources": {},
+        "source_affinity": {
+            "temporary": {
+                "ttl_seconds": TEMPORARY_INTEREST_TTL_SECONDS,
+                "sources": {},
+            },
+            "persistent": {
+                "min_explicit_evidence": PERSISTENT_INTEREST_MIN_EVIDENCE,
+                "sources": {},
+            },
         },
     }
 
@@ -168,23 +230,21 @@ def _load_persistent_state(root: Path) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raw = {}
-    raw_sources = raw.get("sources") if isinstance(raw, Mapping) else None
+    if not isinstance(raw, Mapping) or raw.get("schema_version") != 2:
+        raw = {}
+    conversation = _sanitize_persistent_bucket(raw.get("conversation_acceptance"))
+    raw_sources = raw.get("source_affinity")
     sources: dict[str, dict[str, Any]] = {}
     if isinstance(raw_sources, Mapping):
         for raw_source, raw_bucket in raw_sources.items():
             source = _source_name(raw_source)
-            if not source or not isinstance(raw_bucket, Mapping):
-                continue
-            sources[source] = {
-                "positive_evidence_count": _count(
-                    raw_bucket.get("positive_evidence_count")
-                ),
-                "negative_evidence_count": _count(
-                    raw_bucket.get("negative_evidence_count")
-                ),
-                "updated_at": max(0.0, _number(raw_bucket.get("updated_at"), 0.0)),
-            }
-    return {"schema_version": 1, "sources": sources}
+            if source and isinstance(raw_bucket, Mapping):
+                sources[source] = _sanitize_persistent_bucket(raw_bucket)
+    return {
+        "schema_version": 2,
+        "conversation_acceptance": conversation,
+        "source_affinity": sources,
+    }
 
 
 def _save_persistent_state(root: Path, state: Mapping[str, Any]) -> None:
@@ -204,7 +264,56 @@ def _save_persistent_state(root: Path, state: Mapping[str, Any]) -> None:
             pass
 
 
-def _persistent_affinity(bucket: Mapping[str, Any]) -> float:
+def _persistent_bucket(
+    state: dict[str, Any],
+    scope: str,
+    subject: str,
+    now: float,
+) -> dict[str, Any]:
+    if scope == _CONVERSATION_SCOPE:
+        return state["conversation_acceptance"]
+    return state["source_affinity"].setdefault(
+        subject,
+        {
+            "positive_evidence_count": 0,
+            "negative_evidence_count": 0,
+            "updated_at": now,
+        },
+    )
+
+
+def _temporary_snapshot(bucket: Mapping[str, Any], now: float) -> dict[str, Any]:
+    return {
+        "interest_preview": _number(bucket.get("interest_preview"), 0.0),
+        "positive_evidence_count": _count(bucket.get("positive_evidence_count")),
+        "negative_evidence_count": _count(bucket.get("negative_evidence_count")),
+        "expires_in_seconds": round(
+            max(0.0, _number(bucket.get("expires_at"), 0.0) - now),
+            3,
+        ),
+    }
+
+
+def _sanitize_persistent_bucket(value: Any) -> dict[str, Any]:
+    bucket = value if isinstance(value, Mapping) else {}
+    return {
+        "positive_evidence_count": _count(bucket.get("positive_evidence_count")),
+        "negative_evidence_count": _count(bucket.get("negative_evidence_count")),
+        "updated_at": max(0.0, _number(bucket.get("updated_at"), 0.0)),
+    }
+
+
+def _empty_evidence_bucket() -> dict[str, Any]:
+    return {
+        "interest_preview": 0.0,
+        "positive_evidence_count": 0,
+        "negative_evidence_count": 0,
+        "updated_at": 0.0,
+        "expires_at": 0.0,
+    }
+
+
+def _persistent_score(bucket: Mapping[str, Any]) -> float:
     positive = _count(bucket.get("positive_evidence_count"))
     negative = _count(bucket.get("negative_evidence_count"))
     total = positive + negative

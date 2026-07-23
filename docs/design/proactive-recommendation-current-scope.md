@@ -2,9 +2,9 @@
 
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
-> 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
-> 最近更新：2026-07-22
-> 当前阶段：Recommendation MVP 第二轮与 P44-G0-A～D Shadow-only feedback preview 已完成
+> 当前实现分支：`feat/recommend-MVP`（Testbench v2 同步待单独进行）
+> 最近更新：2026-07-23
+> 当前阶段：P44-G1 第一部分 feedback preview v2 语义拆分
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -20,6 +20,8 @@
 8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
 10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；它们不进入排序、PASS、投递或 tuning。
+11. `feedback_state_preview_v2` 将全局搭话接受度与实际素材来源偏好分开；本阶段只修正状态语义，不实现个性化重排。
+12. Recommendation Testbench 当前仍以 v1 契约为已完成基线；v2 adapter/sanitizer 同步属于下一项独立工作，不与本次 MVP 修改混合提交。
 
 正式 timing-v3 baseline：
 
@@ -58,7 +60,7 @@
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
 - 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示个人相对回复速度 bonus。
-- 在 Shadow 中保存来源级临时/持久聚合 preview，并把决策前快照写入后续 observation。
+- 在 Shadow 中分别保存全局搭话接受度与已验证素材来源 affinity，并把决策前快照写入后续 observation。
 
 ### 3.2 暂不允许
 
@@ -68,6 +70,7 @@
 - 新增推荐层时间硬门控或再次实现调度回退。
 - 把 `backoff_level`、`backoff_tier`、scheduler policy 等调度内部状态加入推荐画像。
 - 将一次回复、一次播放或一次快速响应持久化为长期兴趣。
+- 将通用回复、继续对话或 inferred ignored 解释为 Music、News、Meme 或 Vision 来源偏好。
 - 让 `reward_score_v2_preview` 或相对回复速度 bonus 影响候选分数、PASS、投递、tuning 或持久画像。
 - 引入 MMR、DPP、向量数据库、Feature Store、MABWiser/Mab2Rec、OBP 或其他新运行时依赖。
 - 启用 epsilon exploration、contextual bandit、OPE 或多用户 Canary。
@@ -162,13 +165,25 @@ P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事�
 ### 5.4 P44-G0-C/D：临时/持久状态与 observation preview
 
 1. 临时兴趣只在进程内保存，TTL 为 2 小时；不同显式反馈可累积，但过期后自动删除。
-2. 持久文件 `proactive_recommendation_feedback_state_preview.json` 只保存来源级正/负证据计数和更新时间，不保存 turn ID、回复正文、标题、URL 或逐条 latency。
+2. 历史 v1 文件 `proactive_recommendation_feedback_state_preview.json` 保持只读；v2 使用独立文件 `proactive_recommendation_feedback_state_preview_v2.json` 保存聚合证据，两者均不保存 turn ID、回复正文、标题、URL 或逐条 latency。
 3. 单条显式证据只改变临时兴趣；持久证据少于 3 条时 `affinity_preview=0`。同一 turn 的同组反馈不重复累计持久证据。
 4. 状态仅由成功写入 JSONL、可归因到已投递 Shadow observation 的 feedback 更新；孤儿反馈、技术零分和 `active_source` 不更新状态。
 5. 每条新的 Shadow observation 记录决策前 `feedback_state_preview`；字段经过独立白名单与数值边界清洗。
 6. preview 不进入候选 `score_breakdown`，推荐排序、PASS、投递、tuning 和生产权重均不读取，因此当前 baseline 排序不变。
 
 实际个性化消费、持久 affinity 衰减及生产启用仍需独立候选评估，不在 P44-G0-C/D 授权内。
+
+### 5.5 P44-G1 第一部分：feedback preview v2 语义边界
+
+1. `conversation_acceptance` 只描述用户是否接受本次主动搭话。通用回复、继续对话与关闭主动搭话只更新该状态，不更新任何素材来源 affinity。
+2. `source_affinity` 只接受实际投递素材的可验证来源行为；当前实现支持具有 candidate ID 的 Music 行为及明确来源关闭事件。
+3. `ignored` 继续作为低置信报告信号，不写入 v2 临时或持久状态；`music_error`、`autoplay_blocked` 和其他技术零分也不更新状态。
+4. 来源 affinity 必须同时匹配 pending `turn_id`、实际来源与 candidate ID；Shadow 中未实际投递的候选不得获得偏好证据。
+5. 临时 TTL 继续为 2 小时，持久 preview 继续要求至少 3 条合格证据；同一 turn 的同组事件不重复累计持久证据。
+6. v1 不迁移为 v2 来源偏好，避免继承“愿意聊天等于喜欢素材”的旧语义；v1 状态文件和历史 observation 保持只读，原始 JSONL 不删除、不重写，v2 从独立文件的冷状态开始。
+7. v2 仍标记 `ranking_consumed=false` 和 `tuning_consumed=false`，不改变 baseline 分数、PASS、scheduler、投递或 tuning。
+
+本部分不包含个性化调整公式、Shadow 重排、News/Meme/Vision 推断偏好、持久衰减、新反馈 UI 或 Testbench 候选分析。
 
 ## 6. Testbench 准入原则
 

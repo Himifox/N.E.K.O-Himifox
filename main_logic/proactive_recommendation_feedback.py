@@ -19,7 +19,8 @@ import time
 from typing import Any
 
 from main_logic.proactive_recommendation_feedback_state import (
-    update_feedback_state_preview,
+    update_conversation_acceptance_preview,
+    update_source_affinity_preview,
 )
 
 
@@ -97,6 +98,21 @@ _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS = {
     "autoplay_blocked",
 }
 _REWARD_V2_PREVIEW_REPLY_EVENTS = {"user_reply_fast", "user_reply"}
+_CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
+    "user_reply_fast",
+    "user_reply",
+    "user_continue",
+    "proactive_disabled_after",
+}
+_SOURCE_AFFINITY_EVENT_TYPES = {
+    "source_disabled_after",
+    "music_played_through",
+    "music_high_completion",
+    "music_mid_completion",
+    "music_normal_close",
+    "music_early_close",
+    "music_hard_skip",
+}
 
 _TOP_LEVEL_KEYS = {
     "ts",
@@ -520,9 +536,10 @@ def record_feedback_event(
     duplicate_group = False
     if pending is not None:
         duplicate_event = str(event["event_type"]) in pending.seen_event_types
-        duplicate_group = str(event.get("event_group") or "") in pending.seen_groups
+        state_group = _feedback_state_group(event)
+        duplicate_group = state_group in pending.seen_groups
         pending.seen_event_types.add(str(event["event_type"]))
-        pending.seen_groups.add(str(event.get("event_group") or ""))
+        pending.seen_groups.add(state_group)
     effective_log_mode = (
         log_mode if log_mode is not None else (pending.log_mode if pending else "off")
     )
@@ -543,25 +560,60 @@ def record_feedback_event(
             and pending.recommendation_mode == "shadow"
             and not duplicate_event
         ):
-            component = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(
-                str(event.get("event_type") or "")
-            )
+            event_type = str(event.get("event_type") or "")
+            component = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(event_type)
             score = float(component[1]) if component is not None else 0.0
+            persistent_eligible = (
+                not duplicate_group
+                and event.get("confidence") in {"medium", "high"}
+                and score != 0
+            )
             try:
-                update_feedback_state_preview(
-                    config_dir=effective_config_dir,
-                    source_type=event.get("source_type"),
-                    score=score,
-                    persistent_eligible=(
-                        not duplicate_group
-                        and event.get("confidence") in {"medium", "high"}
-                        and score != 0
-                    ),
-                    now=_number(event.get("ts"), time.time()),
-                )
+                if event_type in _CONVERSATION_ACCEPTANCE_EVENT_TYPES:
+                    update_conversation_acceptance_preview(
+                        config_dir=effective_config_dir,
+                        score=score,
+                        persistent_eligible=persistent_eligible,
+                        now=_number(event.get("ts"), time.time()),
+                    )
+                elif (
+                    event_type in _SOURCE_AFFINITY_EVENT_TYPES
+                    and _source_affinity_event_matches_pending(event, pending)
+                ):
+                    update_source_affinity_preview(
+                        config_dir=effective_config_dir,
+                        source_type=event.get("source_type"),
+                        score=score,
+                        persistent_eligible=persistent_eligible,
+                        now=_number(event.get("ts"), time.time()),
+                    )
             except Exception as exc:
                 logger.debug("feedback state preview update failed: %s", exc)
     return event
+
+
+def _source_affinity_event_matches_pending(
+    event: Mapping[str, Any],
+    pending: PendingRecommendationFeedback,
+) -> bool:
+    """Require an exact delivered source and material before updating affinity."""
+    pending_candidate = _clean_text(pending.candidate_id)
+    return bool(
+        pending_candidate
+        and _normalize_source_type(event.get("source_type")) == pending.source_type
+        and _clean_text(event.get("candidate_id")) == pending_candidate
+    )
+
+
+def _feedback_state_group(event: Mapping[str, Any]) -> str:
+    event_type = str(event.get("event_type") or "")
+    event_group = str(event.get("event_group") or "unknown")
+    if event_type in _CONVERSATION_ACCEPTANCE_EVENT_TYPES:
+        return f"conversation:{event_group}"
+    if event_type in _SOURCE_AFFINITY_EVENT_TYPES:
+        source = _normalize_source_type(event.get("source_type")) or "unknown"
+        return f"source:{source}:{event_group}"
+    return f"other:{event_group}"
 
 
 def note_user_turn_for_feedback(
