@@ -725,3 +725,15 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
 - 首次真实运行覆盖 131 条 v2 observation，Music 平均分 +0.0044、最大 +0.0060，
   Top-1/HHI/最大曝光均不变；结论为 `impact_only`，没有 Shadow 或生产候选。
 - 新增 P55 smoke；生产权重、PASS、scheduler、投递和 tuning 均未修改。
+
+## P44-G1-R2 · 渐进式个性化积分响应曲线 (2026-07-24)
+
+- 新增固定 `gradual_8/12/20` 证据置信度曲线，并保留 R1 `current_v1` 对照；
+  生产 affinity 决定方向，证据数只决定逐步接近 ±0.03 上限的速度。
+- 新增逐 observation 资源分数、证据轨迹、Top-3 换位、分差、来源曝光和 HHI
+  报告，以及只读 API `/personalization/response-curves`。
+- 131 条真实 observation 上，`gradual_12` 中位积分 0.0200、最大 0.0275、触顶率
+  0，HHI/最大曝光不变；机械门禁通过。
+- 因 Music 来源证据为 11 条正向、0 条负向，正式结论为
+  `hold_for_negative_evidence`，不产生 Shadow 或生产候选。
+- 新增 P56 smoke；MVP、生产状态、候选、过滤、权重、PASS、投递和 tuning 均未修改。

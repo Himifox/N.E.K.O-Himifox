@@ -3,8 +3,8 @@
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
-> 最近更新：2026-07-23
-> 当前阶段：P44-G1-R1 有界个性化影响模拟完成，结论为 `impact_only`
+> 最近更新：2026-07-24
+> 当前阶段：P44-G1-R2 渐进积分响应曲线完成，结论为 `hold_for_negative_evidence`
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -23,6 +23,7 @@
 11. P44-G1 以一次主动搭话 encounter 为单位；所有素材共享聊天反馈，music 另加播放行为。素材来源仅作描述性分组，不因普通回复自动形成长期来源偏好。
 12. `feedback_state_preview_v2` 将全局搭话接受度与可验证素材来源偏好分开；v1 历史状态和 observation 不迁移、不重写。
 13. Testbench 已完成首个 persistent source affinity 有界影响模拟：最大允许调整 ±0.03，真实数据中 Music 最大实际 +0.006，Top-1、HHI 和最大来源曝光均未变化；没有形成 Shadow 或生产候选。
+14. R2 已验证证据置信度响应曲线：`gradual_12` 中位积分 +0.0200、最大 +0.0275、触顶率 0，HHI 与最大来源曝光不变；它只通过机械门禁，因缺少负向来源证据和 outcome 标签仍为 HOLD。
 
 正式 timing-v3 baseline：
 
@@ -62,6 +63,7 @@
 - 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示。
 - 在 Shadow observation 中只读记录 v2 全局搭话接受度和已验证素材来源 affinity 的决策前快照。
 - 在 Testbench 中只读模拟有界 persistent source affinity，并报告逐来源分数、Top-1 翻转和集中度；结果不得自动晋升生产。
+- 在 Testbench 中比较登记的渐进积分响应曲线，展示逐 observation 资源分数、证据轨迹和 Top-3 换位；曲线不得被生产 ranking 或 tuning 消费。
 
 ### 3.2 暂不允许
 
@@ -173,6 +175,17 @@ Testbench 候选只读取 observation 内嵌的决策前 persistent source affin
 生产门槛时不调整，任何候选最大变化为 ±0.03。全局 conversation acceptance 不改变
 来源相对排名。首个 131 observation v2 freeze 上没有 Top-1 翻转，也没有集中度变化，
 正式结论为 `impact_only`；缺少负向来源证据和 outcome 标签，不能评价效果或进入 Shadow。
+
+### 5.6 P44-G1-R2：渐进式积分响应曲线
+
+R2 保留生产 preview 的 affinity 方向和至少 3 条显式证据门槛，只在 Testbench 中以
+8/12/20 条证据作为达到 ±0.03 上限的三档置信度曲线。默认 `gradual_12` 在首个 v2
+freeze 上得到中位 +0.0200、最大 +0.0275，且没有触顶、HHI 或最大曝光退化。
+
+该 cohort 的 20 条可调整 Music 候选中，15 条原本已是 Top-1；其余候选与 Top-1
+至少相差 0.034，因此 ±0.03 约束下零 Top-1 翻转是预期结果，不是无效判据。曲线只
+产生一次 Top-3 换位。当前只有 Music 正向 11、负向 0，正式状态为
+`hold_for_negative_evidence`；不进入 MVP、Shadow 或自动调权。
 
 ## 6. Testbench 准入原则
 
