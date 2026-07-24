@@ -67,3 +67,25 @@ def test_large_music_stream_does_not_advertise_probe_content_length():
 
     assert "headers['Content-Length'] = content_length" not in large_stream_branch
     assert "_stream_music(current_url, request_headers, MAX_MUSIC_SIZE)" in large_stream_branch
+
+
+def test_music_close_feedback_tracks_only_active_playback_time():
+    source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+
+    assert "let activePlaybackAccumulatedMs = 0" in source
+    assert "function resetMusicPlaybackTiming()" in source
+    assert "function startActiveMusicPlayback(now)" in source
+    assert "function stopActiveMusicPlayback(now)" in source
+    assert "function getActiveMusicPlaybackMs(now)" in source
+    assert "metadata.active_playback_ms" in source
+    assert "const rawActiveMs = metadata && metadata.active_playback_ms" in source
+
+    assert "addEventListener('playing'" in source
+    assert "['waiting', 'stalled', 'pause', 'seeking']" in source
+    assert "addEventListener('seeked'" in source
+
+    assert "const didStart = activePlaybackDidStart" in source
+    assert "const eventType = musicCloseFeedbackEventType(metadata)" in source
+    assert "if (eventType === 'music_hard_skip')" in source
+    assert "else if (eventType === 'music_early_close')" in source
+    assert source.count("resetMusicPlaybackTiming();") >= 4

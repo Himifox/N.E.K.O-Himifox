@@ -13,6 +13,7 @@ from main_logic.proactive_recommendation_feedback import (
     note_user_turn_for_feedback,
     record_feedback_event,
     register_pending_feedback,
+    sanitize_feedback_metadata,
     sanitize_recommendation_feedback_event,
     join_observations_with_feedback,
     summarize_feedback_calibration,
@@ -608,8 +609,55 @@ def test_music_feedback_threshold_mapping():
     assert music_feedback_event_type(started=False) == "music_not_started"
     assert music_feedback_event_type(played_wall_ms=2500) == "music_hard_skip"
     assert music_feedback_event_type(played_wall_ms=8000) == "music_early_close"
+    assert (
+        music_feedback_event_type(active_playback_ms=2500, played_wall_ms=24_000)
+        == "music_hard_skip"
+    )
+    assert (
+        music_feedback_event_type(active_playback_ms=8000, played_wall_ms=24_000)
+        == "music_early_close"
+    )
+    assert (
+        music_feedback_event_type(
+            active_playback_ms=12_252,
+            played_wall_ms=23_940,
+            completion_ratio=0.037,
+        )
+        == "music_early_close"
+    )
+    assert (
+        music_feedback_event_type(active_playback_ms=18_000, played_wall_ms=24_000)
+        == "music_normal_close"
+    )
     assert music_feedback_event_type(played_wall_ms=20_000, completion_ratio=0.35) == "music_mid_completion"
     assert music_feedback_event_type(played_wall_ms=20_000, completion_ratio=0.72) == "music_high_completion"
+
+
+def test_active_playback_metadata_is_finite_nonnegative_and_round_trips():
+    assert sanitize_feedback_metadata({"active_playback_ms": 12_252.5}) == {
+        "active_playback_ms": 12_252.5
+    }
+    for invalid in (
+        -1,
+        float("nan"),
+        float("inf"),
+        "12252",
+        True,
+        86_400_001,
+        10**1000,
+    ):
+        assert "active_playback_ms" not in sanitize_feedback_metadata(
+            {"active_playback_ms": invalid}
+        )
+
+    event = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="music-active-time",
+        event_type="music_early_close",
+        source_type="music",
+        metadata={"active_playback_ms": 12_252, "played_wall_ms": 23_940},
+    )
+    assert json.loads(json.dumps(event))["metadata"]["active_playback_ms"] == 12_252
 
 
 def test_user_turn_feedback_respects_privacy_and_records_continue(tmp_path):
