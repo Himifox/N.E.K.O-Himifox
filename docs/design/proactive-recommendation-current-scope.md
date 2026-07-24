@@ -4,7 +4,7 @@
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 最近完成工作分支：`feat/recommend-testbench`（仅离线分析）
 > 最近更新：2026-07-23
-> 当前阶段：P44-G1 feedback preview v2 语义拆分；Testbench 只读同步单独提交
+> 当前阶段：P44-G1-R1 有界个性化影响模拟完成，结论为 `impact_only`
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -22,6 +22,7 @@
 10. P44-G0 只允许从原始 feedback event 重算 turn-level `reward_score_v2_preview`，并将 MVP 的 `feedback_state_preview` 合同同步到 Testbench；Testbench 不复制 reward 公式，两类 preview 均不进入排序、tuning 或生产推荐。
 11. P44-G1 以一次主动搭话 encounter 为单位；所有素材共享聊天反馈，music 另加播放行为。素材来源仅作描述性分组，不因普通回复自动形成长期来源偏好。
 12. `feedback_state_preview_v2` 将全局搭话接受度与可验证素材来源偏好分开；v1 历史状态和 observation 不迁移、不重写。
+13. Testbench 已完成首个 persistent source affinity 有界影响模拟：最大允许调整 ±0.03，真实数据中 Music 最大实际 +0.006，Top-1、HHI 和最大来源曝光均未变化；没有形成 Shadow 或生产候选。
 
 正式 timing-v3 baseline：
 
@@ -60,6 +61,7 @@
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
 - 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示。
 - 在 Shadow observation 中只读记录 v2 全局搭话接受度和已验证素材来源 affinity 的决策前快照。
+- 在 Testbench 中只读模拟有界 persistent source affinity，并报告逐来源分数、Top-1 翻转和集中度；结果不得自动晋升生产。
 
 ### 3.2 暂不允许
 
@@ -162,7 +164,15 @@ P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的
 3. inferred ignored、技术零分、孤儿反馈和未实际投递的 Shadow 候选均不更新状态。
 4. v1 不迁移为 v2，v2 从独立冷状态开始；两版都保持 `ranking_consumed=false` 与 `tuning_consumed=false`。
 
-本阶段不包含个性化调整公式、Shadow 重排、News/Meme/Vision 推断偏好、持久衰减或新反馈 UI。
+MVP 本阶段不包含个性化消费、Shadow 重排、News/Meme/Vision 推断偏好、持久衰减或
+新反馈 UI；下述 R1 公式仅存在于 Testbench 影响模拟中。
+
+### 5.5 P44-G1-R1：有界个性化影响模拟
+
+Testbench 候选只读取 observation 内嵌的决策前 persistent source affinity，证据低于
+生产门槛时不调整，任何候选最大变化为 ±0.03。全局 conversation acceptance 不改变
+来源相对排名。首个 131 observation v2 freeze 上没有 Top-1 翻转，也没有集中度变化，
+正式结论为 `impact_only`；缺少负向来源证据和 outcome 标签，不能评价效果或进入 Shadow。
 
 ## 6. Testbench 准入原则
 

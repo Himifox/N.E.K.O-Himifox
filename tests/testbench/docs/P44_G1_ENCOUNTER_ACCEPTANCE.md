@@ -1,6 +1,6 @@
 # P44-G1 主动搭话接受度离线分析
 
-> 状态：已完成首份真实 preview cohort 只读报告；结论为 `descriptive_only`。
+> 状态：v1 接受度报告为 `descriptive_only`；v2 R1 有界影响模拟为 `impact_only`。
 > 分支：`feat/recommend-testbench`
 
 ## 1. 评估单位
@@ -92,3 +92,11 @@ Golden、人工 annotation、分析报告和原始 JSONL 不迁移、不重写�
 
 v2 只读同步只用于后续新数据的安全导入和导出验证。它不让 preview 进入 baseline
 排名，不启动新的 G1 候选分析，也不修改生产权重、scheduler 或 tuning。
+
+## 8. G1-R1 有界影响模拟
+
+R1 已在独立 v2 freeze 上完成。候选只读取决策时
+`source_affinity.persistent`，最大分数调整 ±0.03；`conversation_acceptance` 不参与
+来源相对排名。首次真实运行没有 Top-1 翻转，来源曝光与 HHI 不变，因此结论为
+`impact_only`，不能晋升 Shadow。完整合同和逐来源分数见
+`P44_G1_R1_BOUNDED_PERSONALIZATION.md`。

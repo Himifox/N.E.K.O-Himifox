@@ -715,3 +715,13 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
   不修改生产权重、排序、投递、scheduler 或 tuning。
 - 首份真实 freeze 为 260 条 preview observation / 161 个投递 encounter；结论为
   `descriptive_only`，未生成调度或权重候选。
+
+## P44-G1-R1 · 有界个性化排名影响模拟 (2026-07-24)
+
+- 新增 v2 cohort 冻结、persistent source affinity ±0.03 有界模拟和 JSON/Markdown
+  报告；全局 conversation acceptance 不参与来源相对排名。
+- 新增逐来源平均分、Top-1 翻转、来源曝光和 HHI 对照，以及只读 API
+  `/personalization/bounded-impact`。
+- 首次真实运行覆盖 131 条 v2 observation，Music 平均分 +0.0044、最大 +0.0060，
+  Top-1/HHI/最大曝光均不变；结论为 `impact_only`，没有 Shadow 或生产候选。
+- 新增 P55 smoke；生产权重、PASS、scheduler、投递和 tuning 均未修改。
