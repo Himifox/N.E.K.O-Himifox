@@ -49,12 +49,10 @@ from config import (
 )
 from main_logic.proactive_recommendation_feedback import (
     FEEDBACK_LOG_FILENAME,
-    append_recommendation_feedback_jsonl,
-    build_feedback_event,
     has_forbidden_feedback_fields,
     load_recommendation_feedback_jsonl,
+    record_feedback_event_with_status,
     record_recent_setting_feedback,
-    sanitize_feedback_metadata,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
@@ -77,8 +75,6 @@ from main_logic.proactive_recommendation_observer import (
 from main_logic.proactive_recommendation_tuning import (
     TUNING_FILENAME,
     load_recommendation_tuning,
-    maybe_auto_apply_recommendation_tuning_from_logs,
-    maybe_update_recommendation_tuning_health_from_logs,
     pause_recommendation_tuning,
     reset_recommendation_tuning,
     resume_recommendation_tuning,
@@ -531,36 +527,21 @@ async def record_proactive_recommendation_feedback(request: Request):
     if not lanlan_name:
         return {"success": False, "error": "lanlan_name missing"}
 
-    event = build_feedback_event(
+    result = await asyncio.to_thread(
+        record_feedback_event_with_status,
         lanlan_name=lanlan_name,
         turn_id=turn_id,
         event_type=event_type,
         source_type=data.get("source_type"),
         candidate_id=data.get("candidate_id"),
-        metadata=sanitize_feedback_metadata(data.get("metadata") or {}),
-    )
-    wrote = await asyncio.to_thread(
-        append_recommendation_feedback_jsonl,
-        event,
+        metadata=data.get("metadata") or {},
         log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
         config_dir=config_dir,
     )
-    if wrote:
-        tuning_result = await asyncio.to_thread(
-            maybe_auto_apply_recommendation_tuning_from_logs,
-            mode=PROACTIVE_RECOMMENDATION_TUNING_MODE,
-            config_dir=config_dir,
-        )
-        if not tuning_result.get("applied") and not tuning_result.get("rollback_applied"):
-            await asyncio.to_thread(
-                maybe_update_recommendation_tuning_health_from_logs,
-                mode=PROACTIVE_RECOMMENDATION_TUNING_MODE,
-                config_dir=config_dir,
-            )
     return {
         "success": True,
-        "logged": bool(wrote),
-        "event": event,
+        "logged": result.logged,
+        "event": result.event,
         "log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
     }
 

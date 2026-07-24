@@ -195,6 +195,12 @@ class PendingRecommendationFeedback:
     continue_seen: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RecommendationFeedbackRecordResult:
+    event: dict[str, Any] | None
+    logged: bool
+
+
 _pending_feedback: dict[tuple[str, str], PendingRecommendationFeedback] = {}
 
 
@@ -483,10 +489,36 @@ def record_feedback_event(
     config_dir: str | os.PathLike[str] | None = None,
     ts: float | None = None,
 ) -> dict[str, Any] | None:
+    return record_feedback_event_with_status(
+        lanlan_name=lanlan_name,
+        turn_id=turn_id,
+        event_type=event_type,
+        source_type=source_type,
+        candidate_id=candidate_id,
+        metadata=metadata,
+        log_mode=log_mode,
+        config_dir=config_dir,
+        ts=ts,
+    ).event
+
+
+def record_feedback_event_with_status(
+    *,
+    lanlan_name: Any,
+    turn_id: Any,
+    event_type: str,
+    source_type: Any = None,
+    candidate_id: Any = None,
+    metadata: Mapping[str, Any] | None = None,
+    log_mode: str | None = None,
+    config_dir: str | os.PathLike[str] | None = None,
+    ts: float | None = None,
+) -> RecommendationFeedbackRecordResult:
+    """Record one event through the shared log, state, and tuning chokepoint."""
     name = _clean_text(lanlan_name)
     tid = _clean_text(turn_id)
     if not name or not tid:
-        return None
+        return RecommendationFeedbackRecordResult(event=None, logged=False)
     pending = _pending_feedback.get((name, tid))
     event = build_feedback_event(
         lanlan_name=name,
@@ -498,7 +530,7 @@ def record_feedback_event(
         ts=ts,
     )
     if not event.get("event_type"):
-        return None
+        return RecommendationFeedbackRecordResult(event=None, logged=False)
     duplicate_event = False
     duplicate_group = False
     if pending is not None:
@@ -556,7 +588,7 @@ def record_feedback_event(
                     )
             except Exception as exc:
                 logger.debug("feedback state preview update failed: %s", exc)
-    return event
+    return RecommendationFeedbackRecordResult(event=event, logged=wrote)
 
 
 def _source_affinity_event_matches_pending(

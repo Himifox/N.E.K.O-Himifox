@@ -5,11 +5,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main_routers.proactive_router as proactive_router
+import main_logic.proactive_recommendation_feedback as feedback_module
 from config import AUTOSTART_CSRF_TOKEN
 from main_logic.proactive_recommendation_feedback import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
     build_feedback_event,
+    clear_pending_recommendation_feedback,
+    register_pending_feedback,
+)
+from main_logic.proactive_recommendation_feedback_state import (
+    clear_temporary_feedback_state_preview,
+    get_feedback_state_preview,
 )
 from main_logic.proactive_recommendation_observer import (
     CALIBRATION_SAMPLE_LIMIT,
@@ -540,3 +547,123 @@ def test_feedback_endpoint_requires_csrf_and_rejects_sensitive_fields(monkeypatc
     assert payload["event"]["event_type"] == "user_reply_fast"
     assert "must-not-leak" not in json.dumps(payload, ensure_ascii=False)
     assert "must-not-leak" not in rows
+
+
+def test_feedback_endpoint_updates_verified_music_negative_preview_once(
+    monkeypatch,
+    tmp_path,
+):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    tuning_calls = []
+    monkeypatch.setattr(
+        feedback_module,
+        "_maybe_auto_apply_tuning_after_feedback",
+        lambda *, config_dir: tuning_calls.append(config_dir),
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="music-hard-skip",
+        source_type="music",
+        candidate_id="music:verified",
+        delivered_at=10_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    client = _client(monkeypatch, tmp_path, now=10_001.0)
+    headers = {
+        "Origin": "http://testserver",
+        "X-CSRF-Token": AUTOSTART_CSRF_TOKEN,
+    }
+    body = {
+        "lanlan_name": "neko",
+        "turn_id": "music-hard-skip",
+        "source_type": "music",
+        "event_type": "music_hard_skip",
+        "metadata": {"played_wall_ms": 2_000},
+    }
+
+    first = client.post(
+        "/api/proactive/recommendation/feedback",
+        headers=headers,
+        json=body,
+    )
+    duplicate = client.post(
+        "/api/proactive/recommendation/feedback",
+        headers=headers,
+        json=body,
+    )
+
+    assert first.status_code == 200
+    assert first.json()["success"] is True
+    assert first.json()["logged"] is True
+    assert first.json()["event"]["candidate_id"] == "music:verified"
+    assert duplicate.json()["logged"] is True
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_002.0)
+    temporary = preview["source_affinity"]["temporary"]["sources"]["music"]
+    persistent = preview["source_affinity"]["persistent"]["sources"]["music"]
+    assert temporary["interest_preview"] == -0.7
+    assert temporary["negative_evidence_count"] == 1
+    assert persistent["negative_evidence_count"] == 1
+    assert persistent["positive_evidence_count"] == 0
+    assert len(tuning_calls) == 2  # Both log rows, but never twice per request.
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / FEEDBACK_LOG_FILENAME).read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 2
+    assert all(row["candidate_id"] == "music:verified" for row in rows)
+    assert all(row["event_type"] == "music_hard_skip" for row in rows)
+
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="music-early-close",
+        source_type="music",
+        candidate_id="music:second",
+        delivered_at=10_003.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    early = client.post(
+        "/api/proactive/recommendation/feedback",
+        headers=headers,
+        json={
+            "lanlan_name": "neko",
+            "turn_id": "music-early-close",
+            "source_type": "music",
+            "event_type": "music_early_close",
+            "metadata": {"played_wall_ms": 8_000},
+        },
+    )
+    assert early.json()["event"]["candidate_id"] == "music:second"
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_004.0)
+    persistent = preview["source_affinity"]["persistent"]["sources"]["music"]
+    assert persistent["negative_evidence_count"] == 2
+
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="music-technical",
+        source_type="music",
+        candidate_id="music:technical",
+        delivered_at=10_005.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    client.post(
+        "/api/proactive/recommendation/feedback",
+        headers=headers,
+        json={
+            "lanlan_name": "neko",
+            "turn_id": "music-technical",
+            "source_type": "music",
+            "event_type": "music_error",
+        },
+    )
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_006.0)
+    persistent = preview["source_affinity"]["persistent"]["sources"]["music"]
+    assert persistent["negative_evidence_count"] == 2
+    clear_pending_recommendation_feedback()
