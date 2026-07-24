@@ -1,15 +1,24 @@
-"""Read-only diagnostics for the public meme knowledge runtime."""
+"""Local management API for the public meme knowledge database."""
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
+from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
 from knowledge.moegirl_knowledge.bundled_chime_runtime import (
     get_public_knowledge_status,
     request_bundled_chime_reimport,
 )
+from knowledge.moegirl_knowledge.catalog_overrides import (
+    entry_key,
+    get_catalog_override_path,
+    load_disabled_entries,
+    set_entry_disabled,
+)
+from knowledge.moegirl_knowledge.source_registry import get_source
 from main_routers.shared_state import get_config_manager
 from utils.logger_config import get_module_logger
 
@@ -18,9 +27,43 @@ router = APIRouter(prefix="/api/moegirl-knowledge", tags=["moegirl-knowledge"])
 logger = get_module_logger(__name__, "Main")
 
 
+def _store() -> MoegirlKnowledgeStore:
+    database_path = (
+        Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
+    )
+    return MoegirlKnowledgeStore(database_path)
+
+
+def _source_tag(value: str) -> str:
+    value = str(value or "").strip()
+    return value if not value or value.startswith("source:") else f"source:{value}"
+
+
+def _entry_payload(entry, *, disabled: bool, score: float | None = None, detail: bool = False) -> dict:
+    source = get_source(entry.source_tag)
+    payload = {
+        "title": entry.title,
+        "terms": {role: list(values) for role, values in entry.terms.items()},
+        "tags": list(entry.tags),
+        "summary": entry.summary,
+        "source": {
+            "tag": source.tag,
+            "name": source.name,
+            "homepage": source.homepage,
+            "license": source.license,
+        },
+        "disabled": disabled,
+    }
+    if score is not None:
+        payload["score"] = score
+    if detail:
+        payload["content"] = entry.content
+    return payload
+
+
 @router.get("/status")
 async def get_moegirl_knowledge_status():
-    """Return source-level health without exposing queries or knowledge text."""
+    """Return local database and source-level health without knowledge text."""
     try:
         payload = await asyncio.to_thread(get_public_knowledge_status, get_config_manager())
         return {"ok": True, **payload}
@@ -28,9 +71,103 @@ async def get_moegirl_knowledge_status():
         return {"ok": False, "error_type": type(exc).__name__}
 
 
+@router.get("/entries")
+async def list_moegirl_knowledge_entries(
+    query: str = Query(default="", max_length=200),
+    source: str = Query(default="", max_length=80),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """Browse local cards or diagnose retrieval using the production retriever."""
+    store = _store()
+    source_tag = _source_tag(source)
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    if query.strip():
+        hits = await asyncio.to_thread(
+            MoegirlKnowledgeRetriever(store).search,
+            query.strip(),
+            limit=max(store.count(), 1),
+        )
+        if source_tag:
+            hits = [hit for hit in hits if hit.entry.source_tag == source_tag]
+        total = len(hits)
+        items = [
+            _entry_payload(hit.entry, disabled=False, score=hit.score)
+            for hit in hits[offset:offset + limit]
+        ]
+    else:
+        total = store.count_by_source_tag(source_tag) if source_tag else store.count()
+        entries = await asyncio.to_thread(
+            store.list_entries,
+            source_tag=source_tag,
+            limit=limit,
+            offset=offset,
+        )
+        items = [
+            _entry_payload(entry, disabled=entry_key(entry) in disabled)
+            for entry in entries
+        ]
+    return {"ok": True, "total": total, "offset": offset, "limit": limit, "items": items}
+
+
+@router.get("/entry")
+async def get_moegirl_knowledge_entry(
+    source: str = Query(..., min_length=1, max_length=80),
+    title: str = Query(..., min_length=1, max_length=500),
+):
+    """Return one complete five-field local card selected by source and title."""
+    store = _store()
+    entry = await asyncio.to_thread(store.get_entry, _source_tag(source), title.strip())
+    if entry is None:
+        return {"ok": False, "reason": "not_found"}
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    return {"ok": True, "entry": _entry_payload(
+        entry,
+        disabled=entry_key(entry) in disabled,
+        detail=True,
+    )}
+
+
+@router.post("/entry/disabled")
+async def set_moegirl_knowledge_entry_disabled(request: Request):
+    """Disable or restore one local card without changing the database row."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    from .system_router import _validate_local_mutation_request
+
+    rejected = _validate_local_mutation_request(
+        request,
+        payload=payload,
+        error_defaults={"ok": False, "reason": "csrf_validation_failed"},
+    )
+    if rejected is not None:
+        return rejected
+    source_tag = _source_tag(str(payload.get("source") or ""))
+    title = str(payload.get("title") or "").strip()
+    disabled = payload.get("disabled")
+    if not source_tag.startswith("source:") or not title or not isinstance(disabled, bool):
+        return {"ok": False, "reason": "invalid_request"}
+    store = _store()
+    entry = await asyncio.to_thread(store.get_entry, source_tag, title)
+    if entry is None:
+        return {"ok": False, "reason": "not_found"}
+    count = await asyncio.to_thread(
+        set_entry_disabled,
+        get_catalog_override_path(store.database_path),
+        source_tag=source_tag,
+        title=title,
+        disabled=disabled,
+    )
+    return {"ok": True, "disabled": disabled, "disabled_entries": count}
+
+
 @router.post("/chime/reimport")
 async def reimport_bundled_chime(request: Request):
-    """Reimport the fixed package asset after local-data maintenance."""
+    """Reimport the fixed package asset after authenticated local maintenance."""
     try:
         payload = await request.json()
     except Exception:

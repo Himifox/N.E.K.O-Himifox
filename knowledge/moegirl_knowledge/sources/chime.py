@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from importlib.resources import files
 from typing import Any
 
@@ -47,19 +46,18 @@ def load_bundled_chime_dataset() -> ChimeDataset:
     if not isinstance(records, list) or len(records) != CHIME_ENTRY_COUNT:
         raise ValueError("bundled CHIME dataset has an unexpected record count")
 
-    synced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     entries: list[MoegirlKnowledgeEntry] = []
-    seen_ids: set[str] = set()
+    seen_records: set[str] = set()
     for record_index, record in enumerate(records):
-        entry = _entry_from_record(record, record_index=record_index, synced_at=synced_at)
-        if entry.id in seen_ids:
-            raise ValueError("bundled CHIME dataset has duplicate record identifiers")
-        seen_ids.add(entry.id)
+        entry = _entry_from_record(record, record_index=record_index)
+        if entry.content_hash in seen_records:
+            raise ValueError("bundled CHIME dataset has duplicate records")
+        seen_records.add(entry.content_hash)
         entries.append(entry)
     return ChimeDataset(entries=tuple(entries), sha256=digest, commit=CHIME_COMMIT)
 
 
-def _entry_from_record(record: Any, *, record_index: int, synced_at: str) -> MoegirlKnowledgeEntry:
+def _entry_from_record(record: Any, *, record_index: int) -> MoegirlKnowledgeEntry:
     if not isinstance(record, dict):
         raise ValueError("bundled CHIME record is not an object")
     meme = _required_text(record, "meme")
@@ -87,23 +85,15 @@ def _entry_from_record(record: Any, *, record_index: int, synced_at: str) -> Moe
     content = "\n\n".join(content_sections)
     # Aliases participate in FTS/index updates.  Include them in the fixed
     # asset's hash so a manual/startup reimport upgrades existing local rows.
-    entry_hash = hashlib.sha256(
-        (content + "\0" + "\0".join(aliases)).encode("utf-8")
-    ).hexdigest()
     return MoegirlKnowledgeEntry(
         # A displayed term can legitimately have multiple dataset definitions.
         # Keep each fixed source record distinct instead of guessing that they
         # are aliases with the same meaning.
-        id=f"chime:{hashlib.sha256(f'{record_index}:{normalized}'.encode('utf-8')).hexdigest()}",
         title=meme,
-        content=content,
-        summary=meaning,
-        source_url=CHIME_DATASET_URL,
-        source_license=CHIME_LICENSE,
-        aliases=aliases,
+        terms={"alias": aliases, "recognition": ()},
         tags=tuple(tags),
-        content_hash=entry_hash,
-        synced_at=synced_at,
+        summary=meaning,
+        content=content,
     )
 
 

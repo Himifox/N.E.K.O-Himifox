@@ -869,9 +869,9 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
                 )
 
             try:
-                from .moegirl_knowledge_runtime import start_moegirl_knowledge_sync
+                from .moegirl_knowledge_runtime import start_moegirl_knowledge_runtime
 
-                await start_moegirl_knowledge_sync(_config_manager, logger)
+                await start_moegirl_knowledge_runtime(_config_manager, logger)
             except Exception as e:
                 logger.warning("Moegirl knowledge runtime startup failed: %s", type(e).__name__)
 
@@ -1059,9 +1059,9 @@ async def on_shutdown():
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
         try:
-            from .moegirl_knowledge_runtime import stop_moegirl_knowledge_sync
+            from .moegirl_knowledge_runtime import stop_moegirl_knowledge_runtime
 
-            await stop_moegirl_knowledge_sync()
+            await stop_moegirl_knowledge_runtime()
         except Exception as e:
             logger.debug("Moegirl knowledge runtime cleanup failed: %s", type(e).__name__)
         cleanup()

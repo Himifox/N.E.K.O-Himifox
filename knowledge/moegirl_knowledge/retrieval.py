@@ -6,12 +6,14 @@ import json
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
 from .filters import make_fts_query, normalize_meme_phrase, normalize_search_text
 from .models import MoegirlKnowledgeHit
 from .store import MoegirlKnowledgeStore, _entry_from_row
 
 
 _AUTO_MENTION_MIN_LENGTH = 3
+_AUTO_RECOGNITION_MIN_LENGTH = 2
 
 
 @dataclass(slots=True)
@@ -37,6 +39,11 @@ class MemeMentionMatcher:
                 if len(phrase) < _AUTO_MENTION_MIN_LENGTH:
                     continue
                 self._insert(phrase, entry)
+            for value in entry.recognition_terms:
+                phrase = normalize_search_text(value)
+                if len(phrase) < _AUTO_RECOGNITION_MIN_LENGTH:
+                    continue
+                self._insert(phrase, entry)
 
     def _insert(self, phrase: str, entry: object) -> None:
         node_index = 0
@@ -46,7 +53,7 @@ class MemeMentionMatcher:
             if node_index == len(self._nodes):
                 self._nodes.append(_TrieNode())
         terminal = self._nodes[node_index].entries
-        if not any(existing.id == entry.id for existing, _ in terminal):
+        if not any(existing.content_hash == entry.content_hash for existing, _ in terminal):
             terminal.append((entry, len(phrase)))
 
     def find(self, text: str, *, limit: int) -> list[MoegirlKnowledgeHit]:
@@ -61,16 +68,16 @@ class MemeMentionMatcher:
                     break
                 node_index = next_index
                 for entry, length in self._nodes[node_index].entries:
-                    previous = best_by_id.get(entry.id)
+                    entry_key = entry.content_hash
+                    previous = best_by_id.get(entry_key)
                     if previous is None or length > previous[1]:
-                        best_by_id[entry.id] = (entry, length)
+                        best_by_id[entry_key] = (entry, length)
         hits = [
             MoegirlKnowledgeHit(entry=entry, score=float(length))
             for entry, length in best_by_id.values()
         ]
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
-
 
 class MoegirlKnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
@@ -85,10 +92,11 @@ class MoegirlKnowledgeRetriever:
         candidate_limit = max(12, limit * 4)
         rows_by_id = {}
         for row in self.store.query_fts(make_fts_query(query), limit=candidate_limit):
-            rows_by_id[row["id"]] = row
+            rows_by_id[row["rowid"]] = row
         for row in self.store.query_like(query_text, limit=candidate_limit):
-            rows_by_id.setdefault(row["id"], row)
+            rows_by_id.setdefault(row["rowid"], row)
 
+        disabled = load_disabled_entries(get_catalog_override_path(self.store.database_path))
         hits: list[MoegirlKnowledgeHit] = []
         for row in rows_by_id.values():
             try:
@@ -96,6 +104,8 @@ class MoegirlKnowledgeRetriever:
             except (TypeError, ValueError, json.JSONDecodeError):
                 # A damaged row must not make public-knowledge lookup block a
                 # conversation.  Later management tooling can report it.
+                continue
+            if entry_key(entry) in disabled:
                 continue
             score = _score(entry, query_text, float(row["rank"]) if "rank" in row.keys() else 0.0)
             hits.append(MoegirlKnowledgeHit(entry=entry, score=score))
@@ -114,15 +124,16 @@ class MoegirlKnowledgeRetriever:
             results.extend(matcher.find(phrase_text, limit=max(limit * 2, limit)))
         best_by_id: dict[str, MoegirlKnowledgeHit] = {}
         for hit in results:
-            previous = best_by_id.get(hit.entry.id)
+            entry_key = hit.entry.content_hash
+            previous = best_by_id.get(entry_key)
             if previous is None or hit.score > previous.score:
-                best_by_id[hit.entry.id] = hit
+                best_by_id[entry_key] = hit
         return sorted(best_by_id.values(), key=lambda hit: (-hit.score, hit.entry.title))[:limit]
-
 
 @dataclass(slots=True)
 class _CachedMentionMatcher:
     revision: int
+    disabled: frozenset[tuple[str, str]]
     matcher: MemeMentionMatcher
 
 
@@ -133,11 +144,17 @@ def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatc
     """Refresh the per-database matcher only after a committed upsert batch."""
     cache_key = str(store.database_path.resolve())
     revision = store.entries_revision()
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
     cached = _MENTION_MATCHER_CACHE.get(cache_key)
-    if cached is None or cached.revision != revision:
+    if cached is None or cached.revision != revision or cached.disabled != disabled:
         cached = _CachedMentionMatcher(
             revision=revision,
-            matcher=MemeMentionMatcher(store.list_active_entries()),
+            disabled=disabled,
+            matcher=MemeMentionMatcher(
+                entry
+                for entry in store.list_active_entries()
+                if entry_key(entry) not in disabled
+            ),
         )
         _MENTION_MATCHER_CACHE[cache_key] = cached
     return cached.matcher
@@ -146,6 +163,7 @@ def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatc
 def _score(entry, normalized_query: str, fts_rank: float) -> float:
     title = normalize_search_text(entry.title)
     aliases = [normalize_search_text(value) for value in entry.aliases]
+    recognition_terms = [normalize_search_text(value) for value in entry.recognition_terms]
     tags = [normalize_search_text(value) for value in entry.tags]
     if normalized_query == title:
         return 1_000.0
@@ -155,6 +173,10 @@ def _score(entry, normalized_query: str, fts_rank: float) -> float:
         return 850.0
     if any(normalized_query in alias for alias in aliases):
         return 800.0
+    if normalized_query in recognition_terms:
+        return 900.0
+    if any(normalized_query in value for value in recognition_terms):
+        return 780.0
     if any(normalized_query in tag for tag in tags):
         return 700.0
     return 100.0 - fts_rank

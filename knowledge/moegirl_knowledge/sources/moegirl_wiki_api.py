@@ -33,6 +33,9 @@ class SourcePage:
     content: str
     source_url: str
     page_id: int | None
+    source_name: str = "moegirl"
+    source_license: str = "CC BY-NC-SA 3.0 CN (verify page-specific terms)"
+    tags: tuple[str, ...] = ()
 
 
 class MoegirlWikiApiSource:

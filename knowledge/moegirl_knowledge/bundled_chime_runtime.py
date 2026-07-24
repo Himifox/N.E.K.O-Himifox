@@ -9,11 +9,11 @@ from pathlib import Path
 
 from utils.file_utils import atomic_write_json
 
+from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
+from .source_registry import SOURCES
 from .store import MoegirlKnowledgeStore
-from .sources import (
+from .sources.chime import (
     CHIME_COMMIT,
-    CHIME_DATASET_URL,
-    CHIME_LICENSE,
     load_bundled_chime_dataset,
 )
 
@@ -30,25 +30,45 @@ def get_public_knowledge_status(config_manager) -> dict:
     root = Path(config_manager.knowledge_dir) / "moegirl-knowledge"
     store = MoegirlKnowledgeStore(root / "knowledge.db")
     chime_state = _load_public_state(root / "chime_state.json")
-    moegirl_state = _load_public_state(root / "sync_state.json")
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    entries = store.list_active_entries()
+    existing_keys = {entry_key(entry) for entry in entries}
+    disabled_count = len(disabled & existing_keys)
+    sources = {}
+    for source_tag, source in SOURCES.items():
+        count = store.count_by_source_tag(source_tag)
+        source_disabled = sum(
+            1 for key in disabled & existing_keys if key[0] == source_tag
+        )
+        source_key = source_tag.removeprefix("source:")
+        state = chime_state if source_tag == "source:chime" else {}
+        sources[source_key] = {
+            "status": state.get("status", "available" if count else "empty"),
+            "entries": count,
+            "active_entries": count - source_disabled,
+            "disabled_entries": source_disabled,
+            "last_success_at": state.get("last_success_at", ""),
+            "name": source.name,
+            "license": source.license,
+            "homepage": source.homepage,
+            "acquisition": (
+                "bundled" if source_tag == "source:chime"
+                else "local_import" if source_tag == "source:geng-guide"
+                else "isolated"
+            ),
+        }
+        if source_tag == "source:chime":
+            sources[source_key]["version"] = state.get("commit", CHIME_COMMIT)
     return {
-        "database": {"entries": store.count(), "integrity_ok": store.integrity_ok()},
-        "sources": {
-            "chime": {
-                "status": chime_state.get("status", "not_imported"),
-                "entries": store.count_by_id_prefix("chime:"),
-                "last_success_at": chime_state.get("last_success_at", ""),
-                "version": chime_state.get("commit", CHIME_COMMIT),
-                "license": CHIME_LICENSE,
-                "source_url": CHIME_DATASET_URL,
-            },
-            "moegirl": {
-                "status": moegirl_state.get("status", "not_synced"),
-                "entries": store.count_by_id_prefix("moegirl:"),
-                "last_success_at": moegirl_state.get("last_success_at", ""),
-                "failed": _safe_nonnegative_int(moegirl_state.get("failed")),
-            },
+        "mode": "local_only",
+        "remote_acquisition": "isolated",
+        "database": {
+            "entries": len(entries),
+            "active_entries": len(entries) - disabled_count,
+            "disabled_entries": disabled_count,
+            "integrity_ok": store.integrity_ok(),
         },
+        "sources": sources,
     }
 
 
@@ -94,7 +114,7 @@ async def _import_bundled_chime(database_path: Path, state_path: Path, logger) -
     try:
         dataset = await asyncio.to_thread(load_bundled_chime_dataset)
         store = MoegirlKnowledgeStore(database_path)
-        results = await asyncio.to_thread(store.upsert_many, dataset.entries)
+        results = await asyncio.to_thread(store.replace_source, "source:chime", dataset.entries)
         status = {
             "status": "ready",
             "commit": dataset.commit,

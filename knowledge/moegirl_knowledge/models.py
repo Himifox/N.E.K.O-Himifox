@@ -1,70 +1,90 @@
-"""Typed records for the public Moegirl knowledge base."""
+"""Five-field public knowledge records.
+
+The database deliberately stores only conversational knowledge.  Source
+policy and sync health are source-level concerns, not per-entry payload.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .filters import sanitize_external_text
 
 
-DEFAULT_SOURCE_LICENSE = "CC BY-NC-SA 3.0 CN (verify page-specific terms)"
+TERM_ROLES = ("alias", "recognition")
 
 
 def _clean_values(values: Iterable[str]) -> tuple[str, ...]:
     seen: set[str] = set()
-    cleaned: list[str] = []
+    result: list[str] = []
     for value in values:
-        text = sanitize_external_text(value, max_chars=300)
+        text = sanitize_external_text(str(value), max_chars=300)
         if text and text not in seen:
             seen.add(text)
-            cleaned.append(text)
-    return tuple(cleaned)
+            result.append(text)
+    return tuple(result)
+
+
+def normalize_terms(value: Mapping[str, Iterable[str]] | None) -> dict[str, tuple[str, ...]]:
+    """Return the only supported term roles with cleaned, distinct values."""
+    value = value or {}
+    return {role: _clean_values(value.get(role, ())) for role in TERM_ROLES}
 
 
 @dataclass(frozen=True, slots=True)
 class MoegirlKnowledgeEntry:
-    """A source-attributed public knowledge record, never a character memory."""
+    """A compact public knowledge card; never a user or character memory."""
 
-    id: str
     title: str
+    terms: Mapping[str, Iterable[str]]
+    tags: tuple[str, ...]
+    summary: str
     content: str
-    source_url: str
-    source_page_id: int | None = None
-    aliases: tuple[str, ...] = ()
-    tags: tuple[str, ...] = ()
-    summary: str = ""
-    source_license: str = DEFAULT_SOURCE_LICENSE
-    content_hash: str = ""
-    synced_at: str = ""
-    status: str = "active"
 
     def __post_init__(self) -> None:
-        entry_id = sanitize_external_text(self.id, max_chars=200)
         title = sanitize_external_text(self.title, max_chars=500)
         content = sanitize_external_text(self.content)
-        source_url = sanitize_external_text(self.source_url, max_chars=2_000)
-        if not entry_id or not title or not content or not source_url:
-            raise ValueError("id, title, content, and source_url are required")
-        object.__setattr__(self, "id", entry_id)
+        if not title or not content:
+            raise ValueError("title and content are required")
         object.__setattr__(self, "title", title)
-        object.__setattr__(self, "content", content)
-        object.__setattr__(self, "source_url", source_url)
-        object.__setattr__(self, "aliases", _clean_values(self.aliases))
+        object.__setattr__(self, "terms", normalize_terms(self.terms))
         object.__setattr__(self, "tags", _clean_values(self.tags))
         object.__setattr__(self, "summary", sanitize_external_text(self.summary, max_chars=4_000))
-        object.__setattr__(self, "source_license", sanitize_external_text(self.source_license, max_chars=1_000))
-        object.__setattr__(self, "synced_at", sanitize_external_text(self.synced_at, max_chars=100))
-        object.__setattr__(self, "status", sanitize_external_text(self.status, max_chars=40) or "active")
-        digest = self.content_hash or sha256(content.encode("utf-8")).hexdigest()
-        object.__setattr__(self, "content_hash", sanitize_external_text(digest, max_chars=128))
+        object.__setattr__(self, "content", content)
+        source_tags = [tag for tag in self.tags if tag.startswith("source:")]
+        if len(source_tags) != 1:
+            raise ValueError("exactly one source:* tag is required")
+
+    @property
+    def aliases(self) -> tuple[str, ...]:
+        """Compatibility view; new code must use ``terms`` explicitly."""
+        return self.terms["alias"]
+
+    @property
+    def recognition_terms(self) -> tuple[str, ...]:
+        return self.terms["recognition"]
+
+    @property
+    def source_tag(self) -> str:
+        return next(tag for tag in self.tags if tag.startswith("source:"))
+
+    @property
+    def content_hash(self) -> str:
+        """Transient comparison key; it is intentionally not persisted."""
+        payload = "\0".join((
+            self.title,
+            repr(self.terms),
+            repr(self.tags),
+            self.summary,
+            self.content,
+        ))
+        return sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
 class MoegirlKnowledgeHit:
-    """A compact result suitable for later tool rendering."""
-
     entry: MoegirlKnowledgeEntry
     score: float
 

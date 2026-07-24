@@ -91,7 +91,7 @@ def test_seed_catalog_expands_wiki_category_members_not_chat_text():
     calls: list[dict[str, str]] = []
 
     async def fake_find(query: str, *, limit: int):
-        from knowledge.moegirl_knowledge.sources import SourcePage
+        from knowledge.moegirl_knowledge.sources.moegirl_wiki_api import SourcePage
 
         assert query == "bootstrap"
         assert limit == 3

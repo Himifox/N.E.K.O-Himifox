@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,13 +54,7 @@ class MoegirlKnowledgeSynchronizer:
                     ):
                         failed += 1
                         continue
-                    entry_id = f"moegirl:{page.page_id}" if page.page_id is not None else f"moegirl:{hashlib.sha256(page.source_url.encode()).hexdigest()[:20]}"
-                    entry = MoegirlKnowledgeEntry(
-                        id=entry_id, title=page.title, content=page.content,
-                        summary=page.content[:600], source_url=page.source_url,
-                        source_page_id=page.page_id, tags=("moegirl", "public-knowledge"),
-                        synced_at=started.isoformat().replace("+00:00", "Z"),
-                    )
+                    entry = self._entry_from_page(page, started, recognition_query=str(query))
                     result = await asyncio.to_thread(self.store.upsert, entry)
                     added += int(result.created)
                     updated += int(result.updated)
@@ -140,21 +133,14 @@ class MoegirlKnowledgeSynchronizer:
                 )
 
     @staticmethod
-    def _entry_from_page(page, synced_at: datetime) -> MoegirlKnowledgeEntry:
-        entry_id = (
-            f"moegirl:{page.page_id}"
-            if page.page_id is not None
-            else f"moegirl:{hashlib.sha256(page.source_url.encode()).hexdigest()[:20]}"
-        )
+    def _entry_from_page(page, synced_at: datetime, recognition_query: str = "") -> MoegirlKnowledgeEntry:
+        source_name = str(getattr(page, "source_name", "moegirl") or "moegirl")
         return MoegirlKnowledgeEntry(
-            id=entry_id,
             title=page.title,
+            terms={"alias": (), "recognition": (recognition_query,) if len(recognition_query.strip()) >= 3 else ()},
+            tags=(f"source:{source_name}", "scope:public", *getattr(page, "tags", ())),
             content=page.content,
             summary=page.content[:600],
-            source_url=page.source_url,
-            source_page_id=page.page_id,
-            tags=("moegirl", "public-knowledge"),
-            synced_at=synced_at.isoformat().replace("+00:00", "Z"),
         )
 
     def _write_status(

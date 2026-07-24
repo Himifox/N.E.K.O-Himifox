@@ -1,4 +1,8 @@
-"""Remote source adapters for later synchronization phases."""
+"""Local import sources used by the public knowledge runtime.
+
+Remote maintenance adapters intentionally require direct module imports so the
+normal application path cannot acquire Geng8 or Moegirl networking by accident.
+"""
 
 from .chime import (
     CHIME_COMMIT,
@@ -7,17 +11,13 @@ from .chime import (
     ChimeDataset,
     load_bundled_chime_dataset,
 )
-from .chinese_wikipedia_api import ChineseWikipediaApiSource
-from .moegirl_wiki_api import MoegirlWikiApiSource, SourceCandidate, SourcePage
+from .geng_guide import load_geng_guide_markdown
 
 __all__ = [
     "ChimeDataset",
     "CHIME_COMMIT",
     "CHIME_DATASET_URL",
     "CHIME_LICENSE",
-    "ChineseWikipediaApiSource",
-    "MoegirlWikiApiSource",
-    "SourceCandidate",
-    "SourcePage",
     "load_bundled_chime_dataset",
+    "load_geng_guide_markdown",
 ]

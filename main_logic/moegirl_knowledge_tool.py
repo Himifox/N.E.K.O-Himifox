@@ -1,21 +1,14 @@
-"""Safe, compact rendering for public Moegirl knowledge retrieval."""
+"""Compact, local-only rendering for public meme knowledge retrieval."""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
-from knowledge.moegirl_knowledge.filters import is_relevant_source_page
-from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry
-from knowledge.moegirl_knowledge.sources import ChineseWikipediaApiSource, MoegirlWikiApiSource
+from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
-from config.moegirl_knowledge_settings import (
-    MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_FALLBACK_ENABLED,
-    MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_TIMEOUT_SECONDS,
-)
 from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
 
@@ -44,36 +37,27 @@ MOEGIRL_KNOWLEDGE_QUERY_DESCRIPTION = {
     "zh-TW": "要查詢的梗、術語或作品文化背景。",
 }
 
-# The legacy tool name remains available for already-configured roles.  New
-# sessions use these source-neutral descriptions because local results can now
-# come from the bundled CHIME dataset as well as Moegirl Wiki.
 PUBLIC_MEME_KNOWLEDGE_TOOL_DESCRIPTION = {
-    "zh": "检索本地公共梗知识库，用于理解 ACG、网络梗和作品文化背景。结果不是用户或角色记忆。",
-    "en": "Search local public meme knowledge for ACG, internet-meme, and fandom context. Never treat results as user or character memories.",
-    "ja": "ローカルの公共ミーム知識を検索し、ACG、ネットミーム、作品文化の文脈を確認します。結果をユーザーやキャラクターの記憶として扱わないでください。",
-    "ko": "ACG, 인터넷 밈, 팬덤 맥락을 위한 로컬 공용 밈 지식을 검색합니다. 결과를 사용자 또는 캐릭터의 기억으로 취급하지 마세요.",
-    "es": "Busca conocimiento público local sobre memes, ACG y contexto de fandom. Nunca lo trates como memoria del usuario o personaje.",
-    "pt": "Pesquisa conhecimento público local sobre memes, ACG e contexto de fandom. Nunca trate o resultado como memória do usuário ou personagem.",
-    "ru": "Ищет локальные публичные знания о мемах, ACG и фэндомном контексте. Не считайте результат памятью пользователя или персонажа.",
-    "zh-TW": "檢索本機公共梗知識庫，用於理解 ACG、網路梗和作品文化背景。結果不是使用者或角色記憶。",
+    "zh": "检索本地公共梗知识库，用于理解 ACG、网络梗和作品文化背景。该工具不会联网，结果不是用户或角色记忆。",
+    "en": "Search the local public meme knowledge base for ACG, internet-meme, and fandom context. This tool never accesses the network or user memory.",
+    "ja": "ローカルの公共ミーム知識を検索します。このツールはネットワークやユーザー記憶にアクセスしません。",
+    "ko": "로컬 공용 밈 지식을 검색합니다. 이 도구는 네트워크나 사용자 기억에 접근하지 않습니다.",
+    "es": "Busca la base local de memes públicos. Esta herramienta no accede a la red ni a la memoria del usuario.",
+    "pt": "Pesquisa a base local de memes públicos. Esta ferramenta não acessa a rede nem a memória do usuário.",
+    "ru": "Ищет в локальной базе публичных мемов без доступа к сети или памяти пользователя.",
+    "zh-TW": "檢索本機公共梗知識庫；此工具不會連網，也不會存取使用者記憶。",
 }
-PUBLIC_MEME_KNOWLEDGE_QUERY_DESCRIPTION = {
-    "zh": "要查询的梗、术语或作品文化背景。",
-    "en": "The meme, term, or fandom context to look up.",
-    "ja": "調べるミーム、用語、またはファンダムの文脈です。",
-    "ko": "조회할 밈, 용어 또는 팬덤 맥락입니다.",
-    "es": "El meme, término o contexto de fandom que se busca.",
-    "pt": "O meme, termo ou contexto de fandom a pesquisar.",
-    "ru": "Мем, термин или контекст фэндома для поиска.",
-    "zh-TW": "要查詢的梗、術語或作品文化背景。",
-}
-
-_fallback_lock = asyncio.Lock()
+PUBLIC_MEME_KNOWLEDGE_QUERY_DESCRIPTION = MOEGIRL_KNOWLEDGE_QUERY_DESCRIPTION
 
 
 async def handle_moegirl_knowledge_call(
-    arguments: dict, *, language: str, deadline_monotonic: float | None = None,
+    arguments: dict,
+    *,
+    language: str,
+    deadline_monotonic: float | None = None,
 ) -> str:
+    """Search only the local SQLite database and render at most three cards."""
+    del language, deadline_monotonic
     started_at = time.perf_counter()
     query = str((arguments or {}).get("query") or "").strip()
     if not query:
@@ -83,134 +67,37 @@ async def handle_moegirl_knowledge_call(
     except (TypeError, ValueError):
         requested_limit = 3
     limit = min(max(requested_limit, 1), 3)
-    config_manager = get_config_manager()
-    database_path = Path(config_manager.knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path)
-    retriever = MoegirlKnowledgeRetriever(store)
+    database_path = (
+        Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
+    )
+    retriever = MoegirlKnowledgeRetriever(MoegirlKnowledgeStore(database_path))
     hits = await asyncio.to_thread(retriever.search, query, limit=limit)
-    lookup_source = "local"
-    if not hits:
-        if MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_FALLBACK_ENABLED:
-            hits, lookup_source = await _fetch_and_store_on_miss(
-                query, store, retriever, limit=limit, deadline_monotonic=deadline_monotonic,
-            )
-        else:
-            lookup_source = "local_miss_encyclopedia_disabled"
     logger.info(
-        "[moegirl-knowledge] tool lookup source=%s hits=%d elapsed_ms=%d",
-        lookup_source,
+        "[moegirl-knowledge] tool lookup source=local hits=%d elapsed_ms=%d",
         len(hits),
         int((time.perf_counter() - started_at) * 1000),
     )
     if not hits:
-        if MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_FALLBACK_ENABLED:
-            return (
-                "No relevant public knowledge was found in the local database or encyclopedia sources. "
-                "If an enabled web_search plugin is available, use it once as the final fallback."
-            )
         return "No relevant public knowledge is available locally."
-    lines = ["Public meme knowledge (reference only; not a memory):"]
+
+    lines = ["Public meme knowledge (local reference only; not a memory):"]
     for hit in hits:
         entry = hit.entry
-        summary = entry.summary or entry.content[:420]
-        summary = summary.replace("\n", " ").strip()[:500]
+        summary = (entry.summary or entry.content[:420]).replace("\n", " ").strip()[:500]
         meme_type = get_meme_type(entry)
         usage_example = get_meme_usage_example(entry)
-        if "source:chime" in entry.tags:
-            source_name = "CHIME (MIT dataset)"
-        elif "wikipedia" in entry.tags:
-            source_name = "Chinese Wikipedia"
-        else:
-            source_name = "Moegirl Wiki"
         risk_note = " | caution: may include profane or offensive usage" if any(
             tag in {"risk:profanity", "risk:offense"} for tag in entry.tags
         ) else ""
+        source = get_source(entry.source_tag)
         details = f"- {entry.title}: {summary}"
         if meme_type:
             details += f"\n  Type: {meme_type}"
         if usage_example:
             details += f"\n  Typical usage: {usage_example}"
-        details += (
-            f"\n  Source: {source_name} | {entry.source_url} | "
-            f"synced: {entry.synced_at or 'unknown'}{risk_note}"
-        )
+        details += f"\n  Source: {source.name} | license: {source.license}{risk_note}"
         lines.append(details)
     return "\n".join(lines)
 
 
 handle_public_meme_knowledge_call = handle_moegirl_knowledge_call
-
-
-async def _fetch_and_store_on_miss(
-    query: str,
-    store: MoegirlKnowledgeStore,
-    retriever: MoegirlKnowledgeRetriever,
-    *,
-    limit: int,
-    deadline_monotonic: float | None = None,
-) -> tuple[list, str]:
-    """Query attributed encyclopedia sources serially within one turn budget."""
-    try:
-        timeout_seconds = MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_TIMEOUT_SECONDS
-        if deadline_monotonic is not None:
-            timeout_seconds = min(timeout_seconds, deadline_monotonic - time.monotonic())
-        if timeout_seconds <= 0:
-            return [], "encyclopedia_deadline_exhausted"
-        deadline = time.monotonic() + timeout_seconds
-        async with asyncio.timeout(timeout_seconds):
-            async with _fallback_lock:
-                already_available = await asyncio.to_thread(retriever.search, query, limit=limit)
-                if already_available:
-                    return already_available, "local_after_lock"
-                sources = (
-                    (
-                        "moegirl",
-                        MoegirlWikiApiSource(timeout_seconds=MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_TIMEOUT_SECONDS),
-                        "CC BY-NC-SA 3.0 CN (verify page-specific terms)",
-                    ),
-                    (
-                        "wikipedia",
-                        ChineseWikipediaApiSource(timeout_seconds=MOEGIRL_KNOWLEDGE_ENCYCLOPEDIA_TIMEOUT_SECONDS),
-                        "CC BY-SA 4.0",
-                    ),
-                )
-                for source_index, (source_name, source, source_license) in enumerate(sources):
-                    remaining_seconds = deadline - time.monotonic()
-                    sources_remaining = len(sources) - source_index
-                    if remaining_seconds <= 0:
-                        return [], "encyclopedia_deadline_exhausted"
-                    try:
-                        # Sequential sources receive an equal share of the
-                        # remaining request budget.  A slow first source must
-                        # not prevent the second encyclopedia from running.
-                        async with asyncio.timeout(remaining_seconds / sources_remaining):
-                            page = await source.find_relevant_page(query, limit=5)
-                    except TimeoutError:
-                        logger.info("[moegirl-knowledge] encyclopedia source timed out source=%s", source_name)
-                        continue
-                    except Exception:
-                        logger.warning("[moegirl-knowledge] encyclopedia source failed source=%s", source_name)
-                        continue
-                    if page is None or not page.source_url or not is_relevant_source_page(
-                        query, title=page.title, content=page.content
-                    ):
-                        continue
-                    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    entry_id = (
-                        f"{source_name}:{page.page_id}"
-                        if page.page_id is not None else f"{source_name}:query:{query}"
-                    )
-                    entry = MoegirlKnowledgeEntry(
-                        id=entry_id, title=page.title, content=page.content,
-                        summary=page.content[:600], source_url=page.source_url,
-                        source_page_id=page.page_id, tags=(source_name, "on-demand"),
-                        source_license=source_license, synced_at=now,
-                    )
-                    await asyncio.to_thread(store.upsert, entry)
-                    hits = await asyncio.to_thread(retriever.search, query, limit=limit)
-                    if hits:
-                        return hits, f"{source_name}_stored"
-                return [], "encyclopedia_miss"
-    except TimeoutError:
-        logger.info("[moegirl-knowledge] encyclopedia lookup timed out")
-        return [], "encyclopedia_timeout"
