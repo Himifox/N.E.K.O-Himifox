@@ -21,6 +21,10 @@ from tests.testbench.pipeline.recommendation_bounded_personalization import (
     BoundedPersonalizationError,
     analyze_bounded_personalization,
 )
+from tests.testbench.pipeline.recommendation_personalization_response_curve import (
+    PersonalizationResponseCurveError,
+    analyze_personalization_response_curves,
+)
 from tests.testbench.pipeline.recommendation_shadow import annotation_summary, audit_shadow_dataset, p44_readiness, validate_annotations
 from tests.testbench.pipeline.recommendation_timing_audit import (
     prepare_observation_for_timing_import,
@@ -49,6 +53,8 @@ class PersonalizationTraceBody(BaseModel):
     scenario_id: str = "competition_15"; users: list[dict[str, Any]]
 class BoundedPersonalizationBody(BaseModel):
     dataset_id: str; max_abs_delta: float = 0.03
+class PersonalizationResponseCurvesBody(BaseModel):
+    dataset_id: str
 class AnnotationsBody(BaseModel): annotations: list[dict[str, Any]]
 class BaselineSignoffBody(BaseModel):
     baseline_id: str = "canonical-production-default-v1"; overwrite: bool = False
@@ -217,6 +223,19 @@ def personalization_bounded_impact(body: BoundedPersonalizationBody):
             422,
             detail={
                 "error_type": "RecommendationBoundedPersonalizationInvalid",
+                "message": str(exc),
+            },
+        ) from exc
+
+@router.post("/personalization/response-curves")
+def personalization_response_curves(body: PersonalizationResponseCurvesBody):
+    try:
+        return analyze_personalization_response_curves(datasets_read(body.dataset_id))
+    except PersonalizationResponseCurveError as exc:
+        raise HTTPException(
+            422,
+            detail={
+                "error_type": "RecommendationPersonalizationResponseCurveInvalid",
                 "message": str(exc),
             },
         ) from exc
