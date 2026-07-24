@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 
-from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
+from knowledge.api import KnowledgeService, open_knowledge
 from knowledge.moegirl_knowledge.bundled_chime_runtime import (
     get_public_knowledge_status,
     request_bundled_chime_reimport,
@@ -16,7 +15,6 @@ from knowledge.moegirl_knowledge.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
-    set_entry_disabled,
 )
 from knowledge.moegirl_knowledge.source_registry import get_source
 from main_routers.shared_state import get_config_manager
@@ -27,11 +25,8 @@ router = APIRouter(prefix="/api/moegirl-knowledge", tags=["moegirl-knowledge"])
 logger = get_module_logger(__name__, "Main")
 
 
-def _store() -> MoegirlKnowledgeStore:
-    database_path = (
-        Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
-    )
-    return MoegirlKnowledgeStore(database_path)
+def _service() -> KnowledgeService:
+    return open_knowledge(get_config_manager().knowledge_dir)
 
 
 def _source_tag(value: str) -> str:
@@ -39,8 +34,15 @@ def _source_tag(value: str) -> str:
     return value if not value or value.startswith("source:") else f"source:{value}"
 
 
-def _entry_payload(entry, *, disabled: bool, score: float | None = None, detail: bool = False) -> dict:
-    source = get_source(entry.source_tag)
+def _entry_payload(
+    entry,
+    *,
+    database_path,
+    disabled: bool,
+    score: float | None = None,
+    detail: bool = False,
+) -> dict:
+    source = get_source(entry.source_tag, database_path=database_path)
     payload = {
         "title": entry.title,
         "terms": {role: list(values) for role, values in entry.terms.items()},
@@ -79,32 +81,46 @@ async def list_moegirl_knowledge_entries(
     offset: int = Query(default=0, ge=0),
 ):
     """Browse local cards or diagnose retrieval using the production retriever."""
-    store = _store()
+    service = _service()
+    database_path = service.database_path("meme")
     source_tag = _source_tag(source)
-    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    disabled = load_disabled_entries(
+        get_catalog_override_path(database_path)
+    )
     if query.strip():
         hits = await asyncio.to_thread(
-            MoegirlKnowledgeRetriever(store).search,
+            service.search,
+            "meme",
             query.strip(),
-            limit=max(store.count(), 1),
+            limit=max(service.count_entries("meme"), 1),
         )
         if source_tag:
             hits = [hit for hit in hits if hit.entry.source_tag == source_tag]
         total = len(hits)
         items = [
-            _entry_payload(hit.entry, disabled=False, score=hit.score)
+            _entry_payload(
+                hit.entry,
+                database_path=database_path,
+                disabled=False,
+                score=hit.score,
+            )
             for hit in hits[offset:offset + limit]
         ]
     else:
-        total = store.count_by_source_tag(source_tag) if source_tag else store.count()
+        total = service.count_entries("meme", source_tag=source_tag)
         entries = await asyncio.to_thread(
-            store.list_entries,
+            service.list_entries,
+            "meme",
             source_tag=source_tag,
             limit=limit,
             offset=offset,
         )
         items = [
-            _entry_payload(entry, disabled=entry_key(entry) in disabled)
+            _entry_payload(
+                entry,
+                database_path=database_path,
+                disabled=entry_key(entry) in disabled,
+            )
             for entry in entries
         ]
     return {"ok": True, "total": total, "offset": offset, "limit": limit, "items": items}
@@ -116,13 +132,22 @@ async def get_moegirl_knowledge_entry(
     title: str = Query(..., min_length=1, max_length=500),
 ):
     """Return one complete five-field local card selected by source and title."""
-    store = _store()
-    entry = await asyncio.to_thread(store.get_entry, _source_tag(source), title.strip())
+    service = _service()
+    database_path = service.database_path("meme")
+    entry = await asyncio.to_thread(
+        service.get_entry,
+        "meme",
+        source_tag=_source_tag(source),
+        title=title.strip(),
+    )
     if entry is None:
         return {"ok": False, "reason": "not_found"}
-    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    disabled = load_disabled_entries(
+        get_catalog_override_path(database_path)
+    )
     return {"ok": True, "entry": _entry_payload(
         entry,
+        database_path=database_path,
         disabled=entry_key(entry) in disabled,
         detail=True,
     )}
@@ -151,13 +176,18 @@ async def set_moegirl_knowledge_entry_disabled(request: Request):
     disabled = payload.get("disabled")
     if not source_tag.startswith("source:") or not title or not isinstance(disabled, bool):
         return {"ok": False, "reason": "invalid_request"}
-    store = _store()
-    entry = await asyncio.to_thread(store.get_entry, source_tag, title)
+    service = _service()
+    entry = await asyncio.to_thread(
+        service.get_entry,
+        "meme",
+        source_tag=source_tag,
+        title=title,
+    )
     if entry is None:
         return {"ok": False, "reason": "not_found"}
     count = await asyncio.to_thread(
-        set_entry_disabled,
-        get_catalog_override_path(store.database_path),
+        service.set_entry_disabled,
+        "meme",
         source_tag=source_tag,
         title=title,
         disabled=disabled,

@@ -16,7 +16,7 @@ def test_chime_entry_stores_a_phrase_alias_and_hashes_it_for_reimport():
         "examples": [],
     }
 
-    entry = _entry_from_record(record, record_index=1, synced_at="2026-07-20T00:00:00Z")
+    entry = _entry_from_record(record, record_index=1)
 
     assert entry.aliases == ("人在cpu人",)
     assert entry.content_hash

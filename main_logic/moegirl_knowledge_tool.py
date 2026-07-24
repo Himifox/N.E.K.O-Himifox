@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
 
-from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
+from knowledge.api import open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
 from utils.config_manager import get_config_manager
@@ -67,11 +66,8 @@ async def handle_moegirl_knowledge_call(
     except (TypeError, ValueError):
         requested_limit = 3
     limit = min(max(requested_limit, 1), 3)
-    database_path = (
-        Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
-    )
-    retriever = MoegirlKnowledgeRetriever(MoegirlKnowledgeStore(database_path))
-    hits = await asyncio.to_thread(retriever.search, query, limit=limit)
+    service = open_knowledge(get_config_manager().knowledge_dir)
+    hits = await asyncio.to_thread(service.search, "meme", query, limit=limit)
     logger.info(
         "[moegirl-knowledge] tool lookup source=local hits=%d elapsed_ms=%d",
         len(hits),
@@ -94,7 +90,10 @@ async def handle_moegirl_knowledge_call(
             if "quality:stale-usage" in entry.tags
             else ""
         )
-        source = get_source(entry.source_tag)
+        source = get_source(
+            entry.source_tag,
+            database_path=service.database_path("meme"),
+        )
         details = f"- {entry.title}: {summary}"
         if meme_type:
             details += f"\n  Type: {meme_type}"
