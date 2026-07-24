@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "O personagem atual não tem modelo definido",
     "cookiesLogin": {
-        "title": "Centro de controle de credenciais NEKO",
-        "header": "Centro de aquisição de credenciais",
+        "title": "Central de gerenciamento de credenciais N.E.K.O",
+        "header": "Central de gerenciamento de credenciais",
+        "heroDescription": "Cole o <span class=\"highlight\">Cookie</span> de cada plataforma e armazene-o com criptografia para uso posterior.",
+        "emptyStatus": "Ainda não há credenciais salvas. Escolha uma plataforma para começar.",
         "bilibili": "Bilíbili",
         "xhh": "Xiaoheihe",
         "youtube": "YouTube",

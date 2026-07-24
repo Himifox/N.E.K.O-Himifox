@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "現在のキャラクターにモデルが設定されていません",
     "cookiesLogin": {
-        "title": "N.E.K.O クレデンシャル制御センター",
-        "header": "クレデンシャル取得センター",
+        "title": "N.E.K.O 認証情報管理センター",
+        "header": "認証情報管理センター",
+        "heroDescription": "各プラットフォームの <span class=\"highlight\">Cookie</span> を貼り付けて暗号化保存し、後で利用できます。",
+        "emptyStatus": "保存済みの認証情報はありません。プラットフォームを選択して追加してください。",
         "bilibili": "ビリビリ (Bilibili)",
         "xhh": "小黒盒",
         "youtube": "YouTube",

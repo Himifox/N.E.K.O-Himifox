@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "현재 캐릭터에 모델이 설정되지 않았습니다",
     "cookiesLogin": {
-        "title": "N.E.K.O 자격 증명 제어 센터",
-        "header": "자격 증명 획득 센터",
+        "title": "N.E.K.O 자격 증명 관리 센터",
+        "header": "자격 증명 관리 센터",
+        "heroDescription": "각 플랫폼의 <span class=\"highlight\">Cookie</span>를 붙여넣고 암호화하여 나중에 사용할 수 있도록 저장합니다.",
+        "emptyStatus": "저장된 자격 증명이 없습니다. 플랫폼을 선택해 추가하세요.",
         "bilibili": "빌리빌리 (Bilibili)",
         "xhh": "Xiaoheihe",
         "youtube": "YouTube",

@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "Current character has no model set",
     "cookiesLogin": {
-        "title": "N.E.K.O Credential Control Center",
-        "header": "Credential Acquisition Center",
+        "title": "N.E.K.O Credential Management Center",
+        "header": "Credential Management Center",
+        "heroDescription": "Paste each platform's <span class=\"highlight\">Cookie</span> here and store it encrypted for later use.",
+        "emptyStatus": "No credentials saved yet. Choose a platform to get started.",
         "bilibili": "Bilibili",
         "xhh": "Xiaoheihe",
         "youtube": "YouTube",

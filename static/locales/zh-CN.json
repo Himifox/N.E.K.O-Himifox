@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "当前角色未设置模型",
     "cookiesLogin": {
-        "title": "N.E.K.O 凭证控制中心",
-        "header": "凭证获取中心",
+        "title": "N.E.K.O 凭证管理中心",
+        "header": "凭证管理中心",
+        "heroDescription": "在各平台粘贴 <span class=\"highlight\">Cookie</span> 并加密存储，供后续调用。",
+        "emptyStatus": "还没有保存的凭证呢，选个平台开始添加吧",
         "bilibili": "Bilibili",
         "xhh": "小黑盒",
         "youtube": "YouTube",

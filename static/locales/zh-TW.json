@@ -3784,8 +3784,10 @@
     },
     "characterModelNotSet": "當前角色未設定模型",
     "cookiesLogin": {
-        "title": "N.E.K.O 憑證控制中心",
-        "header": "憑證取得中心",
+        "title": "N.E.K.O 憑證管理中心",
+        "header": "憑證管理中心",
+        "heroDescription": "在各平台貼上 <span class=\"highlight\">Cookie</span> 並加密儲存，供後續呼叫。",
+        "emptyStatus": "還沒有儲存的憑證，選擇一個平台開始新增吧",
         "bilibili": "嗶哩嗶哩",
         "xhh": "小黑盒",
         "youtube": "YouTube",

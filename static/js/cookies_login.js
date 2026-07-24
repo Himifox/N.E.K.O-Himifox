@@ -226,6 +226,7 @@ function initPlatformConfig() {
 // 安全渲染带标签的教程步骤，并提供完善的中文回退
 function renderStaticHtmlI18n() {
     const htmlSteps = {
+        'credential-hero-description': { key: 'cookiesLogin.heroDescription', fallback: '在各平台粘贴 <span class="highlight">Cookie</span> 并加密存储，供后续调用。' },
         'guide-step1': { key: 'cookiesLogin.guide.step1', fallback: '在浏览器打开对应平台网页并<span class="highlight-text">完成登录</span>。' },
         'guide-step3': { key: 'cookiesLogin.guide.step3', fallback: '在顶部找到并点击 <span class="highlight-text">Application (应用程序)</span>。' },
         'guide-step4': { key: 'cookiesLogin.guide.step4', fallback: '左侧找到 <span class="highlight-text">Cookies</span>，点击域名后在右侧复制对应的值。' }
@@ -240,8 +241,15 @@ function renderStaticHtmlI18n() {
     const step2Suffix = document.getElementById('guide-step2-suffix');
     if (step2Prefix) step2Prefix.textContent = safeT('cookiesLogin.guide.step2_prefix', '按下键盘');
     if (step2Suffix) step2Suffix.textContent = safeT('cookiesLogin.guide.step2_suffix', '打开开发者工具。');
+    const platformList = document.getElementById('platform-list-content');
+    if (platformList) {
+        platformList.dataset.emptyText = safeT(
+            'cookiesLogin.emptyStatus',
+            '还没有保存的凭证呢，选个平台开始添加吧'
+        );
+    }
     // 更新关闭按钮的标题和图片 alt 文本
-    const closeBtn = document.querySelector('.close-btn');
+    const closeBtn = document.querySelector('[data-neko-window-control="close"]');
     if (closeBtn) {
         const closeText = safeT('common.close', '关闭');
         closeBtn.title = closeText;
@@ -277,7 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderStaticHtmlI18n();
     
     const firstTab = document.querySelector('.tab-btn');
-    if (firstTab) switchTab('netease', firstTab);
+    if (firstTab) switchTab('netease', firstTab, true);
     refreshStatusList();
 });
 
@@ -657,9 +665,10 @@ function switchTab(platformKey, btnElement, isReRender = false) {
     // 更新选项卡文本
     if (btnElement) {
         document.querySelectorAll('.tab-btn').forEach(btn =>{
-             btn.classList.remove('active');
+            const active = btn === btnElement;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
         });
-        btnElement.classList.add('active');
     }
     // 更新面板描述
     const descBox = document.getElementById('panel-desc');
@@ -1036,10 +1045,12 @@ async function refreshStatusList() {
                 res.data?.has_cookies === true || 
                 res.data === true
             );
+            if (!active) return;
 
             // 1. 卡片主容器
             const statusCard = document.createElement('div');
             statusCard.className = 'status-card';
+            statusCard.dataset.platform = key;
 
             // 2. 左侧：平台名称
             const statusInfo = document.createElement('div');
@@ -1140,10 +1151,8 @@ function showAlert(success, message) {
     clearAlertTimer();
     
     // 2. 设置样式与内容
-    alertEl.style.display = 'block';
-    alertEl.style.backgroundColor = success ? '#ecfdf5' : '#fef2f2';
-    alertEl.style.color = success ? '#059669' : '#dc2626';
-    alertEl.style.borderColor = success ? '#a7f3d0' : '#fecaca';
+    alertEl.classList.toggle('success', success);
+    alertEl.classList.toggle('error', !success);
     alertEl.textContent = message; 
 
     // 3. 开启新的定时器
@@ -1151,6 +1160,7 @@ function showAlert(success, message) {
         // 再次检查 DOM 是否存在 (防止 4秒内 页面被销毁导致报错)
         if (alertEl) {
             alertEl.style.display = 'none';
+            alertEl.classList.remove('success', 'error');
         }
         alertTimeout = null; // 倒计时结束，重置变量状态
     }, 4000);
