@@ -21,6 +21,19 @@ Geng8 and Moegirl adapters are isolated maintenance code. They are not imported
 by Main Server startup, chat streaming, the public-knowledge tool, or the normal
 `knowledge.moegirl_knowledge.sources` package surface.
 
+## Generic service boundary
+
+New project code uses `knowledge.api` and `KnowledgeService`. The existing
+`build_meme_turn_context`, `MoegirlKnowledgeStore`, and
+`MoegirlKnowledgeRetriever` names remain compatibility entrypoints, so the
+conversation core, tool registration, memory service, and Main Server lifecycle
+do not depend on the generic implementation.
+
+Collection behaviour is project-owned `CollectionSpec` data: storage location,
+priority, automatic-context permission, matching thresholds, and response
+policy. A future collection reuses the same query, matching, management, and
+card-rendering methods instead of adding another set of domain functions.
+
 ## Entry contract
 
 The business row contains only five fields:
@@ -55,6 +68,19 @@ The bundled CHIME entry “水灵灵” is currently tagged
 `quality:stale-usage` based on observed current usage. Explicit local search can
 still return it with an outdated-usage warning, but it cannot inject an
 automatic conversation card.
+
+## Local data packs
+
+`KnowledgeService.import_pack()` accepts an explicitly selected local JSON pack.
+It never downloads, scans for, or executes a pack. Pack entries use the same
+five fields; pack ID, source homepage, license, entry count, and automatic
+context permission live once in `packs.json` beside the collection database.
+
+Community source tags are derived as `source:community.<pack_id>` and cannot
+spoof built-in sources. Import atomically replaces only that source slice. A
+community pack is searchable immediately but is excluded from automatic turn
+matching until the user explicitly enables that pack. Packs cannot provide
+Python, prompts, matching policies, response policies, or network configuration.
 
 ## Local management
 
@@ -91,6 +117,8 @@ Run the focused local suite with:
 
 ```text
 uv run pytest tests/unit/test_moegirl_knowledge_store.py \
+  tests/unit/test_knowledge_service.py \
+  tests/unit/test_knowledge_packs.py \
   tests/unit/test_chime_source.py \
   tests/unit/test_moegirl_turn_context.py \
   tests/unit/test_moegirl_ephemeral_response.py \
