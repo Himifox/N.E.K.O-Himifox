@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from importlib.resources import files
+
 from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
 from knowledge.moegirl_knowledge.sources.chime import (
     CHIME_COMMIT,
@@ -20,6 +23,19 @@ def test_bundled_chime_dataset_has_pinned_integrity_and_provenance():
     assert CHIME_LICENSE
     assert all("source:chime" in entry.tags for entry in dataset.entries)
     assert len({entry.content_hash for entry in dataset.entries}) == CHIME_ENTRY_COUNT
+
+
+def test_bundled_chime_jsonl_has_one_object_per_line():
+    raw = (
+        files("knowledge.moegirl_knowledge.data")
+        .joinpath("chime_full.jsonl")
+        .read_text(encoding="utf-8")
+    )
+    lines = raw.splitlines()
+
+    assert len(lines) == CHIME_ENTRY_COUNT
+    assert all(line for line in lines)
+    assert all(isinstance(json.loads(line), dict) for line in lines)
 
 
 def test_bundled_chime_import_is_idempotent_and_searchable(tmp_path):

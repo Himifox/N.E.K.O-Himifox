@@ -18,9 +18,9 @@ CHIME_DATASET_URL = (
     f"{CHIME_COMMIT}/data/chime_full.json"
 )
 CHIME_LICENSE = "MIT (CHIME dataset; Copyright (c) 2025 Yubo Xie)"
-# The bundled JSON is checked out with LF line endings by Git.  Keep the
+# The bundled JSONL is checked out with LF line endings by Git.  Keep the
 # integrity check aligned with the bytes the application actually packages.
-CHIME_SHA256 = "dc438bcb0083918bb074fdbf8dbe275ce355b62cffe96f13a48f8b2fc51de3ec"
+CHIME_SHA256 = "e7eaea229d6d8a7af0c3273067bca8220d89c85bc1865b7907cc397e279e8e75"
 CHIME_ENTRY_COUNT = 1_458
 _STALE_USAGE_TERMS = frozenset({"水灵灵"})
 
@@ -35,21 +35,35 @@ class ChimeDataset:
 
 
 def load_bundled_chime_dataset() -> ChimeDataset:
-    """Load one fixed JSON asset without executing third-party code or networking."""
-    raw = files("knowledge.moegirl_knowledge.data").joinpath("chime_full.json").read_bytes()
+    """Load one fixed JSONL asset without executing third-party code or networking."""
+    raw = (
+        files("knowledge.moegirl_knowledge.data")
+        .joinpath("chime_full.jsonl")
+        .read_bytes()
+    )
     digest = hashlib.sha256(raw).hexdigest()
     if digest != CHIME_SHA256:
         raise ValueError("bundled CHIME dataset hash mismatch")
     try:
-        records = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("bundled CHIME dataset is not valid UTF-8 JSON") from exc
-    if not isinstance(records, list) or len(records) != CHIME_ENTRY_COUNT:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("bundled CHIME dataset is not valid UTF-8 JSONL") from exc
+    if len(lines) != CHIME_ENTRY_COUNT:
         raise ValueError("bundled CHIME dataset has an unexpected record count")
 
     entries: list[MoegirlKnowledgeEntry] = []
     seen_records: set[str] = set()
-    for record_index, record in enumerate(records):
+    for record_index, line in enumerate(lines):
+        if not line:
+            raise ValueError("bundled CHIME dataset contains a blank record")
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"bundled CHIME dataset has invalid JSON at line {record_index + 1}"
+            ) from exc
+        if not isinstance(record, dict):
+            raise ValueError("bundled CHIME record is not an object")
         entry = _entry_from_record(record, record_index=record_index)
         if entry.content_hash in seen_records:
             raise ValueError("bundled CHIME dataset has duplicate records")
