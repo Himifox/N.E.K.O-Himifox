@@ -18,6 +18,32 @@ _WEAK_SHORT_TERM_LENGTH = 2
 _STALE_USAGE_TAG = "quality:stale-usage"
 
 
+@dataclass(frozen=True, slots=True)
+class MatchPolicy:
+    """Trusted matching rules shared by all conversational collections."""
+
+    title_min_length: int = _AUTO_MENTION_MIN_LENGTH
+    alias_min_length: int = _AUTO_MENTION_MIN_LENGTH
+    recognition_min_length: int = _AUTO_RECOGNITION_MIN_LENGTH
+    allowed_source_tags: tuple[str, ...] | None = None
+    excluded_entry_tags: tuple[str, ...] = ()
+    weak_term_length: int = 0
+    weak_required_tags: tuple[str, ...] = ()
+    weak_required_tag_prefixes: tuple[str, ...] = ()
+    weak_excluded_tags: tuple[str, ...] = ()
+    weak_content_line_prefix: str = ""
+
+
+MEME_MATCH_POLICY = MatchPolicy(
+    excluded_entry_tags=(_STALE_USAGE_TAG,),
+    weak_term_length=_WEAK_SHORT_TERM_LENGTH,
+    weak_required_tags=("source:chime",),
+    weak_required_tag_prefixes=("type:",),
+    weak_excluded_tags=(_STALE_USAGE_TAG,),
+    weak_content_line_prefix="- ",
+)
+
+
 @dataclass(slots=True)
 class _TrieNode:
     children: dict[str, int] = field(default_factory=dict)
@@ -32,23 +58,36 @@ class MemeMentionMatcher:
     user never needs to quote a meme for local turn context to find it.
     """
 
-    def __init__(self, entries: Iterable[object]) -> None:
+    def __init__(
+        self,
+        entries: Iterable[object],
+        *,
+        policy: MatchPolicy = MEME_MATCH_POLICY,
+    ) -> None:
+        self._policy = policy
         self._nodes = [_TrieNode()]
         self._entry_terms: dict[str, int] = {}
         self._weak_short_terms: list[tuple[str, object, int]] = []
         for entry in entries:
             for term_kind, value in enumerate((entry.title, *entry.aliases)):
                 phrase = normalize_search_text(value)
-                if len(phrase) >= _AUTO_MENTION_MIN_LENGTH:
+                minimum_length = (
+                    policy.title_min_length if term_kind == 0 else policy.alias_min_length
+                )
+                if len(phrase) >= minimum_length:
                     self._insert(phrase, entry)
-                elif len(phrase) == _WEAK_SHORT_TERM_LENGTH and _is_weak_short_entry(entry):
+                elif (
+                    policy.weak_term_length > 0
+                    and len(phrase) == policy.weak_term_length
+                    and _is_weak_entry(entry, policy)
+                ):
                     # Title wins over aliases at the same position.  All aliases
                     # share the same secondary priority because their stored order
                     # is not semantic evidence.
                     self._weak_short_terms.append((phrase, entry, min(term_kind, 1)))
             for value in entry.recognition_terms:
                 phrase = normalize_search_text(value)
-                if len(phrase) < _AUTO_RECOGNITION_MIN_LENGTH:
+                if len(phrase) < policy.recognition_min_length:
                     continue
                 self._insert(phrase, entry)
 
@@ -101,7 +140,7 @@ class MemeMentionMatcher:
                 best_by_id[entry.content_hash] = candidate
         ordered = sorted(best_by_id.values(), key=lambda value: value[:3])
         return [
-            MoegirlKnowledgeHit(entry=entry, score=float(_WEAK_SHORT_TERM_LENGTH))
+            MoegirlKnowledgeHit(entry=entry, score=float(self._policy.weak_term_length))
             for _, _, _, entry in ordered[:limit]
         ]
 
@@ -138,13 +177,19 @@ class MoegirlKnowledgeRetriever:
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
-    def find_mentions(self, user_text: str, *, limit: int = 1) -> list[MoegirlKnowledgeHit]:
+    def find_mentions(
+        self,
+        user_text: str,
+        *,
+        limit: int = 1,
+        policy: MatchPolicy = MEME_MATCH_POLICY,
+    ) -> list[MoegirlKnowledgeHit]:
         """Find known phrases anywhere in a normal conversational sentence."""
         normalized_text = normalize_search_text(user_text)
         if len(normalized_text) < 2 or limit <= 0:
             return []
         phrase_text = normalize_meme_phrase(user_text)
-        matcher = _get_cached_mention_matcher(self.store)
+        matcher = _get_cached_mention_matcher(self.store, policy)
         results = matcher.find(normalized_text, limit=max(limit * 2, limit))
         if phrase_text and phrase_text != normalized_text:
             results.extend(matcher.find(phrase_text, limit=max(limit * 2, limit)))
@@ -161,15 +206,32 @@ class MoegirlKnowledgeRetriever:
         user_text: str,
         *,
         limit: int = 1,
+        policy: MatchPolicy = MEME_MATCH_POLICY,
     ) -> list[MoegirlKnowledgeHit]:
         """Find cautious two-character candidates after strong matching misses."""
         normalized_text = normalize_search_text(user_text)
-        if len(normalized_text) < _WEAK_SHORT_TERM_LENGTH or limit <= 0:
+        if policy.weak_term_length <= 0 or len(normalized_text) < policy.weak_term_length or limit <= 0:
             return []
-        return _get_cached_mention_matcher(self.store).find_weak_short(
+        return _get_cached_mention_matcher(self.store, policy).find_weak_short(
             normalized_text,
             limit=limit,
         )
+
+    def match_turn(
+        self,
+        user_text: str,
+        *,
+        policy: MatchPolicy = MEME_MATCH_POLICY,
+        limit: int = 1,
+    ) -> tuple[str, list[MoegirlKnowledgeHit]]:
+        """Return strong matches first, then policy-approved weak matches."""
+        strong = self.find_mentions(user_text, limit=limit, policy=policy)
+        if strong:
+            return "strong", strong
+        weak = self.find_weak_short_mentions(user_text, limit=limit, policy=policy)
+        if weak:
+            return "weak_short", weak
+        return "none", []
 
 @dataclass(slots=True)
 class _CachedMentionMatcher:
@@ -178,12 +240,15 @@ class _CachedMentionMatcher:
     matcher: MemeMentionMatcher
 
 
-_MENTION_MATCHER_CACHE: dict[str, _CachedMentionMatcher] = {}
+_MENTION_MATCHER_CACHE: dict[tuple[str, MatchPolicy], _CachedMentionMatcher] = {}
 
 
-def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatcher:
+def _get_cached_mention_matcher(
+    store: MoegirlKnowledgeStore,
+    policy: MatchPolicy = MEME_MATCH_POLICY,
+) -> MemeMentionMatcher:
     """Refresh the per-database matcher only after a committed upsert batch."""
-    cache_key = str(store.database_path.resolve())
+    cache_key = (str(store.database_path.resolve()), policy)
     revision = store.entries_revision()
     disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
     cached = _MENTION_MATCHER_CACHE.get(cache_key)
@@ -192,9 +257,17 @@ def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatc
             revision=revision,
             disabled=disabled,
             matcher=MemeMentionMatcher(
-                entry
-                for entry in store.list_active_entries()
-                if entry_key(entry) not in disabled and _STALE_USAGE_TAG not in entry.tags
+                (
+                    entry
+                    for entry in store.list_active_entries()
+                    if entry_key(entry) not in disabled
+                    and (
+                        policy.allowed_source_tags is None
+                        or entry.source_tag in policy.allowed_source_tags
+                    )
+                    and not any(tag in entry.tags for tag in policy.excluded_entry_tags)
+                ),
+                policy=policy,
             ),
         )
         _MENTION_MATCHER_CACHE[cache_key] = cached
@@ -203,12 +276,29 @@ def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatc
 
 def _is_weak_short_entry(entry: object) -> bool:
     """Return whether an entry has enough local evidence for a weak hint."""
+    return _is_weak_entry(entry, MEME_MATCH_POLICY)
+
+
+def _is_weak_entry(entry: object, policy: MatchPolicy) -> bool:
+    """Evaluate a weak hint using trusted collection data, not source code hooks."""
     tags = tuple(entry.tags)
-    if "source:chime" not in tags or _STALE_USAGE_TAG in tags:
+    if any(tag not in tags for tag in policy.weak_required_tags):
         return False
-    if not any(tag.startswith("type:") and tag.removeprefix("type:").strip() for tag in tags):
+    if any(tag in tags for tag in policy.weak_excluded_tags):
         return False
-    return any(line.strip().startswith("- ") for line in entry.content.splitlines())
+    for prefix in policy.weak_required_tag_prefixes:
+        if not any(tag.startswith(prefix) and tag.removeprefix(prefix).strip() for tag in tags):
+            return False
+    if policy.weak_content_line_prefix:
+        return any(
+            line.strip().startswith(policy.weak_content_line_prefix)
+            for line in entry.content.splitlines()
+        )
+    return True
+
+
+KnowledgeRetriever = MoegirlKnowledgeRetriever
+KnowledgeMentionMatcher = MemeMentionMatcher
 
 
 def _score(entry, normalized_query: str, fts_rank: float) -> float:

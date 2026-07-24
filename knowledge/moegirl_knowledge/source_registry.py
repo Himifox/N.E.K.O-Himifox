@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
+from .filters import sanitize_external_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,5 +26,46 @@ SOURCES: dict[str, KnowledgeSource] = {
 }
 
 
-def get_source(tag: str) -> KnowledgeSource:
-    return SOURCES.get(tag, KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown", False))
+def get_source(
+    tag: str,
+    *,
+    database_path: str | Path | None = None,
+) -> KnowledgeSource:
+    source = SOURCES.get(tag)
+    if source is not None:
+        return source
+    if database_path is not None:
+        source = _get_pack_source(tag, Path(database_path).with_name("packs.json"))
+        if source is not None:
+            return source
+    return KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown", False)
+
+
+def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    packs = payload.get("packs") if isinstance(payload, dict) else None
+    if not isinstance(packs, dict):
+        return None
+    for pack in packs.values():
+        if not isinstance(pack, dict) or pack.get("source_tag") != tag:
+            continue
+        source = pack.get("source")
+        if not isinstance(source, dict):
+            return None
+        return KnowledgeSource(
+            tag=tag,
+            name=sanitize_external_text(
+                str(source.get("name") or tag.removeprefix("source:")),
+                max_chars=200,
+            ),
+            homepage=sanitize_external_text(str(source.get("homepage") or ""), max_chars=2_000),
+            license=sanitize_external_text(
+                str(source.get("license") or "Unknown"),
+                max_chars=500,
+            ),
+            supports_sync=False,
+        )
+    return None
