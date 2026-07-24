@@ -141,6 +141,8 @@ def _artifact() -> dict:
             "score_version": "report_score_v1",
             "metadata": {
                 "reply_latency_seconds": 12.5,
+                "active_playback_ms": 12_252,
+                "played_wall_ms": 23_940,
                 "unknown_metadata": "drop-me",
             },
             "unknown_raw_field": "remains-only-in-source",
@@ -179,6 +181,8 @@ def main() -> int:
     assert "private-title" not in dumped and "private.example" not in dumped
     assert "unknown_raw_field" not in dumped and "unknown_metadata" not in dumped
     assert safe["feedback"][0]["metadata"]["reply_latency_seconds"] == 12.5
+    assert safe["feedback"][0]["metadata"]["active_playback_ms"] == 12_252
+    assert safe["feedback"][0]["metadata"]["played_wall_ms"] == 23_940
     assert safe["observations"][1]["review_context"]["delivered_excerpt"] == "安全投递摘要"
     assert safe["annotations"] == raw["annotations"]
     assert safe["items"] == raw["items"]
@@ -193,6 +197,7 @@ def main() -> int:
         assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash
         loaded = read_recommendation_safe_export(target)
         assert loaded == safe
+        assert loaded["feedback"][0]["metadata"]["active_playback_ms"] == 12_252
         assert prepare_recommendation_safe_view(loaded) == loaded
         try:
             write_new_recommendation_safe_export(target, safe)
