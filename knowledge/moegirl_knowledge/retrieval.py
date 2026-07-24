@@ -14,6 +14,8 @@ from .store import MoegirlKnowledgeStore, _entry_from_row
 
 _AUTO_MENTION_MIN_LENGTH = 3
 _AUTO_RECOGNITION_MIN_LENGTH = 2
+_WEAK_SHORT_TERM_LENGTH = 2
+_STALE_USAGE_TAG = "quality:stale-usage"
 
 
 @dataclass(slots=True)
@@ -33,12 +35,17 @@ class MemeMentionMatcher:
     def __init__(self, entries: Iterable[object]) -> None:
         self._nodes = [_TrieNode()]
         self._entry_terms: dict[str, int] = {}
+        self._weak_short_terms: list[tuple[str, object, int]] = []
         for entry in entries:
-            for value in (entry.title, *entry.aliases):
+            for term_kind, value in enumerate((entry.title, *entry.aliases)):
                 phrase = normalize_search_text(value)
-                if len(phrase) < _AUTO_MENTION_MIN_LENGTH:
-                    continue
-                self._insert(phrase, entry)
+                if len(phrase) >= _AUTO_MENTION_MIN_LENGTH:
+                    self._insert(phrase, entry)
+                elif len(phrase) == _WEAK_SHORT_TERM_LENGTH and _is_weak_short_entry(entry):
+                    # Title wins over aliases at the same position.  All aliases
+                    # share the same secondary priority because their stored order
+                    # is not semantic evidence.
+                    self._weak_short_terms.append((phrase, entry, min(term_kind, 1)))
             for value in entry.recognition_terms:
                 phrase = normalize_search_text(value)
                 if len(phrase) < _AUTO_RECOGNITION_MIN_LENGTH:
@@ -78,6 +85,25 @@ class MemeMentionMatcher:
         ]
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
+
+    def find_weak_short(self, text: str, *, limit: int) -> list[MoegirlKnowledgeHit]:
+        """Find eligible two-character CHIME terms by exact continuous text."""
+        if limit <= 0:
+            return []
+        best_by_id: dict[str, tuple[int, int, str, object]] = {}
+        for phrase, entry, term_priority in self._weak_short_terms:
+            position = text.find(phrase)
+            if position < 0:
+                continue
+            candidate = (position, term_priority, entry.title, entry)
+            previous = best_by_id.get(entry.content_hash)
+            if previous is None or candidate[:3] < previous[:3]:
+                best_by_id[entry.content_hash] = candidate
+        ordered = sorted(best_by_id.values(), key=lambda value: value[:3])
+        return [
+            MoegirlKnowledgeHit(entry=entry, score=float(_WEAK_SHORT_TERM_LENGTH))
+            for _, _, _, entry in ordered[:limit]
+        ]
 
 class MoegirlKnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
@@ -130,6 +156,21 @@ class MoegirlKnowledgeRetriever:
                 best_by_id[entry_key] = hit
         return sorted(best_by_id.values(), key=lambda hit: (-hit.score, hit.entry.title))[:limit]
 
+    def find_weak_short_mentions(
+        self,
+        user_text: str,
+        *,
+        limit: int = 1,
+    ) -> list[MoegirlKnowledgeHit]:
+        """Find cautious two-character candidates after strong matching misses."""
+        normalized_text = normalize_search_text(user_text)
+        if len(normalized_text) < _WEAK_SHORT_TERM_LENGTH or limit <= 0:
+            return []
+        return _get_cached_mention_matcher(self.store).find_weak_short(
+            normalized_text,
+            limit=limit,
+        )
+
 @dataclass(slots=True)
 class _CachedMentionMatcher:
     revision: int
@@ -153,11 +194,21 @@ def _get_cached_mention_matcher(store: MoegirlKnowledgeStore) -> MemeMentionMatc
             matcher=MemeMentionMatcher(
                 entry
                 for entry in store.list_active_entries()
-                if entry_key(entry) not in disabled
+                if entry_key(entry) not in disabled and _STALE_USAGE_TAG not in entry.tags
             ),
         )
         _MENTION_MATCHER_CACHE[cache_key] = cached
     return cached.matcher
+
+
+def _is_weak_short_entry(entry: object) -> bool:
+    """Return whether an entry has enough local evidence for a weak hint."""
+    tags = tuple(entry.tags)
+    if "source:chime" not in tags or _STALE_USAGE_TAG in tags:
+        return False
+    if not any(tag.startswith("type:") and tag.removeprefix("type:").strip() for tag in tags):
+        return False
+    return any(line.strip().startswith("- ") for line in entry.content.splitlines())
 
 
 def _score(entry, normalized_query: str, fts_rank: float) -> float:

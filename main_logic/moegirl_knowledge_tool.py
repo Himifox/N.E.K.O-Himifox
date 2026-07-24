@@ -89,13 +89,21 @@ async def handle_moegirl_knowledge_call(
         risk_note = " | caution: may include profane or offensive usage" if any(
             tag in {"risk:profanity", "risk:offense"} for tag in entry.tags
         ) else ""
+        quality_note = (
+            " | caution: usage may be outdated"
+            if "quality:stale-usage" in entry.tags
+            else ""
+        )
         source = get_source(entry.source_tag)
         details = f"- {entry.title}: {summary}"
         if meme_type:
             details += f"\n  Type: {meme_type}"
         if usage_example:
             details += f"\n  Typical usage: {usage_example}"
-        details += f"\n  Source: {source.name} | license: {source.license}{risk_note}"
+        details += (
+            f"\n  Source: {source.name} | license: {source.license}"
+            f"{risk_note}{quality_note}"
+        )
         lines.append(details)
     return "\n".join(lines)
 

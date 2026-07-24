@@ -84,7 +84,11 @@ class StreamingMixin:
                 database_path,
                 limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
             )
-            logger.info("[moegirl-knowledge] automatic turn context hits=%d", result.hit_count)
+            logger.info(
+                "[moegirl-knowledge] automatic turn context hits=%d mode=%s",
+                result.hit_count,
+                result.match_mode,
+            )
             return result.text
         except Exception as exc:
             logger.warning("[moegirl-knowledge] automatic turn context failed: %s", type(exc).__name__)

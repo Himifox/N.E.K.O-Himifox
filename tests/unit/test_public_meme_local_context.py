@@ -25,3 +25,34 @@ async def test_local_miss_never_invokes_a_model_or_network_fallback(monkeypatch)
     context = await manager._build_public_meme_turn_context("这是一个暂未入库的新梗")
 
     assert context == ""
+
+
+@pytest.mark.asyncio
+async def test_weak_short_context_logs_its_match_mode(monkeypatch):
+    import knowledge.moegirl_knowledge.turn_context as turn_context
+    import main_logic.core.streaming as streaming_module
+
+    manager = _Manager()
+    log_calls = []
+    monkeypatch.setattr(
+        turn_context,
+        "build_meme_turn_context",
+        lambda *_args, **_kwargs: MemeTurnContext(
+            text="temporary card",
+            hit_count=1,
+            match_mode="weak_short",
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_module.logger,
+        "info",
+        lambda message, *args: log_calls.append((message, args)),
+    )
+
+    context = await manager._build_public_meme_turn_context("越改越上头")
+
+    assert context == "temporary card"
+    assert log_calls == [(
+        "[moegirl-knowledge] automatic turn context hits=%d mode=%s",
+        (1, "weak_short"),
+    )]

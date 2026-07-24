@@ -22,6 +22,7 @@ CHIME_LICENSE = "MIT (CHIME dataset; Copyright (c) 2025 Yubo Xie)"
 # integrity check aligned with the bytes the application actually packages.
 CHIME_SHA256 = "dc438bcb0083918bb074fdbf8dbe275ce355b62cffe96f13a48f8b2fc51de3ec"
 CHIME_ENTRY_COUNT = 1_458
+_STALE_USAGE_TERMS = frozenset({"水灵灵"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +81,8 @@ def _entry_from_record(record: Any, *, record_index: int) -> MoegirlKnowledgeEnt
         tags.append("risk:profanity")
     if record.get("offense") is True:
         tags.append("risk:offense")
+    if meme in _STALE_USAGE_TERMS:
+        tags.append("quality:stale-usage")
     phrase_alias = normalize_meme_phrase(meme)
     aliases = (phrase_alias,) if phrase_alias and phrase_alias != normalized else ()
     content = "\n\n".join(content_sections)

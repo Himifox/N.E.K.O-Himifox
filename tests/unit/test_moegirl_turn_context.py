@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from knowledge.moegirl_knowledge import MoegirlKnowledgeEntry, MoegirlKnowledgeStore
+from knowledge.moegirl_knowledge.catalog_overrides import (
+    get_catalog_override_path,
+    set_entry_disabled,
+)
 from knowledge.moegirl_knowledge.turn_context import build_meme_turn_context
 
 
@@ -147,3 +151,128 @@ def test_turn_context_scans_all_aliases_and_refreshes_after_a_local_write(tmp_pa
 
     assert refreshed.hit_count == 1
     assert "Term: second entry" in refreshed.text
+
+
+def _weak_chime_entry(title: str, *, terms=None, tags=None, content=None):
+    return MoegirlKnowledgeEntry(
+        title=title,
+        terms=terms or {"alias": (), "recognition": ()},
+        tags=tags or ("source:chime", "type:现象"),
+        summary="a non-literal internet usage",
+        content=content or "Meaning\n- a typical non-literal example",
+    )
+
+
+def test_two_character_chime_title_with_type_and_example_is_a_weak_hint(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(_weak_chime_entry("上头"))
+
+    context = build_meme_turn_context("最近做这个方案越改越上头", database_path)
+
+    assert context.hit_count == 1
+    assert context.match_mode == "weak_short"
+    assert "EPHEMERAL POSSIBLE SHORT MEME TASK" in context.text
+    assert "may be using" in context.text
+    assert "medical, safety-related, financial" in context.text
+
+
+def test_another_eligible_two_character_chime_title_is_a_weak_hint(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    MoegirlKnowledgeStore(database_path).upsert(_weak_chime_entry("内卷"))
+
+    context = build_meme_turn_context("大家把日报写成论文，太内卷了", database_path)
+
+    assert context.hit_count == 1
+    assert context.match_mode == "weak_short"
+    assert "Term: 内卷" in context.text
+
+
+def test_two_character_recognition_remains_a_strong_match(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(MoegirlKnowledgeEntry(
+        title="夺笋",
+        terms={"alias": (), "recognition": ("夺笋",)},
+        tags=("source:chime", "type:谐音"),
+        summary="a playful way to say something is mean",
+        content="Meaning\n- 你这发言太夺笋了",
+    ))
+
+    context = build_meme_turn_context("你这发言多少有点夺笋", database_path)
+
+    assert context.hit_count == 1
+    assert context.match_mode == "strong"
+    assert "confirmed meme" in context.text
+
+
+def test_strong_match_wins_over_an_earlier_weak_short_term(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(_weak_chime_entry("上头"))
+    store.upsert(MoegirlKnowledgeEntry(
+        title="电子榨菜",
+        terms={},
+        tags=("source:chime", "type:现象"),
+        summary="content watched while eating",
+        content="Meaning\n- 吃饭时看电子榨菜",
+    ))
+
+    context = build_meme_turn_context("上头了，还是先看点电子榨菜吧", database_path)
+
+    assert context.match_mode == "strong"
+    assert "Term: 电子榨菜" in context.text
+    assert "Term: 上头" not in context.text
+
+
+def test_disabled_two_character_entry_does_not_create_a_weak_hint(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(_weak_chime_entry("内卷"))
+    set_entry_disabled(
+        get_catalog_override_path(database_path),
+        source_tag="source:chime",
+        title="内卷",
+        disabled=True,
+    )
+
+    context = build_meme_turn_context("这也太内卷了", database_path)
+
+    assert context == type(context)()
+
+
+def test_weak_short_hint_requires_chime_type_and_example(tmp_path):
+    cases = (
+        _weak_chime_entry("无型", tags=("source:chime",)),
+        _weak_chime_entry("无例", content="Meaning without an example list"),
+        _weak_chime_entry("他源", tags=("source:geng-guide", "type:现象")),
+    )
+    for index, entry in enumerate(cases):
+        database_path = tmp_path / str(index) / "knowledge.db"
+        MoegirlKnowledgeStore(database_path).upsert(entry)
+        assert build_meme_turn_context(f"这里出现{entry.title}二字", database_path).hit_count == 0
+
+
+def test_stale_usage_entry_is_excluded_from_automatic_context(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(_weak_chime_entry(
+        "水灵灵",
+        tags=("source:chime", "type:现象", "quality:stale-usage"),
+    ))
+
+    context = build_meme_turn_context("她就这么水灵灵地把 bug 带上线了", database_path)
+
+    assert context.hit_count == 0
+    assert context.match_mode == "none"
+
+
+def test_response_task_forbids_mechanical_repetition(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    MoegirlKnowledgeStore(database_path).upsert(_weak_chime_entry("上头"))
+
+    context = build_meme_turn_context("这个项目越改越上头", database_path)
+
+    assert "Do not merely repeat, paraphrase" in context.text
+    assert "relevant reaction, light joke, stance, or natural question" in context.text
+    assert "explicitly asks for a meaning or distinction" in context.text

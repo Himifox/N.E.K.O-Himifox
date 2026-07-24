@@ -54,6 +54,31 @@ async def test_local_tool_result_includes_type_usage_and_source(monkeypatch, tmp
     assert "Source: CHIME | license: MIT" in result
 
 
+@pytest.mark.asyncio
+async def test_explicit_local_result_warns_when_usage_may_be_outdated(monkeypatch, tmp_path):
+    knowledge_root = tmp_path / "knowledge"
+    database_path = knowledge_root / "moegirl-knowledge" / "knowledge.db"
+    MoegirlKnowledgeStore(database_path).upsert(MoegirlKnowledgeEntry(
+        title="水灵灵",
+        terms={},
+        tags=("source:chime", "type:现象", "quality:stale-usage"),
+        summary="an older recorded usage",
+        content="Meaning\n- an older example",
+    ))
+    monkeypatch.setattr(
+        knowledge_tool,
+        "get_config_manager",
+        lambda: SimpleNamespace(knowledge_dir=knowledge_root),
+    )
+
+    result = await knowledge_tool.handle_moegirl_knowledge_call(
+        {"query": "水灵灵"}, language="en"
+    )
+
+    assert "水灵灵" in result
+    assert "caution: usage may be outdated" in result
+
+
 def test_normal_source_package_exports_only_local_importers():
     from knowledge.moegirl_knowledge import sources
 

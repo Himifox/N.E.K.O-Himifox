@@ -8,6 +8,7 @@ from knowledge.moegirl_knowledge.sources.chime import (
     CHIME_SHA256,
     load_bundled_chime_dataset,
 )
+from knowledge.moegirl_knowledge.turn_context import build_meme_turn_context
 
 
 def test_bundled_chime_dataset_has_pinned_integrity_and_provenance():
@@ -33,3 +34,29 @@ def test_bundled_chime_import_is_idempotent_and_searchable(tmp_path):
     assert store.count() == CHIME_ENTRY_COUNT
     hits = MoegirlKnowledgeRetriever(store).search("treetree", limit=1)
     assert hits and hits[0].entry.source_tag == "source:chime"
+    upper_context = build_meme_turn_context(
+        "最近做这个方案越改越上头", store.database_path,
+    )
+    involution_context = build_meme_turn_context(
+        "大家把日报写成论文，太内卷了", store.database_path,
+    )
+    assert upper_context.match_mode == "weak_short"
+    assert "Term: 上头" in upper_context.text
+    assert involution_context.match_mode == "weak_short"
+    assert "Term: 内卷" in involution_context.text
+    assert build_meme_turn_context(
+        "她就这么水灵灵地把 bug 带上线了", store.database_path,
+    ).match_mode == "none"
+
+
+def test_bundled_chime_marks_only_confirmed_stale_usage_entry():
+    entries = load_bundled_chime_dataset().entries
+    waterling_entries = [entry for entry in entries if entry.title == "水灵灵"]
+
+    assert waterling_entries
+    assert all("quality:stale-usage" in entry.tags for entry in waterling_entries)
+    assert all(
+        "quality:stale-usage" not in entry.tags
+        for entry in entries
+        if entry.title != "水灵灵"
+    )
