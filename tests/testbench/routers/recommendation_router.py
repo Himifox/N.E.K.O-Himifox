@@ -17,6 +17,10 @@ from tests.testbench.pipeline.recommendation_export import build_report_json, bu
 from tests.testbench.pipeline.recommendation_runner import RecommendationRunError, check_reproducibility, delete_run, list_runs, preview_scenario, read_run, run_experiment
 from tests.testbench.pipeline.recommendation_scenario import RecommendationScenarioError, delete_user_scenario, duplicate_scenario, list_scenarios, read_scenario, save_user_scenario, validate_scenario_dict
 from tests.testbench.pipeline.recommendation_personalization import PersonalizationTraceError, run_personalization_trace
+from tests.testbench.pipeline.recommendation_bounded_personalization import (
+    BoundedPersonalizationError,
+    analyze_bounded_personalization,
+)
 from tests.testbench.pipeline.recommendation_shadow import annotation_summary, audit_shadow_dataset, p44_readiness, validate_annotations
 from tests.testbench.pipeline.recommendation_timing_audit import (
     prepare_observation_for_timing_import,
@@ -43,6 +47,8 @@ class CalibrationBody(BaseModel):
     dataset_id: str; variant: dict[str, Any] = Field(default_factory=dict)
 class PersonalizationTraceBody(BaseModel):
     scenario_id: str = "competition_15"; users: list[dict[str, Any]]
+class BoundedPersonalizationBody(BaseModel):
+    dataset_id: str; max_abs_delta: float = 0.03
 class AnnotationsBody(BaseModel): annotations: list[dict[str, Any]]
 class BaselineSignoffBody(BaseModel):
     baseline_id: str = "canonical-production-default-v1"; overwrite: bool = False
@@ -198,6 +204,22 @@ def personalization_trace(body: PersonalizationTraceBody):
     try: return run_personalization_trace(body.model_dump())
     except PersonalizationTraceError as exc:
         raise HTTPException(422, detail={"error_type": "RecommendationPersonalizationInvalid", "message": str(exc)}) from exc
+
+@router.post("/personalization/bounded-impact")
+def personalization_bounded_impact(body: BoundedPersonalizationBody):
+    try:
+        return analyze_bounded_personalization(
+            datasets_read(body.dataset_id),
+            max_abs_delta=body.max_abs_delta,
+        )
+    except BoundedPersonalizationError as exc:
+        raise HTTPException(
+            422,
+            detail={
+                "error_type": "RecommendationBoundedPersonalizationInvalid",
+                "message": str(exc),
+            },
+        ) from exc
 
 def _annotation_path(dataset_id: str): return tb_config.RECOMMENDATION_DATASETS_DIR / "annotations" / f"{dataset_id}.json"
 def _read_annotations(dataset_id: str):
