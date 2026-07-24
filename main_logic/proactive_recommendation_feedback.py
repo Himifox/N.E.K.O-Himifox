@@ -132,6 +132,7 @@ _METADATA_KEYS = {
     "reply_length",
     "reply_length_bucket",
     "played_wall_ms",
+    "active_playback_ms",
     "audio_current_time_sec",
     "audio_duration_sec",
     "completion_ratio",
@@ -139,6 +140,7 @@ _METADATA_KEYS = {
     "game_type",
     "reason",
 }
+_MAX_PLAYBACK_FEEDBACK_MS = 24 * 60 * 60 * 1000
 _FORBIDDEN_EVENT_KEYS = {
     "payload",
     "source_links",
@@ -265,6 +267,16 @@ def sanitize_feedback_metadata(metadata: Any) -> dict[str, Any]:
     for key in _METADATA_KEYS:
         if key not in metadata:
             continue
+        if key == "active_playback_ms":
+            value = metadata.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            try:
+                numeric_value = float(value)
+            except (OverflowError, TypeError, ValueError):
+                continue
+            if not math.isfinite(numeric_value) or not 0 <= numeric_value <= _MAX_PLAYBACK_FEEDBACK_MS:
+                continue
         safe[key] = _json_safe_scalar(metadata.get(key))
     return safe
 
@@ -718,6 +730,7 @@ class ProactiveRecommendationFeedbackTurnSink:
 
 def music_feedback_event_type(
     *,
+    active_playback_ms: Any = None,
     played_wall_ms: Any = None,
     completion_ratio: Any = None,
     started: bool = True,
@@ -733,16 +746,18 @@ def music_feedback_event_type(
         return "autoplay_blocked"
     if not started:
         return "music_not_started"
+    active = _number(active_playback_ms, -1.0)
+    wall = _number(played_wall_ms, -1.0)
+    played_ms = active if math.isfinite(active) and active >= 0 else wall
+    if math.isfinite(played_ms) and 0 <= played_ms <= 3000:
+        return "music_hard_skip"
+    if math.isfinite(played_ms) and 0 <= played_ms < 15000:
+        return "music_early_close"
     ratio = _number(completion_ratio, -1.0)
     if ratio >= 0.70:
         return "music_high_completion"
     if ratio >= 0.30:
         return "music_mid_completion"
-    wall = _number(played_wall_ms, -1.0)
-    if wall >= 0 and wall <= 3000:
-        return "music_hard_skip"
-    if wall >= 0 and wall < 15000:
-        return "music_early_close"
     return "music_normal_close"
 
 

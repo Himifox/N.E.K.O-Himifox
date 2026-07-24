@@ -1289,7 +1289,6 @@
                     break;
                 case 'close': {
                     recordMusicCloseFeedback(playbackStartedAt);
-                    playbackStartedAt = 0;
                     destroyMusicPlayer(true, true, true);
                     break;
                 }
@@ -1501,8 +1500,8 @@
 
     // --- 音乐秒关检测 & 自动冷却 ---
     const SKIP_CONFIG = {
-        skipThresholdMs: 15000,              // < 15 秒关闭 = 视为"秒关"
-        hardSkipThresholdMs: 3000,           // 起播后 ≤ 3 秒即关 = "秒叉"，单次即触发冷却
+        skipThresholdMs: 15000,              // 实际播放累计 < 15 秒关闭 = 视为"秒关"
+        hardSkipThresholdMs: 3000,           // 实际播放累计 ≤ 3 秒关闭 = "秒叉"，单次即触发冷却
         consecutiveSkipsToTrigger: 2,        // 连续秒关 2 次触发冷却
         cooldownDurationMs: 20 * 60 * 1000   // 冷却 20 分钟
     };
@@ -1521,9 +1520,40 @@
     const markProactiveMusicRecommended = () => {
         lastProactiveRecommendAt = Date.now();
     };
-    let playbackStartedAt = 0;        // Date.now() at first play of current track; 0 = never started
+    let playbackStartedAt = 0;        // Date.now() at first play request; diagnostic wall clock only
+    let activePlaybackStartedAt = null; // monotonic clock for the current audible segment
+    let activePlaybackAccumulatedMs = 0;
+    let activePlaybackDidStart = false;
     let consecutiveSkipCount = 0;
     let musicCooldownUntil = 0;
+
+    function resetMusicPlaybackTiming() {
+        playbackStartedAt = 0;
+        activePlaybackStartedAt = null;
+        activePlaybackAccumulatedMs = 0;
+        activePlaybackDidStart = false;
+    }
+
+    function startActiveMusicPlayback(now) {
+        if (activePlaybackStartedAt !== null) return;
+        const startedAt = Number.isFinite(now) ? now : performance.now();
+        activePlaybackStartedAt = startedAt;
+        activePlaybackDidStart = true;
+    }
+
+    function stopActiveMusicPlayback(now) {
+        if (activePlaybackStartedAt === null) return activePlaybackAccumulatedMs;
+        const stoppedAt = Number.isFinite(now) ? now : performance.now();
+        activePlaybackAccumulatedMs += Math.max(0, stoppedAt - activePlaybackStartedAt);
+        activePlaybackStartedAt = null;
+        return activePlaybackAccumulatedMs;
+    }
+
+    function getActiveMusicPlaybackMs(now) {
+        if (activePlaybackStartedAt === null) return activePlaybackAccumulatedMs;
+        const current = Number.isFinite(now) ? now : performance.now();
+        return activePlaybackAccumulatedMs + Math.max(0, current - activePlaybackStartedAt);
+    }
 
     // 从 localStorage 恢复冷却状态
     try {
@@ -1591,6 +1621,7 @@
     function getMusicPlaybackFeedbackMetadata(startedAt) {
         const metadata = {};
         if (startedAt) metadata.played_wall_ms = Math.max(0, Date.now() - startedAt);
+        metadata.active_playback_ms = Math.max(0, Math.round(getActiveMusicPlaybackMs()));
         try {
             const audio = localPlayer && localPlayer.audio;
             if (audio) {
@@ -1634,37 +1665,41 @@
     }
 
     function musicCloseFeedbackEventType(metadata) {
+        const rawActiveMs = metadata && metadata.active_playback_ms;
+        const activeMs = rawActiveMs === null || rawActiveMs === undefined ? NaN : Number(rawActiveMs);
         const wallMs = Number(metadata && metadata.played_wall_ms);
         const ratio = Number(metadata && metadata.completion_ratio);
-        if (isFinite(wallMs) && wallMs <= SKIP_CONFIG.hardSkipThresholdMs) return 'music_hard_skip';
-        if (isFinite(wallMs) && wallMs < SKIP_CONFIG.skipThresholdMs) return 'music_early_close';
+        const playedMs = isFinite(activeMs) && activeMs >= 0 ? activeMs : wallMs;
+        if (isFinite(playedMs) && playedMs <= SKIP_CONFIG.hardSkipThresholdMs) return 'music_hard_skip';
+        if (isFinite(playedMs) && playedMs < SKIP_CONFIG.skipThresholdMs) return 'music_early_close';
         if (isFinite(ratio) && ratio >= 0.7) return 'music_high_completion';
         if (isFinite(ratio) && ratio >= 0.3) return 'music_mid_completion';
         return 'music_normal_close';
     }
 
-    // 用户关闭播放器时结算「秒关」反馈。判定用「从首次起播到关闭」的墙钟时长：
-    //   startedAt == 0（压根没起播过——autoplay 被拦 / 加载失败 / 关得太早）→ 这次分享没有
+    // 用户关闭播放器时结算「秒关」反馈。判定使用媒体实际 playing 的累计时长：
+    //   没有进入过 playing（autoplay 被拦 / 加载失败 / 关得太早）→ 这次分享没有
     //     效送达用户，不构成喜恶信号，既不冷却也不计秒关，直接返回
-    //   墙钟按真实经过时间算，不受 seek / 进度条拖动污染，比按 currentTime 差值估算可靠
-    //   （pause 期间也计入：用户主动暂停代表有意互动、非秒拒，久停后关按正常收听处理不冷却）
+    //   waiting / stalled / pause / seeking 均不累计；played_wall_ms 只保留作诊断
     //   ≤ hardSkipThresholdMs → 起播后一下就叉，最强拒绝信号，单次即进冷却
     //   < skipThresholdMs      → 秒关，累计 consecutiveSkipsToTrigger 次进冷却
     //   >= skipThresholdMs     → 正常收听，重置秒关计数
     function recordMusicCloseFeedback(startedAt) {
-        if (!startedAt) {
+        const didStart = activePlaybackDidStart;
+        stopActiveMusicPlayback();
+        if (!startedAt || !didStart) {
             reportProactiveMusicFeedback('music_not_started', { reason: 'close_before_start' });
             currentMusicFeedbackMeta = null;
             return;
         }
         const metadata = getMusicPlaybackFeedbackMetadata(startedAt);
-        const wallMs = metadata.played_wall_ms;
-        reportProactiveMusicFeedback(musicCloseFeedbackEventType(metadata), metadata);
+        const eventType = musicCloseFeedbackEventType(metadata);
+        reportProactiveMusicFeedback(eventType, metadata);
         currentMusicFeedbackMeta = null;
-        if (wallMs <= SKIP_CONFIG.hardSkipThresholdMs) {
+        if (eventType === 'music_hard_skip') {
             console.log('[Music UI] 秒叉（起播后 ≤' + (SKIP_CONFIG.hardSkipThresholdMs / 1000) + 's 关闭），立即冷却');
             enterMusicCooldown();
-        } else if (wallMs < SKIP_CONFIG.skipThresholdMs) {
+        } else if (eventType === 'music_early_close') {
             recordMusicSkip();
         } else {
             resetSkipCounter();
@@ -1879,8 +1914,8 @@
 
 
     const destroyMusicPlayer = (removeDOM = true, fullTeardown = false, updateToken = false) => {
-        // 播放器销毁即结束当前曲目生命周期，清起播时间戳，避免残留到下一首
-        playbackStartedAt = 0;
+        // 播放器销毁即结束当前曲目生命周期，清空墙钟与 active timing，避免残留到下一首
+        resetMusicPlaybackTiming();
         const destroyedPlaybackId = getCurrentMusicPlaybackId();
         // 重要：销毁播放器意味着取消所有正在进行的异步加载令牌
         // 只有在 fullTeardown (手动关闭) 或明确要求时才更新 token
@@ -2269,6 +2304,19 @@
                 // --- 绑定核心事件 (仅在初始化时绑定一次) ---
                 // 【核心修复】使用闭包固定当前的播放器实例
                 const boundPlayer = localPlayer;
+                const boundAudio = boundPlayer.audio;
+
+                if (boundAudio && typeof boundAudio.addEventListener === 'function') {
+                    boundAudio.addEventListener('playing', () => startActiveMusicPlayback());
+                    ['waiting', 'stalled', 'pause', 'seeking'].forEach((eventName) => {
+                        boundAudio.addEventListener(eventName, () => stopActiveMusicPlayback());
+                    });
+                    boundAudio.addEventListener('seeked', () => {
+                        if (!boundAudio.paused && !boundAudio.ended && boundAudio.readyState >= 3) {
+                            startActiveMusicPlayback();
+                        }
+                    });
+                }
 
                 boundPlayer.on('play', () => {
                     if (autoDestroyTimer) { clearTimeout(autoDestroyTimer); autoDestroyTimer = null; }
@@ -2282,6 +2330,7 @@
                     emitBarState();
                 });
                 boundPlayer.on('pause', () => {
+                    stopActiveMusicPlayback();
                     updatePlayBtnState(false);
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
@@ -2292,11 +2341,12 @@
                     emitBarState();
                 });
                 boundPlayer.on('ended', () => {
+                    stopActiveMusicPlayback();
                     updatePlayBtnState(false);
                     resetSkipCounter();
                     notifyMusicPlayedThrough(currentPlayingTrack);
                     currentMusicFeedbackMeta = null;
-                    playbackStartedAt = 0;
+                    resetMusicPlaybackTiming();
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                     autoDestroyTimer = setTimeout(() => {
@@ -2308,9 +2358,10 @@
                 boundPlayer.on('error', (err) => {
                     if (boundPlayer._destroying) return;
                     console.error('[Music UI] APlayer error:', err);
+                    stopActiveMusicPlayback();
                     reportProactiveMusicFeedback('music_error', { reason: 'aplayer_error' });
                     currentMusicFeedbackMeta = null;
-                    playbackStartedAt = 0;
+                    resetMusicPlaybackTiming();
 
                     const tokenAtEvent = boundPlayer._latestToken;
                     boundPlayer._loadError = true;
@@ -2342,7 +2393,6 @@
                 musicBar.querySelector('.music-bar-close').onclick = (e) => {
                     e.preventDefault();
                     recordMusicCloseFeedback(playbackStartedAt);
-                    playbackStartedAt = 0;
                     destroyMusicPlayer(true, true, true);
                 };
                 apBtn.onclick = (e) => {
@@ -2596,7 +2646,7 @@
             } else {
                 // --- 复用模式下的切歌逻辑 ---
                 // Reset skip-tracking so the previous track's timing doesn't carry over
-                playbackStartedAt = 0;
+                resetMusicPlaybackTiming();
                 if (localPlayer.list) {
                     localPlayer.list.clear();
                     localPlayer.list.add([{ name: trackInfo.name, artist: trackInfo.artist, url: trackInfo.url, cover: hasCover ? trackInfo.cover : '' }]);
