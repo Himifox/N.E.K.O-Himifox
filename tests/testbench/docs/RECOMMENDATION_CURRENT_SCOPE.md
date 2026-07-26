@@ -20,6 +20,7 @@
 - P44-G1-R1 有界个性化模拟（±0.03）：20 个 warm-state Music 候选平均分 0.5614→0.5658（最大实际增量 +0.0060），Top-1 翻转 0，HHI 与最大来源曝光不变；结论 `impact_only`，`candidate_for_shadow=false`。
 - P44-G1-R2 渐进响应曲线：`gradual_12` 通过机械门禁（Music 平均分 0.5614→0.5755，触顶 0%），但来源证据仅 Music 正向 11 / 负向 0，无人工 outcome 与反事实标签；正式状态 `hold_for_negative_evidence`。
 - 2026-07-26：本分支生产代码副本已追平 `feat/recommend-MVP` 截点 `3c0626bf`（补齐 runtime/timing 模块、activity 接线修复与 `feedback_joined_count` 显式求和语义）；推荐单测 118/118、烟测 p41–p56 14/14 全绿。
+- 2026-07-26：observation v3 的 Testbench adapter 正式同步完成。导入与安全导出直接采用生产 sanitizer 的 `decision_context.timing` 输出，原 v2 兼容桥接层退役为漂移拒绝门：生产输出与审计契约不一致时以 `production_timing_sanitizer_drift` 显式拒绝，不再静默修补；对通过审计的行输出逐位不变。
 - 生产权重、阈值、interval、scheduler、routing、投递与 tuning 均未修改。
 - `active_source` 与所有自动 tuning 继续保持 `HOLD/off`。
 

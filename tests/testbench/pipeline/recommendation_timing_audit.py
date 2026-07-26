@@ -237,7 +237,15 @@ def prepare_observation_for_timing_import(
     observation: Mapping[str, Any],
     production_sanitizer: Callable[[Mapping[str, Any]], dict[str, Any]],
 ) -> dict[str, Any]:
-    """Apply production sanitization while preserving only valid v3 timing."""
+    """Apply production sanitization and gate it on the audited v3 contract.
+
+    Since the 2026-07-26 production-core sync the production sanitizer owns
+    `decision_context.timing` (observation v3); Testbench no longer patches
+    the sanitized row. The audited normalization is kept only as a drift
+    gate: if the production output disagrees with the v3 timing contract,
+    the row is rejected loudly instead of silently repaired, so a future
+    production semantic change cannot pass unnoticed.
+    """
     inspected = inspect_timing_observation(observation)
     generation = inspected["schema_generation"]
     if (
@@ -252,11 +260,21 @@ def prepare_observation_for_timing_import(
             "errors": inspected["errors"],
         }
     safe = production_sanitizer(observation)
-    decision_context = sanitized_timing_decision_context(observation)
-    if decision_context:
-        # Idempotent once the production v3 sanitizer is present, and a safe
-        # compatibility bridge while Testbench is still based on production v2.
-        safe["decision_context"] = decision_context
+    expected_context = sanitized_timing_decision_context(observation)
+    if expected_context and safe.get("decision_context") != expected_context:
+        return {
+            "accepted": False,
+            "observation": None,
+            "reason": "production_timing_sanitizer_drift",
+            "errors": [{
+                "path": "decision_context.timing",
+                "code": "production_timing_sanitizer_drift",
+                "message": (
+                    "production sanitizer output does not match the audited "
+                    "observation timing schema v3 contract"
+                ),
+            }],
+        }
     return {
         "accepted": True,
         "observation": safe,

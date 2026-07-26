@@ -737,3 +737,16 @@ v1.1.0 发布当日的用户手测反馈收治, 仍属 v1.1 同一版本号 (未
 - 因 Music 来源证据为 11 条正向、0 条负向，正式结论为
   `hold_for_negative_evidence`，不产生 Shadow 或生产候选。
 - 新增 P56 smoke；MVP、生产状态、候选、过滤、权重、PASS、投递和 tuning 均未修改。
+
+## 生产代码同步 + observation v3 timing adapter 正式同步 (2026-07-26)
+
+- 本分支生产代码副本追平 `feat/recommend-MVP` 截点 `3c0626bf`：补齐
+  `proactive_recommendation_runtime.py` / `proactive_recommendation_timing.py`、
+  排序真实 activity 接线与 `feedback_joined_count` 显式求和语义（修复
+  `test_recommendation_summary_returns_feedback_metrics` 红测）。
+- `prepare_observation_for_timing_import` 退役 v2 兼容桥接层：生产 sanitizer
+  原生输出 `decision_context.timing`，审计规范化仅作漂移门，不一致时以
+  `production_timing_sanitizer_drift` 拒绝导入，不再静默修补；对通过审计的
+  行输出逐位不变，既有 freeze/export 均不受影响。
+- P47 smoke 改为断言模拟 v2 sanitizer 被作为漂移拒绝；推荐单测 118/118、
+  烟测 p41–p56 14/14 全绿。生产权重、PASS、scheduler、投递和 tuning 均未修改。

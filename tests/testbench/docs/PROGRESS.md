@@ -1710,3 +1710,19 @@ Verified after sync: recommendation unit tests 118/118 and smokes p41–p56
 imported: three of its checks assert main-branch frontend features
 (`waitForMusicMediaReady`, candidate retry loop) that this branch's `static/`
 has not synced yet.
+
+## 2026-07-26 · observation v3 timing adapter finalized (bridge retired)
+
+Follow-up to the core sync above; closes the "observation v3 Testbench
+adapter/sanitizer sync" item from the MVP scope document.
+`prepare_observation_for_timing_import` no longer patches `decision_context`
+after production sanitization: the production sanitizer owns the v3 timing
+block, and the audited Testbench normalization now acts only as a drift
+gate — a mismatch rejects the row with `production_timing_sanitizer_drift`
+instead of silently repairing it, so a future production semantic change
+cannot pass unnoticed. For every row that passes the audit both sides produce
+identical bounded/rounded values, so run artifacts are unchanged. Import
+(`recommendation_router.datasets_import`) and safe export already consume the
+real production sanitizer. P47 now asserts the drift rejection for a
+simulated legacy v2 sanitizer. Verified: smokes p41–p56 14/14 and
+recommendation unit tests 118/118 green.

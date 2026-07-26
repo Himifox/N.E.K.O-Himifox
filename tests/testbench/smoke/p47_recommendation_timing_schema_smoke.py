@@ -180,9 +180,11 @@ def main() -> int:
     assert mixed["timing_unknown_version_count"] == 1
     assert mixed["timing_unsupported_future_count"] == 1
 
-    # Simulate a v2 production sanitizer that does not yet know
-    # decision_context. The Testbench compatibility bridge must preserve only
-    # the validated timing fields and reject malformed schema-v3 observations.
+    # The v2-era compatibility bridge is retired: since the 2026-07-26
+    # production-core sync the production sanitizer owns
+    # decision_context.timing. A sanitizer that fails to reproduce the audited
+    # v3 timing block (here: a simulated legacy v2 sanitizer that strips it)
+    # must be rejected as drift instead of silently patched.
     def v2_sanitizer(row: dict) -> dict:
         return {
             key: value
@@ -190,11 +192,11 @@ def main() -> int:
             if key != "decision_context"
         }
 
-    prepared = prepare_observation_for_timing_import(valid, v2_sanitizer)
-    assert prepared["accepted"]
-    assert prepared["observation"]["decision_context"]["timing"] == (
-        inspected["normalized_timing"]
-    )
+    drifted = prepare_observation_for_timing_import(valid, v2_sanitizer)
+    assert not drifted["accepted"]
+    assert drifted["reason"] == "production_timing_sanitizer_drift"
+    assert drifted["observation"] is None
+    assert drifted["errors"][0]["code"] == "production_timing_sanitizer_drift"
     rejected = prepare_observation_for_timing_import(missing, v2_sanitizer)
     assert not rejected["accepted"]
     assert rejected["reason"] == "invalid_timing_context"
