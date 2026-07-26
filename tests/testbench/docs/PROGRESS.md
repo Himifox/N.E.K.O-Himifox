@@ -1726,3 +1726,19 @@ identical bounded/rounded values, so run artifacts are unchanged. Import
 real production sanitizer. P47 now asserts the drift rejection for a
 simulated legacy v2 sanitizer. Verified: smokes p41–p56 14/14 and
 recommendation unit tests 118/118 green.
+
+## 2026-07-26 · M1-C multi-user beta cohort guide drafted (recruitment not started)
+
+Authorized under the maturity plan M1-C (see
+`docs/records/recommendation-maturity-plan-2026-07-26.md` on the status-check
+branch). Adds `RECOMMENDATION_BETA_COHORT_GUIDE.md`: informed-consent
+template, participant env configuration (shadow mode + observation/feedback
+jsonl sinks + shadow_review, names verified against
+`config/proactive_settings.py`), collection rules, sanitized export/import
+flow via `export_recommendation_shadow.py` → `/datasets/import` → freeze
+tools, and completion gates (aggregate ≥200 decision observations / ≥50
+attributable explicit feedback across ≥5 informed participants over 7 days).
+Documentation only: no production behavior, config, weights or tuning change;
+recruitment and collection have NOT started. This cohort, once frozen, is the
+shared data basis for M2 (personalization acceptance) and M3 (decision-gate
+modeling).
