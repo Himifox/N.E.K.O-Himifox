@@ -2,7 +2,7 @@
 
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
-> 当前实现分支：`feat/recommend-MVP`（Testbench 分支生产代码副本已于 2026-07-26 追平截点 `3c0626bf`；observation v3 的 Testbench adapter/sanitizer 同步仍待单独进行）
+> 当前实现分支：`feat/recommend-MVP`（Testbench 分支生产代码副本已于 2026-07-26 追平截点 `3c0626bf`，observation v3 的 Testbench adapter 同步同日完成）
 > 最近更新：2026-07-26
 > 当前阶段：P44-G1 第一部分已完成；Testbench 侧 G1-R1/R2 只读模拟已完成，正式状态 `hold_for_negative_evidence`，`candidate_for_shadow=false`
 
@@ -21,7 +21,7 @@
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
 10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；它们不进入排序、PASS、投递或 tuning。
 11. `feedback_state_preview_v2` 将全局搭话接受度与实际素材来源偏好分开；该语义拆分已随 G1 第一部分落地（`37c40080`，2026-07-24 补音乐反馈经 preview state 归类的修复 `01514161`/`3c0626bf`），不实现个性化重排。
-12. Recommendation Testbench 已完成 `feedback_state_preview` v2 的只读 safe-view 同步（P54，2026-07-23），并于 2026-07-26 将其生产代码副本追平本分支截点 `3c0626bf`（推荐单测 118/118、烟测 p41–p56 14/14 全绿）；observation v3 的 Testbench adapter/sanitizer 同步仍为下一项独立工作，当前 timing 分析仍经 Testbench 侧兼容桥接层，不与 MVP 修改混合提交。
+12. Recommendation Testbench 已完成 `feedback_state_preview` v2 的只读 safe-view 同步（P54，2026-07-23），并于 2026-07-26 将其生产代码副本追平本分支截点 `3c0626bf`（推荐单测 118/118、烟测 p41–p56 14/14 全绿）。observation v3 的 Testbench adapter 同步已于同日完成：导入与安全导出直接采用生产 sanitizer 的 `decision_context.timing` 输出，原 v2 兼容桥接层退役为漂移拒绝门（`production_timing_sanitizer_drift`）——生产侧 timing 语义漂移会在 Testbench 导入 chokepoint 被显式拒绝，而非静默修补。
 13. Testbench 侧已完成 P44-G1 首份真实接受度报告（260 observation / 161 投递 encounter，`descriptive_only`）、G1-R1 有界个性化模拟（`impact_only`）与 G1-R2 渐进响应曲线（`gradual_12` 仅过机械门禁，`hold_for_negative_evidence`）；`candidate_for_shadow=false`，三者均不构成本文第 7 节意义上的 MVP 变更申请。
 
 正式 timing-v3 baseline：
