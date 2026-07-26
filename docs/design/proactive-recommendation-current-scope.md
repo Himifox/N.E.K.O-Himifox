@@ -2,9 +2,9 @@
 
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
-> 当前实现分支：`feat/recommend-MVP`（Testbench v2 同步待单独进行）
-> 最近更新：2026-07-23
-> 当前阶段：P44-G1 第一部分 feedback preview v2 语义拆分
+> 当前实现分支：`feat/recommend-MVP`（Testbench 分支生产代码副本已于 2026-07-26 追平截点 `3c0626bf`；observation v3 的 Testbench adapter/sanitizer 同步仍待单独进行）
+> 最近更新：2026-07-26
+> 当前阶段：P44-G1 第一部分已完成；Testbench 侧 G1-R1/R2 只读模拟已完成，正式状态 `hold_for_negative_evidence`，`candidate_for_shadow=false`
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
 
@@ -20,8 +20,9 @@
 8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
 10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；它们不进入排序、PASS、投递或 tuning。
-11. `feedback_state_preview_v2` 将全局搭话接受度与实际素材来源偏好分开；本阶段只修正状态语义，不实现个性化重排。
-12. Recommendation Testbench 当前仍以 v1 契约为已完成基线；v2 adapter/sanitizer 同步属于下一项独立工作，不与本次 MVP 修改混合提交。
+11. `feedback_state_preview_v2` 将全局搭话接受度与实际素材来源偏好分开；该语义拆分已随 G1 第一部分落地（`37c40080`，2026-07-24 补音乐反馈经 preview state 归类的修复 `01514161`/`3c0626bf`），不实现个性化重排。
+12. Recommendation Testbench 已完成 `feedback_state_preview` v2 的只读 safe-view 同步（P54，2026-07-23），并于 2026-07-26 将其生产代码副本追平本分支截点 `3c0626bf`（推荐单测 118/118、烟测 p41–p56 14/14 全绿）；observation v3 的 Testbench adapter/sanitizer 同步仍为下一项独立工作，当前 timing 分析仍经 Testbench 侧兼容桥接层，不与 MVP 修改混合提交。
+13. Testbench 侧已完成 P44-G1 首份真实接受度报告（260 observation / 161 投递 encounter，`descriptive_only`）、G1-R1 有界个性化模拟（`impact_only`）与 G1-R2 渐进响应曲线（`gradual_12` 仅过机械门禁，`hold_for_negative_evidence`）；`candidate_for_shadow=false`，三者均不构成本文第 7 节意义上的 MVP 变更申请。
 
 正式 timing-v3 baseline：
 
@@ -185,6 +186,19 @@ P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事�
 
 本部分不包含个性化调整公式、Shadow 重排、News/Meme/Vision 推断偏好、持久衰减、新反馈 UI 或 Testbench 候选分析。
 
+本部分已完成：语义拆分随 `37c40080` 落地（2026-07-23），音乐反馈经 preview state 归类的两项修复（`01514161`、`3c0626bf`）于 2026-07-24 收尾。
+
+### 5.6 P44-G1 Testbench 侧 R1/R2（只读模拟，无 MVP 变更）
+
+R1/R2 在 `feat/recommend-testbench` 上完成，证据文档为
+`tests/testbench/docs/P44_G1_R1_BOUNDED_PERSONALIZATION.md` 与
+`tests/testbench/docs/P44_G1_R2_PERSONALIZATION_RESPONSE_CURVES.md`：
+
+1. R1 对决策前快照中 `source_affinity.persistent` 做 ±0.03 硬裁剪的有界模拟，结论 `impact_only`：20 个 warm-state Music 候选平均分 0.5614→0.5658，Top-1 翻转 0，HHI 与最大来源曝光不变。
+2. R2 解释 R1 的恒定 +0.006（生产 affinity 达证据门槛后固定 0.2），并比较证据置信度渐进曲线；`gradual_12` 仅通过机械门禁（Music 平均分 0.5614→0.5755，触顶 0%），正式状态 `hold_for_negative_evidence`。
+3. 当前来源证据仅 Music 正向 11 / 负向 0，缺人工 outcome 与反事实标签；`candidate_for_shadow` 固定为 false。
+4. 两轮均不修改生产权重、排序、PASS、投递、scheduler 或 tuning，也不沿用为第 7 节的 MVP 变更授权；下一步属于研究 Backlog 的"定向补充真实负向来源证据"，需单独立项。
+
 ## 6. Testbench 准入原则
 
 硬门禁：
@@ -220,6 +234,7 @@ P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事�
 
 以下项目保留研究价值，但不是当前或默认下一阶段：
 
+- 定向补充真实负向来源证据（当前 Music 亲和度证据为正向 11 / 负向 0，是 G1-R1/R2 效果验收的共同阻塞项）；
 - 临时/持久 preview 的实际消费与持久 affinity 衰减；
 - `reward_score_v2` 对画像或排序的实际消费（G0-A～D 仅批准 preview）；
 - semantic repeat、MMR 与单候选恢复；
