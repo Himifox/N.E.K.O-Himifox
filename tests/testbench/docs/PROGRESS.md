@@ -1606,7 +1606,7 @@ The real timing cohort covers idle 76 / chatting 10 / unknown 19. It has no
 `gaming` is not a target, while away/busy are recorded only if they occur
 naturally. No subsequent Recommendation phase is automatically authorized.
 
-## P44-F2-R0 · Timing Evidence Restart preflight · ready for human review (2026-07-21)
+## P44-F2-R0 · Timing Evidence Restart preflight · closed: HOLD / no_candidate (2026-07-22)
 
 P44-F2-R0 is a separately approved Testbench-only evidence step, not a new
 timing strategy. It preserves the 105-observation freeze and creates a distinct
@@ -1628,6 +1628,15 @@ at least 20 qualified samples on each delivery side. P49 proves both the blind
 manifest and a synthetic `ready_for_f2_rerun` control. A successful gate only
 permits re-running the existing association analysis; it does not permit a
 candidate formula, new collection, MVP change or tuning.
+
+Close-out (2026-07-22): `RECOMMENDATION_CURRENT_SCOPE.md` records the final
+decision as `HOLD / no_candidate` — the preflight passed feasibility, but no
+new human annotation round is opened. The 101-observation analysis ceiling
+above remains valid only as feasibility evidence; readiness stays `hold`, and
+any restart of the timing evidence chain still requires separate
+authorization. (This heading previously read "ready for human review", which
+described the preflight result, not a decision to start review; unified here
+with the boundary document.)
 
 ## P44-G0 · MVP feedback-state preview sync · complete (2026-07-22)
 
@@ -1654,3 +1663,50 @@ cutoff and static non-consumption contracts. The first real freeze contains
 `descriptive_only`: 41 explicit conversation-feedback turns are positive,
 none are negative, and music has only 6 conversation-feedback turns. G2, G3
 and OPE/bandit remain HOLD.
+
+## P44-G1-R1 · bounded personalization impact simulation · complete / impact_only (2026-07-24)
+
+R1 simulates the candidate `persistent_source_affinity_max_003_v1` on the
+frozen cohort `shadow-p44g1-v2-20260724-112124.json` (131 observations /
+23 feedback events, input SHA-256
+`7d5be2e7c985cdf880f73fc1b26b8405b3d3fdaa626725ae237493ea621bf49f`):
+delta = persistent source affinity × 0.03, hard-clipped to ±0.03, zero below
+the explicit-evidence threshold; conversation acceptance is displayed but never
+enters source ranking. 20 warm-state observations yield 20 adjusted Music
+candidates: mean score 0.5614 → 0.5658 (max actual delta +0.0060), zero Top-1
+flips, HHI 0.3054 and max source exposure 45.04% unchanged. Verdict:
+`impact_only`, `candidate_for_shadow=false` — source evidence is Music-only
+and all-positive (11/0), with no human outcome or counterfactual labels.
+P55 covers the simulation contract. Details:
+`P44_G1_R1_BOUNDED_PERSONALIZATION.md`.
+
+## P44-G1-R2 · gradual personalization response curves · complete / hold_for_negative_evidence (2026-07-24)
+
+R2 explains R1's constant +0.006 (production affinity saturates at 0.2 once
+the evidence threshold is met, so R1 is always 0.2 × 0.03) and compares
+confidence-weighted curves `current_v1` / `gradual_8` / `gradual_12` /
+`gradual_20` on the same freeze (R2 input SHA-256
+`cf5c2fefa7e8f1bae71189e18029e0c4ffa1bf99bec51cb9709f7105999fa7f9`).
+`gradual_12` is the default mechanical candidate and passes the mechanical
+gate (Music mean 0.5614 → 0.5755, zero saturation, zero Top-1 flips), but the
+formal status is `hold_for_negative_evidence`: source evidence remains
+Music-only positive 11 / negative 0, with no counterfactual or human outcome
+labels. `candidate_for_shadow` stays false until real negative source evidence
+and human outcome labels both exist. The next step is targeted collection of
+real negative evidence, not an MVP change. P56 covers the curve contract.
+Details: `P44_G1_R2_PERSONALIZATION_RESPONSE_CURVES.md`.
+
+## 2026-07-26 · production recommendation core re-synced with feat/recommend-MVP
+
+Maintenance, not a new evidence phase. The production-code copy on this branch
+is brought level with the `feat/recommend-MVP` cutoff `3c0626bf` (commit
+`7f25c86a`): adds the previously missing
+`proactive_recommendation_runtime.py` / `proactive_recommendation_timing.py`
+modules, the real `activity_snapshot.state` ranking wiring, the safe shadow
+review-context chain, and the explicit-sum `feedback_joined_count` semantics
+(fixing the red `test_recommendation_summary_returns_feedback_metrics`).
+Verified after sync: recommendation unit tests 118/118 and smokes p41–p56
+14/14 green. `tests/unit/test_music_playback_static.py` is intentionally not
+imported: three of its checks assert main-branch frontend features
+(`waitForMusicMediaReady`, candidate retry loop) that this branch's `static/`
+has not synced yet.

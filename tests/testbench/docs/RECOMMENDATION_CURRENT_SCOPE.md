@@ -3,8 +3,8 @@
 > 状态：**Testbench 当前操作规范**
 > 所在分支：`feat/recommend-testbench`
 > 产品/MVP 边界归属：`feat/recommend-MVP`
-> 最近更新：2026-07-22
-> 当前阶段：P44-G1 首份真实接受度报告已完成；结论为 `descriptive_only`
+> 最近更新：2026-07-26
+> 当前阶段：P44-G1-R2 渐进响应曲线已完成；状态 `hold_for_negative_evidence`，`candidate_for_shadow=false`
 
 本文是 Recommendation Testbench 的当前操作说明。产品组件边界仍由 MVP 的 [`proactive-recommendation-current-scope.md`](../../../docs/design/proactive-recommendation-current-scope.md) 决定；`PROGRESS.md`、`CHANGELOG.md` 和 `tests/testbench_data/recommendation/exports/` 中的文件分别是历史记录、版本记录和不可变运行产物，不能覆盖本文的当前结论。
 
@@ -15,7 +15,11 @@
 - P44-F2 timing-v3 freeze：105 observation / 30 个显式 joined feedback turn / 0 个 timing 契约错误。
 - P44-F2-B：`no_candidate`。
 - P44-F2-R0：`HOLD / no_candidate`；不再打开新的人工标注轮次。
-- P44-G0：已完成 MVP `feedback_state_preview` 的 Testbench sanitizer、校验与安全导入往返；不复制 `reward_score_v2_preview` 公式，也不接入排序。
+- P44-G0：已完成 MVP `feedback_state_preview` 的 Testbench sanitizer、校验与安全导入往返（含 v2 只读同步，P52/P54）；不复制 `reward_score_v2_preview` 公式，也不接入排序。
+- P44-G1 首份真实接受度报告：260 preview observation / 161 投递 encounter；结论 `descriptive_only`（41 条显式聊天反馈全部正向，music 仅 6 条不足门槛）。
+- P44-G1-R1 有界个性化模拟（±0.03）：20 个 warm-state Music 候选平均分 0.5614→0.5658（最大实际增量 +0.0060），Top-1 翻转 0，HHI 与最大来源曝光不变；结论 `impact_only`，`candidate_for_shadow=false`。
+- P44-G1-R2 渐进响应曲线：`gradual_12` 通过机械门禁（Music 平均分 0.5614→0.5755，触顶 0%），但来源证据仅 Music 正向 11 / 负向 0，无人工 outcome 与反事实标签；正式状态 `hold_for_negative_evidence`。
+- 2026-07-26：本分支生产代码副本已追平 `feat/recommend-MVP` 截点 `3c0626bf`（补齐 runtime/timing 模块、activity 接线修复与 `feedback_joined_count` 显式求和语义）；推荐单测 118/118、烟测 p41–p56 14/14 全绿。
 - 生产权重、阈值、interval、scheduler、routing、投递与 tuning 均未修改。
 - `active_source` 与所有自动 tuning 继续保持 `HOLD/off`。
 
@@ -26,6 +30,12 @@
 - Cutoff：2026-07-21 10:33:52（Asia/Shanghai）
 - 审计：`shadow-p44f2-timing-v3-baseline-20260721-103709-audit.md`
 - 分析：`shadow-p44f2-timing-v3-baseline-20260721-103709-analysis.md`
+
+G1-R1/R2 freeze：
+
+- 文件：`shadow-p44g1-v2-20260724-112124.json`（131 observation / 23 feedback event）
+- R1 输入 SHA-256：`7d5be2e7c985cdf880f73fc1b26b8405b3d3fdaa626725ae237493ea621bf49f`
+- R2 输入 SHA-256：`cf5c2fefa7e8f1bae71189e18029e0c4ffa1bf99bec51cb9709f7105999fa7f9`
 
 上述 export 位于本地 `tests/testbench_data/recommendation/exports/`，属于不可变证据，不得为同步文档而重写。
 
@@ -103,6 +113,17 @@ music 仅 6 条共同聊天反馈，不满足候选门禁。生产权重、排�
 tuning 均未改变。报告同时记录 preview-v1 尚未把 music 的共同聊天状态与播放资源
 状态拆开；该合同缺口只作后续评审输入，不在 Testbench 反向修改 MVP。
 
+### 7.1 P44-G1-R1 / R2：有界个性化模拟与响应曲线
+
+R1/R2 已完成并归档，规范见
+[`P44_G1_R1_BOUNDED_PERSONALIZATION.md`](./P44_G1_R1_BOUNDED_PERSONALIZATION.md) 与
+[`P44_G1_R2_PERSONALIZATION_RESPONSE_CURVES.md`](./P44_G1_R2_PERSONALIZATION_RESPONSE_CURVES.md)。
+两轮均为同一 v2 freeze 上的只读离线模拟：R1 结论 `impact_only`（delta 硬裁剪
+±0.03、Top-1 翻转 0、HHI 与最大来源曝光不变）；R2 中 `gradual_12` 仅通过机械
+门禁，正式状态 `hold_for_negative_evidence`。在真实负向来源证据与人工 outcome
+标签同时具备之前，`candidate_for_shadow` 固定为 false；两轮均不修改生产权重、
+排序、投递、scheduler 或 tuning，也不因通过机械门禁自动进入 Shadow 评审。
+
 ## 8. P44-F2-R0：历史收口
 
 R0 不是新的策略阶段，也不撤销 P44-F2 的 `no_candidate`。它只判断现有
@@ -117,6 +138,7 @@ R0 后仍必须遵守：若 readiness 为 `hold`，不默认重新采集、不�
 ## 9. 研究 Backlog（其余全部 `HOLD`）
 
 - 为 timing cohort 补充合规人工决策标签或重新采集带标签 cohort；
+- 定向补充真实负向来源证据（当前 Music 亲和度证据为正向 11 / 负向 0，是 G1-R1/R2 效果验收的共同阻塞项）；
 - 个体回复时延基线；
 - G1 证据充分后的 scheduler/routing Shadow 候选评审；
 - 新的重复惩罚、来源多样性、semantic repeat、MMR、单候选恢复；
