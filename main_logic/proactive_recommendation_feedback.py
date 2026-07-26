@@ -211,6 +211,39 @@ def clear_pending_recommendation_feedback() -> None:
     _pending_feedback.clear()
 
 
+def consecutive_unanswered_recommendation_deliveries(
+    lanlan_name: Any,
+    *,
+    now: float | None = None,
+) -> int:
+    """Count newest recommendation deliveries without an explicit user reply.
+
+    This is an observation-only, process-local fatigue signal. It never changes
+    delivery behavior and only considers pending turns retained by the existing
+    feedback reply window.
+    """
+    name = _clean_text(lanlan_name)
+    if not name:
+        return 0
+    current = time.time() if now is None else float(now)
+    _prune_pending_feedback(now=current)
+    pending_rows = sorted(
+        (
+            pending
+            for pending in _pending_feedback.values()
+            if pending.lanlan_name == name and pending.delivered_at <= current
+        ),
+        key=lambda pending: pending.delivered_at,
+        reverse=True,
+    )
+    count = 0
+    for pending in pending_rows:
+        if pending.reply_seen:
+            break
+        count += 1
+    return count
+
+
 def has_forbidden_feedback_fields(payload: Mapping[str, Any]) -> bool:
     return _contains_forbidden_keys(payload)
 
@@ -794,11 +827,14 @@ def summarize_recommendation_feedback(
     positive = 0
     negative = 0
     neutral = 0
+    explicit_count = 0
+    inferred_count = 0
 
     for row in samples:
         key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
         events = list(events_by_turn.get(key, ()))
-        if not events and row.get("delivered") is True:
+        feedback_inferred = False
+        if key[0] and key[1] and not events and row.get("delivered") is True:
             ts = _number(row.get("ts"), -1.0)
             if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
                 events = [
@@ -810,9 +846,14 @@ def summarize_recommendation_feedback(
                         ts=current,
                     )
                 ]
+                feedback_inferred = True
         if not events:
             missing += 1
             continue
+        if feedback_inferred:
+            inferred_count += 1
+        else:
+            explicit_count += 1
         selected = _select_feedback_events_for_turn(events)
         score = _clamp(sum(_number(event.get("report_score_v1"), 0.0) for event in selected), -1.0, 1.0)
         feedback_scores.append(score)
@@ -838,6 +879,9 @@ def summarize_recommendation_feedback(
     count = len(feedback_scores)
     return {
         "feedback_sample_count": count,
+        "feedback_joined_count": explicit_count,
+        "feedback_inferred_count": inferred_count,
+        "feedback_scored_count": count,
         "average_turn_feedback_score": round(sum(feedback_scores) / count, 3) if count else None,
         "positive_rate": _rate(positive, count),
         "negative_rate": _rate(negative, count),
@@ -1178,9 +1222,13 @@ def summarize_feedback_calibration(
         if row.get("feedback_missing") is not True
         and isinstance(row.get("turn_feedback_score"), (int, float))
     ]
+    feedback_joined_count = sum(
+        1 for row in scored if row.get("feedback_inferred") is not True
+    )
+    feedback_inferred_count = sum(
+        1 for row in scored if row.get("feedback_inferred") is True
+    )
     feedback_scored_count = len(scored)
-    feedback_inferred_count = sum(bool(row.get("feedback_inferred")) for row in scored)
-    feedback_joined_count = feedback_scored_count - feedback_inferred_count
     feedback_scores = [float(row["turn_feedback_score"]) for row in scored]
     positive_count = sum(1 for score in feedback_scores if score > 0)
     negative_count = sum(1 for score in feedback_scores if score < 0)
@@ -1252,10 +1300,12 @@ def summarize_feedback_calibration(
         "feedback_joined_count": feedback_joined_count,
         "feedback_inferred_count": feedback_inferred_count,
         "feedback_scored_count": feedback_scored_count,
-        "feedback_missing_count": len(joined) - feedback_joined_count,
+        "feedback_missing_count": len(joined) - feedback_scored_count,
         "average_feedback_score": _average(feedback_scores),
         "top1_positive_rate": _rate(positive_count, feedback_scored_count),
         "top1_negative_rate": _rate(negative_count, feedback_scored_count),
+        "feedback_score_population": "explicit_and_inferred",
+        "feedback_rate_denominator": "feedback_scored_count",
         "score_by_source_type": score_by_source_type,
         "score_bucket_feedback": bucket_feedback,
         "over_scored_sources": over_scored_sources,

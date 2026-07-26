@@ -1,17 +1,28 @@
 import json
 
+import pytest
+
+from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
+
 from main_logic.proactive_recommendation_observer import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
+    REVIEW_CONTEXT_DELIVERED_EXCERPT_MAX_LENGTH,
+    REVIEW_CONTEXT_SAFE_SUMMARY_MAX_LENGTH,
+    REVIEW_CONTEXT_SAFE_TITLE_MAX_LENGTH,
     append_recommendation_observation_jsonl,
     get_recommendation_calibration_samples,
     load_recommendation_observations_jsonl,
-    sanitize_recommendation_feedback_state_preview,
     sanitize_recommendation_observation,
+    sanitize_recommendation_decision_context,
+    sanitize_recommendation_feedback_state_preview,
+    sanitize_recommendation_review_context,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
     summarize_recommendation_observations,
+    summarize_recommendation_review_context,
     summarize_recommendation_validation,
+    validate_recommendation_review_context,
 )
 
 
@@ -20,6 +31,10 @@ def _observation(**overrides):
         "ts": 123.0,
         "lanlan_name": "neko",
         "turn_id": "turn-1",
+        "activity_state": "gaming",
+        "activity_propensity": "restricted",
+        "algorithm_version": PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+        "git_revision": None,
         "recommendation_mode": "active_source",
         "decision_stage": "phase1_material",
         "candidate_count": 2,
@@ -62,7 +77,7 @@ def _observation(**overrides):
     return base
 
 
-def test_feedback_state_preview_sanitizer_keeps_only_bounded_v2_aggregates():
+def test_feedback_state_preview_sanitizer_keeps_only_bounded_aggregates():
     safe = sanitize_recommendation_feedback_state_preview(
         {
             "version": "feedback_state_preview_v2",
@@ -81,6 +96,7 @@ def test_feedback_state_preview_sanitizer_keeps_only_bounded_v2_aggregates():
                     "negative_evidence_count": 0,
                     "updated_at": 100.0,
                     "acceptance_preview": 0.2,
+                    "url": "https://private.example/token=secret",
                 },
             },
             "source_affinity": {
@@ -110,6 +126,7 @@ def test_feedback_state_preview_sanitizer_keeps_only_bounded_v2_aggregates():
                     },
                 },
             },
+            "messages": ["private"],
         }
     )
 
@@ -185,6 +202,49 @@ def test_writer_jsonl_appends_and_creates_parent(tmp_path):
     assert payload["active_bias_applied"] is True
     assert payload["active_model_followed_preference"] is True
     assert payload["top_candidates"][0]["source_type"] == "music"
+    assert payload["algorithm_version"] == PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
+
+
+def test_writer_rejects_observation_without_turn_id(tmp_path):
+    path = tmp_path / "observations.jsonl"
+
+    wrote = append_recommendation_observation_jsonl(
+        _observation(turn_id=None),
+        log_mode="jsonl",
+        path=path,
+    )
+
+    assert wrote is False
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "activity_state",
+    ["gaming", "busy", "away", "focused_work", "unknown"],
+)
+def test_activity_and_algorithm_fields_survive_sanitize_and_jsonl_round_trip(
+    tmp_path,
+    activity_state,
+):
+    path = tmp_path / f"{activity_state}.jsonl"
+    observation = _observation(
+        activity_state=activity_state,
+        activity_propensity="restricted" if activity_state != "unknown" else "unknown",
+    )
+
+    safe = sanitize_recommendation_observation(observation)
+    wrote = append_recommendation_observation_jsonl(
+        observation,
+        log_mode="jsonl",
+        path=path,
+    )
+    rows = load_recommendation_observations_jsonl(path)
+
+    assert wrote is True
+    assert safe["activity_state"] == activity_state
+    assert rows[0]["activity_state"] == activity_state
+    assert rows[0]["activity_propensity"] == observation["activity_propensity"]
+    assert rows[0]["algorithm_version"] == PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
 
 
 def test_sanitize_observation_drops_payload_source_links_and_raw_fields():
@@ -201,8 +261,196 @@ def test_sanitize_observation_drops_payload_source_links_and_raw_fields():
         "id",
         "source_type",
         "family",
-        "topic",
+        "topic_usable",
         "score",
+    }
+    assert safe["top_candidates"][0]["topic_usable"] is True
+
+
+def test_sanitize_observation_never_persists_candidate_topic_or_nested_context():
+    safe = sanitize_recommendation_observation(
+        _observation(
+            top_candidates=[
+                {
+                    "rank": 1,
+                    "id": "personal:1",
+                    "source_type": "personal",
+                    "family": "personal",
+                    "topic": "private personal dynamic must-not-leak",
+                    "score": 0.88,
+                    "window_title": "private window must-not-leak",
+                    "raw_text": "private chat must-not-leak",
+                    "url": "https://example.test/?token=must-not-leak",
+                }
+            ]
+        )
+    )
+    dumped = json.dumps(safe, ensure_ascii=False)
+
+    assert safe["top_candidates"][0]["topic_usable"] is True
+    assert "topic" not in safe["top_candidates"][0]
+    assert "must-not-leak" not in dumped
+    assert "window_title" not in dumped
+    assert "raw_text" not in dumped
+    assert "url" not in dumped
+
+
+def test_decision_context_sanitizer_keeps_only_bounded_timing_features():
+    safe = sanitize_recommendation_decision_context(
+        {
+            "timing": {
+                "configured_interval_seconds": "300",
+                "elapsed_since_last_delivery_seconds": 12.34567,
+                "recent_delivery_count_30m": "2",
+                "recent_delivery_count_2h": -3,
+                "consecutive_unanswered_deliveries": True,
+                "private_text": "must-not-leak",
+            },
+            "raw_context": {"messages": ["must-not-leak"]},
+        }
+    )
+
+    assert safe == {
+        "timing": {
+            "configured_interval_seconds": 300.0,
+            "elapsed_since_last_delivery_seconds": 12.346,
+            "recent_delivery_count_30m": 2,
+            "recent_delivery_count_2h": 0,
+            "consecutive_unanswered_deliveries": 0,
+        }
+    }
+    assert "must-not-leak" not in json.dumps(safe, ensure_ascii=False)
+
+
+def test_review_context_sanitizer_removes_forbidden_fields_urls_and_bounds_text():
+    raw = {
+        "schema_version": 99,
+        "candidate_labels": [
+            {
+                "id": "music:1",
+                "source_type": "music",
+                "safe_title": "T" * 200 + " https://private.test/song?token=secret",
+                "safe_summary": "S" * 400 + " token=secret",
+                "score": 0.82,
+                "url": "https://private.test/?cookie=secret",
+                "payload": {"cookie": "secret"},
+            }
+        ],
+        "activity_state": "focused_work",
+        "delivered_excerpt": "D" * 300 + " https://private.test/?token=secret",
+        "redaction_notes": ["screen_text_truncated"],
+        "screenshot_b64": "must-not-leak",
+        "chat_text": "must-not-leak",
+    }
+
+    safe = sanitize_recommendation_review_context(raw)
+    dumped = json.dumps(safe, ensure_ascii=False)
+
+    assert safe["schema_version"] == 1
+    assert len(safe["candidate_labels"][0]["safe_title"]) <= REVIEW_CONTEXT_SAFE_TITLE_MAX_LENGTH
+    assert len(safe["candidate_labels"][0]["safe_summary"]) <= REVIEW_CONTEXT_SAFE_SUMMARY_MAX_LENGTH
+    assert len(safe["delivered_excerpt"]) <= REVIEW_CONTEXT_DELIVERED_EXCERPT_MAX_LENGTH
+    assert "url_removed" in safe["redaction_notes"]
+    assert "text_truncated" in safe["redaction_notes"]
+    assert "must-not-leak" not in dumped
+    assert "private.test" not in dumped
+    assert "token=secret" not in dumped
+
+
+def test_review_context_validator_requires_context_and_candidate_alignment():
+    observation = _observation()
+
+    missing = validate_recommendation_review_context(observation)
+    misaligned = validate_recommendation_review_context(
+        {
+            **observation,
+            "review_context": {
+                "schema_version": 1,
+                "candidate_labels": [
+                    {
+                        "id": "news:wrong",
+                        "source_type": "news",
+                        "safe_title": "safe",
+                        "safe_summary": "safe",
+                        "score": 0.5,
+                    }
+                ],
+                "activity_state": "idle",
+                "delivered_excerpt": "safe",
+                "redaction_notes": [],
+            },
+        }
+    )
+
+    assert missing == {
+        "valid": False,
+        "annotation_ready": False,
+        "issues": ["missing_review_context"],
+    }
+    assert misaligned["annotation_ready"] is False
+    assert "review_context_candidate_alignment_mismatch" in misaligned["issues"]
+
+
+def test_sanitized_review_context_is_annotation_ready_and_raw_forbidden_context_is_not():
+    observation = _observation()
+    raw_context = {
+        "candidate_labels": [
+            {
+                "id": "music:1",
+                "source_type": "music",
+                "safe_title": "Kitchen Song",
+                "safe_summary": "short summary",
+                "score": 0.82,
+                "url": "https://example.test/?token=secret",
+            }
+        ],
+        "activity_state": "focused_work",
+        "delivered_excerpt": "short excerpt",
+        "redaction_notes": [],
+    }
+    raw_result = validate_recommendation_review_context(
+        {**observation, "review_context": raw_context}
+    )
+    safe_observation = sanitize_recommendation_observation(
+        {**observation, "review_context": raw_context}
+    )
+    safe_result = validate_recommendation_review_context(safe_observation)
+
+    assert raw_result["annotation_ready"] is False
+    assert "review_context_forbidden_fields" in raw_result["issues"]
+    assert "review_context_url_present" in raw_result["issues"]
+    assert safe_result == {"valid": True, "annotation_ready": True, "issues": []}
+
+
+def test_review_context_summary_blocks_rows_without_safe_context():
+    ready = sanitize_recommendation_observation(
+        {
+            **_observation(),
+            "review_context": {
+                "candidate_labels": [
+                    {
+                        "id": "music:1",
+                        "source_type": "music",
+                        "safe_title": "Kitchen Song",
+                        "safe_summary": "short summary",
+                        "score": 0.82,
+                    }
+                ],
+                "activity_state": "idle",
+                "delivered_excerpt": "short excerpt",
+                "redaction_notes": [],
+            },
+        }
+    )
+
+    summary = summarize_recommendation_review_context([ready, _observation(turn_id="blocked")])
+
+    assert summary == {
+        "sample_count": 2,
+        "review_context_present_count": 1,
+        "annotation_ready_count": 1,
+        "annotation_blocked_count": 1,
+        "issue_distribution": {"missing_review_context": 1},
     }
 
 

@@ -9,9 +9,9 @@ from collections import Counter, deque
 from collections.abc import Iterable, Mapping, Sequence
 import json
 import logging
-import math
 import os
 from pathlib import Path
+import math
 import re
 import time
 from typing import Any
@@ -51,6 +51,7 @@ _TOP_LEVEL_KEYS = {
     "algorithm_version",
     "git_revision",
     "review_context",
+    "decision_context",
     "feedback_state_preview",
     "recommendation_mode",
     "decision_stage",
@@ -76,13 +77,11 @@ _TOP_LEVEL_KEYS = {
     "active_bias_fallback_reason",
     "active_model_followed_preference",
 }
-_TOP_CANDIDATE_KEYS = {"rank", "id", "source_type", "family", "topic", "score"}
+_TOP_CANDIDATE_KEYS = {"rank", "id", "source_type", "family", "topic_usable", "score"}
 _EXAMPLE_KEYS = {
     "turn_id",
     "ts",
     "decision_stage",
-    "activity_state",
-    "algorithm_version",
     "shadow_selected_source_type",
     "actual_primary_channel",
     "actual_rank",
@@ -140,8 +139,14 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             review_context = sanitize_recommendation_review_context(observation.get(key))
             if review_context:
                 safe[key] = review_context
+        elif key == "decision_context":
+            decision_context = sanitize_recommendation_decision_context(observation.get(key))
+            if decision_context:
+                safe[key] = decision_context
         elif key == "feedback_state_preview":
-            state_preview = sanitize_recommendation_feedback_state_preview(observation.get(key))
+            state_preview = sanitize_recommendation_feedback_state_preview(
+                observation.get(key)
+            )
             if state_preview:
                 safe[key] = state_preview
         elif key == "active_channels":
@@ -151,8 +156,40 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
     return safe
 
 
+def sanitize_recommendation_decision_context(value: Any) -> dict[str, Any]:
+    """Return the bounded, observation-only context allowed for offline gates."""
+    if not isinstance(value, Mapping):
+        return {}
+    timing = value.get("timing")
+    if not isinstance(timing, Mapping):
+        return {}
+
+    safe_timing = {
+        "configured_interval_seconds": _bounded_optional_number(
+            timing.get("configured_interval_seconds"),
+            lower=0.0,
+            upper=86_400.0,
+        ),
+        "elapsed_since_last_delivery_seconds": _bounded_optional_number(
+            timing.get("elapsed_since_last_delivery_seconds"),
+            lower=0.0,
+            upper=31_536_000.0,
+        ),
+        "recent_delivery_count_30m": _bounded_nonnegative_int(
+            timing.get("recent_delivery_count_30m")
+        ),
+        "recent_delivery_count_2h": _bounded_nonnegative_int(
+            timing.get("recent_delivery_count_2h")
+        ),
+        "consecutive_unanswered_deliveries": _bounded_nonnegative_int(
+            timing.get("consecutive_unanswered_deliveries")
+        ),
+    }
+    return {"timing": safe_timing}
+
+
 def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]:
-    """Keep only bounded v1/v2 feedback-state preview aggregates."""
+    """Keep only bounded v2 conversation and source aggregates."""
     if not isinstance(value, Mapping):
         return {}
     if value.get("version") == "feedback_state_preview_v1":
@@ -239,11 +276,19 @@ def _sanitize_legacy_feedback_state_preview(value: Mapping[str, Any]) -> dict[st
         "tuning_consumed": False,
         "temporary": {
             "ttl_seconds": _bounded_nonnegative_int(temporary.get("ttl_seconds")),
-            "sources": _sanitize_feedback_state_sources(temporary.get("sources"), persistent=False),
+            "sources": _sanitize_feedback_state_sources(
+                temporary.get("sources"),
+                persistent=False,
+            ),
         },
         "persistent": {
-            "min_explicit_evidence": _bounded_nonnegative_int(persistent.get("min_explicit_evidence")),
-            "sources": _sanitize_feedback_state_sources(persistent.get("sources"), persistent=True),
+            "min_explicit_evidence": _bounded_nonnegative_int(
+                persistent.get("min_explicit_evidence")
+            ),
+            "sources": _sanitize_feedback_state_sources(
+                persistent.get("sources"),
+                persistent=True,
+            ),
         },
     }
 
@@ -287,7 +332,11 @@ def _sanitize_feedback_state_bucket(
     return bucket
 
 
-def _sanitize_feedback_state_sources(value: Any, *, persistent: bool) -> dict[str, dict[str, Any]]:
+def _sanitize_feedback_state_sources(
+    value: Any,
+    *,
+    persistent: bool,
+) -> dict[str, dict[str, Any]]:
     if not isinstance(value, Mapping):
         return {}
     safe: dict[str, dict[str, Any]] = {}
@@ -431,6 +480,56 @@ def summarize_recommendation_review_context(
     }
 
 
+def _sanitize_review_text(value: Any, *, max_length: int) -> tuple[str, list[str]]:
+    text = " ".join(str(value or "").split())
+    notes: list[str] = []
+    if _REVIEW_URL_RE.search(text):
+        text = _REVIEW_URL_RE.sub("", text)
+        notes.append("url_removed")
+    if _REVIEW_SECRET_RE.search(text):
+        text = _REVIEW_SECRET_RE.sub("[redacted]", text)
+        notes.append("secret_redacted")
+    text = " ".join(text.split())
+    if len(text) > max_length:
+        text = text[:max_length].rstrip()
+        notes.append("text_truncated")
+    return text, notes
+
+
+def _contains_review_forbidden_fields(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key).strip().lower() in _REVIEW_FORBIDDEN_KEYS:
+                return True
+            if _contains_review_forbidden_fields(child):
+                return True
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_contains_review_forbidden_fields(child) for child in value)
+    return False
+
+
+def _contains_review_url(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_review_url(child) for child in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_contains_review_url(child) for child in value)
+    return bool(_REVIEW_URL_RE.search(str(value or "")))
+
+
+def _review_candidate_identity(value: Any) -> list[tuple[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    out: list[tuple[str, str]] = []
+    for row in value:
+        if not isinstance(row, Mapping):
+            continue
+        candidate_id = str(row.get("id") or "").strip()
+        source_type = str(row.get("source_type") or "").strip()
+        if candidate_id and source_type:
+            out.append((candidate_id, source_type))
+    return out
+
+
 def append_recommendation_observation_jsonl(
     observation: Mapping[str, Any],
     *,
@@ -446,9 +545,15 @@ def append_recommendation_observation_jsonl(
     if target is None:
         return False
     try:
+        safe = sanitize_recommendation_observation(observation)
+        if not str(safe.get("turn_id") or "").strip():
+            logger.debug("proactive recommendation observation rejected: missing turn_id")
+            return False
+        if not str(safe.get("algorithm_version") or "").strip():
+            logger.debug("proactive recommendation observation rejected: missing algorithm_version")
+            return False
         target.parent.mkdir(parents=True, exist_ok=True)
         _rotate_if_needed(target, rotate_bytes=rotate_bytes)
-        safe = sanitize_recommendation_observation(observation)
         with target.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(safe, ensure_ascii=False, sort_keys=True) + "\n")
         return True
@@ -858,6 +963,11 @@ def _sanitize_top_candidates(value: Any) -> list[dict[str, Any]]:
             for key in _TOP_CANDIDATE_KEYS
             if key in item
         }
+        # Candidate topics may contain personal dynamics, window titles, or
+        # other user-derived context. Preserve only the low-quality diagnostic
+        # signal, never the topic text itself.
+        if "topic_usable" not in clean and "topic" in item:
+            clean["topic_usable"] = len(str(item.get("topic") or "").strip()) >= 4
         if clean:
             out.append(clean)
     return out
@@ -869,56 +979,6 @@ def _json_safe_scalar(value: Any) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_json_safe_scalar(item) for item in value]
     return str(value)
-
-
-def _sanitize_review_text(value: Any, *, max_length: int) -> tuple[str, list[str]]:
-    text = " ".join(str(value or "").split())
-    notes: list[str] = []
-    if _REVIEW_URL_RE.search(text):
-        text = _REVIEW_URL_RE.sub("", text)
-        notes.append("url_removed")
-    if _REVIEW_SECRET_RE.search(text):
-        text = _REVIEW_SECRET_RE.sub("[redacted]", text)
-        notes.append("secret_redacted")
-    text = " ".join(text.split())
-    if len(text) > max_length:
-        text = text[:max_length].rstrip()
-        notes.append("text_truncated")
-    return text, notes
-
-
-def _contains_review_forbidden_fields(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            if str(key).strip().lower() in _REVIEW_FORBIDDEN_KEYS:
-                return True
-            if _contains_review_forbidden_fields(child):
-                return True
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return any(_contains_review_forbidden_fields(child) for child in value)
-    return False
-
-
-def _contains_review_url(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        return any(_contains_review_url(child) for child in value.values())
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return any(_contains_review_url(child) for child in value)
-    return bool(_REVIEW_URL_RE.search(str(value or "")))
-
-
-def _review_candidate_identity(value: Any) -> list[tuple[str, str]]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        return []
-    out: list[tuple[str, str]] = []
-    for row in value:
-        if not isinstance(row, Mapping):
-            continue
-        candidate_id = str(row.get("id") or "").strip()
-        source_type = str(row.get("source_type") or "").strip()
-        if candidate_id and source_type:
-            out.append((candidate_id, source_type))
-    return out
 
 
 def _clean_string_list(value: Any) -> list[str]:
@@ -969,11 +1029,11 @@ def _is_low_quality_top1(row: Mapping[str, Any]) -> bool:
     top = _top1_candidate(row)
     if top is None:
         return True
-    topic = str(top.get("topic") or "").strip()
     source_type = str(top.get("source_type") or "").strip()
     candidate_id = str(top.get("id") or "").strip()
     score = _number(top.get("score"), -1.0)
-    return not source_type or not candidate_id or len(topic) < 4 or score < 0.2
+    topic_usable = top.get("topic_usable") is True
+    return not source_type or not candidate_id or not topic_usable or score < 0.2
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -1001,7 +1061,12 @@ def _number(value: Any, default: float) -> float:
         return default
 
 
-def _bounded_optional_number(value: Any, *, lower: float, upper: float) -> float | None:
+def _bounded_optional_number(
+    value: Any,
+    *,
+    lower: float,
+    upper: float,
+) -> float | None:
     if value is None or isinstance(value, bool):
         return None
     try:

@@ -1,3 +1,4 @@
+from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
 from main_logic.proactive_recommendation_feedback import (
     build_feedback_event,
 )
@@ -25,6 +26,7 @@ def _observation(turn_id, *, source_type="music", score=0.82, ts=10_000.0):
         "ts": ts,
         "lanlan_name": "neko",
         "turn_id": turn_id,
+        "algorithm_version": PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
         "decision_stage": "phase1_material",
         "candidate_count": 1,
         "shadow_selected_source_type": source_type,

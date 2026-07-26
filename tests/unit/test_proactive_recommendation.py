@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from main_logic.proactive_recommendation import (
     ProactiveCandidate,
     ProactiveRecommendationDecision,
@@ -8,6 +10,7 @@ from main_logic.proactive_recommendation import (
     build_candidates,
     build_shadow_recommendation_decision,
     reorder_phase1_topics_for_bias,
+    resolve_recommendation_activity_state,
     source_type_to_phase2_tag,
 )
 
@@ -32,6 +35,44 @@ def _material_candidate(source_type, *, score=0.8, url="https://example.test/ite
         payload={"link": {"url": url, "title": f"{source_type} title"}} if url else {},
         score=score,
     )
+
+
+def test_activity_state_resolution_uses_inferred_state_not_collapsed_propensity():
+    snapshot = SimpleNamespace(
+        state="focused_work",
+        propensity="restricted_screen_only",
+    )
+
+    assert resolve_recommendation_activity_state(snapshot) == "focused_work"
+    assert resolve_recommendation_activity_state(None) == "unknown"
+
+
+def test_away_activity_filters_non_contextual_material():
+    decision = build_phase1_material_shadow_decision(
+        ProactiveRecommendationContext(
+            lanlan_name="neko",
+            enabled_modes=("news", "vision"),
+            activity_state=resolve_recommendation_activity_state(
+                SimpleNamespace(state="away", propensity="restricted_screen_only")
+            ),
+        ),
+        phase1_topics=[("web", "headline")],
+        selected_web_link={
+            "title": "public headline",
+            "url": "https://example.test/news",
+            "mode": "news",
+        },
+        vision_content={"window_category": "desktop"},
+        active_channels=["web", "vision"],
+    )
+
+    filtered_news = {
+        candidate_id: reason
+        for candidate_id, reason in decision.filtered_reasons.items()
+        if candidate_id.startswith("news:")
+    }
+    assert filtered_news
+    assert set(filtered_news.values()) == {"activity_busy"}
 
 
 def test_build_candidates_normalizes_sources_topic_hooks_and_mini_game():

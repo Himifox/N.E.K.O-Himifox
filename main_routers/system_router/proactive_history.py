@@ -37,12 +37,14 @@ from config.prompts.prompts_proactive import (
     RECENT_PROACTIVE_CHANNEL_LABELS,
 )
 from utils.file_utils import atomic_write_json_async, read_json
+from main_logic.proactive_recommendation_timing import (
+    record_proactive_delivery_for_timing,
+)
 
 
 # --- 主动搭话近期记录暂存区 ---
 # {lanlan_name: deque([(timestamp, message), ...], maxlen=10)}
 _proactive_chat_history: dict[str, deque] = {}
-
 
 # --- 主动搭话"素材标识"近期去重暂存区（ANTI_REPEAT_EXEMPT_SOURCE_TAGS 用）---
 # {lanlan_name: {source_tag: deque([(timestamp, material_key), ...], maxlen=N)}}
@@ -198,9 +200,11 @@ def _record_proactive_chat(lanlan_name: str, message: str, channel: str = ''):
     - message: chat content
     - channel: source channel (optional, default 'vision')
     """
+    recorded_at = time.time()
     if lanlan_name not in _proactive_chat_history:
         _proactive_chat_history[lanlan_name] = deque(maxlen=PROACTIVE_CHAT_HISTORY_MAX)
-    _proactive_chat_history[lanlan_name].append((time.time(), message, channel))
+    _proactive_chat_history[lanlan_name].append((recorded_at, message, channel))
+    record_proactive_delivery_for_timing(lanlan_name, delivered_at=recorded_at)
 
     # Telemetry：主动搭话实际投递。channel 是低基数 enum（vision/news/video/
     # personal/music/meme/mini_game/...），截断防意外高基数。配合 settings_state

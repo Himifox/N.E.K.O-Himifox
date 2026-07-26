@@ -28,6 +28,8 @@ Endpoints:
 * ``GET  /api/proactive/settings``  — read the current values of proactive-chat fields
 * ``POST /api/proactive/settings``  — partially update proactive-chat fields (whitelisted)
 * ``GET  /api/proactive/recommendation/summary`` — read shadow recommendation diagnostics
+* ``GET  /api/proactive/recommendation/runtime`` — read active-source feature-flag state
+* ``POST /api/proactive/recommendation/runtime/rollback`` — demote active-source to shadow
 
 All writes go through ``utils.preferences.save_global_conversation_settings``
 so the whitelist / type validation / atomic-write logic is maintained in one place.
@@ -45,6 +47,7 @@ from fastapi import APIRouter, Request
 from config import (
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
 from main_logic.proactive_recommendation_feedback import (
@@ -71,6 +74,10 @@ from main_logic.proactive_recommendation_observer import (
     summarize_recommendation_calibration,
     summarize_recommendation_review_context,
     summarize_recommendation_validation,
+)
+from main_logic.proactive_recommendation_runtime import (
+    get_recommendation_runtime_status,
+    rollback_recommendation_runtime,
 )
 from main_logic.proactive_recommendation_tuning import (
     TUNING_FILENAME,
@@ -462,6 +469,7 @@ async def get_proactive_recommendation_summary(
         "reward_score_v2_preview": reward_score_v2_preview,
         "review_context_validation": review_context_validation,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
+        "runtime": get_recommendation_runtime_status(),
         "tuning": tuning_public_status(tuning),
         "sample_count": calibration["sample_count"],
         "retention": {
@@ -478,6 +486,7 @@ async def get_proactive_recommendation_summary(
             "feedback_missing": feedback_missing,
             "feedback_log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
             "tuning_mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
+            "review_context_mode": PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
         },
     }
     if include_examples:
@@ -487,6 +496,47 @@ async def get_proactive_recommendation_summary(
             limit=DEFAULT_EXAMPLE_LIMIT,
         )
     return payload
+
+
+@router.get("/recommendation/runtime")
+async def get_proactive_recommendation_runtime():
+    """Return the non-sensitive startup flag and effective runtime mode."""
+    return {
+        "success": True,
+        "runtime": get_recommendation_runtime_status(),
+    }
+
+
+@router.post("/recommendation/runtime/rollback")
+async def rollback_proactive_recommendation_runtime(request: Request):
+    """Emergency one-way demotion from active_source to shadow.
+
+    There is deliberately no matching activation endpoint.  Active source can
+    only be opted into by the developer at process startup.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    from .system_router import _validate_local_mutation_request
+
+    validation_error = _validate_local_mutation_request(request, payload=data)
+    if validation_error is not None:
+        return validation_error
+    reason = str(data.get("reason") or "developer_runtime_rollback").strip()[:120]
+    result = rollback_recommendation_runtime(reason=reason)
+    logger.warning(
+        "proactive recommendation runtime rollback requested: applied=%s previous=%s",
+        result.get("applied"),
+        result.get("previous_mode"),
+    )
+    return {
+        "success": True,
+        **result,
+    }
 
 
 @router.post("/recommendation/feedback")

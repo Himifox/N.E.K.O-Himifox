@@ -157,6 +157,18 @@ PROACTIVE_RECOMMENDATION_TUNING_MODE = _read_str_env(
 )
 """Optional local source-score tuning mode for proactive recommendations."""
 
+PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE",
+    "off",
+    allowed=("off", "shadow_review", "testbench"),
+)
+"""Optional privacy-bounded context for human review exports.
+
+``shadow_review`` enables it only for production shadow observations;
+``testbench`` is reserved for explicit adapter/export calls. It is off by
+default and must never change ranking or delivery behavior.
+"""
+
 EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。
 - 用途：返回情感标签 + score 等短输出。

@@ -850,6 +850,50 @@ def test_feedback_calibration_joins_turns_and_suggests_adjustments():
     assert "feedback_sample_count_below_threshold" in calibration["active_ready_reasons"]
 
 
+def test_feedback_calibration_separates_explicit_inferred_and_invalid_turn_ids():
+    observations = [
+        _observation(turn_id="explicit", ts=10_000.0),
+        _observation(turn_id="inferred", ts=9_000.0),
+        _observation(turn_id=None, ts=9_000.0),
+    ]
+    events = [
+        build_feedback_event(
+            lanlan_name="neko",
+            turn_id="explicit",
+            event_type="user_reply",
+            source_type="music",
+            ts=10_010.0,
+        )
+    ]
+
+    joined = join_observations_with_feedback(
+        observations,
+        events,
+        now=10_000.0,
+        window_seconds=3600,
+        sample_limit=50,
+    )
+    calibration = summarize_feedback_calibration(
+        observations,
+        events,
+        now=10_000.0,
+        window_seconds=3600,
+        sample_limit=50,
+    )
+
+    assert joined[0]["feedback_inferred"] is False
+    assert joined[1]["feedback_inferred"] is True
+    assert joined[1]["feedback_event_types"] == ["ignored"]
+    assert joined[2]["feedback_inferred"] is False
+    assert joined[2]["feedback_missing"] is True
+    assert calibration["feedback_joined_count"] == 1
+    assert calibration["feedback_inferred_count"] == 1
+    assert calibration["feedback_scored_count"] == 2
+    assert calibration["feedback_missing_count"] == 1
+    assert calibration["feedback_rate_denominator"] == "feedback_scored_count"
+    assert "feedback_sample_count_below_threshold" in calibration["active_ready_reasons"]
+
+
 def test_feedback_calibration_distinguishes_strong_music_from_weak_ignored():
     observations = []
     events = []

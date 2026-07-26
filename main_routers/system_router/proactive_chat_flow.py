@@ -129,7 +129,6 @@ from utils.tokenize import count_tokens
 from ..shared_state import get_config_manager, get_session_manager
 from main_logic.omni_realtime_client import OmniRealtimeClient
 from config import (
-    APP_VERSION,
     MEMORY_SERVER_PORT,
     focus_extra_body,
     leaks_thinking_in_content,
@@ -148,25 +147,33 @@ from config import (
     MINI_GAME_INVITE_FORCE_GAME_TYPE,
     PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
-    PROACTIVE_RECOMMENDATION_MODE,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
 from main_logic.proactive_recommendation import (
+    PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+    PROACTIVE_RECOMMENDATION_GIT_REVISION,
     ProactiveRecommendationContext,
     build_active_source_bias,
     build_phase1_material_shadow_decision,
     build_recommendation_observation,
+    build_recommendation_review_context,
     build_shadow_recommendation_decision,
     reorder_phase1_topics_for_bias,
+    resolve_recommendation_activity_state,
 )
 from main_logic.proactive_recommendation_feedback import (
+    consecutive_unanswered_recommendation_deliveries,
     music_feedback_event_type,
     record_feedback_event,
     register_pending_feedback_from_observation,
 )
 from main_logic.proactive_recommendation_feedback_state import (
     get_feedback_state_preview,
+)
+from main_logic.proactive_recommendation_timing import (
+    proactive_delivery_timing_snapshot,
 )
 from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
@@ -175,6 +182,9 @@ from main_logic.proactive_recommendation_observer import (
 from main_logic.proactive_recommendation_tuning import (
     load_recommendation_tuning,
     tuning_public_status,
+)
+from main_logic.proactive_recommendation_runtime import (
+    get_recommendation_runtime_mode,
 )
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_directives import render_regen_avoid_instruction, render_format_fix_instruction
@@ -216,6 +226,8 @@ from utils.meme_moderation import moderate_meme_image_url
 # utils/llm_client），模块级立即展开会把两个 SDK 拉回 main_server 端口就绪路径。
 # 首次求值发生在 LLM 调用的异常处理处，彼时 SDK 必已随 client 构造加载。
 _PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
+_MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
+_MEME_PROXY_CANDIDATE_TIMEOUT_SECONDS = 6.0
 
 
 def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
@@ -226,6 +238,31 @@ def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
             *chat_retry_error_types(),
         )
     return _PROACTIVE_LLM_RETRY_ERROR_TYPES
+
+
+async def _meme_proxy_candidate_fetchable(url: str) -> tuple[bool, str]:
+    """Return whether the existing meme proxy can fetch this candidate now."""
+    if not url:
+        return False, "missing_url"
+    try:
+        from .meme_proxy import fetch_meme_image_response
+
+        response = await asyncio.wait_for(
+            fetch_meme_image_response(url, write_cache=False),
+            timeout=_MEME_PROXY_CANDIDATE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        return False, type(exc).__name__
+
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if status_code < 200 or status_code >= 300:
+        return False, f"proxy_status_{status_code}"
+    media_type = str(getattr(response, "media_type", "") or "").lower()
+    if not media_type.startswith("image/"):
+        return False, f"proxy_media_type:{media_type or 'missing'}"
+    if not (getattr(response, "body", b"") or b""):
+        return False, "proxy_empty_body"
+    return True, media_type
 
 
 async def _safe_fire_proactive_done(scope: dict) -> None:
@@ -326,15 +363,28 @@ def _record_proactive_recommendation_observation(
     ts: float | None = None,
     activity_state: Any = None,
     activity_propensity: Any = None,
-    algorithm_version: str | None = None,
+    review_context_mode: str = "off",
+    delivered_text: Any = None,
+    decision_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist the finalized recommendation observation."""
     if decision is None:
         return None
-    turn_id = str(response_body.get("turn_id") or "").strip() or str(uuid4())
-    # Keep the response and observation on the same identifier so later UI
-    # feedback can always join to the row, including pass/short-circuit exits.
-    response_body["turn_id"] = turn_id
+    turn_id = str(response_body.get("turn_id") or "").strip()
+    if not turn_id:
+        turn_id = str(uuid4())
+        response_body["turn_id"] = turn_id
+    effective_review_mode = "off"
+    if review_context_mode == "testbench":
+        effective_review_mode = "testbench"
+    elif recommendation_mode == "shadow" and review_context_mode == "shadow_review":
+        effective_review_mode = "shadow_review"
+    review_context = build_recommendation_review_context(
+        decision,
+        mode=effective_review_mode,
+        activity_state=activity_state,
+        delivered_text=delivered_text,
+    )
     observation_ts = time.time() if ts is None else ts
     raw_observation = build_recommendation_observation(
         decision,
@@ -353,7 +403,10 @@ def _record_proactive_recommendation_observation(
         turn_id=turn_id,
         activity_state=activity_state,
         activity_propensity=activity_propensity,
-        algorithm_version=algorithm_version or f"{APP_VERSION}:proactive-recommendation-observation-v2",
+        algorithm_version=PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+        git_revision=PROACTIVE_RECOMMENDATION_GIT_REVISION,
+        review_context=review_context,
+        decision_context=decision_context,
     )
     if recommendation_mode == "shadow" and config_dir is not None:
         try:
@@ -559,7 +612,23 @@ async def proactive_chat(request: Request):
         master_name_current, her_name_current, _, _, _, lanlan_prompt_map, _, _, _ = await _config_manager.aget_character_data()
         
         data = await request.json()
+        recommendation_mode = get_recommendation_runtime_mode()
         lanlan_name = data.get('lanlan_name') or her_name_current
+        _timing_snapshot_at = time.time()
+        _recommendation_timing_context = proactive_delivery_timing_snapshot(
+            lanlan_name,
+            configured_interval_seconds=data.get('base_interval_seconds'),
+            now=_timing_snapshot_at,
+        )
+        _recommendation_timing_context["consecutive_unanswered_deliveries"] = (
+            consecutive_unanswered_recommendation_deliveries(
+                lanlan_name,
+                now=_timing_snapshot_at,
+            )
+        )
+        _recommendation_decision_context = {
+            "timing": _recommendation_timing_context,
+        }
         is_playing_music = data.get('is_playing_music', False)
         current_track = data.get('current_track', None)
         music_cooldown = data.get('music_cooldown', False)
@@ -700,6 +769,7 @@ async def proactive_chat(request: Request):
         shadow_recommendation_decision = None
         material_recommendation_decision = None
         active_recommendation_bias = None
+        _review_delivered_text = None
 
         async def _end_proactive(resp: JSONResponse) -> JSONResponse:
             """Wraps every normal/short-circuit proactive exit: idempotently fires PROACTIVE_DONE.
@@ -724,19 +794,33 @@ async def proactive_chat(request: Request):
                 return resp
             body = _ensure_proactive_reason_code(body)
             final_recommendation_decision = material_recommendation_decision or shadow_recommendation_decision
-            if PROACTIVE_RECOMMENDATION_MODE != "off" and final_recommendation_decision is not None:
+            if recommendation_mode != "off" and final_recommendation_decision is not None:
                 try:
                     _record_proactive_recommendation_observation(
                         final_recommendation_decision,
                         lanlan_name=lanlan_name,
                         response_body=body,
-                        recommendation_mode=PROACTIVE_RECOMMENDATION_MODE,
+                        recommendation_mode=recommendation_mode,
                         active_bias=active_recommendation_bias,
                         observation_log_mode=PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
                         config_dir=getattr(get_config_manager(), "config_dir", None),
-                        activity_state=getattr(activity_snapshot, "state", "unknown") if activity_snapshot is not None else "unknown",
-                        activity_propensity=getattr(activity_snapshot, "propensity", "unknown") if activity_snapshot is not None else "unknown",
-                        algorithm_version=f"{APP_VERSION}:proactive-recommendation-observation-v2",
+                        activity_state=(
+                            getattr(activity_snapshot, "state", "unknown")
+                            if activity_snapshot is not None
+                            else "unknown"
+                        ),
+                        activity_propensity=(
+                            getattr(activity_snapshot, "propensity", "unknown")
+                            if activity_snapshot is not None
+                            else "unknown"
+                        ),
+                        review_context_mode=(
+                            "shadow_review"
+                            if PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE == "shadow_review"
+                            else "off"
+                        ),
+                        delivered_text=_review_delivered_text,
+                        decision_context=_recommendation_decision_context,
                     )
                 except Exception as _rec_err:
                     logger.debug("[%s] proactive recommendation observation failed: %s", lanlan_name, _rec_err)
@@ -1375,7 +1459,7 @@ async def proactive_chat(request: Request):
                 _log_video_content(lanlan_name, video_content)
                 links = _extract_links_from_raw(mode, video_content)
                 return (mode, {'formatted_content': formatted, 'raw_data': video_content, 'links': links})
-            
+
             elif mode == 'window':
                 window_context_content = await fetch_window_context_content(limit=5)
                 if not window_context_content['success']:
@@ -1916,7 +2000,7 @@ async def proactive_chat(request: Request):
         # 合并 Phase 1 LLM 调用：web 筛选 + music 关键词 + meme 关键词
         # 一次 LLM 调用完成所有任务，降低 RPM
         # ============================================================
-        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+        if recommendation_mode in ("shadow", "active_source"):
             try:
                 shadow_ctx = ProactiveRecommendationContext(
                     lanlan_name=lanlan_name,
@@ -1931,7 +2015,7 @@ async def proactive_chat(request: Request):
                     recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
                     recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
                     privacy_state="open" if activity_snapshot is not None else "unknown",
-                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    activity_state=resolve_recommendation_activity_state(activity_snapshot),
                     mini_game_available=MINI_GAME_INVITE_ENABLED,
                 )
                 shadow_recommendation_decision = build_shadow_recommendation_decision(
@@ -2178,6 +2262,7 @@ async def proactive_chat(request: Request):
         if meme_content and meme_content.get('success') and meme_content.get('data'):
             meme_data = meme_content.get('data', [])
             if meme_data:
+                proxy_checked_count = 0
                 for candidate_meme in meme_data:
                     meme_title = candidate_meme.get('title', '')
                     meme_url = candidate_meme.get('url', '')
@@ -2215,6 +2300,32 @@ async def proactive_chat(request: Request):
                             "[%s]- 已记录被 moderation 拦截的表情包 source 衰减历史: url_hash=%s",
                             lanlan_name,
                             meme_topic_key[:16],
+                        )
+                        continue
+                    if proxy_checked_count >= _MEME_PROXY_CANDIDATE_CHECK_LIMIT:
+                        logger.info(
+                            "[%s]- Phase 1 表情包代理预检达到上限(%d)，跳过本轮 meme 通道",
+                            lanlan_name,
+                            _MEME_PROXY_CANDIDATE_CHECK_LIMIT,
+                        )
+                        break
+                    if mgr.state.is_proactive_preempted():
+                        return await _end_proactive(
+                            JSONResponse(_proactive_preempted_json("phase1_pre_meme_proxy_check"))
+                        )
+                    proxy_checked_count += 1
+                    proxy_ok, proxy_reason = await _meme_proxy_candidate_fetchable(meme_url)
+                    if mgr.state.is_proactive_preempted():
+                        return await _end_proactive(
+                            JSONResponse(_proactive_preempted_json("phase1_post_meme_proxy_check"))
+                        )
+                    if not proxy_ok:
+                        logger.info(
+                            "[%s]- Phase 1 表情包代理不可取，跳过候选: reason=%s title=%s url=%s",
+                            lanlan_name,
+                            proxy_reason,
+                            meme_title[:30],
+                            meme_url[:100],
                         )
                         continue
                     single_meme_topic = get_meme_topic_line(
@@ -2256,7 +2367,7 @@ async def proactive_chat(request: Request):
         
         # 收集各通道结果
         active_channels = [ch for ch, _ in phase1_topics]
-        if PROACTIVE_RECOMMENDATION_MODE in ("shadow", "active_source"):
+        if recommendation_mode in ("shadow", "active_source"):
             try:
                 material_ctx = ProactiveRecommendationContext(
                     lanlan_name=lanlan_name,
@@ -2271,7 +2382,7 @@ async def proactive_chat(request: Request):
                     recent_shadow_sources=_recent_proactive_recommendation_shadow_sources(lanlan_name),
                     recent_candidate_ids=_recent_proactive_recommendation_shadow_candidate_ids(lanlan_name),
                     privacy_state="open" if activity_snapshot is not None else "unknown",
-                    activity_state=str(getattr(activity_snapshot, "propensity", "unknown")),
+                    activity_state=resolve_recommendation_activity_state(activity_snapshot),
                     mini_game_available=MINI_GAME_INVITE_ENABLED,
                 )
                 material_recommendation_decision = build_phase1_material_shadow_decision(
@@ -2283,7 +2394,7 @@ async def proactive_chat(request: Request):
                     vision_content=vision_content,
                     active_channels=active_channels,
                 )
-                if PROACTIVE_RECOMMENDATION_MODE == "active_source":
+                if recommendation_mode == "active_source":
                     active_recommendation_bias = build_active_source_bias(
                         material_recommendation_decision,
                         min_score_gap=PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
@@ -2862,6 +2973,17 @@ async def proactive_chat(request: Request):
         # 重复度 / BM25 防复读判定**之前**剥：否则被泄漏标签做前缀的复读句会因前缀
         # 稀释相似度而绕过 dedup。这些标签纯脚手架，绝不该进 TTS / 历史。
         response_text = _strip_proactive_intent_label_leak(response_text)
+        if not response_text:
+            if not mgr.state.is_proactive_preempted(proactive_sid):
+                await mgr.handle_new_message()
+            else:
+                logger.info("[%s] cleaned proactive output is empty but user already took over; skip TTS cleanup", lanlan_name)
+            return await _end_proactive(JSONResponse({
+                "success": True,
+                "action": "pass",
+                "reason_code": PROACTIVE_REASON_PASS_GENERATION_EMPTY,
+                "message": "Phase 2 清理后输出为空"
+            }))
         # 不要把 proactive 原文写进 logger（会进日志文件 / 遥测）；只记元数据。
         # 完整原文通过 print 给开发者本地查看。
         logger.debug(f"[{lanlan_name}] Phase 2 流式完成 (vision={phase2_use_vision}, len={len(response_text)} chars)")
@@ -3305,6 +3427,8 @@ async def proactive_chat(request: Request):
                 "lanlan_name": lanlan_name,
                 "turn_id": mgr.current_speech_id,
             }))
+
+        _review_delivered_text = response_text
 
         # 记录主动搭话
         _record_proactive_chat(lanlan_name, response_text, primary_channel)
