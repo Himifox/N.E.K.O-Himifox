@@ -27,7 +27,7 @@ from config.prompts.prompts_proactive import (
     get_proactive_music_unknown_track_name,
 )
 from utils.logger_config import get_module_logger
-from utils.music_crawlers import fetch_music_content
+from utils.music_crawlers import fetch_music_content, mark_music_as_played
 
 from .state import _clear_channel_from_proactive_history
 
@@ -42,6 +42,23 @@ class MusicRecommendationSelection:
     topic: str = ""
     link: dict | None = None
     topic_key: str = ""
+
+
+@dataclass(frozen=True)
+class _MusicRequest:
+    keyword: str = ""
+    song_name: str = ""
+    song_artist: str = ""
+    playlist_name: str = ""
+    personalization_source: str = "auto"
+
+    @property
+    def strict(self) -> bool:
+        return bool(
+            self.song_name
+            or self.playlist_name
+            or self.personalization_source != "auto"
+        )
 
 
 def _log_music_content(lanlan_name: str, music_content: dict) -> None:
@@ -183,6 +200,7 @@ def _select_music_recommendation(
             }
 
     track = tracks[picked_index]
+    mark_music_as_played(track)
     link = {
         "title": track.get("name", ""),
         "artist": track.get("artist", ""),
@@ -241,22 +259,84 @@ def _build_music_dynamic_context(
     return context
 
 
+def _parse_music_request(value: str) -> _MusicRequest:
+    normalized = value.strip()
+    for prefix in ("playlist:", "playlist：", "歌单:", "歌单："):
+        if normalized.casefold().startswith(prefix.casefold()):
+            name = normalized[len(prefix):].strip(' \'"「」『』《》')
+            return _MusicRequest(playlist_name=name)
+
+    for prefix in ("song:", "song：", "歌曲:", "歌曲："):
+        if normalized.casefold().startswith(prefix.casefold()):
+            payload = normalized[len(prefix):].strip(' \'"「」『』《》')
+            song_name, separator, song_artist = payload.partition("|")
+            song_name = song_name.strip(' \'"「」『』《》')
+            song_artist = song_artist.strip(' \'"「」『』《》') if separator else ""
+            keyword = " ".join(part for part in (song_name, song_artist) if part)
+            return _MusicRequest(
+                keyword=keyword,
+                song_name=song_name,
+                song_artist=song_artist,
+            )
+
+    for prefix in ("source:", "source："):
+        if normalized.casefold().startswith(prefix.casefold()):
+            source = normalized[len(prefix):].strip().casefold()
+            aliases = {
+                "liked": "liked",
+                "favorites": "liked",
+                "我喜欢": "liked",
+                "红心": "liked",
+                "daily": "daily",
+                "daily recommendations": "daily",
+                "日推": "daily",
+                "每日推荐": "daily",
+            }
+            normalized_source = aliases.get(source)
+            if normalized_source:
+                return _MusicRequest(personalization_source=normalized_source)
+            logger.warning("未知音乐来源指令: %r", source)
+            return _MusicRequest()
+
+    if normalized.casefold() in {"personalized", "个性化", "按喜好推荐"}:
+        return _MusicRequest()
+    return _MusicRequest(keyword=normalized)
+
+
 async def _fetch_music_with_fallback(
     keyword: str,
     *,
     lanlan_name: str = "",
 ) -> dict | None:
-    """Search by keyword, falling back to a random recommendation."""
+    """Resolve a music directive, preserving strict source and song requests."""
+    request = _parse_music_request(keyword)
+
     try:
-        result = await fetch_music_content(keyword=keyword, limit=5)
+        result = await fetch_music_content(
+            keyword=request.keyword,
+            limit=5,
+            personalized=True,
+            playlist_name=request.playlist_name,
+            personalization_source=request.personalization_source,
+            requested_song=request.song_name,
+            requested_artist=request.song_artist,
+        )
         if result and result.get("success"):
             return result
     except Exception as exc:
-        logger.warning("[%s] 音乐关键词 %r 搜索异常: %s", lanlan_name, keyword, exc)
+        logger.warning("[%s] 音乐关键词 %r 搜索异常: %s", lanlan_name, request.keyword, exc)
 
-    logger.warning("[%s] 音乐关键词 %r 搜索失败，尝试随机推荐", lanlan_name, keyword)
+    if request.strict:
+        logger.warning("[%s] 严格音乐请求未命中，不切换其他来源", lanlan_name)
+        return None
+
+    logger.warning("[%s] 音乐关键词 %r 搜索失败，尝试个性化推荐", lanlan_name, request.keyword)
     try:
-        return await fetch_music_content(keyword="", limit=5)
+        return await fetch_music_content(
+            keyword="",
+            limit=5,
+            personalized=True,
+        )
     except Exception as exc:
         logger.warning("[%s] 随机音乐推荐异常: %s", lanlan_name, exc)
         return None

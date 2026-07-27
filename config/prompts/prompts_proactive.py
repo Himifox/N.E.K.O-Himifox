@@ -2363,8 +2363,11 @@ _UNIFIED_P1_MUSIC_SECTION = {
 原则：
 1. 当{master_name}明确提出听歌请求时（例如"来点音乐"、"放首歌"），你应该播放音乐
 2. 当对话中出现放松、休息、工作累了、心情不好等情境时，可以主动推荐轻松的音乐
-3. 提取出歌曲、歌手或音乐风格作为搜索关键词。支持：华语、流行、电子、说唱、lofi、chill、pop、hiphop、ambient、古典、钢琴、acoustic等
-4. 如果{master_name}没有明确指定，根据对话氛围或喜好推荐
+3. 明确指定歌曲时返回 song:歌名；同时指定歌手时返回 song:歌名|歌手。例如“播放周杰伦的晴天”返回 song:晴天|周杰伦
+4. 普通歌手或音乐风格请求直接返回搜索关键词，例如“来点周杰伦”返回 周杰伦
+5. 明确要求只听红心或“我喜欢”时返回 source:liked；要求日推或每日推荐时返回 source:daily。否定与肯定同时出现时按最终指定来源，例如“别放日推，只听红心”返回 source:liked
+6. 明确要求从网易云某个歌单中选择时返回 playlist:歌单原名
+7. 没有指定歌曲、歌手、风格、来源或歌单时返回 personalized
 """,
     "en": """
 ======Task: Music Keyword======
@@ -2373,8 +2376,11 @@ You are {lanlan_name}. Decide if you should play music for {master_name}, and pr
 Rules:
 1. When {master_name} explicitly asks for music (e.g., "play some music"), play music
 2. When the conversation mentions relaxing, being tired, feeling down, etc., proactively recommend relaxing music
-3. Extract song title, artist, or genre as a search keyword. Supported: pop, hiphop, lofi, chill, electronic, ambient, classical, piano, acoustic, etc.
-4. If {master_name} doesn't specify, recommend based on conversation mood or preferences
+3. For a specific song, return song:title; with an artist, return song:title|artist
+4. For a general artist or genre request, return the normal search keyword
+5. Return source:liked for liked/favorited songs, and source:daily for NetEase daily recommendations; honor the user's final positive choice when negation is also present
+6. For an explicitly named NetEase playlist, return playlist:exact playlist name
+7. If no song, artist, genre, source, or playlist is specified, return personalized
 """,
     "ja": """
 ======タスク: 音楽キーワード======
@@ -2383,8 +2389,11 @@ Rules:
 原則：
 1. {master_name}が明確に音楽をリクエストした場合、音楽を再生すべき
 2. 会話でリラックス、疲れ、気分が落ち込んでいる状況が出てきたら、軽やかな音楽をおすすめ
-3. 曲名、アーティスト、ジャンルから検索キーワードを抽出。対応：ポップ、ヒップホップ、lofi、chill、エレクトロニック、クラシック、ピアノ等
-4. 指定がなければ会話の雰囲気や好みに基づいておすすめ
+3. 特定の曲は song:曲名、歌手も指定された場合は song:曲名|歌手 を返す
+4. 一般的な歌手・ジャンル指定は通常の検索キーワードを返す
+5. お気に入り曲のみは source:liked、NetEaseの日次おすすめは source:daily を返す
+6. NetEaseのプレイリストが明示された場合、playlist:正確な名前 を返す
+7. 曲、歌手、ジャンル、ソース、プレイリストの指定がなければ personalized を返す
 """,
     "ko": """
 ======작업: 음악 키워드======
@@ -2393,8 +2402,11 @@ Rules:
 원칙:
 1. {master_name}이(가) 명시적으로 음악을 요청하면 음악을 재생
 2. 대화에서 휴식, 피로, 기분 우울 등의 상황이 나타나면 편안한 음악 추천
-3. 노래 제목, 아티스트 또는 장르에서 검색 키워드를 추출. 지원: 팝, 힙합, 로파이, chill, 일렉트로닉, 클래식 등
-4. 지정이 없으면 대화 분위기나 취향에 따라 추천
+3. 특정 곡은 song:곡명, 가수도 지정되면 song:곡명|가수 를 반환
+4. 일반 가수나 장르 요청은 보통 검색 키워드를 반환
+5. 좋아요 곡만 요청하면 source:liked, NetEase 일일 추천은 source:daily 를 반환
+6. NetEase 재생목록이 명시되면 playlist:정확한 이름 을 반환
+7. 노래, 가수, 장르, 소스, 재생목록 지정이 없으면 personalized 를 반환
 """,
     "ru": """
 ======Задача: Ключевое слово для музыки======
@@ -2403,8 +2415,11 @@ Rules:
 Принципы:
 1. Когда {master_name} явно просит музыку — воспроизведите
 2. Когда в разговоре упоминается отдых, усталость, плохое настроение — рекомендуйте расслабляющую музыку
-3. Извлеките название песни, исполнителя или жанр. Поддерживаемые: поп, хип-хоп, лофай, чилл, электроника, классика, пианино и т.д.
-4. Если не указано — рекомендуйте по атмосфере разговора
+3. Для конкретной песни верните song:название; если указан исполнитель — song:название|исполнитель
+4. Для общего запроса исполнителя или жанра верните обычное поисковое слово
+5. Для любимых песен верните source:liked, для ежедневных рекомендаций NetEase — source:daily
+6. Для явно указанного плейлиста NetEase верните playlist:точное название
+7. Если песня, исполнитель, жанр, источник или плейлист не указаны, верните personalized
 """,
     "es": """
 ======Tarea: Palabra clave musical======
@@ -2413,8 +2428,11 @@ Eres {lanlan_name}. Decide si deberías poner música para {master_name} y propo
 Reglas:
 1. Si {master_name} pide música explícitamente, pon música
 2. Si la conversación menciona relajarse, cansancio, bajón, etc., recomienda música relajante
-3. Extrae título, artista o género como palabra clave. Soportado: pop, hiphop, lofi, chill, electronic, ambient, classical, piano, acoustic, etc.
-4. Si {master_name} no especifica, recomienda según ánimo o preferencias
+3. Para una canción concreta, devuelve song:título; con artista, song:título|artista
+4. Para una petición general de artista o género, devuelve la palabra de búsqueda normal
+5. Para canciones favoritas devuelve source:liked; para recomendaciones diarias de NetEase, source:daily
+6. Para una playlist de NetEase explícita, devuelve playlist:nombre exacto
+7. Si no se especifica canción, artista, género, fuente ni playlist, devuelve personalized
 """,
     "pt": """
 ======Tarefa: Palavra-chave musical======
@@ -2423,8 +2441,11 @@ Você é {lanlan_name}. Decida se deve tocar música para {master_name} e forne�
 Regras:
 1. Se {master_name} pedir música explicitamente, toque música
 2. Se a conversa mencionar relaxar, cansaço, desânimo etc., recomende música relaxante
-3. Extraia título, artista ou gênero como palavra-chave. Suportado: pop, hiphop, lofi, chill, electronic, ambient, classical, piano, acoustic, etc.
-4. Se {master_name} não especificar, recomende pelo clima ou preferências
+3. Para uma música específica, retorne song:título; com artista, song:título|artista
+4. Para um pedido geral de artista ou gênero, retorne a palavra de busca normal
+5. Para músicas favoritas retorne source:liked; para recomendações diárias do NetEase, source:daily
+6. Para uma playlist do NetEase explicitamente nomeada, retorne playlist:nome exato
+7. Sem música, artista, gênero, fonte ou playlist especificados, retorne personalized
 """,
 }
 
@@ -2483,7 +2504,7 @@ _UNIFIED_P1_FORMAT = {
 简述：[2-3句话，为什么有趣、聊天切入点是什么]
 - 都不值得聊：[WEB] [PASS]""",
         "music": """[MUSIC]
-- 决定播放音乐：直接返回搜索关键词（例如 [MUSIC] 周杰伦）
+- 决定播放音乐：返回搜索关键词或受控指令，例如 [MUSIC] song:晴天|周杰伦、[MUSIC] source:liked、[MUSIC] source:daily、[MUSIC] playlist:夜间循环、[MUSIC] personalized
 - 不适合播放：[MUSIC] [PASS]""",
         "meme": """[MEME]
 - 有合适的关键词：直接返回关键词（例如 [MEME] 搞笑猫）
@@ -2498,7 +2519,7 @@ Topic: [original title exactly as shown in the content]
 Summary: [2-3 sentences on why it's interesting]
 - If nothing is worth sharing: [WEB] [PASS]""",
         "music": """[MUSIC]
-- If playing music: return only the keyword (e.g. [MUSIC] lofi)
+- If playing music: return a keyword or controlled directive, e.g. [MUSIC] song:Yellow|Coldplay, [MUSIC] source:liked, [MUSIC] source:daily, [MUSIC] playlist:Night Loop, or [MUSIC] personalized
 - If not suitable: [MUSIC] [PASS]""",
         "meme": """[MEME]
 - If a keyword fits: return it (e.g. [MEME] funny cat)
@@ -2513,7 +2534,7 @@ Summary: [2-3 sentences on why it's interesting]
 概要：[2〜3文]
 - 全て価値なし：[WEB] [PASS]""",
         "music": """[MUSIC]
-- 音楽再生を決定した場合：キーワードのみ返す（例 [MUSIC] lofi）
+- 音楽再生を決定した場合：検索語または制御命令を返す（例 [MUSIC] song:曲名|歌手、[MUSIC] source:liked、[MUSIC] source:daily、[MUSIC] playlist:名前、[MUSIC] personalized）
 - 適していない場合：[MUSIC] [PASS]""",
         "meme": """[MEME]
 - キーワードがある場合：返す（例 [MEME] 猫）
@@ -2528,7 +2549,7 @@ Summary: [2-3 sentences on why it's interesting]
 요약: [2-3문장]
 - 가치 없음: [WEB] [PASS]""",
         "music": """[MUSIC]
-- 음악 재생 결정: 키워드만 반환 (예: [MUSIC] lofi)
+- 음악 재생 결정: 검색어 또는 제어 명령 반환 (예: [MUSIC] song:곡명|가수, [MUSIC] source:liked, [MUSIC] source:daily, [MUSIC] playlist:이름, [MUSIC] personalized)
 - 적합하지 않음: [MUSIC] [PASS]""",
         "meme": """[MEME]
 - 키워드가 있으면: 반환 (예: [MEME] 고양이)
@@ -2543,7 +2564,7 @@ Summary: [2-3 sentences on why it's interesting]
 Кратко: [2-3 предложения]
 - Если ничего: [WEB] [PASS]""",
         "music": """[MUSIC]
-- Если воспроизвести: верните только ключевое слово (например [MUSIC] lofi)
+- Если воспроизвести: верните поисковое слово или команду, например [MUSIC] song:название|исполнитель, [MUSIC] source:liked, [MUSIC] source:daily, [MUSIC] playlist:название или [MUSIC] personalized
 - Если не подходит: [MUSIC] [PASS]""",
         "meme": """[MEME]
 - Если есть подходящее: верните ключевое слово (например [MEME] кот)
@@ -2558,7 +2579,7 @@ Topic: [título original exactamente como aparece]
 Summary: [2-3 frases sobre por qué es interesante]
 - Si nada vale la pena: [WEB] [PASS]""",
         "music": """[MUSIC]
-- Si se pone música: devuelve solo la keyword (p. ej. [MUSIC] lofi)
+- Si se pone música: devuelve una búsqueda o instrucción, p. ej. [MUSIC] song:título|artista, [MUSIC] source:liked, [MUSIC] source:daily, [MUSIC] playlist:nombre o [MUSIC] personalized
 - Si no es adecuado: [MUSIC] [PASS]""",
         "meme": """[MEME]
 - Si encaja una keyword: devuélvela (p. ej. [MEME] gato gracioso)
@@ -2573,7 +2594,7 @@ Topic: [título original exatamente como aparece]
 Summary: [2-3 frases sobre por que é interessante]
 - Se nada valer compartilhar: [WEB] [PASS]""",
         "music": """[MUSIC]
-- Se tocar música: retorne apenas a keyword (ex. [MUSIC] lofi)
+- Se tocar música: retorne uma busca ou instrução, ex. [MUSIC] song:título|artista, [MUSIC] source:liked, [MUSIC] source:daily, [MUSIC] playlist:nome ou [MUSIC] personalized
 - Se não for adequado: [MUSIC] [PASS]""",
         "meme": """[MEME]
 - Se uma keyword combinar: retorne-a (ex. [MEME] gato engraçado)

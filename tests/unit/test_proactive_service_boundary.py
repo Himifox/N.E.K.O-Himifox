@@ -160,6 +160,47 @@ def test_proactive_domain_logs_to_main_service(module) -> None:
     assert module.logger.name == f"{APP_NAME}.Main.{module.__name__}"
 
 
+@pytest.mark.parametrize(
+    ("value", "keyword", "song", "artist", "playlist", "source", "strict"),
+    (
+        ("source:liked", "", "", "", "", "liked", True),
+        ("source：daily", "", "", "", "", "daily", True),
+        ("playlist:夜间循环", "", "", "", "夜间循环", "auto", True),
+        ("song:晴天|周杰伦", "晴天 周杰伦", "晴天", "周杰伦", "", "auto", True),
+        ("personalized", "", "", "", "", "auto", False),
+        ("周杰伦", "周杰伦", "", "", "", "auto", False),
+    ),
+)
+def test_parse_music_request_directives(
+    value,
+    keyword,
+    song,
+    artist,
+    playlist,
+    source,
+    strict,
+) -> None:
+    request = music_recommendation._parse_music_request(value)
+
+    assert request.keyword == keyword
+    assert request.song_name == song
+    assert request.song_artist == artist
+    assert request.playlist_name == playlist
+    assert request.personalization_source == source
+    assert request.strict is strict
+
+
+@pytest.mark.asyncio
+async def test_strict_music_request_does_not_fall_back(monkeypatch) -> None:
+    fetch = AsyncMock(return_value={"success": False, "data": []})
+    monkeypatch.setattr(music_recommendation, "fetch_music_content", fetch)
+
+    result = await music_recommendation._fetch_music_with_fallback("source:liked")
+
+    assert result is None
+    fetch.assert_awaited_once()
+
+
 def test_proactive_router_is_a_thin_ordered_adapter() -> None:
     source = inspect.getsource(proactive_chat_flow.proactive_chat)
 

@@ -56,6 +56,18 @@ keyword: pass template
     assert parsed["meme_pass"] is False
 
 
+def test_parse_unified_phase1_preserves_music_directives():
+    for directive in (
+        "source:liked",
+        "source:daily",
+        "playlist:夜间循环",
+        "song:晴天|周杰伦",
+        "personalized",
+    ):
+        parsed = sr_parsing._parse_unified_phase1_result(f"[MUSIC] {directive}")
+        assert parsed["music_keyword"] == directive
+
+
 def test_parse_unified_phase1_keyword_plus_pass_template_line_is_not_pass():
     parsed = sr_parsing._parse_unified_phase1_result(
         """
