@@ -12,6 +12,7 @@
     <style>
         :root {
             --bg: oklch(0.97 0.014 225);
+            --bg-edge: oklch(0.92 0.05 215);
             --surface: oklch(0.995 0.006 225 / 0.82);
             --fg: oklch(0.22 0.035 255);
             --muted: oklch(0.55 0.03 250);
@@ -33,9 +34,9 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", system-ui, sans-serif;
             background-color: var(--bg);
             background-image:
-                radial-gradient(circle at 8% 8%, var(--accent-glow), transparent 27%),
-                radial-gradient(circle at 92% 74%, oklch(0.75 0.12 205 / 0.12), transparent 30%),
-                linear-gradient(145deg, transparent 42%, oklch(0.8 0.08 220 / 0.08));
+                radial-gradient(ellipse at 82% 12%, oklch(0.84 0.11 215 / 0.28), transparent 40%),
+                radial-gradient(ellipse at 10% 82%, oklch(0.78 0.1 225 / 0.16), transparent 36%),
+                linear-gradient(112deg, color-mix(in oklch, var(--bg) 92%, white) 0%, var(--bg) 48%, var(--bg-edge) 100%);
             color: var(--fg);
             margin: 0; padding: 0;
             height: 100vh; height: 100dvh;
@@ -54,6 +55,21 @@
             background-size: 44px 44px;
             -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16%, #000 82%, transparent);
             mask-image: linear-gradient(to bottom, transparent, #000 16%, #000 82%, transparent);
+        }
+        body::after {
+            content: '';
+            position: fixed;
+            z-index: 0;
+            top: 52px;
+            right: -36px;
+            bottom: 0;
+            width: min(50vw, 620px);
+            pointer-events: none;
+            background: url('/static/default/card_faces/YUI.png') center 14% / cover no-repeat;
+            opacity: 0.17;
+            filter: saturate(0.72) contrast(0.94);
+            -webkit-mask-image: radial-gradient(ellipse 78% 76% at 76% 38%, #000 0%, rgba(0, 0, 0, 0.78) 50%, transparent 100%);
+            mask-image: radial-gradient(ellipse 78% 76% at 76% 38%, #000 0%, rgba(0, 0, 0, 0.78) 50%, transparent 100%);
         }
 
         /* ==============================
@@ -821,6 +837,7 @@
            RESPONSIVE
            ============================== */
         @media (max-width: 640px) {
+            body::after { display: none; }
             .console-main { padding: 16px; gap: 16px; }
 
             .character-banner { padding: 16px 18px; border-radius: 16px; }
@@ -857,6 +874,7 @@
            ============================== */
         [data-theme="dark"] {
             --bg: oklch(0.12 0.025 255);
+            --bg-edge: oklch(0.16 0.045 235);
             --surface: oklch(0.17 0.028 255 / 0.84);
             --surface-raised: oklch(0.16 0.025 255 / 0.9);
             --fg: oklch(0.94 0.012 235);
@@ -869,6 +887,10 @@
             --cat-ear-bg: oklch(0.6 0.14 230);
             --header-bg: oklch(0.13 0.026 255 / 0.88);
             --panel-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+        }
+        [data-theme="dark"] body::after {
+            opacity: 0.24;
+            filter: brightness(0.3) saturate(0.82) contrast(1.08);
         }
         [data-theme="dark"] .app-header { background: var(--header-bg); }
         [data-theme="dark"] .character-banner { border-color: var(--border); }
