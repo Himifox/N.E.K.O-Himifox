@@ -32,6 +32,7 @@ class MatchPolicy:
     weak_required_tag_prefixes: tuple[str, ...] = ()
     weak_excluded_tags: tuple[str, ...] = ()
     weak_content_line_prefix: str = ""
+    latin_word_boundaries: bool = False
 
 
 MEME_MATCH_POLICY = MatchPolicy(

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import logging
 import threading
 
 import pytest
 
-from knowledge.api import KnowledgeEntry, KnowledgeStore
+from knowledge.api import ContextHint, KnowledgeEntry, KnowledgeStore
 from knowledge.moegirl_knowledge.retrieval import MatchPolicy
 from knowledge.service import (
     MEME_RESPONSE_POLICY,
@@ -14,7 +15,13 @@ from knowledge.service import (
 )
 
 
-def _spec(collection_id: str, *, priority: int = 0, automatic: bool = True):
+def _spec(
+    collection_id: str,
+    *,
+    priority: int = 0,
+    automatic: bool = True,
+    context_hints: tuple[ContextHint, ...] = (),
+):
     return CollectionSpec(
         collection_id=collection_id,
         storage_directory=collection_id,
@@ -22,14 +29,15 @@ def _spec(collection_id: str, *, priority: int = 0, automatic: bool = True):
         auto_context_enabled=automatic,
         match_policy=MatchPolicy(),
         response_policy=MEME_RESPONSE_POLICY,
+        context_hints=context_hints,
     )
 
 
-def _entry(title: str, *, source: str, recognition=()):
+def _entry(title: str, *, source: str, recognition=(), tags=()):
     return KnowledgeEntry(
         title=title,
         terms={"alias": (), "recognition": recognition},
-        tags=(f"source:{source}", "type:reference"),
+        tags=(f"source:{source}", "type:reference", *tags),
         summary=f"Meaning of {title}",
         content=f"Meaning\n- {title} used in context",
     )
@@ -94,6 +102,164 @@ def test_global_route_selects_one_high_priority_card_across_five_collections(tmp
     assert context.hit_count == 1
     assert context.collection_id == "collection-4"
     assert context.text.count("Term: shared phrase") == 1
+
+
+def test_context_hint_disambiguates_equal_cross_collection_matches(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="knowledge.routing")
+    meme = _spec(
+        "meme",
+        priority=100,
+        context_hints=(ContextHint(terms=("是什么梗",)),),
+    )
+    tarot = _spec(
+        "tarot",
+        priority=10,
+        context_hints=(ContextHint(
+            required_tags=("dataset:tarot",),
+            terms=("抽到", "这张牌"),
+        ),),
+    )
+    service = _service_with_entries(
+        tmp_path,
+        (meme, tarot),
+        {
+            "meme": (_entry("The Moon", source="meme"),),
+            "tarot": (_entry(
+                "The Moon",
+                source="tarot",
+                tags=("dataset:tarot",),
+            ),),
+        },
+    )
+
+    tarot_context = service.build_turn_context("我抽到了 The Moon，这张牌怎么解释？")
+    meme_context = service.build_turn_context("The Moon 是什么梗？")
+
+    assert tarot_context.collection_id == "tarot"
+    assert meme_context.collection_id == "meme"
+    assert tarot_context.hit_count == meme_context.hit_count == 1
+    assert any(
+        "resolution=context_hint collection=tarot" in message
+        for message in caplog.messages
+    )
+
+
+def test_context_hint_cannot_trigger_an_unmentioned_entry(tmp_path):
+    service = _service_with_entries(
+        tmp_path,
+        (_spec(
+            "tarot",
+            context_hints=(ContextHint(terms=("抽到", "这张牌")),),
+        ),),
+        {"tarot": (_entry("The Moon", source="tarot"),)},
+    )
+
+    assert service.build_turn_context("我抽到这张牌了").hit_count == 0
+
+
+def test_context_hint_does_not_override_a_better_match_mode(tmp_path):
+    weak_policy = MatchPolicy(
+        title_min_length=3,
+        weak_term_length=2,
+        weak_required_tags=("source:weak",),
+        weak_required_tag_prefixes=("type:",),
+        weak_content_line_prefix="- ",
+    )
+    weak = CollectionSpec(
+        collection_id="weak",
+        storage_directory="weak",
+        priority=100,
+        auto_context_enabled=True,
+        match_policy=weak_policy,
+        response_policy=MEME_RESPONSE_POLICY,
+        context_hints=(ContextHint(terms=("strong context",)),),
+    )
+    strong = _spec("strong", priority=1)
+    service = _service_with_entries(
+        tmp_path,
+        (weak, strong),
+        {
+            "weak": (_entry("xy", source="weak"),),
+            "strong": (_entry("confirmed phrase", source="strong"),),
+        },
+    )
+
+    context = service.build_turn_context("xy confirmed phrase strong context")
+
+    assert context.collection_id == "strong"
+    assert context.match_mode == "strong"
+
+
+def test_latin_context_hint_uses_word_boundaries(tmp_path):
+    high = _spec("high", priority=100)
+    low = _spec(
+        "low",
+        priority=1,
+        context_hints=(ContextHint(terms=("tarot",)),),
+    )
+    service = _service_with_entries(
+        tmp_path,
+        (high, low),
+        {
+            "high": (_entry("shared phrase", source="high"),),
+            "low": (_entry("shared phrase", source="low"),),
+        },
+    )
+
+    assert service.build_turn_context(
+        "tarot shared phrase"
+    ).collection_id == "low"
+    assert service.build_turn_context(
+        "tarotology shared phrase"
+    ).collection_id == "high"
+
+
+def test_equal_context_hints_fall_back_to_collection_priority(tmp_path):
+    high = _spec(
+        "high",
+        priority=100,
+        context_hints=(ContextHint(terms=("first clue",)),),
+    )
+    low = _spec(
+        "low",
+        priority=1,
+        context_hints=(ContextHint(terms=("other clue",)),),
+    )
+    service = _service_with_entries(
+        tmp_path,
+        (high, low),
+        {
+            "high": (_entry("shared phrase", source="high"),),
+            "low": (_entry("shared phrase", source="low"),),
+        },
+    )
+
+    context = service.build_turn_context(
+        "first clue and other clue both describe shared phrase"
+    )
+
+    assert context.collection_id == "high"
+
+
+def test_context_hint_does_not_override_a_longer_strong_match(tmp_path):
+    hinted = _spec(
+        "hinted",
+        priority=100,
+        context_hints=(ContextHint(terms=("tarot",)),),
+    )
+    specific = _spec("specific", priority=1)
+    service = _service_with_entries(
+        tmp_path,
+        (hinted, specific),
+        {
+            "hinted": (_entry("moon card", source="hinted"),),
+            "specific": (_entry("The Moon tarot card", source="specific"),),
+        },
+    )
+
+    context = service.build_turn_context("tarot: The Moon tarot card")
+
+    assert context.collection_id == "specific"
 
 
 def test_strong_route_beats_a_higher_priority_weak_route(tmp_path):

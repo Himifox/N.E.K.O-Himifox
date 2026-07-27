@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import re
 import threading
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +23,15 @@ from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
 _CARD_CACHE_LIMIT = 256
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextHint:
+    """Non-triggering vocabulary used only to break equal cross-library matches."""
+
+    required_tags: tuple[str, ...] = ()
+    terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +40,7 @@ class RouteCollection:
     database_path: Path
     priority: int
     policy: MatchPolicy
+    context_hints: tuple[ContextHint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +51,10 @@ class RouteRecord:
     source_tag: str
     title: str
     strong_terms: tuple[str, ...]
+    boundary_terms: tuple[str, ...]
     weak_terms: tuple[str, ...]
+    context_terms: tuple[str, ...]
+    boundary_context_terms: tuple[str, ...]
     revision: int
 
     @property
@@ -67,6 +83,8 @@ class RoutingSnapshot:
         for record in records:
             for phrase in record.strong_terms:
                 self._insert(phrase, record, "strong")
+            for phrase in record.boundary_terms:
+                self._insert(phrase, record, "strong")
             for phrase in record.weak_terms:
                 self._insert(phrase, record, "weak_short")
 
@@ -78,7 +96,7 @@ class RoutingSnapshot:
             if node_index == len(self._nodes):
                 self._nodes.append(_TrieNode())
         terminal = self._nodes[node_index].terminals
-        value = (record, mode, len(phrase))
+        value = (record, mode, len(phrase.replace("\0", "")))
         if value not in terminal:
             terminal.append(value)
 
@@ -86,12 +104,15 @@ class RoutingSnapshot:
         self,
         normalized: str,
         phrase: str,
+        boundary_text: str,
     ) -> RouteMatch | None:
         if len(normalized) < 2:
             return None
         candidates = self._scan(normalized)
         if phrase and phrase != normalized:
             candidates.extend(self._scan(phrase))
+        if boundary_text:
+            candidates.extend(self._scan(boundary_text))
         best: dict[tuple[str, str, str], RouteMatch] = {}
         for candidate in candidates:
             previous = best.get(candidate.record.key)
@@ -134,13 +155,49 @@ class SegmentedRoutingSnapshot:
         if len(normalized) < 2:
             return None
         phrase = normalize_meme_phrase(normalized, already_normalized=True)
+        boundary_text = _normalize_latin_boundary_text(user_text)
         matches = (
-            matcher.find_normalized(normalized, phrase)
+            matcher.find_normalized(normalized, phrase, boundary_text)
             for collection_id, matcher in self._matchers.items()
             if collection_id in allowed_collections
         )
         candidates = [match for match in matches if match is not None]
-        return min(candidates, key=_match_sort_key) if candidates else None
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        evidence = {
+            match.record.key: _context_evidence_score(match.record, normalized, boundary_text)
+            for match in candidates
+        }
+        selected = min(
+            candidates,
+            key=lambda match: _cross_collection_sort_key(match, evidence[match.record.key]),
+        )
+        quality_peers = [
+            match
+            for match in candidates
+            if match.match_mode == selected.match_mode and match.score == selected.score
+        ]
+        peer_scores = [evidence[match.record.key] for match in quality_peers]
+        best_evidence = max(peer_scores, default=0)
+        resolved_by_hint = (
+            best_evidence > 0
+            and evidence[selected.record.key] == best_evidence
+            and peer_scores.count(best_evidence) == 1
+        )
+        resolution = (
+            "match_quality"
+            if len(quality_peers) == 1
+            else "context_hint" if resolved_by_hint else "collection_priority"
+        )
+        logger.info(
+            "[public-knowledge] route conflict candidates=%d resolution=%s collection=%s",
+            len(candidates),
+            resolution,
+            selected.record.collection_id,
+        )
+        return selected
 
 
 def _match_sort_key(match: RouteMatch) -> tuple[int, float, int, str, str]:
@@ -151,6 +208,40 @@ def _match_sort_key(match: RouteMatch) -> tuple[int, float, int, str, str]:
         match.record.title,
         match.record.collection_id,
     )
+
+
+def _cross_collection_sort_key(
+    match: RouteMatch,
+    context_score: int,
+) -> tuple[int, float, int, int, str, str]:
+    return (
+        0 if match.match_mode == "strong" else 1,
+        -match.score,
+        -context_score,
+        -match.record.priority,
+        match.record.title,
+        match.record.collection_id,
+    )
+
+
+def _context_evidence_score(
+    record: RouteRecord,
+    normalized: str,
+    boundary_text: str,
+) -> int:
+    ordinary = max(
+        (len(term) for term in record.context_terms if term in normalized),
+        default=0,
+    )
+    bounded = max(
+        (
+            len(term.replace("\0", ""))
+            for term in record.boundary_context_terms
+            if term in boundary_text
+        ),
+        default=0,
+    )
+    return max(ordinary, bounded)
 
 
 class KnowledgeRoutingState:
@@ -312,13 +403,21 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
             continue
         if any(tag in entry.tags for tag in policy.excluded_entry_tags):
             continue
+        context_terms, boundary_context_terms = _entry_context_terms(
+            entry,
+            collection.context_hints,
+        )
         strong: list[str] = []
+        boundary: list[str] = []
         weak: list[str] = []
         for index, value in enumerate((entry.title, *entry.aliases)):
             phrase = normalize_search_text(value)
             minimum = policy.title_min_length if index == 0 else policy.alias_min_length
             if len(phrase) >= minimum:
-                strong.append(phrase)
+                if policy.latin_word_boundaries and _contains_latin(value):
+                    boundary.append(_normalize_latin_boundary_text(value))
+                else:
+                    strong.append(phrase)
             elif (
                 policy.weak_term_length > 0
                 and len(phrase) == policy.weak_term_length
@@ -328,8 +427,11 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
         for value in entry.recognition_terms:
             phrase = normalize_search_text(value)
             if len(phrase) >= policy.recognition_min_length:
-                strong.append(phrase)
-        if strong or weak:
+                if policy.latin_word_boundaries and _contains_latin(value):
+                    boundary.append(_normalize_latin_boundary_text(value))
+                else:
+                    strong.append(phrase)
+        if strong or boundary or weak:
             records.append(RouteRecord(
                 collection_id=collection.collection_id,
                 database_path=collection.database_path,
@@ -337,10 +439,48 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
                 source_tag=entry.source_tag,
                 title=entry.title,
                 strong_terms=tuple(dict.fromkeys(strong)),
+                boundary_terms=tuple(dict.fromkeys(boundary)),
                 weak_terms=tuple(dict.fromkeys(weak)),
+                context_terms=context_terms,
+                boundary_context_terms=boundary_context_terms,
                 revision=revision,
             ))
     return tuple(records)
+
+
+_LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _contains_latin(value: str) -> bool:
+    return any("a" <= character <= "z" for character in value.casefold())
+
+
+def _normalize_latin_boundary_text(value: str) -> str:
+    tokens = _LATIN_TOKEN_RE.findall(unicodedata.normalize("NFKC", str(value)).casefold())
+    return "\0" + "\0".join(tokens) + "\0" if tokens else ""
+
+
+def _entry_context_terms(
+    entry: MoegirlKnowledgeEntry,
+    hints: tuple[ContextHint, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ordinary: list[str] = []
+    bounded: list[str] = []
+    tags = frozenset(entry.tags)
+    for hint in hints:
+        if not set(hint.required_tags).issubset(tags):
+            continue
+        for value in hint.terms:
+            normalized = normalize_search_text(value)
+            if not normalized:
+                continue
+            if _contains_latin(value):
+                boundary = _normalize_latin_boundary_text(value)
+                if boundary:
+                    bounded.append(boundary)
+            else:
+                ordinary.append(normalized)
+    return tuple(dict.fromkeys(ordinary)), tuple(dict.fromkeys(bounded))
 
 
 def _safe_load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:

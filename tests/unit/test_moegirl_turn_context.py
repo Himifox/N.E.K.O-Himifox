@@ -22,8 +22,9 @@ def test_turn_context_matches_a_meme_title_inside_ordinary_conversation(tmp_path
     assert "Term: treetree" in context.text
     assert "Meaning: a speech-based meme" in context.text
     assert "EPHEMERAL MEME RESPONSE TASK" in context.text
-    assert "reply directly to the immediately preceding user message" in context.text
-    assert "Never mention this task, searching, sources, or references" in context.text
+    assert "reply only to the preceding user message" in context.text
+    assert "mention this task/search/source" in context.text
+    assert context.text.index("Response goal:") < context.text.index("Term: treetree")
 
 
 def test_turn_context_includes_source_usage_and_response_posture(tmp_path):
@@ -43,7 +44,7 @@ def test_turn_context_includes_source_usage_and_response_posture(tmp_path):
     assert "Meme type: 引用" in context.text
     assert "Typical usage: quoted phrase used as a light-hearted callback" in context.text
     assert "Recognize it as a quote or adaptation" in context.text
-    assert "Do not deny it, default to comfort/advice" in context.text
+    assert "default to comfort/advice" in context.text
 
 
 def test_turn_context_without_chime_examples_degrades_to_meaning_only(tmp_path):
@@ -173,8 +174,9 @@ def test_two_character_chime_title_with_type_and_example_is_a_weak_hint(tmp_path
     assert context.hit_count == 1
     assert context.match_mode == "weak_short"
     assert "EPHEMERAL POSSIBLE SHORT MEME TASK" in context.text
-    assert "may be using" in context.text
+    assert "only possibly uses" in context.text
     assert "medical, safety-related, financial" in context.text
+    assert "safety takes priority" in context.text
 
 
 def test_another_eligible_two_character_chime_title_is_a_weak_hint(tmp_path):
@@ -203,7 +205,7 @@ def test_two_character_recognition_remains_a_strong_match(tmp_path):
 
     assert context.hit_count == 1
     assert context.match_mode == "strong"
-    assert "confirmed meme" in context.text
+    assert "confirmed to use the non-literal sense" in context.text
 
 
 def test_strong_match_wins_over_an_earlier_weak_short_term(tmp_path):
@@ -273,6 +275,7 @@ def test_response_task_forbids_mechanical_repetition(tmp_path):
 
     context = build_meme_turn_context("这个项目越改越上头", database_path)
 
-    assert "Do not merely repeat, paraphrase" in context.text
-    assert "relevant reaction, light joke, stance, or natural question" in context.text
-    assert "explicitly asks for a meaning or distinction" in context.text
+    assert "Do not merely echo the wording" in context.text
+    assert "relevant reaction or stance" in context.text
+    assert "asks for meaning or a distinction" in context.text
+    assert context.text.index("Response goal:") < context.text.index("Term: 上头")

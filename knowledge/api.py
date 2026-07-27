@@ -19,10 +19,12 @@ from .moegirl_knowledge.store import (
     MoegirlKnowledgeStore as KnowledgeStore,
 )
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
+from .routing import ContextHint
 from .service import (
     CollectionSpec,
     KnowledgeService,
     KnowledgeTurnContext,
+    MaterialRoute,
     ResponsePolicy,
 )
 
@@ -34,6 +36,7 @@ def open_knowledge(knowledge_root: str | Path) -> KnowledgeService:
 
 __all__ = [
     "CollectionSpec",
+    "ContextHint",
     "KnowledgeEntry",
     "KnowledgeHit",
     "KnowledgeMentionMatcher",
@@ -44,6 +47,7 @@ __all__ = [
     "KnowledgeStore",
     "KnowledgeStoreError",
     "KnowledgeTurnContext",
+    "MaterialRoute",
     "MatchPolicy",
     "PackInstallResult",
     "ResponsePolicy",
