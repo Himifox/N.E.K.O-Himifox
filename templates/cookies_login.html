@@ -369,22 +369,30 @@
             from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes fadeSlideIn {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
+        @keyframes tabSlideFromRight {
+            from { opacity: 0.35; transform: translateX(24px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes tabSlideFromLeft {
+            from { opacity: 0.35; transform: translateX(-24px); }
+            to { opacity: 1; transform: translateX(0); }
         }
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.05); }
         }
-        .tab-transition .tab-content {
-            animation: fadeSlideIn 0.3s ease-out;
+        .tab-slide-from-right .tab-content {
+            animation: tabSlideFromRight 0.28s cubic-bezier(0.2, 0.75, 0.25, 1);
+        }
+        .tab-slide-from-left .tab-content {
+            animation: tabSlideFromLeft 0.28s cubic-bezier(0.2, 0.75, 0.25, 1);
         }
         @media (prefers-reduced-motion: reduce) {
             .content-card { animation: none; }
             *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
             #QRLogin { transition: none; }
-            .tab-transition .tab-content { animation: none; }
+            .tab-slide-from-right .tab-content,
+            .tab-slide-from-left .tab-content { animation: none; }
         }
 
         /* ==============================
@@ -1003,12 +1011,22 @@
       if (_origSwitch) {
         window.switchTab = function(platform, el, isReRender) {
           var card = document.querySelector('.content-card');
+          var tabs = Array.from(document.querySelectorAll('.tab-btn'));
+          var currentIndex = tabs.findIndex(function(tab) {
+            return tab.classList.contains('active');
+          });
+          var nextIndex = tabs.indexOf(el);
+
           if (card) {
-            card.classList.remove('tab-transition');
-            void card.offsetWidth;
-            card.classList.add('tab-transition');
+            card.classList.remove('tab-slide-from-left', 'tab-slide-from-right');
           }
+
           _origSwitch(platform, el, isReRender);
+
+          if (card && !isReRender && currentIndex !== nextIndex && currentIndex >= 0 && nextIndex >= 0) {
+            void card.offsetWidth;
+            card.classList.add(nextIndex > currentIndex ? 'tab-slide-from-right' : 'tab-slide-from-left');
+          }
         };
       }
 
