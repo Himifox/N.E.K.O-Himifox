@@ -83,21 +83,38 @@ async def test_manual_reimport_schedules_only_one_background_task(monkeypatch, t
 async def test_main_runtime_only_schedules_bundled_local_import(monkeypatch, tmp_path):
     import app.main_server.moegirl_knowledge_runtime as runtime
 
-    scheduled = []
-    stopped = []
+    scheduled_chime = []
+    scheduled_corpora = []
+    stopped_chime = []
+    stopped_corpora = []
 
-    monkeypatch.setattr(runtime, "schedule_bundled_chime_import", lambda *_args: scheduled.append(True))
+    monkeypatch.setattr(
+        runtime,
+        "schedule_bundled_chime_import",
+        lambda *_args: scheduled_chime.append(True),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "schedule_bundled_corpora_import",
+        lambda *_args: scheduled_corpora.append(True),
+    )
 
-    async def _stop():
-        stopped.append(True)
+    async def _stop_chime():
+        stopped_chime.append(True)
 
-    monkeypatch.setattr(runtime, "stop_bundled_chime_import", _stop)
+    async def _stop_corpora():
+        stopped_corpora.append(True)
+
+    monkeypatch.setattr(runtime, "stop_bundled_chime_import", _stop_chime)
+    monkeypatch.setattr(runtime, "stop_bundled_corpora_import", _stop_corpora)
     config = SimpleNamespace(knowledge_dir=tmp_path, ensure_knowledge_directory=lambda: True)
 
     await runtime.start_moegirl_knowledge_runtime(config, logging.getLogger("test.runtime"))
     await runtime.stop_moegirl_knowledge_runtime()
 
-    assert scheduled == [True]
-    assert stopped == [True]
+    assert scheduled_chime == [True]
+    assert scheduled_corpora == [True]
+    assert stopped_chime == [True]
+    assert stopped_corpora == [True]
     assert not hasattr(runtime, "submit_public_meme_candidate")
     assert not hasattr(runtime, "request_moegirl_knowledge_sync")

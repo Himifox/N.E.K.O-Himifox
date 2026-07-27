@@ -23,6 +23,13 @@ SOURCES: dict[str, KnowledgeSource] = {
     "source:geng-guide": KnowledgeSource("source:geng-guide", "梗指南", "local-import://geng-guide-output.md", "User-provided export; license not stated", False),
     "source:moegirl": KnowledgeSource("source:moegirl", "萌娘百科", "https://zh.moegirl.org.cn/", "CC BY-NC-SA 3.0 CN", True),
     "source:geng8": KnowledgeSource("source:geng8", "梗8", "https://www.geng8.com/", "Verify site terms before redistribution", True),
+    "source:corpora": KnowledgeSource(
+        "source:corpora",
+        "Darius Kazemi's Corpora",
+        "https://github.com/dariusk/corpora",
+        "CC0 1.0",
+        False,
+    ),
 }
 
 

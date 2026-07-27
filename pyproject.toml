@@ -115,6 +115,8 @@ exclude = [
 [tool.hatch.build.targets.wheel.force-include]
 "knowledge/moegirl_knowledge/data/chime_full.jsonl" = "knowledge/moegirl_knowledge/data/chime_full.jsonl"
 "knowledge/moegirl_knowledge/data/LICENSE-CHIME.txt" = "knowledge/moegirl_knowledge/data/LICENSE-CHIME.txt"
+"knowledge/data/corpora_demo.jsonl" = "knowledge/data/corpora_demo.jsonl"
+"knowledge/data/LICENSE-CORPORA.txt" = "knowledge/data/LICENSE-CORPORA.txt"
 
 [tool.hatch.build.targets.sdist]
 include = [
