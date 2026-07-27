@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from importlib.resources import files
+from pathlib import Path
 
 from knowledge.moegirl_knowledge import MoegirlKnowledgeRetriever, MoegirlKnowledgeStore
 from knowledge.moegirl_knowledge.sources.chime import (
@@ -63,6 +64,26 @@ def test_bundled_chime_import_is_idempotent_and_searchable(tmp_path):
     assert build_meme_turn_context(
         "她就这么水灵灵地把 bug 带上线了", store.database_path,
     ).match_mode == "none"
+
+
+def test_fixed_response_quality_cases_keep_their_expected_routes(tmp_path):
+    cases_path = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "knowledge_response_quality_cases.json"
+    )
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.replace_source("source:chime", load_bundled_chime_dataset().entries)
+
+    actual = {
+        case["id"]: build_meme_turn_context(
+            case["message"], store.database_path,
+        ).match_mode
+        for case in cases
+    }
+
+    assert actual == {case["id"]: case["expected_mode"] for case in cases}
 
 
 def test_bundled_chime_marks_only_confirmed_stale_usage_entry():
