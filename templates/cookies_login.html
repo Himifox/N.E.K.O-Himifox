@@ -136,6 +136,7 @@
             -webkit-app-region: no-drag;
         }
         .header-right .window-dot {
+            position: relative;
             width: 28px;
             height: 28px;
             background: transparent;
@@ -160,9 +161,68 @@
         .header-right .dot-close::before { background: #ff5f57; }
         .header-right .dot-min::before { background: #febc2e; }
         .header-right .dot-max::before { background: #28c840; }
+        .header-right .dot-close { color: #7a211d; }
+        .header-right .dot-min { color: #765313; }
+        .header-right .dot-max { color: #176126; }
+        .header-right .window-dot-icon {
+            position: absolute;
+            z-index: 1;
+            display: block;
+            width: 7px;
+            height: 7px;
+            pointer-events: none;
+            opacity: 0.72;
+            transition: opacity 0.15s ease;
+        }
+        .header-right .window-dot:hover .window-dot-icon { opacity: 1; }
+        .header-right .dot-close-icon::before,
+        .header-right .dot-close-icon::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 0;
+            width: 7px;
+            height: 1.25px;
+            border-radius: 1px;
+            background: currentColor;
+        }
+        .header-right .dot-close-icon::before { transform: rotate(45deg); }
+        .header-right .dot-close-icon::after { transform: rotate(-45deg); }
+        .header-right .dot-min-icon {
+            width: 7px;
+            height: 1.25px;
+            border-radius: 1px;
+            background: currentColor;
+        }
+        .header-right .neko-window-maximize-icon {
+            width: 7px;
+            height: 7px;
+            border: 1.25px solid currentColor;
+            border-radius: 1px;
+            background: transparent;
+            box-sizing: border-box;
+            transition: opacity 0.15s ease;
+        }
+        .header-right .neko-window-maximize-icon.restored {
+            position: absolute;
+            background: transparent;
+            transform: translate(1px, 1px);
+        }
+        .header-right .neko-window-maximize-icon.restored::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            width: 7px;
+            height: 7px;
+            border: 1.25px solid currentColor;
+            border-radius: 1px;
+            background: transparent;
+            box-sizing: border-box;
+        }
         .header-right .window-dot:hover::before { opacity: 0.75; transform: scale(1.08); }
         .header-right .window-dot:active::before { transform: scale(0.9); }
-        .header-right .window-dot:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+        .header-right .window-dot:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
         .header-right .header-pin { width: 28px; height: 28px; border-radius: 50%; }
         .header-right .header-pin .neko-window-pin-icon { width: 14px; height: 14px; }
 
@@ -861,9 +921,15 @@
             <button type="button" class="neko-window-control-btn header-pin" data-neko-window-control="pin" hidden data-i18n-title="common.pinWindow" data-i18n-aria="common.pinWindow" title="置顶窗口" aria-label="置顶窗口" aria-pressed="false">
                 <span class="neko-window-pin-icon" aria-hidden="true"></span>
             </button>
-            <button type="button" class="window-dot dot-close" data-neko-window-control="close" data-i18n-title="common.close" data-i18n-aria="common.close" title="关闭" aria-label="关闭"></button>
-            <button type="button" class="window-dot dot-min" data-neko-window-control="minimize" data-i18n-title="common.minimize" data-i18n-aria="common.minimize" title="最小化" aria-label="最小化"></button>
-            <button type="button" class="window-dot dot-max" data-neko-window-control="maximize" data-i18n-title="common.maximize" data-i18n-aria="common.maximize" title="最大化" aria-label="最大化"></button>
+            <button type="button" class="window-dot dot-close" data-neko-window-control="close" data-i18n-title="common.close" data-i18n-aria="common.close" title="关闭" aria-label="关闭">
+                <span class="window-dot-icon dot-close-icon" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="window-dot dot-min" data-neko-window-control="minimize" data-i18n-title="common.minimize" data-i18n-aria="common.minimize" title="最小化" aria-label="最小化">
+                <span class="window-dot-icon dot-min-icon" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="window-dot dot-max" data-neko-window-control="maximize" data-i18n-title="common.maximize" data-i18n-aria="common.maximize" title="最大化" aria-label="最大化">
+                <span class="window-dot-icon neko-window-maximize-icon" aria-hidden="true"></span>
+            </button>
         </div>
     </header>
 
