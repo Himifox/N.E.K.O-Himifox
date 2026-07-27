@@ -5,6 +5,7 @@ from collections import deque
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from main_logic.proactive_chat import decisions as sr_sources
+from main_logic.proactive_chat import candidate_selection
 from main_logic.proactive_chat import generation as sr_parsing
 from main_logic.proactive_chat import service as proactive_service
 from main_logic.proactive_chat import state as sr
@@ -26,7 +27,7 @@ def test_parse_unified_phase1_marks_explicit_music_and_meme_pass():
 
 
 def test_phase1_web_candidates_are_balanced_across_modes(monkeypatch):
-    monkeypatch.setattr(proactive_service, "_should_skip_source", lambda _key: False)
+    monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
     sources = {
         "personal": {
             "links": [
@@ -52,7 +53,7 @@ def test_phase1_web_candidates_are_balanced_across_modes(monkeypatch):
 
 
 def test_bilibili_following_wins_duplicate_from_video_radar(monkeypatch):
-    monkeypatch.setattr(proactive_service, "_should_skip_source", lambda _key: False)
+    monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
     duplicate_url = "https://www.bilibili.com/video/BVduplicate"
     sources = {
         "personal": {

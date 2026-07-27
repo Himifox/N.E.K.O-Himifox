@@ -82,6 +82,10 @@ from main_logic.proactive_chat.delivery import (
     _commit_proactive_delivery,
     _record_committed_delivery,
 )
+from main_logic.proactive_chat.candidate_selection import (
+    _format_phase1_link_candidate,
+    _round_robin_phase1_links,
+)
 from main_logic.proactive_chat.generation import (
     Phase2PromptContext,
     ProactiveModelConfig,
@@ -115,10 +119,9 @@ from main_logic.proactive_chat.state import (
     _source_hash,
 )
 from main_logic.proactive_chat.sources import collect_proactive_sources
-from utils.web_scraper.bilibili_content import (
-    BilibiliEnrichmentPreempted,
-    enrich_bilibili_video,
-    format_bilibili_phase2_context,
+from utils.web_scraper.proactive_candidate import (
+    SelectedWebCandidatePreempted,
+    prepare_selected_web_candidate,
 )
 from utils.language_utils import (
     get_global_language,
@@ -147,68 +150,6 @@ __all__ = [
 
 
 logger = get_module_logger(__name__, "Main")
-
-
-def _format_phase1_link_candidate(index: int, item: dict[str, Any]) -> str:
-    """Render useful candidate evidence without leaking bulky raw metadata."""
-
-    title = str(item.get("title") or "").strip()
-    details: list[str] = []
-    field_labels = (
-        ("source", "来源"),
-        ("author", "UP主"),
-        ("reason", "推荐依据"),
-        ("description_hint", "简介"),
-        ("url", "URL"),
-    )
-    for field, label in field_labels:
-        value = " ".join(str(item.get(field) or "").split())
-        if not value:
-            continue
-        if field == "description_hint":
-            value = value[:240]
-        details.append(f"{label}: {value}")
-    published_at = item.get("published_at")
-    if published_at:
-        details.append(f"发布时间戳: {published_at}")
-    suffix = f" | {' | '.join(details)}" if details else ""
-    return f"{index}. {title}{suffix}"
-
-
-def _round_robin_phase1_links(
-    modes: list[str],
-    sources: dict[str, Any],
-    *,
-    total: int,
-) -> dict[str, list[dict[str, Any]]]:
-    """Give every enabled web mode candidates before any one mode can dominate."""
-
-    selected = {mode: [] for mode in modes}
-    positions = {mode: 0 for mode in modes}
-    seen_keys: set[str] = set()
-    remaining = max(0, total)
-    while remaining:
-        made_progress = False
-        for mode in modes:
-            links = list((sources.get(mode) or {}).get("links", []) or [])
-            while positions[mode] < len(links):
-                link = dict(links[positions[mode]])
-                positions[mode] += 1
-                key = _source_hash(link.get("url", ""), link.get("title", ""))
-                if key and (key in seen_keys or _should_skip_source(key)):
-                    continue
-                if key:
-                    seen_keys.add(key)
-                link.setdefault("mode", mode)
-                selected[mode].append(link)
-                remaining -= 1
-                made_progress = True
-                break
-            if remaining <= 0:
-                break
-        if not made_progress:
-            break
-    return selected
 
 
 _MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
@@ -1421,8 +1362,7 @@ async def handle_proactive_chat(
         # 收集音乐链接（在 Phase 1 Web 筛选完成后）
         # meme 也不经过 Phase 1 LLM 筛选，直接添加话题
         web_modes = [m for m in sources if m not in ("vision", "music", "meme")]
-        # A duplicate BVID keeps the strongest native explanation: followed UP
-        # update first, then the video radar (home before hot internally).
+        # Personal-feed context wins when the same URL also appears elsewhere.
         web_modes.sort(key=lambda mode: 0 if mode == "personal" else 1)
 
         merged_web_content = ""
@@ -1890,39 +1830,38 @@ async def handle_proactive_chat(
         web_topic = phase1_decision.web_topic
         music_topic = phase1_decision.music_topic
         primary_channel = phase1_decision.primary_channel
-        if selected_web_link and selected_web_link.get("platform") == "bilibili":
-            if selected_web_link.get("kind") == "video":
-                if mgr.state.is_proactive_preempted():
-                    return await _end_proactive(
-                        ProactiveChatResult(
-                            body=_proactive_preempted_json(
-                                "phase1_pre_bilibili_enrichment"
-                            )
+        if selected_web_link:
+            if mgr.state.is_proactive_preempted():
+                return await _end_proactive(
+                    ProactiveChatResult(
+                        body=_proactive_preempted_json(
+                            "phase1_pre_candidate_preparation"
                         )
                     )
-                try:
-                    selected_web_link = await enrich_bilibili_video(
-                        selected_web_link,
-                        language=proactive_lang,
-                        is_preempted=mgr.state.is_proactive_preempted,
-                    )
-                except BilibiliEnrichmentPreempted:
-                    return await _end_proactive(
-                        ProactiveChatResult(
-                            body=_proactive_preempted_json(
-                                "phase1_bilibili_enrichment"
-                            )
+                )
+            try:
+                selected_web_link, web_topic = await prepare_selected_web_candidate(
+                    selected_web_link,
+                    fallback_topic=web_topic,
+                    language=proactive_lang,
+                    is_preempted=mgr.state.is_proactive_preempted,
+                )
+            except SelectedWebCandidatePreempted:
+                return await _end_proactive(
+                    ProactiveChatResult(
+                        body=_proactive_preempted_json(
+                            "phase1_candidate_preparation"
                         )
                     )
-                if mgr.state.is_proactive_preempted():
-                    return await _end_proactive(
-                        ProactiveChatResult(
-                            body=_proactive_preempted_json(
-                                "phase1_post_bilibili_enrichment"
-                            )
+                )
+            if mgr.state.is_proactive_preempted():
+                return await _end_proactive(
+                    ProactiveChatResult(
+                        body=_proactive_preempted_json(
+                            "phase1_post_candidate_preparation"
                         )
                     )
-            web_topic = format_bilibili_phase2_context(selected_web_link)
+                )
         print(
             f"[{lanlan_name}] Phase 1 可用通道: {active_channels}，主通道: {primary_channel}"
         )

@@ -50,7 +50,7 @@ logger = get_module_logger(__name__, "Main")
 
 
 def _public_web_link(link: dict[str, Any]) -> dict[str, Any]:
-    """Keep Bilibili enrichment metadata internal to proactive generation."""
+    """Strip every platform's internal metadata at the response boundary."""
 
     return {
         key: link[key]

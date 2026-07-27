@@ -70,21 +70,6 @@ def _interleave_link_groups(candidate_groups: list[list[dict]]) -> list[dict]:
     return links
 
 
-_BILIBILI_LINK_FIELDS = (
-    "platform",
-    "lane",
-    "kind",
-    "resource_id",
-    "bvid",
-    "author",
-    "reason",
-    "description_hint",
-    "published_at",
-    "native_rank",
-    "authenticated",
-)
-
-
 def _link_from_item(
     item: dict,
     *,
@@ -92,11 +77,11 @@ def _link_from_item(
     url: str,
     source: str,
 ) -> dict:
-    link = {"title": title, "url": url, "source": source}
-    if item.get("platform") == "bilibili" or item.get("bvid"):
-        for field in _BILIBILI_LINK_FIELDS:
-            if field in item:
-                link[field] = item[field]
+    # Candidate metadata stays internal until decisions.py emits a public link.
+    # Keeping this generic avoids teaching the orchestration layer every
+    # platform's private field contract.
+    link = dict(item)
+    link.update({"title": title, "url": url, "source": source})
     return link
 
 

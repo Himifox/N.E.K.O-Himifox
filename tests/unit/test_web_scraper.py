@@ -13,6 +13,7 @@ import utils.config_manager as config_manager_module
 import utils.web_scraper as web_scraper
 import utils.web_scraper.bilibili_content as bilibili_content
 import utils.web_scraper.personal_dynamics as personal_dynamics
+import utils.web_scraper.proactive_candidate as proactive_candidate
 import utils.web_scraper.trending_content as trending_content
 import utils.web_scraper.window_context as window_context
 
@@ -63,6 +64,56 @@ async def test_bilibili_radar_interleaves_home_and_hot_and_deduplicates(monkeypa
     assert result["success"] is True
     assert [item["bvid"] for item in result["videos"]] == ["BV1", "BV2", "BV3"]
     assert result["videos"][0]["lane"] == "home"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_selected_web_candidate_adapter_passes_through_other_platforms():
+    candidate = {
+        "platform": "youtube",
+        "title": "video",
+        "url": "https://example.test/video",
+    }
+
+    prepared, topic = await proactive_candidate.prepare_selected_web_candidate(
+        candidate,
+        fallback_topic="existing topic",
+        language="zh",
+    )
+
+    assert prepared == candidate
+    assert prepared is not candidate
+    assert topic == "existing topic"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_selected_web_candidate_adapter_dispatches_bilibili(monkeypatch):
+    async def fake_enrich(candidate, *, language, is_preempted):
+        assert language == "zh"
+        assert is_preempted is None
+        return {**candidate, "content_summary": "可靠内容"}
+
+    monkeypatch.setattr(proactive_candidate, "enrich_bilibili_video", fake_enrich)
+    monkeypatch.setattr(
+        proactive_candidate,
+        "format_bilibili_phase2_context",
+        lambda candidate: f"B站上下文：{candidate['content_summary']}",
+    )
+
+    prepared, topic = await proactive_candidate.prepare_selected_web_candidate(
+        {
+            "platform": "bilibili",
+            "kind": "video",
+            "bvid": "BVadapter",
+            "title": "video",
+        },
+        fallback_topic="existing topic",
+        language="zh",
+    )
+
+    assert prepared["content_summary"] == "可靠内容"
+    assert topic == "B站上下文：可靠内容"
 
 
 @pytest.mark.unit
