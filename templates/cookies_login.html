@@ -131,14 +131,14 @@
         .header-right {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding-right: 4px;
+            gap: 4px;
+            padding-right: 0;
             -webkit-app-region: no-drag;
         }
         .header-right .window-dot {
             position: relative;
-            width: 28px;
-            height: 28px;
+            width: 32px;
+            height: 32px;
             background: transparent;
             border: none;
             cursor: pointer;
@@ -152,11 +152,12 @@
         }
         .header-right .window-dot::before {
             content: '';
-            width: 12px;
-            height: 12px;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
             display: block;
-            transition: opacity 0.2s, transform 0.15s;
+            box-shadow: inset 0 0 0 0.75px rgba(0, 0, 0, 0.14), 0 1px 2px rgba(24, 48, 58, 0.16);
+            transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
         }
         .header-right .dot-close::before { background: #ff5f57; }
         .header-right .dot-min::before { background: #febc2e; }
@@ -168,10 +169,10 @@
             position: absolute;
             z-index: 1;
             display: block;
-            width: 7px;
-            height: 7px;
+            width: 10px;
+            height: 10px;
             pointer-events: none;
-            opacity: 0.72;
+            opacity: 0.86;
             transition: opacity 0.15s ease;
         }
         .header-right .window-dot:hover .window-dot-icon { opacity: 1; }
@@ -179,26 +180,26 @@
         .header-right .dot-close-icon::after {
             content: '';
             position: absolute;
-            top: 3px;
+            top: 4.25px;
             left: 0;
-            width: 7px;
-            height: 1.25px;
+            width: 10px;
+            height: 1.5px;
             border-radius: 1px;
             background: currentColor;
         }
         .header-right .dot-close-icon::before { transform: rotate(45deg); }
         .header-right .dot-close-icon::after { transform: rotate(-45deg); }
         .header-right .dot-min-icon {
-            width: 7px;
-            height: 1.25px;
+            width: 10px;
+            height: 1.5px;
             border-radius: 1px;
             background: currentColor;
         }
         .header-right .neko-window-maximize-icon {
-            width: 7px;
-            height: 7px;
-            border: 1.25px solid currentColor;
-            border-radius: 1px;
+            width: 10px;
+            height: 10px;
+            border: 1.5px solid currentColor;
+            border-radius: 1.5px;
             background: transparent;
             box-sizing: border-box;
             transition: opacity 0.15s ease;
@@ -213,15 +214,23 @@
             position: absolute;
             top: -4px;
             left: -4px;
-            width: 7px;
-            height: 7px;
-            border: 1.25px solid currentColor;
-            border-radius: 1px;
+            width: 9px;
+            height: 9px;
+            border: 1.5px solid currentColor;
+            border-radius: 1.5px;
             background: transparent;
             box-sizing: border-box;
         }
-        .header-right .window-dot:hover::before { opacity: 0.75; transform: scale(1.08); }
-        .header-right .window-dot:active::before { transform: scale(0.9); }
+        .header-right .window-dot:hover::before {
+            filter: saturate(1.08) brightness(1.04);
+            transform: scale(1.06);
+            box-shadow: inset 0 0 0 0.75px rgba(0, 0, 0, 0.16), 0 2px 5px rgba(24, 48, 58, 0.2);
+        }
+        .header-right .window-dot:active::before {
+            filter: saturate(0.96) brightness(0.95);
+            transform: scale(0.92);
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
         .header-right .window-dot:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
         .header-right .header-pin { width: 28px; height: 28px; border-radius: 50%; }
         .header-right .header-pin .neko-window-pin-icon { width: 14px; height: 14px; }
