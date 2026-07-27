@@ -66,7 +66,7 @@ class StreamingMixin:
         return True
 
     async def _build_public_meme_turn_context(self, user_text: str) -> str:
-        """Resolve turn-local public-meme context from the local database only."""
+        """Resolve one turn-local card across enabled public knowledge collections."""
         try:
             from config.moegirl_knowledge_settings import (
                 MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
@@ -74,24 +74,25 @@ class StreamingMixin:
             )
             if not MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
                 return ""
-            from knowledge.moegirl_knowledge.turn_context import build_meme_turn_context
+            from knowledge.api import open_knowledge
             from utils.config_manager import get_config_manager
 
-            database_path = Path(get_config_manager().knowledge_dir) / "moegirl-knowledge" / "knowledge.db"
+            knowledge_root = Path(get_config_manager().knowledge_dir)
+            service = open_knowledge(knowledge_root)
             result = await asyncio.to_thread(
-                build_meme_turn_context,
+                service.build_conversation_context,
                 user_text,
-                database_path,
                 limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
             )
             logger.info(
-                "[moegirl-knowledge] automatic turn context hits=%d mode=%s",
+                "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
                 result.hit_count,
                 result.match_mode,
+                result.collection_id or "none",
             )
             return result.text
         except Exception as exc:
-            logger.warning("[moegirl-knowledge] automatic turn context failed: %s", type(exc).__name__)
+            logger.warning("[public-knowledge] automatic turn context failed: %s", type(exc).__name__)
             return ""
     
     async def _flush_pending_input_data(self):
