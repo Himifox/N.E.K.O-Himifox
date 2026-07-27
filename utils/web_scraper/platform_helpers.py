@@ -175,6 +175,24 @@ def _get_bilibili_credential() -> Any | None:
     
     return None
 
+
+def _bilibili_account_cache_key(credential: Any) -> str:
+    """Build a stable, non-secret cache key for one Bilibili account."""
+
+    try:
+        cookies = credential.get_cookies()
+    except Exception:
+        cookies = {}
+    user_id = str((cookies or {}).get("DedeUserID") or "").strip()
+    if user_id:
+        return f"user:{user_id}"
+    cookie_fingerprint = "\0".join(
+        f"{key}={value}"
+        for key, value in sorted((cookies or {}).items())
+        if str(value).strip()
+    )
+    return "cookie:" + hashlib.sha256(cookie_fingerprint.encode()).hexdigest()[:16]
+
 def _get_platform_cookies(platform_name: str) -> dict[str, str]:
     """
     Generic platform cookie reader (hooks into the system's unified encrypted/plaintext read logic)

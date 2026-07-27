@@ -38,6 +38,19 @@ def _format_phase1_link_candidate(index: int, item: dict[str, Any]) -> str:
     return f"{index}. {title}{suffix}"
 
 
+def _phase1_linkless_modes(
+    modes: list[str], sources: dict[str, Any]
+) -> list[str]:
+    """Return formatted-only modes that each need a Phase 1 budget slot."""
+
+    return [
+        mode
+        for mode in modes
+        if not ((sources.get(mode) or {}).get("links") or [])
+        and str((sources.get(mode) or {}).get("formatted_content") or "").strip()
+    ]
+
+
 def _round_robin_phase1_links(
     modes: list[str],
     sources: dict[str, Any],
@@ -48,12 +61,16 @@ def _round_robin_phase1_links(
 
     selected = {mode: [] for mode in modes}
     positions = {mode: 0 for mode in modes}
+    links_by_mode = {
+        mode: list((sources.get(mode) or {}).get("links", []) or [])
+        for mode in modes
+    }
     seen_keys: set[str] = set()
     remaining = max(0, total)
     while remaining:
         made_progress = False
         for mode in modes:
-            links = list((sources.get(mode) or {}).get("links", []) or [])
+            links = links_by_mode[mode]
             while positions[mode] < len(links):
                 link = dict(links[positions[mode]])
                 positions[mode] += 1

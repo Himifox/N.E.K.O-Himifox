@@ -19,7 +19,7 @@ import utils.web_scraper.window_context as window_context
 
 
 @pytest.fixture(autouse=True)
-def clear_tieba_recent_keys():
+def reset_scraper_caches():
     trending_content._TIEBA_RECENT_KEYS.clear()
     bilibili_content._RESULT_CACHE.clear()
     bilibili_content._ENRICHMENT_CACHE.clear()
@@ -121,12 +121,18 @@ async def test_selected_web_candidate_adapter_dispatches_bilibili(monkeypatch):
 async def test_bilibili_home_retries_anonymously_after_login_failure(monkeypatch):
     from bilibili_api import homepage
 
-    credential = object()
+    class FakeCredential:
+        def get_cookies(self):
+            return {"SESSDATA": "account-a"}
+
+    credential = FakeCredential()
     calls = []
+    auth_fails = True
 
     async def fake_get_videos(*, credential=None):
+        nonlocal auth_fails
         calls.append(credential)
-        if credential is not None:
+        if credential is not None and auth_fails:
             raise RuntimeError("expired cookie")
         return {
             "item": [
@@ -149,6 +155,13 @@ async def test_bilibili_home_retries_anonymously_after_login_failure(monkeypatch
     assert result["authenticated"] is False
     assert result["videos"][0]["authenticated"] is False
     assert "匿名首页" in result["warning"]
+
+    auth_fails = False
+    recovered = await bilibili_content.fetch_bilibili_home(limit=10)
+
+    assert calls == [credential, None, credential]
+    assert recovered["authenticated"] is True
+    assert recovered.get("cached") is not True
 
 
 @pytest.mark.unit
@@ -351,6 +364,57 @@ def test_bilibili_subtitle_selection_fallback_order():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_bilibili_subtitle_download_rejects_non_bilibili_url(monkeypatch):
+    class UnexpectedClient:
+        async def get(self, *_args, **_kwargs):
+            raise AssertionError("untrusted subtitle URL must not be requested")
+
+    monkeypatch.setattr(
+        bilibili_content,
+        "get_external_http_client",
+        lambda: UnexpectedClient(),
+    )
+
+    result = await bilibili_content._download_subtitle(
+        {"subtitle_url": "https://127.0.0.1/internal"}
+    )
+
+    assert result == ""
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_bilibili_subtitle_download_accepts_bilibili_cdn(monkeypatch):
+    requested = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"body": [{"content": "第一句"}]}
+
+    class FakeClient:
+        async def get(self, url, **_kwargs):
+            requested.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        bilibili_content,
+        "get_external_http_client",
+        lambda: FakeClient(),
+    )
+
+    result = await bilibili_content._download_subtitle(
+        {"subtitle_url": "//i0.hdslb.com/bfs/subtitle/test.json"}
+    )
+
+    assert requested == ["https://i0.hdslb.com/bfs/subtitle/test.json"]
+    assert result == "第一句"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_bilibili_enrichment_prefers_chinese_subtitle(monkeypatch):
     from bilibili_api import video
 
@@ -358,7 +422,7 @@ async def test_bilibili_enrichment_prefers_chinese_subtitle(monkeypatch):
 
     class FakeVideo:
         def __init__(self, *, bvid, credential):
-            assert bvid == "BVselected"
+            captured["bvid"] = bvid
 
         async def get_info(self):
             return {
@@ -375,7 +439,7 @@ async def test_bilibili_enrichment_prefers_chinese_subtitle(monkeypatch):
             return [{"tag_name": "教程"}]
 
         async def get_subtitle(self, cid):
-            assert cid == 789
+            captured["cid"] = cid
             return {
                 "subtitles": [
                     {"lan": "en", "subtitle_url": "//example/en.json"},
@@ -404,6 +468,8 @@ async def test_bilibili_enrichment_prefers_chinese_subtitle(monkeypatch):
     )
 
     assert captured["subtitle"] == "zh-CN"
+    assert captured["bvid"] == "BVselected"
+    assert captured["cid"] == 789
     assert result["content_summary"] == "这是中文字幕内容。"
     assert result["summary_basis"] == "subtitle"
 
@@ -741,6 +807,43 @@ async def test_bilibili_following_uses_two_minute_cache(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_bilibili_following_cache_isolated_without_user_id(monkeypatch):
+    current_credential = {"value": "account-a"}
+    calls = 0
+
+    class FakeCredential:
+        def __init__(self, sessdata):
+            self.sessdata = sessdata
+
+        def get_cookies(self):
+            return {"SESSDATA": self.sessdata}
+
+    async def fake_fetch(_limit):
+        nonlocal calls
+        calls += 1
+        return {"success": True, "status": "ok", "dynamics": [{"id": calls}]}
+
+    monkeypatch.setattr(
+        personal_dynamics,
+        "_get_bilibili_credential",
+        lambda: FakeCredential(current_credential["value"]),
+    )
+    monkeypatch.setattr(
+        personal_dynamics,
+        "_fetch_bilibili_personal_dynamic_uncached",
+        fake_fetch,
+    )
+
+    first = await personal_dynamics.fetch_bilibili_personal_dynamic(10)
+    current_credential["value"] = "account-b"
+    second = await personal_dynamics.fetch_bilibili_personal_dynamic(10)
+
+    assert calls == 2
+    assert first["dynamics"] != second["dynamics"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_bilibili_following_concurrent_calls_share_one_fetch(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
@@ -818,7 +921,21 @@ async def test_bilibili_following_video_keeps_bvid_and_content_fields(monkeypatc
                                     },
                                 },
                             },
-                        }
+                        },
+                        {
+                            "id_str": "dynamic-2",
+                            "type": "DYNAMIC_TYPE_DRAW",
+                            "modules": {
+                                "module_author": {
+                                    "name": "关注UP",
+                                    "pub_time": "刚刚",
+                                },
+                                "module_dynamic": {
+                                    "desc": {"text": "图文正文"},
+                                    "major": {"type": "MAJOR_TYPE_DRAW"},
+                                },
+                            },
+                        },
                     ]
                 },
             }
@@ -848,6 +965,7 @@ async def test_bilibili_following_video_keeps_bvid_and_content_fields(monkeypatc
     assert item["kind"] == "video"
     assert item["description_hint"] == "视频简介"
     assert item["authenticated"] is True
+    assert result["dynamics"][1]["title"] == "[图文动态] 图文正文"
 
 
 def test_bilibili_phase2_context_does_not_invent_missing_summary():
@@ -866,7 +984,7 @@ def test_bilibili_phase2_context_does_not_invent_missing_summary():
 
     assert "无可靠摘要" in context
     assert "看起来在聊" in context
-    assert "不能说“你关注的UP主更新了”" not in context
+    assert "登录态确认：否" in context
 
 
 @pytest.mark.unit

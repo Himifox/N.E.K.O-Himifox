@@ -84,6 +84,7 @@ from main_logic.proactive_chat.delivery import (
 )
 from main_logic.proactive_chat.candidate_selection import (
     _format_phase1_link_candidate,
+    _phase1_linkless_modes,
     _round_robin_phase1_links,
 )
 from main_logic.proactive_chat.generation import (
@@ -1366,68 +1367,6 @@ async def handle_proactive_chat(
         web_modes.sort(key=lambda mode: 0 if mode == "personal" else 1)
 
         merged_web_content = ""
-        if web_modes:
-            parts = []
-            selected_by_mode = _round_robin_phase1_links(
-                web_modes,
-                sources,
-                total=_PHASE1_TOTAL_TOPIC_TARGET,
-            )
-            remaining_total = _PHASE1_TOTAL_TOPIC_TARGET - sum(
-                len(items) for items in selected_by_mode.values()
-            )
-            for m in web_modes:
-                src = sources[m]
-                label_map = PROACTIVE_SOURCE_LABELS.get(
-                    proactive_lang, PROACTIVE_SOURCE_LABELS["en"]
-                )
-                label = label_map.get(m, m)
-                selected_links = selected_by_mode.get(m, [])
-
-                if selected_links:
-                    all_web_links.extend(selected_links)
-                    lines = []
-                    for idx, item in enumerate(selected_links, start=1):
-                        from utils.tokenize import truncate_to_tokens as _ttt
-
-                        title = item.get("title", "").strip()
-                        if not title:
-                            continue
-                        # 单条外部内容截到 PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS，
-                        # 防止个别 title/url 异常长撑爆 prompt。
-                        item_line = _ttt(
-                            _format_phase1_link_candidate(idx, item),
-                            PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
-                        )
-                        lines.append(item_line)
-                    if lines:
-                        parts.append(f"--- {label} ---\n" + "\n".join(lines))
-                        continue
-
-                content_text = src.get("formatted_content", "")
-                if content_text and remaining_total > 0:
-                    compact_lines = [
-                        ln.strip() for ln in content_text.splitlines() if ln.strip()
-                    ]
-                    if compact_lines:
-                        fallback_lines = compact_lines[:remaining_total]
-                        if fallback_lines:
-                            from utils.tokenize import truncate_to_tokens as _ttt
-
-                            fallback_lines = [
-                                _ttt(ln, PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS)
-                                for ln in fallback_lines
-                            ]
-                            parts.append(
-                                f"--- {label} ---\n" + "\n".join(fallback_lines)
-                            )
-                            remaining_total -= len(fallback_lines)
-            from utils.tokenize import truncate_to_tokens as _ttt
-
-            # 兜底总和截断：防止 20 source × 200 token = 4k 超过 2k 总预算
-            merged_web_content = _ttt(
-                "\n\n".join(parts), PROACTIVE_EXTERNAL_TOTAL_MAX_TOKENS
-            )
 
         # Phase 1 结果收集
         phase1_topics: list[tuple[str, str]] = []  # [(channel, topic_summary), ...]
@@ -1489,54 +1428,79 @@ async def handle_proactive_chat(
                 _surfaced_reflection_ids = []
                 followup_topics_prompt = ""
 
-            # 被剔除的 web 子通道不参与 merged_web_content（sources 已弹出，
-            # 但 merged_web_content 已经构建完毕，需要重新构建）
-            if suppressed & set(web_modes):
-                # 重新构建 merged_web_content，排除被剔除的通道
-                remaining_web_modes = [m for m in web_modes if m not in suppressed]
-                if remaining_web_modes:
-                    selected_by_mode_2 = _round_robin_phase1_links(
-                        remaining_web_modes,
-                        sources,
-                        total=_PHASE1_TOTAL_TOPIC_TARGET,
-                    )
-                    all_web_links = []
-                    parts = []
-                    for m in remaining_web_modes:
-                        src = sources.get(m)
-                        if not src:
-                            continue
-                        label_map = PROACTIVE_SOURCE_LABELS.get(
-                            proactive_lang, PROACTIVE_SOURCE_LABELS["en"]
+
+        # Build once after source suppression so candidates are decayed only once.
+        web_modes = [mode for mode in web_modes if mode in sources]
+        if web_modes:
+            from utils.tokenize import truncate_to_tokens as _ttt
+
+            parts = []
+            fallback_modes = _phase1_linkless_modes(web_modes, sources)
+            selected_by_mode = _round_robin_phase1_links(
+                web_modes,
+                sources,
+                total=max(
+                    0, _PHASE1_TOTAL_TOPIC_TARGET - len(fallback_modes)
+                ),
+            )
+            remaining_total = _PHASE1_TOTAL_TOPIC_TARGET - sum(
+                len(items) for items in selected_by_mode.values()
+            )
+            remaining_fallback_modes = len(fallback_modes)
+            for mode in web_modes:
+                src = sources[mode]
+                label_map = PROACTIVE_SOURCE_LABELS.get(
+                    proactive_lang, PROACTIVE_SOURCE_LABELS["en"]
+                )
+                label = label_map.get(mode, mode)
+                selected_links = selected_by_mode.get(mode, [])
+
+                if selected_links:
+                    all_web_links.extend(selected_links)
+                    lines = [
+                        _ttt(
+                            _format_phase1_link_candidate(index, item),
+                            PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
                         )
-                        label = label_map.get(m, m)
-                        selected_links_2 = selected_by_mode_2.get(m, [])
-                        if selected_links_2:
-                            all_web_links.extend(selected_links_2)
-                            lines = []
-                            from utils.tokenize import truncate_to_tokens as _ttt2
+                        for index, item in enumerate(selected_links, start=1)
+                        if item.get("title", "").strip()
+                    ]
+                    if lines:
+                        parts.append(f"--- {label} ---\n" + "\n".join(lines))
+                        continue
 
-                            for idx, item in enumerate(selected_links_2, start=1):
-                                t = item.get("title", "").strip()
-                                if not t:
-                                    continue
-                                # 同上路径，单条 cap
-                                lines.append(
-                                    _ttt2(
-                                        _format_phase1_link_candidate(idx, item),
-                                        PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
-                                    )
-                                )
-                            if lines:
-                                parts.append(f"--- {label} ---\n" + "\n".join(lines))
-                    from utils.tokenize import truncate_to_tokens as _ttt3
+                content_text = src.get("formatted_content", "")
+                if content_text and remaining_total > 0:
+                    compact_lines = [
+                        line.strip()
+                        for line in content_text.splitlines()
+                        if line.strip()
+                    ]
+                    if compact_lines:
+                        is_reserved_fallback = mode in fallback_modes
+                        reserve_for_later = max(
+                            0,
+                            remaining_fallback_modes
+                            - (1 if is_reserved_fallback else 0),
+                        )
+                        fallback_limit = remaining_total - reserve_for_later
+                        if fallback_limit <= 0:
+                            continue
+                        fallback_lines = [
+                            _ttt(line, PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS)
+                            for line in compact_lines[:fallback_limit]
+                        ]
+                        parts.append(
+                            f"--- {label} ---\n" + "\n".join(fallback_lines)
+                        )
+                        remaining_total -= len(fallback_lines)
+                        if is_reserved_fallback:
+                            remaining_fallback_modes -= 1
 
-                    merged_web_content = _ttt3(
-                        "\n\n".join(parts), PROACTIVE_EXTERNAL_TOTAL_MAX_TOKENS
-                    )
-                else:
-                    merged_web_content = ""
-                    all_web_links = []
+            # 兜底总和截断：防止 20 source × 200 token = 4k 超过 2k 总预算
+            merged_web_content = _ttt(
+                "\n\n".join(parts), PROACTIVE_EXTERNAL_TOTAL_MAX_TOKENS
+            )
 
         # ============================================================
         # 合并 Phase 1 LLM 调用：web 筛选 + music 关键词 + meme 关键词

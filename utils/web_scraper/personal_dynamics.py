@@ -31,7 +31,11 @@ if TYPE_CHECKING:
 import json
 
 from ._shared import get_random_user_agent, is_china_region, logger
-from .platform_helpers import _get_bilibili_credential, _get_platform_cookies
+from .platform_helpers import (
+    _bilibili_account_cache_key,
+    _get_bilibili_credential,
+    _get_platform_cookies,
+)
 from .trending_content import _format_score
 
 _BILIBILI_DYNAMIC_TTL_SECONDS = 2 * 60
@@ -222,7 +226,7 @@ async def _fetch_bilibili_personal_dynamic_uncached(limit: int = 10) -> Dict[str
                     'kind': kind,
                     'resource_id': resource_id,
                     'bvid': str(bvid or ''),
-                    'title': title or final_content,
+                    'title': title or content,
                     'reason': '关注UP更新',
                     'description_hint': re.sub(r'\s+', ' ', description_hint).strip(),
                     'published_at': published_at,
@@ -254,8 +258,7 @@ async def fetch_bilibili_personal_dynamic(limit: int = 10) -> Dict[str, Any]:
             'error': '未提供Bilibili认证信息',
         }
     normalized_limit = max(1, min(int(limit), 20))
-    cookies = credential.get_cookies()
-    account_key = str(cookies.get('DedeUserID') or 'authenticated')
+    account_key = _bilibili_account_cache_key(credential)
     cache_key = f"{account_key}:{normalized_limit}"
     now = time.monotonic()
     cached = _BILIBILI_DYNAMIC_CACHE.get(cache_key)

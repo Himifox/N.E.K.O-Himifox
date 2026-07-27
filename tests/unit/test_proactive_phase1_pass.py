@@ -52,6 +52,29 @@ def test_phase1_web_candidates_are_balanced_across_modes(monkeypatch):
     assert all(link["mode"] == "personal" for link in selected["personal"])
 
 
+def test_phase1_reserves_budget_for_linkless_window_context(monkeypatch):
+    monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
+    sources = {
+        "window": {"formatted_content": "当前窗口：Project N.E.K.O"},
+        "news": {
+            "links": [
+                {"title": f"news-{index}", "url": f"https://news/{index}"}
+                for index in range(20)
+            ]
+        },
+    }
+
+    fallback_modes = proactive_service._phase1_linkless_modes(
+        ["window", "news"], sources
+    )
+    selected = proactive_service._round_robin_phase1_links(
+        ["window", "news"], sources, total=12 - len(fallback_modes)
+    )
+
+    assert fallback_modes == ["window"]
+    assert len(selected["news"]) == 11
+
+
 def test_bilibili_following_wins_duplicate_from_video_radar(monkeypatch):
     monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
     duplicate_url = "https://www.bilibili.com/video/BVduplicate"

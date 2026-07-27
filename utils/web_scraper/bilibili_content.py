@@ -16,11 +16,15 @@ from copy import deepcopy
 import re
 import time
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 from utils.external_http_client import get_external_http_client
 from utils.logger_config import get_module_logger
 
-from .platform_helpers import _get_bilibili_credential
+from .platform_helpers import (
+    _bilibili_account_cache_key,
+    _get_bilibili_credential,
+)
 
 
 logger = get_module_logger(__name__, "Main")
@@ -139,10 +143,11 @@ async def _cached_result(
             result = {"success": False, "videos": [], "error": str(exc)}
 
         if result.get("success"):
+            store_key = str(result.pop("_cache_key", "") or key)
             stored = deepcopy(result)
             stored.pop("cached", None)
             stored.pop("stale", None)
-            _RESULT_CACHE[key] = (now, stored)
+            _RESULT_CACHE[store_key] = (now, stored)
             return result
 
         if cached and now - cached[0] <= _STALE_TTL_SECONDS:
@@ -266,15 +271,13 @@ async def fetch_bilibili_home(limit: int = 10) -> dict[str, Any]:
     normalized_limit = max(1, min(int(limit), 20))
     credential = _get_bilibili_credential()
     authenticated = bool(credential)
-    account_key = "anonymous"
-    if credential:
-        try:
-            account_key = str(
-                credential.get_cookies().get("DedeUserID") or "authenticated"
-            )
-        except Exception:
-            account_key = "authenticated"
+    account_key = (
+        _bilibili_account_cache_key(credential)
+        if credential
+        else "anonymous"
+    )
     cache_key = f"bilibili_home:{account_key}:{normalized_limit}"
+    anonymous_cache_key = f"bilibili_home:anonymous:{normalized_limit}"
 
     async def _fetch() -> dict[str, Any]:
         from bilibili_api import homepage
@@ -307,6 +310,7 @@ async def fetch_bilibili_home(limit: int = 10) -> dict[str, Any]:
         }
         if auth_warning:
             result["warning"] = f"登录首页不可用，已使用匿名首页: {auth_warning}"
+            result["_cache_key"] = anonymous_cache_key
         if not videos:
             result["error"] = "Bilibili首页没有返回可用视频"
         return result
@@ -391,6 +395,15 @@ async def _download_subtitle(entry: dict[str, Any]) -> str:
         return ""
     if url.startswith("//"):
         url = "https:" + url
+    try:
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or not (
+        hostname == "hdslb.com" or hostname.endswith(".hdslb.com")
+    ):
+        return ""
     response = await get_external_http_client().get(url, timeout=8.0)
     response.raise_for_status()
     payload = response.json()
