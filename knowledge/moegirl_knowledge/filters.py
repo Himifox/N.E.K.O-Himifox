@@ -32,7 +32,7 @@ def normalize_search_text(value: str) -> str:
     return "".join(_FTS_TOKEN_RE.split(unicodedata.normalize("NFKC", str(value or "")).casefold()))
 
 
-def normalize_meme_phrase(value: str) -> str:
+def normalize_meme_phrase(value: str, *, already_normalized: bool = False) -> str:
     """Normalize a conversational rendering of a known meme title.
 
     This is deliberately narrower than semantic search: it removes common
@@ -40,7 +40,7 @@ def normalize_meme_phrase(value: str) -> str:
     lets a title such as ``他在 CPU 你`` match ``他这是在 CPU 我吧`` without
     treating unrelated prose or source content as a meme alias.
     """
-    normalized = normalize_search_text(value)
+    normalized = str(value) if already_normalized else normalize_search_text(value)
     normalized = _MEME_FILLER_RE.sub("", normalized)
     return _MEME_PRONOUN_RE.sub("人", normalized)
 

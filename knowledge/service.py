@@ -18,6 +18,12 @@ from .moegirl_knowledge.retrieval import (
 )
 from .moegirl_knowledge.source_registry import SOURCES, get_source
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .routing import (
+    KnowledgeRoutingState,
+    RouteCollection,
+    get_routing_state,
+    notify_database_changed,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +158,7 @@ class KnowledgeService:
         self._database_paths = {
             key: Path(value) for key, value in (database_paths or {}).items()
         }
+        self._routing_state: KnowledgeRoutingState | None = None
 
     @classmethod
     def from_root(cls, knowledge_root: str | Path) -> "KnowledgeService":
@@ -211,18 +218,39 @@ class KnowledgeService:
     ) -> KnowledgeTurnContext:
         if limit <= 0:
             return KnowledgeTurnContext()
-        requested = set(collection_ids) if collection_ids is not None else None
-        matches: list[KnowledgeTurnMatch] = []
-        for spec in self._collections.values():
-            if requested is not None and spec.collection_id not in requested:
-                continue
-            if requested is None and not spec.auto_context_enabled:
-                continue
-            matches.extend(self.match_turn(spec.collection_id, user_text, limit=limit))
-        if not matches:
+        if collection_ids is None:
+            allowed = frozenset(
+                spec.collection_id
+                for spec in self._collections.values()
+                if spec.auto_context_enabled and spec.response_policy is not None
+            )
+        else:
+            allowed = frozenset(collection_ids)
+            unknown = allowed.difference(self._collections)
+            if unknown:
+                raise ValueError(f"unknown knowledge collection: {sorted(unknown)[0]}")
+            allowed = frozenset(
+                collection_id
+                for collection_id in allowed
+                if self._spec(collection_id).response_policy is not None
+            )
+        if not allowed:
             return KnowledgeTurnContext()
-        matches.sort(key=self._turn_match_sort_key)
-        selected = matches[0]
+        route_match = self._get_routing_state().match(
+            user_text,
+            allowed_collections=allowed,
+        )
+        if route_match is None:
+            return KnowledgeTurnContext()
+        entry = self._get_routing_state().get_card(route_match)
+        if entry is None:
+            return KnowledgeTurnContext()
+        selected = KnowledgeTurnMatch(
+            collection_id=route_match.record.collection_id,
+            hit=MoegirlKnowledgeHit(entry=entry, score=route_match.score),
+            match_mode=route_match.match_mode,
+            collection_priority=route_match.record.priority,
+        )
         policy = self._spec(selected.collection_id).response_policy
         if policy is None:
             return KnowledgeTurnContext()
@@ -265,12 +293,18 @@ class KnowledgeService:
         disabled: bool,
     ) -> int:
         database_path = self.database_path(collection_id)
-        return set_entry_disabled(
+        count = set_entry_disabled(
             get_catalog_override_path(database_path),
             source_tag=source_tag,
             title=title,
             disabled=disabled,
         )
+        notify_database_changed(database_path)
+        # Management writes may remove a route, so publish the new snapshot
+        # before returning rather than briefly serving a disabled card.
+        if self._routing_state is not None:
+            self._routing_state.refresh()
+        return count
 
     def get_status(self, collection_id: str) -> dict:
         store = self._store(collection_id)
@@ -290,7 +324,9 @@ class KnowledgeService:
 
         pack = load_pack(path)
         self._spec(pack.collection_id)
-        return install_pack(self.database_path(pack.collection_id), pack)
+        result = install_pack(self.database_path(pack.collection_id), pack)
+        self.refresh_routing_index(background=True)
+        return result
 
     def list_packs(self, collection_id: str) -> tuple[dict, ...]:
         from .packs import list_installed_packs
@@ -311,6 +347,15 @@ class KnowledgeService:
             pack_id,
             enabled=enabled,
         )
+        self._routing_state = None
+        self.refresh_routing_index(background=True)
+
+    def refresh_routing_index(self, *, background: bool = False) -> None:
+        state = self._get_routing_state()
+        if background:
+            state.refresh_in_background()
+        else:
+            state.refresh()
 
     def database_path(self, collection_id: str) -> Path:
         if collection_id in self._database_paths:
@@ -330,6 +375,21 @@ class KnowledgeService:
     def _retriever(self, collection_id: str) -> MoegirlKnowledgeRetriever:
         return MoegirlKnowledgeRetriever(self._store(collection_id))
 
+    def _get_routing_state(self) -> KnowledgeRoutingState:
+        if self._routing_state is None:
+            collections = tuple(
+                RouteCollection(
+                    collection_id=spec.collection_id,
+                    database_path=self.database_path(spec.collection_id),
+                    priority=spec.priority,
+                    policy=self._effective_match_policy(spec),
+                )
+                for spec in self._collections.values()
+                if spec.response_policy is not None
+            )
+            self._routing_state = get_routing_state(collections)
+        return self._routing_state
+
     def _effective_match_policy(self, spec: CollectionSpec) -> MatchPolicy:
         if not spec.restrict_auto_context_to_registered_sources:
             return spec.match_policy
@@ -340,16 +400,6 @@ class KnowledgeService:
             *enabled_pack_source_tags(self.database_path(spec.collection_id)),
         )))
         return replace(spec.match_policy, allowed_source_tags=allowed_sources)
-
-    @staticmethod
-    def _turn_match_sort_key(match: KnowledgeTurnMatch) -> tuple[int, float, int, str]:
-        mode_priority = 0 if match.match_mode == "strong" else 1
-        return (
-            mode_priority,
-            -match.hit.score,
-            -match.collection_priority,
-            match.hit.entry.title,
-        )
 
     def _render_turn_context(
         self,

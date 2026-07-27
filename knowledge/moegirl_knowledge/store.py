@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -13,6 +14,8 @@ from .models import MoegirlKnowledgeEntry, UpsertResult
 
 
 SCHEMA_VERSION = 5
+_INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
+_INITIALIZE_LOCK = threading.Lock()
 
 
 class KnowledgeStoreError(RuntimeError):
@@ -30,16 +33,30 @@ class MoegirlKnowledgeStore:
         if writable:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            connection = sqlite3.connect(self.database_path)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA busy_timeout=5000")
-            if writable:
-                connection.execute("PRAGMA journal_mode=WAL")
-            self._initialize(connection)
-            # Schema/tag compatibility work must persist even when a caller
-            # opened the store for a read immediately after an application
-            # upgrade.
-            connection.commit()
+            cache_key = str(self.database_path.resolve())
+            identity = _database_identity(self.database_path)
+            if (
+                cache_key not in _INITIALIZED_DATABASES
+                or _INITIALIZED_DATABASES[cache_key] != identity
+            ):
+                with _INITIALIZE_LOCK:
+                    identity = _database_identity(self.database_path)
+                    if (
+                        cache_key not in _INITIALIZED_DATABASES
+                        or _INITIALIZED_DATABASES[cache_key] != identity
+                    ):
+                        connection = self._open_connection(writable=writable)
+                        self._initialize(connection)
+                        # Migration and compatibility writes must persist before
+                        # any caller observes the initialized database.
+                        connection.commit()
+                        _INITIALIZED_DATABASES[cache_key] = _database_identity(
+                            self.database_path
+                        )
+                    else:
+                        connection = self._open_connection(writable=writable)
+            else:
+                connection = self._open_connection(writable=writable)
             yield connection
             if writable:
                 connection.commit()
@@ -48,6 +65,14 @@ class MoegirlKnowledgeStore:
         finally:
             if "connection" in locals():
                 connection.close()
+
+    def _open_connection(self, *, writable: bool) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=5000")
+        if writable:
+            connection.execute("PRAGMA journal_mode=WAL")
+        return connection
 
     def _initialize(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -139,14 +164,18 @@ class MoegirlKnowledgeStore:
             result = self._upsert_with_connection(connection, entry)
             if not result.unchanged:
                 self._increment_entries_revision(connection)
-            return result
+        if not result.unchanged:
+            self._notify_routing_changed()
+        return result
 
     def upsert_many(self, entries: Sequence[MoegirlKnowledgeEntry]) -> tuple[UpsertResult, ...]:
         with self._connection(writable=True) as connection:
             results = tuple(self._upsert_with_connection(connection, entry) for entry in entries)
             if any(not result.unchanged for result in results):
                 self._increment_entries_revision(connection)
-            return results
+        if any(not result.unchanged for result in results):
+            self._notify_routing_changed()
+        return results
 
     def replace_source(self, source_tag: str, entries: Sequence[MoegirlKnowledgeEntry]) -> tuple[UpsertResult, ...]:
         """Atomically replace a fixed bundled/imported source namespace."""
@@ -164,7 +193,14 @@ class MoegirlKnowledgeStore:
             )
             results = tuple(self._insert_with_connection(connection, entry) for entry in entries)
             self._increment_entries_revision(connection)
-            return results
+        self._notify_routing_changed()
+        return results
+
+    def _notify_routing_changed(self) -> None:
+        # Local import avoids a persistence -> routing import cycle.
+        from knowledge.routing import notify_database_changed
+
+        notify_database_changed(self.database_path)
 
     @staticmethod
     def _entry_key(entry: MoegirlKnowledgeEntry) -> str:
@@ -233,6 +269,26 @@ class MoegirlKnowledgeStore:
                 return int(row["value"]) if row else 0
         except (KnowledgeStoreError, TypeError, ValueError):
             return 0
+
+    def load_routing_entries(self) -> tuple[int, tuple[MoegirlKnowledgeEntry, ...]]:
+        """Read one collection revision and its routeable cards in one transaction."""
+        try:
+            with self._connection() as connection:
+                revision_row = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'entries_revision'"
+                ).fetchone()
+                revision = int(revision_row["value"]) if revision_row else 0
+                entries: list[MoegirlKnowledgeEntry] = []
+                for row in connection.execute(
+                    "SELECT rowid, * FROM entries ORDER BY rowid"
+                ).fetchall():
+                    try:
+                        entries.append(_entry_from_row(row))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                return revision, tuple(entries)
+        except (KnowledgeStoreError, TypeError, ValueError):
+            return 0, ()
 
     def integrity_ok(self) -> bool:
         try:
@@ -335,3 +391,11 @@ def _entry_from_row(row: sqlite3.Row) -> MoegirlKnowledgeEntry:
         title=row["title"], terms=raw_terms if isinstance(raw_terms, dict) else {},
         tags=_json_values(row["tags"]), summary=row["summary"], content=row["content"],
     )
+
+
+def _database_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return int(stat.st_dev), int(stat.st_ino)

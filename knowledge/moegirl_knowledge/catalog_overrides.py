@@ -59,6 +59,9 @@ def set_entry_disabled(
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
+    from knowledge.routing import notify_database_changed
+
+    notify_database_changed(output_path.with_name("knowledge.db"))
     return len(entries)
 
 

@@ -115,6 +115,10 @@ async def _import_bundled_chime(database_path: Path, state_path: Path, logger) -
         dataset = await asyncio.to_thread(load_bundled_chime_dataset)
         store = MoegirlKnowledgeStore(database_path)
         results = await asyncio.to_thread(store.replace_source, "source:chime", dataset.entries)
+        from knowledge.service import KnowledgeService
+
+        service = KnowledgeService.for_collection("meme", database_path)
+        await asyncio.to_thread(service.refresh_routing_index)
         status = {
             "status": "ready",
             "commit": dataset.commit,
