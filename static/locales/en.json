@@ -77,15 +77,6 @@
             "decline": "No, keep it on"
         }
     },
-    "tutorialPrompt": {
-        "title": "Want to start the home tutorial?",
-        "message": "I can quickly show you the main entry points on the home screen so you can get started with N.E.K.O right away.",
-        "note": "You can skip it at any time, or reopen it later from Memory Browser.",
-        "startNow": "Start tutorial",
-        "later": "Maybe later",
-        "never": "Don't remind me",
-        "startFailed": "The tutorial couldn't be started right now. Please try again later."
-    },
     "characterProfile": {
         "gender": "Gender",
         "age": "Age",
@@ -1170,20 +1161,20 @@
             "title": "Alibaba US API Notice",
             "message": "You are currently using Alibaba's US API, which does not support TTS or realtime voice. We recommend switching to Alibaba's Singapore API."
         },
-        "conversationModelConfig": "Text Dialogue Model Configuration",
-        "summaryModelConfig": "Summary Model Configuration",
-        "gameModelsConfig": "Mini-game Model Configuration",
+        "conversationModelConfig": "Text Chat Model",
+        "summaryModelConfig": "Summary Model",
+        "gameModelsConfig": "Mini-game Model",
         "gameMainModelConfig": "Mini-game Main Model Configuration",
         "gameSummaryModelConfig": "Mini-game Summary Model Configuration",
-        "correctionModelConfig": "Correction Model Configuration",
-        "emotionModelConfig": "Emotion Model Configuration",
-        "visionModelConfig": "Vision Model Configuration",
-        "realtimeModelConfig": "Realtime API (Local Mode)",
-        "ttsModelConfig": "TTS Model Configuration (Duplex Streaming)",
+        "correctionModelConfig": "Correction Model",
+        "emotionModelConfig": "Emotion Model",
+        "visionModelConfig": "Vision Chat Model",
+        "realtimeModelConfig": "Realtime Multimodal Model (Local Mode)",
+        "ttsModelConfig": "TTS Model",
         "apiUrl": "API URL",
         "apiKey": "API Key",
         "modelId": "Model ID",
-        "agentApiConfigTitle": "Agent API Config (Vision-capable required)",
+        "agentApiConfigTitle": "Agent API (Vision-capable required)",
         "providerPlaceholder": "e.g., openai, azure, local",
         "apiUrlPlaceholder": "e.g., https://api.openai.com/v1",
         "modelIdPlaceholder": "e.g., gpt-5.1-chat-latest, qwen-flash",
@@ -3395,7 +3386,7 @@
                 "desc": "Check to enable custom API configuration. Then configure independent APIs for different modules like summarization, correction, emotion analysis, etc."
             },
             "step9": {
-                "title": "📝 Summary Model Configuration",
+                "title": "📝 Summary Model",
                 "desc": "Summary model generates conversation summaries and manages memory. Configure independent API service for summary tasks."
             }
         },

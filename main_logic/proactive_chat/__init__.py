@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2025-2026 Project N.E.K.O. Team
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,12 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility alias for :mod:`utils.prompt_state.tutorial`."""
+"""
+Domain modules for proactive chat.
 
-from __future__ import annotations
-
-import sys
-
-from utils.prompt_state import tutorial as _implementation
-
-sys.modules[__name__] = _implementation
+HTTP adapters remain in :mod:`main_routers.system_router`; this package owns
+framework-independent proactive-chat contracts and business behavior.
+"""

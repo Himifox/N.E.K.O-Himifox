@@ -54,13 +54,12 @@ def test_non_active_and_invalid_startup_modes_remain_safe():
 def test_proactive_flow_snapshots_mode_and_wires_real_activity_state():
     source = (
         Path(__file__).parents[2]
-        / "main_routers"
-        / "system_router"
-        / "proactive_chat_flow.py"
+        / "main_logic"
+        / "proactive_chat"
+        / "recommendation_integration.py"
     ).read_text(encoding="utf-8")
 
-    assert source.count("recommendation_mode = get_recommendation_runtime_mode()") == 1
-    assert source.count(
-        "activity_state=resolve_recommendation_activity_state(activity_snapshot)"
-    ) == 2
+    assert source.count("self.mode = get_recommendation_runtime_mode()") == 1
+    assert "activity_state=resolve_recommendation_activity_state(" in source
+    assert "self.activity_snapshot" in source
     assert 'activity_state=str(getattr(activity_snapshot, "propensity"' not in source

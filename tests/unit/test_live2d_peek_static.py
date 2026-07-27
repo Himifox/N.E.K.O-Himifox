@@ -165,16 +165,17 @@ def test_live2d_widget_mode_edge_peek_reports_viewport_intersection_bounds():
     assert "drawPolygon" not in bounds_source
     assert "const renderer = manager && manager.pixi_app && manager.pixi_app.renderer;" in edge_peek_source
     assert "const screen = renderer && renderer.screen;" in edge_peek_source
-    assert "const viewportW = Number.isFinite(rendererW) && rendererW > 0 ? rendererW : Number(window.innerWidth);" in edge_peek_source
-    assert "const viewportH = Number.isFinite(rendererH) && rendererH > 0 ? rendererH : Number(window.innerHeight);" in edge_peek_source
-    assert "const width = Number.isFinite(viewportW) && viewportW > 0 ? viewportW : fallbackW;" in edge_peek_source
-    assert "const height = Number.isFinite(viewportH) && viewportH > 0 ? viewportH : fallbackH;" in edge_peek_source
+    assert "const canvasW = Number(screen && screen.width);" in edge_peek_source
+    assert "const vw = Number(window.innerWidth);" in edge_peek_source
+    assert "const viewportW = Number.isFinite(canvasW) && canvasW > 0" in edge_peek_source
+    assert "? Math.min(canvasW, vw)" in edge_peek_source
+    assert ": (validVw ? vw : fallbackW);" in edge_peek_source
     assert "getLive2DPeekPlacement(model, bounds, this)" in edge_peek_source
     assert "Math.max(fallbackW" not in viewport_source
     assert "Math.max(fallbackH" not in viewport_source
 
 
-def test_live2d_widget_mode_edge_peek_normal_snap_uses_renderer_screen_bounds():
+def test_live2d_widget_mode_edge_peek_normal_snap_caps_renderer_at_web_viewport():
     interaction_source = _source(LIVE2D_INTERACTION_PATH)
     snap_source = interaction_source.split("Live2DManager.prototype._checkSnapRequired = async function", 1)[1]
     snap_source = snap_source.split("Live2DManager.prototype._applySnapAnimation", 1)[0]
@@ -183,6 +184,8 @@ def test_live2d_widget_mode_edge_peek_normal_snap_uses_renderer_screen_bounds():
     assert "const rendererScreen = renderer && renderer.screen;" in snap_source
     assert "let screenRight = Number.isFinite(rendererW) && rendererW > 0 ? rendererW : window.innerWidth;" in snap_source
     assert "let screenBottom = Number.isFinite(rendererH) && rendererH > 0 ? rendererH : window.innerHeight;" in snap_source
+    assert "screenRight = Math.min(screenRight, viewportW);" in snap_source
+    assert "screenBottom = Math.min(screenBottom, viewportH);" in snap_source
 
 
 def test_live2d_widget_mode_edge_peek_does_not_persist_peek_position():

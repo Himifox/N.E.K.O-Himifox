@@ -307,13 +307,19 @@ function getLive2DPeekViewport(bounds = null, manager = null) {
     const fallbackH = bounds && Number.isFinite(bounds.height) ? bounds.height : 1;
     const renderer = manager && manager.pixi_app && manager.pixi_app.renderer;
     const screen = renderer && renderer.screen;
-    const rendererW = Number(screen && screen.width);
-    const rendererH = Number(screen && screen.height);
-    const viewportW = Number.isFinite(rendererW) && rendererW > 0 ? rendererW : Number(window.innerWidth);
-    const viewportH = Number.isFinite(rendererH) && rendererH > 0 ? rendererH : Number(window.innerHeight);
-    const width = Number.isFinite(viewportW) && viewportW > 0 ? viewportW : fallbackW;
-    const height = Number.isFinite(viewportH) && viewportH > 0 ? viewportH : fallbackH;
-    return { left: 0, top: 0, right: width, bottom: height, width, height };
+    const canvasW = Number(screen && screen.width);
+    const canvasH = Number(screen && screen.height);
+    const vw = Number(window.innerWidth);
+    const vh = Number(window.innerHeight);
+    const validVw = Number.isFinite(vw) && vw > 0;
+    const validVh = Number.isFinite(vh) && vh > 0;
+    const viewportW = Number.isFinite(canvasW) && canvasW > 0
+        ? (validVw ? Math.min(canvasW, vw) : canvasW)
+        : (validVw ? vw : fallbackW);
+    const viewportH = Number.isFinite(canvasH) && canvasH > 0
+        ? (validVh ? Math.min(canvasH, vh) : canvasH)
+        : (validVh ? vh : fallbackH);
+    return { left: 0, top: 0, right: viewportW, bottom: viewportH, width: viewportW, height: viewportH };
 }
 
 function getLive2DPeekViewportIntersection(bounds, viewport) {
@@ -489,7 +495,10 @@ function getLive2DPeekPlacement(model, bounds, manager = null) {
     const baseScaleX = model.scale && Number.isFinite(Number(model.scale.x)) ? Number(model.scale.x) : 1;
     const targetRotationDegrees = getLive2DPeekRotationDegrees(anchor);
     const targetRotation = targetRotationDegrees * Math.PI / 180;
-    const targetScaleX = getLive2DPeekInwardScaleX(model, side);
+    let targetScaleX = getLive2DPeekInwardScaleX(model, side);
+    if (side === 'right') {
+        targetScaleX = Math.abs(targetScaleX);
+    }
     const baseHeadAnchor = getLive2DPeekHeadAnchor(manager);
     const fallbackHeadLocalPoint = baseHeadAnchor
         ? null
@@ -940,10 +949,16 @@ Live2DManager.prototype._checkSnapRequired = async function (model, options = {}
         const rendererScreen = renderer && renderer.screen;
         const rendererW = Number(rendererScreen && rendererScreen.width);
         const rendererH = Number(rendererScreen && rendererScreen.height);
+        const viewportW = Number(window.innerWidth);
+        const viewportH = Number(window.innerHeight);
         let screenLeft = 0;
         let screenTop = 0;
         let screenRight = Number.isFinite(rendererW) && rendererW > 0 ? rendererW : window.innerWidth;
         let screenBottom = Number.isFinite(rendererH) && rendererH > 0 ? rendererH : window.innerHeight;
+        // renderer 在旧版本或初始化竞态中可能仍保留物理屏幕尺寸；网页真正能显示的区域
+        // 永远不能超过当前 viewport，否则首次加载围栏会把已出界模型误判为可见。
+        if (Number.isFinite(viewportW) && viewportW > 0) screenRight = Math.min(screenRight, viewportW);
+        if (Number.isFinite(viewportH) && viewportH > 0) screenBottom = Math.min(screenBottom, viewportH);
 
         // 可选：读 workArea 做二次保险（取更小值），但绝不能超过 innerWidth/innerHeight
         if (window.electronScreen && window.electronScreen.getCurrentDisplay) {

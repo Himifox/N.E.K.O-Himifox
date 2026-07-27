@@ -26,6 +26,7 @@ class MemoryStorage {
 function browserFixture() {
   const storage = new MemoryStorage()
   const elements = new Map()
+  const eventListeners = new Map()
   let reloads = 0
   let cookieValue = ''
 
@@ -36,6 +37,14 @@ function browserFixture() {
     },
     getElementById(id) {
       return elements.get(id) ?? null
+    },
+    addEventListener(type, listener) {
+      const listeners = eventListeners.get(type) ?? []
+      listeners.push(listener)
+      eventListeners.set(type, listeners)
+    },
+    dispatch(type, event) {
+      for (const listener of eventListeners.get(type) ?? []) listener(event)
     },
     head: {
       appendChild(element) {
@@ -138,7 +147,12 @@ test('granting consent queues consent before measurement and loads one tag', asy
   )
 
   const commands = fixture.windowObject.dataLayer
-  assert.deepEqual(commands.slice(0, 5).map((command) => command.slice(0, 2)), [
+  assert.equal(Array.isArray(commands[0]), false)
+  assert.equal(Object.prototype.toString.call(commands[0]), '[object Arguments]')
+  const queuedCommands = commands.slice(0, 5).map(
+    (command) => Array.from(command).slice(0, 2),
+  )
+  assert.deepEqual(queuedCommands, [
     ['consent', 'default'],
     ['consent', 'update'],
     ['js', commands[2][1]],
@@ -171,6 +185,65 @@ test('route tracking skips exactly one bootstrap page view', async () => {
   assert.deepEqual(trackedTargets, ['/architecture/', '/plugins/'])
 })
 
+test('recognizes only the N.E.K.O. Steam store app URL', async () => {
+  const analytics = await freshAnalyticsModule()
+
+  assert.equal(
+    analytics.isSteamCtaUrl(
+      'https://store.steampowered.com/app/4099310/__NEKO/?utm_source=test',
+    ),
+    true,
+  )
+  assert.equal(
+    analytics.isSteamCtaUrl('https://store.steampowered.com/app/4099310'),
+    true,
+  )
+  assert.equal(
+    analytics.isSteamCtaUrl('https://store.steampowered.com/app/999999/other'),
+    false,
+  )
+  assert.equal(
+    analytics.isSteamCtaUrl('https://example.com/app/4099310/__NEKO/'),
+    false,
+  )
+})
+
+test('delegated Steam CTA tracking emits one consented GA4 event', async () => {
+  const analytics = await freshAnalyticsModule()
+  const fixture = browserFixture()
+  const anchor = {
+    href: 'https://store.steampowered.com/app/4099310/__NEKO/?utm_source=project-neko.online&utm_medium=referral&utm_campaign=docs_home&utm_content=hero_en',
+    textContent: '  Get on Steam  ',
+  }
+  const target = {
+    closest(selector) {
+      assert.equal(selector, 'a[href]')
+      return anchor
+    },
+  }
+
+  assert.equal(analytics.installSteamCtaClickTracking(fixture), true)
+  assert.equal(analytics.installSteamCtaClickTracking(fixture), false)
+  fixture.documentObject.dispatch('click', { target })
+  assert.equal(fixture.windowObject.dataLayer, undefined)
+
+  analytics.acceptGoogleAnalytics(fixture)
+  fixture.documentObject.dispatch('click', { target })
+
+  const eventCommand = Array.from(fixture.windowObject.dataLayer.at(-1))
+  assert.equal(eventCommand[0], 'event')
+  assert.equal(eventCommand[1], analytics.STEAM_CTA_EVENT_NAME)
+  assert.deepEqual(eventCommand[2], {
+    link_url: anchor.href,
+    link_domain: 'store.steampowered.com',
+    link_text: 'Get on Steam',
+    cta_location: 'hero_en',
+    page_location: 'https://project-neko.online/guide/',
+    page_title: 'N.E.K.O. Docs',
+    transport_type: 'beacon',
+  })
+})
+
 test('a cross-tab denial immediately disables active analytics', async () => {
   const analytics = await freshAnalyticsModule()
   const fixture = browserFixture()
@@ -201,7 +274,7 @@ test('a cross-tab denial immediately disables active analytics', async () => {
   assert.equal(analytics.trackAnalyticsPageView('/plugins/', fixture), false)
   assert.equal(fixture.reloadCount(), 1)
   assert.deepEqual(
-    fixture.windowObject.dataLayer.at(-1).slice(0, 2),
+    Array.from(fixture.windowObject.dataLayer.at(-1)).slice(0, 2),
     ['consent', 'update'],
   )
   assert.equal(
@@ -223,7 +296,7 @@ test('revoking active analytics stores denial and reloads without a second tag',
   assert.equal(fixture.reloadCount(), 1)
   assert.equal(fixture.elements.size, 1)
   assert.deepEqual(
-    fixture.windowObject.dataLayer.at(-1).slice(0, 2),
+    Array.from(fixture.windowObject.dataLayer.at(-1)).slice(0, 2),
     ['consent', 'update'],
   )
   assert.equal(
