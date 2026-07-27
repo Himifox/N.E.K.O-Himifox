@@ -249,6 +249,15 @@
         .char-avatar-privacy {
             opacity: 0;
         }
+        .char-avatar-theme-dark {
+            display: none;
+        }
+        [data-theme="dark"] .char-avatar-theme-light {
+            display: none;
+        }
+        [data-theme="dark"] .char-avatar-theme-dark {
+            display: block;
+        }
         .character-banner.credential-privacy-active .char-avatar-idle {
             opacity: 0;
         }
@@ -856,8 +865,10 @@
         <!-- Character greeting banner -->
         <div class="character-banner">
             <div class="char-avatar-wrap" aria-hidden="true">
-                <img class="char-avatar char-avatar-idle" src="/static/images/cookies/yui-credential-idle.webp" alt="" draggable="false">
-                <img class="char-avatar char-avatar-privacy" src="/static/images/cookies/yui-credential-privacy.webp" alt="" draggable="false">
+                <img class="char-avatar char-avatar-idle char-avatar-theme-light" src="/static/images/cookies/yui-credential-idle-light.webp" alt="" draggable="false">
+                <img class="char-avatar char-avatar-privacy char-avatar-theme-light" src="/static/images/cookies/yui-credential-privacy-light.webp" alt="" draggable="false">
+                <img class="char-avatar char-avatar-idle char-avatar-theme-dark" src="/static/images/cookies/yui-credential-idle.webp" alt="" draggable="false">
+                <img class="char-avatar char-avatar-privacy char-avatar-theme-dark" src="/static/images/cookies/yui-credential-privacy.webp" alt="" draggable="false">
                 <span class="char-status-dot"></span>
             </div>
             <div class="char-speech">
