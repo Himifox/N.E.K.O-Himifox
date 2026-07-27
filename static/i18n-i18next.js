@@ -31,7 +31,7 @@
     // locale 资源版本（用于 cache-busting，避免客户端长期缓存旧语言包导致新增 key 不生效）
     // 修改原因：凭证管理页新增界面文案；递增版本让 Electron、
     // Docker 等长期缓存重新拉取包含新 key 的语言包。
-    const LOCALE_VERSION = '2026-07-24-credential-management-i18n';
+    const LOCALE_VERSION = '2026-07-27-youtube-instruction-format-i18n';
 
     function initDecorativeImageDragGuard() {
         const markImage = (img) => {

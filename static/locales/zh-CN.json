@@ -3828,7 +3828,7 @@
             "twitch": "<b>Device Code 授权：</b>在 Twitch Developer Console 创建公开应用，填入 Client ID 后按提示完成授权。",
             "bilibili": "<b>目标：</b>请前往 <b>bilibili.com</b>获取这些 Cookies。",
             "xhh": "<b>推荐：</b>点击下方扫码登录；也可前往 <b>xiaoheihe.cn</b> 登录后手动填写 Cookies。",
-            "youtube": "<b>1. 获取 Cookie</b><br>在已登录 YouTube 的浏览器中：<br>1. 打开 <b>youtube.com</b><br>2. 按 F12 → Network<br>3. 刷新页面，选择一个 <code>youtubei/v1/browse</code> 请求<br>4. 在 Request Headers 中复制完整的 Cookie 值",
+            "youtube": "<b>获取 Cookie</b><div class=\"instruction-lead\">在已登录 YouTube 的浏览器中：</div><ol class=\"instruction-steps\"><li>打开 <b>youtube.com</b></li><li>按 <b>F12</b>，打开 <b>Network</b> 面板</li><li>刷新页面后，选择名称包含 <code>youtubei/v1/browse</code> 的请求</li><li>在 <b>Request Headers</b> 中复制完整的 Cookie 值</li></ol>",
             "douyin": "<b>目标：</b> 请前往 <b>douyin.com</b> 获取这些 Cookies。",
             "kuaishou": "<b>目标：</b> 请前往 <b>kuaishou.com</b> 获取这些 Cookies。",
             "weibo": "<b>目标：</b> 请前往 <b>weibo.com</b> 获取这些 Cookies。",

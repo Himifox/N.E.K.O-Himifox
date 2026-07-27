@@ -3828,7 +3828,7 @@
             "twitch": "<b>Device Code 認可：</b>Twitch Developer Console で公開アプリを作成し、Client ID を入力して画面の案内に従ってください。",
             "bilibili": "<b>対象：</b> <b>bilibili.com</b> にアクセスして Cookie を取得してください。",
             "xhh": "<b>推奨：</b>下のQRコードログインを使うか、<b>xiaoheihe.cn</b> にログインしてCookieを手動入力してください。",
-            "youtube": "<b>1. Cookie を取得</b><br>YouTube にログイン済みのブラウザで：<br>1. <b>youtube.com</b> を開く<br>2. F12 → Network を押す<br>3. ページを更新し、<code>youtubei/v1/browse</code> リクエストを選択する<br>4. Request Headers から完全な Cookie 値をコピーする",
+            "youtube": "<b>Cookie を取得</b><div class=\"instruction-lead\">YouTube にログイン済みのブラウザで：</div><ol class=\"instruction-steps\"><li><b>youtube.com</b> を開く</li><li><b>F12</b> を押して <b>Network</b> パネルを開く</li><li>ページを更新し、名前に <code>youtubei/v1/browse</code> を含むリクエストを選択する</li><li><b>Request Headers</b> から完全な Cookie 値をコピーする</li></ol>",
             "douyin": "<b>対象：</b> <b>douyin.com</b> にアクセスして Cookie を取得してください。",
             "kuaishou": "<b>対象：</b> <b>kuaishou.com</b> にアクセスして Cookie を取得してください。",
             "weibo": "<b>対象：</b> <b>weibo.com</b> にアクセスして Cookie を取得してください。",

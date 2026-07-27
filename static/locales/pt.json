@@ -3828,7 +3828,7 @@
             "twitch": "<b>Autorização por Device Code:</b> crie um aplicativo público no Twitch Developer Console, informe o Client ID e siga as instruções.",
             "bilibili": "<b>Target:</b> Vá para <b>bilibili.com</b> para buscar esses cookies.",
             "xhh": "<b>Recomendado:</b> use o login por QR abaixo ou entre em <b>xiaoheihe.cn</b> e preencha os cookies manualmente.",
-            "youtube": "<b>1. Obtenha o Cookie</b><br>Em um navegador conectado ao YouTube:<br>1. Abra <b>youtube.com</b><br>2. Pressione F12 → Network<br>3. Atualize a página e selecione uma solicitação <code>youtubei/v1/browse</code><br>4. Copie o valor completo do Cookie em Request Headers",
+            "youtube": "<b>Obtenha o Cookie</b><div class=\"instruction-lead\">Em um navegador conectado ao YouTube:</div><ol class=\"instruction-steps\"><li>Abra <b>youtube.com</b></li><li>Pressione <b>F12</b> e abra o painel <b>Network</b></li><li>Atualize a página e selecione uma solicitação cujo nome contenha <code>youtubei/v1/browse</code></li><li>Copie o valor completo do Cookie em <b>Request Headers</b></li></ol>",
             "douyin": "<b>Target:</b> Vá para <b>douyin.com</b> para buscar esses cookies.",
             "kuaishou": "<b>Target:</b> Vá para <b>kuaishou.com</b> para buscar esses cookies.",
             "weibo": "<b>Target:</b> Vá para <b>weibo.com</b> para buscar esses cookies.",

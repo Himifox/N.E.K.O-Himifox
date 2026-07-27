@@ -3828,7 +3828,7 @@
             "twitch": "<b>Device Code 인증:</b> Twitch Developer Console에서 공개 앱을 만들고 Client ID를 입력한 다음 안내를 따르세요.",
             "bilibili": "<b>대상:</b> <b>bilibili.com</b>에 접속하여 해당 쿠키를 가져오세요.",
             "xhh": "<b>권장:</b> 아래 QR 로그인을 사용하거나 <b>xiaoheihe.cn</b>에 로그인한 뒤 쿠키를 직접 입력하세요.",
-            "youtube": "<b>1. Cookie 가져오기</b><br>YouTube에 로그인된 브라우저에서:<br>1. <b>youtube.com</b> 열기<br>2. F12 → Network 누르기<br>3. 페이지를 새로고침하고 <code>youtubei/v1/browse</code> 요청 선택<br>4. Request Headers에서 전체 Cookie 값 복사",
+            "youtube": "<b>Cookie 가져오기</b><div class=\"instruction-lead\">YouTube에 로그인된 브라우저에서:</div><ol class=\"instruction-steps\"><li><b>youtube.com</b> 열기</li><li><b>F12</b>를 눌러 <b>Network</b> 패널 열기</li><li>페이지를 새로고침한 뒤 이름에 <code>youtubei/v1/browse</code>가 포함된 요청 선택</li><li><b>Request Headers</b>에서 전체 Cookie 값 복사</li></ol>",
             "douyin": "<b>대상:</b> <b>douyin.com</b>에 접속하여 해당 쿠키를 가져오세요.",
             "kuaishou": "<b>대상:</b> <b>kuaishou.com</b>에 접속하여 해당 쿠키를 가져오세요.",
             "weibo": "<b>대상:</b> <b>weibo.com</b>에 접속하여 해당 쿠키를 가져오세요.",
