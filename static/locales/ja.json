@@ -3826,15 +3826,15 @@
         },
         "instructions": {
             "twitch": "<b>Device Code 認可：</b>Twitch Developer Console で公開アプリを作成し、Client ID を入力して画面の案内に従ってください。",
-            "bilibili": "<b>対象：</b> <b>bilibili.com</b> にアクセスして Cookie を取得してください。",
-            "xhh": "<b>推奨：</b>下のQRコードログインを使うか、<b>xiaoheihe.cn</b> にログインしてCookieを手動入力してください。",
-            "youtube": "<b>Cookie を取得</b><div class=\"instruction-lead\">YouTube にログイン済みのブラウザで：</div><ol class=\"instruction-steps\"><li><b>youtube.com</b> を開く</li><li><b>F12</b> を押して <b>Network</b> パネルを開く</li><li>ページを更新し、名前に <code>youtubei/v1/browse</code> を含むリクエストを選択する</li><li><b>Request Headers</b> から完全な Cookie 値をコピーする</li></ol>",
-            "douyin": "<b>対象：</b> <b>douyin.com</b> にアクセスして Cookie を取得してください。",
-            "kuaishou": "<b>対象：</b> <b>kuaishou.com</b> にアクセスして Cookie を取得してください。",
-            "weibo": "<b>対象：</b> <b>m.weibo.cn</b> にアクセスして Cookie を取得してください。",
-            "twitter": "<b>対象：</b> <b>x.com</b> にアクセスして Cookie を取得してください。",
-            "reddit": "<b>対象：</b> <b>reddit.com</b> にアクセスして Cookie を取得してください。",
-            "netease": "<b>対象：</b> <b>music.163.com</b> にアクセスして Cookie を取得してください。"
+            "bilibili": "<b>対象：</b> <code>bilibili.com</code> にアクセスして Cookie を取得してください。",
+            "xhh": "<b>推奨：</b>下のQRコードログインを使うか、<code>xiaoheihe.cn</code> にログインしてCookieを手動入力してください。",
+            "youtube": "<b>Cookie を取得</b><div class=\"instruction-lead\">YouTube にログイン済みのブラウザで：</div><ol class=\"instruction-steps\"><li><code>youtube.com</code> を開く</li><li><b>F12</b> を押して <b>Network</b> パネルを開く</li><li>ページを更新し、名前に <code>youtubei/v1/browse</code> を含むリクエストを選択する</li><li><b>Request Headers</b> から完全な Cookie 値をコピーする</li></ol>",
+            "douyin": "<b>対象：</b> <code>douyin.com</code> にアクセスして Cookie を取得してください。",
+            "kuaishou": "<b>対象：</b> <code>kuaishou.com</code> にアクセスして Cookie を取得してください。",
+            "weibo": "<b>対象：</b> <code>m.weibo.cn</code> にアクセスして Cookie を取得してください。",
+            "twitter": "<b>対象：</b> <code>x.com</code> にアクセスして Cookie を取得してください。",
+            "reddit": "<b>対象：</b> <code>reddit.com</code> にアクセスして Cookie を取得してください。",
+            "netease": "<b>対象：</b> <code>music.163.com</code> にアクセスして Cookie を取得してください。"
         },
         "guide": {
             "title": "初心者向け共通ガイド",

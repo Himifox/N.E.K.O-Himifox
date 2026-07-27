@@ -3826,15 +3826,15 @@
         },
         "instructions": {
             "twitch": "<b>Device Code 授权：</b>在 Twitch Developer Console 创建公开应用，填入 Client ID 后按提示完成授权。",
-            "bilibili": "<b>目标：</b>请前往 <b>bilibili.com</b>获取这些 Cookies。",
-            "xhh": "<b>推荐：</b>点击下方扫码登录；也可前往 <b>xiaoheihe.cn</b> 登录后手动填写 Cookies。",
-            "youtube": "<b>获取 Cookie</b><div class=\"instruction-lead\">在已登录 YouTube 的浏览器中：</div><ol class=\"instruction-steps\"><li>打开 <b>youtube.com</b></li><li>按 <b>F12</b>，打开 <b>Network</b> 面板</li><li>刷新页面后，选择名称包含 <code>youtubei/v1/browse</code> 的请求</li><li>在 <b>Request Headers</b> 中复制完整的 Cookie 值</li></ol>",
-            "douyin": "<b>目标：</b> 请前往 <b>douyin.com</b> 获取这些 Cookies。",
-            "kuaishou": "<b>目标：</b> 请前往 <b>kuaishou.com</b> 获取这些 Cookies。",
-            "weibo": "<b>目标：</b> 请前往 <b>m.weibo.cn</b> 获取这些 Cookies。",
-            "twitter": "<b>目标：</b> 请前往 <b>x.com</b> 获取这些 Cookies。",
-            "reddit": "<b>目标：</b> 请前往 <b>reddit.com</b> 获取这些 Cookies。",
-            "netease": "<b>目标：</b> 请前往 <b>music.163.com</b> 获取这些 Cookies。"
+            "bilibili": "<b>目标：</b>请前往 <code>bilibili.com</code>获取这些 Cookies。",
+            "xhh": "<b>推荐：</b>点击下方扫码登录；也可前往 <code>xiaoheihe.cn</code> 登录后手动填写 Cookies。",
+            "youtube": "<b>获取 Cookie</b><div class=\"instruction-lead\">在已登录 YouTube 的浏览器中：</div><ol class=\"instruction-steps\"><li>打开 <code>youtube.com</code></li><li>按 <b>F12</b>，打开 <b>Network</b> 面板</li><li>刷新页面后，选择名称包含 <code>youtubei/v1/browse</code> 的请求</li><li>在 <b>Request Headers</b> 中复制完整的 Cookie 值</li></ol>",
+            "douyin": "<b>目标：</b> 请前往 <code>douyin.com</code> 获取这些 Cookies。",
+            "kuaishou": "<b>目标：</b> 请前往 <code>kuaishou.com</code> 获取这些 Cookies。",
+            "weibo": "<b>目标：</b> 请前往 <code>m.weibo.cn</code> 获取这些 Cookies。",
+            "twitter": "<b>目标：</b> 请前往 <code>x.com</code> 获取这些 Cookies。",
+            "reddit": "<b>目标：</b> 请前往 <code>reddit.com</code> 获取这些 Cookies。",
+            "netease": "<b>目标：</b> 请前往 <code>music.163.com</code> 获取这些 Cookies。"
         },
         "guide": {
             "title": "新手通用获取教程",

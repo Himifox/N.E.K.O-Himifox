@@ -207,7 +207,7 @@ function initPlatformConfig() {
             // 附带默认中文提示，自动填入正确的域名或名称
             // 如果字典里有 instructionKey，直接用字典的（字典通常自带了网址）
             // 如果字典没有，则使用这里的模板，并填入 m.weibo.cn 或 翻译后的平台名
-            instruction: data.instructionKey ? safeT(data.instructionKey, `<b>目标：</b> 请前往 <b>${targetDisplay}</b> 获取这些 Cookies。`) : '',
+            instruction: data.instructionKey ? safeT(data.instructionKey, `<b>目标：</b> 请前往 <code>${targetDisplay}</code> 获取这些 Cookies。`) : '',
             cookieStringMode: data.cookieStringMode === true,
             cookieStringLabel: data.cookieStringLabelKey ? safeT(data.cookieStringLabelKey, '完整 Cookie') : '',
             cookieStringDesc: data.cookieStringDescKey ? safeT(data.cookieStringDescKey, '粘贴 Request Headers 中完整的 Cookie 值') : '',
