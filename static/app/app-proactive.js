@@ -1470,7 +1470,11 @@
                         window._proactiveAttachmentBuffer = {};
                     }
                     if (!window._proactiveAttachmentBuffer[captureTurnId]) {
-                        window._proactiveAttachmentBuffer[captureTurnId] = { memes: [], links: [] };
+                        window._proactiveAttachmentBuffer[captureTurnId] = { memes: [], links: [], feedbackContext: null };
+                    }
+
+                    if (result.feedback_context && result.feedback_context.turn_id === captureTurnId) {
+                        window._proactiveAttachmentBuffer[captureTurnId].feedbackContext = result.feedback_context;
                     }
                     
                     if (processed.memeLinks.length > 0) {
@@ -1523,11 +1527,141 @@
                 _showProactiveSourceCards(attachments.links, turnId);
             }, 3000);
         }
+
+        if (attachments.feedbackContext) {
+            _showProactiveFeedbackActions(attachments.feedbackContext, turnId);
+        }
         
         // flush 后清理 buffer
         delete window._proactiveAttachmentBuffer[turnId];
     }
     mod._flushProactiveAttachments = _flushProactiveAttachments;
+
+    // ======================== scoped explicit feedback ========================
+
+    function _proactiveFeedbackText(key, fallback, options) {
+        if (typeof window.t !== 'function') return fallback;
+        var translated = window.t(key, options || {});
+        return translated && translated !== key ? translated : fallback;
+    }
+
+    function _proactiveFeedbackSourceLabel(sourceType) {
+        var source = String(sourceType || '').toLowerCase();
+        var fallbacks = {
+            news: '新闻', meme: '表情包', vision: '屏幕内容',
+            video: '视频', music: '音乐'
+        };
+        return _proactiveFeedbackText(
+            'proactiveFeedback.sources.' + source,
+            fallbacks[source] || source || '这类内容'
+        );
+    }
+
+    async function _submitProactiveScopedFeedback(context, eventType) {
+        var payload = {
+            lanlan_name: (window.lanlan_config && window.lanlan_config.lanlan_name) || '',
+            turn_id: context.turn_id,
+            event_type: eventType,
+            metadata: { ui_generation: 'dual_scope_v1' }
+        };
+        var headers = { 'Content-Type': 'application/json' };
+        var security = window.nekoLocalMutationSecurity;
+        if (security && typeof security.getMutationHeaders === 'function') {
+            Object.assign(headers, await security.getMutationHeaders());
+        }
+        var response = await fetch('/api/proactive/recommendation/feedback', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload)
+        });
+        var result = await response.json();
+        if (!response.ok || result.success !== true || result.state_updated !== true) {
+            var reason = result.state_reason || result.error || ('HTTP ' + response.status);
+            throw new Error(reason);
+        }
+        return result;
+    }
+
+    function _showProactiveFeedbackActions(context, targetTurnId) {
+        try {
+            if (!context || context.ui_generation !== 'dual_scope_v1') return;
+            if (!context.turn_id || context.turn_id !== targetTurnId) return;
+            if (window.realisticGeminiCurrentTurnId !== targetTurnId) return;
+            var chatContent = document.getElementById('chat-content-wrapper');
+            if (!chatContent) return;
+            var existing = chatContent.querySelectorAll('.proactive-feedback-actions');
+            for (var i = 0; i < existing.length; i++) {
+                if (existing[i].dataset.turnId === targetTurnId) return;
+            }
+
+            var panel = document.createElement('div');
+            panel.className = 'proactive-feedback-actions';
+            panel.dataset.turnId = targetTurnId;
+            panel.style.cssText =
+                'margin: 4px 12px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;' +
+                'font-size: 12px; color: var(--text-secondary, rgba(210,210,210,0.85));';
+
+            var status = document.createElement('span');
+            status.className = 'proactive-feedback-status';
+            status.setAttribute('aria-live', 'polite');
+
+            function makeButton(label, eventType) {
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'proactive-feedback-action';
+                button.textContent = label;
+                button.style.cssText =
+                    'border: 1px solid var(--border-color, rgba(255,255,255,0.16));' +
+                    'border-radius: 12px; padding: 3px 9px; cursor: pointer;' +
+                    'background: var(--bg-secondary, rgba(255,255,255,0.08)); color: inherit;';
+                button.addEventListener('click', async function () {
+                    var buttons = panel.querySelectorAll('button');
+                    for (var j = 0; j < buttons.length; j++) buttons[j].disabled = true;
+                    status.textContent = _proactiveFeedbackText('proactiveFeedback.saving', '正在记录…');
+                    try {
+                        await _submitProactiveScopedFeedback(context, eventType);
+                        for (var k = 0; k < buttons.length; k++) buttons[k].remove();
+                        status.textContent = _proactiveFeedbackText(
+                            'proactiveFeedback.recorded',
+                            '已记录，只用于改进推荐'
+                        );
+                    } catch (error) {
+                        for (var n = 0; n < buttons.length; n++) buttons[n].disabled = false;
+                        status.textContent = _proactiveFeedbackText(
+                            'proactiveFeedback.failed',
+                            '记录失败，请稍后重试'
+                        ) + ' (' + String(error && error.message || error) + ')';
+                    }
+                });
+                return button;
+            }
+
+            panel.appendChild(makeButton(
+                _proactiveFeedbackText('proactiveFeedback.notNow', '现在不方便'),
+                'proactive_not_now'
+            ));
+            if (context.source_feedback_available === true && context.source_type) {
+                panel.appendChild(makeButton(
+                    _proactiveFeedbackText(
+                        'proactiveFeedback.lessSource',
+                        '少推荐{{source}}',
+                        { source: _proactiveFeedbackSourceLabel(context.source_type) }
+                    ).replace('{{source}}', _proactiveFeedbackSourceLabel(context.source_type)),
+                    'source_not_interested'
+                ));
+            }
+            panel.appendChild(status);
+            chatContent.appendChild(panel);
+            chatContent.scrollTop = chatContent.scrollHeight;
+            if (window.currentTurnGeminiAttachments) {
+                window.currentTurnGeminiAttachments.push(panel);
+            }
+        } catch (error) {
+            console.warn('Failed to show proactive feedback actions:', error);
+        }
+    }
+    mod._showProactiveFeedbackActions = _showProactiveFeedbackActions;
+    mod._submitProactiveScopedFeedback = _submitProactiveScopedFeedback;
 
     // ======================== source link card ========================
 

@@ -1,4 +1,12 @@
 {
+    "proactiveFeedback": {
+        "notNow": "今は都合が悪い",
+        "lessSource": "{{source}}を減らす",
+        "saving": "記録中…",
+        "recorded": "おすすめ改善のために記録しました",
+        "failed": "記録できませんでした。もう一度お試しください。",
+        "sources": { "news": "ニュース", "meme": "ミーム", "vision": "画面内容", "video": "動画", "music": "音楽" }
+    },
     "common": {
         "load": "読み込み",
         "minimize": "最小化",

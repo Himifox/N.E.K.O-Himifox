@@ -1,4 +1,12 @@
 {
+    "proactiveFeedback": {
+        "notNow": "現在不方便",
+        "lessSource": "少推薦{{source}}",
+        "saving": "正在記錄…",
+        "recorded": "已記錄，只用於改善推薦",
+        "failed": "記錄失敗，請稍後重試",
+        "sources": { "news": "新聞", "meme": "迷因圖片", "vision": "螢幕內容", "video": "影片", "music": "音樂" }
+    },
     "common": {
         "load": "加載",
         "minimize": "最小化",
