@@ -233,7 +233,6 @@
             height: 124px;
             background: url('/static/default/card_faces/YUI.png') center 24% / cover;
             border-radius: 50%;
-            transition: transform 0.45s cubic-bezier(0.2, 0.85, 0.25, 1.2);
         }
         .char-avatar {
             position: absolute;
@@ -243,38 +242,18 @@
             border-radius: 50%;
             object-fit: cover;
             filter: drop-shadow(0 8px 16px color-mix(in srgb, var(--accent) 24%, transparent));
-            transition: opacity 0.28s ease, transform 0.5s cubic-bezier(0.2, 0.85, 0.25, 1.2);
-            will-change: opacity, transform;
         }
         .char-avatar-idle {
             opacity: 1;
-            transform: scale(1);
         }
         .char-avatar-privacy {
             opacity: 0;
-            transform: translate(10px, 5px) rotate(3deg) scale(0.9);
-        }
-        .character-banner.credential-privacy-active .char-avatar-wrap {
-            transform: translateX(-2px) rotate(-1deg);
         }
         .character-banner.credential-privacy-active .char-avatar-idle {
             opacity: 0;
-            transform: translate(-10px, 4px) rotate(-4deg) scale(0.92);
         }
         .character-banner.credential-privacy-active .char-avatar-privacy {
             opacity: 1;
-            transform: translate(0, -1px) rotate(-2deg) scale(1.03);
-            animation: credentialPrivacyFlinch 0.32s cubic-bezier(0.2, 0.8, 0.3, 1);
-        }
-        @keyframes credentialPrivacyFlinch {
-            0% { transform: translate(10px, 6px) rotate(6deg) scale(0.88); }
-            55% { transform: translate(-3px, -3px) rotate(-3deg) scale(1.06); }
-            100% { transform: translate(0, -1px) rotate(-2deg) scale(1.03); }
-        }
-        @media (hover: hover) {
-            .character-banner:not(.credential-privacy-active) .char-avatar-wrap:hover .char-avatar-idle {
-                transform: translateY(-3px) rotate(-1deg) scale(1.04);
-            }
         }
         .char-status-dot {
             position: absolute;
