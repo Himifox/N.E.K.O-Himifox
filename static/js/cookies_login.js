@@ -275,6 +275,26 @@ function handleLocaleChange() {
 document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('localechange', handleLocaleChange);
 
+    const characterBanner = document.querySelector('.character-banner');
+    const isCredentialInput = (element) =>
+        element instanceof Element && element.classList.contains('credential-input');
+
+    document.addEventListener('focusin', (event) => {
+        if (isCredentialInput(event.target)) {
+            characterBanner?.classList.add('credential-privacy-active');
+        }
+    });
+
+    document.addEventListener('focusout', (event) => {
+        if (!isCredentialInput(event.target)) return;
+
+        requestAnimationFrame(() => {
+            if (!isCredentialInput(document.activeElement)) {
+                characterBanner?.classList.remove('credential-privacy-active');
+            }
+        });
+    });
+
     if (getTranslator()) {
         handleLocaleChange();
         return;
