@@ -176,20 +176,31 @@ def _get_bilibili_credential() -> Any | None:
     return None
 
 
-def _bilibili_account_cache_key(credential: Any) -> str:
-    """Build a stable, non-secret cache key for one Bilibili account."""
+def _bilibili_account_cache_key(credential: Any) -> str | None:
+    """Build a stable cache key, or ``None`` when caching is unsafe."""
 
     try:
         cookies = credential.get_cookies()
-    except Exception:
-        cookies = {}
-    user_id = str((cookies or {}).get("DedeUserID") or "").strip()
+    except Exception as exc:
+        logger.debug(
+            "Bilibili credential cookies unavailable; skip account cache (%s)",
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(cookies, dict):
+        return None
+    user_id = str(cookies.get("DedeUserID") or "").strip()
     if user_id:
         return f"user:{user_id}"
-    cookie_fingerprint = "\0".join(
-        f"{key}={value}"
-        for key, value in sorted((cookies or {}).items())
+    cookie_parts = sorted(
+        (str(key), str(value))
+        for key, value in cookies.items()
         if str(value).strip()
+    )
+    if not cookie_parts:
+        return None
+    cookie_fingerprint = "\0".join(
+        f"{key}={value}" for key, value in cookie_parts
     )
     return "cookie:" + hashlib.sha256(cookie_fingerprint.encode()).hexdigest()[:16]
 

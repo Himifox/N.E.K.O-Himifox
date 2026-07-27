@@ -259,6 +259,8 @@ async def fetch_bilibili_personal_dynamic(limit: int = 10) -> Dict[str, Any]:
         }
     normalized_limit = max(1, min(int(limit), 20))
     account_key = _bilibili_account_cache_key(credential)
+    if account_key is None:
+        return await _fetch_bilibili_personal_dynamic_uncached(normalized_limit)
     cache_key = f"{account_key}:{normalized_limit}"
     now = time.monotonic()
     cached = _BILIBILI_DYNAMIC_CACHE.get(cache_key)

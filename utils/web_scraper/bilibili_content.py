@@ -114,11 +114,19 @@ def _cache_lock(key: str) -> asyncio.Lock:
 
 
 async def _cached_result(
-    key: str,
+    key: str | None,
     *,
     ttl: float,
     fetcher: Callable[[], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
+    if key is None:
+        try:
+            result = await fetcher()
+        except Exception as exc:  # Preserve endpoint isolation without caching.
+            return {"success": False, "videos": [], "error": str(exc)}
+        result.pop("_cache_key", None)
+        return result
+
     now = time.monotonic()
     for cache_key, (stored_at, _payload) in list(_RESULT_CACHE.items()):
         if now - stored_at > _STALE_TTL_SECONDS:
@@ -276,7 +284,11 @@ async def fetch_bilibili_home(limit: int = 10) -> dict[str, Any]:
         if credential
         else "anonymous"
     )
-    cache_key = f"bilibili_home:{account_key}:{normalized_limit}"
+    cache_key = (
+        f"bilibili_home:{account_key}:{normalized_limit}"
+        if account_key is not None
+        else None
+    )
     anonymous_cache_key = f"bilibili_home:anonymous:{normalized_limit}"
 
     async def _fetch() -> dict[str, Any]:

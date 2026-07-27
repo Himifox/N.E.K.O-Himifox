@@ -205,6 +205,51 @@ async def test_bilibili_home_uses_credential_without_enriching_candidates(monkey
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_bilibili_home_skips_account_cache_when_cookie_read_fails(monkeypatch):
+    from bilibili_api import homepage
+
+    current_credential = {"value": None}
+    calls = []
+
+    class FakeCredential:
+        def __init__(self, account):
+            self.account = account
+
+        def get_cookies(self):
+            raise RuntimeError("cookie store unavailable")
+
+    async def fake_get_videos(*, credential=None):
+        calls.append(credential.account)
+        return {
+            "item": [
+                {
+                    "bvid": f"BV{credential.account}",
+                    "title": f"recommendation-{credential.account}",
+                    "owner": {"name": credential.account},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        bilibili_content,
+        "_get_bilibili_credential",
+        lambda: current_credential["value"],
+    )
+    monkeypatch.setattr(homepage, "get_videos", fake_get_videos)
+
+    current_credential["value"] = FakeCredential("account-a")
+    first = await bilibili_content.fetch_bilibili_home(limit=10)
+    current_credential["value"] = FakeCredential("account-b")
+    second = await bilibili_content.fetch_bilibili_home(limit=10)
+
+    assert calls == ["account-a", "account-b"]
+    assert first["videos"][0]["bvid"] == "BVaccount-a"
+    assert second["videos"][0]["bvid"] == "BVaccount-b"
+    assert bilibili_content._RESULT_CACHE == {}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_bilibili_hot_feed_uses_ttl_cache(monkeypatch):
     from bilibili_api import hot
 
@@ -840,6 +885,51 @@ async def test_bilibili_following_cache_isolated_without_user_id(monkeypatch):
 
     assert calls == 2
     assert first["dynamics"] != second["dynamics"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_bilibili_following_skips_cache_when_cookie_read_fails(monkeypatch):
+    current_credential = {"value": None}
+    calls = 0
+
+    class FakeCredential:
+        def __init__(self, account):
+            self.account = account
+
+        def get_cookies(self):
+            raise RuntimeError("cookie store unavailable")
+
+    async def fake_fetch(_limit):
+        nonlocal calls
+        calls += 1
+        credential = current_credential["value"]
+        return {
+            "success": True,
+            "status": "ok",
+            "dynamics": [{"account": credential.account}],
+        }
+
+    monkeypatch.setattr(
+        personal_dynamics,
+        "_get_bilibili_credential",
+        lambda: current_credential["value"],
+    )
+    monkeypatch.setattr(
+        personal_dynamics,
+        "_fetch_bilibili_personal_dynamic_uncached",
+        fake_fetch,
+    )
+
+    current_credential["value"] = FakeCredential("account-a")
+    first = await personal_dynamics.fetch_bilibili_personal_dynamic(10)
+    current_credential["value"] = FakeCredential("account-b")
+    second = await personal_dynamics.fetch_bilibili_personal_dynamic(10)
+
+    assert calls == 2
+    assert first["dynamics"] == [{"account": "account-a"}]
+    assert second["dynamics"] == [{"account": "account-b"}]
+    assert personal_dynamics._BILIBILI_DYNAMIC_CACHE == {}
 
 
 @pytest.mark.unit

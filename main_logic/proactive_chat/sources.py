@@ -78,9 +78,11 @@ def _link_from_item(
     source: str,
 ) -> dict:
     # Candidate metadata stays internal until decisions.py emits a public link.
-    # Keeping this generic avoids teaching the orchestration layer every
-    # platform's private field contract.
-    link = dict(item)
+    # Only adapters that explicitly mark their platform opt into carrying
+    # private metadata. Legacy sources such as YouTube must retain the old
+    # title/url/source-only contract instead of leaking feed-only fields into
+    # link extraction results.
+    link = dict(item) if item.get("platform") else {}
     link.update({"title": title, "url": url, "source": source})
     return link
 
