@@ -3831,7 +3831,7 @@
             "youtube": "<b>获取 Cookie</b><div class=\"instruction-lead\">在已登录 YouTube 的浏览器中：</div><ol class=\"instruction-steps\"><li>打开 <b>youtube.com</b></li><li>按 <b>F12</b>，打开 <b>Network</b> 面板</li><li>刷新页面后，选择名称包含 <code>youtubei/v1/browse</code> 的请求</li><li>在 <b>Request Headers</b> 中复制完整的 Cookie 值</li></ol>",
             "douyin": "<b>目标：</b> 请前往 <b>douyin.com</b> 获取这些 Cookies。",
             "kuaishou": "<b>目标：</b> 请前往 <b>kuaishou.com</b> 获取这些 Cookies。",
-            "weibo": "<b>目标：</b> 请前往 <b>weibo.com</b> 获取这些 Cookies。",
+            "weibo": "<b>目标：</b> 请前往 <b>m.weibo.cn</b> 获取这些 Cookies。",
             "twitter": "<b>目标：</b> 请前往 <b>x.com</b> 获取这些 Cookies。",
             "reddit": "<b>目标：</b> 请前往 <b>reddit.com</b> 获取这些 Cookies。",
             "netease": "<b>目标：</b> 请前往 <b>music.163.com</b> 获取这些 Cookies。"

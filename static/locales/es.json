@@ -3831,7 +3831,7 @@
             "youtube": "<b>Obtén la Cookie</b><div class=\"instruction-lead\">En un navegador con la sesión de YouTube iniciada:</div><ol class=\"instruction-steps\"><li>Abre <b>youtube.com</b></li><li>Pulsa <b>F12</b> y abre el panel <b>Network</b></li><li>Actualiza la página y selecciona una solicitud cuyo nombre contenga <code>youtubei/v1/browse</code></li><li>Copia el valor completo de Cookie desde <b>Request Headers</b></li></ol>",
             "douyin": "<b>Destino:</b> Vaya a <b>douyin.com</b> para buscar estas cookies.",
             "kuaishou": "<b>Destino:</b> Vaya a <b>kuaishou.com</b> para buscar estas cookies.",
-            "weibo": "<b>Destino:</b> Vaya a <b>weibo.com</b> para buscar estas cookies.",
+            "weibo": "<b>Destino:</b> Vaya a <b>m.weibo.cn</b> para buscar estas cookies.",
             "twitter": "<b>Destino:</b> Vaya a <b>x.com</b> para buscar estas cookies.",
             "reddit": "<b>Destino:</b> Vaya a <b>reddit.com</b> para buscar estas cookies.",
             "netease": "<b>Destino:</b> Vaya a <b>music.163.com</b> para buscar estas cookies."
