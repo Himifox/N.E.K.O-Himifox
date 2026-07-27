@@ -278,9 +278,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const characterBanner = document.querySelector('.character-banner');
     const isCredentialInput = (element) =>
         element instanceof Element && element.classList.contains('credential-input');
+    let credentialPrivacyRestoreTimer = null;
 
     document.addEventListener('focusin', (event) => {
         if (isCredentialInput(event.target)) {
+            window.clearTimeout(credentialPrivacyRestoreTimer);
             characterBanner?.classList.add('credential-privacy-active');
         }
     });
@@ -288,11 +290,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('focusout', (event) => {
         if (!isCredentialInput(event.target)) return;
 
-        requestAnimationFrame(() => {
+        window.clearTimeout(credentialPrivacyRestoreTimer);
+        credentialPrivacyRestoreTimer = window.setTimeout(() => {
             if (!isCredentialInput(document.activeElement)) {
                 characterBanner?.classList.remove('credential-privacy-active');
             }
-        });
+        }, 450);
     });
 
     if (getTranslator()) {
