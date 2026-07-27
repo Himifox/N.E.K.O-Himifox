@@ -19,6 +19,7 @@ function createSubmitApi(responsePayload) {
   const context = {
     window: {
       lanlan_config: { lanlan_name: 'YUI' },
+      addEventListener() {},
       nekoLocalMutationSecurity: {
         async getMutationHeaders() { return { 'X-CSRF-Token': 'test' }; },
       },
@@ -88,4 +89,12 @@ test('feedback actions require a delivered turn context before rendering', () =>
   assert.match(source, /context\.turn_id !== targetTurnId/);
   assert.match(source, /realisticGeminiCurrentTurnId !== targetTurnId/);
   assert.match(source, /context\.source_feedback_available === true/);
+});
+
+test('feedback actions render through the visible cross-window React chat', () => {
+  assert.match(source, /window\.__nekoMirrorChatAppend/);
+  assert.match(source, /role: 'system'/);
+  assert.match(source, /type: 'buttons'/);
+  assert.match(source, /react-chat-window:action/);
+  assert.match(source, /window\.__nekoMirrorChatUpdate/);
 });

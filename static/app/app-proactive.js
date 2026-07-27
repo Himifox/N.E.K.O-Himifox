@@ -1582,10 +1582,151 @@
         return result;
     }
 
+    function _proactiveFeedbackMessageId(turnId) {
+        return 'proactive-feedback-' + String(turnId || '');
+    }
+
+    function _proactiveFeedbackActions(context, disabled) {
+        var messageId = _proactiveFeedbackMessageId(context.turn_id);
+        var commonPayload = {
+            turn_id: context.turn_id,
+            source_type: context.source_type || null,
+            source_feedback_available: context.source_feedback_available === true,
+            ui_generation: 'dual_scope_v1'
+        };
+        var actions = [{
+            id: messageId + '-not-now',
+            label: _proactiveFeedbackText('proactiveFeedback.notNow', '现在不方便'),
+            action: 'proactive_scoped_feedback',
+            variant: 'secondary',
+            disabled: !!disabled,
+            payload: Object.assign({}, commonPayload, { event_type: 'proactive_not_now' })
+        }];
+        if (context.source_feedback_available === true && context.source_type) {
+            actions.push({
+                id: messageId + '-less-source',
+                label: _proactiveFeedbackText(
+                    'proactiveFeedback.lessSource',
+                    '少推荐{{source}}',
+                    { source: _proactiveFeedbackSourceLabel(context.source_type) }
+                ).replace('{{source}}', _proactiveFeedbackSourceLabel(context.source_type)),
+                action: 'proactive_scoped_feedback',
+                variant: 'secondary',
+                disabled: !!disabled,
+                payload: Object.assign({}, commonPayload, { event_type: 'source_not_interested' })
+            });
+        }
+        return actions;
+    }
+
+    function _proactiveFeedbackBlocks(context, state, error) {
+        if (state === 'saving') {
+            return [{
+                type: 'status', tone: 'info',
+                text: _proactiveFeedbackText('proactiveFeedback.saving', '正在记录…')
+            }];
+        }
+        if (state === 'recorded') {
+            return [{
+                type: 'status', tone: 'success',
+                text: _proactiveFeedbackText('proactiveFeedback.recorded', '已记录，只用于改进推荐')
+            }];
+        }
+        var blocks = [];
+        if (state === 'failed') {
+            blocks.push({
+                type: 'status', tone: 'error',
+                text: _proactiveFeedbackText('proactiveFeedback.failed', '记录失败，请稍后重试') +
+                    ' (' + String(error && error.message || error) + ')'
+            });
+        }
+        blocks.push({ type: 'buttons', buttons: _proactiveFeedbackActions(context, false) });
+        return blocks;
+    }
+
+    function _updateProactiveFeedbackMessage(messageId, patch) {
+        var host = window.reactChatWindowHost;
+        var mirrorUpdate = window.__nekoMirrorChatUpdate;
+        if (typeof mirrorUpdate === 'function') {
+            mirrorUpdate(host, messageId, patch);
+        } else if (host && typeof host.updateMessage === 'function') {
+            host.updateMessage(messageId, patch);
+        }
+    }
+
+    async function _handleProactiveFeedbackMessageAction(event) {
+        var detail = event && event.detail || {};
+        var action = detail.action || {};
+        var payload = action.payload || {};
+        if (action.action !== 'proactive_scoped_feedback' || payload.ui_generation !== 'dual_scope_v1') {
+            return;
+        }
+        var eventType = payload.event_type;
+        if (eventType !== 'proactive_not_now' && eventType !== 'source_not_interested') return;
+        var context = {
+            turn_id: String(payload.turn_id || ''),
+            source_type: payload.source_type || null,
+            source_feedback_available: payload.source_feedback_available === true,
+            ui_generation: 'dual_scope_v1'
+        };
+        if (!context.turn_id) return;
+        var messageId = detail.message && detail.message.id
+            ? String(detail.message.id)
+            : _proactiveFeedbackMessageId(context.turn_id);
+        _updateProactiveFeedbackMessage(messageId, {
+            blocks: _proactiveFeedbackBlocks(context, 'saving')
+        });
+        try {
+            await _submitProactiveScopedFeedback(context, eventType);
+            _updateProactiveFeedbackMessage(messageId, {
+                blocks: _proactiveFeedbackBlocks(context, 'recorded')
+            });
+        } catch (error) {
+            _updateProactiveFeedbackMessage(messageId, {
+                blocks: _proactiveFeedbackBlocks(context, 'failed', error)
+            });
+        }
+    }
+
+    if (!window._proactiveFeedbackActionListenerBound) {
+        window._proactiveFeedbackActionListenerBound = true;
+        window.addEventListener('react-chat-window:action', _handleProactiveFeedbackMessageAction);
+    }
+
     function _showProactiveFeedbackActions(context, targetTurnId) {
         try {
             if (!context || context.ui_generation !== 'dual_scope_v1') return;
             if (!context.turn_id || context.turn_id !== targetTurnId) return;
+            var messageId = _proactiveFeedbackMessageId(targetTurnId);
+            window._proactiveFeedbackRenderedTurns = window._proactiveFeedbackRenderedTurns || {};
+            if (window._proactiveFeedbackRenderedTurns[targetTurnId]) return;
+            var host = window.reactChatWindowHost;
+            var mirrorAppend = window.__nekoMirrorChatAppend;
+            if (typeof mirrorAppend === 'function' || (host && typeof host.appendMessage === 'function')) {
+                var now = new Date();
+                var timeText = now.getHours().toString().padStart(2, '0') + ':' +
+                    now.getMinutes().toString().padStart(2, '0');
+                var feedbackMessage = {
+                    id: messageId,
+                    role: 'system',
+                    author: _proactiveFeedbackText('proactiveFeedback.title', '推荐反馈'),
+                    time: timeText,
+                    createdAt: Date.now(),
+                    turnId: targetTurnId,
+                    blocks: _proactiveFeedbackBlocks(context, 'ready'),
+                    status: 'sent'
+                };
+                if (typeof mirrorAppend === 'function') {
+                    mirrorAppend(host, feedbackMessage);
+                } else {
+                    host.appendMessage(feedbackMessage);
+                }
+                window._proactiveFeedbackRenderedTurns[targetTurnId] = true;
+                return;
+            }
+
+            // Legacy chat fallback. The current React/Electron surface uses the
+            // mirrored message path above; this branch is kept for older hosts.
             if (window.realisticGeminiCurrentTurnId !== targetTurnId) return;
             var chatContent = document.getElementById('chat-content-wrapper');
             if (!chatContent) return;
@@ -1656,6 +1797,7 @@
             if (window.currentTurnGeminiAttachments) {
                 window.currentTurnGeminiAttachments.push(panel);
             }
+            window._proactiveFeedbackRenderedTurns[targetTurnId] = true;
         } catch (error) {
             console.warn('Failed to show proactive feedback actions:', error);
         }
