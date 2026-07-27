@@ -115,6 +115,11 @@ from main_logic.proactive_chat.state import (
     _source_hash,
 )
 from main_logic.proactive_chat.sources import collect_proactive_sources
+from utils.web_scraper.bilibili_content import (
+    BilibiliEnrichmentPreempted,
+    enrich_bilibili_video,
+    format_bilibili_phase2_context,
+)
 from utils.language_utils import (
     get_global_language,
     get_global_language_full,
@@ -142,6 +147,68 @@ __all__ = [
 
 
 logger = get_module_logger(__name__, "Main")
+
+
+def _format_phase1_link_candidate(index: int, item: dict[str, Any]) -> str:
+    """Render useful candidate evidence without leaking bulky raw metadata."""
+
+    title = str(item.get("title") or "").strip()
+    details: list[str] = []
+    field_labels = (
+        ("source", "来源"),
+        ("author", "UP主"),
+        ("reason", "推荐依据"),
+        ("description_hint", "简介"),
+        ("url", "URL"),
+    )
+    for field, label in field_labels:
+        value = " ".join(str(item.get(field) or "").split())
+        if not value:
+            continue
+        if field == "description_hint":
+            value = value[:240]
+        details.append(f"{label}: {value}")
+    published_at = item.get("published_at")
+    if published_at:
+        details.append(f"发布时间戳: {published_at}")
+    suffix = f" | {' | '.join(details)}" if details else ""
+    return f"{index}. {title}{suffix}"
+
+
+def _round_robin_phase1_links(
+    modes: list[str],
+    sources: dict[str, Any],
+    *,
+    total: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Give every enabled web mode candidates before any one mode can dominate."""
+
+    selected = {mode: [] for mode in modes}
+    positions = {mode: 0 for mode in modes}
+    seen_keys: set[str] = set()
+    remaining = max(0, total)
+    while remaining:
+        made_progress = False
+        for mode in modes:
+            links = list((sources.get(mode) or {}).get("links", []) or [])
+            while positions[mode] < len(links):
+                link = dict(links[positions[mode]])
+                positions[mode] += 1
+                key = _source_hash(link.get("url", ""), link.get("title", ""))
+                if key and (key in seen_keys or _should_skip_source(key)):
+                    continue
+                if key:
+                    seen_keys.add(key)
+                link.setdefault("mode", mode)
+                selected[mode].append(link)
+                remaining -= 1
+                made_progress = True
+                break
+            if remaining <= 0:
+                break
+        if not made_progress:
+            break
+    return selected
 
 
 _MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
@@ -1354,42 +1421,31 @@ async def handle_proactive_chat(
         # 收集音乐链接（在 Phase 1 Web 筛选完成后）
         # meme 也不经过 Phase 1 LLM 筛选，直接添加话题
         web_modes = [m for m in sources if m not in ("vision", "music", "meme")]
+        # A duplicate BVID keeps the strongest native explanation: followed UP
+        # update first, then the video radar (home before hot internally).
+        web_modes.sort(key=lambda mode: 0 if mode == "personal" else 1)
 
         merged_web_content = ""
         if web_modes:
             parts = []
-            seen_topic_keys: set[str] = set()
-            remaining_total = _PHASE1_TOTAL_TOPIC_TARGET
+            selected_by_mode = _round_robin_phase1_links(
+                web_modes,
+                sources,
+                total=_PHASE1_TOTAL_TOPIC_TARGET,
+            )
+            remaining_total = _PHASE1_TOTAL_TOPIC_TARGET - sum(
+                len(items) for items in selected_by_mode.values()
+            )
             for m in web_modes:
-                if remaining_total <= 0:
-                    break
                 src = sources[m]
                 label_map = PROACTIVE_SOURCE_LABELS.get(
                     proactive_lang, PROACTIVE_SOURCE_LABELS["en"]
                 )
                 label = label_map.get(m, m)
-                links = src.get("links", []) or []
-
-                selected_links: list[dict] = []
-                for link in links:
-                    title = link.get("title", "")
-                    url = link.get("url", "")
-                    key = _source_hash(url, title)
-                    if key:
-                        # 跨会话衰减 skip：5h 硬窗口，之后按 web 半衰期概率瞬移到下一条
-                        if key in seen_topic_keys or _should_skip_source(key):
-                            continue
-                        seen_topic_keys.add(key)
-                    # 给 link 打上来源 mode 标记，用于细粒度 channel 记录
-                    if "mode" not in link:
-                        link["mode"] = m
-                    selected_links.append(link)
-                    if len(selected_links) >= remaining_total:
-                        break
+                selected_links = selected_by_mode.get(m, [])
 
                 if selected_links:
                     all_web_links.extend(selected_links)
-                    remaining_total -= len(selected_links)
                     lines = []
                     for idx, item in enumerate(selected_links, start=1):
                         from utils.tokenize import truncate_to_tokens as _ttt
@@ -1397,18 +1453,10 @@ async def handle_proactive_chat(
                         title = item.get("title", "").strip()
                         if not title:
                             continue
-                        source = item.get("source", "").strip()
-                        url = item.get("url", "").strip()
-                        suffix = []
-                        if source:
-                            suffix.append(f"来源: {source}")
-                        if url:
-                            suffix.append(f"URL: {url}")
-                        ext = (" | " + " | ".join(suffix)) if suffix else ""
                         # 单条外部内容截到 PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS，
                         # 防止个别 title/url 异常长撑爆 prompt。
                         item_line = _ttt(
-                            f"{idx}. {title}{ext}",
+                            _format_phase1_link_candidate(idx, item),
                             PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
                         )
                         lines.append(item_line)
@@ -1417,7 +1465,7 @@ async def handle_proactive_chat(
                         continue
 
                 content_text = src.get("formatted_content", "")
-                if content_text:
+                if content_text and remaining_total > 0:
                     compact_lines = [
                         ln.strip() for ln in content_text.splitlines() if ln.strip()
                     ]
@@ -1507,16 +1555,14 @@ async def handle_proactive_chat(
                 # 重新构建 merged_web_content，排除被剔除的通道
                 remaining_web_modes = [m for m in web_modes if m not in suppressed]
                 if remaining_web_modes:
-                    # 先从 all_web_links 中移除被剔除通道的链接
-                    all_web_links = [
-                        lk for lk in all_web_links if lk.get("mode") not in suppressed
-                    ]
+                    selected_by_mode_2 = _round_robin_phase1_links(
+                        remaining_web_modes,
+                        sources,
+                        total=_PHASE1_TOTAL_TOPIC_TARGET,
+                    )
+                    all_web_links = []
                     parts = []
-                    seen_topic_keys_2: set[str] = set()
-                    remaining_total_2 = _PHASE1_TOTAL_TOPIC_TARGET
                     for m in remaining_web_modes:
-                        if remaining_total_2 <= 0:
-                            break
                         src = sources.get(m)
                         if not src:
                             continue
@@ -1524,23 +1570,9 @@ async def handle_proactive_chat(
                             proactive_lang, PROACTIVE_SOURCE_LABELS["en"]
                         )
                         label = label_map.get(m, m)
-                        links = src.get("links", []) or []
-                        selected_links_2: list[dict] = []
-                        for link in links:
-                            title = link.get("title", "")
-                            url = link.get("url", "")
-                            key = _source_hash(url, title)
-                            if key:
-                                if key in seen_topic_keys_2 or _should_skip_source(key):
-                                    continue
-                                seen_topic_keys_2.add(key)
-                            if "mode" not in link:
-                                link["mode"] = m
-                            selected_links_2.append(link)
-                            if len(selected_links_2) >= remaining_total_2:
-                                break
+                        selected_links_2 = selected_by_mode_2.get(m, [])
                         if selected_links_2:
-                            remaining_total_2 -= len(selected_links_2)
+                            all_web_links.extend(selected_links_2)
                             lines = []
                             from utils.tokenize import truncate_to_tokens as _ttt2
 
@@ -1548,18 +1580,10 @@ async def handle_proactive_chat(
                                 t = item.get("title", "").strip()
                                 if not t:
                                     continue
-                                s = item.get("source", "").strip()
-                                u = item.get("url", "").strip()
-                                suffix = []
-                                if s:
-                                    suffix.append(f"来源: {s}")
-                                if u:
-                                    suffix.append(f"URL: {u}")
-                                ext = (" | " + " | ".join(suffix)) if suffix else ""
                                 # 同上路径，单条 cap
                                 lines.append(
                                     _ttt2(
-                                        f"{idx}. {t}{ext}",
+                                        _format_phase1_link_candidate(idx, item),
                                         PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
                                     )
                                 )
@@ -1628,12 +1652,19 @@ async def handle_proactive_chat(
                 )
             else:
                 if matched:
-                    selected_web_link = {
-                        "title": web_parsed.get("title", matched.get("title", "")),
-                        "url": matched["url"],
-                        "source": web_parsed.get("source", matched.get("source", "")),
-                        "mode": matched.get("mode", "web"),  # 保留细粒度 mode
-                    }
+                    selected_web_link = dict(matched)
+                    selected_web_link.update(
+                        {
+                            "title": web_parsed.get(
+                                "title", matched.get("title", "")
+                            ),
+                            "url": matched["url"],
+                            "source": web_parsed.get(
+                                "source", matched.get("source", "")
+                            ),
+                            "mode": matched.get("mode", "web"),
+                        }
+                    )
                     print(
                         f"[{lanlan_name}] Phase 1 链接预匹配成功: {matched.get('title', '')[:60]}"
                     )
@@ -1859,6 +1890,39 @@ async def handle_proactive_chat(
         web_topic = phase1_decision.web_topic
         music_topic = phase1_decision.music_topic
         primary_channel = phase1_decision.primary_channel
+        if selected_web_link and selected_web_link.get("platform") == "bilibili":
+            if selected_web_link.get("kind") == "video":
+                if mgr.state.is_proactive_preempted():
+                    return await _end_proactive(
+                        ProactiveChatResult(
+                            body=_proactive_preempted_json(
+                                "phase1_pre_bilibili_enrichment"
+                            )
+                        )
+                    )
+                try:
+                    selected_web_link = await enrich_bilibili_video(
+                        selected_web_link,
+                        language=proactive_lang,
+                        is_preempted=mgr.state.is_proactive_preempted,
+                    )
+                except BilibiliEnrichmentPreempted:
+                    return await _end_proactive(
+                        ProactiveChatResult(
+                            body=_proactive_preempted_json(
+                                "phase1_bilibili_enrichment"
+                            )
+                        )
+                    )
+                if mgr.state.is_proactive_preempted():
+                    return await _end_proactive(
+                        ProactiveChatResult(
+                            body=_proactive_preempted_json(
+                                "phase1_post_bilibili_enrichment"
+                            )
+                        )
+                    )
+            web_topic = format_bilibili_phase2_context(selected_web_link)
         print(
             f"[{lanlan_name}] Phase 1 可用通道: {active_channels}，主通道: {primary_channel}"
         )

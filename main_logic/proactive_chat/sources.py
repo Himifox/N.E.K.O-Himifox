@@ -70,6 +70,36 @@ def _interleave_link_groups(candidate_groups: list[list[dict]]) -> list[dict]:
     return links
 
 
+_BILIBILI_LINK_FIELDS = (
+    "platform",
+    "lane",
+    "kind",
+    "resource_id",
+    "bvid",
+    "author",
+    "reason",
+    "description_hint",
+    "published_at",
+    "native_rank",
+    "authenticated",
+)
+
+
+def _link_from_item(
+    item: dict,
+    *,
+    title: str,
+    url: str,
+    source: str,
+) -> dict:
+    link = {"title": title, "url": url, "source": source}
+    if item.get("platform") == "bilibili" or item.get("bvid"):
+        for field in _BILIBILI_LINK_FIELDS:
+            if field in item:
+                link[field] = item[field]
+    return link
+
+
 def _extract_links_from_raw(
     mode: str,
     raw_data: dict,
@@ -143,11 +173,12 @@ def _extract_links_from_raw(
                         else "YouTube"
                     )
                     links.append(
-                        {
-                            "title": title,
-                            "url": url,
-                            "source": item.get("source") or default_source,
-                        }
+                        _link_from_item(
+                            item,
+                            title=title,
+                            url=url,
+                            source=item.get("source") or default_source,
+                        )
                     )
 
         elif mode == "home":
@@ -155,11 +186,12 @@ def _extract_links_from_raw(
             for item in bilibili.get("videos", []) or []:
                 if item.get("title") and item.get("url"):
                     links.append(
-                        {
-                            "title": item["title"],
-                            "url": item["url"],
-                            "source": "B站",
-                        }
+                        _link_from_item(
+                            item,
+                            title=item["title"],
+                            url=item["url"],
+                            source="B站",
+                        )
                     )
             weibo = raw_data.get("weibo", {})
             for item in weibo.get("trending", []) or []:
@@ -212,14 +244,19 @@ def _extract_links_from_raw(
             for data_key, items_key, title_keys, source_name in platform_specs:
                 group: list[dict] = []
                 for item in raw_data.get(data_key, {}).get(items_key, []) or []:
-                    title = next(
+                    title = item.get("title", "") or next(
                         (item.get(key, "") for key in title_keys if item.get(key)),
                         "",
                     )
                     url = item.get("url", "")
                     if title and url:
                         group.append(
-                            {"title": title, "url": url, "source": source_name}
+                            _link_from_item(
+                                item,
+                                title=title,
+                                url=url,
+                                source=source_name,
+                            )
                         )
                 if group:
                     platform_links.append(group)
