@@ -4,6 +4,8 @@
         "minimize": "Minimizar",
         "maximize": "Maximizar",
         "restore": "Restaurar",
+        "pinWindow": "Fijar ventana",
+        "unpinWindow": "Desfijar ventana",
         "expand": "Expandir",
         "close": "Cerca",
         "save": "Guardar",
@@ -74,15 +76,6 @@
             "accept": "Sí, desactiva la pantalla compartida",
             "decline": "No, déjala"
         }
-    },
-    "tutorialPrompt": {
-        "title": "¿Quieres empezar el tutorial en casa?",
-        "message": "Puedo mostrarte rápidamente los principales puntos de entrada en la pantalla de inicio para que puedas comenzar con N.E.K.O de inmediato.",
-        "note": "Puede omitirlo en cualquier momento o volver a abrirlo más tarde desde Memory Browser.",
-        "startNow": "Iniciar tutorial",
-        "later": "tal vez más tarde",
-        "never": "no me lo recuerdes",
-        "startFailed": "El tutorial no se pudo iniciar en este momento. Inténtelo de nuevo más tarde."
     },
     "characterProfile": {
         "gender": "Género",
@@ -809,6 +802,14 @@
         "toolLollipop": "Chupete",
         "toolFist": "Pata de gato",
         "toolHammer": "Martillo",
+        "toolRps": "Piedra, papel o tijera",
+        "avatarToolRpsGestureRock": "Piedra",
+        "avatarToolRpsGestureScissors": "Tijeras",
+        "avatarToolRpsGesturePaper": "Papel",
+        "avatarToolRpsResultUserWin": "Has ganado",
+        "avatarToolRpsResultAvatarWin": "{{name}} ha ganado",
+        "avatarToolRpsResultDraw": "Empate",
+        "avatarToolRpsRoundAnnouncement": "Has sacado {{userGesture}}. {{name}} ha sacado {{avatarGesture}}. {{result}}.",
         "avatarToolsButtonAriaLabel": "Herramientas de avatar",
         "clearAvatarToolAriaLabel": "Desactivar herramienta",
         "avatarToolQuickbarAriaLabel": "Herramientas rápidas de avatar",
@@ -837,8 +838,7 @@
         "compactExportHistory": "Historial",
         "compactHistoryToggleOpen": "Mostrar historial",
         "compactHistoryToggleClose": "Ocultar historial",
-        "compactHistoryControlsShow": "Mostrar acciones del historial",
-        "compactHistoryControlsHide": "Ocultar acciones del historial",
+    "compactHistoryExport": "Exportar historial de conversación",
         "compactExportControlsCollapse": "Ocultar controles de selección",
         "compactExportControlsExpand": "Mostrar controles de selección",
         "exportAction": "Exportar",
@@ -1161,20 +1161,20 @@
             "title": "Aviso de API de Alibaba en EE. UU.",
             "message": "Actualmente está usando la API de Alibaba en EE. UU., que no admite TTS ni voz en tiempo real. Se recomienda cambiar a la API de Alibaba en Singapur."
         },
-        "conversationModelConfig": "Configuración del modelo de diálogo de texto",
-        "summaryModelConfig": "Configuración del modelo resumido",
-        "gameModelsConfig": "Configuración de modelos del minijuego",
+        "conversationModelConfig": "Modelo de chat de texto",
+        "summaryModelConfig": "Modelo de resumen",
+        "gameModelsConfig": "Modelo de minijuego",
         "gameMainModelConfig": "Configuración del modelo principal del minijuego",
         "gameSummaryModelConfig": "Configuración del modelo de resumen del minijuego",
-        "correctionModelConfig": "Configuración del modelo de corrección",
-        "emotionModelConfig": "Configuración del modelo de emoción",
-        "visionModelConfig": "Configuración del modelo de visión",
-        "realtimeModelConfig": "API en tiempo real (modo local)",
-        "ttsModelConfig": "Configuración del modelo TTS (transmisión dúplex)",
+        "correctionModelConfig": "Modelo de corrección",
+        "emotionModelConfig": "Modelo de emociones",
+        "visionModelConfig": "Modelo de chat visual",
+        "realtimeModelConfig": "Modelo multimodal en tiempo real (modo local)",
+        "ttsModelConfig": "Modelo TTS",
         "apiUrl": "URL de la API",
         "apiKey": "Clave API",
         "modelId": "ID del modelo",
-        "agentApiConfigTitle": "Configuración de API del agente (se requiere compatibilidad con Vision)",
+        "agentApiConfigTitle": "API del agente (se requiere compatibilidad con Vision)",
         "providerPlaceholder": "por ejemplo, openai, azure, local",
         "apiUrlPlaceholder": "por ejemplo, https://api.openai.com/v1",
         "modelIdPlaceholder": "por ejemplo, gpt-5.1-chat-latest, qwen-flash",
@@ -1665,6 +1665,7 @@
         },
         "registeredVoices": "Voces registradas",
         "preview": "Avance",
+        "previewing": "Reproduciendo vista previa",
         "previewFailed": "Error en la vista previa: {{error}}",
         "previewTimeout": "La generación de la vista previa agotó el tiempo de espera. Inténtalo de nuevo más tarde.",
         "playFailed": "Error en la reproducción: {{error}}",
@@ -2627,7 +2628,8 @@
             "language": "Idioma",
             "general": "General",
             "mediaCredentials": "Credenciales de medios",
-            "characterCardManager": "Gestión de tarjetas de personaje"
+            "characterCardManager": "Gestión de tarjetas de personaje",
+            "advancedSettings": "Ajustes avanzados"
         },
         "language": {
             "title": "Seleccionar idioma",
@@ -2642,12 +2644,19 @@
             "chatIntervalBase": "Intervalo mínimo",
             "visionInterval": "Intervalo de percepción"
         },
+        "widgetMode": {
+            "enabledNotice": "Modo de acoplamiento al borde Beta está activado.",
+            "disabledNotice": "Modo de acoplamiento al borde Beta está desactivado. Live2D vuelve al ajuste normal en los bordes.",
+            "toggleFailed": "No se pudo cambiar Modo de acoplamiento al borde Beta. Inténtalo de nuevo más tarde."
+        },
         "toggles": {
             "allowInterrupt": "Permitir interrupción",
             "mergeMessages": "Fusionar mensajes",
             "avatarReactionBubble": "Burbuja de expresión",
             "focusCognition": "Modo concentración",
             "focusCognitionTooltip": "Cuando está activado, se concentra y piensa más a fondo cuando te abres o preguntas algo complejo; desactivado desactiva la concentración por completo.",
+            "widgetMode": "Modo de acoplamiento al borde Beta",
+            "widgetModeTooltip": "Activa manualmente el modo de acoplamiento para que Live2D pueda asomarse desde seis anclajes del borde.",
             "slopFilter": "Expresión natural",
             "slopFilterTooltip": "Reduce las expresiones repetitivas y estereotipadas de las respuestas anteriores para que se exprese con más naturalidad.",
             "autoCat": "Modo gato automático",
@@ -3377,7 +3386,7 @@
                 "desc": "Marque para habilitar la configuración de API personalizada. Luego configure API independientes para diferentes módulos como resumen, corrección, análisis de emociones, etc."
             },
             "step9": {
-                "title": "📝 Configuración del modelo resumido",
+                "title": "📝 Modelo de resumen",
                 "desc": "El modelo de resumen genera resúmenes de conversaciones y gestiona la memoria. Configure el servicio API independiente para tareas de resumen."
             }
         },
@@ -3780,6 +3789,7 @@
         "bilibili": "Bilibili",
         "xhh": "Xiaoheihe",
         "youtube": "YouTube",
+        "twitch": "Twitch",
         "douyin": "Douyin",
         "kuaishou": "Kuaishou",
         "weibo": "Weibo",
@@ -3805,7 +3815,15 @@
         "noCookies": "Primero configure las cookies",
         "statusLoadFailed": "Error al cargar el estado",
         "thisPlatform": "esta plataforma",
+        "twitchAuth": {
+            "clientId": "Twitch Developer Client ID", "clientIdDesc": "Crea una aplicación pública en Twitch Developer Console e introduce su Client ID. No se solicita ni almacena Client Secret.",
+            "start": "Iniciar autorización de Twitch", "authorizeHint": "Abre la página de activación de Twitch e introduce este código:", "check": "Ya autoricé; comprobar estado",
+            "invalidClientId": "Introduce un Twitch Client ID válido", "started": "La autorización de Twitch se inició; completa la confirmación en el navegador",
+            "startFailed": "No se pudo iniciar la autorización de Twitch. Comprueba el Client ID y la red.", "authorized": "La credencial de Twitch se cifró y guardó",
+            "pending": "La autorización aún no termina. Confírmala en Twitch y vuelve a intentarlo", "checkFailed": "Falló la comprobación. Inicia la autorización de nuevo."
+        },
         "instructions": {
+            "twitch": "<b>Autorización con Device Code:</b> crea una aplicación pública en Twitch Developer Console, introduce su Client ID y sigue las indicaciones.",
             "bilibili": "<b>Destino:</b> Vaya a <b>bilibili.com</b> para buscar estas cookies.",
             "xhh": "<b>Recomendado:</b> use el inicio de sesión QR o entre en <b>xiaoheihe.cn</b> e introduzca las cookies manualmente.",
             "youtube": "<b>1. Obtén la Cookie</b><br>En un navegador con la sesión de YouTube iniciada:<br>1. Abre <b>youtube.com</b><br>2. Pulsa F12 → Network<br>3. Actualiza la página y selecciona una solicitud <code>youtubei/v1/browse</code><br>4. Copia el valor completo de Cookie desde Request Headers",

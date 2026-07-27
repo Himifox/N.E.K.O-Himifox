@@ -4,6 +4,8 @@
         "minimize": "Minimizar",
         "maximize": "Maximizar",
         "restore": "Restaurar",
+        "pinWindow": "Fixar janela no topo",
+        "unpinWindow": "Desafixar janela",
         "expand": "Expandir",
         "close": "Fechar",
         "save": "Salvar",
@@ -74,15 +76,6 @@
             "accept": "Sim, desliga o compartilhamento de tela",
             "decline": "Não, deixa ligado"
         }
-    },
-    "tutorialPrompt": {
-        "title": "Quer começar o tutorial em casa?",
-        "message": "Posso mostrar rapidamente os principais pontos de entrada na tela inicial para que você possa começar a usar o N.E.K.O imediatamente.",
-        "note": "Você pode ignorá-lo a qualquer momento ou reabri-lo mais tarde no Memory Browser.",
-        "startNow": "Iniciar tutorial",
-        "later": "Talvez mais tarde",
-        "never": "Não me lembre",
-        "startFailed": "O tutorial não pôde ser iniciado agora. Por favor, tente novamente mais tarde."
     },
     "characterProfile": {
         "gender": "Gênero",
@@ -809,6 +802,14 @@
         "toolLollipop": "Pirulito",
         "toolFist": "Pata de gato",
         "toolHammer": "Martelo",
+        "toolRps": "Pedra, papel e tesoura",
+        "avatarToolRpsGestureRock": "Pedra",
+        "avatarToolRpsGestureScissors": "Tesoura",
+        "avatarToolRpsGesturePaper": "Papel",
+        "avatarToolRpsResultUserWin": "Você venceu",
+        "avatarToolRpsResultAvatarWin": "{{name}} venceu",
+        "avatarToolRpsResultDraw": "Empate",
+        "avatarToolRpsRoundAnnouncement": "Você jogou {{userGesture}}. {{name}} jogou {{avatarGesture}}. {{result}}.",
         "avatarToolsButtonAriaLabel": "Ferramentas do avatar",
         "clearAvatarToolAriaLabel": "Desativar ferramenta",
         "avatarToolQuickbarAriaLabel": "Ferramentas rápidas do avatar",
@@ -837,8 +838,7 @@
         "compactExportHistory": "Histórico",
         "compactHistoryToggleOpen": "Mostrar histórico",
         "compactHistoryToggleClose": "Ocultar histórico",
-        "compactHistoryControlsShow": "Mostrar ações do histórico",
-        "compactHistoryControlsHide": "Ocultar ações do histórico",
+    "compactHistoryExport": "Exportar histórico da conversa",
         "compactExportControlsCollapse": "Ocultar controles de seleção",
         "compactExportControlsExpand": "Mostrar controles de seleção",
         "exportAction": "Exportar",
@@ -1161,20 +1161,20 @@
             "title": "Aviso da API dos EUA da Alibaba",
             "message": "Você está usando a API dos EUA da Alibaba, que não oferece suporte a TTS nem voz em tempo real. Recomendamos mudar para a API de Singapura da Alibaba."
         },
-        "conversationModelConfig": "Configuração do modelo de diálogo de texto",
-        "summaryModelConfig": "Configuração resumida do modelo",
-        "gameModelsConfig": "Configuração dos modelos do minijogo",
+        "conversationModelConfig": "Modelo de chat de texto",
+        "summaryModelConfig": "Modelo de resumo",
+        "gameModelsConfig": "Modelo de minijogo",
         "gameMainModelConfig": "Configuração do modelo principal do minijogo",
         "gameSummaryModelConfig": "Configuração do modelo de resumo do minijogo",
-        "correctionModelConfig": "Configuração do modelo de correção",
-        "emotionModelConfig": "Configuração do modelo de emoção",
-        "visionModelConfig": "Configuração do modelo de visão",
-        "realtimeModelConfig": "API em tempo real (modo local)",
-        "ttsModelConfig": "Configuração do modelo TTS (streaming duplex)",
+        "correctionModelConfig": "Modelo de correção",
+        "emotionModelConfig": "Modelo de emoção",
+        "visionModelConfig": "Modelo de chat visual",
+        "realtimeModelConfig": "Modelo multimodal em tempo real (modo local)",
+        "ttsModelConfig": "Modelo TTS",
         "apiUrl": "URL da API",
         "apiKey": "Chave de API",
         "modelId": "ID do modelo",
-        "agentApiConfigTitle": "Configuração da API do agente (é necessário ter capacidade para Vision)",
+        "agentApiConfigTitle": "API do agente (é necessário ter capacidade para Vision)",
         "providerPlaceholder": "por exemplo, openai, azul, local",
         "apiUrlPlaceholder": "por exemplo, https://api.openai.com/v1",
         "modelIdPlaceholder": "por exemplo, gpt-5.1-chat-latest, qwen-flash",
@@ -1665,6 +1665,7 @@
         },
         "registeredVoices": "Vozes registradas",
         "preview": "Visualização",
+        "previewing": "Reproduzindo prévia",
         "previewFailed": "Falha na visualização: {{error}}",
         "previewTimeout": "A geração da prévia expirou. Tente novamente mais tarde.",
         "playFailed": "Falha na reprodução: {{error}}",
@@ -2627,7 +2628,8 @@
             "language": "Linguagem",
             "general": "Em geral",
             "mediaCredentials": "Credenciais de mídia",
-            "characterCardManager": "Gerenciador de Cartões de Personagem"
+            "characterCardManager": "Gerenciador de Cartões de Personagem",
+            "advancedSettings": "Configurações avançadas"
         },
         "language": {
             "title": "Selecione o idioma",
@@ -2642,12 +2644,19 @@
             "chatIntervalBase": "Intervalo Mínimo",
             "visionInterval": "Intervalo de Percepção"
         },
+        "widgetMode": {
+            "enabledNotice": "O Modo de encaixe na borda Beta está ativo.",
+            "disabledNotice": "O Modo de encaixe na borda Beta está desativado. O Live2D voltou ao encaixe normal nas bordas.",
+            "toggleFailed": "Não foi possível alternar o Modo de encaixe na borda Beta. Tente novamente mais tarde."
+        },
         "toggles": {
             "allowInterrupt": "Permitir interrupção",
             "mergeMessages": "Mesclar mensagens",
             "avatarReactionBubble": "Bolha de Expressão",
             "focusCognition": "Modo de concentração",
             "focusCognitionTooltip": "Quando ativado, ela se concentra e pensa mais profundamente quando você desabafa ou pergunta algo complexo; desativado desliga a concentração.",
+            "widgetMode": "Modo de encaixe na borda Beta",
+            "widgetModeTooltip": "Ative manualmente o modo de encaixe para o Live2D espiar por seis âncoras da borda.",
             "slopFilter": "Expressão natural",
             "slopFilterTooltip": "Reduz formas de dizer repetitivas e estereotipadas nas respostas anteriores para que ela se expresse com mais naturalidade.",
             "autoCat": "Modo gato automático",
@@ -3377,7 +3386,7 @@
                 "desc": "Marque para ativar a configuração de API personalizada. Em seguida, configure APIs independentes para diferentes módulos, como resumo, correção, análise emocional, etc."
             },
             "step9": {
-                "title": "📝 Configuração resumida do modelo",
+                "title": "📝 Modelo de resumo",
                 "desc": "O modelo de resumo gera resumos de conversas e gerencia a memória. Configure o serviço de API independente para tarefas de resumo."
             }
         },
@@ -3780,6 +3789,7 @@
         "bilibili": "Bilíbili",
         "xhh": "Xiaoheihe",
         "youtube": "YouTube",
+        "twitch": "Twitch",
         "douyin": "Douyin",
         "kuaishou": "Kuaishou",
         "weibo": "Weibo",
@@ -3805,7 +3815,15 @@
         "noCookies": "Por favor configure os cookies primeiro",
         "statusLoadFailed": "Falha no carregamento do status",
         "thisPlatform": "esta plataforma",
+        "twitchAuth": {
+            "clientId": "Twitch Developer Client ID", "clientIdDesc": "Crie um aplicativo público no Twitch Developer Console e informe o Client ID. O Client Secret não é solicitado nem armazenado.",
+            "start": "Iniciar autorização da Twitch", "authorizeHint": "Abra a página de ativação da Twitch e informe este código:", "check": "Já autorizei; verificar status",
+            "invalidClientId": "Informe um Twitch Client ID válido", "started": "A autorização da Twitch foi iniciada; conclua a confirmação no navegador",
+            "startFailed": "Não foi possível iniciar a autorização da Twitch. Verifique o Client ID e a rede.", "authorized": "A credencial da Twitch foi criptografada e salva",
+            "pending": "A autorização ainda não terminou. Confirme na Twitch e tente novamente", "checkFailed": "Falha ao verificar a autorização. Inicie novamente."
+        },
         "instructions": {
+            "twitch": "<b>Autorização por Device Code:</b> crie um aplicativo público no Twitch Developer Console, informe o Client ID e siga as instruções.",
             "bilibili": "<b>Target:</b> Vá para <b>bilibili.com</b> para buscar esses cookies.",
             "xhh": "<b>Recomendado:</b> use o login por QR abaixo ou entre em <b>xiaoheihe.cn</b> e preencha os cookies manualmente.",
             "youtube": "<b>1. Obtenha o Cookie</b><br>Em um navegador conectado ao YouTube:<br>1. Abra <b>youtube.com</b><br>2. Pressione F12 → Network<br>3. Atualize a página e selecione uma solicitação <code>youtubei/v1/browse</code><br>4. Copie o valor completo do Cookie em Request Headers",

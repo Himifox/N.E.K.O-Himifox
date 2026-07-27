@@ -511,6 +511,7 @@ _MAIN_LIMITED_MODE_ALLOWED_EXACT_PATHS = {
     "/health",
     "/favicon.ico",
     "/api/beacon/shutdown",
+    "/api/runtime/shutdown",
     "/api/config/steam_language",
     "/api/system/status",
 }
@@ -922,6 +923,19 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
                     current_root_state.get("mode") or ROOT_MODE_NORMAL,
                 )
 
+            # GeoIP 预热必须在放开会话准入之前完成：会话的线路在 start_session 时
+            # 定死，一旦 _runtime_startup_init_completed 置位、limited mode 解除，
+            # 请求就能进来，此时若区域判定还没落地，首个会话会整场钉在大陆兜底线路。
+            # 放在这里（而不是本函数末尾）正是为了堵住那个准入窗口。
+            # 配置到这一步才最终成型（Cloud Save 快照已导入、Steamworks 已初始化），
+            # 所以也不能再往前挪——早读会看到导入前的旧配置而得出「无需区域判定」。
+            # 等待经 to_thread offload，不占事件循环；请求路径依然从不等探测。
+            try:
+                if not await _config_manager.awarmup_region_check():
+                    logger.info("[GeoIP] 启动预热未拿到区域结论，后续调用按退避重试")
+            except Exception:
+                logger.debug("[GeoIP] 预热失败，留给后续调用重试", exc_info=True)
+
             _runtime_startup_init_completed = True
             _disable_main_storage_limited_mode()
 
@@ -996,11 +1010,13 @@ async def on_startup():
             init_one_catgirl=init_one_catgirl,
             remove_one_catgirl=remove_one_catgirl,
             request_app_shutdown=lambda: asyncio.create_task(
-                request_application_shutdown_async()
+                request_application_shutdown_async(reason="storage_location_restart")
             ),
             release_storage_startup_barrier=release_storage_startup_barrier,
         )
         set_steamworks_initializer(ensure_steamworks_initialized)
+        # GeoIP 预热已移到 _ensure_main_server_runtime_initialized 末尾——配置到那里
+        # 才最终成型（Cloud Save 快照导入 + Steamworks 初始化完成）。
         # asyncio 的慢回调告警只在 loop debug 模式下输出。默认关闭，
         # 需要排查事件循环停顿时设 NEKO_DEBUG_ASYNC=1 启用（会略微增加每 callback 开销）。
         if os.environ.get("NEKO_DEBUG_ASYNC") == "1":
@@ -1294,14 +1310,14 @@ importlib.import_module(
 ).runtime.get_start_config = get_start_config
 
 
-async def request_application_shutdown_async():
+async def request_application_shutdown_async(*, reason: str = "application_request"):
     """Request an application-level shutdown compatible with both launcher modes."""
     current_config = get_start_config()
     request_runtime_shutdown = current_config.get("request_runtime_shutdown")
     if callable(request_runtime_shutdown):
         try:
             await asyncio.sleep(0.5)
-            result = request_runtime_shutdown()
+            result = request_runtime_shutdown(reason=reason)
             if inspect.isawaitable(result):
                 await result
             return
@@ -1361,6 +1377,9 @@ async def shutdown_server_async():
 importlib.import_module(
     f"{__package__}._shared"
 ).runtime.shutdown_server_async = shutdown_server_async
+importlib.import_module(
+    f"{__package__}._shared"
+).runtime.request_application_shutdown_async = request_application_shutdown_async
 
 
 # Steam 创意工坊管理相关API路由

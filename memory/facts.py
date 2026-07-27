@@ -208,7 +208,12 @@ class FactStore:
         RELATED_CONTEXT recall of reflection synthesis. Returns a new list; the
         archive never enters the cache.
 
-        A corrupted archive file degrades best-effort to active-only, no raise."""
+        A corrupted archive file degrades best-effort to active-only, no raise
+        (incl. invalid UTF-8: daily import's fingerprint scan now reads the
+        archive via this loader before any per-day isolation, so a non-UTF-8
+        archive must degrade here instead of aborting the whole import — Codex
+        P2). ``UnicodeDecodeError`` is a ``ValueError`` subclass, distinct from
+        ``JSONDecodeError``, so it is listed explicitly."""
         active = self.load_facts(name)
         archive_path = self._facts_archive_path(name)
         if not os.path.exists(archive_path):
@@ -216,7 +221,7 @@ class FactStore:
         try:
             with open(archive_path, encoding='utf-8') as f:
                 archived = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
             logger.warning(f"[FactStore] {name}: 读取 archive 失败，降级仅 active: {e}")
             return list(active)
         if not isinstance(archived, list):
@@ -426,7 +431,7 @@ class FactStore:
         while retries < max_retries:
             try:
                 set_call_type(call_type)
-                api_config = self._config_manager.get_model_api_config(tier)
+                api_config = await self._config_manager.aget_model_api_config(tier)
                 from config import LLM_OUTPUT_GUARD_MAX_TOKENS
                 _llm_kwargs = dict(
                     timeout=timeout,
@@ -483,10 +488,20 @@ class FactStore:
 
     async def _allm_extract_facts(
         self, lanlan_name: str, messages: list,
+        *, treat_malformed_as_failure: bool = False,
     ) -> list[dict] | None:
         """Stage-1: pure extraction. Prompt carries no existing observations
         to avoid self-cycling (the LLM quoting an existing reflection back as a
-        new fact). Returns the raw LLM-extracted list, or None on terminal failure."""
+        new fact). Returns the raw LLM-extracted list, or None on terminal failure.
+
+        ``treat_malformed_as_failure``: a non-array payload (e.g. ``{"facts":
+        [...]}``) is a model-shape failure, not a confirmed empty extraction.
+        The conversation paths tolerate it as ``[]`` (advance the cursor; the
+        window is lossy but recoverable from live chat). Daily import passes
+        ``True`` so a malformed result becomes a failed day (retryable) rather
+        than being checkpointed in the sidecar as a fact-less day — a sidecar
+        checkpoint would skip the LLM on every later import and silently lose
+        that day's facts (Codex P2)."""
         _, _, _, _, name_mapping, _, _, _, _ = await self._config_manager.aget_character_data()
         name_mapping['ai'] = lanlan_name
         conversation_text = self._format_conversation(messages, name_mapping)
@@ -504,6 +519,12 @@ class FactStore:
         if extracted is None:
             return None
         if not isinstance(extracted, list):
+            if treat_malformed_as_failure:
+                logger.warning(
+                    f"[FactStore] {lanlan_name}: Stage-1 返回非数组 "
+                    f"{type(extracted).__name__}，当作抽取失败（可重试，不 checkpoint）"
+                )
+                return None
             logger.warning(
                 f"[FactStore] {lanlan_name}: Stage-1 返回非数组 "
                 f"{type(extracted).__name__}，当作空列表处理"
@@ -1223,6 +1244,223 @@ class FactStore:
             return []
         return await self._apersist_new_facts(lanlan_name, extracted)
 
+    # ── external import state (sidecar) ──────────────────────────────
+
+    def _external_import_state_path(self, name: str) -> str:
+        from memory import ensure_character_dir
+        return os.path.join(
+            ensure_character_dir(self._config_manager.memory_dir, name),
+            'external_import_state.json',
+        )
+
+    def _load_external_import_state(self, name: str) -> dict:
+        """Best-effort read of the per-character external-import sidecar.
+
+        Missing / corrupt / non-dict payloads degrade to ``{}``: the worst
+        case is re-extracting already-imported days (wasted LLM calls), never
+        data loss, so this read must not fail an import.
+        """
+        path = self._external_import_state_path(name)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+                # UnicodeDecodeError（非法 UTF-8 字节，ValueError 子类，非
+                # JSONDecodeError/OSError）也要降级：_acollect_day_fp_sources 在
+                # per-day 隔离**之前**跑，一个损坏 sidecar 冒泡会 abort 整个导入，
+                # 违背 docstring 承诺的「降级空集」（Codex P2）。
+                logger.warning(
+                    f"[FactStore] {name}: 读取 external_import_state 失败，降级为空: {e}"
+                )
+        return {}
+
+    @staticmethod
+    def _state_daily_fingerprints(state: dict) -> set[str]:
+        """Processed-day fingerprint set held by the sidecar state dict."""
+        daily = state.get('daily')
+        fps = daily.get('imported_day_fingerprints') if isinstance(daily, dict) else None
+        if not isinstance(fps, list):
+            return set()
+        return {str(x) for x in fps if x}
+
+    @staticmethod
+    def _facts_have_day_fingerprint(facts: list[dict], fingerprint: str) -> bool:
+        """Whether any fact's ``external_import`` provenance carries this day's
+        fingerprint — i.e. the day IS carried by a fact and must NOT get a
+        sidecar entry.
+
+        Covers both a newly appended fact and an existing fact whose provenance
+        was upgraded in place (e.g. ai_disclosure→user_observation on a same-day
+        exact-hash hit): both stamp ``day_fingerprint``, both ride facts.json's
+        rollback lifecycle and self-heal, so a sidecar entry for such a day
+        would outlive a rollback and suppress the re-extraction (Codex P2)."""
+        for f in facts:
+            meta = f.get('external_import')
+            if isinstance(meta, dict) and str(meta.get('day_fingerprint') or '') == fingerprint:
+                return True
+        return False
+
+    async def _acollect_day_fp_sources(self, name: str) -> tuple[set[str], set[str]]:
+        """The two idempotency carriers, returned separately as
+        ``(sidecar_fps, provenance_fps)``.
+
+        provenance_fps scans active + archive (``aload_facts_full``) so a day
+        whose facts were archived still counts as carried. Callers union the two
+        for the skip filter, and diff them (``sidecar ∩ provenance``) to detect
+        stale sidecar entries a fact now carries — see the up-front self-heal in
+        ``aimport_external_daily``."""
+        state = await asyncio.to_thread(self._load_external_import_state, name)
+        sidecar_fps = self._state_daily_fingerprints(state)
+        provenance_fps: set[str] = set()
+        for f in await self.aload_facts_full(name):
+            meta = f.get('external_import')
+            if isinstance(meta, dict) and meta.get('day_fingerprint'):
+                provenance_fps.add(str(meta['day_fingerprint']))
+        return sidecar_fps, provenance_fps
+
+    async def _aload_imported_day_fps(self, name: str) -> set[str]:
+        """Union of processed-day fingerprints from two carriers, split by
+        whether the day persisted any fact:
+
+        - **Fact provenance** (``external_import.day_fingerprint`` inside
+          facts.json / facts_archive.json) is authoritative for days that
+          persisted at least one fact. It rides the fact data's own cloudsave
+          sync / restore / rollback lifecycle, so a rolled-back day loses its
+          fingerprint together with its facts and re-imports self-heal —
+          exactly #2383's behavior. Days-with-facts therefore do **not** get a
+          sidecar entry (see ``_arecord_unpersisted_day_fp``): a sidecar record
+          that outlived a facts.json rollback would permanently suppress the
+          re-extraction that restores the day.
+        - **Sidecar** (``external_import_state.json``) carries **only** days the
+          LLM judged to hold no fact at all (empty extraction). A day whose
+          extracted facts were *all deduped away* is NOT recorded here — its
+          content is already carried by the deduping facts (under a different
+          fingerprint, so a rollback of those facts couldn't self-heal a sidecar
+          entry), so it re-extracts instead (added=0, no data lost — chosen over
+          a fact-carried multi-fingerprint scheme). Re-extracting a truly
+          fact-less day is harmless, so a stale / desynced sidecar never loses
+          data (Codex P2 follow-up).
+
+        Provenance is read over active + archive (``aload_facts_full``) so a day
+        whose facts were archived by ``_archive_absorbed`` (>7 days old) still
+        skips instead of re-extracting. The production skip filter computes this
+        same union itself from ``_acollect_day_fp_sources`` (it also needs the
+        ``sidecar ∩ provenance`` intersection for the up-front self-heal), so
+        this wrapper is the read-side contract exercised by the sidecar
+        degradation tests. The persist-time concurrent re-check reads active
+        provenance directly (a rival import that just persisted writes the
+        active list, and a sidecar-only rival must not suppress this request's
+        real facts).
+        """
+        sidecar_fps, provenance_fps = await self._acollect_day_fp_sources(name)
+        return sidecar_fps | provenance_fps
+
+    async def _arecord_unpersisted_day_fp(self, name: str, fingerprint: str) -> None:
+        """Best-effort: record a day's fingerprint in the sidecar **iff no fact
+        carries it**.
+
+        Called only for days the LLM judged fact-less (empty extraction); a day
+        whose extracted facts all deduped away re-extracts instead of being
+        sidecar-recorded (see ``_aload_imported_day_fps``). The
+        active-provenance re-check runs **inside** the persist alock (the same
+        lock as fact persistence): a concurrent same-character import that
+        persists this day's facts either lands before us — we see its provenance
+        and skip the sidecar — or after us, blocked on the lock. So a day that
+        ends up with a fact carrier never also gets a sidecar entry (which would
+        outlive a facts.json rollback and suppress the self-healing
+        re-extraction, Codex P2). No TOCTOU; the same critical section also
+        absorbs the sidecar's own read-modify-write.
+
+        Best-effort by design: the sidecar is a pure idempotency accelerator.
+        A write failure (disk full / permission; the cloudsave fence is already
+        rejected at the import entrypoint) degrades to re-extracting this day on
+        the next import — the exact #2383-era cost — so it must never escalate
+        a day that otherwise succeeded into a failed_day / HTTP 500. Fact
+        persistence keeps its own hard ``assert_cloudsave_writable`` semantics;
+        only this accelerator layer is soft.
+        """
+        try:
+            async with self._get_persist_alock(name):
+                active = await self.aload_facts(name)
+                if self._facts_have_day_fingerprint(active, fingerprint):
+                    return
+                await asyncio.to_thread(
+                    self._record_imported_day_fp_locked, name, fingerprint
+                )
+        except (MaintenanceModeError, OSError) as exc:
+            logger.warning(
+                f"[FactStore] {name}: sidecar 落盘失败（降级为下次重导重抽该天）: {exc}"
+            )
+
+    def _record_imported_day_fp_locked(self, name: str, fingerprint: str) -> None:
+        assert_cloudsave_writable(
+            self._config_manager,
+            operation="save",
+            target=f"memory/{name}/external_import_state.json",
+        )
+        state = self._load_external_import_state(name)
+        fps = self._state_daily_fingerprints(state)
+        if fingerprint in fps:
+            return
+        fps.add(fingerprint)
+        state.setdefault('version', 1)
+        daily = state.get('daily')
+        if not isinstance(daily, dict):
+            daily = {}
+            state['daily'] = daily
+        # 对偶 persona folded_fingerprints：集合语义、sorted 落盘（稳定可 diff）。
+        daily['imported_day_fingerprints'] = sorted(fps)
+        atomic_write_json(
+            self._external_import_state_path(name), state,
+            indent=2, ensure_ascii=False,
+        )
+
+    async def _aclear_day_fps(self, name: str, fingerprints: set[str]) -> None:
+        """Best-effort: drop day fingerprints from the sidecar because a fact now
+        carries them, or the day re-extracts — either way they must not linger as
+        stale sidecar entries that a facts rollback couldn't self-heal (Codex P2).
+
+        Fires the write only when the sidecar actually holds one of them. Used
+        both for the up-front self-heal (``sidecar ∩ provenance``) and for the
+        per-day clear after a day yields facts. Same per-character alock +
+        best-effort contract as ``_arecord_unpersisted_day_fp``."""
+        if not fingerprints:
+            return
+        try:
+            async with self._get_persist_alock(name):
+                await asyncio.to_thread(self._clear_day_fps_locked, name, fingerprints)
+        except (MaintenanceModeError, OSError) as exc:
+            logger.warning(
+                f"[FactStore] {name}: sidecar 清理陈旧指纹失败（无害，下次导入再清）: {exc}"
+            )
+
+    def _clear_day_fps_locked(self, name: str, fingerprints: set[str]) -> None:
+        path = self._external_import_state_path(name)
+        if not os.path.exists(path):
+            return  # 无 sidecar 文件 → 只一次 stat、不碰盘。
+        state = self._load_external_import_state(name)
+        fps = self._state_daily_fingerprints(state)
+        to_drop = fps & fingerprints
+        if not to_drop:
+            return
+        assert_cloudsave_writable(
+            self._config_manager,
+            operation="save",
+            target=f"memory/{name}/external_import_state.json",
+        )
+        fps -= to_drop
+        daily = state.get('daily')
+        if not isinstance(daily, dict):
+            return
+        daily['imported_day_fingerprints'] = sorted(fps)
+        atomic_write_json(
+            self._external_import_state_path(name), state,
+            indent=2, ensure_ascii=False,
+        )
+
     async def aimport_external_daily(
         self, lanlan_name: str, candidates: list[dict], source_format: str,
         imported_at: str,
@@ -1249,11 +1487,23 @@ class FactStore:
         that day from scratch (a partially-persisted day would fingerprint-skip
         forever, Greptile P1).
 
-        Idempotency mirrors persona ``folded_fingerprints``: each persisted fact
-        carries its day's content fingerprint; a re-imported day whose fragments
-        are unchanged is skipped outright — zero LLM calls (Codex P2). Changed
-        content re-extracts; near-identical re-extraction output is absorbed by
-        the same-date FTS5 dedup in ``_apersist_new_facts``.
+        Idempotency mirrors persona ``folded_fingerprints`` via each day's
+        content fingerprint, held by the fact carrier when there is one and by
+        the sidecar only when there is none: days that persisted (or upgraded in
+        place) a fact carry it in their ``external_import`` provenance (inside
+        facts.json, so it shares the fact data's cloudsave lifecycle and
+        self-heals on rollback); days the LLM judged fact-less (empty
+        extraction) record it in the ``external_import_state.json`` sidecar,
+        which would otherwise have no home and re-run the LLM + burn cap quota on
+        every re-import (Codex P2 follow-up). A day whose extracted facts all
+        deduped away is left to re-extract (its content is already carried by
+        the deduping facts under a different fingerprint; recording a sidecar
+        entry that a facts rollback couldn't self-heal was rejected). The read
+        side unions provenance + sidecar (see ``_aload_imported_day_fps``). A
+        re-imported day whose fragments are unchanged is skipped outright — zero
+        LLM calls (Codex P2). Changed content re-extracts; near-identical
+        re-extraction output is absorbed by the same-date FTS5 dedup in
+        ``_apersist_new_facts``.
 
         After fingerprint filtering, more than ``EXTERNAL_IMPORT_DAILY_MAX_FILES``
         genuinely-new days raises ``ExternalMemoryImportTooLargeError`` — an
@@ -1274,13 +1524,17 @@ class FactStore:
             by_file.setdefault(str(cand.get("source_file") or ""), []).append(cand)
 
         # 逐日指纹幂等（对偶 persona folded_fingerprints）：已导入且内容未变的
-        # 天直接 skip，不进 LLM。指纹在下方随每条 fact 的 provenance 落盘。
-        existing = await self.aload_facts(lanlan_name)
-        imported_day_fps: set[str] = set()
-        for f in existing:
-            meta = f.get('external_import')
-            if isinstance(meta, dict) and meta.get('day_fingerprint'):
-                imported_day_fps.add(str(meta['day_fingerprint']))
+        # 天直接 skip，不进 LLM。双载体：有 fact 天靠 provenance（含 archive），无
+        # fact 天靠 sidecar。
+        sidecar_fps, provenance_fps = await self._acollect_day_fp_sources(lanlan_name)
+        # skip 前自愈：sidecar 里凡 fact provenance 也持有的指纹 = 陈旧（这天已有
+        # fact 载体、不该在 sidecar）→ 清掉。覆盖 exact-hash upgrade 残留、并发
+        # sidecar-only 残留、以及成功天即时清理失败/进程中断——那次清理在 persist
+        # 后、会被本处 skip 绕过而永不重跑（CodeRabbit + Codex）。
+        stale_sidecar = sidecar_fps & provenance_fps
+        if stale_sidecar:
+            await self._aclear_day_fps(lanlan_name, stale_sidecar)
+        imported_day_fps = sidecar_fps | provenance_fps
 
         day_dates = {
             source_file: next(
@@ -1341,34 +1595,53 @@ class FactStore:
                 )
                 # 只有 LLM 往返占并发槽；写盘走 _apersist_new_facts 的 per-character
                 # 锁自行互斥，放在槽外让别的日子的 LLM 调用尽早起跑。
+                # 畸形非数组当失败天（可重试）：否则会被当空抽取天 checkpoint 进
+                # sidecar、后续导入 skip LLM 而静默丢该天 facts（Codex P2）。
                 async with llm_slots:
-                    extracted = await self._allm_extract_facts(lanlan_name, messages)
+                    extracted = await self._allm_extract_facts(
+                        lanlan_name, messages, treat_malformed_as_failure=True,
+                    )
                 if extracted is None:
                     logger.warning(
                         f"[FactStore] {lanlan_name}: 外部 daily 抽取 LLM 失败，"
                         f"放弃 {source_file}（整天重试重抽）"
                     )
                     return 0, True
-                day_extracted.extend(f for f in extracted if isinstance(f, dict))
+                batch_facts = [f for f in extracted if isinstance(f, dict)]
+                if extracted and not batch_facts:
+                    # 数组非空但无 object 元素（如 ["Master likes tea"]）= schema 失败、
+                    # 非确认空抽取——treat_malformed_as_failure 只挡「非数组」，挡不住
+                    # 「数组套字符串」。当失败天可重试，否则被 checkpoint 成空抽取天、
+                    # 后续导入 skip LLM 静默丢该天 facts（Codex P2）。
+                    logger.warning(
+                        f"[FactStore] {lanlan_name}: 外部 daily 抽取返回无 object 元素的"
+                        f"数组，放弃 {source_file}（整天重试重抽）"
+                    )
+                    return 0, True
+                day_extracted.extend(batch_facts)
             if not day_extracted:
+                # 空抽取天：LLM 判该日无 fact，无 fact 载体存指纹，只能靠 sidecar，
+                # 否则每次重导都重抽该天并占 cap 配额（Codex P2 follow-up）。
+                # _arecord 锁内二次确认 active 无该天 provenance 才落（兜并发对方
+                # 已 persist 真实 facts 的情况）；best-effort 写失败退回重抽、不升级
+                # failed_day。
+                await self._arecord_unpersisted_day_fp(lanlan_name, day_fps[source_file])
                 return 0, False
             # 并发缩窗重查：两个同角色 commit 可能都在开头读过 imported_day_fps
-            # 才各自跑 LLM；persist 前重读一次，若对方已把同指纹落盘则放弃本次
-            # 写入（措辞不同的重复 facts 会绕过精确去重）。剩余极窄的 TOCTOU
-            # 窗口由同日期 FTS5 近似去重兜底；前端 in-flight 单飞锁已挡住单
-            # 客户端的并发导入（Codex P2）。
-            latest = await self.aload_facts(lanlan_name)
-            for existing_fact in latest:
-                meta = existing_fact.get('external_import')
-                if (
-                    isinstance(meta, dict)
-                    and str(meta.get('day_fingerprint') or '') == day_fps[source_file]
-                ):
-                    logger.info(
-                        f"[FactStore] {lanlan_name}: {source_file} 已被并发导入落盘，"
-                        "放弃本次写入"
-                    )
-                    return 0, False
+            # 才各自跑 LLM；persist 前重读一次，若对方已把这天真实 facts 落盘则
+            # 放弃本次写入（措辞不同的重复 facts 会绕过精确去重）。剩余极窄的
+            # TOCTOU 窗口由同日期 FTS5 近似去重兜底；前端 in-flight 单飞锁已挡住
+            # 单客户端的并发导入（Codex P2）。
+            # 只认 active fact provenance、**不查 sidecar**：本请求已抽出非空
+            # facts，不能被对方并发的 sidecar-only（空抽取/全去重、无 fact 载体）
+            # 结果挤掉——那会让「无 fact 的 sidecar」压掉真实抽取的 facts（Codex）。
+            active_now = await self.aload_facts(lanlan_name)
+            if self._facts_have_day_fingerprint(active_now, day_fps[source_file]):
+                logger.info(
+                    f"[FactStore] {lanlan_name}: {source_file} 已被并发导入落盘，"
+                    "放弃本次写入"
+                )
+                return 0, False
             for fact in day_extracted:
                 # Stamp provenance; _apersist_new_facts_locked turns event_date
                 # into event_start_at and tags the entry as external_import.
@@ -1381,9 +1654,27 @@ class FactStore:
                     "imported_at": imported_at,
                     "day_fingerprint": day_fps[source_file],
                 }
-            new_facts = await self._apersist_new_facts(
-                lanlan_name, day_extracted, semantic_dedup=True,
-            )
+            try:
+                new_facts = await self._apersist_new_facts(
+                    lanlan_name, day_extracted, semantic_dedup=True,
+                )
+            except Exception:
+                # persist 失败（FTS/JSON 写错等）也要清该天 sidecar：本请求已抽出真实
+                # facts（这天有内容），若并发空抽取先写下 sidecar，persist 失败后它会
+                # 成为唯一载体、压制用户重试 skip 未变日记而永不落盘（Codex）。收窄非
+                # 根除：对方空判定在本清理**之后**才落盘的序覆盖不到——失败天标识不
+                # 持久化、无法跨请求围栏，与「任意后续导入 LLM 恰判空即 checkpoint」
+                # 的既定接受面同构。失败天由 gather 计入 failed_days、重试从头重抽。
+                await self._aclear_day_fps(lanlan_name, {day_fps[source_file]})
+                raise
+            # 抽出 fact 的天（成功落新 fact，或全去重命中既有）都清掉该天可能残留的
+            # sidecar 指纹（并发对方空抽取先写下的）——这些天不该在 sidecar：
+            #  - 成功/upgrade 天：指纹已在 fact provenance，与 facts 同处回滚单元、
+            #    回滚后一起消失重导自愈；残留 sidecar 会在回滚后压制重抽 → 记忆丢失。
+            #  - 全去重天：不记 sidecar，靠「每次重抽自愈」保 rollback-safe（既有 fact
+            #    回滚后重抽会重新 append）；若被并发空抽取的 sidecar 挡住就破坏自愈。
+            # 绝大多数天 sidecar 无此指纹 → 一次 stat 即返回（Codex）。
+            await self._aclear_day_fps(lanlan_name, {day_fps[source_file]})
             return len(new_facts), False
 
         outcomes = await asyncio.gather(
@@ -1678,7 +1969,7 @@ class FactStore:
         try:
             from utils.llm_client import create_chat_llm_async
             set_call_type("memory_recheck_fact")
-            api_config = self._config_manager.get_model_api_config('summary')
+            api_config = await self._config_manager.aget_model_api_config('summary')
             from config import LLM_OUTPUT_GUARD_MAX_TOKENS
             llm = await create_chat_llm_async(
                 api_config['model'],

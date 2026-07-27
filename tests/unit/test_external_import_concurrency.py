@@ -255,7 +255,24 @@ class _DailyConcurrencyHarness(FactStore):
     async def aload_facts(self, lanlan_name):
         return []
 
-    async def _allm_extract_facts(self, lanlan_name, messages):
+    async def aload_facts_full(self, lanlan_name):
+        # 隔离真实盘：读路径（_acollect_day_fp_sources）现取 active+archive。
+        return []
+
+    # 隔离 sidecar 文件 IO：否则无 fact 载体天会读写真实 memory_dir。
+    def _load_external_import_state(self, name):
+        return {}
+
+    async def _arecord_unpersisted_day_fp(self, lanlan_name, fingerprint):
+        return None
+
+    async def _aclear_day_fps(self, lanlan_name, fingerprints):
+        # 成功/persist 失败天的清理同样要隔离：真实 _clear_day_fps_locked 在
+        # exists 早退**之前**就 ensure_character_dir，会在真实 memory_dir 里
+        # mkdir 幽灵角色目录。
+        return None
+
+    async def _allm_extract_facts(self, lanlan_name, messages, **_kwargs):
         text = "\n".join(getattr(m, "content", "") for m in messages)
         return await self._extract(text)
 
