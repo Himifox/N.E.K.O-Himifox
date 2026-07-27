@@ -12,7 +12,9 @@ from main_logic.proactive_recommendation_feedback import (
     music_feedback_event_type,
     note_user_turn_for_feedback,
     record_feedback_event,
+    record_feedback_event_with_status,
     register_pending_feedback,
+    register_pending_feedback_from_observation,
     sanitize_feedback_metadata,
     sanitize_recommendation_feedback_event,
     join_observations_with_feedback,
@@ -445,6 +447,90 @@ def test_shadow_turn_can_update_conversation_and_source_groups_independently(tmp
         ["positive_evidence_count"]
         == 1
     )
+
+
+def test_scoped_explicit_feedback_separates_timing_from_source_preference(tmp_path):
+    clear_temporary_feedback_state_preview()
+    pending = register_pending_feedback_from_observation(
+        _observation(
+            turn_id="scoped-news",
+            shadow_selected_source_type="news",
+            shadow_selected_candidate_id="news:verified",
+            actual_primary_channel="chat",
+            recommendation_mode="shadow",
+        ),
+        log_mode="jsonl",
+        config_dir=tmp_path,
+    )
+    assert pending is not None
+    assert pending.source_type == "news"
+    assert pending.candidate_id == "news:verified"
+
+    not_now = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="scoped-news",
+        event_type="proactive_not_now",
+        metadata={"ui_generation": "dual_scope_v1"},
+        ts=10_001.0,
+    )
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_001.0)
+    assert not_now.state_updated is True
+    assert not_now.feedback_scope == "conversation_acceptance"
+    assert not_now.state_reason == "temporary_only"
+    assert preview["conversation_acceptance"]["temporary"]["negative_evidence_count"] == 1
+    assert preview["conversation_acceptance"]["persistent"]["negative_evidence_count"] == 0
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
+
+    source_negative = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="scoped-news",
+        event_type="source_not_interested",
+        metadata={"ui_generation": "dual_scope_v1"},
+        ts=10_002.0,
+    )
+    duplicate = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="scoped-news",
+        event_type="source_not_interested",
+        metadata={"ui_generation": "not-registered"},
+        ts=10_003.0,
+    )
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_003.0)
+    source = preview["source_affinity"]["persistent"]["sources"]["news"]
+    assert source_negative.state_updated is True
+    assert source_negative.feedback_scope == "source_affinity"
+    assert source_negative.state_reason == "exact_pending_match"
+    assert source_negative.event["metadata"] == {"ui_generation": "dual_scope_v1"}
+    assert duplicate.state_updated is False
+    assert duplicate.state_reason == "duplicate_event"
+    assert duplicate.event["metadata"] == {}
+    assert source["negative_evidence_count"] == 1
+    assert preview["conversation_acceptance"]["persistent"]["negative_evidence_count"] == 0
+
+
+def test_source_not_interested_without_verified_material_is_diagnostic_only(tmp_path):
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="unverified-source",
+        source_type="chat",
+        delivered_at=10_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    result = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="unverified-source",
+        event_type="source_not_interested",
+        ts=10_001.0,
+    )
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_001.0)
+    assert result.logged is True
+    assert result.state_updated is False
+    assert result.feedback_scope == "source_affinity"
+    assert result.state_reason == "pending_material_mismatch"
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
 
 
 def test_shadow_source_affinity_rejects_unverified_and_technical_events(tmp_path):

@@ -15,6 +15,7 @@ from uuid import uuid4
 from config import (
     MINI_GAME_INVITE_ENABLED,
     PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
+    PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
     PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
@@ -53,6 +54,46 @@ from .state import _recent_proactive_chat_entries
 
 _SHADOW_HISTORY_MAX = 20
 _shadow_history: dict[str, deque[dict[str, Any]]] = {}
+_EXPLICIT_FEEDBACK_SOURCES = {
+    "news",
+    "web",
+    "meme",
+    "vision",
+    "window",
+    "video",
+    "music",
+}
+
+
+def _explicit_feedback_context(
+    observation: Mapping[str, Any] | None,
+    *,
+    recommendation_mode: str,
+) -> dict[str, Any] | None:
+    """Expose only the facts needed to render Shadow feedback actions."""
+    if (
+        PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI != "shadow"
+        or recommendation_mode != "shadow"
+        or not isinstance(observation, Mapping)
+        or observation.get("delivered") is not True
+    ):
+        return None
+    turn_id = str(observation.get("turn_id") or "").strip()
+    if not turn_id:
+        return None
+    source = str(observation.get("shadow_selected_source_type") or "").strip().lower()
+    source_available = bool(
+        observation.get("matched_actual_material") is True
+        and observation.get("shadow_selected_candidate_id")
+        and source in _EXPLICIT_FEEDBACK_SOURCES
+    )
+    display_source = {"web": "news", "window": "vision"}.get(source, source)
+    return {
+        "turn_id": turn_id,
+        "source_type": display_source if source_available else None,
+        "source_feedback_available": source_available,
+        "ui_generation": "dual_scope_v1",
+    }
 
 
 def _record_shadow_selection(
@@ -324,7 +365,7 @@ class RecommendationTurn:
         if not self.enabled or decision is None:
             return
         snapshot = self.activity_snapshot
-        _record_proactive_recommendation_observation(
+        observation = _record_proactive_recommendation_observation(
             decision,
             lanlan_name=self.lanlan_name,
             response_body=response_body,
@@ -347,3 +388,9 @@ class RecommendationTurn:
             decision_context=self.decision_context,
             log=self.log,
         )
+        feedback_context = _explicit_feedback_context(
+            observation,
+            recommendation_mode=self.mode,
+        )
+        if feedback_context is not None:
+            response_body["feedback_context"] = feedback_context

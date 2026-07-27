@@ -43,6 +43,8 @@ _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "ignored": ("generic_engagement", -0.05, "low"),
     "proactive_disabled_after": ("settings", -0.70, "high"),
     "source_disabled_after": ("settings", -0.35, "medium"),
+    "proactive_not_now": ("interrupt", -0.35, "high"),
+    "source_not_interested": ("source_preference", -0.35, "high"),
     "music_played_through": ("music", 0.90, "high"),
     "music_high_completion": ("music", 0.65, "high"),
     "music_mid_completion": ("music", 0.25, "medium"),
@@ -70,6 +72,8 @@ _REWARD_V2_PREVIEW_EVENT_COMPONENTS: dict[str, tuple[str, float]] = {
     "ignored": ("interrupt", -0.05),
     "proactive_disabled_after": ("settings", -0.70),
     "source_disabled_after": ("settings", -0.35),
+    "proactive_not_now": ("interrupt", -0.35),
+    "source_not_interested": ("settings", -0.35),
     "music_played_through": ("consumption", 0.90),
     "music_high_completion": ("consumption", 0.65),
     "music_mid_completion": ("consumption", 0.25),
@@ -103,9 +107,11 @@ _CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
     "user_reply",
     "user_continue",
     "proactive_disabled_after",
+    "proactive_not_now",
 }
 _SOURCE_AFFINITY_EVENT_TYPES = {
     "source_disabled_after",
+    "source_not_interested",
     "music_played_through",
     "music_high_completion",
     "music_mid_completion",
@@ -139,7 +145,9 @@ _METADATA_KEYS = {
     "mini_game_choice",
     "game_type",
     "reason",
+    "ui_generation",
 }
+_UI_GENERATIONS = {"dual_scope_v1"}
 _MAX_PLAYBACK_FEEDBACK_MS = 24 * 60 * 60 * 1000
 _FORBIDDEN_EVENT_KEYS = {
     "payload",
@@ -201,6 +209,9 @@ class PendingRecommendationFeedback:
 class RecommendationFeedbackRecordResult:
     event: dict[str, Any] | None
     logged: bool
+    state_updated: bool = False
+    feedback_scope: str = "diagnostic_only"
+    state_reason: str = "not_logged"
 
 
 _pending_feedback: dict[tuple[str, str], PendingRecommendationFeedback] = {}
@@ -299,6 +310,12 @@ def sanitize_feedback_metadata(metadata: Any) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key in _METADATA_KEYS:
         if key not in metadata:
+            continue
+        if key == "ui_generation":
+            value = _clean_text(metadata.get(key))
+            if value not in _UI_GENERATIONS:
+                continue
+            safe[key] = value
             continue
         if key == "active_playback_ms":
             value = metadata.get(key)
@@ -473,12 +490,14 @@ def register_pending_feedback_from_observation(
     turn_id = _clean_text(observation.get("turn_id"))
     if not lanlan_name or not turn_id:
         return None
+    matched_material = observation.get("matched_actual_material") is True
     source_type = _normalize_source_type(
-        observation.get("actual_primary_channel")
-        or observation.get("shadow_selected_source_type")
+        observation.get("shadow_selected_source_type")
+        if matched_material
+        else observation.get("actual_primary_channel")
     )
     candidate_id = None
-    if observation.get("matched_actual_material") is True:
+    if matched_material:
         candidate_id = _clean_text(observation.get("shadow_selected_candidate_id")) or None
     return register_pending_feedback(
         lanlan_name=lanlan_name,
@@ -563,7 +582,9 @@ def record_feedback_event_with_status(
     name = _clean_text(lanlan_name)
     tid = _clean_text(turn_id)
     if not name or not tid:
-        return RecommendationFeedbackRecordResult(event=None, logged=False)
+        return RecommendationFeedbackRecordResult(
+            event=None, logged=False, state_reason="invalid_identity"
+        )
     pending = _pending_feedback.get((name, tid))
     event = build_feedback_event(
         lanlan_name=name,
@@ -575,7 +596,9 @@ def record_feedback_event_with_status(
         ts=ts,
     )
     if not event.get("event_type"):
-        return RecommendationFeedbackRecordResult(event=None, logged=False)
+        return RecommendationFeedbackRecordResult(
+            event=None, logged=False, state_reason="invalid_event"
+        )
     duplicate_event = False
     duplicate_group = False
     if pending is not None:
@@ -595,7 +618,11 @@ def record_feedback_event_with_status(
         log_mode=effective_log_mode,
         config_dir=effective_config_dir,
     )
+    state_updated = False
+    feedback_scope = "diagnostic_only"
+    state_reason = "not_logged"
     if wrote:
+        state_reason = "not_shadow"
         _maybe_auto_apply_tuning_after_feedback(
             config_dir=effective_config_dir,
         )
@@ -614,16 +641,27 @@ def record_feedback_event_with_status(
             )
             try:
                 if event_type in _CONVERSATION_ACCEPTANCE_EVENT_TYPES:
+                    feedback_scope = "conversation_acceptance"
+                    persistent_eligible = (
+                        persistent_eligible and event_type != "proactive_not_now"
+                    )
                     update_conversation_acceptance_preview(
                         config_dir=effective_config_dir,
                         score=score,
                         persistent_eligible=persistent_eligible,
                         now=_number(event.get("ts"), time.time()),
                     )
+                    state_updated = True
+                    state_reason = (
+                        "temporary_only"
+                        if event_type == "proactive_not_now"
+                        else "applied"
+                    )
                 elif (
                     event_type in _SOURCE_AFFINITY_EVENT_TYPES
                     and _source_affinity_event_matches_pending(event, pending)
                 ):
+                    feedback_scope = "source_affinity"
                     update_source_affinity_preview(
                         config_dir=effective_config_dir,
                         source_type=event.get("source_type"),
@@ -631,9 +669,28 @@ def record_feedback_event_with_status(
                         persistent_eligible=persistent_eligible,
                         now=_number(event.get("ts"), time.time()),
                     )
+                    state_updated = True
+                    state_reason = "exact_pending_match"
+                elif event_type in _SOURCE_AFFINITY_EVENT_TYPES:
+                    feedback_scope = "source_affinity"
+                    state_reason = "pending_material_mismatch"
+                else:
+                    state_reason = "event_not_stateful"
             except Exception as exc:
                 logger.debug("feedback state preview update failed: %s", exc)
-    return RecommendationFeedbackRecordResult(event=event, logged=wrote)
+                state_updated = False
+                state_reason = "state_update_failed"
+        elif pending is None:
+            state_reason = "pending_missing"
+        elif duplicate_event:
+            state_reason = "duplicate_event"
+    return RecommendationFeedbackRecordResult(
+        event=event,
+        logged=wrote,
+        state_updated=state_updated,
+        feedback_scope=feedback_scope,
+        state_reason=state_reason,
+    )
 
 
 def _source_affinity_event_matches_pending(

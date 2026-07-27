@@ -169,6 +169,13 @@ PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE = _read_str_env(
 default and must never change ranking or delivery behavior.
 """
 
+PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
+    "off",
+    allowed=("off", "shadow"),
+)
+"""Expose scoped explicit-feedback actions for delivered Shadow turns only."""
+
 EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。
 - 用途：返回情感标签 + score 等短输出。

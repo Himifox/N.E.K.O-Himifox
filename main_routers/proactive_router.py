@@ -592,6 +592,9 @@ async def record_proactive_recommendation_feedback(request: Request):
         "success": True,
         "logged": result.logged,
         "event": result.event,
+        "state_updated": result.state_updated,
+        "feedback_scope": result.feedback_scope,
+        "state_reason": result.state_reason,
         "log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
     }
 

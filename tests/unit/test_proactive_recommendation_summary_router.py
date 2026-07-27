@@ -660,8 +660,13 @@ def test_feedback_endpoint_updates_verified_music_negative_preview_once(
     assert first.status_code == 200
     assert first.json()["success"] is True
     assert first.json()["logged"] is True
+    assert first.json()["state_updated"] is True
+    assert first.json()["feedback_scope"] == "source_affinity"
+    assert first.json()["state_reason"] == "exact_pending_match"
     assert first.json()["event"]["candidate_id"] == "music:verified"
     assert duplicate.json()["logged"] is True
+    assert duplicate.json()["state_updated"] is False
+    assert duplicate.json()["state_reason"] == "duplicate_event"
     preview = get_feedback_state_preview(config_dir=tmp_path, now=10_002.0)
     temporary = preview["source_affinity"]["temporary"]["sources"]["music"]
     persistent = preview["source_affinity"]["persistent"]["sources"]["music"]

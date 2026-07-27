@@ -1,5 +1,7 @@
 import json
 
+import main_logic.proactive_chat.recommendation_integration as recommendation_integration
+
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
     ProactiveCandidate,
@@ -16,6 +18,57 @@ from main_logic.proactive_recommendation_feedback_state import (
     update_source_affinity_preview,
 )
 from main_routers.system_router import _record_proactive_recommendation_observation
+
+
+def test_explicit_feedback_context_is_shadow_only_and_hides_candidate(monkeypatch):
+    observation = {
+        "turn_id": "turn-feedback",
+        "delivered": True,
+        "matched_actual_material": True,
+        "shadow_selected_source_type": "news",
+        "shadow_selected_candidate_id": "news:private-id",
+    }
+    monkeypatch.setattr(
+        recommendation_integration,
+        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
+        "shadow",
+    )
+
+    context = recommendation_integration._explicit_feedback_context(
+        observation,
+        recommendation_mode="shadow",
+    )
+
+    assert context == {
+        "turn_id": "turn-feedback",
+        "source_type": "news",
+        "source_feedback_available": True,
+        "ui_generation": "dual_scope_v1",
+    }
+    assert "candidate" not in json.dumps(context)
+    assert recommendation_integration._explicit_feedback_context(
+        observation,
+        recommendation_mode="active_source",
+    ) is None
+
+
+def test_explicit_feedback_context_keeps_timing_action_when_material_unverified(monkeypatch):
+    monkeypatch.setattr(
+        recommendation_integration,
+        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
+        "shadow",
+    )
+    context = recommendation_integration._explicit_feedback_context(
+        {
+            "turn_id": "turn-chat-only",
+            "delivered": True,
+            "matched_actual_material": False,
+            "shadow_selected_source_type": "news",
+        },
+        recommendation_mode="shadow",
+    )
+    assert context["source_feedback_available"] is False
+    assert context["source_type"] is None
 
 
 def _material_candidate(source_type, *, score=0.8, url="https://example.test/item"):
