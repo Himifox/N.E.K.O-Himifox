@@ -667,27 +667,47 @@
         }
 
         .submit-btn {
-            width: 100%;
-            padding: 14px;
-            font-size: 16px;
-            font-weight: 600;
-            border-radius: 12px;
-            border: none;
-            background: linear-gradient(135deg, var(--accent), color-mix(in oklch, var(--accent) 72%, white));
+            width: fit-content;
+            min-width: 220px;
+            max-width: 100%;
+            min-height: 48px;
+            margin-left: auto;
+            padding: 8px 16px 8px 10px;
+            font-size: 14px;
+            font-weight: 650;
+            letter-spacing: 0.01em;
+            border-radius: 14px;
+            border: 1px solid color-mix(in oklch, var(--accent) 62%, white);
+            background: linear-gradient(135deg, color-mix(in oklch, var(--accent) 68%, black), var(--accent));
             color: #fff;
             cursor: pointer;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 10px;
+            gap: 9px;
             font-family: inherit;
-            box-shadow: 0 10px 28px var(--accent-glow), inset 0 1px rgba(255,255,255,0.3);
-            transition: all 0.2s;
+            box-shadow: 0 8px 20px var(--accent-glow), inset 0 1px rgba(255,255,255,0.24);
+            transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
         }
+        .submit-btn svg {
+            width: 30px;
+            height: 30px;
+            padding: 6px;
+            border-radius: 9px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.13);
+            flex-shrink: 0;
+        }
+        .submit-btn #submit-text { white-space: nowrap; }
         .submit-btn:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
-        .submit-btn:hover { filter: brightness(0.96) saturate(1.08); transform: translateY(-2px); }
-        .submit-btn:active { transform: scale(0.98); }
-        .submit-btn.loading { pointer-events: none; opacity: 0.7; }
+        .submit-btn:hover {
+            transform: translateY(-1px);
+            border-color: color-mix(in oklch, var(--accent) 42%, white);
+            box-shadow: 0 11px 24px var(--accent-glow), inset 0 1px rgba(255,255,255,0.3);
+        }
+        .submit-btn:active { transform: translateY(0); box-shadow: 0 5px 12px var(--accent-glow); }
+        .submit-btn.loading,
+        .submit-btn:disabled { pointer-events: none; opacity: 0.58; }
         .submit-btn.loading svg { animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -862,7 +882,7 @@
             .field-group input,
             .field-group textarea { font-size: 16px; padding: 14px; }
 
-            .submit-btn { padding: 16px 14px; min-height: 52px; }
+            .submit-btn { width: 100%; min-height: 52px; margin-left: 0; padding: 10px 16px 10px 12px; }
 
             #status-area { padding: 0 18px 20px; }
             #status-area > h3 { font-size: 13px; }
@@ -1132,17 +1152,6 @@
         };
       }
 
-      function initMicro() {
-        var sb = document.getElementById('submit-btn');
-        if (sb) {
-          sb.addEventListener('click', function() {
-            if (this.classList.contains('loading')) return;
-            this.style.animation = 'pulse 0.3s ease';
-            setTimeout(function(){ sb.style.animation = ''; }, 300);
-          });
-        }
-      }
-
       var observer = new MutationObserver(function() {
         injectStatusIcons();
       });
@@ -1153,11 +1162,9 @@
 
       if (document.readyState === 'complete') {
         injectStatusIcons();
-        initMicro();
       } else {
         window.addEventListener('load', function() {
           injectStatusIcons();
-          initMicro();
         });
       }
 
