@@ -12,8 +12,8 @@ the bundled CHIME asset during startup. Normal runtime code is local-only:
 - ordinary text turns perform title, alias, and recognition matching in SQLite;
 - a confirmed match supplies one ephemeral response card to the current model
   request and is removed before conversation history is persisted;
-- `search_public_meme_knowledge` performs local FTS5/BM25 retrieval and returns
-  at most three compact cards;
+- `query_public_knowledge(query, collection="meme", mode="lookup", limit=3)`
+  performs local FTS5/BM25 retrieval and returns at most three compact cards;
 - a local miss returns immediately and never queues a crawler or encyclopedia
   request.
 

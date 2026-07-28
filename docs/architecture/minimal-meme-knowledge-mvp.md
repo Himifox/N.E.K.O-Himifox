@@ -14,7 +14,7 @@ Main Server 启动后后台导入已有的本地 SQLite/FTS5 知识库。它是�
 ## 范围与边界
 
 - 复用 `MoegirlKnowledgeStore` 和 FTS5，并以通用内置工具
-  `search_public_meme_knowledge` 提供公共梗查询；结果可以包含萌娘百科、中文维基
+  `query_public_knowledge` 提供公共梗查询；结果可以包含萌娘百科、中文维基
   百科和 CHIME 三种公共来源。
 - 不增加服务、进程、插件、向量模型或云端存储。
 - 不修改 `recent.json`、`facts.json`、`reflections.json`、`persona.json`，也不把数据集
@@ -30,7 +30,7 @@ Main Server 启动后后台导入已有的本地 SQLite/FTS5 知识库。它是�
         └─ 验证 SHA-256、JSON 顶层结构和 1,458 条记录
               └─ 单个 SQLite 事务写入 entries 与 FTS5
                     └─ <knowledge_dir>/moegirl-knowledge/knowledge.db
-  └─ search_public_meme_knowledge
+  └─ query_public_knowledge（collection="meme"）
        └─ search_moegirl_knowledge（兼容别名）
 ```
 
@@ -77,7 +77,7 @@ SQLite、用户记忆或 INFO 日志。
 | `knowledge/moegirl_knowledge/store.py` | `upsert_many()` 在一次事务内更新 entries 与 FTS5。 |
 | `app/main_server/moegirl_knowledge_runtime.py` | 启动后的后台导入、取消和最小状态记录。 |
 | `main_logic/moegirl_knowledge_tool.py` | 按命中来源显示 CHIME（MIT 数据集）或萌娘百科，并提示风险标签。 |
-| `main_logic/core/tool_calling.py` | 注册通用 `search_public_meme_knowledge`。 |
+| `main_logic/core/tool_calling.py` | 注册通用 `query_public_knowledge`。 |
 | `main_routers/moegirl_knowledge_router.py` | 分来源状态 API，以及经 CSRF/Origin 保护的本地 CHIME 重导入操作；不返回查询或正文。 |
 
 `CHIME_KNOWLEDGE_ENABLED=True` 只控制本地导入任务；它不表示允许网络访问。数据资产通过

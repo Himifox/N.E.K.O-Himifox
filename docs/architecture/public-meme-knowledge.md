@@ -112,7 +112,7 @@ CHIME 包含 1,458 条短语型中文梗，字段包括含义、出处、例句�
 许可明确的数据集 ──┐
 萌百 API ──────────┼─> 来源适配器 -> 校验/净化 -> SQLite + FTS5
 已授权的梗百科 ────┘                               │
-                                                    ├─> search_public_meme_knowledge
+                                                    ├─> query_public_knowledge
 候选词表/实时站点 ─> 候选队列（不持久化正文） ─────┘
 ```
 
@@ -212,7 +212,8 @@ CHIME 数据更新不应默默覆盖本地修订；新版本需生成导入报�
 
 第一步新增内部 `PublicMemeKnowledgeRetriever`，复用现有 FTS/LIKE 查询并增加
 `source_id`、`scope`、`risk_tags` 权重。第二步才注册内置工具
-`search_public_meme_knowledge(query, limit=3)`；旧 `search_moegirl_knowledge`
+`query_public_knowledge(query, collection="meme", mode="lookup", limit=3)`；旧
+`search_moegirl_knowledge`
 在一个兼容周期内保留，并过滤 `scope=acg` 与 `source_id=moegirl`。
 
 返回格式：
@@ -279,7 +280,7 @@ CHIME 数据更新不应默默覆盖本地修订；新版本需生成导入报�
 - 从现有 `MoegirlKnowledgeRetriever` 抽取通用排序逻辑，支持跨来源 FTS5 检索、
   来源过滤、范围匹配和短卡片渲染；
 - 仅对明确求知调用百科与已启用的网页搜索插件，严格串行并设置总超时；
-- 注册 `search_public_meme_knowledge`，保留旧工具兼容；
+- 注册 `query_public_knowledge`，通过 `collection="meme"` 查询梗库，并保留旧工具兼容；
 - 验收：相同词的不同圈层条目不被误合并；空库、损坏库、单一来源失败
   都可继续对话；普通聊天绝不触发该链路。
 
