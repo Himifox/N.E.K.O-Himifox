@@ -459,6 +459,7 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_date = ''
         self._daily_recommend_user_id = 0
         self._daily_recommend_retry_after = 0.0
+        self._daily_recommend_error_code = ''
         self._daily_recommend_lock = asyncio.Lock()
         self._exploration_tracks: List[Dict[str, Any]] = []
         self._exploration_tracks_at = 0.0
@@ -467,6 +468,7 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._personalization_api_lock = asyncio.Lock()
         self._personalization_last_request_at = 0.0
         self._personalization_source_index = 0
+        self._personalization_error_code = ''
         self._load_cookies()
 
     def _invalidate_taste_snapshot(self) -> None:
@@ -481,11 +483,13 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_date = ''
         self._daily_recommend_user_id = 0
         self._daily_recommend_retry_after = 0.0
+        self._daily_recommend_error_code = ''
         self._exploration_tracks = []
         self._exploration_tracks_at = 0.0
         self._exploration_retry_after = 0.0
         self._account_profile = {}
         self._personalization_source_index = 0
+        self._personalization_error_code = ''
 
     def _get_cookie_file_mtime(self) -> float:
         """Get the last-modified time of the NetEase cookie file; returns 0 when absent"""
@@ -731,12 +735,8 @@ class NeteaseCrawler(BaseMusicCrawler):
 
     async def _build_taste_snapshot(self) -> Dict[str, Any] | None:
         """Build a bounded snapshot from liked songs, visible playlists and artists."""
-        if not self._has_cookies or self._cookie_invalid:
-            return None
-        if not self._vip_checked:
-            await self._check_vip_status()
-        user_id = int(self._account_profile.get('user_id') or 0)
-        if not user_id or self._cookie_invalid:
+        user_id = await self._get_personalization_user_id()
+        if not user_id:
             return None
 
         from pyncm_async.apis.user import GetUserArtistSubs
@@ -770,6 +770,24 @@ class NeteaseCrawler(BaseMusicCrawler):
             ],
         }
 
+    async def _get_personalization_user_id(self) -> int:
+        self._check_cookie_freshness()
+        if not self._has_cookies:
+            self._personalization_error_code = 'login_required'
+            return 0
+        if self._cookie_invalid:
+            self._personalization_error_code = 'cookie_invalid'
+            return 0
+        if not self._vip_checked:
+            await self._check_vip_status()
+        if self._cookie_invalid:
+            self._personalization_error_code = 'cookie_invalid'
+            return 0
+        user_id = int(self._account_profile.get('user_id') or 0)
+        if not user_id:
+            self._personalization_error_code = 'upstream_error'
+        return user_id
+
     @staticmethod
     def _resolve_playlist(
         snapshot: Dict[str, Any],
@@ -801,6 +819,7 @@ class NeteaseCrawler(BaseMusicCrawler):
         ):
             return [dict(item) for item in self._daily_recommend_tracks]
         if time.time() < self._daily_recommend_retry_after:
+            self._personalization_error_code = self._daily_recommend_error_code
             return []
 
         async with self._daily_recommend_lock:
@@ -811,6 +830,7 @@ class NeteaseCrawler(BaseMusicCrawler):
             ):
                 return [dict(item) for item in self._daily_recommend_tracks]
             if time.time() < self._daily_recommend_retry_after:
+                self._personalization_error_code = self._daily_recommend_error_code
                 return []
 
             from pyncm_async.apis import WeapiCryptoRequest
@@ -822,6 +842,10 @@ class NeteaseCrawler(BaseMusicCrawler):
             try:
                 payload = await self._personalization_api_call(GetDailyRecommendedSongs)
             except Exception as exc:
+                self._daily_recommend_error_code = (
+                    'cookie_invalid' if self._cookie_invalid else 'upstream_error'
+                )
+                self._personalization_error_code = self._daily_recommend_error_code
                 self._daily_recommend_retry_after = (
                     time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
                 )
@@ -847,6 +871,8 @@ class NeteaseCrawler(BaseMusicCrawler):
                 tracks.append(track)
 
             if not tracks:
+                self._daily_recommend_error_code = 'source_empty'
+                self._personalization_error_code = self._daily_recommend_error_code
                 self._daily_recommend_retry_after = (
                     time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
                 )
@@ -855,6 +881,7 @@ class NeteaseCrawler(BaseMusicCrawler):
             self._daily_recommend_date = today
             self._daily_recommend_user_id = user_id
             self._daily_recommend_retry_after = 0.0
+            self._daily_recommend_error_code = ''
             return [dict(item) for item in tracks]
 
     async def get_taste_snapshot(self) -> Dict[str, Any] | None:
@@ -971,40 +998,83 @@ class NeteaseCrawler(BaseMusicCrawler):
         personalization_source: str = "auto",
     ) -> List[Dict[str, Any]]:
         """Return account candidates, optionally restricted to one visible playlist."""
-        snapshot = await self.get_taste_snapshot()
-        if not snapshot:
-            return []
+        self._personalization_error_code = ''
         bounded_limit = max(1, int(limit))
 
-        requested_playlist = self._resolve_playlist(
-            snapshot,
-            playlist_id,
-            playlist_name,
-        )
-        if requested_playlist:
+        if playlist_id or playlist_name:
+            user_id = await self._get_personalization_user_id()
+            if not user_id:
+                return []
+            playlists = await self._fetch_visible_playlists(user_id)
+            requested_playlist = self._resolve_playlist(
+                {'playlists': playlists},
+                playlist_id,
+                playlist_name,
+            )
+            if not requested_playlist:
+                normalized_name = playlist_name.strip().casefold()
+                exact_matches = [
+                    item for item in playlists
+                    if normalized_name
+                    and str(item.get('name') or '').strip().casefold() == normalized_name
+                ]
+                self._personalization_error_code = (
+                    'playlist_ambiguous' if len(exact_matches) > 1 else 'playlist_not_found'
+                )
+                logger.warning(
+                    "[%s] 指定歌单不存在或名称不唯一",
+                    self.platform_name,
+                )
+                return []
             tracks = await self._fetch_playlist_tracks(int(requested_playlist['id']))
             for track in tracks:
                 track['recommendation_source'] = 'playlist'
                 track['playlist_id'] = int(requested_playlist['id'])
                 track['playlist_name'] = requested_playlist.get('name', '')
             random.shuffle(tracks)
+            if not tracks:
+                self._personalization_error_code = 'source_empty'
             return tracks[:bounded_limit]
-        if playlist_id or playlist_name:
-            logger.warning(
-                "[%s] 指定歌单不存在或名称不唯一",
-                self.platform_name,
+
+        if personalization_source == 'daily':
+            user_id = await self._get_personalization_user_id()
+            if not user_id:
+                return []
+            daily = await self.get_daily_recommendations(user_id)
+            random.shuffle(daily)
+            if not daily and not self._personalization_error_code:
+                self._personalization_error_code = 'source_empty'
+            return daily[:bounded_limit]
+
+        if personalization_source == 'liked':
+            user_id = await self._get_personalization_user_id()
+            if not user_id:
+                return []
+            playlists = await self._fetch_visible_playlists(user_id)
+            liked_playlist = next(
+                (item for item in playlists if str(item.get('special_type') or '') == '5'),
+                None,
             )
+            liked = (
+                await self._fetch_playlist_tracks(int(liked_playlist['id']))
+                if liked_playlist else []
+            )
+            for track in liked:
+                track['recommendation_source'] = 'liked'
+            random.shuffle(liked)
+            if not liked:
+                self._personalization_error_code = 'source_empty'
+            return liked[:bounded_limit]
+
+        snapshot = await self.get_taste_snapshot()
+        if not snapshot:
             return []
 
         liked = list(snapshot.get('liked_tracks') or [])
         random.shuffle(liked)
-        if personalization_source == 'liked':
-            return liked[:bounded_limit]
 
         daily = await self.get_daily_recommendations(int(snapshot['user_id']))
         random.shuffle(daily)
-        if personalization_source == 'daily':
-            return daily[:bounded_limit]
 
         try:
             artist = await self._fetch_exploration_tracks(
@@ -1821,10 +1891,12 @@ async def fetch_music_content(
     # 使用懒加载访问器获取爬虫实例
     all_crawlers = get_music_crawlers()
     netease_used = False
+    personalization_error_code = ''
     strict_request = bool(
         playlist_id
         or playlist_name
         or requested_song
+        or requested_artist
         or personalization_source != "auto"
     )
 
@@ -1841,6 +1913,15 @@ async def fetch_music_content(
         except Exception as exc:
             logger.warning(f"[个性化推荐] 网易云账号候选获取失败，回退原调度: {type(exc).__name__}: {exc}")
             personalized_results = []
+            personalization_error_code = (
+                'cookie_invalid'
+                if all_crawlers['netease']._cookie_invalid
+                else 'upstream_error'
+            )
+        else:
+            personalization_error_code = str(
+                all_crawlers['netease']._personalization_error_code or ''
+            )
         if personalized_results:
             all_results.extend(personalized_results)
             logger.info(f"[个性化推荐] 使用网易云个性化候选 {len(personalized_results)} 首")
@@ -2037,9 +2118,15 @@ async def fetch_music_content(
 
     if not all_results:
         logger.warning("所有音乐源（含兜底）均未返回任何结果")
+        error_code = (
+            personalization_error_code
+            if strict_request and personalization_error_code
+            else 'track_not_found'
+        )
         return {
             'success': False,
             'error': '未能找到任何相关音乐',
+            'error_code': error_code,
             'data': [],
             'netease_cookie_invalid': netease_cookie_invalid,
         }
@@ -2061,6 +2148,7 @@ async def fetch_music_content(
         return {
             'success': False,
             'error': '去重后无可用音乐',
+            'error_code': 'track_not_found',
             'data': [],
             'netease_cookie_invalid': netease_cookie_invalid,
         }
@@ -2076,10 +2164,29 @@ async def fetch_music_content(
             return {
                 'success': False,
                 'error': '未能找到指定歌曲',
+                'error_code': 'track_not_found',
                 'data': [],
                 'netease_cookie_invalid': netease_cookie_invalid,
             }
         unique_results = [requested_match]
+    elif requested_artist:
+        target_artist = _normalize_song_match_text(requested_artist)
+        unique_results = [
+            item
+            for item in unique_results
+            if target_artist
+            and target_artist
+            in _normalize_song_match_text(str(item.get('artist') or ''))
+        ]
+        if not unique_results:
+            logger.warning("指定歌手未找到可靠候选: %s", requested_artist)
+            return {
+                'success': False,
+                'error': '未能找到指定歌手的歌曲',
+                'error_code': 'track_not_found',
+                'data': [],
+                'netease_cookie_invalid': netease_cookie_invalid,
+            }
     
     # 【核心优化】获取搜索结果后立即鉴别最佳匹配，并重排列表顺序
     match_target = " ".join(
