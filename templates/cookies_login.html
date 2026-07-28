@@ -918,9 +918,20 @@
             --header-bg: oklch(0.13 0.026 255 / 0.88);
             --panel-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
         }
+        [data-theme="dark"] body {
+            background-image:
+                radial-gradient(ellipse at 84% 18%, oklch(0.58 0.17 220 / 0.34), transparent 42%),
+                radial-gradient(ellipse at 12% 82%, oklch(0.42 0.12 235 / 0.14), transparent 38%),
+                linear-gradient(112deg, oklch(0.14 0.03 255) 0%, var(--bg) 50%, var(--bg-edge) 100%);
+        }
         [data-theme="dark"] body::after {
-            opacity: 0.24;
-            filter: brightness(0.3) saturate(0.82) contrast(1.08);
+            opacity: 0.42;
+            filter:
+                brightness(0.62)
+                saturate(1.2)
+                contrast(1.06)
+                drop-shadow(0 0 24px oklch(0.72 0.17 220 / 0.38))
+                drop-shadow(0 0 60px oklch(0.62 0.15 225 / 0.24));
         }
         [data-theme="dark"] .app-header { background: var(--header-bg); }
         [data-theme="dark"] .character-banner { border-color: var(--border); }
