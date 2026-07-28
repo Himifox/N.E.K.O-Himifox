@@ -16,18 +16,18 @@
             --font-ui: "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
             --font-display: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
             --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-            --surface: oklch(0.995 0.006 225 / 0.82);
+            --surface: oklch(0.995 0.006 225 / 0.46);
             --fg: oklch(0.22 0.035 255);
             --muted: oklch(0.55 0.03 250);
-            --border: oklch(0.86 0.035 225);
+            --border: oklch(0.86 0.035 225 / 0.72);
             --accent: oklch(0.73 0.17 220);
             --accent-dim: oklch(0.57 0.15 225);
-            --accent-soft: oklch(0.93 0.055 220 / 0.86);
+            --accent-soft: oklch(0.93 0.055 220 / 0.48);
             --accent-glow: oklch(0.73 0.17 220 / 0.2);
             --success: oklch(0.65 0.18 150);
-            --surface-raised: oklch(0.995 0.006 225 / 0.88);
+            --surface-raised: oklch(0.995 0.006 225 / 0.54);
             --cat-ear-bg: oklch(0.72 0.16 220);
-            --header-bg: oklch(0.985 0.01 225 / 0.82);
+            --header-bg: oklch(0.985 0.01 225 / 0.48);
             --panel-shadow: 0 20px 55px rgba(26, 68, 96, 0.1);
         }
 
@@ -441,7 +441,9 @@
         }
         .tab-btn:active { transform: scale(0.95); }
         .tab-btn.active {
-            background: linear-gradient(135deg, var(--accent), color-mix(in oklch, var(--accent) 70%, white));
+            background: linear-gradient(135deg,
+                color-mix(in oklch, var(--accent) 82%, transparent),
+                color-mix(in oklch, color-mix(in oklch, var(--accent) 72%, white) 82%, transparent));
             border-color: var(--accent);
             color: #fff;
             font-weight: 600;
@@ -698,7 +700,9 @@
             letter-spacing: 0.01em;
             border-radius: 14px;
             border: 1px solid color-mix(in oklch, var(--accent) 62%, white);
-            background: linear-gradient(135deg, color-mix(in oklch, var(--accent) 68%, black), var(--accent));
+            background: linear-gradient(135deg,
+                color-mix(in oklch, color-mix(in oklch, var(--accent) 72%, black) 84%, transparent),
+                color-mix(in oklch, var(--accent) 84%, transparent));
             color: #fff;
             cursor: pointer;
             display: flex;
@@ -839,7 +843,7 @@
             width: 20px; height: 20px;
             display: block;
         }
-        .status-tag.active { background: oklch(0.92 0.06 150); color: oklch(0.42 0.15 150); }
+        .status-tag.active { background: oklch(0.92 0.06 150 / 0.58); color: oklch(0.42 0.15 150); }
         .status-tag.active::before {
             content: '';
             display: inline-block;
@@ -860,7 +864,7 @@
            QR COLLAPSE BUTTON
            ============================== */
         .qr-collapse-btn {
-            background: oklch(0.92 0.04 230);
+            background: oklch(0.92 0.04 230 / 0.58);
             color: var(--accent-dim);
             border: 1px solid transparent;
             padding: 4px 12px;
@@ -877,7 +881,23 @@
             font-family: inherit;
         }
         .qr-collapse-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        .qr-collapse-btn:hover { background: oklch(0.88 0.06 230); transform: translateY(-1px); }
+        .qr-collapse-btn:hover { background: oklch(0.88 0.06 230 / 0.68); transform: translateY(-1px); }
+
+        .tutorial-banner,
+        .step-item,
+        #panel-desc,
+        #panel-desc code,
+        .field-group input,
+        .field-group textarea,
+        .encrypt-row,
+        .submit-btn,
+        #platform-list-content:empty,
+        .status-card,
+        .status-tag,
+        .qr-collapse-btn {
+            backdrop-filter: blur(20px) saturate(140%);
+            -webkit-backdrop-filter: blur(20px) saturate(140%);
+        }
 
         /* ==============================
            RESPONSIVE
@@ -921,17 +941,17 @@
         [data-theme="dark"] {
             --bg: oklch(0.12 0.025 255);
             --bg-edge: oklch(0.16 0.045 235);
-            --surface: oklch(0.17 0.028 255 / 0.84);
-            --surface-raised: oklch(0.16 0.025 255 / 0.9);
+            --surface: oklch(0.17 0.028 255 / 0.42);
+            --surface-raised: oklch(0.16 0.025 255 / 0.5);
             --fg: oklch(0.94 0.012 235);
             --muted: oklch(0.68 0.025 245);
-            --border: oklch(0.29 0.045 235);
+            --border: oklch(0.29 0.045 235 / 0.72);
             --accent: oklch(0.74 0.16 220);
             --accent-dim: oklch(0.76 0.14 220);
-            --accent-soft: oklch(0.24 0.055 230 / 0.84);
+            --accent-soft: oklch(0.24 0.055 230 / 0.46);
             --accent-glow: oklch(0.72 0.17 220 / 0.24);
             --cat-ear-bg: oklch(0.6 0.14 230);
-            --header-bg: oklch(0.13 0.026 255 / 0.88);
+            --header-bg: oklch(0.13 0.026 255 / 0.46);
             --panel-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
         }
         [data-theme="dark"] body {
