@@ -12,6 +12,10 @@ import hashlib
 import os
 from typing import Any
 
+from main_logic.proactive_recommendation_personalization import (
+    PERSONALIZATION_MAX_ABS_DELTA,
+)
+
 from config.application import APP_VERSION
 
 
@@ -35,7 +39,7 @@ _SOURCE_TYPE_SCORE_ADJUSTMENTS = {
 }
 
 PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION = (
-    f"{APP_VERSION}:proactive-recommendation-observation-v3"
+    f"{APP_VERSION}:proactive-recommendation-observation-v4"
 )
 # Build environments may inject a revision once at process start. Never shell
 # out per observation: logging must remain cheap and work in packaged builds.
@@ -87,6 +91,8 @@ class ProactiveRecommendationContext:
     activity_state: str = "unknown"
     topic_materials: Sequence[Mapping[str, Any]] = ()
     mini_game_available: bool = False
+    personalization_mode: str = "off"
+    personalization_adjustments: Mapping[str, float] = field(default_factory=dict)
 
 
 def resolve_recommendation_activity_state(activity_snapshot: Any) -> str:
@@ -111,10 +117,11 @@ class ProactiveRecommendationDecision:
     filtered_reasons: dict[str, str] = field(default_factory=dict)
     score_breakdown: dict[str, dict[str, float]] = field(default_factory=dict)
     shadow_selected_source_type: str | None = None
+    personalization: dict[str, Any] = field(default_factory=dict)
 
     def to_log_dict(self) -> dict[str, Any]:
         selected = self.selected_candidate.to_log_dict() if self.selected_candidate else None
-        return {
+        result = {
             "decision_stage": self.decision_stage,
             "candidate_count": self.candidate_count,
             "filtered_reasons": dict(self.filtered_reasons),
@@ -128,6 +135,9 @@ class ProactiveRecommendationDecision:
                 for key, values in self.score_breakdown.items()
             },
         }
+        if self.personalization:
+            result["personalization"] = dict(self.personalization)
+        return result
 
 
 @dataclass(slots=True)
@@ -217,7 +227,7 @@ def build_recommendation_observation(
         and active_preferred_tag
         and actual_source_tag == active_preferred_tag
     )
-    return {
+    observation = {
         "ts": _number(ts, 0.0) if ts is not None else None,
         "lanlan_name": _text(lanlan_name) or None,
         "turn_id": _text(turn_id) or None,
@@ -261,6 +271,9 @@ def build_recommendation_observation(
         "active_bias_fallback_reason": active_bias_info.get("fallback_reason"),
         "active_model_followed_preference": active_model_followed_preference,
     }
+    if decision.personalization:
+        observation["personalization"] = dict(decision.personalization)
+    return observation
 
 
 def build_recommendation_review_context(
@@ -394,8 +407,14 @@ def build_active_source_bias(
             score_gap=_score_gap(ranked),
         )
 
+    effective_min_score_gap = max(0.0, float(min_score_gap))
+    if (
+        decision.personalization.get("ranking_consumed") is True
+        and decision.personalization.get("top1_changed") is True
+    ):
+        effective_min_score_gap = 0.0
     gap = _score_gap(ranked)
-    if gap is not None and gap < max(0.0, float(min_score_gap)):
+    if gap is not None and gap < effective_min_score_gap:
         return _active_bias_fallback(
             "score_gap_too_small",
             candidate=top,
@@ -463,6 +482,11 @@ def _rank_candidates(
 
     ranked.sort(key=lambda item: item.score, reverse=True)
     selected = ranked[0] if ranked else None
+    personalization = _personalization_diagnostics(
+        ctx,
+        ranked,
+        score_breakdown,
+    )
     return ProactiveRecommendationDecision(
         candidate_count=len(candidates),
         selected_candidate=selected,
@@ -471,6 +495,7 @@ def _rank_candidates(
         filtered_reasons=filtered,
         score_breakdown=score_breakdown,
         shadow_selected_source_type=selected.source_type if selected else None,
+        personalization=personalization,
     )
 
 
@@ -767,7 +792,24 @@ def _score_candidate(
         - 0.25 * interruption_cost
         - 0.30 * risk_penalty
     )
-    score = _clamp01(base_score + source_type_adjustment + tuning_adjustment - diversity_penalty)
+    baseline_score = _clamp01(
+        base_score + source_type_adjustment + tuning_adjustment - diversity_penalty
+    )
+    personalization_mode = _personalization_mode(ctx.personalization_mode)
+    personalization_adjustment = 0.0
+    if personalization_mode in {"shadow_compare", "active"}:
+        personalization_adjustment = max(
+            -PERSONALIZATION_MAX_ABS_DELTA,
+            min(
+                PERSONALIZATION_MAX_ABS_DELTA,
+                _number(
+                    ctx.personalization_adjustments.get(candidate.source_type),
+                    0.0,
+                ),
+            ),
+        )
+    personalized_score = _clamp01(baseline_score + personalization_adjustment)
+    score = personalized_score if personalization_mode == "active" else baseline_score
     breakdown = {
         "source_weight": source_weight,
         "freshness": freshness,
@@ -787,7 +829,86 @@ def _score_candidate(
         "candidate_repeat_count": float(diversity_stats["candidate_repeat_count"]),
         "score": score,
     }
+    if personalization_mode != "off":
+        breakdown.update(
+            {
+                "baseline_score": baseline_score,
+                "personalization_adjustment": personalization_adjustment,
+                "personalized_score": personalized_score,
+            }
+        )
     return score, breakdown
+
+
+def _personalization_diagnostics(
+    ctx: ProactiveRecommendationContext,
+    ranked: Sequence[ProactiveCandidate],
+    score_breakdown: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    mode = _personalization_mode(ctx.personalization_mode)
+    if mode == "off" or not ranked:
+        return {}
+
+    baseline_ranked = sorted(
+        ranked,
+        key=lambda candidate: _number(
+            score_breakdown.get(candidate.id, {}).get("baseline_score"),
+            candidate.score,
+        ),
+        reverse=True,
+    )
+    personalized_ranked = sorted(
+        ranked,
+        key=lambda candidate: _number(
+            score_breakdown.get(candidate.id, {}).get("personalized_score"),
+            candidate.score,
+        ),
+        reverse=True,
+    )
+    baseline_top = baseline_ranked[0]
+    personalized_top = personalized_ranked[0]
+    baseline_positions = {
+        candidate.id: index for index, candidate in enumerate(baseline_ranked, start=1)
+    }
+    personalized_positions = {
+        candidate.id: index
+        for index, candidate in enumerate(personalized_ranked, start=1)
+    }
+    rows = []
+    for candidate in baseline_ranked:
+        breakdown = score_breakdown.get(candidate.id, {})
+        rows.append(
+            {
+                "id": candidate.id,
+                "source_type": candidate.source_type,
+                "baseline_rank": baseline_positions[candidate.id],
+                "personalized_rank": personalized_positions[candidate.id],
+                "baseline_score": round(
+                    _number(breakdown.get("baseline_score"), candidate.score), 6
+                ),
+                "delta": round(
+                    _number(breakdown.get("personalization_adjustment"), 0.0), 6
+                ),
+                "personalized_score": round(
+                    _number(breakdown.get("personalized_score"), candidate.score), 6
+                ),
+            }
+        )
+    return {
+        "mode": mode,
+        "ranking_consumed": mode == "active",
+        "baseline_selected_candidate_id": baseline_top.id,
+        "baseline_selected_source_type": baseline_top.source_type,
+        "personalized_selected_candidate_id": personalized_top.id,
+        "personalized_selected_source_type": personalized_top.source_type,
+        "top1_changed": baseline_top.id != personalized_top.id,
+        "candidates": rows,
+    }
+
+
+def _personalization_mode(value: Any) -> str:
+    mode = _text(value)
+    return mode if mode in {"off", "shadow_compare", "active"} else "off"
 
 
 def _context_match(ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate) -> float:

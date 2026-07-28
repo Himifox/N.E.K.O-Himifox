@@ -53,6 +53,7 @@ _TOP_LEVEL_KEYS = {
     "review_context",
     "decision_context",
     "feedback_state_preview",
+    "personalization",
     "recommendation_mode",
     "decision_stage",
     "candidate_count",
@@ -149,6 +150,12 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             )
             if state_preview:
                 safe[key] = state_preview
+        elif key == "personalization":
+            personalization = sanitize_recommendation_personalization(
+                observation.get(key)
+            )
+            if personalization:
+                safe[key] = personalization
         elif key == "active_channels":
             safe[key] = _clean_string_list(observation.get(key))
         else:
@@ -216,8 +223,8 @@ def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]
         return {}
     return {
         "version": "feedback_state_preview_v2",
-        "preview_only": True,
-        "ranking_consumed": False,
+        "preview_only": value.get("preview_only") is not False,
+        "ranking_consumed": value.get("ranking_consumed") is True,
         "tuning_consumed": False,
         "conversation_acceptance": {
             "temporary": {
@@ -260,6 +267,70 @@ def sanitize_recommendation_feedback_state_preview(value: Any) -> dict[str, Any]
                 ),
             },
         },
+    }
+
+
+def sanitize_recommendation_personalization(value: Any) -> dict[str, Any]:
+    """Keep only bounded baseline-vs-personalized ranking diagnostics."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    mode = str(value.get("mode") or "").strip().lower()
+    if mode not in {"shadow_compare", "active"}:
+        return {}
+    candidates = value.get("candidates")
+    safe_candidates: list[dict[str, Any]] = []
+    if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+        for row in candidates[:20]:
+            if not isinstance(row, Mapping):
+                continue
+            candidate_id = str(row.get("id") or "").strip()[:160]
+            source_type = str(row.get("source_type") or "").strip().lower()[:32]
+            if not candidate_id or not source_type:
+                continue
+            safe_candidates.append(
+                {
+                    "id": candidate_id,
+                    "source_type": source_type,
+                    "baseline_rank": _bounded_nonnegative_int(
+                        row.get("baseline_rank")
+                    ),
+                    "personalized_rank": _bounded_nonnegative_int(
+                        row.get("personalized_rank")
+                    ),
+                    "baseline_score": _bounded_optional_number(
+                        row.get("baseline_score"), lower=0.0, upper=1.0
+                    ),
+                    "delta": _bounded_optional_number(
+                        row.get("delta"), lower=-0.03, upper=0.03
+                    ),
+                    "personalized_score": _bounded_optional_number(
+                        row.get("personalized_score"), lower=0.0, upper=1.0
+                    ),
+                }
+            )
+    ranking_consumed = mode == "active" and value.get("ranking_consumed") is True
+    return {
+        "mode": mode,
+        "ranking_consumed": ranking_consumed,
+        "baseline_selected_candidate_id": str(
+            value.get("baseline_selected_candidate_id") or ""
+        ).strip()[:160]
+        or None,
+        "baseline_selected_source_type": str(
+            value.get("baseline_selected_source_type") or ""
+        ).strip().lower()[:32]
+        or None,
+        "personalized_selected_candidate_id": str(
+            value.get("personalized_selected_candidate_id") or ""
+        ).strip()[:160]
+        or None,
+        "personalized_selected_source_type": str(
+            value.get("personalized_selected_source_type") or ""
+        ).strip().lower()[:32]
+        or None,
+        "top1_changed": value.get("top1_changed") is True,
+        "candidates": safe_candidates,
     }
 
 

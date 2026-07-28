@@ -71,6 +71,81 @@ def test_explicit_feedback_context_keeps_timing_action_when_material_unverified(
     assert context["source_type"] is None
 
 
+def test_explicit_feedback_context_can_be_enabled_for_active_personalization(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        recommendation_integration,
+        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
+        "active",
+    )
+    context = recommendation_integration._explicit_feedback_context(
+        {
+            "turn_id": "turn-active",
+            "delivered": True,
+            "matched_actual_material": True,
+            "shadow_selected_source_type": "music",
+            "shadow_selected_candidate_id": "music:active",
+        },
+        recommendation_mode="active_source",
+    )
+
+    assert context["source_type"] == "music"
+    assert context["source_feedback_available"] is True
+
+
+def test_active_personalization_top1_change_can_drive_source_bias(
+    tmp_path, monkeypatch
+):
+    clear_temporary_feedback_state_preview()
+    for index in range(12):
+        update_source_affinity_preview(
+            config_dir=tmp_path,
+            source_type="meme",
+            score=0.7,
+            persistent_eligible=True,
+            now=100.0 + index,
+        )
+    monkeypatch.setattr(
+        recommendation_integration,
+        "get_recommendation_runtime_mode",
+        lambda: "active_source",
+    )
+    monkeypatch.setattr(
+        recommendation_integration,
+        "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
+        "active",
+    )
+    turn = recommendation_integration.RecommendationTurn(
+        lanlan_name="personalization-bias-test",
+        config_dir=tmp_path,
+    )
+
+    reordered = turn.decide_material(
+        enabled_modes=("music", "meme"),
+        source_weights={},
+        phase1_topics=[("music", "calm song"), ("meme", "cat joke")],
+        selected_web_link=None,
+        selected_music_link={
+            "title": "Song",
+            "artist": "Artist",
+            "url": "https://example.test/song",
+        },
+        selected_meme_link={
+            "title": "Meme",
+            "url": "https://example.test/meme",
+        },
+        vision_content=None,
+        active_channels=("music", "meme"),
+    )
+
+    assert turn.material_decision.personalization["top1_changed"] is True
+    assert turn.material_decision.selected_candidate.source_type == "meme"
+    assert turn.active_bias.applied is True
+    assert turn.active_bias.preferred_source_type == "meme"
+    assert reordered[0][0] == "meme"
+
+
 def _material_candidate(source_type, *, score=0.8, url="https://example.test/item"):
     return ProactiveCandidate(
         id=f"{source_type}:1",

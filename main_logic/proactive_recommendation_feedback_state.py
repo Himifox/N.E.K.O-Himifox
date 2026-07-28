@@ -1,4 +1,4 @@
-"""Shadow-only, non-ranking feedback state preview."""
+"""Bounded feedback state used by optional recommendation personalization."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -125,7 +125,7 @@ def get_feedback_state_preview(
     config_dir: str | os.PathLike[str] | None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Return a sanitized snapshot; ranking and tuning never consume it."""
+    """Return a point-in-time snapshot; tuning never consumes it."""
     root = _config_root(config_dir)
     current = time.time() if now is None else float(now)
     if root is None:

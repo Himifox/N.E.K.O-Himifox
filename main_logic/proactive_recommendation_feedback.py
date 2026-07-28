@@ -18,6 +18,7 @@ from statistics import median
 import time
 from typing import Any
 
+from config import PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
 from main_logic.proactive_recommendation_feedback_state import (
     update_conversation_acceptance_preview,
     update_source_affinity_preview,
@@ -626,11 +627,7 @@ def record_feedback_event_with_status(
         _maybe_auto_apply_tuning_after_feedback(
             config_dir=effective_config_dir,
         )
-        if (
-            pending is not None
-            and pending.recommendation_mode == "shadow"
-            and not duplicate_event
-        ):
+        if pending is not None and _feedback_state_enabled(pending) and not duplicate_event:
             event_type = str(event.get("event_type") or "")
             component = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(event_type)
             score = float(component[1]) if component is not None else 0.0
@@ -703,6 +700,17 @@ def _source_affinity_event_matches_pending(
         pending_candidate
         and _normalize_source_type(event.get("source_type")) == pending.source_type
         and _clean_text(event.get("candidate_id")) == pending_candidate
+    )
+
+
+def _feedback_state_enabled(pending: PendingRecommendationFeedback) -> bool:
+    """Keep learning enabled in Shadow and explicitly personalized active runs."""
+    if pending.recommendation_mode == "shadow":
+        return True
+    return (
+        pending.recommendation_mode == "active_source"
+        and PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
+        in {"shadow_compare", "active"}
     )
 
 

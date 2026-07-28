@@ -172,9 +172,22 @@ default and must never change ranking or delivery behavior.
 PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI = _read_str_env(
     "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
     "off",
-    allowed=("off", "shadow"),
+    allowed=("off", "shadow", "active"),
 )
-"""Expose scoped explicit-feedback actions for delivered Shadow turns only."""
+"""Expose scoped feedback actions for Shadow or active-source delivered turns."""
+
+PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
+    "off",
+    allowed=("off", "shadow_compare", "active"),
+)
+"""Consume bounded source-affinity evidence in recommendation ranking.
+
+``off`` preserves the baseline byte-for-byte; ``shadow_compare`` records a
+personalized counterfactual without changing ranking; ``active`` applies the
+registered gradual_12 delta. Actual delivery still requires the existing
+``PROACTIVE_RECOMMENDATION_MODE=active_source`` opt-in.
+"""
 
 EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。

@@ -172,6 +172,51 @@ def test_feedback_state_preview_sanitizer_keeps_v1_read_only():
     assert safe["temporary"]["sources"]["music"]["interest_preview"] == 0.5
 
 
+def test_personalization_diagnostics_sanitizer_keeps_only_bounded_fields():
+    safe = sanitize_recommendation_observation(
+        _observation(
+            personalization={
+                "mode": "active",
+                "ranking_consumed": True,
+                "baseline_selected_candidate_id": "music:1",
+                "baseline_selected_source_type": "music",
+                "personalized_selected_candidate_id": "meme:1",
+                "personalized_selected_source_type": "meme",
+                "top1_changed": True,
+                "candidates": [
+                    {
+                        "id": "meme:1",
+                        "source_type": "meme",
+                        "baseline_rank": 2,
+                        "personalized_rank": 1,
+                        "baseline_score": 0.68,
+                        "delta": 0.03,
+                        "personalized_score": 0.71,
+                        "title": "must-not-leak",
+                    }
+                ],
+                "payload": "must-not-leak",
+            }
+        )
+    )
+
+    personalization = safe["personalization"]
+    assert personalization["ranking_consumed"] is True
+    assert personalization["top1_changed"] is True
+    assert personalization["candidates"] == [
+        {
+            "id": "meme:1",
+            "source_type": "meme",
+            "baseline_rank": 2,
+            "personalized_rank": 1,
+            "baseline_score": 0.68,
+            "delta": 0.03,
+            "personalized_score": 0.71,
+        }
+    ]
+    assert "must-not-leak" not in json.dumps(personalization)
+
+
 def test_writer_off_does_not_create_file(tmp_path):
     path = tmp_path / "observations.jsonl"
 

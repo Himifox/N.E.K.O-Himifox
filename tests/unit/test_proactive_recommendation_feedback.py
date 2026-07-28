@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import main_logic.proactive_recommendation_feedback as feedback_module
+
 from main_logic.proactive_recommendation_feedback import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
@@ -321,6 +323,47 @@ def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
 
     for source_path in policy_sources:
         assert "reward_score_v2_preview" not in source_path.read_text(encoding="utf-8")
+
+
+def test_active_personalization_keeps_verified_source_learning_enabled(
+    tmp_path, monkeypatch
+):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    monkeypatch.setattr(
+        feedback_module,
+        "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
+        "active",
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="active-music",
+        source_type="music",
+        candidate_id="music:active",
+        delivered_at=1_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="active_source",
+    )
+
+    result = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="active-music",
+        event_type="music_played_through",
+        source_type="music",
+        candidate_id="music:active",
+        ts=1_100.0,
+    )
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=1_101.0)
+
+    assert result.state_updated is True
+    assert result.feedback_scope == "source_affinity"
+    assert (
+        preview["source_affinity"]["persistent"]["sources"]["music"][
+            "positive_evidence_count"
+        ]
+        == 1
+    )
 
 
 def test_shadow_feedback_state_separates_conversation_from_source_affinity(tmp_path):

@@ -18,6 +18,7 @@ from config import (
     PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
+    PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE,
     PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
@@ -38,6 +39,10 @@ from main_logic.proactive_recommendation_feedback import (
     register_pending_feedback_from_observation,
 )
 from main_logic.proactive_recommendation_feedback_state import get_feedback_state_preview
+from main_logic.proactive_recommendation_personalization import (
+    build_personalization_plan,
+    personalization_adjustments,
+)
 from main_logic.proactive_recommendation_observer import (
     append_recommendation_observation_jsonl,
     sanitize_recommendation_observation,
@@ -70,10 +75,15 @@ def _explicit_feedback_context(
     *,
     recommendation_mode: str,
 ) -> dict[str, Any] | None:
-    """Expose only the facts needed to render Shadow feedback actions."""
+    """Expose only the facts needed to render scoped feedback actions."""
+    ui_mode = PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI
+    mode_matches = (
+        ui_mode == "shadow" and recommendation_mode == "shadow"
+    ) or (
+        ui_mode == "active" and recommendation_mode == "active_source"
+    )
     if (
-        PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI != "shadow"
-        or recommendation_mode != "shadow"
+        not mode_matches
         or not isinstance(observation, Mapping)
         or observation.get("delivered") is not True
     ):
@@ -174,6 +184,7 @@ def _record_proactive_recommendation_observation(
     review_context_mode: str = "off",
     delivered_text: Any = None,
     decision_context: Mapping[str, Any] | None = None,
+    feedback_state_snapshot: Mapping[str, Any] | None = None,
     log: logging.Logger | None = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist one finalized recommendation observation."""
@@ -217,7 +228,16 @@ def _record_proactive_recommendation_observation(
         review_context=review_context,
         decision_context=decision_context,
     )
-    if recommendation_mode == "shadow" and config_dir is not None:
+    if feedback_state_snapshot:
+        state_snapshot = dict(feedback_state_snapshot)
+        ranking_consumed = bool(
+            decision.personalization
+            and decision.personalization.get("ranking_consumed") is True
+        )
+        state_snapshot["preview_only"] = not ranking_consumed
+        state_snapshot["ranking_consumed"] = ranking_consumed
+        raw_observation["feedback_state_preview"] = state_snapshot
+    elif recommendation_mode == "shadow" and config_dir is not None:
         raw_observation["feedback_state_preview"] = get_feedback_state_preview(
             config_dir=config_dir, now=observation_ts
         )
@@ -253,6 +273,9 @@ class RecommendationTurn:
     log: logging.Logger | None = None
     mode: str = field(init=False)
     decision_context: dict[str, Any] = field(init=False)
+    personalization_mode: str = field(init=False)
+    feedback_state_snapshot: dict[str, Any] = field(init=False)
+    personalization_plan: dict[str, Any] = field(init=False)
     activity_snapshot: Any = None
     source_decision: Any = None
     material_decision: Any = None
@@ -262,6 +285,15 @@ class RecommendationTurn:
     def __post_init__(self) -> None:
         self.mode = get_recommendation_runtime_mode()
         now = time.time()
+        self.personalization_mode = PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
+        self.feedback_state_snapshot = get_feedback_state_preview(
+            config_dir=self.config_dir,
+            now=now,
+        )
+        self.personalization_plan = build_personalization_plan(
+            self.feedback_state_snapshot,
+            mode=self.personalization_mode,
+        )
         timing = proactive_delivery_timing_snapshot(
             self.lanlan_name,
             configured_interval_seconds=self.configured_interval_seconds,
@@ -308,6 +340,10 @@ class RecommendationTurn:
                 self.activity_snapshot
             ),
             mini_game_available=MINI_GAME_INVITE_ENABLED,
+            personalization_mode=self.personalization_mode,
+            personalization_adjustments=personalization_adjustments(
+                self.personalization_plan
+            ),
         )
 
     def decide_source(
@@ -386,6 +422,7 @@ class RecommendationTurn:
             review_context_mode=PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
             delivered_text=self.delivered_text,
             decision_context=self.decision_context,
+            feedback_state_snapshot=self.feedback_state_snapshot,
             log=self.log,
         )
         feedback_context = _explicit_feedback_context(
