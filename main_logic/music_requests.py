@@ -193,7 +193,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     payload = _strip_request_payload(payload)
     if payload in {"", "歌", "歌曲", "音乐", "一首歌", "首歌", "点音乐"}:
         return MusicRequest()
-    return None
+    return MusicRequest(keyword=payload)
 
 
 def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
@@ -232,7 +232,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     payload = _strip_request_payload(match.group(1))
     if payload.casefold() in {"music", "a song", "some music", "something"}:
         return MusicRequest()
-    return None
+    return MusicRequest(keyword=payload)
 
 
 def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
@@ -246,27 +246,6 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
         if request is not None:
             return request
     return None
-
-
-def music_request_from_tool_arguments(arguments: dict[str, Any]) -> MusicRequest:
-    source = str(arguments.get("source") or "auto").strip().casefold()
-    if source in {"liked", "daily"}:
-        return MusicRequest(personalization_source=source)
-    playlist = _strip_request_payload(str(arguments.get("playlist") or ""))
-    if playlist:
-        return MusicRequest(playlist_name=playlist)
-    song = _strip_request_payload(str(arguments.get("song") or ""))
-    artist = _strip_request_payload(str(arguments.get("artist") or ""))
-    keyword = _strip_request_payload(str(arguments.get("keyword") or ""))
-    if song:
-        return MusicRequest(
-            keyword=" ".join(part for part in (song, artist) if part),
-            song_name=song,
-            song_artist=artist,
-        )
-    if artist:
-        return MusicRequest(keyword=artist, song_artist=artist)
-    return MusicRequest(keyword=keyword)
 
 
 async def fetch_music_request(

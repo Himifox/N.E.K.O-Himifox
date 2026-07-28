@@ -7,6 +7,7 @@ MUSIC_UI_PATH = ROOT / "static" / "jukebox" / "music_ui.js"
 MUSIC_UI_CSS_PATH = ROOT / "static" / "css" / "music_ui.css"
 PROACTIVE_UI_PATH = ROOT / "static" / "app" / "app-proactive.js"
 APP_CHAT_PATH = ROOT / "static" / "app" / "app-chat.js"
+APP_WEBSOCKET_PATH = ROOT / "static" / "app" / "app-websocket.js"
 LOCALES_DIR = ROOT / "static" / "locales"
 MUSIC_ROUTER_PATH = ROOT / "main_routers" / "music_router.py"
 MUSIC_CRAWLERS_PATH = ROOT / "utils" / "music_crawlers.py"
@@ -64,6 +65,18 @@ def test_proactive_music_only_retries_candidate_specific_failures():
     assert "musicLinks = normalizedLinks.filter" in source
     assert "name: musicLink.title || '未知曲目'" not in source
     assert "artist: musicLink.artist || '未知艺术家'" not in source
+
+
+def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
+    source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
+
+    assert "response.type === 'music_play_candidates'" in source
+    assert (
+        "window.dispatchMusicPlayDetailed(track, { source: 'user' })" in source
+    )
+    assert "dispatchResult.canTryNextCandidate !== true" in source
+    assert "_musicCandidateDispatchEpoch" in source
+    assert "_musicCandidateDispatchQueue" in source
 
 
 def test_missing_music_cover_stays_out_of_data_and_uses_frontend_placeholder():

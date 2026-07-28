@@ -565,6 +565,104 @@
         dispatchMusicPlayUrlResponse(response, 'websocket');
     }
 
+    function showMusicRequestFailure(response) {
+        if (typeof window.showStatusToast !== 'function') return;
+        var errorCode = (response && response.error_code) || 'track_not_found';
+        var query = (response && response.query) || '';
+        var message;
+        if (errorCode === 'cookie_invalid') {
+            message = (window.t && window.t('music.cookieExpired')) || '音乐Cookie已失效';
+        } else if (errorCode === 'login_required') {
+            message = '请先配置网易云音乐 Cookie';
+        } else if (errorCode === 'playlist_ambiguous') {
+            message = '存在重名歌单，请提供更明确的歌单名';
+        } else if (errorCode === 'source_empty') {
+            message = '该音乐来源暂无可播放歌曲';
+        } else if (errorCode === 'upstream_error' || errorCode === 'playback_failed') {
+            message = window.safeT ? window.safeT('music.searchFailed', '音乐搜索失败') : '音乐搜索失败';
+        } else {
+            message = window.t
+                ? window.t('music.notFound', {
+                    query: query,
+                    defaultValue: '找不到歌曲: ' + query
+                })
+                : ('找不到歌曲: ' + query);
+        }
+        window.showStatusToast(message, 3000);
+    }
+
+    async function dispatchMusicPlayCandidatesResponse(response, reason) {
+        var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
+        for (var index = 0; index < tracks.length; index++) {
+            if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
+                return false;
+            }
+            var track = tracks[index];
+            if (!track || !track.url) continue;
+            var dispatchResult;
+            if (typeof window.dispatchMusicPlayDetailed === 'function') {
+                dispatchResult = await window.dispatchMusicPlayDetailed(track, { source: 'user' });
+            } else if (typeof window.dispatchMusicPlay === 'function') {
+                var accepted = await window.dispatchMusicPlay(track, { source: 'user' });
+                dispatchResult = {
+                    ok: accepted === true,
+                    canTryNextCandidate: false
+                };
+            } else {
+                return false;
+            }
+            if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
+                return false;
+            }
+            if (dispatchResult && dispatchResult.ok === true) {
+                claimMusicPlayUrl(getMusicPlayUrlClaimKey(track));
+                return true;
+            }
+            if (!dispatchResult || dispatchResult.canTryNextCandidate !== true) {
+                break;
+            }
+            console.warn('[Music] 用户点歌候选不可用，尝试下一条:', track.url, reason);
+        }
+        if (response._clientDispatchEpoch === window._musicCandidateDispatchEpoch) {
+            showMusicRequestFailure({ error_code: 'playback_failed' });
+        }
+        return false;
+    }
+
+    function queueMusicPlayCandidatesResponse(response, reason) {
+        var previous = window._musicCandidateDispatchQueue || Promise.resolve();
+        var queued = previous.catch(function () {}).then(function () {
+            if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
+                return false;
+            }
+            return dispatchMusicPlayCandidatesResponse(response, reason);
+        });
+        window._musicCandidateDispatchQueue = queued;
+    }
+
+    function handleMusicPlayCandidatesResponse(response) {
+        var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
+        if (tracks.length === 0) return;
+        window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
+        response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
+        var firstTrack = tracks[0];
+        var key = getMusicPlayUrlClaimKey(firstTrack);
+        getMusicPlayUrlCoordChannel();
+
+        if (isStandaloneChatPageForMusic() && !hasLocalMusicOwnerOrPending()) {
+            setTimeout(function () {
+                if (shouldSkipMusicPlayUrlForOtherWindow(key)) return;
+                setTimeout(function () {
+                    if (shouldSkipMusicPlayUrlForOtherWindow(key)) return;
+                    queueMusicPlayCandidatesResponse(response, 'chat-fallback');
+                }, MUSIC_PLAY_URL_SECONDARY_CONFIRM_MS);
+            }, getMusicPlayUrlFollowerGraceMs());
+            return;
+        }
+        if (shouldSkipMusicPlayUrlForOtherWindow(key)) return;
+        queueMusicPlayCandidatesResponse(response, 'websocket');
+    }
+
     function readNewUserIcebreakerStore() {
         try {
             if (typeof localStorage === 'undefined') return null;
@@ -3129,6 +3227,13 @@
                 // -------- music play url --------
                 } else if (response.type === 'music_play_url') {
                     handleMusicPlayUrlResponse(response);
+
+                } else if (response.type === 'music_play_candidates') {
+                    handleMusicPlayCandidatesResponse(response);
+
+                // -------- user music request failed --------
+                } else if (response.type === 'music_request_failed') {
+                    showMusicRequestFailure(response);
 
                 // -------- repetition_warning --------
                 } else if (response.type === 'repetition_warning') {

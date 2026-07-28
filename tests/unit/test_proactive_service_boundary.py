@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config import APP_NAME
+from main_logic import music_requests
 from main_logic.proactive_chat import (
     break_reminders,
     contracts,
@@ -199,6 +200,82 @@ async def test_strict_music_request_does_not_fall_back(monkeypatch) -> None:
 
     assert result is None
     fetch.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("text", "keyword", "song", "artist", "playlist", "source"),
+    (
+        ("我想听邓紫棋的歌", "邓紫棋", "", "邓紫棋", "", "auto"),
+        ("播放《晴天》", "晴天", "晴天", "", "", "auto"),
+        ("播放周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
+        ("播放邓紫棋", "邓紫棋", "", "", "", "auto"),
+        ("播放轻音乐", "轻音乐", "", "", "", "auto"),
+        ("从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
+        ("来点我喜欢的", "", "", "", "", "liked"),
+        ("来首歌", "", "", "", "", "auto"),
+        ("别放日推，只听红心", "", "", "", "", "liked"),
+    ),
+)
+def test_parse_explicit_user_music_request(
+    text,
+    keyword,
+    song,
+    artist,
+    playlist,
+    source,
+) -> None:
+    request = music_requests.parse_explicit_user_music_request(text)
+
+    assert request is not None
+    assert request.keyword == keyword
+    assert request.song_name == song
+    assert request.song_artist == artist
+    assert request.playlist_name == playlist
+    assert request.personalization_source == source
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "不要放歌",
+        "刚才听了晴天",
+        "你喜欢邓紫棋吗？",
+    ),
+)
+def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
+    assert music_requests.parse_explicit_user_music_request(text) is None
+
+
+@pytest.mark.asyncio
+async def test_direct_music_request_preserves_failure_reason() -> None:
+    fetch = AsyncMock(
+        return_value={
+            "success": False,
+            "error_code": "cookie_invalid",
+            "data": [],
+        }
+    )
+
+    result = await music_requests.fetch_music_request(
+        music_requests.MusicRequest(personalization_source="liked"),
+        fetcher=fetch,
+        include_failure=True,
+    )
+
+    assert result["error_code"] == "cookie_invalid"
+
+
+def test_music_playback_keeps_core_entrypoints_thin() -> None:
+    core_dir = Path(__file__).parents[2] / "main_logic" / "core"
+    streaming_source = (core_dir / "streaming.py").read_text(encoding="utf-8")
+    turn_source = (core_dir / "turn.py").read_text(encoding="utf-8")
+    tool_source = (core_dir / "tool_calling.py").read_text(encoding="utf-8")
+
+    assert "music_request" not in streaming_source
+    assert "music_request" not in turn_source
+    assert "_execute_music_request" not in tool_source
+    assert "music_playback" not in tool_source
+    assert "play_music" not in tool_source
 
 
 def test_proactive_router_is_a_thin_ordered_adapter() -> None:
