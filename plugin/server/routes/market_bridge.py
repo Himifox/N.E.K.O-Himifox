@@ -27,7 +27,7 @@ from urllib.parse import urlparse, urlencode
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from plugin.logging_config import get_logger
@@ -85,6 +85,19 @@ _OAUTH_REFRESH_LOCK = asyncio.Lock()
 _DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 200 MB
 _DOWNLOAD_TIMEOUT = 120.0  # 秒
 _ALLOWED_SUFFIXES = frozenset({".neko-plugin", ".neko-bundle"})
+_KNOWLEDGE_BRIDGE_PATHS = frozenset({
+    "collections",
+    "entries",
+    "entry",
+    "entry/disabled",
+    "collection/auto-context",
+    "packs",
+    "packs/import",
+    "packs/auto-context",
+    "packs/remove",
+    "subscriptions/apply",
+    "diagnostics/recent",
+})
 
 
 def _normalize_required_sha256(value: str | None) -> str:
@@ -107,6 +120,63 @@ def _normalize_required_sha256(value: str | None) -> str:
 def get_bridge_token() -> str:
     """获取当前 bridge token（供 URI scheme handler 使用）。"""
     return _BRIDGE_TOKEN
+
+
+@router.api_route("/knowledge/{path:path}", methods=["GET", "POST"])
+async def public_knowledge_bridge(
+    path: str,
+    request: Request,
+    token: str = Query(..., description="Bridge token"),
+):
+    """Bounded same-origin bridge from the manager UI to Main Server."""
+    _verify_token(token)
+    normalized_path = path.strip("/")
+    if normalized_path not in _KNOWLEDGE_BRIDGE_PATHS:
+        raise HTTPException(status_code=404, detail="knowledge endpoint not found")
+    main_port = _main_server_port()
+    target = f"http://127.0.0.1:{main_port}/api/public-knowledge/{normalized_path}"
+    if request.url.query:
+        forwarded = [
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "token"
+        ]
+    else:
+        forwarded = []
+    headers = {"Accept": "application/json"}
+    if request.method == "POST":
+        import config
+
+        headers.update({
+            "Content-Type": request.headers.get("content-type", "application/json"),
+            "Origin": f"http://127.0.0.1:{main_port}",
+            "X-CSRF-Token": str(config.AUTOSTART_CSRF_TOKEN),
+        })
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=2.0),
+            proxy=None,
+            trust_env=False,
+        ) as client:
+            response = await client.request(
+                request.method,
+                target,
+                params=forwarded,
+                content=await request.body() if request.method == "POST" else None,
+                headers=headers,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Main Server unavailable") from exc
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers={
+            "Content-Type": response.headers.get(
+                "content-type",
+                "application/json",
+            )
+        },
+    )
 
 
 def _main_server_port() -> int:

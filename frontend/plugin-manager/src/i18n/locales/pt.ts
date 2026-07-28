@@ -44,7 +44,20 @@ export default {
     adapters: 'Adaptadores',
     adapterUI: 'UI do adaptador',
     packageManager: 'Gerenciador de pacotes',
-    market: 'Mercado de plugins'
+    market: 'Mercado de plugins',
+    knowledge: 'Conhecimento'
+  },
+  knowledge: {
+    title: 'Gerenciador de conhecimento', subtitle: 'Gerencie conhecimento público local, pacotes de dados e correspondências de conversa',
+    marketNotice: 'A conexão do protocolo do mercado de conhecimento está reservada. Coleções internas e pacotes locais já podem ser gerenciados.',
+    overview: 'Visão geral', ready: 'Pronto', degraded: 'Degradado', entries: 'Entradas', disabled: 'Desativadas', packs: 'Pacotes',
+    autoContext: 'Usar na conversa automática', catalog: 'Catálogo', searchPlaceholder: 'Pesquisar títulos, aliases, resumos ou conteúdo',
+    term: 'Entrada', summary: 'Resumo', source: 'Fonte', actions: 'Ações', details: 'Detalhes', restore: 'Restaurar', disable: 'Desativar',
+    previous: 'Anterior', next: 'Próxima', packId: 'ID do pacote', subscription: 'Assinatura', localImport: 'Importação local',
+    importPack: 'Importar pacote', diagnostics: 'Correspondências recentes', time: 'Hora', collection: 'Coleção', matchMode: 'Modo de correspondência',
+    delivered: 'Cartão enviado', yes: 'Sim', no: 'Não', terms: 'Termos', tags: 'Tags', content: 'Conteúdo',
+    loadFailed: 'Falha ao carregar os dados', operationFailed: 'A operação falhou', importSuccess: 'Pacote importado',
+    invalidPack: 'Pacote inválido', removeConfirm: 'Remover o pacote {name}?'
   },
   market: {
     title: 'Obter novos plugins',
