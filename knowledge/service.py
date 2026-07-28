@@ -8,8 +8,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from .collection_overrides import (
+    get_collection_override_path,
+    load_auto_context_overrides,
+    set_collection_auto_context,
+)
 from .moegirl_knowledge.catalog_overrides import (
     get_catalog_override_path,
+    load_disabled_entries,
     set_entry_disabled,
 )
 from .moegirl_knowledge.models import MoegirlKnowledgeEntry, MoegirlKnowledgeHit
@@ -64,6 +70,7 @@ class CollectionSpec:
 
     collection_id: str
     storage_directory: str
+    display_name: str = ""
     database_filename: str = "knowledge.db"
     priority: int = 0
     auto_context_enabled: bool = False
@@ -90,6 +97,8 @@ class KnowledgeTurnContext:
     hit_count: int = 0
     match_mode: str = "none"
     collection_id: str = ""
+    entry_title: str = ""
+    source_tag: str = ""
 
 
 MEME_RESPONSE_POLICY = ResponsePolicy(
@@ -137,6 +146,7 @@ MEME_RESPONSE_POLICY = ResponsePolicy(
 MEME_COLLECTION = CollectionSpec(
     collection_id="meme",
     storage_directory="moegirl-knowledge",
+    display_name="Public Meme Knowledge",
     priority=100,
     auto_context_enabled=True,
     restrict_auto_context_to_registered_sources=True,
@@ -312,6 +322,7 @@ CORPORA_MATERIAL_ROUTES = (
 CORPORA_COLLECTION = CollectionSpec(
     collection_id="corpora",
     storage_directory="corpora",
+    display_name="Corpora",
     priority=10,
     auto_context_enabled=True,
     restrict_auto_context_to_registered_sources=True,
@@ -411,6 +422,9 @@ class KnowledgeService:
         self._database_paths = {
             key: Path(value) for key, value in (database_paths or {}).items()
         }
+        self._auto_context_overrides = load_auto_context_overrides(
+            get_collection_override_path(self.knowledge_root)
+        )
         self._routing_state: KnowledgeRoutingState | None = None
 
     @classmethod
@@ -437,6 +451,23 @@ class KnowledgeService:
         limit: int = 3,
     ) -> list[MoegirlKnowledgeHit]:
         return self._retriever(collection_id).search(query, limit=limit)
+
+    def search_page(
+        self,
+        collection_id: str,
+        query: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[MoegirlKnowledgeHit, ...]:
+        """Return one bounded ranked page without loading the whole collection."""
+        limit = min(max(int(limit), 1), 100)
+        offset = min(max(int(offset), 0), 10_000)
+        hits = self._retriever(collection_id).search(
+            query,
+            limit=offset + limit + 1,
+        )
+        return tuple(hits[offset:offset + limit + 1])
 
     def sample_entries(
         self,
@@ -495,7 +526,7 @@ class KnowledgeService:
             allowed = frozenset(
                 spec.collection_id
                 for spec in self._collections.values()
-                if spec.auto_context_enabled and spec.response_policy is not None
+                if self._auto_context_enabled(spec) and spec.response_policy is not None
             )
         else:
             allowed = frozenset(collection_ids)
@@ -532,6 +563,8 @@ class KnowledgeService:
             hit_count=1,
             match_mode=selected.match_mode,
             collection_id=selected.collection_id,
+            entry_title=entry.title,
+            source_tag=entry.source_tag,
         )
 
     def build_conversation_context(
@@ -562,7 +595,7 @@ class KnowledgeService:
             (self._spec(value) for value in allowed),
             key=lambda value: (-value.priority, value.collection_id),
         ):
-            if not spec.auto_context_enabled or spec.response_policy is None:
+            if not self._auto_context_enabled(spec) or spec.response_policy is None:
                 continue
             route = next((
                 candidate
@@ -586,6 +619,8 @@ class KnowledgeService:
                 hit_count=1,
                 match_mode="material_sample",
                 collection_id=spec.collection_id,
+                entry_title=entries[0].title,
+                source_tag=entries[0].source_tag,
             )
         return KnowledgeTurnContext()
 
@@ -636,11 +671,59 @@ class KnowledgeService:
 
     def get_status(self, collection_id: str) -> dict:
         store = self._store(collection_id)
+        spec = self._spec(collection_id)
+        disabled = load_disabled_entries(
+            get_catalog_override_path(self.database_path(collection_id))
+        )
         return {
             "collection_id": collection_id,
+            "name": spec.display_name or collection_id,
             "entries": store.count(),
             "integrity_ok": store.integrity_ok(),
+            "auto_context": self._auto_context_enabled(spec),
+            "disabled_entries": len(disabled),
+            "sources": store.count_by_source_tags(),
+            "packs": len(self.list_packs(collection_id)),
         }
+
+    def list_collections(self) -> tuple[dict, ...]:
+        results: list[dict] = []
+        for collection_id in sorted(self._collections):
+            try:
+                results.append({"status": "ready", **self.get_status(collection_id)})
+            except Exception as exc:
+                spec = self._spec(collection_id)
+                results.append({
+                    "collection_id": collection_id,
+                    "name": spec.display_name or collection_id,
+                    "status": "degraded",
+                    "integrity_ok": False,
+                    "error_type": type(exc).__name__,
+                    "auto_context": self._auto_context_enabled(spec),
+                })
+        return tuple(results)
+
+    def set_collection_auto_context(self, collection_id: str, *, enabled: bool) -> None:
+        self._spec(collection_id)
+        set_collection_auto_context(
+            get_collection_override_path(self.knowledge_root),
+            collection_id=collection_id,
+            enabled=enabled,
+        )
+        self._auto_context_overrides[collection_id] = bool(enabled)
+        self._routing_state = None
+
+    def install_pack(self, pack, *, subscription=None):
+        from .packs import install_pack
+
+        self._spec(pack.collection_id)
+        result = install_pack(
+            self.database_path(pack.collection_id),
+            pack,
+            subscription=subscription,
+        )
+        self.refresh_routing_index(background=True)
+        return result
 
     def count_entries(self, collection_id: str, *, source_tag: str = "") -> int:
         store = self._store(collection_id)
@@ -655,6 +738,15 @@ class KnowledgeService:
         result = install_pack(self.database_path(pack.collection_id), pack)
         self.refresh_routing_index(background=True)
         return result
+
+    def remove_pack(self, collection_id: str, pack_id: str) -> int:
+        from .packs import remove_pack
+
+        self._spec(collection_id)
+        removed = remove_pack(self.database_path(collection_id), pack_id)
+        self._routing_state = None
+        self.refresh_routing_index(background=True)
+        return removed
 
     def list_packs(self, collection_id: str) -> tuple[dict, ...]:
         from .packs import list_installed_packs
@@ -718,6 +810,12 @@ class KnowledgeService:
             )
             self._routing_state = get_routing_state(collections)
         return self._routing_state
+
+    def _auto_context_enabled(self, spec: CollectionSpec) -> bool:
+        return self._auto_context_overrides.get(
+            spec.collection_id,
+            spec.auto_context_enabled,
+        )
 
     def _effective_match_policy(self, spec: CollectionSpec) -> MatchPolicy:
         if not spec.restrict_auto_context_to_registered_sources:

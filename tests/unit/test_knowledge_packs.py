@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
 import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.packs import install_pack, validate_pack
+from knowledge.subscriptions import canonical_pack_bytes, validate_subscription
 
 
 def _payload(*, title="community phrase", pack_id="community-fixture"):
@@ -116,3 +118,51 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     store = KnowledgeStore(database_path)
     assert store.get_entry(previous.source_tag, "previous title") is not None
     assert store.get_entry(previous.source_tag, "replacement title") is None
+
+
+def test_subscription_metadata_is_stored_outside_entries(tmp_path):
+    service = open_knowledge(tmp_path)
+    payload = _payload()
+    pack = validate_pack(payload)
+    digest = hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
+    subscription = validate_subscription({
+        "provider": "market-fixture",
+        "remote_id": "knowledge/community-fixture",
+        "version": "1.2.3",
+        "channel": "stable",
+        "artifact_sha256": digest,
+    })
+
+    service.install_pack(pack, subscription=subscription.to_dict())
+
+    installed = service.list_packs("meme")
+    assert installed[0]["subscription"] == subscription.to_dict()
+    entry = service.get_entry(
+        "meme",
+        source_tag=pack.source_tag,
+        title="community phrase",
+    )
+    assert entry is not None
+    assert set(entry.__dataclass_fields__) == {
+        "title", "terms", "tags", "summary", "content",
+    }
+
+
+def test_removing_pack_does_not_remove_another_source(tmp_path):
+    service = open_knowledge(tmp_path)
+    database_path = service.database_path("meme")
+    KnowledgeStore(database_path).upsert(KnowledgeEntry(
+        title="built in entry",
+        terms={},
+        tags=("source:chime",),
+        summary="Built in",
+        content="Built in content",
+    ))
+    service.install_pack(validate_pack(_payload()))
+
+    removed = service.remove_pack("meme", "community-fixture")
+
+    assert removed == 1
+    assert service.search("meme", "community phrase", limit=1) == []
+    assert service.search("meme", "built in entry", limit=1)
+    assert service.list_packs("meme") == ()

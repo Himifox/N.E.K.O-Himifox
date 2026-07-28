@@ -113,6 +113,8 @@ def validate_pack(payload: object) -> KnowledgePack:
 def install_pack(
     database_path: str | Path,
     pack: KnowledgePack,
+    *,
+    subscription: dict[str, str] | None = None,
 ) -> PackInstallResult:
     """Replace one community source and its metadata with rollback on failure."""
     database_path = Path(database_path)
@@ -127,7 +129,7 @@ def install_pack(
         existing_collection = str(existing.get("collection_id") or "")
         if existing_collection and existing_collection != pack.collection_id:
             raise ValueError("knowledge pack cannot change its collection")
-    new_registry = _registry_with_pack(old_registry, pack)
+    new_registry = _registry_with_pack(old_registry, pack, subscription=subscription)
     store.replace_source(pack.source_tag, pack.entries)
     try:
         atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
@@ -167,6 +169,40 @@ def set_pack_auto_context(
         raise ValueError("knowledge pack is not installed")
     packs[pack_id] = {**packs[pack_id], "auto_context": bool(enabled)}
     atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+
+
+def remove_pack(database_path: str | Path, pack_id: str) -> int:
+    """Remove one community pack with registry rollback on failure."""
+    pack_id = _identifier(pack_id, "pack_id")
+    database_path = Path(database_path)
+    registry_path = get_pack_registry_path(database_path)
+    registry = _load_registry(registry_path)
+    packs = registry.get("packs")
+    metadata = packs.get(pack_id) if isinstance(packs, dict) else None
+    if not isinstance(metadata, dict):
+        raise ValueError("knowledge pack is not installed")
+    source_tag = str(metadata.get("source_tag") or "")
+    if not source_tag.startswith("source:community."):
+        raise ValueError("only community packs can be removed")
+
+    store = MoegirlKnowledgeStore(database_path)
+    old_entries = tuple(
+        entry for entry in store.list_active_entries() if entry.source_tag == source_tag
+    )
+    new_packs = dict(packs)
+    new_packs.pop(pack_id, None)
+    store.replace_source(source_tag, ())
+    try:
+        atomic_write_json(
+            registry_path,
+            {"schema_version": 1, "packs": new_packs},
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception:
+        store.replace_source(source_tag, old_entries)
+        raise
+    return len(old_entries)
 
 
 def enabled_pack_source_tags(database_path: str | Path) -> tuple[str, ...]:
@@ -253,10 +289,18 @@ def _load_registry(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _registry_with_pack(registry: dict[str, Any], pack: KnowledgePack) -> dict[str, Any]:
+def _registry_with_pack(
+    registry: dict[str, Any],
+    pack: KnowledgePack,
+    *,
+    subscription: dict[str, str] | None = None,
+) -> dict[str, Any]:
     packs = dict(registry.get("packs", {}))
     previous = packs.get(pack.pack_id, {})
     auto_context = previous.get("auto_context") is True if isinstance(previous, dict) else False
+    previous_subscription = (
+        previous.get("subscription") if isinstance(previous, dict) else None
+    )
     packs[pack.pack_id] = {
         "collection_id": pack.collection_id,
         "source_tag": pack.source_tag,
@@ -267,5 +311,6 @@ def _registry_with_pack(registry: dict[str, Any], pack: KnowledgePack) -> dict[s
         },
         "entries": len(pack.entries),
         "auto_context": auto_context,
+        "subscription": subscription if subscription is not None else previous_subscription,
     }
     return {"schema_version": 1, "packs": packs}

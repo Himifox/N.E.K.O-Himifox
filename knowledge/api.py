@@ -20,6 +20,12 @@ from .moegirl_knowledge.store import (
 )
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
 from .routing import ContextHint
+from .subscriptions import (
+    SUBSCRIPTION_PROTOCOL_VERSION,
+    KnowledgeSubscription,
+    canonical_pack_bytes,
+    validate_subscription,
+)
 from .service import (
     CollectionSpec,
     KnowledgeService,
@@ -46,11 +52,15 @@ __all__ = [
     "KnowledgeService",
     "KnowledgeStore",
     "KnowledgeStoreError",
+    "KnowledgeSubscription",
     "KnowledgeTurnContext",
     "MaterialRoute",
     "MatchPolicy",
     "PackInstallResult",
     "ResponsePolicy",
+    "SUBSCRIPTION_PROTOCOL_VERSION",
     "UpsertResult",
+    "canonical_pack_bytes",
     "open_knowledge",
+    "validate_subscription",
 ]

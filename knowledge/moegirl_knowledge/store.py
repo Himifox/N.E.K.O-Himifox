@@ -262,6 +262,23 @@ class MoegirlKnowledgeStore:
         except KnowledgeStoreError:
             return 0
 
+    def count_by_source_tags(self) -> tuple[dict[str, object], ...]:
+        """Return compact source counts without materializing entry rows."""
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT tag.value source_tag, COUNT(*) entry_count "
+                    "FROM entries JOIN json_each(entries.tags) tag "
+                    "WHERE tag.value LIKE 'source:%' "
+                    "GROUP BY tag.value ORDER BY tag.value"
+                ).fetchall()
+                return tuple({
+                    "tag": str(row["source_tag"]),
+                    "entries": int(row["entry_count"]),
+                } for row in rows)
+        except KnowledgeStoreError:
+            return ()
+
     def entries_revision(self) -> int:
         try:
             with self._connection() as connection:

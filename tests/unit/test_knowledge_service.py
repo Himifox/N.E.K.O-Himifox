@@ -79,3 +79,19 @@ def test_generic_disable_management_removes_an_entry_from_search(tmp_path):
 
     assert count == 1
     assert service.search("meme", "disable me", limit=1) == []
+
+
+def test_collection_auto_context_override_does_not_disable_explicit_search(tmp_path):
+    service = open_knowledge(tmp_path)
+    KnowledgeStore(service.database_path("meme")).upsert(_entry(
+        "known phrase",
+        source="chime",
+    ))
+    assert service.build_turn_context("known phrase appears").hit_count == 1
+
+    service.set_collection_auto_context("meme", enabled=False)
+
+    assert service.build_turn_context("known phrase appears").hit_count == 0
+    assert service.search("meme", "known phrase", limit=1)
+    restarted = open_knowledge(tmp_path)
+    assert restarted.get_status("meme")["auto_context"] is False
