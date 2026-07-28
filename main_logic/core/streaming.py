@@ -84,6 +84,15 @@ class StreamingMixin:
                 user_text,
                 limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
             )
+            from knowledge.diagnostics import record_knowledge_route
+            record_knowledge_route(
+                collection_id=result.collection_id,
+                entry_title=result.entry_title,
+                source_tag=result.source_tag,
+                match_mode=result.match_mode,
+                card_delivered=bool(result.text),
+                result="matched" if result.hit_count else "miss",
+            )
             logger.info(
                 "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
                 result.hit_count,
@@ -93,6 +102,11 @@ class StreamingMixin:
             return result.text
         except Exception as exc:
             logger.warning("[public-knowledge] automatic turn context failed: %s", type(exc).__name__)
+            try:
+                from knowledge.diagnostics import record_knowledge_route
+                record_knowledge_route(result="error", error_type=type(exc).__name__)
+            except Exception:
+                pass
             return ""
     
     async def _flush_pending_input_data(self):
