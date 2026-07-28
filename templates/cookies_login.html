@@ -614,9 +614,12 @@
             border-radius: 10px;
             font-family: var(--font-mono);
             font-size: 14px;
-            background: color-mix(in oklch, var(--surface) 88%, transparent);
+            background: color-mix(in oklch, var(--surface) 62%, transparent);
             color: var(--fg);
-            transition: all 0.2s;
+            box-shadow: inset 0 1px color-mix(in oklch, white 34%, transparent);
+            backdrop-filter: blur(14px) saturate(118%);
+            -webkit-backdrop-filter: blur(14px) saturate(118%);
+            transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
             -webkit-appearance: none;
             appearance: none;
         }
@@ -625,7 +628,8 @@
         .field-group textarea:focus {
             outline: none;
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
+            background: color-mix(in oklch, var(--surface) 76%, transparent);
+            box-shadow: 0 0 0 3px var(--accent-glow), inset 0 1px color-mix(in oklch, white 42%, transparent);
         }
 
         #QRLogin {
@@ -942,9 +946,18 @@
         [data-theme="dark"] .plat-icon svg [fill="#E6162D"] { fill: var(--fg) !important; }
         [data-theme="dark"] #status-area > h3 { border-top-color: var(--border); }
         [data-theme="dark"] .field-group input,
-        [data-theme="dark"] .field-group textarea { background: var(--surface); border-color: var(--border); color: var(--fg); }
+        [data-theme="dark"] .field-group textarea {
+            background: color-mix(in oklch, var(--surface) 60%, transparent);
+            border-color: var(--border);
+            color: var(--fg);
+            box-shadow: inset 0 1px color-mix(in oklch, var(--accent) 10%, transparent);
+        }
         [data-theme="dark"] .field-group input:focus,
-        [data-theme="dark"] .field-group textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+        [data-theme="dark"] .field-group textarea:focus {
+            background: color-mix(in oklch, var(--surface) 74%, transparent);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow), inset 0 1px color-mix(in oklch, var(--accent) 14%, transparent);
+        }
         [data-theme="dark"] .content-card { border-color: var(--border); }
         [data-theme="dark"] .alert.error { background: oklch(0.28 0.06 30); border-color: oklch(0.4 0.12 30); color: oklch(0.8 0.08 30); }
         [data-theme="dark"] .alert.success { background: oklch(0.24 0.06 150); border-color: oklch(0.35 0.12 150); color: oklch(0.78 0.08 150); }
