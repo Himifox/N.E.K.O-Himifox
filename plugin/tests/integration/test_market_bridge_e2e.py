@@ -276,12 +276,7 @@ def bridge_e2e_env(
 @pytest.mark.asyncio
 async def test_bridge_token_rejects_trusted_remote_origin(
     bridge_e2e_env: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from plugin.server.routes import market_bridge as market_bridge_module
-
-    monkeypatch.setattr(market_bridge_module, "_main_server_port", lambda: 48911)
-
     res = await bridge_e2e_env["client"].get(
         "/market/bridge-token",
         headers={
@@ -296,43 +291,35 @@ async def test_bridge_token_rejects_trusted_remote_origin(
 @pytest.mark.asyncio
 async def test_bridge_token_allows_local_same_origin(
     bridge_e2e_env: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from plugin.server.routes import market_bridge as market_bridge_module
-
-    monkeypatch.setattr(market_bridge_module, "_main_server_port", lambda: 48911)
-
     res = await bridge_e2e_env["client"].get(
         "/market/bridge-token",
         headers={
-            "Host": "127.0.0.1:48911",
-            "Origin": "http://127.0.0.1:48911",
+            "Host": "127.0.0.1:48916",
+            "Origin": "http://127.0.0.1:48916",
         },
     )
 
     assert res.status_code == 200
     assert res.json()["bridge_token"] == bridge_e2e_env["token"]
+    assert res.json()["port"] == 48916
 
 
 @pytest.mark.asyncio
 async def test_pair_code_allows_local_manager_and_is_single_use(
     bridge_e2e_env: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from plugin.server.routes import market_bridge as market_bridge_module
-
-    monkeypatch.setattr(market_bridge_module, "_main_server_port", lambda: 48911)
     issued = await bridge_e2e_env["client"].post(
         "/market/pair-code",
         headers={
-            "Host": "127.0.0.1:48911",
-            "Origin": "http://127.0.0.1:48911",
+            "Host": "127.0.0.1:48916",
+            "Origin": "http://127.0.0.1:48916",
         },
     )
 
     assert issued.status_code == 200
     payload = issued.json()
-    assert payload["port"] == 48911
+    assert payload["port"] == 48916
     exchanged = await bridge_e2e_env["client"].post(
         "/market/token-exchange",
         json={"one_time_code": payload["one_time_code"]},
@@ -345,6 +332,21 @@ async def test_pair_code_allows_local_manager_and_is_single_use(
     assert exchanged.status_code == 200
     assert exchanged.json()["bridge_token"] == bridge_e2e_env["token"]
     assert repeated.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pair_code_rejects_mismatched_local_origin(
+    bridge_e2e_env: dict[str, Any],
+) -> None:
+    res = await bridge_e2e_env["client"].post(
+        "/market/pair-code",
+        headers={
+            "Host": "127.0.0.1:48916",
+            "Origin": "http://127.0.0.1:5173",
+        },
+    )
+
+    assert res.status_code == 403
 
 
 @pytest.mark.asyncio
