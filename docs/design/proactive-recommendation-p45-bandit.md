@@ -50,3 +50,13 @@ Testbench 比较 deterministic baseline、active personalization、ε-greedy、T
 扩大前至少需要 200 个可探索 encounter，每个 arm 至少 30 次曝光且有正负反馈，ESS ≥ 100；OPE reward 点估计提升 ≥ 5% 且 95% CI 下界 ≥ 0；nDCG@3 下降 ≤ 0.02、最大来源曝光增加 ≤ 5pp、HHI 增加 ≤ 0.02。系统不会自动扩大 Canary。
 
 当前工程完成不等于效果验收完成。没有满足上述数据门禁时，结论保持 `shadow_only` 或 `insufficient_support`，生产配置仍应保持 Bandit `off`/`shadow`。
+
+## 5. P45-R1 策略与证据合同
+
+- `source-context-v2` 明确区分 Bandit 的 `proposed_arm` 与真实投递的 `actual_arm`。
+- `shadow_compare` 不改变实际排序，但 Shadow 与 Canary 都使用同一 `personalized-policy-score-v1`。
+- Shadow 的行为策略是实际确定性投递；虚拟动作及其 target probability 不承接真实反馈。
+- Canary 只有在实际候选与 proposed candidate 精确一致时才标记 `policy_applied=true`，并记录可用于 OPE 的 behavior propensity。
+- 全局 Top-1 为 Vision、Video 或其他非 Bandit 来源时，Bandit 不得应用或探索。
+- 同轮显式来源反馈覆盖 Music 自然行为时，先扣除旧 outcome 在当前时刻的衰减贡献；旧状态缺少时间依据时保守兼容并记录诊断计数。
+- v1 Observation 继续只读兼容，但不得与 v2 行为日志混合做 OPE。
