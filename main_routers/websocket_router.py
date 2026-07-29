@@ -48,6 +48,7 @@ from utils.icebreaker_route_state import (
     finalize_icebreaker_route,
     get_active_icebreaker_route_session_id,
 )
+from main_logic.music_playback import handle_music_playback_state
 
 router = APIRouter(tags=["websocket"])
 logger = get_module_logger(__name__, "Main")
@@ -669,6 +670,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 # 字段已被 line 136-139 通用 handler 处理（``set_user_language``），
                 # 这里 no-op 以避免落到 default 分支推 UNKNOWN_ACTION 状态给前端。
                 pass
+
+            elif action == "music_playback_state":
+                handle_music_playback_state(
+                    session_manager[lanlan_name],
+                    message,
+                )
 
             elif action in ("voice_play_start", "voice_play_end"):
                 # FRONTEND-reported real audio playback boundaries. start =

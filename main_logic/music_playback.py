@@ -30,6 +30,7 @@ from utils.logger_config import get_module_logger
 logger = get_module_logger(__name__, "Main")
 
 _session_manager_getter: Callable[[str], Any | None] | None = None
+_PLAYBACK_STATES = frozenset({"playing", "paused", "ended", "error"})
 
 
 def register_music_session_manager_getter(
@@ -61,6 +62,91 @@ def _next_music_request_epoch(manager: Any) -> int:
 
 def _is_current_music_request(manager: Any, epoch: int) -> bool:
     return int(getattr(manager, "_music_request_epoch", 0) or 0) == epoch
+
+
+def _clean_playback_text(value: Any, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
+    """Feed a player-confirmed state into the existing callback delivery path."""
+    state = _clean_playback_text(event.get("state"), 16).lower()
+    if state not in _PLAYBACK_STATES:
+        return False
+
+    track = event.get("track")
+    track = track if isinstance(track, dict) else {}
+    name = _clean_playback_text(track.get("name"), 120)
+    artist = _clean_playback_text(track.get("artist"), 120)
+    playback_id = _clean_playback_text(event.get("playback_id"), 512)
+    request_id = _clean_playback_text(event.get("request_id"), 64)
+    source = _clean_playback_text(event.get("source"), 16).lower()
+    event_key = (playback_id, request_id, state)
+    if getattr(manager, "_music_playback_event_key", None) == event_key:
+        return False
+    manager._music_playback_event_key = event_key
+
+    title = f"《{name}》" if name else "所选歌曲"
+    by_artist = f"（{artist}）" if artist else ""
+    facts = {
+        "playing": f"播放器已确认开始播放{title}{by_artist}。",
+        "paused": f"播放器当前已暂停{title}{by_artist}。",
+        "ended": f"播放器已结束播放{title}{by_artist}。",
+        "error": f"播放器未能正常播放{title}{by_artist}。",
+    }
+    detail = facts[state]
+    acknowledge_key = (playback_id, request_id)
+    should_respond = (
+        state == "playing"
+        and source == "user"
+        and getattr(manager, "_music_playback_acknowledged_key", None)
+        != acknowledge_key
+    )
+    if should_respond:
+        manager._music_playback_acknowledged_key = acknowledge_key
+        detail += " 请简短自然地确认已经开始播放，不要再次调用音乐播放工具。"
+
+    callback = {
+        "event": "agent_task_callback",
+        "origin": "event",
+        "task_id": playback_id or request_id or "music_playback",
+        "channel": "music_playback",
+        "status": "completed",
+        "success": state != "error",
+        "summary": detail,
+        "detail": detail,
+        "source_kind": "music",
+        "source_name": "music_player",
+        "delivery_mode": "proactive" if should_respond else "passive",
+        "priority": 10,
+        "coalesce_key": f"music-playback-state:{getattr(manager, 'lanlan_name', '')}",
+        "metadata": {
+            "context_type": "music_playback",
+            "state": state,
+            "playback_id": playback_id,
+            "request_id": request_id,
+        },
+        "context_type": "music_playback",
+    }
+
+    if should_respond and callable(getattr(manager, "submit_proactive_callback", None)):
+        manager.submit_proactive_callback(
+            callback,
+            priority=callback["priority"],
+            coalesce_key=callback["coalesce_key"],
+        )
+        return True
+
+    enqueue = getattr(manager, "enqueue_agent_callback", None)
+    if not callable(enqueue):
+        return False
+    enqueue(callback)
+    if should_respond:
+        trigger = getattr(manager, "trigger_agent_callbacks", None)
+        fire_task = getattr(manager, "_fire_task", None)
+        if callable(trigger) and callable(fire_task):
+            fire_task(trigger())
+    return True
 
 
 async def _execute_music_request(

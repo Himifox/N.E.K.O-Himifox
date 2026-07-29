@@ -8,6 +8,7 @@ MUSIC_UI_CSS_PATH = ROOT / "static" / "css" / "music_ui.css"
 PROACTIVE_UI_PATH = ROOT / "static" / "app" / "app-proactive.js"
 APP_CHAT_PATH = ROOT / "static" / "app" / "app-chat.js"
 APP_WEBSOCKET_PATH = ROOT / "static" / "app" / "app-websocket.js"
+WEBSOCKET_ROUTER_PATH = ROOT / "main_routers" / "websocket_router.py"
 LOCALES_DIR = ROOT / "static" / "locales"
 MUSIC_ROUTER_PATH = ROOT / "main_routers" / "music_router.py"
 MUSIC_CRAWLERS_PATH = ROOT / "utils" / "music_crawlers.py"
@@ -72,11 +73,25 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
 
     assert "response.type === 'music_play_candidates'" in source
     assert (
-        "window.dispatchMusicPlayDetailed(track, { source: 'user' })" in source
+        "source: 'user'," in source
     )
+    assert "requestId: response.request_id" in source
     assert "dispatchResult.canTryNextCandidate !== true" in source
     assert "_musicCandidateDispatchEpoch" in source
     assert "_musicCandidateDispatchQueue" in source
+
+
+def test_music_player_reports_confirmed_state_to_backend():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    router_source = WEBSOCKET_ROUTER_PATH.read_text(encoding="utf-8")
+
+    assert "function reportMusicPlaybackState(state, track)" in player_source
+    assert "action: 'music_playback_state'" in player_source
+    assert "reportMusicPlaybackState('playing', currentPlayingTrack)" in player_source
+    assert "reportMusicPlaybackState('ended', currentPlayingTrack)" in player_source
+    assert "reportMusicPlaybackState('error', currentPlayingTrack)" in player_source
+    assert 'elif action == "music_playback_state":' in router_source
+    assert "handle_music_playback_state(" in router_source
 
 
 def test_missing_music_cover_stays_out_of_data_and_uses_frontend_placeholder():

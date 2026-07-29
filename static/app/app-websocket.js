@@ -601,9 +601,15 @@
             if (!track || !track.url) continue;
             var dispatchResult;
             if (typeof window.dispatchMusicPlayDetailed === 'function') {
-                dispatchResult = await window.dispatchMusicPlayDetailed(track, { source: 'user' });
+                dispatchResult = await window.dispatchMusicPlayDetailed(track, {
+                    source: 'user',
+                    requestId: response.request_id
+                });
             } else if (typeof window.dispatchMusicPlay === 'function') {
-                var accepted = await window.dispatchMusicPlay(track, { source: 'user' });
+                var accepted = await window.dispatchMusicPlay(track, {
+                    source: 'user',
+                    requestId: response.request_id
+                });
                 dispatchResult = {
                     ok: accepted === true,
                     canTryNextCandidate: false

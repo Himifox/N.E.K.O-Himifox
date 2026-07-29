@@ -120,6 +120,36 @@
     let musicCardMessageId = null;
     let aplayerLoadPromise = null;
     let latestMusicRequestToken = 0;
+    let currentMusicPlaybackContext = { source: '', requestId: null };
+
+    function setMusicPlaybackContext(options) {
+        options = options || {};
+        currentMusicPlaybackContext = {
+            source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
+            requestId: options.requestId ?? null
+        };
+    }
+
+    function reportMusicPlaybackState(state, track) {
+        try {
+            const appState = window.appState;
+            const socket = appState && appState.socket;
+            if (!socket || typeof socket.send !== 'function') return;
+            if (socket.readyState !== 1 && typeof socket.readyState !== 'undefined') return;
+            const currentTrack = track || {};
+            socket.send(JSON.stringify({
+                action: 'music_playback_state',
+                state: state,
+                playback_id: getCurrentMusicPlaybackId(),
+                request_id: currentMusicPlaybackContext.requestId,
+                source: currentMusicPlaybackContext.source,
+                track: {
+                    name: String(currentTrack.name || '').slice(0, 120),
+                    artist: String(currentTrack.artist || '').slice(0, 120)
+                }
+            }));
+        } catch (_) { /* best-effort playback awareness */ }
+    }
 
     // --- 竞态保护：dispatch 入口的"加载中"标记 ---
     // sendMusicMessage 的 URL 校验/库加载阶段对外暴露，避免并发 dispatch 在
@@ -2204,6 +2234,7 @@
         // --- 2. 原地更新 UI 文本与音乐状态图标 (始终执行) ---
         const playbackIdForRequest = createMusicPlaybackId(trackInfo, currentToken);
         currentMusicPlaybackId = playbackIdForRequest;
+        setMusicPlaybackContext(playbackOptions);
         currentMusicOwnerStartedAt = Date.now();
         currentPlayingTrack = trackInfo;
         // 广播一次占位 state —— APlayer 还在初始化/切曲，但 follower 现在
@@ -2339,6 +2370,7 @@
                     boundPlayer._loadError = false;
                     if (!playbackStartedAt) playbackStartedAt = Date.now();
                     updateMusicCard('playing', currentPlayingTrack);
+                    reportMusicPlaybackState('playing', currentPlayingTrack);
                     // 跨窗口协调：本地真正开始放歌后通知其他窗口
                     broadcastMusicCoord('music_started');
                     startMusicHeartbeat();
@@ -2352,6 +2384,10 @@
                         if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
                     }, MUSIC_CONFIG.timeouts.paused);
                     updateMusicCard('paused', currentPlayingTrack);
+                    reportMusicPlaybackState(
+                        boundPlayer.audio && boundPlayer.audio.ended ? 'ended' : 'paused',
+                        currentPlayingTrack
+                    );
                     emitBarState();
                 });
                 boundPlayer.on('ended', () => {
@@ -2365,6 +2401,7 @@
                         if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
                     }, MUSIC_CONFIG.timeouts.ended);
                     updateMusicCard('ended', currentPlayingTrack);
+                    reportMusicPlaybackState('ended', currentPlayingTrack);
                     emitBarState();
                 });
                 boundPlayer.on('error', (err) => {
@@ -2392,6 +2429,7 @@
                         showErrorToast('music.playError', errorDetail);
                         updatePlayBtnState(false);
                         setMusicBarVisualState(musicBar, 'error');
+                        reportMusicPlaybackState('error', currentPlayingTrack);
 
                         if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                         autoDestroyTimer = setTimeout(() => {
@@ -2710,6 +2748,7 @@
                     showErrorToast('music.loadTimeout', 'Music loading timed out');
                 }
                 setMusicBarVisualState(musicBar, 'error');
+                reportMusicPlaybackState('error', currentPlayingTrack);
                 updateMusicCard('error', currentPlayingTrack);
                 emitBarState();
                 return musicPlayResult(
@@ -2730,6 +2769,7 @@
             // 回滚：前面已经发过 emitBarInitialState，但 APlayer 没建起来，
             // 后续事件不会广播，follower 会卡着占位 bar，这里补一条 destroyed
             broadcastBarDestroyed(false, playbackIdForRequest);
+            reportMusicPlaybackState('error', currentPlayingTrack);
             showErrorToast('music.playError', 'Music playback failed to load');
             return musicPlayResult(false, 'player_error');
         }
@@ -2844,11 +2884,14 @@
             if (player && player._loadError) {
                 destroyMusicPlayer(true, false, true);
             } else {
+                setMusicPlaybackContext(playbackOptions);
                 if (shouldAutoPlay && player && player.audio && player.audio.paused) {
                     if (typeof window.setMusicUserDriven === 'function')
                         window.setMusicUserDriven();
                     player.play();
                     showNowPlayingToast(trackInfo.name);
+                } else if (player && player.audio && !player.audio.paused) {
+                    reportMusicPlaybackState('playing', trackInfo);
                 }
                 releasePending();
                 return musicPlayResult(true, 'already_playing');
