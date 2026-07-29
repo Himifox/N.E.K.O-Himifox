@@ -73,6 +73,7 @@ from main_logic.proactive_recommendation_observer import (
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
     summarize_recommendation_review_context,
+    summarize_recommendation_policy,
     summarize_recommendation_validation,
 )
 from main_logic.proactive_recommendation_runtime import (
@@ -455,6 +456,7 @@ async def get_proactive_recommendation_summary(
     review_context_validation = summarize_recommendation_review_context(
         calibration_samples
     )
+    policy_monitor = summarize_recommendation_policy(calibration_samples)
     try:
         tuning_config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
@@ -472,6 +474,7 @@ async def get_proactive_recommendation_summary(
         "feedback_calibration": feedback_calibration,
         "reward_score_v2_preview": reward_score_v2_preview,
         "review_context_validation": review_context_validation,
+        "policy_monitor": policy_monitor,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
         "runtime": get_recommendation_runtime_status(),
         "tuning": tuning_public_status(tuning),

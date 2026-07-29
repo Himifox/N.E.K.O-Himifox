@@ -477,6 +477,58 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     }
 
 
+def summarize_recommendation_policy(
+    observations: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize policy exposure and propensity integrity for runtime monitoring."""
+    modes: Counter[str] = Counter()
+    choices: Counter[str] = Counter()
+    policy_count = 0
+    explored_count = 0
+    exploration_eligible_count = 0
+    probability_violation_count = 0
+    for observation in observations:
+        raw_policy = observation.get("policy_decision")
+        if not isinstance(raw_policy, Mapping):
+            continue
+        policy_count += 1
+        policy = sanitize_recommendation_policy_decision(raw_policy)
+        if not policy:
+            probability_violation_count += 1
+            continue
+        modes[str(policy["mode"])] += 1
+        chosen = str(policy.get("chosen_arm") or "")
+        if chosen:
+            choices[chosen] += 1
+        exploration_eligible_count += int(
+            policy.get("exploration_eligible") is True
+        )
+        explored_count += int(policy.get("explored") is True)
+    total_choices = sum(choices.values())
+    distribution = {
+        source: round(count / total_choices, 6) if total_choices else 0.0
+        for source, count in sorted(choices.items())
+    }
+    return {
+        "policy_observation_count": policy_count,
+        "valid_policy_observation_count": policy_count - probability_violation_count,
+        "mode_distribution": dict(sorted(modes.items())),
+        "chosen_arm_count": dict(sorted(choices.items())),
+        "chosen_arm_distribution": distribution,
+        "exploration_eligible_count": exploration_eligible_count,
+        "explored_count": explored_count,
+        "observed_exploration_rate": round(
+            explored_count / exploration_eligible_count, 6
+        )
+        if exploration_eligible_count
+        else 0.0,
+        "max_source_exposure_rate": max(distribution.values(), default=0.0),
+        "hhi": round(sum(value * value for value in distribution.values()), 6),
+        "probability_violation_count": probability_violation_count,
+        "hard_gate_pass": probability_violation_count == 0,
+    }
+
+
 def _sanitize_legacy_feedback_state_preview(value: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve safe historical v1 snapshots without migrating their semantics."""
     temporary = value.get("temporary")
