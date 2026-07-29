@@ -3805,6 +3805,8 @@
         "confirmRemove": "¿Está seguro de que desea borrar las credenciales de inicio de sesión de {{platformName}}?",
         "credentialsRemoved": "Credenciales eliminadas exitosamente",
         "credentialsSaved": "¡{{platformName}} credenciales guardadas exitosamente!",
+        "mascotInteractionLabel": "Interactuar con la mascota",
+        "mascotPokeMessage": "¡Deja de picarme!",
         "credentialsRemovedFailed": "La eliminación falló",
         "removeFailed": "Error en la eliminación, verifique su red",
         "requiredField": "Complete el campo requerido: [{{fieldName}}]",

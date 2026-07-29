@@ -3805,6 +3805,8 @@
         "confirmRemove": "Tem certeza de que deseja limpar as credenciais de login de {{platformName}}?",
         "credentialsRemoved": "Credenciais removidas com sucesso",
         "credentialsSaved": "{{platformName}} credenciais salvas com sucesso!",
+        "mascotInteractionLabel": "Interagir com a mascote",
+        "mascotPokeMessage": "Pare de me cutucar!",
         "credentialsRemovedFailed": "Falha na remoção",
         "removeFailed": "Falha na remoção, verifique sua rede",
         "requiredField": "Preencha o campo obrigatório: [{{fieldName}}]",

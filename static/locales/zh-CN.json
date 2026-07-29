@@ -3805,6 +3805,8 @@
         "confirmRemove": "确定要清空 {{platformName}} 的登录凭证吗？",
         "credentialsRemoved": "已成功移除凭证",
         "credentialsSaved": "{{platformName}} 凭证保存成功！",
+        "mascotInteractionLabel": "与看板娘互动",
+        "mascotPokeMessage": "不要一直戳啦！",
         "credentialsRemovedFailed": "删除失败",
         "removeFailed": "删除失败，请检查网络",
         "requiredField": "请填写必填项: [{{fieldName}}]",

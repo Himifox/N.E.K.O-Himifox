@@ -322,10 +322,16 @@
             flex-shrink: 0;
             width: 124px;
             height: 124px;
+            padding: 0;
+            border: 0;
             background: url('/static/default/card_faces/YUI.png') center 24% / cover;
             border-radius: 50%;
             box-shadow: 0 0 18px var(--accent-glow);
+            color: var(--accent);
+            cursor: pointer;
+            appearance: none;
         }
+        .char-avatar-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
         .char-avatar-wrap::after {
             content: '';
             position: absolute;
@@ -355,6 +361,9 @@
         .char-avatar-privacy {
             opacity: 0;
         }
+        .char-avatar-angry {
+            opacity: 0;
+        }
         .char-avatar-theme-dark {
             display: none;
         }
@@ -370,6 +379,12 @@
         .character-banner.credential-privacy-active .char-avatar-privacy {
             opacity: 1;
         }
+        .character-banner.mascot-angry:not(.credential-privacy-active) .char-avatar-idle {
+            opacity: 0;
+        }
+        .character-banner.mascot-angry:not(.credential-privacy-active) .char-avatar-angry {
+            opacity: 1;
+        }
         .char-status-dot {
             position: absolute;
             z-index: 4;
@@ -380,6 +395,105 @@
             background: var(--success);
             border: 3px solid var(--surface-raised);
             border-radius: 50%;
+        }
+        .mascot-effect {
+            position: absolute;
+            z-index: 6;
+            pointer-events: none;
+            opacity: 0;
+        }
+        .mascot-anger-mark {
+            top: -12px;
+            right: -12px;
+            color: #ff665d;
+            font: 800 24px/1 var(--font-ui);
+            text-shadow: 0 2px 8px rgba(255, 82, 73, 0.38);
+        }
+        .mascot-steam {
+            width: 15px;
+            height: 9px;
+            top: 24px;
+            border: 2px solid color-mix(in oklch, white 82%, var(--accent));
+            border-radius: 50%;
+        }
+        .mascot-steam-left { left: -13px; }
+        .mascot-steam-right { right: -13px; }
+        .mascot-stars {
+            top: -8px;
+            left: -16px;
+            color: oklch(0.82 0.16 95);
+            font: 700 22px/1 var(--font-ui);
+            text-shadow: 0 0 12px color-mix(in oklch, currentColor 52%, transparent);
+        }
+        .mascot-question {
+            top: -12px;
+            right: -8px;
+            color: var(--accent);
+            font: 800 28px/1 var(--font-display);
+            text-shadow: 0 0 12px var(--accent-glow);
+        }
+        .mascot-ear-lines {
+            inset: 1px -12px auto;
+            color: var(--accent);
+            font: 800 18px/1 var(--font-ui);
+            letter-spacing: 74px;
+            white-space: nowrap;
+        }
+        .character-banner.mascot-angry .mascot-anger-mark,
+        .character-banner.mascot-angry .mascot-steam,
+        .character-banner.mascot-success .mascot-stars,
+        .character-banner.mascot-failure .mascot-question,
+        .character-banner.mascot-curious .mascot-question,
+        .character-banner.mascot-ear-twitch .mascot-ear-lines {
+            opacity: 1;
+            animation: mascotEffectPop 0.56s ease-out both;
+        }
+        .character-banner.mascot-angry .mascot-steam {
+            animation-name: mascotSteam;
+        }
+        .character-banner.mascot-curious .char-avatar:not(.char-avatar-privacy) {
+            animation: mascotCurious 0.48s ease-in-out;
+        }
+        .mascot-bubble {
+            position: absolute;
+            z-index: 7;
+            top: 12px;
+            left: 138px;
+            max-width: 180px;
+            padding: 7px 11px;
+            border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--border));
+            border-radius: 12px 12px 12px 4px;
+            background: var(--surface-raised);
+            box-shadow: 0 8px 22px var(--accent-glow);
+            backdrop-filter: blur(16px) saturate(135%);
+            color: var(--fg);
+            font-size: 12px;
+            font-weight: 650;
+            line-height: 1.35;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .mascot-bubble.visible {
+            opacity: 1;
+            animation: mascotEffectPop 0.32s ease-out both;
+        }
+        .character-banner.credential-privacy-active .mascot-effect,
+        .character-banner.credential-privacy-active .mascot-bubble {
+            opacity: 0 !important;
+            animation: none !important;
+        }
+        @keyframes mascotEffectPop {
+            from { opacity: 0; transform: translateY(3px) scale(0.86); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes mascotSteam {
+            from { opacity: 0; transform: translateY(5px) scale(0.72); }
+            55% { opacity: 1; }
+            to { opacity: 0; transform: translateY(-8px) scale(1.08); }
+        }
+        @keyframes mascotCurious {
+            0%, 100% { transform: scale(1.07) rotate(0); }
+            45% { transform: scale(1.07) rotate(-2deg); }
         }
         .char-speech {
             flex: 1;
@@ -933,6 +1047,7 @@
             .character-banner { flex-direction: column; text-align: center; gap: 12px; }
             .char-speech h1 { font-size: 19px; }
             .header-greeting small { display: none; }
+            .mascot-bubble { top: 8px; left: calc(50% + 22px); }
         }
 
         /* ==============================
@@ -1055,13 +1170,22 @@
 
         <!-- Character greeting banner -->
         <div class="character-banner">
-            <div class="char-avatar-wrap" aria-hidden="true">
+            <button type="button" class="char-avatar-wrap" data-i18n-aria="cookiesLogin.mascotInteractionLabel" aria-label="与看板娘互动">
                 <img class="char-avatar char-avatar-idle char-avatar-theme-light" src="/static/images/cookies/yui-credential-idle-light.webp" alt="" draggable="false">
                 <img class="char-avatar char-avatar-privacy char-avatar-theme-light" src="/static/images/cookies/yui-credential-privacy-light.webp" alt="" draggable="false">
+                <img class="char-avatar char-avatar-angry char-avatar-theme-light" src="/static/images/cookies/yui-credential-angry-light.webp" alt="" draggable="false">
                 <img class="char-avatar char-avatar-idle char-avatar-theme-dark" src="/static/images/cookies/yui-credential-idle.webp" alt="" draggable="false">
                 <img class="char-avatar char-avatar-privacy char-avatar-theme-dark" src="/static/images/cookies/yui-credential-privacy.webp" alt="" draggable="false">
-                <span class="char-status-dot"></span>
-            </div>
+                <img class="char-avatar char-avatar-angry char-avatar-theme-dark" src="/static/images/cookies/yui-credential-angry.webp" alt="" draggable="false">
+                <span class="char-status-dot" aria-hidden="true"></span>
+                <span class="mascot-effect mascot-anger-mark" aria-hidden="true">╬</span>
+                <span class="mascot-effect mascot-steam mascot-steam-left" aria-hidden="true"></span>
+                <span class="mascot-effect mascot-steam mascot-steam-right" aria-hidden="true"></span>
+                <span class="mascot-effect mascot-stars" aria-hidden="true">✦ ✧</span>
+                <span class="mascot-effect mascot-question" aria-hidden="true">?</span>
+                <span class="mascot-effect mascot-ear-lines" aria-hidden="true">⌁⌁</span>
+            </button>
+            <span class="mascot-bubble" aria-live="polite"></span>
             <div class="char-speech">
                 <h1 data-i18n="cookiesLogin.header">凭证管理中心</h1>
                 <p id="credential-hero-description">在各平台粘贴 <span class="highlight">Cookie</span> 并加密存储，供后续调用。</p>

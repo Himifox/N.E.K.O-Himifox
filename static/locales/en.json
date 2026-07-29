@@ -3805,6 +3805,8 @@
         "confirmRemove": "Are you sure you want to clear the login credentials for {{platformName}}?",
         "credentialsRemoved": "Credentials removed successfully",
         "credentialsSaved": "{{platformName}} credentials saved successfully!",
+        "mascotInteractionLabel": "Interact with the mascot",
+        "mascotPokeMessage": "Stop poking me!",
         "credentialsRemovedFailed": "Removal failed",
         "removeFailed": "Removal failed, please check your network",
         "requiredField": "Please fill in the required field: [{{fieldName}}]",

@@ -3805,6 +3805,8 @@
         "confirmRemove": "Вы уверены, что хотите очистить учетные данные для входа в {{platformName}}?",
         "credentialsRemoved": "Учетные данные успешно удалены",
         "credentialsSaved": "Учетные данные {{platformName}} успешно сохранены!",
+        "mascotInteractionLabel": "Взаимодействовать с маскотом",
+        "mascotPokeMessage": "Хватит меня тыкать!",
         "credentialsRemovedFailed": "Ошибка удаления",
         "removeFailed": "Ошибка удаления, проверьте сеть",
         "requiredField": "Пожалуйста, заполните обязательное поле: [{{fieldName}}]",

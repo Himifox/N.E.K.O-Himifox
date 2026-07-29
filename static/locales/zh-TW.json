@@ -3805,6 +3805,8 @@
         "confirmRemove": "確定要清空 {{platformName}} 的登入憑證嗎？",
         "credentialsRemoved": "已成功移除憑證",
         "credentialsSaved": "{{platformName}} 憑證儲存成功！",
+        "mascotInteractionLabel": "與看板娘互動",
+        "mascotPokeMessage": "別一直戳啦！",
         "credentialsRemovedFailed": "刪除失敗",
         "removeFailed": "刪除失敗，請檢查網路",
         "requiredField": "請填寫必填項: [{{fieldName}}]",

@@ -3805,6 +3805,8 @@
         "confirmRemove": "{{platformName}}のログインクレデンシャルを本当にクリアしますか？",
         "credentialsRemoved": "クレデンシャルの削除に成功しました",
         "credentialsSaved": "{{platformName}} クレデンシャルの保存に成功しました！",
+        "mascotInteractionLabel": "マスコットと触れ合う",
+        "mascotPokeMessage": "もう、つつかないで！",
         "credentialsRemovedFailed": "削除に失敗しました",
         "removeFailed": "削除に失敗しました、ネットワークを確認してください",
         "requiredField": "必須項目を記入してください: [{{fieldName}}]",

@@ -3805,6 +3805,8 @@
         "confirmRemove": "{{platformName}}의 로그인 자격 증명을 정말로 지우시겠습니까?",
         "credentialsRemoved": "자격 증명이 성공적으로 삭제되었습니다",
         "credentialsSaved": "{{platformName}} 자격 증명이 성공적으로 저장되었습니다!",
+        "mascotInteractionLabel": "마스코트와 상호작용",
+        "mascotPokeMessage": "그만 찌르라구요!",
         "credentialsRemovedFailed": "삭제 실패",
         "removeFailed": "삭제 실패, 네트워크를 확인해주세요",
         "requiredField": "필수 항목을 입력해주세요: [{{fieldName}}]",

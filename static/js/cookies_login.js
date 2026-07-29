@@ -283,6 +283,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('focusin', (event) => {
         if (isCredentialInput(event.target)) {
             window.clearTimeout(credentialPrivacyRestoreTimer);
+            clearMascotReaction();
+            window.clearTimeout(mascotBubbleTimer);
+            mascotBubble?.classList.remove('visible');
+            if (mascotBubble) mascotBubble.textContent = '';
             characterBanner?.classList.add('credential-privacy-active');
         }
     });
@@ -296,6 +300,68 @@ document.addEventListener('DOMContentLoaded', () => {
                 characterBanner?.classList.remove('credential-privacy-active');
             }
         }, 450);
+    });
+
+    const mascotButton = document.querySelector('.char-avatar-wrap');
+    const mascotBubble = document.querySelector('.mascot-bubble');
+    const reactionClasses = ['mascot-angry', 'mascot-success', 'mascot-failure', 'mascot-curious', 'mascot-ear-twitch'];
+    let mascotReactionTimer = null;
+    let mascotDeferredTimer = null;
+    let mascotBubbleTimer = null;
+    let mascotClicks = [];
+
+    const clearMascotReaction = () => {
+        window.clearTimeout(mascotReactionTimer);
+        reactionClasses.forEach(className => characterBanner?.classList.remove(className));
+    };
+
+    window.triggerMascotReaction = (type, duration = 900) => {
+        if (!characterBanner) return;
+        if (characterBanner.classList.contains('credential-privacy-active')) {
+            if (type === 'success' || type === 'failure') {
+                window.clearTimeout(mascotDeferredTimer);
+                mascotDeferredTimer = window.setTimeout(() => window.triggerMascotReaction(type, duration), 500);
+            }
+            return;
+        }
+        clearMascotReaction();
+        characterBanner.classList.add(`mascot-${type}`);
+        mascotReactionTimer = window.setTimeout(clearMascotReaction, duration);
+    };
+
+    mascotButton?.addEventListener('click', (event) => {
+        if (characterBanner?.classList.contains('credential-privacy-active')) return;
+
+        if (event.target instanceof Element && event.target.closest('.char-status-dot')) {
+            window.triggerMascotReaction('curious', 650);
+            return;
+        }
+
+        if (event.detail > 0) {
+            const rect = mascotButton.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width;
+            const y = (event.clientY - rect.top) / rect.height;
+            if (y < 0.34 && (x < 0.38 || x > 0.62)) {
+                window.triggerMascotReaction('ear-twitch', 620);
+                return;
+            }
+        }
+
+        const now = Date.now();
+        mascotClicks = mascotClicks.filter(clickedAt => now - clickedAt < 850);
+        mascotClicks.push(now);
+        window.triggerMascotReaction('angry', mascotClicks.length >= 3 ? 1350 : 900);
+
+        if (mascotClicks.length >= 3 && mascotBubble) {
+            mascotClicks = [];
+            window.clearTimeout(mascotBubbleTimer);
+            mascotBubble.textContent = safeT('cookiesLogin.mascotPokeMessage', '不要一直戳啦！');
+            mascotBubble.classList.add('visible');
+            mascotBubbleTimer = window.setTimeout(() => {
+                mascotBubble.classList.remove('visible');
+                mascotBubble.textContent = '';
+            }, 1350);
+        }
     });
 
     if (getTranslator()) {
@@ -1022,6 +1088,7 @@ async function submitCurrentCookie() {
         if (response.ok && result.success) {
             const message = safeT('cookiesLogin.credentialsSaved', '{{platformName}} 凭证已保存').replace('{{platformName}}', config.name);
             showAlert(true, message);
+            window.triggerMascotReaction?.('success', 1100);
             document.querySelectorAll('.credential-input').forEach(i => i.value = '');
             refreshStatusList();
         } else {
@@ -1030,10 +1097,12 @@ async function submitCurrentCookie() {
                 : (result?.detail || result?.message);
             const message = getLocalizedApiMessage(rawMessage, 'cookiesLogin.saveFailed', '保存失败，请检查格式是否正确');
             showAlert(false, message);
+            window.triggerMascotReaction?.('failure', 1050);
         }
     } catch (err) {
         const message = safeT('cookiesLogin.networkError', '网络请求失败，请检查连接');
         showAlert(false, message);
+        window.triggerMascotReaction?.('failure', 1050);
         console.error("Submit error:", err);
     } finally {
         if (submitBtn) submitBtn.disabled = false;
