@@ -193,7 +193,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
 
     generic_match = re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?"
-        r"(播放|放一首|放首|听一下|想听|要听|来一首|来首|来点)(.{0,60})",
+        r"(播放一首|播放首|播放|放一首|放首|听一下|想听|要听|来一首|来首|来点)(.{0,60})",
         clause,
     )
     if not generic_match:
@@ -206,6 +206,8 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     if named_song_match:
         song = _strip_request_payload(named_song_match.group(1))
         return MusicRequest(keyword=song, song_name=song)
+    if _action in {"播放一首", "播放首", "放一首", "放首", "来一首", "来首"}:
+        return MusicRequest(keyword=payload, song_name=payload)
     return MusicRequest(keyword=payload)
 
 
