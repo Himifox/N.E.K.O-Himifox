@@ -1915,9 +1915,15 @@ async def fetch_music_content(
         or requested_artist
         or personalization_source != "auto"
     )
+    use_account_personalization = personalized and not (requested_song or requested_artist)
+    strict_personalization = use_account_personalization and bool(
+        playlist_id
+        or playlist_name
+        or personalization_source != "auto"
+    )
 
     # 明确点歌仍走公开搜索；其余个性化请求即使带关键词，也应尊重账号候选池。
-    if personalized and not (requested_song or requested_artist):
+    if use_account_personalization:
         netease_used = True
         try:
             personalized_results = await all_crawlers['netease'].personalized_recommendations(
@@ -1943,7 +1949,7 @@ async def fetch_music_content(
             all_results.extend(personalized_results)
             logger.info(f"[个性化推荐] 使用网易云个性化候选 {len(personalized_results)} 首")
 
-    if not all_results and keyword:
+    if not all_results and keyword and not strict_personalization:
         # 场景 A: 用户指定了明确关键词 -> 开启"梯队降级"机制
         kw_lower = keyword.lower()
         # 1. 【强古典词】确保正确路由至 Musopen

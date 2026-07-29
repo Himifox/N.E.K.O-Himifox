@@ -1042,6 +1042,47 @@ async def test_fetch_music_content_strict_liked_source_does_not_blind_fallback()
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'strict_kwargs',
+    [
+        {'personalization_source': 'liked'},
+        {'playlist_id': 88},
+    ],
+)
+async def test_fetch_music_content_strict_personalization_with_keyword_does_not_fallback(
+    strict_kwargs,
+):
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease._personalization_error_code = 'source_empty'
+    mock_netease.personalized_recommendations = AsyncMock(return_value=[])
+    mock_netease.search = AsyncMock(return_value=[{
+        'name': 'Public Track',
+        'artist': 'Public Artist',
+        'url': '/api/music/play/netease/9',
+    }])
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        response = await fetch_music_content(
+            '周杰伦',
+            limit=5,
+            personalized=True,
+            **strict_kwargs,
+        )
+
+    assert response['success'] is False
+    assert response['error_code'] == 'source_empty'
+    mock_netease.search.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_fetch_music_content_honors_personalized_keyword_request():
     mock_netease = MagicMock()
     mock_netease._cookie_invalid = False
