@@ -73,10 +73,10 @@ def ensure_recommendation_preference_state(
                         "effective_failure": _bounded_count(
                             raw_bucket.get("negative_evidence_count")
                         ),
-                        "updated_at": max(
-                            0.0, _finite(raw_bucket.get("updated_at"))
-                        )
-                        or current,
+                        # v2 counters had no decay contract. Start the new
+                        # 30-day clock at migration so existing evidence is
+                        # preserved instead of being retroactively expired.
+                        "updated_at": current,
                     }
         _save_state(root, state)
         return _public_state(state, current)
