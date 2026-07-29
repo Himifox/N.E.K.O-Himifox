@@ -1103,10 +1103,21 @@ class NeteaseCrawler(BaseMusicCrawler):
             )
             artist = []
 
-        lead_source = NETEASE_PERSONALIZATION_SOURCE_ORDER[
-            self._personalization_source_index % len(NETEASE_PERSONALIZATION_SOURCE_ORDER)
-        ]
-        self._personalization_source_index += 1
+        keyword_key = keyword.strip().casefold()
+        has_artist_hint = bool(
+            keyword_key
+            and any(
+                keyword_key in str(item.get('name') or '').casefold()
+                for item in snapshot.get('subscribed_artists') or []
+            )
+        )
+        if has_artist_hint and artist:
+            lead_source = 'artist'
+        else:
+            lead_source = NETEASE_PERSONALIZATION_SOURCE_ORDER[
+                self._personalization_source_index % len(NETEASE_PERSONALIZATION_SOURCE_ORDER)
+            ]
+            self._personalization_source_index += 1
         source_order = [lead_source] + [
             source for source in ('liked', 'daily', 'artist')
             if source != lead_source
@@ -1524,10 +1535,19 @@ class MusopenCrawler(BaseMusicCrawler):
             ]
             results = []
             for piece in pieces[:limit * 3]:
-                recordings_response = await self.client.get(
-                    f"https://api.musopen.org/v2/pieces/{piece['id']}/recordings/"
-                )
-                recordings_response.raise_for_status()
+                try:
+                    recordings_response = await self.client.get(
+                        f"https://api.musopen.org/v2/pieces/{piece['id']}/recordings/"
+                    )
+                    recordings_response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    logger.warning(
+                        "[%s] 曲目 %s 的录音接口失败，继续尝试其他曲目: %s",
+                        self.platform_name,
+                        piece['id'],
+                        type(exc).__name__,
+                    )
+                    continue
                 for recording in recordings_response.json().get('results', []):
                     audio_url = recording.get('fileurl')
                     duration_seconds = _parse_duration_seconds(recording.get('length'))
@@ -2402,7 +2422,10 @@ def _select_requested_song(
             ).ratio()
             artist_matches = (
                 target_artist in candidate_artist
-                or candidate_artist in target_artist
+                or (
+                    len(candidate_artist) >= 2
+                    and candidate_artist in target_artist
+                )
                 or (
                     len(target_artist) >= 4
                     and len(candidate_artist) >= 4
