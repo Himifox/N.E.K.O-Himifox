@@ -8,7 +8,20 @@
       <el-button :loading="loading" @click="refreshAll">{{ t('common.refresh') }}</el-button>
     </header>
 
-    <el-alert :title="t('knowledge.marketNotice')" type="info" :closable="false" show-icon />
+    <div class="market-entry">
+      <el-alert :title="t('knowledge.marketConnected')" type="info" :closable="false" show-icon />
+      <el-tag v-if="marketAuth.authenticated" type="success" effect="plain">
+        {{ t('market.accountConnected', { name: marketAuthDisplayName }) }}
+      </el-tag>
+      <el-button
+        type="primary"
+        plain
+        :loading="marketAuthBusy"
+        @click="marketAuth.authenticated ? openKnowledgeMarket() : startMarketLogin()"
+      >
+        {{ marketAuth.authenticated ? t('knowledge.openMarket') : t('market.login') }}
+      </el-button>
+    </div>
 
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="t('knowledge.overview')" name="overview">
@@ -136,8 +149,18 @@ import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { knowledgeApi, type KnowledgeCollection, type KnowledgeEntrySummary } from '@/api/knowledge'
+import { getMarketUrl } from '@/api/market'
+import { useMarketAuth } from '@/composables/useMarketAuth'
+import { openExternalUrl } from '@/utils/openExternal'
 
 const { t } = useI18n()
+const {
+  marketAuth,
+  marketAuthBusy,
+  marketAuthDisplayName,
+  loadMarketAuthStatus,
+  startMarketLogin,
+} = useMarketAuth()
 const activeTab = ref('overview')
 const loading = ref(false)
 const collections = ref<KnowledgeCollection[]>([])
@@ -155,6 +178,33 @@ const packsLoading = ref(false)
 const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+
+async function openKnowledgeMarket() {
+  if (!marketAuth.value.authenticated) {
+    await startMarketLogin()
+    return
+  }
+  const base = await getMarketUrl()
+  if (!base) {
+    ElMessage.error(t('knowledge.marketUnavailable'))
+    return
+  }
+  let target = `${base.replace(/\/+$/, '')}/#/knowledge`
+  try {
+    const response = await fetch('/market/pair-code', { method: 'POST' })
+    if (response.ok) {
+      const pairing = await response.json()
+      const query = new URLSearchParams({
+        neko_pair: String(pairing.one_time_code || ''),
+        neko_port: String(pairing.port || ''),
+      })
+      target = `${base.replace(/\/+$/, '')}/#/knowledge?${query}`
+    }
+  } catch {
+    // The Market remains browsable when local pairing is temporarily unavailable.
+  }
+  openExternalUrl(target)
+}
 
 async function refreshAll() {
   loading.value = true
@@ -257,11 +307,15 @@ watch(activeTab, (tab) => {
   if (tab === 'diagnostics') loadDiagnostics()
 })
 
-onMounted(refreshAll)
+onMounted(() => {
+  void Promise.all([refreshAll(), loadMarketAuthStatus()])
+})
 </script>
 
 <style scoped>
 .knowledge-manager { padding: 24px; display: flex; flex-direction: column; gap: 18px; }
+.market-entry { display: flex; align-items: center; gap: 12px; }
+.market-entry .el-alert { flex: 1; }
 .page-heading, .card-heading, .switch-row, .toolbar, .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .page-heading h1 { margin: 0 0 6px; }
 .page-heading p { margin: 0; color: var(--el-text-color-secondary); }

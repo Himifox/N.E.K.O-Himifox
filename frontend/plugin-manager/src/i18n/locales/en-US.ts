@@ -48,6 +48,8 @@ export default {
     knowledge: 'Knowledge'
   },
   knowledge: {
+    marketConnected: 'The knowledge market is connected. Packages are verified before local installation.',
+    openMarket: 'Browse knowledge market', marketUnavailable: 'The plugin market is unavailable',
     title: 'Knowledge Manager', subtitle: 'Manage local public knowledge, data packs, and conversation matches',
     marketNotice: 'The knowledge-market protocol socket is reserved. Built-in collections and local data packs are available now.',
     overview: 'Overview', ready: 'Ready', degraded: 'Degraded', entries: 'Entries', disabled: 'Disabled', packs: 'Data packs',

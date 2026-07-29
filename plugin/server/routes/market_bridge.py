@@ -448,6 +448,12 @@ class MarketBridgeTokenResponse(BaseModel):
     port: int = 48911
 
 
+class MarketPairCodeResponse(BaseModel):
+    one_time_code: str
+    port: int = 48911
+    expires_in: int = _ONE_TIME_CODE_TTL_SECONDS
+
+
 class MarketOAuthStartResponse(BaseModel):
     auth_url: str
     state: str
@@ -709,6 +715,16 @@ async def market_bridge_token(request: Request):
     _require_local_bridge_token_access(request)
 
     return MarketBridgeTokenResponse(bridge_token=_BRIDGE_TOKEN, port=_main_server_port())
+
+
+@router.post("/pair-code", response_model=MarketPairCodeResponse)
+async def market_pair_code(request: Request):
+    """Issue a short-lived code to the local manager for a remote Market page."""
+    _require_local_bridge_token_access(request)
+    return MarketPairCodeResponse(
+        one_time_code=_issue_one_time_code(),
+        port=_main_server_port(),
+    )
 
 
 @router.post("/oauth/start", response_model=MarketOAuthStartResponse)

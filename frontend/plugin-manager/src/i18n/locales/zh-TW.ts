@@ -48,6 +48,8 @@ export default {
     knowledge: '知識庫'
   },
   knowledge: {
+    marketConnected: '知識包市集已接通；訂閱後會先驗證，再寫入本機知識庫。',
+    openMarket: '瀏覽知識庫市集', marketUnavailable: '外掛市集目前無法使用',
     title: '知識庫管理', subtitle: '管理本機公共知識、資料包與對話命中情況',
     marketNotice: '知識包市集協議介面已預留；目前可管理內建知識庫與本機資料包。',
     overview: '總覽', ready: '正常', degraded: '異常', entries: '詞條', disabled: '已停用', packs: '資料包',
