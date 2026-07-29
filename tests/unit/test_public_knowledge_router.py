@@ -118,3 +118,45 @@ def test_subscription_handoff_verifies_hash_and_installs_pack(monkeypatch, tmp_p
         json=payload,
     ).json()
     assert rejected["reason"] == "artifact_hash_mismatch"
+
+
+def test_subscription_size_limit_applies_to_pack_not_small_envelope(
+    monkeypatch,
+    tmp_path,
+):
+    import main_routers.public_knowledge_router as module
+
+    client = _client(monkeypatch, tmp_path)
+    pack = {
+        "schema_version": 1,
+        "pack_id": "size-fixture",
+        "collection_id": "meme",
+        "source": {"name": "Size", "homepage": "", "license": "CC0-1.0"},
+        "entries": [{
+            "title": "size fixture",
+            "terms": {"alias": [], "recognition": []},
+            "tags": [],
+            "summary": "",
+            "content": "content",
+        }],
+    }
+    pack_size = len(canonical_pack_bytes(pack))
+    monkeypatch.setattr(module, "MAX_PACK_BYTES", pack_size)
+    digest = hashlib.sha256(canonical_pack_bytes(pack)).hexdigest()
+
+    response = client.post(
+        "/api/public-knowledge/subscriptions/apply",
+        json={
+            "protocol_version": 1,
+            "subscription": {
+                "provider": "plugin-market",
+                "remote_id": "knowledge/size-fixture",
+                "version": "1.0.0",
+                "channel": "stable",
+                "artifact_sha256": digest,
+            },
+            "pack": pack,
+        },
+    ).json()
+
+    assert response["ok"] is True

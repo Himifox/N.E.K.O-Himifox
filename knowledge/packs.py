@@ -129,6 +129,10 @@ def install_pack(
         existing_collection = str(existing.get("collection_id") or "")
         if existing_collection and existing_collection != pack.collection_id:
             raise ValueError("knowledge pack cannot change its collection")
+        _validate_subscription_identity(
+            existing.get("subscription"),
+            subscription,
+        )
     new_registry = _registry_with_pack(old_registry, pack, subscription=subscription)
     store.replace_source(pack.source_tag, pack.entries)
     try:
@@ -314,3 +318,18 @@ def _registry_with_pack(
         "subscription": subscription if subscription is not None else previous_subscription,
     }
     return {"schema_version": 1, "packs": packs}
+
+
+def _validate_subscription_identity(
+    previous: object,
+    replacement: dict[str, str] | None,
+) -> None:
+    previous_is_subscription = isinstance(previous, dict)
+    replacement_is_subscription = isinstance(replacement, dict)
+    if previous_is_subscription != replacement_is_subscription:
+        raise ValueError("knowledge pack subscription identity cannot change")
+    if not previous_is_subscription:
+        return
+    for field in ("provider", "remote_id"):
+        if str(previous.get(field) or "") != str(replacement.get(field) or ""):
+            raise ValueError("knowledge pack subscription identity cannot change")

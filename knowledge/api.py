@@ -24,6 +24,7 @@ from .subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,
     KnowledgeSubscription,
     canonical_pack_bytes,
+    load_canonical_pack_artifact,
     validate_subscription,
 )
 from .service import (
@@ -61,6 +62,7 @@ __all__ = [
     "SUBSCRIPTION_PROTOCOL_VERSION",
     "UpsertResult",
     "canonical_pack_bytes",
+    "load_canonical_pack_artifact",
     "open_knowledge",
     "validate_subscription",
 ]

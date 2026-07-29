@@ -8,7 +8,11 @@ import pytest
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.packs import install_pack, validate_pack
-from knowledge.subscriptions import canonical_pack_bytes, validate_subscription
+from knowledge.subscriptions import (
+    canonical_pack_bytes,
+    load_canonical_pack_artifact,
+    validate_subscription,
+)
 
 
 def _payload(*, title="community phrase", pack_id="community-fixture"):
@@ -146,6 +150,39 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
     assert set(entry.__dataclass_fields__) == {
         "title", "terms", "tags", "summary", "content",
     }
+
+
+def test_market_artifact_must_use_canonical_json_bytes():
+    payload = _payload()
+
+    assert load_canonical_pack_artifact(canonical_pack_bytes(payload)) == payload
+    with pytest.raises(ValueError, match="canonical JSON"):
+        load_canonical_pack_artifact(
+            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        )
+
+
+def test_subscription_update_cannot_change_remote_identity(tmp_path):
+    service = open_knowledge(tmp_path)
+    payload = _payload()
+    pack = validate_pack(payload)
+    digest = hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
+    subscription = {
+        "provider": "plugin-market",
+        "remote_id": "knowledge/community-fixture",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": digest,
+    }
+    service.install_pack(pack, subscription=subscription)
+
+    with pytest.raises(ValueError, match="identity"):
+        service.install_pack(
+            pack,
+            subscription={**subscription, "remote_id": "knowledge/impostor"},
+        )
+    with pytest.raises(ValueError, match="identity"):
+        service.install_pack(pack)
 
 
 def test_removing_pack_does_not_remove_another_source(tmp_path):

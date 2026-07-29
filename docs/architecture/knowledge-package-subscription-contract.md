@@ -56,7 +56,7 @@ POST /api/public-knowledge/subscriptions/apply
 }
 ```
 
-`artifact_sha256` 是 `pack` 对象按 UTF-8、JSON 键排序、无多余空白序列化后的 SHA-256。Main Server 会重新计算摘要，不信任调用方给出的结果。
+市场制品使用 `.neko-knowledge.json` 后缀，其文件字节必须等于 `pack` 对象按 UTF-8、JSON 键排序、无多余空白序列化后的结果。`artifact_sha256` 因此同时是下载文件摘要和规范化 `pack` 摘要。Market Bridge 先验证下载字节，Main Server 再独立复算，不信任调用方给出的结果。
 
 ## 固定边界
 
@@ -70,8 +70,15 @@ POST /api/public-knowledge/subscriptions/apply
 - 安装后默认不参与自动搭话，需由用户单独开启该数据包的自动上下文。
 - 不写入用户记忆，也不持久化用户对话。
 
-## 当前完成与未来接线
+## 市场接线
 
-当前已完成本地知识包导入、启停、删除、订阅元数据保存、摘要复核和交接端点。插件市场尚未提供知识包目录与下载协议，因此界面不会伪装成已经支持在线订阅。
+插件市场通过独立知识包目录发布制品，不把知识包伪装成可执行插件。市场网页只把目录 ID、远端 ID、版本、通道、制品 URL 和摘要交给本地端点：
 
-未来市场接入只需补充三项：知识包目录查询、经身份验证的制品下载、下载完成后调用上述交接端点。已有知识库地基和管理 API 无需重做。
+```text
+POST /market/knowledge/subscribe
+GET  /market/knowledge/tasks/{task_id}
+GET  /market/knowledge/subscriptions
+POST /market/knowledge/unsubscribe
+```
+
+本地 Bridge 负责受限下载、10 MB 限制、SHA-256 和规范 JSON 校验，再调用 Main Server 交接端点。安装结果以本地 `packs.json` 为准；Market 账户记录为尽力同步，失败不回滚已经安全落地的本地知识包。

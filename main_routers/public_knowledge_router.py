@@ -26,6 +26,7 @@ from main_routers.shared_state import get_config_manager
 
 
 router = APIRouter(prefix="/api/public-knowledge", tags=["public-knowledge"])
+_PACK_ENVELOPE_OVERHEAD_BYTES = 64 * 1024
 
 
 def _service():
@@ -263,7 +264,7 @@ async def list_public_knowledge_packs(
 @router.post("/packs/import")
 async def import_public_knowledge_pack(request: Request):
     raw = await request.body()
-    if len(raw) > MAX_PACK_BYTES:
+    if len(raw) > MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES:
         return {"ok": False, "reason": "pack_too_large"}
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -275,7 +276,10 @@ async def import_public_knowledge_pack(request: Request):
     if rejected is not None:
         return rejected
     try:
-        pack = validate_pack(payload.get("pack"))
+        pack_payload = payload.get("pack")
+        if len(canonical_pack_bytes(pack_payload)) > MAX_PACK_BYTES:
+            return {"ok": False, "reason": "pack_too_large"}
+        pack = validate_pack(pack_payload)
         result = await asyncio.to_thread(_service().install_pack, pack)
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
@@ -292,7 +296,7 @@ async def import_public_knowledge_pack(request: Request):
 async def apply_public_knowledge_subscription(request: Request):
     """Install provider-verified data without coupling to a market protocol."""
     raw = await request.body()
-    if len(raw) > MAX_PACK_BYTES:
+    if len(raw) > MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES:
         return {"ok": False, "reason": "pack_too_large"}
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -308,7 +312,10 @@ async def apply_public_knowledge_subscription(request: Request):
     try:
         subscription = validate_subscription(payload.get("subscription"))
         pack_payload = payload.get("pack")
-        digest = hashlib.sha256(canonical_pack_bytes(pack_payload)).hexdigest()
+        pack_bytes = canonical_pack_bytes(pack_payload)
+        if len(pack_bytes) > MAX_PACK_BYTES:
+            return {"ok": False, "reason": "pack_too_large"}
+        digest = hashlib.sha256(pack_bytes).hexdigest()
         if digest != subscription.artifact_sha256:
             return {"ok": False, "reason": "artifact_hash_mismatch"}
         pack = validate_pack(pack_payload)

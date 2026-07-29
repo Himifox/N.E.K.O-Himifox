@@ -49,6 +49,17 @@ def canonical_pack_bytes(payload: object) -> bytes:
     ).encode("utf-8")
 
 
+def load_canonical_pack_artifact(raw: bytes) -> object:
+    """Decode a market artifact and require its bytes to be canonical JSON."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("knowledge artifact is not valid UTF-8 JSON") from exc
+    if raw != canonical_pack_bytes(payload):
+        raise ValueError("knowledge artifact is not canonical JSON")
+    return payload
+
+
 def _required_text(value: object, field: str, max_chars: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > max_chars:
         raise ValueError(f"subscription {field} is invalid")
