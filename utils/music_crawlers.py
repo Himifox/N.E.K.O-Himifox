@@ -463,7 +463,9 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_lock = asyncio.Lock()
         self._exploration_tracks: List[Dict[str, Any]] = []
         self._exploration_tracks_at = 0.0
+        self._exploration_keyword = ''
         self._exploration_retry_after = 0.0
+        self._exploration_retry_keyword = ''
         self._exploration_lock = asyncio.Lock()
         self._personalization_api_lock = asyncio.Lock()
         self._personalization_last_request_at = 0.0
@@ -486,7 +488,9 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_error_code = ''
         self._exploration_tracks = []
         self._exploration_tracks_at = 0.0
+        self._exploration_keyword = ''
         self._exploration_retry_after = 0.0
+        self._exploration_retry_keyword = ''
         self._account_profile = {}
         self._personalization_source_index = 0
         self._personalization_error_code = ''
@@ -933,25 +937,33 @@ class NeteaseCrawler(BaseMusicCrawler):
         artists = list(snapshot.get('subscribed_artists') or [])
         if not artists or limit <= 0:
             return []
+        keyword_key = keyword.strip().casefold()
         now = time.time()
-        if self._exploration_tracks and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS:
+        if (
+            self._exploration_tracks
+            and self._exploration_keyword == keyword_key
+            and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS
+        ):
             tracks = list(self._exploration_tracks)
             random.shuffle(tracks)
             return tracks[:limit]
-        if now < self._exploration_retry_after:
+        if self._exploration_retry_keyword == keyword_key and now < self._exploration_retry_after:
             return []
         async with self._exploration_lock:
             now = time.time()
-            if self._exploration_tracks and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS:
+            if (
+                self._exploration_tracks
+                and self._exploration_keyword == keyword_key
+                and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS
+            ):
                 tracks = list(self._exploration_tracks)
                 random.shuffle(tracks)
                 return tracks[:limit]
-            if now < self._exploration_retry_after:
+            if self._exploration_retry_keyword == keyword_key and now < self._exploration_retry_after:
                 return []
-            keyword_lower = keyword.strip().lower()
             matching = [
                 item for item in artists
-                if keyword_lower and keyword_lower in str(item.get('name') or '').lower()
+                if keyword_key and keyword_key in str(item.get('name') or '').casefold()
             ]
             artist = random.choice(matching or artists)
             from pyncm_async.apis.artist import GetArtistTracks
@@ -968,6 +980,7 @@ class NeteaseCrawler(BaseMusicCrawler):
                 self._exploration_retry_after = (
                     time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
                 )
+                self._exploration_retry_keyword = keyword_key
                 raise
             songs = (payload or {}).get('songs') or (payload or {}).get('hotSongs') or []
             familiar_ids = set(snapshot.get('liked_track_ids') or set())
@@ -982,9 +995,11 @@ class NeteaseCrawler(BaseMusicCrawler):
                 tracks.append(track)
             self._exploration_tracks = tracks
             self._exploration_tracks_at = time.time()
+            self._exploration_keyword = keyword_key
             self._exploration_retry_after = (
                 0.0 if tracks else time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
             )
+            self._exploration_retry_keyword = '' if tracks else keyword_key
             random.shuffle(tracks)
             return tracks[:limit]
 
@@ -1129,7 +1144,7 @@ class NeteaseCrawler(BaseMusicCrawler):
 
         logger.info(f"[{self.platform_name}] 正在搜索: {keyword}")
         search_url = "https://music.163.com/api/search/get/web"
-        search_limit = min(10, max(5, limit * 2))
+        search_limit = min(100, max(5, limit * 2))
         data = {'s': keyword, 'type': 1, 'offset': 0, 'limit': search_limit}
         
         try:
@@ -1529,10 +1544,10 @@ class MusopenCrawler(BaseMusicCrawler):
                     if len(results) >= limit:
                         return results
 
-            if pieces:
+            if results:
                 return results
 
-            logger.warning(f"[{self.platform_name}] API 未找到与 '{search_term}' 相关的曲目")
+            logger.warning(f"[{self.platform_name}] API 未找到与 '{search_term}' 相关的可播放录音，尝试页面兜底")
             response = await self.client.get(url)
             response.raise_for_status()
             # === Musopen 封面抓取 ===
@@ -1901,7 +1916,8 @@ async def fetch_music_content(
         or personalization_source != "auto"
     )
 
-    if personalized and (not keyword or playlist_id or playlist_name):
+    # 明确点歌仍走公开搜索；其余个性化请求即使带关键词，也应尊重账号候选池。
+    if personalized and not (requested_song or requested_artist):
         netease_used = True
         try:
             personalized_results = await all_crawlers['netease'].personalized_recommendations(
