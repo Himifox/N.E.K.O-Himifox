@@ -210,6 +210,7 @@ async def test_strict_music_request_does_not_fall_back(monkeypatch) -> None:
         ("播放周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
         ("播放邓紫棋", "邓紫棋", "", "", "", "auto"),
         ("播放轻音乐", "轻音乐", "", "", "", "auto"),
+        ("换成歌曲：大喜", "大喜", "大喜", "", "", "auto"),
         ("来一首邓紫棋的歌曲，下午好", "邓紫棋", "", "邓紫棋", "", "auto"),
         ("来一首歌曲：21", "21", "21", "", "", "auto"),
         ("来一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
@@ -243,6 +244,7 @@ def test_parse_explicit_user_music_request(
         "不要放歌",
         "刚才听了晴天",
         "你喜欢邓紫棋吗？",
+        "我想换成红色",
     ),
 )
 def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
