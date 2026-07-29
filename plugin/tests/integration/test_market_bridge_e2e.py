@@ -274,6 +274,16 @@ def bridge_e2e_env(
 # ─── Tests ────────────────────────────────────────────────────────────
 
 
+def test_knowledge_subscription_routes_precede_generic_bridge() -> None:
+    from plugin.server.http_app import build_plugin_server_app
+
+    paths = [getattr(route, "path", "") for route in build_plugin_server_app().routes]
+
+    assert paths.index("/market/knowledge/subscribe") < paths.index(
+        "/market/knowledge/{path:path}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_bridge_token_rejects_trusted_remote_origin(
     bridge_e2e_env: dict[str, Any],
