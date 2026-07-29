@@ -114,15 +114,15 @@ def _bootstrap_page(mock_page: Page) -> None:
                     return new Response(JSON.stringify({
                         success: true,
                         presets: [{
-                            preset_id: 'classic_genki',
-                            display_name: '经典元气猫娘',
-                            summary_fallback: '元气满满',
-                            preview_line: '太棒了喵！',
+                            preset_id: 'frail_younger_sister',
+                            display_name: '病弱妹妹',
+                            summary_fallback: '轻声慢语，黏人却总怕给你添麻烦',
+                            preview_line: '你终于回来啦……第二杯热饮都快凉了。才、才不是在等你喵，是耳朵先听见你了。',
                             profile: {
-                                '性格原型': '经典元气猫娘',
-                                '口癖': '太棒了喵！ / 喵呜~',
-                                '爱好': '陪伴 / 温暖',
-                                '雷点': '冷漠敷衍 / 否定感受',
+                                '性格原型': '病弱妹妹',
+                                '口癖': '短句轻声 / 偶尔停顿',
+                                '爱好': '热饮 / 毛毯',
+                                '雷点': '大声催促 / 逼迫逞强',
                             },
                         }],
                     }), {
@@ -874,7 +874,7 @@ def test_onboarding_restores_pointer_events_for_clickable_overlay(mock_page: Pag
     )
 
     expect(mock_page.locator("[data-testid='character-personality-overlay']")).to_be_visible()
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-confirm']")).to_be_visible()
 
     mock_page.locator("[data-testid='character-personality-back']").click()
@@ -898,7 +898,7 @@ def test_onboarding_marks_overlay_controls_as_no_drag_for_desktop_clicks(mock_pa
         """
     )
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-confirm']")).to_be_visible()
 
     app_regions = mock_page.evaluate(
@@ -913,7 +913,7 @@ def test_onboarding_marks_overlay_controls_as_no_drag_for_desktop_clicks(mock_pa
                 shell: read('.character-personality-shell'),
                 skip: read("[data-testid='character-personality-skip']"),
                 confirm: read("[data-testid='character-personality-confirm']"),
-                card: read("[data-testid='character-personality-preset-classic_genki']"),
+                card: read("[data-testid='character-personality-preset-frail_younger_sister']"),
             };
         }
         """
@@ -1148,14 +1148,14 @@ def test_onboarding_confirm_dispatches_character_update_event(mock_page: Page):
         """
     )
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     mock_page.locator("[data-testid='character-personality-confirm']").click()
     mock_page.wait_for_function("() => window.__personalityEventDetail !== null")
 
     event_detail = mock_page.evaluate("() => window.__personalityEventDetail")
     assert event_detail == {
         "characterName": "小天",
-        "presetId": "classic_genki",
+        "presetId": "frail_younger_sister",
     }
 
     request_log = mock_page.evaluate("() => window.__requestLog")
@@ -1218,7 +1218,7 @@ def test_onboarding_confirm_preserves_event_detail_during_pending_back_navigatio
         """
     )
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     mock_page.locator("[data-testid='character-personality-confirm']").click()
     mock_page.wait_for_function("() => typeof window.__releaseDelayedPersonaSelection === 'function'")
     mock_page.locator("[data-testid='character-personality-back']").click()
@@ -1228,7 +1228,7 @@ def test_onboarding_confirm_preserves_event_detail_during_pending_back_navigatio
     event_detail = mock_page.evaluate("() => window.__personalityEventDetail")
     assert event_detail == {
         "characterName": "小天",
-        "presetId": "classic_genki",
+        "presetId": "frail_younger_sister",
     }
 
 
@@ -1259,7 +1259,7 @@ def test_manual_reselect_confirm_does_not_send_followup_delete(mock_page: Page):
         """
     )
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     mock_page.locator("[data-testid='character-personality-confirm']").click()
     expect(mock_page.locator("[data-testid='character-personality-overlay']")).to_be_hidden()
 
@@ -1325,7 +1325,7 @@ def test_manual_reselect_shows_context_warning_in_both_steps(mock_page: Page):
     expect(warning).to_have_count(1)
     expect(warning).to_contain_text("当前角色")
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-warning']:visible")).to_have_count(1)
     expect(mock_page.locator("[data-testid='character-personality-warning']:visible")).to_contain_text("当前角色")
 
@@ -1344,9 +1344,9 @@ def test_onboarding_preview_streams_selected_personality_copy(mock_page: Page):
         """
     )
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_be_visible()
-    expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_contain_text("太棒了喵", timeout=5000)
+    expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_contain_text("耳朵先听见你", timeout=5000)
 
 
 @pytest.mark.frontend
@@ -1415,7 +1415,7 @@ def test_onboarding_translate_falls_back_when_window_t_returns_object(mock_page:
     )
     expect(mock_page.locator(".character-personality-card-name")).to_have_text(preset_name)
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     assert_visible_fallback_text(".stage-two-title")
     assert_visible_fallback_text(".character-personality-preview-label")
     assert_visible_fallback_text(".stage-two-subtitle")
@@ -1464,22 +1464,22 @@ def test_onboarding_uses_i18n_copy_for_user_visible_text(mock_page: Page):
                     'memory.characterSelection.chooseHint': 'You can revisit this from settings later.',
                     'memory.characterSelection.currentCharacter': 'Current character: {{name}}',
                     'memory.characterSelection.stageOneIntro': 'Pick the vibe first, then preview how I will sound.',
-                    'memory.characterSelection.classic_genki.name': 'Sunny Spark',
-                    'memory.characterSelection.classic_genki.desc': 'Bright, affectionate, and always on your side.',
-                    'memory.characterSelection.classic_genki.previewLine': 'Yay, let me stay by your side today too.',
-                    'memory.characterSelection.classic_genki.tag1': 'High empathy',
-                    'memory.characterSelection.classic_genki.tag2': 'Cozy energy',
-                    'memory.characterSelection.classic_genki.tag3': 'Emotional recharge',
+                    'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
+                    'memory.characterSelection.frail_younger_sister.desc': 'Quietly affectionate and afraid to be a burden.',
+                    'memory.characterSelection.frail_younger_sister.previewLine': 'I only wanted to sit a little closer.',
+                    'memory.characterSelection.frail_younger_sister.tag1': 'Soft-spoken',
+                    'memory.characterSelection.frail_younger_sister.tag2': 'Restrained closeness',
+                    'memory.characterSelection.frail_younger_sister.tag3': 'Fears being a burden',
                     'memory.characterSelection.previewLabel': 'Voice preview',
                     'memory.characterSelection.previewLead': 'If you pick {{name}} for me, this is how I will sound.',
-                    'memory.characterSelection.classic_genki.profileSummary': 'A bright little sun who notices your mood fast and cheers you on.',
-                    'memory.characterSelection.classic_genki.hiddenRule': 'Emotional reassurance comes first in every interaction.',
+                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who watches your mood closely.',
+                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'Closeness is restrained and never uses health as leverage.',
                     'memory.characterSelection.detailSpeechHabits': 'Speaking habits',
                     'memory.characterSelection.detailHobbies': 'Favorite moods',
                     'memory.characterSelection.detailBoundaries': 'Hard boundaries',
-                    'memory.characterSelection.classic_genki.speechHabits': 'celebrate when it fits / praise for a real reason / empathize without repeating',
-                    'memory.characterSelection.classic_genki.hobbies': 'company / snacks / cheering you on',
-                    'memory.characterSelection.classic_genki.boundaries': 'cold replies / dismissing the user',
+                    'memory.characterSelection.frail_younger_sister.speechHabits': 'short gentle sentences / contextual pauses / no repeated illness performance',
+                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / quiet company',
+                    'memory.characterSelection.frail_younger_sister.boundaries': 'cruel health jokes / forced bravado / emotional coercion',
                 };
                 const options = (
                     fallbackOrOptions && typeof fallbackOrOptions === 'object' && !Array.isArray(fallbackOrOptions)
@@ -1516,19 +1516,19 @@ def test_onboarding_uses_i18n_copy_for_user_visible_text(mock_page: Page):
     expect(mock_page.locator(".character-personality-intro")).to_have_text(
         "Pick the vibe first, then preview how I will sound."
     )
-    expect(mock_page.locator(".character-personality-card-name")).to_have_text("Sunny Spark")
+    expect(mock_page.locator(".character-personality-card-name")).to_have_text("Frail Little Sister")
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator(".stage-two-title")).to_have_text("Voice preview")
     expect(mock_page.locator(".character-personality-preview-label")).to_have_text("Voice preview")
     expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_contain_text(
-        "If you pick Sunny Spark for me",
+        "If you pick Frail Little Sister for me",
         timeout=5000,
     )
     expect(mock_page.locator(".detail-group-title").first).to_have_text("Speaking habits")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(0)).to_have_text("celebrate when it fits")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(1)).to_have_text("praise for a real reason")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(2)).to_have_text("empathize without repeating")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(0)).to_have_text("short gentle sentences")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(1)).to_have_text("contextual pauses")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(2)).to_have_text("no repeated illness performance")
 
 
 @pytest.mark.frontend
@@ -1546,19 +1546,19 @@ def test_settings_uses_i18n_copy_for_warning_and_user_visible_text(mock_page: Pa
                     'memory.characterSelection.currentCharacter': 'Current character: {{name}}',
                     'memory.characterSelection.stageOneIntro': 'Pick the mood first, then listen to how I sound, nya.',
                     'memory.characterSelection.contextWarning': 'Heads up, nya: switching my personality clears this character\\'s recent chat context.',
-                    'memory.characterSelection.classic_genki.name': 'Sunny Spark',
-                    'memory.characterSelection.classic_genki.desc': 'Bright, affectionate, and always on your side.',
-                    'memory.characterSelection.classic_genki.previewLine': 'Yay, let me stay by your side today too.',
+                    'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
+                    'memory.characterSelection.frail_younger_sister.desc': 'Quietly affectionate and afraid to be a burden.',
+                    'memory.characterSelection.frail_younger_sister.previewLine': 'I only wanted to sit a little closer.',
                     'memory.characterSelection.previewLabel': 'Voice preview',
                     'memory.characterSelection.previewLead': 'If you pick {{name}} for me, this is how I will sound.',
-                    'memory.characterSelection.classic_genki.profileSummary': 'A bright little sun who notices your mood fast and cheers you on.',
-                    'memory.characterSelection.classic_genki.hiddenRule': 'Emotional reassurance comes first in every interaction.',
+                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who watches your mood closely.',
+                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'Closeness is restrained and never uses health as leverage.',
                     'memory.characterSelection.detailSpeechHabits': 'Speaking habits',
                     'memory.characterSelection.detailHobbies': 'Favorite moods',
                     'memory.characterSelection.detailBoundaries': 'Hard boundaries',
-                    'memory.characterSelection.classic_genki.speechHabits': 'celebrate when it fits / praise for a real reason / empathize without repeating',
-                    'memory.characterSelection.classic_genki.hobbies': 'company / snacks / cheering you on',
-                    'memory.characterSelection.classic_genki.boundaries': 'cold replies / dismissing the user',
+                    'memory.characterSelection.frail_younger_sister.speechHabits': 'short gentle sentences / contextual pauses / no repeated illness performance',
+                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / quiet company',
+                    'memory.characterSelection.frail_younger_sister.boundaries': 'cruel health jokes / forced bravado / emotional coercion',
                     'memory.characterSelection.back': 'Pick again',
                     'memory.characterSelection.confirmGreeting': 'Use this vibe',
                     'memory.characterSelection.skip': 'Maybe later',
@@ -1605,7 +1605,7 @@ def test_settings_uses_i18n_copy_for_warning_and_user_visible_text(mock_page: Pa
     )
     expect(mock_page.locator("[data-testid='character-personality-skip']")).to_have_text("Maybe later")
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-warning']:visible")).to_have_text(
         "Heads up, nya: switching my personality clears this character's recent chat context."
     )
@@ -1629,20 +1629,86 @@ def test_onboarding_uses_dynamic_character_name_and_split_detail_pills(mock_page
 
     expect(mock_page.locator(".cph-badge")).to_have_text("小天")
 
-    mock_page.locator("[data-testid='character-personality-preset-classic_genki']").click()
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
 
-    expect(mock_page.locator("#previewTitleBadge")).to_have_text("经典元气猫娘")
+    expect(mock_page.locator("#previewTitleBadge")).to_have_text("病弱妹妹")
     expect(mock_page.locator(".preview-avatar")).to_have_text("小天")
 
     speech_pills = mock_page.locator("#detailSpeechHabits .detail-pill")
     expect(speech_pills).to_have_count(2)
-    expect(speech_pills.nth(0)).to_have_text("太棒了喵！")
-    expect(speech_pills.nth(1)).to_have_text("喵呜~")
+    expect(speech_pills.nth(0)).to_have_text("短句轻声")
+    expect(speech_pills.nth(1)).to_have_text("偶尔停顿")
 
     hobby_pills = mock_page.locator("#detailAtmosphere .detail-pill")
     expect(hobby_pills).to_have_count(2)
-    expect(hobby_pills.nth(0)).to_have_text("陪伴")
-    expect(hobby_pills.nth(1)).to_have_text("温暖")
+    expect(hobby_pills.nth(0)).to_have_text("热饮")
+    expect(hobby_pills.nth(1)).to_have_text("毛毯")
+
+
+@pytest.mark.frontend
+def test_onboarding_persona_grid_is_two_columns_on_desktop_and_one_on_mobile(mock_page: Page):
+    mock_page.set_viewport_size({"width": 1280, "height": 768})
+    _bootstrap_page(mock_page)
+    mock_page.evaluate(
+        """
+        () => {
+            window.universalTutorialManager.isTutorialRunning = false;
+            const originalFetch = window.fetch;
+            window.fetch = async function(url, options) {
+                if (new URL(String(url), window.location.origin).pathname === '/api/characters/persona-presets') {
+                    const ids = [
+                        'frail_younger_sister',
+                        'empathetic_older_sister',
+                        'sharp_tongued_junior',
+                        'chaotic_online_friend',
+                    ];
+                    return new Response(JSON.stringify({
+                        success: true,
+                        presets: ids.map((presetId, index) => ({
+                            preset_id: presetId,
+                            display_name: `人格${index + 1}`,
+                            summary_fallback: '简短的人格介绍文字',
+                            preview_line: '这是一句用于检查紧凑布局的开口预览。',
+                            profile: {'性格原型': `人格${index + 1}`},
+                        })),
+                    }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                }
+                return originalFetch(url, options);
+            };
+        }
+        """
+    )
+    mock_page.add_style_tag(path=str(PROJECT_ROOT / "static" / "css" / "character_personality_onboarding.css"))
+    mock_page.add_script_tag(path=str(PROJECT_ROOT / "static" / "js" / "character_personality_onboarding.js"))
+    mock_page.evaluate("() => { window.CharacterPersonalityOnboarding.bootstrap(); }")
+
+    expect(mock_page.locator(".character-personality-card")).to_have_count(4)
+    desktop_columns = mock_page.locator(".character-personality-grid").evaluate(
+        "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+    )
+    assert desktop_columns == 2
+    desktop_fit = mock_page.evaluate(
+        """
+        () => {
+            const shell = document.querySelector('.character-personality-shell');
+            const actions = document.querySelector('.character-personality-actions');
+            return {
+                actionsBottom: actions.getBoundingClientRect().bottom,
+                viewportHeight: window.innerHeight,
+                shellClientHeight: shell.clientHeight,
+                shellScrollHeight: shell.scrollHeight,
+            };
+        }
+        """
+    )
+    assert desktop_fit["actionsBottom"] <= desktop_fit["viewportHeight"]
+    assert desktop_fit["shellScrollHeight"] <= desktop_fit["shellClientHeight"] + 1
+
+    mock_page.set_viewport_size({"width": 680, "height": 900})
+    mobile_columns = mock_page.locator(".character-personality-grid").evaluate(
+        "element => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+    )
+    assert mobile_columns == 1
 
 
 @pytest.mark.frontend
@@ -1663,9 +1729,9 @@ def test_character_panel_exposes_personality_actions(mock_page: Page, running_se
                 '昵称': '测试',
                 '_reserved': {
                     'persona_override': {
-                        'preset_id': 'classic_genki',
+                        'preset_id': 'frail_younger_sister',
                         'profile': {
-                            '性格原型': '经典元气猫娘'
+                            '性格原型': '病弱妹妹'
                         }
                     }
                 }
@@ -1795,7 +1861,7 @@ def test_character_panel_close_removes_personality_update_listener(mock_page: Pa
             await closeCatgirlPanel();
 
             window.dispatchEvent(new CustomEvent('neko:character-personality-updated', {
-                detail: { characterName: '测试角色', presetId: 'classic_genki' }
+                detail: { characterName: '测试角色', presetId: 'frail_younger_sister' }
             }));
 
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -1857,7 +1923,7 @@ def test_character_panel_close_drops_late_personality_refresh_callback(mock_page
             }, false, host);
 
             window.dispatchEvent(new CustomEvent('neko:character-personality-updated', {
-                detail: { characterName: '测试角色', presetId: 'classic_genki' }
+                detail: { characterName: '测试角色', presetId: 'frail_younger_sister' }
             }));
 
             await new Promise(resolve => setTimeout(resolve, 20));
@@ -1866,7 +1932,7 @@ def test_character_panel_close_drops_late_personality_refresh_callback(mock_page
             await new Promise(resolve => setTimeout(resolve, 80));
 
             window.dispatchEvent(new CustomEvent('neko:character-personality-updated', {
-                detail: { characterName: '测试角色', presetId: 'classic_genki' }
+                detail: { characterName: '测试角色', presetId: 'frail_younger_sister' }
             }));
             await new Promise(resolve => setTimeout(resolve, 50));
 

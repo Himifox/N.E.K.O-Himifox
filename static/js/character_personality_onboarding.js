@@ -731,9 +731,10 @@
 
         getPresetHighlights(preset) {
             const highlightMap = {
-                classic_genki: ['高共情', '贴贴型', '情绪充电'],
-                tsundere_helper: ['嘴硬心软', '高可靠', '吐槽式偏爱'],
-                elegant_butler: ['稳妥周全', '优雅克制', '先你一步'],
+                frail_younger_sister: ['轻声慢语', '黏人克制', '怕添麻烦'],
+                empathetic_older_sister: ['情绪洞察', '温柔坚定', '藏起疲惫'],
+                sharp_tongued_junior: ['精准挑刺', '行动可靠', '嘴硬吃醋'],
+                chaotic_online_friend: ['高浓度接梗', '平等损友', '认真就卡壳'],
             };
             const presetId = preset && preset.preset_id;
             const fallbacks = highlightMap[presetId] || [];
