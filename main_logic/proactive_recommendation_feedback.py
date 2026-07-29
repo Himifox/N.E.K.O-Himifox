@@ -503,20 +503,31 @@ def register_pending_feedback_from_observation(
         return None
     matched_material = observation.get("matched_actual_material") is True
     active_preference = observation.get("active_bias_applied") is True
-    source_type = _normalize_source_type(
-        observation.get("active_preferred_source_type")
-        if matched_material and active_preference
-        else observation.get("shadow_selected_source_type")
-        if matched_material
-        else observation.get("actual_primary_channel")
+    policy = observation.get("policy_decision")
+    policy_v2 = (
+        policy
+        if isinstance(policy, Mapping)
+        and policy.get("context_version") == "source-context-v2"
+        else None
     )
-    candidate_id = None
-    if matched_material:
-        candidate_id = _clean_text(
-            observation.get("active_preferred_candidate_id")
-            if active_preference
-            else observation.get("shadow_selected_candidate_id")
-        ) or None
+    if policy_v2 is not None and policy_v2.get("actual_arm"):
+        source_type = _normalize_source_type(policy_v2.get("actual_arm"))
+        candidate_id = _clean_text(policy_v2.get("actual_candidate_id")) or None
+    else:
+        source_type = _normalize_source_type(
+            observation.get("active_preferred_source_type")
+            if matched_material and active_preference
+            else observation.get("shadow_selected_source_type")
+            if matched_material
+            else observation.get("actual_primary_channel")
+        )
+        candidate_id = None
+        if matched_material:
+            candidate_id = _clean_text(
+                observation.get("active_preferred_candidate_id")
+                if active_preference
+                else observation.get("shadow_selected_candidate_id")
+            ) or None
     return register_pending_feedback(
         lanlan_name=lanlan_name,
         turn_id=turn_id,
@@ -709,6 +720,7 @@ def record_feedback_event_with_status(
                         success=outcome[0],
                         failure=outcome[1],
                         explicit=outcome[2],
+                        outcome_strength=max(outcome[0], outcome[1]),
                         now=_number(event.get("ts"), time.time()),
                     )
                     preference_state_updated = True

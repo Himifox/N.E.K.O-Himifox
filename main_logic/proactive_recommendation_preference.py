@@ -90,6 +90,7 @@ def update_recommendation_source_preference(
     success: float,
     failure: float,
     explicit: bool,
+    outcome_strength: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Apply at most one source outcome per turn, with explicit feedback winning."""
@@ -99,6 +100,9 @@ def update_recommendation_source_preference(
     current = time.time() if now is None else float(now)
     win = _bounded_reward(success)
     loss = _bounded_reward(failure)
+    strength = _bounded_reward(
+        max(win, loss) if outcome_strength is None else outcome_strength
+    )
     if root is None or not turn or not source or (win == 0 and loss == 0):
         return get_recommendation_preference_state(config_dir=config_dir, now=current)
 
@@ -108,21 +112,45 @@ def update_recommendation_source_preference(
         outcome_key = f"{turn}|{source}"
         previous = outcomes.get(outcome_key)
         priority = 2 if explicit else 1
-        if isinstance(previous, Mapping) and int(previous.get("priority", 0)) >= priority:
-            return _public_state(state, current)
+        if isinstance(previous, Mapping):
+            previous_priority = int(previous.get("priority", 0))
+            previous_strength = _bounded_reward(
+                previous.get(
+                    "outcome_strength",
+                    max(
+                        _bounded_reward(previous.get("success")),
+                        _bounded_reward(previous.get("failure")),
+                    ),
+                )
+            )
+            if previous_priority > priority or (
+                previous_priority == priority
+                and previous_strength >= strength
+            ):
+                return _public_state(state, current)
 
         bucket = state["sources"].setdefault(source, _empty_bucket(current))
         _decay_bucket(bucket, current)
         if isinstance(previous, Mapping):
+            recorded_at = max(0.0, _finite(previous.get("recorded_at")))
+            if recorded_at <= 0.0:
+                recorded_at = max(0.0, _finite(previous.get("updated_at")))
+            if recorded_at <= 0.0:
+                previous_factor = 1.0
+                state["legacy_replacement_approximation_count"] = (
+                    int(state.get("legacy_replacement_approximation_count", 0)) + 1
+                )
+            else:
+                previous_factor = _decay_factor(recorded_at, current)
             bucket["effective_success"] = max(
                 0.0,
                 float(bucket["effective_success"])
-                - _bounded_reward(previous.get("success")),
+                - _bounded_reward(previous.get("success")) * previous_factor,
             )
             bucket["effective_failure"] = max(
                 0.0,
                 float(bucket["effective_failure"])
-                - _bounded_reward(previous.get("failure")),
+                - _bounded_reward(previous.get("failure")) * previous_factor,
             )
         bucket["effective_success"] += win
         bucket["effective_failure"] += loss
@@ -133,6 +161,8 @@ def update_recommendation_source_preference(
             "success": win,
             "failure": loss,
             "priority": priority,
+            "outcome_strength": strength,
+            "recorded_at": current,
             "updated_at": current,
         }
         _trim_outcomes(outcomes)
@@ -225,6 +255,9 @@ def _public_state(state: Mapping[str, Any], now: float) -> dict[str, Any]:
         "min_evidence": PREFERENCE_MIN_EVIDENCE,
         "saturation_evidence": PREFERENCE_SATURATION_EVIDENCE,
         "max_abs_delta": PREFERENCE_MAX_ABS_DELTA,
+        "legacy_replacement_approximation_count": max(
+            0, int(state.get("legacy_replacement_approximation_count", 0))
+        ),
         "sources": public_sources,
     }
 
@@ -255,6 +288,9 @@ def _load_state(root: Path) -> dict[str, Any]:
         "version": PREFERENCE_STATE_VERSION,
         "sources": sources,
         "recent_source_outcomes": outcomes,
+        "legacy_replacement_approximation_count": int(
+            _bounded_count(raw.get("legacy_replacement_approximation_count"))
+        ),
     }
 
 
@@ -270,8 +306,7 @@ def _save_state(root: Path, state: Mapping[str, Any]) -> None:
 
 def _decay_bucket(bucket: dict[str, Any], now: float) -> None:
     updated_at = max(0.0, _finite(bucket.get("updated_at")))
-    elapsed = max(0.0, now - updated_at) if updated_at else 0.0
-    factor = 0.5 ** (elapsed / PREFERENCE_HALF_LIFE_SECONDS)
+    factor = _decay_factor(updated_at, now) if updated_at else 1.0
     bucket["effective_success"] = _bounded_count(bucket.get("effective_success")) * factor
     bucket["effective_failure"] = _bounded_count(bucket.get("effective_failure")) * factor
     bucket["updated_at"] = now if updated_at else now
@@ -293,6 +328,7 @@ def _empty_state() -> dict[str, Any]:
         "version": PREFERENCE_STATE_VERSION,
         "sources": {},
         "recent_source_outcomes": {},
+        "legacy_replacement_approximation_count": 0,
     }
 
 
@@ -319,6 +355,11 @@ def _bounded_reward(value: Any) -> float:
 
 def _bounded_count(value: Any) -> float:
     return _clamp(_finite(value), 0.0, 1_000_000.0)
+
+
+def _decay_factor(recorded_at: float, now: float) -> float:
+    elapsed = max(0.0, now - max(0.0, recorded_at))
+    return 0.5 ** (elapsed / PREFERENCE_HALF_LIFE_SECONDS)
 
 
 def _finite(value: Any) -> float:
