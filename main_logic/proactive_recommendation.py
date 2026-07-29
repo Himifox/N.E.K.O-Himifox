@@ -15,6 +15,9 @@ from typing import Any
 from main_logic.proactive_recommendation_personalization import (
     PERSONALIZATION_MAX_ABS_DELTA,
 )
+from main_logic.proactive_recommendation_bandit import (
+    finalize_source_bandit_decision,
+)
 
 from config.application import APP_VERSION
 
@@ -194,24 +197,30 @@ def build_recommendation_observation(
     delivered = _text(action) == "chat" and normalized_reason == "CHAT_DELIVERED"
     active = _clean_string_list(active_channels)
     actual_rank = None
+    actual_candidate = None
     actual_candidate_score = None
     actual_candidate_id = None
     if delivered:
-        rank, candidate = _find_actual_candidate_match(
+        rank, actual_candidate = _find_actual_candidate_match(
             decision.ranked_candidates,
             source_links=source_links,
             source_mode=actual_primary_channel,
             source_tag=source_tag,
             active_channels=active,
         )
-        if rank is not None and candidate is not None:
+        if rank is not None and actual_candidate is not None:
             actual_rank = rank
-            actual_candidate_score = round(candidate.score, 3)
-            actual_candidate_id = candidate.id
+            actual_candidate_score = round(actual_candidate.score, 3)
+            actual_candidate_id = actual_candidate.id
+    finalized_policy_decision = finalize_source_bandit_decision(
+        policy_decision,
+        actual_candidate=actual_candidate,
+        delivered=delivered,
+    )
     actual_aliases = _actual_source_aliases(actual_primary_channel, source_tag, active)
     policy_mode = (
-        _text(policy_decision.get("mode"))
-        if isinstance(policy_decision, Mapping)
+        _text(finalized_policy_decision.get("mode"))
+        if isinstance(finalized_policy_decision, Mapping)
         else ""
     )
     expected_source = (
@@ -260,7 +269,9 @@ def build_recommendation_observation(
             dict(decision_context) if isinstance(decision_context, Mapping) else None
         ),
         "policy_decision": (
-            dict(policy_decision) if isinstance(policy_decision, Mapping) else None
+            finalized_policy_decision
+            if isinstance(finalized_policy_decision, Mapping)
+            else None
         ),
         "recommendation_mode": _text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,
@@ -280,6 +291,7 @@ def build_recommendation_observation(
         "active_channels": active,
         "delivered": delivered,
         "actual_rank": actual_rank,
+        "actual_candidate_id": actual_candidate_id,
         "actual_candidate_score": actual_candidate_score,
         "matched_actual_material": matched_actual_material,
         "matched_actual_source": matched_actual_source,

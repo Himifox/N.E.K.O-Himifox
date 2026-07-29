@@ -70,6 +70,7 @@ _TOP_LEVEL_KEYS = {
     "active_channels",
     "delivered",
     "actual_rank",
+    "actual_candidate_id",
     "actual_candidate_score",
     "matched_actual_material",
     "matched_actual_source",
@@ -403,6 +404,9 @@ def sanitize_recommendation_preference_state(value: Any) -> dict[str, Any]:
         "min_evidence": _bounded_optional_number(value.get("min_evidence"), lower=0.0, upper=1000.0),
         "saturation_evidence": _bounded_optional_number(value.get("saturation_evidence"), lower=0.0, upper=1000.0),
         "max_abs_delta": _bounded_optional_number(value.get("max_abs_delta"), lower=0.0, upper=0.03),
+        "legacy_replacement_approximation_count": _bounded_nonnegative_int(
+            value.get("legacy_replacement_approximation_count")
+        ),
         "sources": sources,
     }
 
@@ -414,37 +418,151 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     mode = str(value.get("mode") or "").strip().lower()
     if mode not in {"shadow", "canary"}:
         return {}
+    context_version = str(
+        value.get("context_version") or "source-context-v1"
+    ).strip()
+    is_v2 = context_version == "source-context-v2"
+    if context_version not in {"source-context-v1", "source-context-v2"}:
+        return {}
     eligible = [
         item for item in _clean_string_list(value.get("eligible_arms"))
         if item in {"news", "music", "meme"}
     ]
-    probabilities = value.get("action_probabilities")
-    if not isinstance(probabilities, Mapping):
+    target_probabilities = value.get(
+        "target_action_probabilities" if is_v2 else "action_probabilities"
+    )
+    if not isinstance(target_probabilities, Mapping):
         return {}
-    safe_probabilities = {
-        arm: _bounded_optional_number(probabilities.get(arm), lower=0.0, upper=1.0)
+    safe_target_probabilities = {
+        arm: _bounded_optional_number(
+            target_probabilities.get(arm), lower=0.0, upper=1.0
+        )
         for arm in eligible
     }
-    if any(number is None for number in safe_probabilities.values()):
+    if any(number is None for number in safe_target_probabilities.values()):
         return {}
-    if eligible and abs(sum(float(number) for number in safe_probabilities.values()) - 1.0) > 1e-9:
+    if eligible and abs(
+        sum(float(number) for number in safe_target_probabilities.values()) - 1.0
+    ) > 1e-9:
         return {}
-    chosen = str(value.get("chosen_arm") or "").strip().lower() or None
-    if chosen is not None and chosen not in eligible:
+    proposed = str(
+        (
+            value.get("proposed_arm")
+            if is_v2
+            else value.get("chosen_arm")
+        )
+        or ""
+    ).strip().lower() or None
+    if proposed is not None and proposed not in eligible:
         return {}
-    chosen_probability = (
-        safe_probabilities.get(chosen) if chosen is not None else None
+    proposed_probability = (
+        safe_target_probabilities.get(proposed) if proposed is not None else None
     )
-    raw_scores = value.get("arm_scores")
-    raw_posteriors = value.get("arm_posteriors")
-    arm_scores = {
+    actual = (
+        str(value.get("actual_arm") or "").strip().lower() or None
+        if is_v2
+        else None
+    )
+    if actual is not None and actual not in {
+        "news",
+        "music",
+        "meme",
+        "vision",
+        "video",
+        "chat",
+        "mini_game",
+    }:
+        return {}
+    raw_behavior = value.get("behavior_action_probabilities") if is_v2 else {}
+    if not isinstance(raw_behavior, Mapping):
+        return {}
+    behavior_present = bool(raw_behavior)
+    safe_behavior = (
+        {
+            arm: _bounded_optional_number(
+                raw_behavior.get(arm), lower=0.0, upper=1.0
+            )
+            for arm in eligible
+        }
+        if behavior_present
+        else {}
+    )
+    if behavior_present and any(
+        number is None for number in safe_behavior.values()
+    ):
+        return {}
+    if behavior_present and abs(
+        sum(float(number) for number in safe_behavior.values()) - 1.0
+    ) > 1e-9:
+        return {}
+    actual_probability = (
+        safe_behavior.get(actual)
+        if actual is not None and actual in safe_behavior and behavior_present
+        else None
+    )
+    if is_v2 and value.get("actual_action_probability") is not None:
+        logged_actual_probability = _bounded_optional_number(
+            value.get("actual_action_probability"), lower=0.0, upper=1.0
+        )
+        if (
+            logged_actual_probability is None
+            or actual_probability is None
+            or abs(float(logged_actual_probability) - float(actual_probability)) > 1e-9
+        ):
+            return {}
+    policy_applied = is_v2 and value.get("policy_applied") is True
+    proposed_candidate_id = str(
+        (
+            value.get("proposed_candidate_id")
+            if is_v2
+            else value.get("chosen_candidate_id")
+        )
+        or ""
+    )[:160] or None
+    actual_candidate_id = (
+        str(value.get("actual_candidate_id") or "")[:160] or None
+        if is_v2
+        else None
+    )
+    if policy_applied and not (
+        mode == "canary"
+        and actual == proposed
+        and actual_candidate_id
+        and actual_candidate_id == proposed_candidate_id
+        and behavior_present
+    ):
+        return {}
+    raw_baseline_scores = (
+        value.get("arm_baseline_scores") if is_v2 else value.get("arm_scores")
+    )
+    raw_policy_scores = (
+        value.get("arm_policy_scores") if is_v2 else value.get("arm_scores")
+    )
+    arm_baseline_scores = {
         arm: _bounded_optional_number(
-            raw_scores.get(arm) if isinstance(raw_scores, Mapping) else None,
+            raw_baseline_scores.get(arm)
+            if isinstance(raw_baseline_scores, Mapping)
+            else None,
             lower=0.0,
             upper=1.0,
         )
         for arm in eligible
     }
+    arm_policy_scores = {
+        arm: _bounded_optional_number(
+            raw_policy_scores.get(arm)
+            if isinstance(raw_policy_scores, Mapping)
+            else None,
+            lower=0.0,
+            upper=1.0,
+        )
+        for arm in eligible
+    }
+    if any(number is None for number in arm_policy_scores.values()) or (
+        is_v2 and any(number is None for number in arm_baseline_scores.values())
+    ):
+        return {}
+    raw_posteriors = value.get("arm_posteriors")
     arm_posteriors: dict[str, dict[str, Any]] = {}
     for arm in eligible:
         bucket = raw_posteriors.get(arm) if isinstance(raw_posteriors, Mapping) else None
@@ -459,21 +577,37 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     return {
         "policy_id": "source_epsilon_greedy_v1",
         "mode": mode,
+        "score_contract": (
+            str(value.get("score_contract") or "")[:80]
+            if is_v2
+            else "legacy-candidate-score-v1"
+        ),
         "eligible_arms": eligible,
         "near_tie_arms": [
             arm for arm in _clean_string_list(value.get("near_tie_arms"))
             if arm in eligible
         ],
-        "chosen_arm": chosen,
-        "chosen_candidate_id": str(value.get("chosen_candidate_id") or "")[:160] or None,
+        "proposed_arm": proposed,
+        "proposed_candidate_id": proposed_candidate_id,
+        "actual_arm": actual,
+        "actual_candidate_id": actual_candidate_id,
+        "policy_applied": policy_applied,
+        "chosen_arm": proposed,
+        "chosen_candidate_id": proposed_candidate_id,
         "exploit_arm": str(value.get("exploit_arm") or "").strip().lower() or None,
-        "action_probabilities": safe_probabilities,
-        "chosen_action_probability": chosen_probability,
+        "target_action_probabilities": safe_target_probabilities,
+        "behavior_action_probabilities": safe_behavior if behavior_present else {},
+        "actual_action_probability": actual_probability,
+        "action_probabilities": safe_target_probabilities,
+        "chosen_action_probability": proposed_probability,
         "exploration_eligible": value.get("exploration_eligible") is True,
         "explored": value.get("explored") is True,
-        "context_version": "source-context-v1",
-        "arm_scores": arm_scores,
+        "context_version": context_version,
+        "arm_baseline_scores": arm_baseline_scores,
+        "arm_policy_scores": arm_policy_scores,
+        "arm_scores": arm_policy_scores,
         "arm_posteriors": arm_posteriors,
+        "fallback_reason": str(value.get("fallback_reason") or "")[:120] or None,
     }
 
 
@@ -482,8 +616,10 @@ def summarize_recommendation_policy(
 ) -> dict[str, Any]:
     """Summarize policy exposure and propensity integrity for runtime monitoring."""
     modes: Counter[str] = Counter()
-    choices: Counter[str] = Counter()
+    proposals: Counter[str] = Counter()
+    actuals: Counter[str] = Counter()
     policy_count = 0
+    applied_count = 0
     explored_count = 0
     exploration_eligible_count = 0
     probability_violation_count = 0
@@ -497,23 +633,32 @@ def summarize_recommendation_policy(
             probability_violation_count += 1
             continue
         modes[str(policy["mode"])] += 1
-        chosen = str(policy.get("chosen_arm") or "")
-        if chosen:
-            choices[chosen] += 1
+        proposed = str(policy.get("proposed_arm") or policy.get("chosen_arm") or "")
+        actual = str(policy.get("actual_arm") or "")
+        if proposed:
+            proposals[proposed] += 1
+        if actual:
+            actuals[actual] += 1
+        elif policy.get("context_version") == "source-context-v1" and proposed:
+            actuals[proposed] += 1
+        applied_count += int(policy.get("policy_applied") is True)
         exploration_eligible_count += int(
             policy.get("exploration_eligible") is True
         )
         explored_count += int(policy.get("explored") is True)
-    total_choices = sum(choices.values())
+    total_choices = sum(actuals.values())
     distribution = {
         source: round(count / total_choices, 6) if total_choices else 0.0
-        for source, count in sorted(choices.items())
+        for source, count in sorted(actuals.items())
     }
     return {
         "policy_observation_count": policy_count,
         "valid_policy_observation_count": policy_count - probability_violation_count,
         "mode_distribution": dict(sorted(modes.items())),
-        "chosen_arm_count": dict(sorted(choices.items())),
+        "proposed_arm_count": dict(sorted(proposals.items())),
+        "actual_arm_count": dict(sorted(actuals.items())),
+        "policy_applied_count": applied_count,
+        "chosen_arm_count": dict(sorted(proposals.items())),
         "chosen_arm_distribution": distribution,
         "exploration_eligible_count": exploration_eligible_count,
         "explored_count": explored_count,

@@ -42,6 +42,8 @@ from main_logic.proactive_recommendation_feedback import (
 )
 from main_logic.proactive_recommendation_feedback_state import get_feedback_state_preview
 from main_logic.proactive_recommendation_bandit import (
+    BANDIT_BASELINE_SCORE_CONTRACT,
+    BANDIT_PERSONALIZED_SCORE_CONTRACT,
     bandit_preferred_candidate,
     build_source_bandit_decision,
 )
@@ -437,6 +439,11 @@ class RecommendationTurn:
                 self.material_decision,
                 mode=effective_bandit_mode,
                 preference_state=self.preference_state_snapshot,
+                score_contract=(
+                    BANDIT_PERSONALIZED_SCORE_CONTRACT
+                    if self.personalization_mode in {"shadow_compare", "active"}
+                    else BANDIT_BASELINE_SCORE_CONTRACT
+                ),
             )
         if self.mode != "active_source":
             return phase1_topics
