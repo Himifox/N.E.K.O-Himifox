@@ -39,7 +39,7 @@ _SOURCE_TYPE_SCORE_ADJUSTMENTS = {
 }
 
 PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION = (
-    f"{APP_VERSION}:proactive-recommendation-observation-v4"
+    f"{APP_VERSION}:proactive-recommendation-observation-v5"
 )
 # Build environments may inject a revision once at process start. Never shell
 # out per observation: logging must remain cheap and work in packaged builds.
@@ -182,6 +182,7 @@ def build_recommendation_observation(
     git_revision: Any = None,
     review_context: Mapping[str, Any] | None = None,
     decision_context: Mapping[str, Any] | None = None,
+    policy_decision: Mapping[str, Any] | None = None,
     top_n: int = 3,
 ) -> dict[str, Any]:
     shadow_source = decision.shadow_selected_source_type
@@ -208,17 +209,32 @@ def build_recommendation_observation(
             actual_candidate_score = round(candidate.score, 3)
             actual_candidate_id = candidate.id
     actual_aliases = _actual_source_aliases(actual_primary_channel, source_tag, active)
+    policy_mode = (
+        _text(policy_decision.get("mode"))
+        if isinstance(policy_decision, Mapping)
+        else ""
+    )
+    expected_source = (
+        _text(active_bias_info.get("preferred_source_type"))
+        if policy_mode == "canary" and active_bias_info.get("applied") is True
+        else shadow_source
+    )
     matched_actual_source = bool(
         delivered
-        and shadow_source
-        and _source_type_matches(shadow_source, actual_aliases)
+        and expected_source
+        and _source_type_matches(expected_source, actual_aliases)
     )
     shadow_candidate_id = decision.selected_candidate.id if decision.selected_candidate else None
+    expected_candidate_id = (
+        _text(active_bias_info.get("preferred_candidate_id"))
+        if policy_mode == "canary" and active_bias_info.get("applied") is True
+        else shadow_candidate_id
+    )
     matched_actual_material = bool(
         delivered
-        and shadow_candidate_id
+        and expected_candidate_id
         and actual_candidate_id
-        and shadow_candidate_id == actual_candidate_id
+        and expected_candidate_id == actual_candidate_id
     )
     active_bias_applied = active_bias_info.get("applied") is True
     active_model_followed_preference = bool(
@@ -242,6 +258,9 @@ def build_recommendation_observation(
         "review_context": dict(review_context) if isinstance(review_context, Mapping) else None,
         "decision_context": (
             dict(decision_context) if isinstance(decision_context, Mapping) else None
+        ),
+        "policy_decision": (
+            dict(policy_decision) if isinstance(policy_decision, Mapping) else None
         ),
         "recommendation_mode": _text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,

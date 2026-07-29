@@ -53,7 +53,9 @@ _TOP_LEVEL_KEYS = {
     "review_context",
     "decision_context",
     "feedback_state_preview",
+    "preference_state",
     "personalization",
+    "policy_decision",
     "recommendation_mode",
     "decision_stage",
     "candidate_count",
@@ -150,12 +152,22 @@ def sanitize_recommendation_observation(observation: Mapping[str, Any]) -> dict[
             )
             if state_preview:
                 safe[key] = state_preview
+        elif key == "preference_state":
+            preference_state = sanitize_recommendation_preference_state(
+                observation.get(key)
+            )
+            if preference_state:
+                safe[key] = preference_state
         elif key == "personalization":
             personalization = sanitize_recommendation_personalization(
                 observation.get(key)
             )
             if personalization:
                 safe[key] = personalization
+        elif key == "policy_decision":
+            policy = sanitize_recommendation_policy_decision(observation.get(key))
+            if policy:
+                safe[key] = policy
         elif key == "active_channels":
             safe[key] = _clean_string_list(observation.get(key))
         else:
@@ -331,6 +343,137 @@ def sanitize_recommendation_personalization(value: Any) -> dict[str, Any]:
         or None,
         "top1_changed": value.get("top1_changed") is True,
         "candidates": safe_candidates,
+    }
+
+
+def sanitize_recommendation_preference_state(value: Any) -> dict[str, Any]:
+    """Keep only the public, bounded preference snapshot."""
+    if not isinstance(value, Mapping):
+        return {}
+    if value.get("version") != "recommendation_preference_state_v1":
+        return {}
+    raw_sources = value.get("sources")
+    if not isinstance(raw_sources, Mapping):
+        return {}
+    sources: dict[str, dict[str, Any]] = {}
+    for raw_source, raw_bucket in raw_sources.items():
+        source = str(raw_source or "").strip().lower()[:32]
+        if not source or not isinstance(raw_bucket, Mapping):
+            continue
+        sources[source] = {
+            "effective_success": _bounded_optional_number(
+                raw_bucket.get("effective_success"), lower=0.0, upper=1_000_000.0
+            ),
+            "effective_failure": _bounded_optional_number(
+                raw_bucket.get("effective_failure"), lower=0.0, upper=1_000_000.0
+            ),
+            "effective_evidence": _bounded_optional_number(
+                raw_bucket.get("effective_evidence"), lower=0.0, upper=1_000_000.0
+            ),
+            "posterior_alpha": _bounded_optional_number(
+                raw_bucket.get("posterior_alpha"), lower=0.0, upper=1_000_002.0
+            ),
+            "posterior_beta": _bounded_optional_number(
+                raw_bucket.get("posterior_beta"), lower=0.0, upper=1_000_002.0
+            ),
+            "posterior_mean": _bounded_optional_number(
+                raw_bucket.get("posterior_mean"), lower=0.0, upper=1.0
+            ),
+            "direction": _bounded_optional_number(
+                raw_bucket.get("direction"), lower=-1.0, upper=1.0
+            ),
+            "confidence": _bounded_optional_number(
+                raw_bucket.get("confidence"), lower=0.0, upper=1.0
+            ),
+            "personalization_delta": _bounded_optional_number(
+                raw_bucket.get("personalization_delta"), lower=-0.03, upper=0.03
+            ),
+            "updated_at": _bounded_optional_number(
+                raw_bucket.get("updated_at"), lower=0.0, upper=4_102_444_800.0
+            ),
+        }
+    prior = value.get("beta_prior") if isinstance(value.get("beta_prior"), Mapping) else {}
+    return {
+        "version": "recommendation_preference_state_v1",
+        "half_life_seconds": _bounded_nonnegative_int(value.get("half_life_seconds")),
+        "beta_prior": {
+            "alpha": _bounded_optional_number(prior.get("alpha"), lower=0.0, upper=100.0),
+            "beta": _bounded_optional_number(prior.get("beta"), lower=0.0, upper=100.0),
+        },
+        "min_evidence": _bounded_optional_number(value.get("min_evidence"), lower=0.0, upper=1000.0),
+        "saturation_evidence": _bounded_optional_number(value.get("saturation_evidence"), lower=0.0, upper=1000.0),
+        "max_abs_delta": _bounded_optional_number(value.get("max_abs_delta"), lower=0.0, upper=0.03),
+        "sources": sources,
+    }
+
+
+def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
+    """Validate source-bandit action support and propensity logging."""
+    if not isinstance(value, Mapping):
+        return {}
+    mode = str(value.get("mode") or "").strip().lower()
+    if mode not in {"shadow", "canary"}:
+        return {}
+    eligible = [
+        item for item in _clean_string_list(value.get("eligible_arms"))
+        if item in {"news", "music", "meme"}
+    ]
+    probabilities = value.get("action_probabilities")
+    if not isinstance(probabilities, Mapping):
+        return {}
+    safe_probabilities = {
+        arm: _bounded_optional_number(probabilities.get(arm), lower=0.0, upper=1.0)
+        for arm in eligible
+    }
+    if any(number is None for number in safe_probabilities.values()):
+        return {}
+    if eligible and abs(sum(float(number) for number in safe_probabilities.values()) - 1.0) > 1e-9:
+        return {}
+    chosen = str(value.get("chosen_arm") or "").strip().lower() or None
+    if chosen is not None and chosen not in eligible:
+        return {}
+    chosen_probability = (
+        safe_probabilities.get(chosen) if chosen is not None else None
+    )
+    raw_scores = value.get("arm_scores")
+    raw_posteriors = value.get("arm_posteriors")
+    arm_scores = {
+        arm: _bounded_optional_number(
+            raw_scores.get(arm) if isinstance(raw_scores, Mapping) else None,
+            lower=0.0,
+            upper=1.0,
+        )
+        for arm in eligible
+    }
+    arm_posteriors: dict[str, dict[str, Any]] = {}
+    for arm in eligible:
+        bucket = raw_posteriors.get(arm) if isinstance(raw_posteriors, Mapping) else None
+        if not isinstance(bucket, Mapping):
+            bucket = {}
+        arm_posteriors[arm] = {
+            "alpha": _bounded_optional_number(bucket.get("alpha"), lower=0.0, upper=1_000_002.0),
+            "beta": _bounded_optional_number(bucket.get("beta"), lower=0.0, upper=1_000_002.0),
+            "mean": _bounded_optional_number(bucket.get("mean"), lower=0.0, upper=1.0),
+            "evidence": _bounded_optional_number(bucket.get("evidence"), lower=0.0, upper=1_000_000.0),
+        }
+    return {
+        "policy_id": "source_epsilon_greedy_v1",
+        "mode": mode,
+        "eligible_arms": eligible,
+        "near_tie_arms": [
+            arm for arm in _clean_string_list(value.get("near_tie_arms"))
+            if arm in eligible
+        ],
+        "chosen_arm": chosen,
+        "chosen_candidate_id": str(value.get("chosen_candidate_id") or "")[:160] or None,
+        "exploit_arm": str(value.get("exploit_arm") or "").strip().lower() or None,
+        "action_probabilities": safe_probabilities,
+        "chosen_action_probability": chosen_probability,
+        "exploration_eligible": value.get("exploration_eligible") is True,
+        "explored": value.get("explored") is True,
+        "context_version": "source-context-v1",
+        "arm_scores": arm_scores,
+        "arm_posteriors": arm_posteriors,
     }
 
 

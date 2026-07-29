@@ -11,7 +11,11 @@ from threading import RLock
 import time
 from typing import Any
 
-from config import PROACTIVE_RECOMMENDATION_MODE
+from config import (
+    PROACTIVE_RECOMMENDATION_BANDIT_MODE,
+    PROACTIVE_RECOMMENDATION_MODE,
+    PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE,
+)
 
 
 VALID_RECOMMENDATION_MODES = frozenset({"off", "shadow", "active_source"})
@@ -43,6 +47,12 @@ class RecommendationRuntimeState:
                 "configured_mode": self._startup_mode,
                 "effective_mode": self._effective_mode,
                 "active_source_enabled": self._effective_mode == "active_source",
+                "bandit_configured_mode": PROACTIVE_RECOMMENDATION_BANDIT_MODE,
+                "bandit_canary_effective": (
+                    self._effective_mode == "active_source"
+                    and PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE == "active"
+                    and PROACTIVE_RECOMMENDATION_BANDIT_MODE == "canary"
+                ),
                 "activation_source": "startup_environment_only",
                 "runtime_activation_allowed": False,
                 "rollback_available": self._effective_mode == "active_source",

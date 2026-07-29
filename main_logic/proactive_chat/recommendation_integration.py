@@ -15,6 +15,7 @@ from uuid import uuid4
 from config import (
     MINI_GAME_INVITE_ENABLED,
     PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
+    PROACTIVE_RECOMMENDATION_BANDIT_MODE,
     PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
@@ -26,6 +27,7 @@ from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
     PROACTIVE_RECOMMENDATION_GIT_REVISION,
     ProactiveRecommendationContext,
+    ProactiveActiveBias,
     build_active_source_bias,
     build_phase1_material_shadow_decision,
     build_recommendation_observation,
@@ -39,6 +41,14 @@ from main_logic.proactive_recommendation_feedback import (
     register_pending_feedback_from_observation,
 )
 from main_logic.proactive_recommendation_feedback_state import get_feedback_state_preview
+from main_logic.proactive_recommendation_bandit import (
+    bandit_preferred_candidate,
+    build_source_bandit_decision,
+)
+from main_logic.proactive_recommendation_preference import (
+    ensure_recommendation_preference_state,
+    preference_adjustments,
+)
 from main_logic.proactive_recommendation_personalization import (
     build_personalization_plan,
     personalization_adjustments,
@@ -91,10 +101,20 @@ def _explicit_feedback_context(
     turn_id = str(observation.get("turn_id") or "").strip()
     if not turn_id:
         return None
-    source = str(observation.get("shadow_selected_source_type") or "").strip().lower()
+    source = str(
+        observation.get("active_preferred_source_type")
+        if observation.get("active_bias_applied") is True
+        else observation.get("shadow_selected_source_type")
+        or ""
+    ).strip().lower()
+    candidate_id = (
+        observation.get("active_preferred_candidate_id")
+        if observation.get("active_bias_applied") is True
+        else observation.get("shadow_selected_candidate_id")
+    )
     source_available = bool(
         observation.get("matched_actual_material") is True
-        and observation.get("shadow_selected_candidate_id")
+        and candidate_id
         and source in _EXPLICIT_FEEDBACK_SOURCES
     )
     display_source = {"web": "news", "window": "vision"}.get(source, source)
@@ -185,6 +205,8 @@ def _record_proactive_recommendation_observation(
     delivered_text: Any = None,
     decision_context: Mapping[str, Any] | None = None,
     feedback_state_snapshot: Mapping[str, Any] | None = None,
+    preference_state_snapshot: Mapping[str, Any] | None = None,
+    policy_decision: Mapping[str, Any] | None = None,
     log: logging.Logger | None = None,
 ) -> dict[str, Any] | None:
     """Build and optionally persist one finalized recommendation observation."""
@@ -227,6 +249,7 @@ def _record_proactive_recommendation_observation(
         git_revision=PROACTIVE_RECOMMENDATION_GIT_REVISION,
         review_context=review_context,
         decision_context=decision_context,
+        policy_decision=policy_decision,
     )
     if feedback_state_snapshot:
         state_snapshot = dict(feedback_state_snapshot)
@@ -237,6 +260,8 @@ def _record_proactive_recommendation_observation(
         state_snapshot["preview_only"] = not ranking_consumed
         state_snapshot["ranking_consumed"] = ranking_consumed
         raw_observation["feedback_state_preview"] = state_snapshot
+    if preference_state_snapshot:
+        raw_observation["preference_state"] = dict(preference_state_snapshot)
     elif recommendation_mode == "shadow" and config_dir is not None:
         raw_observation["feedback_state_preview"] = get_feedback_state_preview(
             config_dir=config_dir, now=observation_ts
@@ -276,6 +301,9 @@ class RecommendationTurn:
     personalization_mode: str = field(init=False)
     feedback_state_snapshot: dict[str, Any] = field(init=False)
     personalization_plan: dict[str, Any] = field(init=False)
+    bandit_mode: str = field(init=False)
+    preference_state_snapshot: dict[str, Any] = field(init=False)
+    policy_decision: dict[str, Any] | None = None
     activity_snapshot: Any = None
     source_decision: Any = None
     material_decision: Any = None
@@ -286,9 +314,19 @@ class RecommendationTurn:
         self.mode = get_recommendation_runtime_mode()
         now = time.time()
         self.personalization_mode = PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
+        self.bandit_mode = PROACTIVE_RECOMMENDATION_BANDIT_MODE
         self.feedback_state_snapshot = get_feedback_state_preview(
             config_dir=self.config_dir,
             now=now,
+        )
+        self.preference_state_snapshot = (
+            ensure_recommendation_preference_state(
+                config_dir=self.config_dir,
+                legacy_preview=self.feedback_state_snapshot,
+                now=now,
+            )
+            if self.personalization_mode != "off" or self.bandit_mode != "off"
+            else {}
         )
         self.personalization_plan = build_personalization_plan(
             self.feedback_state_snapshot,
@@ -341,8 +379,9 @@ class RecommendationTurn:
             ),
             mini_game_available=MINI_GAME_INVITE_ENABLED,
             personalization_mode=self.personalization_mode,
-            personalization_adjustments=personalization_adjustments(
-                self.personalization_plan
+            personalization_adjustments=(
+                preference_adjustments(self.preference_state_snapshot)
+                or personalization_adjustments(self.personalization_plan)
             ),
         )
 
@@ -388,8 +427,41 @@ class RecommendationTurn:
             vision_content=vision_content,
             active_channels=active_channels,
         )
+        effective_bandit_mode = self.bandit_mode
+        if effective_bandit_mode == "canary" and not (
+            self.mode == "active_source" and self.personalization_mode == "active"
+        ):
+            effective_bandit_mode = "shadow"
+        if effective_bandit_mode != "off":
+            self.policy_decision = build_source_bandit_decision(
+                self.material_decision,
+                mode=effective_bandit_mode,
+                preference_state=self.preference_state_snapshot,
+            )
         if self.mode != "active_source":
             return phase1_topics
+        if effective_bandit_mode == "canary" and self.policy_decision:
+            preferred = bandit_preferred_candidate(
+                self.material_decision, self.policy_decision
+            )
+            if preferred is not None:
+                tag = {
+                    "news": "WEB",
+                    "web": "WEB",
+                    "music": "MUSIC",
+                    "meme": "MEME",
+                }.get(str(preferred.source_type).lower())
+                if tag:
+                    self.active_bias = ProactiveActiveBias(
+                        applied=True,
+                        preferred_source_type=preferred.source_type,
+                        preferred_source_tag=tag,
+                        preferred_candidate_id=preferred.id,
+                        score_gap=0.0,
+                    )
+                    return reorder_phase1_topics_for_bias(
+                        phase1_topics, self.active_bias
+                    )
         self.active_bias = build_active_source_bias(
             self.material_decision,
             min_score_gap=PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
@@ -423,6 +495,12 @@ class RecommendationTurn:
             delivered_text=self.delivered_text,
             decision_context=self.decision_context,
             feedback_state_snapshot=self.feedback_state_snapshot,
+            preference_state_snapshot=(
+                self.preference_state_snapshot
+                if self.personalization_mode != "off" or self.bandit_mode != "off"
+                else None
+            ),
+            policy_decision=self.policy_decision,
             log=self.log,
         )
         feedback_context = _explicit_feedback_context(

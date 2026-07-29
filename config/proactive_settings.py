@@ -189,6 +189,18 @@ registered gradual_12 delta. Actual delivery still requires the existing
 ``PROACTIVE_RECOMMENDATION_MODE=active_source`` opt-in.
 """
 
+PROACTIVE_RECOMMENDATION_BANDIT_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_BANDIT_MODE",
+    "off",
+    allowed=("off", "shadow", "canary"),
+)
+"""Constrained source-bandit mode; disabled by default.
+
+``shadow`` records a counterfactual choice. ``canary`` can affect only safe
+near-tie candidates and still requires active personalization plus the
+existing ``active_source`` runtime opt-in.
+"""
+
 EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。
 - 用途：返回情感标签 + score 等短输出。

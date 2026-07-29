@@ -2,6 +2,7 @@
     "proactiveFeedback": {
         "notNow": "今は都合が悪い",
         "lessSource": "{{source}}を減らす",
+        "moreSource": "この{{source}}が好き",
         "saving": "記録中…",
         "recorded": "おすすめ改善のために記録しました",
         "failed": "記録できませんでした。もう一度お試しください。",

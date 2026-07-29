@@ -18,7 +18,13 @@ from statistics import median
 import time
 from typing import Any
 
-from config import PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
+from config import (
+    PROACTIVE_RECOMMENDATION_BANDIT_MODE,
+    PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE,
+)
+from main_logic.proactive_recommendation_preference import (
+    update_recommendation_source_preference,
+)
 from main_logic.proactive_recommendation_feedback_state import (
     update_conversation_acceptance_preview,
     update_source_affinity_preview,
@@ -46,6 +52,7 @@ _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "source_disabled_after": ("settings", -0.35, "medium"),
     "proactive_not_now": ("interrupt", -0.35, "high"),
     "source_not_interested": ("source_preference", -0.35, "high"),
+    "source_interested": ("source_preference", 0.35, "high"),
     "music_played_through": ("music", 0.90, "high"),
     "music_high_completion": ("music", 0.65, "high"),
     "music_mid_completion": ("music", 0.25, "medium"),
@@ -75,6 +82,7 @@ _REWARD_V2_PREVIEW_EVENT_COMPONENTS: dict[str, tuple[str, float]] = {
     "source_disabled_after": ("settings", -0.35),
     "proactive_not_now": ("interrupt", -0.35),
     "source_not_interested": ("settings", -0.35),
+    "source_interested": ("settings", 0.35),
     "music_played_through": ("consumption", 0.90),
     "music_high_completion": ("consumption", 0.65),
     "music_mid_completion": ("consumption", 0.25),
@@ -113,6 +121,7 @@ _CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
 _SOURCE_AFFINITY_EVENT_TYPES = {
     "source_disabled_after",
     "source_not_interested",
+    "source_interested",
     "music_played_through",
     "music_high_completion",
     "music_mid_completion",
@@ -213,6 +222,7 @@ class RecommendationFeedbackRecordResult:
     state_updated: bool = False
     feedback_scope: str = "diagnostic_only"
     state_reason: str = "not_logged"
+    preference_state_updated: bool = False
 
 
 _pending_feedback: dict[tuple[str, str], PendingRecommendationFeedback] = {}
@@ -492,14 +502,21 @@ def register_pending_feedback_from_observation(
     if not lanlan_name or not turn_id:
         return None
     matched_material = observation.get("matched_actual_material") is True
+    active_preference = observation.get("active_bias_applied") is True
     source_type = _normalize_source_type(
-        observation.get("shadow_selected_source_type")
+        observation.get("active_preferred_source_type")
+        if matched_material and active_preference
+        else observation.get("shadow_selected_source_type")
         if matched_material
         else observation.get("actual_primary_channel")
     )
     candidate_id = None
     if matched_material:
-        candidate_id = _clean_text(observation.get("shadow_selected_candidate_id")) or None
+        candidate_id = _clean_text(
+            observation.get("active_preferred_candidate_id")
+            if active_preference
+            else observation.get("shadow_selected_candidate_id")
+        ) or None
     return register_pending_feedback(
         lanlan_name=lanlan_name,
         turn_id=turn_id,
@@ -620,6 +637,7 @@ def record_feedback_event_with_status(
         config_dir=effective_config_dir,
     )
     state_updated = False
+    preference_state_updated = False
     feedback_scope = "diagnostic_only"
     state_reason = "not_logged"
     if wrote:
@@ -677,6 +695,25 @@ def record_feedback_event_with_status(
                 logger.debug("feedback state preview update failed: %s", exc)
                 state_updated = False
                 state_reason = "state_update_failed"
+            outcome = source_preference_outcome(event_type)
+            if (
+                outcome is not None
+                and _source_affinity_event_matches_pending(event, pending)
+                and not duplicate_event
+            ):
+                try:
+                    update_recommendation_source_preference(
+                        config_dir=effective_config_dir,
+                        turn_id=event.get("turn_id"),
+                        source_type=event.get("source_type"),
+                        success=outcome[0],
+                        failure=outcome[1],
+                        explicit=outcome[2],
+                        now=_number(event.get("ts"), time.time()),
+                    )
+                    preference_state_updated = True
+                except Exception as exc:
+                    logger.debug("recommendation preference update failed: %s", exc)
         elif pending is None:
             state_reason = "pending_missing"
         elif duplicate_event:
@@ -687,6 +724,7 @@ def record_feedback_event_with_status(
         state_updated=state_updated,
         feedback_scope=feedback_scope,
         state_reason=state_reason,
+        preference_state_updated=preference_state_updated,
     )
 
 
@@ -711,7 +749,25 @@ def _feedback_state_enabled(pending: PendingRecommendationFeedback) -> bool:
         pending.recommendation_mode == "active_source"
         and PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE
         in {"shadow_compare", "active"}
+    ) or (
+        pending.recommendation_mode == "active_source"
+        and PROACTIVE_RECOMMENDATION_BANDIT_MODE in {"shadow", "canary"}
     )
+
+
+def source_preference_outcome(event_type: str) -> tuple[float, float, bool] | None:
+    """Map verified material feedback to one source-level learning outcome."""
+    outcomes = {
+        "source_interested": (1.0, 0.0, True),
+        "source_not_interested": (0.0, 1.0, True),
+        "source_disabled_after": (0.0, 1.0, True),
+        "music_played_through": (1.0, 0.0, False),
+        "music_high_completion": (1.0, 0.0, False),
+        "music_mid_completion": (0.5, 0.0, False),
+        "music_early_close": (0.0, 1.0, False),
+        "music_hard_skip": (0.0, 1.0, False),
+    }
+    return outcomes.get(event_type)
 
 
 def _feedback_state_group(event: Mapping[str, Any]) -> str:

@@ -79,6 +79,10 @@ from main_logic.proactive_recommendation_runtime import (
     get_recommendation_runtime_status,
     rollback_recommendation_runtime,
 )
+from main_logic.proactive_recommendation_preference import (
+    get_recommendation_preference_state,
+    reset_recommendation_preference_state,
+)
 from main_logic.proactive_recommendation_tuning import (
     TUNING_FILENAME,
     load_recommendation_tuning,
@@ -595,7 +599,50 @@ async def record_proactive_recommendation_feedback(request: Request):
         "state_updated": result.state_updated,
         "feedback_scope": result.feedback_scope,
         "state_reason": result.state_reason,
+        "preference_state_updated": result.preference_state_updated,
         "log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
+    }
+
+
+@router.get("/recommendation/preference")
+async def get_proactive_recommendation_preference():
+    """Return the local, non-sensitive preference aggregate."""
+    try:
+        config_dir = getattr(get_config_manager(), "config_dir", None)
+    except Exception:
+        config_dir = None
+    state = await asyncio.to_thread(
+        get_recommendation_preference_state, config_dir=config_dir
+    )
+    return {"success": True, "preference_state": state}
+
+
+@router.post("/recommendation/preference/reset")
+async def reset_proactive_recommendation_preference(request: Request):
+    """Clear learned preference evidence without changing recommendation flags."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    from .system_router import _validate_local_mutation_request
+
+    validation_error = _validate_local_mutation_request(request, payload=data)
+    if validation_error is not None:
+        return validation_error
+    try:
+        config_dir = getattr(get_config_manager(), "config_dir", None)
+    except Exception:
+        config_dir = None
+    reset = await asyncio.to_thread(
+        reset_recommendation_preference_state, config_dir=config_dir
+    )
+    return {
+        "success": bool(reset),
+        "preference_state": await asyncio.to_thread(
+            get_recommendation_preference_state, config_dir=config_dir
+        ),
     }
 
 

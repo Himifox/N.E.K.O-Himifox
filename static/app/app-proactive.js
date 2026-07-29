@@ -1604,6 +1604,18 @@
         }];
         if (context.source_feedback_available === true && context.source_type) {
             actions.push({
+                id: messageId + '-more-source',
+                label: _proactiveFeedbackText(
+                    'proactiveFeedback.moreSource',
+                    '喜欢这类{{source}}',
+                    { source: _proactiveFeedbackSourceLabel(context.source_type) }
+                ).replace('{{source}}', _proactiveFeedbackSourceLabel(context.source_type)),
+                action: 'proactive_scoped_feedback',
+                variant: 'secondary',
+                disabled: !!disabled,
+                payload: Object.assign({}, commonPayload, { event_type: 'source_interested' })
+            });
+            actions.push({
                 id: messageId + '-less-source',
                 label: _proactiveFeedbackText(
                     'proactiveFeedback.lessSource',
@@ -1662,7 +1674,9 @@
             return;
         }
         var eventType = payload.event_type;
-        if (eventType !== 'proactive_not_now' && eventType !== 'source_not_interested') return;
+        if (eventType !== 'proactive_not_now' &&
+                eventType !== 'source_interested' &&
+                eventType !== 'source_not_interested') return;
         var context = {
             turn_id: String(payload.turn_id || ''),
             source_type: payload.source_type || null,
@@ -1782,6 +1796,14 @@
                 'proactive_not_now'
             ));
             if (context.source_feedback_available === true && context.source_type) {
+                panel.appendChild(makeButton(
+                    _proactiveFeedbackText(
+                        'proactiveFeedback.moreSource',
+                        '喜欢这类{{source}}',
+                        { source: _proactiveFeedbackSourceLabel(context.source_type) }
+                    ).replace('{{source}}', _proactiveFeedbackSourceLabel(context.source_type)),
+                    'source_interested'
+                ));
                 panel.appendChild(makeButton(
                     _proactiveFeedbackText(
                         'proactiveFeedback.lessSource',

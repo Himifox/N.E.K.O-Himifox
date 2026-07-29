@@ -2,6 +2,7 @@
     "proactiveFeedback": {
         "notNow": "Agora não",
         "lessSource": "Mostrar menos {{source}}",
+        "moreSource": "Gosto deste tipo de {{source}}",
         "saving": "Salvando…",
         "recorded": "Registrado apenas para melhorar as recomendações",
         "failed": "Não foi possível registrar. Tente novamente.",

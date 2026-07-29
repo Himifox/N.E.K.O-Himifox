@@ -2,6 +2,7 @@
     "proactiveFeedback": {
         "notNow": "现在不方便",
         "lessSource": "少推荐{{source}}",
+        "moreSource": "喜欢这类{{source}}",
         "saving": "正在记录…",
         "recorded": "已记录，只用于改进推荐",
         "failed": "记录失败，请稍后重试",
