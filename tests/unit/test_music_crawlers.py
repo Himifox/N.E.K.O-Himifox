@@ -830,6 +830,30 @@ async def test_musopen_crawler_falls_back_when_api_recordings_are_unusable():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_musopen_crawler_falls_back_when_api_search_fails():
+    crawler = MusopenCrawler()
+    failed_search = MagicMock(status_code=503)
+    failed_search.raise_for_status.side_effect = httpx.HTTPStatusError(
+        'service unavailable',
+        request=httpx.Request('GET', 'https://api.musopen.org/v2/search/'),
+        response=httpx.Response(503),
+    )
+    page_response = MagicMock(status_code=200, text=MOCK_MUSOPEN_HTML)
+
+    with patch.object(
+        httpx.AsyncClient,
+        'get',
+        new=AsyncMock(side_effect=[failed_search, page_response]),
+    ):
+        results = await crawler.search('Chopin', limit=1)
+
+    assert len(results) == 1
+    assert 'Test' in results[0]['name']
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_musopen_crawler_skips_failed_piece_recordings():
     crawler = MusopenCrawler()
     search_response = MagicMock(status_code=200)
@@ -895,6 +919,47 @@ async def test_bandcamp_crawler_uses_autocomplete_when_html_search_is_challenged
 
     assert [track['name'] for track in results] == ['Bandcamp Song']
     assert get_mock.await_args_list[1].args[0] == 'https://artist.bandcamp.com/album/test'
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_bandcamp_crawler_falls_back_when_autocomplete_fails():
+    crawler = BandcampCrawler()
+    html_search = MagicMock(
+        status_code=200,
+        text='''<div class="heading">
+            <a href="https://artist.bandcamp.com/track/test">Test</a>
+        </div>''',
+    )
+    track_page = MagicMock(
+        status_code=200,
+        text='''<script data-tralbum='{
+            "artist": "Bandcamp Artist",
+            "trackinfo": [{
+                "title": "Fallback Song",
+                "duration": 180,
+                "file": {"mp3-128": "https://audio.example/fallback.mp3"}
+            }]
+        }'></script>''',
+    )
+    get_mock = AsyncMock(side_effect=[
+        httpx.ConnectError(
+            'connection failed',
+            request=httpx.Request(
+                'GET',
+                'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete',
+            ),
+        ),
+        html_search,
+        track_page,
+    ])
+
+    with patch.object(httpx.AsyncClient, 'get', new=get_mock):
+        results = await crawler.search('lofi', limit=1)
+
+    assert [track['name'] for track in results] == ['Fallback Song']
+    assert get_mock.await_args_list[1].args[0] == 'https://bandcamp.com/search'
     await crawler.close()
 
 

@@ -1524,15 +1524,23 @@ class MusopenCrawler(BaseMusicCrawler):
                 'https://musopen.org/music/466-eine-kleine-nachtmusik/': 'Mozart',
                 'https://musopen.org/music/25172-cello-suite-no-1-in-g-major-bwv-1007/': 'Bach',
             }.get(url, keyword)
-            search_response = await self.client.get(
-                'https://api.musopen.org/v2/search/',
-                params={'query': search_term},
-            )
-            search_response.raise_for_status()
-            pieces = [
-                item for item in search_response.json().get('results', [])
-                if item.get('entity') == 'piece' and item.get('id')
-            ]
+            pieces = []
+            try:
+                search_response = await self.client.get(
+                    'https://api.musopen.org/v2/search/',
+                    params={'query': search_term},
+                )
+                search_response.raise_for_status()
+                pieces = [
+                    item for item in search_response.json().get('results', [])
+                    if item.get('entity') == 'piece' and item.get('id')
+                ]
+            except (httpx.HTTPError, AttributeError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "[%s] API 搜索失败，尝试页面兜底: %s",
+                    self.platform_name,
+                    type(exc).__name__,
+                )
             results = []
             for piece in pieces[:limit * 3]:
                 try:
@@ -1784,9 +1792,17 @@ class BandcampCrawler(BaseMusicCrawler):
                 return None
 
         try:
-            autocomplete_url = 'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete'
-            autocomplete = await self.client.get(autocomplete_url, params={'q': keyword})
-            if autocomplete.status_code == 200:
+            autocomplete = None
+            try:
+                autocomplete_url = 'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete'
+                autocomplete = await self.client.get(autocomplete_url, params={'q': keyword})
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "[%s] 自动补全请求失败，尝试 HTML 搜索兜底: %s",
+                    self.platform_name,
+                    type(exc).__name__,
+                )
+            if autocomplete is not None and autocomplete.status_code == 200:
                 try:
                     autocomplete_items = autocomplete.json().get('results') or []
                 except (AttributeError, ValueError):
