@@ -4,6 +4,8 @@
         "minimize": "最小化",
         "maximize": "最大化",
         "restore": "元に戻す",
+        "pinWindow": "ウィンドウを最前面に固定",
+        "unpinWindow": "最前面固定を解除",
         "expand": "展開",
         "close": "閉じる",
         "save": "保存",
@@ -74,15 +76,6 @@
             "accept": "うん、画面共有をオフに",
             "decline": "ううん、このままで"
         }
-    },
-    "tutorialPrompt": {
-        "title": "ホームのチュートリアルを始めますか？",
-        "message": "ホーム画面の主要な入口をすばやく案内して、最短で N.E.K.O を使い始められるようにします。",
-        "note": "途中でいつでもスキップでき、あとからメモリブラウザから再度開くこともできます。",
-        "startNow": "チュートリアルを開始",
-        "later": "あとで",
-        "never": "今後は表示しない",
-        "startFailed": "今はチュートリアルを開始できません。しばらくしてからもう一度お試しください。"
     },
     "characterProfile": {
         "gender": "性別",
@@ -809,6 +802,14 @@
         "toolLollipop": "キャンディー",
         "toolFist": "猫の手",
         "toolHammer": "ハンマー",
+        "toolRps": "じゃんけん",
+        "avatarToolRpsGestureRock": "グー",
+        "avatarToolRpsGestureScissors": "チョキ",
+        "avatarToolRpsGesturePaper": "パー",
+        "avatarToolRpsResultUserWin": "あなたの勝ち",
+        "avatarToolRpsResultAvatarWin": "{{name}}の勝ち",
+        "avatarToolRpsResultDraw": "あいこ",
+        "avatarToolRpsRoundAnnouncement": "あなたは{{userGesture}}、{{name}}は{{avatarGesture}}。{{result}}です。",
         "avatarToolsButtonAriaLabel": "アバターツール",
         "clearAvatarToolAriaLabel": "道具を解除",
         "avatarToolQuickbarAriaLabel": "アバタークイックツール",
@@ -837,8 +838,7 @@
         "compactExportHistory": "履歴",
         "compactHistoryToggleOpen": "履歴を表示",
         "compactHistoryToggleClose": "履歴を隠す",
-        "compactHistoryControlsShow": "履歴操作を表示",
-        "compactHistoryControlsHide": "履歴操作を隠す",
+    "compactHistoryExport": "会話履歴をエクスポート",
         "compactExportControlsCollapse": "選択操作を隠す",
         "compactExportControlsExpand": "選択操作を表示",
         "exportAction": "エクスポート",
@@ -1161,20 +1161,20 @@
             "title": "Alibaba 米国 API の注意",
             "message": "現在 Alibaba の米国 API を使用しています。この API は TTS とリアルタイム音声に対応していません。Alibaba のシンガポール API への切り替えをおすすめします。"
         },
-        "conversationModelConfig": "テキスト対話モデル設定",
-        "summaryModelConfig": "要約モデル設定",
-        "gameModelsConfig": "ミニゲームモデル設定",
+        "conversationModelConfig": "テキストチャットモデル",
+        "summaryModelConfig": "要約モデル",
+        "gameModelsConfig": "ミニゲームモデル",
         "gameMainModelConfig": "ミニゲーム主モデル設定",
         "gameSummaryModelConfig": "ミニゲーム要約モデル設定",
-        "correctionModelConfig": "修正モデル設定",
-        "emotionModelConfig": "感情モデル設定",
-        "visionModelConfig": "視覚モデル設定",
-        "realtimeModelConfig": "リアルタイムAPI（ローカルモード）",
-        "ttsModelConfig": "TTSモデル設定（全二重ストリーミング）",
+        "correctionModelConfig": "修正モデル",
+        "emotionModelConfig": "感情モデル",
+        "visionModelConfig": "視覚チャットモデル",
+        "realtimeModelConfig": "リアルタイムマルチモーダルモデル（ローカルモード）",
+        "ttsModelConfig": "TTSモデル",
         "apiUrl": "API URL",
         "apiKey": "APIキー",
         "modelId": "モデルID",
-        "agentApiConfigTitle": "Agent API 設定（視覚機能対応が必要）",
+        "agentApiConfigTitle": "Agent API（視覚機能対応が必要）",
         "providerPlaceholder": "例: openai, azure, local",
         "apiUrlPlaceholder": "例: https://api.openai.com/v1",
         "modelIdPlaceholder": "例: gpt-5.1-chat-latest",
@@ -1665,6 +1665,7 @@
         },
         "registeredVoices": "登録済みボイス",
         "preview": "プレビュー",
+        "previewing": "プレビュー中",
         "previewFailed": "プレビューに失敗しました: {{error}}",
         "previewTimeout": "プレビュー生成がタイムアウトしました。しばらくしてから再試行してください。",
         "playFailed": "再生に失敗しました: {{error}}",
@@ -2627,7 +2628,8 @@
             "language": "言語",
             "general": "一般設定",
             "mediaCredentials": "メディア資格情報",
-            "characterCardManager": "キャラクターカード管理"
+            "characterCardManager": "キャラクターカード管理",
+            "advancedSettings": "詳細設定"
         },
         "language": {
             "title": "言語を選択",
@@ -2642,12 +2644,19 @@
             "chatIntervalBase": "最小間隔",
             "visionInterval": "感知間隔"
         },
+        "widgetMode": {
+            "enabledNotice": "エッジドックモード Beta を有効にしました。",
+            "disabledNotice": "エッジドックモード Beta を無効にしました。Live2D は通常の端スナップに戻ります。",
+            "toggleFailed": "エッジドックモード Beta を切り替えられませんでした。しばらくしてから再試行してください。"
+        },
         "toggles": {
             "allowInterrupt": "割り込み許可",
             "mergeMessages": "メッセージ結合",
             "avatarReactionBubble": "表情バブル",
             "focusCognition": "集中モード",
             "focusCognitionTooltip": "オンにすると、あなたが弱音を吐いたり複雑な話題のときに集中して深く考えます。オフにすると集中モードに入りません。",
+            "widgetMode": "エッジドックモード Beta",
+            "widgetModeTooltip": "エッジドックモードを手動で有効にすると、Live2D が画面端の 6 つのアンカーから覗けます。",
             "slopFilter": "自然な表現",
             "slopFilterTooltip": "過去の返答にある繰り返しや型にはまった言い回しを減らし、より自然に話せるようにします。",
             "autoCat": "自動ねこ化",
@@ -3377,7 +3386,7 @@
                 "desc": "このオプションをチェックしてカスタムAPI設定を有効にしてください。有効にすると、要約、修正、感情分析など、異なるモジュール用に独立したAPIを設定できます。"
             },
             "step9": {
-                "title": "📝 要約モデル設定",
+                "title": "📝 要約モデル",
                 "desc": "要約モデルは会話要約を生成し、メモリを管理します。要約生成タスク用に独立したAPIサービスを設定できます。"
             }
         },
@@ -3780,6 +3789,7 @@
         "bilibili": "ビリビリ (Bilibili)",
         "xhh": "小黒盒",
         "youtube": "YouTube",
+        "twitch": "Twitch",
         "douyin": "抖音 (Douyin)",
         "kuaishou": "快手 (Kuaishou)",
         "weibo": "微博 (Weibo)",
@@ -3805,7 +3815,15 @@
         "noCookies": "Cookiesを先に設定してください",
         "statusLoadFailed": "状態の読み込みに失敗しました",
         "thisPlatform": "このプラットフォーム",
+        "twitchAuth": {
+            "clientId": "Twitch Developer Client ID", "clientIdDesc": "Twitch Developer Console で公開アプリを作成し Client ID を入力します。Client Secret は要求も保存もされません。",
+            "start": "Twitch 認可を開始", "authorizeHint": "Twitch の有効化ページを開き、次のコードを入力してください：", "check": "認可しました。状態を確認",
+            "invalidClientId": "有効な Twitch Client ID を入力してください", "started": "Twitch 認可を開始しました。ブラウザで確認を完了してください",
+            "startFailed": "Twitch 認可を開始できません。Client ID とネットワークを確認してください", "authorized": "Twitch 認証情報を暗号化して保存しました",
+            "pending": "認可はまだ完了していません。Twitch で確認してから再試行してください", "checkFailed": "認可の確認に失敗しました。もう一度開始してください"
+        },
         "instructions": {
+            "twitch": "<b>Device Code 認可：</b>Twitch Developer Console で公開アプリを作成し、Client ID を入力して画面の案内に従ってください。",
             "bilibili": "<b>対象：</b> <b>bilibili.com</b> にアクセスして Cookie を取得してください。",
             "xhh": "<b>推奨：</b>下のQRコードログインを使うか、<b>xiaoheihe.cn</b> にログインしてCookieを手動入力してください。",
             "youtube": "<b>1. Cookie を取得</b><br>YouTube にログイン済みのブラウザで：<br>1. <b>youtube.com</b> を開く<br>2. F12 → Network を押す<br>3. ページを更新し、<code>youtubei/v1/browse</code> リクエストを選択する<br>4. Request Headers から完全な Cookie 値をコピーする",
