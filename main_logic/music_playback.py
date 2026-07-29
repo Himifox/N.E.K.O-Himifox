@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runtime playback adapter shared by normal chat and model tool calls."""
+"""Runtime adapter for user-initiated music playback."""
 
 from __future__ import annotations
 
@@ -49,10 +49,6 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     request = parse_explicit_user_music_request(str(event.get("content") or ""))
     if request is None:
         return
-    turn_id = str(getattr(manager, "current_speech_id", "") or "")
-    if turn_id and getattr(manager, "_music_request_handled_turn_id", "") == turn_id:
-        return
-    manager._music_request_handled_turn_id = turn_id
     epoch = _next_music_request_epoch(manager)
     manager._fire_task(_execute_music_request(manager, request, epoch))
 
