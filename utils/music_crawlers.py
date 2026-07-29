@@ -1171,10 +1171,11 @@ class NeteaseCrawler(BaseMusicCrawler):
                 song_id = song.get("id")
                 song_name = song.get("name", "未知曲目")
                 artists = song.get("artists", [])
-                if artists:
-                    artist_name = artists[0].get("name", "未知")
-                else:
-                    artist_name = "未知"
+                artist_name = ' / '.join(
+                    str(artist.get('name') or '').strip()
+                    for artist in artists
+                    if isinstance(artist, dict) and artist.get('name')
+                ) or "未知"
                 cover_url = song.get("album", {}).get("picUrl", "")
                 # 使用本地代理路由，支持 VIP 歌曲解析重定向
                 audio_url = f"/api/music/play/netease/{song_id}"
@@ -2332,6 +2333,14 @@ def _normalize_song_match_text(value: str) -> str:
     return re.sub(r"[\s\-—_·,，。.!！?？:：'\"“”‘’《》〈〉「」『』【】()（）\[\]]+", "", value.casefold())
 
 
+def _is_song_title_boundary_prefix(requested: str, candidate: str) -> bool:
+    requested = requested.strip().casefold()
+    candidate = candidate.strip().casefold()
+    if not requested or not candidate.startswith(requested) or len(candidate) == len(requested):
+        return False
+    return candidate[len(requested)] in " \t-—_·([（【「『《〈"
+
+
 def _select_requested_song(
     song_name: str,
     song_artist: str,
@@ -2349,18 +2358,44 @@ def _select_requested_song(
         candidate_artist = _normalize_song_match_text(str(item.get('artist') or ''))
         if not candidate_name:
             continue
-        if target_artist and target_artist not in candidate_artist:
-            continue
 
-        score = difflib.SequenceMatcher(None, target_name, candidate_name).ratio()
+        title_ratio = difflib.SequenceMatcher(None, target_name, candidate_name).ratio()
         exact = target_name == candidate_name
+        boundary_prefix = _is_song_title_boundary_prefix(song_name, str(item.get('name') or ''))
         single_typo = (
             len(target_name) >= 4
             and abs(len(target_name) - len(candidate_name)) <= 1
-            and score >= 0.8
+            and title_ratio >= 0.8
         )
-        if not (exact or single_typo):
+        fuzzy_title = len(target_name) >= 4 and title_ratio >= 0.88
+        if not (exact or boundary_prefix or single_typo or fuzzy_title):
             continue
+
+        artist_score = 1.0
+        if target_artist:
+            if not candidate_artist:
+                continue
+            artist_score = difflib.SequenceMatcher(
+                None, target_artist, candidate_artist
+            ).ratio()
+            artist_matches = (
+                target_artist in candidate_artist
+                or candidate_artist in target_artist
+                or (
+                    len(target_artist) >= 4
+                    and len(candidate_artist) >= 4
+                    and artist_score >= 0.8
+                )
+            )
+            if not artist_matches:
+                continue
+
+        title_score = 1.0 if exact else 0.95 if boundary_prefix else title_ratio
+        score = (
+            title_score
+            if not target_artist
+            else title_score * 0.75 + artist_score * 0.25
+        )
         if score > best_score:
             best_item = item
             best_score = score

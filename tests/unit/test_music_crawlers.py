@@ -42,7 +42,10 @@ MOCK_NETEASE_JSON = {
             {
                 "id": 12345,
                 "name": "Netease Song",
-                "artists": [{"name": "Netease Artist"}],
+                "artists": [
+                    {"name": "Netease Artist"},
+                    {"name": "Featured Artist"},
+                ],
                 "fee": 0,
                 "album": {"picUrl": "http://pic.url/1"}
             }
@@ -128,6 +131,7 @@ async def test_netease_crawler_parsing():
         results: List[Dict[str, Any]] = await crawler.search("test", limit=1)
         assert len(results) == 1
         assert results[0]['name'] == "Netease Song"
+        assert results[0]['artist'] == "Netease Artist / Featured Artist"
         assert "12345" in results[0]['url']
         assert post.await_args.kwargs['headers'] == {'Cookie': ''}
         assert post.await_args.kwargs['data']['limit'] == 5
@@ -346,6 +350,23 @@ def test_requested_song_accepts_one_character_typo_and_checks_artist():
 
     assert _select_requested_song('淋雨一起走', '张韶涵', candidates) == candidates[0]
     assert _select_requested_song('淋雨一起走', '不存在的歌手', candidates) is None
+
+
+@pytest.mark.unit
+def test_requested_song_combines_title_and_artist_similarity():
+    requested = {
+        'name': '丑马（翻自 乐正绫）',
+        'artist': 'Akie秋绘',
+        'url': 'correct',
+    }
+    unrelated = {
+        'name': '我很丑，可是我很温柔',
+        'artist': '赵传',
+        'url': 'wrong',
+    }
+
+    assert _select_requested_song('丑马', '秋绘', [unrelated, requested]) == requested
+    assert _select_requested_song('丑马', '秋绘', [unrelated]) is None
 
 
 @pytest.mark.unit
@@ -955,6 +976,36 @@ async def test_fetch_music_content_matches_requested_song_with_typo():
 
     assert response['success'] is True
     assert [item['name'] for item in response['data']] == ['淋雨一直走']
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_music_content_rejects_unrelated_requested_song():
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease.search = AsyncMock(return_value=[{
+        'name': '我很丑，可是我很温柔',
+        'artist': '赵传',
+        'url': '/api/music/play/netease/2',
+    }])
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        response = await fetch_music_content(
+            '丑马 秋绘',
+            limit=5,
+            personalized=True,
+            requested_song='丑马',
+            requested_artist='秋绘',
+        )
+
+    assert response['success'] is False
+    assert response['error_code'] == 'track_not_found'
 
 
 @pytest.mark.manual
