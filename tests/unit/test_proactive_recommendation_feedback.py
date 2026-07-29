@@ -551,6 +551,32 @@ def test_scoped_explicit_feedback_separates_timing_from_source_preference(tmp_pa
     assert preview["conversation_acceptance"]["persistent"]["negative_evidence_count"] == 0
 
 
+def test_v2_shadow_feedback_uses_actual_arm_not_proposed_arm(tmp_path):
+    pending = register_pending_feedback_from_observation(
+        _observation(
+            turn_id="shadow-policy-v2",
+            shadow_selected_source_type="news",
+            shadow_selected_candidate_id="news:actual",
+            actual_primary_channel="chat",
+            policy_decision={
+                "context_version": "source-context-v2",
+                "mode": "shadow",
+                "proposed_arm": "music",
+                "proposed_candidate_id": "music:virtual",
+                "actual_arm": "news",
+                "actual_candidate_id": "news:actual",
+                "policy_applied": False,
+            },
+        ),
+        log_mode="jsonl",
+        config_dir=tmp_path,
+    )
+
+    assert pending is not None
+    assert pending.source_type == "news"
+    assert pending.candidate_id == "news:actual"
+
+
 def test_source_not_interested_without_verified_material_is_diagnostic_only(tmp_path):
     clear_temporary_feedback_state_preview()
     register_pending_feedback(
