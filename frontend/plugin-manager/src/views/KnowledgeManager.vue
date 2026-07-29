@@ -13,13 +13,15 @@
       <el-tag v-if="marketAuth.authenticated" type="success" effect="plain">
         {{ t('market.accountConnected', { name: marketAuthDisplayName }) }}
       </el-tag>
+      <span v-else class="market-login-hint">{{ t('knowledge.loginRequired') }}</span>
       <el-button
         type="primary"
         plain
-        :loading="marketAuthBusy"
-        @click="marketAuth.authenticated ? openKnowledgeMarket() : startMarketLogin()"
+        :disabled="!marketAuth.authenticated"
+        :loading="marketOpening"
+        @click="openKnowledgeMarket"
       >
-        {{ marketAuth.authenticated ? t('knowledge.openMarket') : t('market.login') }}
+        {{ t('knowledge.openMarket') }}
       </el-button>
     </div>
 
@@ -156,10 +158,8 @@ import { openExternalUrl } from '@/utils/openExternal'
 const { t } = useI18n()
 const {
   marketAuth,
-  marketAuthBusy,
   marketAuthDisplayName,
   loadMarketAuthStatus,
-  startMarketLogin,
 } = useMarketAuth()
 const activeTab = ref('overview')
 const loading = ref(false)
@@ -178,32 +178,33 @@ const packsLoading = ref(false)
 const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const marketOpening = ref(false)
 
 async function openKnowledgeMarket() {
   if (!marketAuth.value.authenticated) {
-    await startMarketLogin()
+    ElMessage.warning(t('knowledge.loginRequired'))
     return
   }
-  const base = await getMarketUrl()
-  if (!base) {
-    ElMessage.error(t('knowledge.marketUnavailable'))
-    return
-  }
-  let target = `${base.replace(/\/+$/, '')}/#/knowledge`
+  marketOpening.value = true
   try {
+    const base = await getMarketUrl()
+    if (!base) throw new Error(t('knowledge.marketUnavailable'))
     const response = await fetch('/market/pair-code', { method: 'POST' })
-    if (response.ok) {
-      const pairing = await response.json()
-      const query = new URLSearchParams({
-        neko_pair: String(pairing.one_time_code || ''),
-        neko_port: String(pairing.port || ''),
-      })
-      target = `${base.replace(/\/+$/, '')}/#/knowledge?${query}`
-    }
-  } catch {
-    // The Market remains browsable when local pairing is temporarily unavailable.
+    if (!response.ok) throw new Error(t('knowledge.marketPairFailed'))
+    const pairing = await response.json()
+    const code = String(pairing.one_time_code || '')
+    const port = Number(pairing.port)
+    if (!code || !Number.isInteger(port)) throw new Error(t('knowledge.marketPairFailed'))
+    const query = new URLSearchParams({
+      neko_pair: code,
+      neko_port: String(port),
+    })
+    openExternalUrl(`${base.replace(/\/+$/, '')}/#/knowledge?${query}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : t('knowledge.marketPairFailed'))
+  } finally {
+    marketOpening.value = false
   }
-  openExternalUrl(target)
 }
 
 async function refreshAll() {
@@ -316,6 +317,7 @@ onMounted(() => {
 .knowledge-manager { padding: 24px; display: flex; flex-direction: column; gap: 18px; }
 .market-entry { display: flex; align-items: center; gap: 12px; }
 .market-entry .el-alert { flex: 1; }
+.market-login-hint { color: var(--el-text-color-secondary); font-size: 13px; }
 .page-heading, .card-heading, .switch-row, .toolbar, .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .page-heading h1 { margin: 0 0 6px; }
 .page-heading p { margin: 0; color: var(--el-text-color-secondary); }
