@@ -209,6 +209,7 @@ def _parse_duration_seconds(value: Any, *, milliseconds: bool = False) -> float 
 def _is_recommendable_duration(duration_seconds: float | None) -> bool:
     return duration_seconds is None or duration_seconds < MAX_RECOMMENDED_TRACK_DURATION_SECONDS
 
+
 # ==================================================
 # 去重与多样性管理
 # ==================================================
@@ -427,6 +428,21 @@ class BaseMusicCrawler:
 # =======================================================
 # 3. 各平台爬虫实现
 # =======================================================
+
+def _normalize_netease_cover_url(value: Any) -> str:
+    cover = str(value or '').strip()
+    candidate = f'https:{cover}' if cover.startswith('//') else cover
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return cover
+    hostname = (parsed.hostname or '').lower()
+    if parsed.scheme in {'http', 'https'} and (
+        hostname == 'music.126.net' or hostname.endswith('.music.126.net')
+    ):
+        return urllib.parse.urlunsplit(parsed._replace(scheme='https'))
+    return cover
+
 
 class NeteaseCrawler(BaseMusicCrawler):
     """
@@ -655,9 +671,8 @@ class NeteaseCrawler(BaseMusicCrawler):
             'name': name,
             'artist': artist,
             'url': f"/api/music/play/netease/{song_id}",
-            'cover': (
-                str(album.get('picUrl') or '')
-                if isinstance(album, dict) else ''
+            'cover': _normalize_netease_cover_url(
+                album.get('picUrl') if isinstance(album, dict) else ''
             ),
             'theme': '#44b7fe',
             'fee': song.get('fee'),
@@ -1207,7 +1222,9 @@ class NeteaseCrawler(BaseMusicCrawler):
                     for artist in artists
                     if isinstance(artist, dict) and artist.get('name')
                 ) or "未知"
-                cover_url = song.get("album", {}).get("picUrl", "")
+                cover_url = _normalize_netease_cover_url(
+                    song.get("album", {}).get("picUrl", "")
+                )
                 # 使用本地代理路由，支持 VIP 歌曲解析重定向
                 audio_url = f"/api/music/play/netease/{song_id}"
                 final_results.append(self._format_item(

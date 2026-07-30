@@ -47,7 +47,7 @@ MOCK_NETEASE_JSON = {
                     {"name": "Featured Artist"},
                 ],
                 "fee": 0,
-                "album": {"picUrl": "http://pic.url/1"}
+                "album": {"picUrl": "http://p1.music.126.net/cover.jpg"}
             }
         ]
     }
@@ -133,10 +133,25 @@ async def test_netease_crawler_parsing():
         assert results[0]['name'] == "Netease Song"
         assert results[0]['artist'] == "Netease Artist / Featured Artist"
         assert "12345" in results[0]['url']
+        assert results[0]['cover'] == "https://p1.music.126.net/cover.jpg"
         assert post.await_args.kwargs['headers'] == {'Cookie': ''}
         assert post.await_args.kwargs['data']['limit'] == 5
         assert post.await_args.kwargs['timeout'] == 5.0
     await crawler.close()
+
+
+@pytest.mark.unit
+def test_netease_library_track_upgrades_trusted_cover_to_https():
+    track = NeteaseCrawler._normalize_library_track({
+        'id': 123,
+        'name': 'Song',
+        'ar': [{'name': 'Artist'}],
+        'al': {'picUrl': '//p2.music.126.net/library-cover.jpg'},
+        'dt': 180000,
+    })
+
+    assert track is not None
+    assert track['cover'] == 'https://p2.music.126.net/library-cover.jpg'
 
 
 @pytest.mark.unit
