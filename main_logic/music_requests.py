@@ -159,6 +159,14 @@ _EN_NEGATIVE_MUSIC = re.compile(
 )
 _EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
 _EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
+_EN_NON_MUSIC_TARGET = re.compile(
+    r"(?:(?:a|the|this|that|my|your)\s+)?"
+    r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?|"
+    r"chess|football|soccer|basketball)"
+    r"|(?:me|us|him|her|them|it|this|that)"
+    r"|with\s+(?:me|us|him|her|them)",
+    re.IGNORECASE,
+)
 _ZH_MUSIC_MOOD_OR_STYLE = {
     "安静",
     "悲伤",
@@ -337,6 +345,8 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if not match:
         return None
     payload = _strip_request_payload(match.group(1))
+    if _EN_NON_MUSIC_TARGET.fullmatch(payload):
+        return None
     if payload.casefold() in {"music", "a song", "some music", "something"}:
         return MusicRequest()
     return MusicRequest(keyword=payload)

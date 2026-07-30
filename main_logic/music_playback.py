@@ -162,6 +162,13 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     playback_id = _clean_playback_text(event.get("playback_id"), 512)
     request_id = _clean_playback_text(event.get("request_id"), 64)
     source = _clean_playback_text(event.get("source"), 16).lower()
+    current_request_epoch = getattr(manager, "_music_request_epoch", None)
+    if (
+        source == "user"
+        and current_request_epoch is not None
+        and request_id != str(current_request_epoch)
+    ):
+        return False
     event_key = (playback_id, request_id, state)
     if getattr(manager, "_music_playback_event_key", None) == event_key:
         return False

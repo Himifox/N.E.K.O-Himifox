@@ -1006,10 +1006,8 @@ class NeteaseCrawler(BaseMusicCrawler):
                         int(candidate['id'])
                     )
                 except Exception as exc:
-                    candidate_error_code = (
-                        'cookie_invalid' if self._cookie_invalid else 'upstream_error'
-                    )
                     if self._cookie_invalid:
+                        candidate_error_code = 'cookie_invalid'
                         logger.warning(
                             "[%s] 候选歌单 %s 抓取时凭证失效，停止后续请求",
                             self.platform_name,
