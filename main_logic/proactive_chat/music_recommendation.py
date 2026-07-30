@@ -241,7 +241,10 @@ def _build_music_dynamic_context(
             ),
         )
         raw_data = music_content.get("raw_data", {}) if music_content else {}
-        if raw_data.get("best_match", {}).get("status") == "fuzzy":
+        if (
+            raw_data.get("_strict_song_request")
+            and raw_data.get("best_match", {}).get("status") == "fuzzy"
+        ):
             context += get_proactive_music_failsafe_hint(master_name, lang)
 
     if is_playing_music:
@@ -266,6 +269,8 @@ async def _fetch_music_with_fallback(
         fetcher=fetch_music_content,
         allow_keyword_fallback=True,
     )
+    if result:
+        result = {**result, "_strict_song_request": bool(request.song_name)}
     if result and result.get("success") and result.get("data"):
         mark_music_request_query(lanlan_name, request)
     if result is None:

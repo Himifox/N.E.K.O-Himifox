@@ -239,10 +239,42 @@ async def test_successful_proactive_query_is_remembered(monkeypatch) -> None:
     )
 
     assert result is not None
+    assert result["_strict_song_request"] is False
     assert music_requests.was_music_request_recent(
         scope,
         music_requests.MusicRequest(keyword="童年"),
     )
+
+
+def test_music_failsafe_only_applies_to_strict_song_request() -> None:
+    fuzzy_content = {
+        "raw_data": {
+            "best_match": {"status": "fuzzy"},
+        }
+    }
+
+    normal_context = music_recommendation._build_music_dynamic_context(
+        selected_music_link={"title": "Track"},
+        music_content=fuzzy_content,
+        is_playing_music=False,
+        master_name="User",
+        lang="zh",
+    )
+    strict_context = music_recommendation._build_music_dynamic_context(
+        selected_music_link={"title": "Track"},
+        music_content={
+            "raw_data": {
+                "best_match": {"status": "fuzzy"},
+                "_strict_song_request": True,
+            }
+        },
+        is_playing_music=False,
+        master_name="User",
+        lang="zh",
+    )
+
+    assert "未找到与关键词精准匹配" not in normal_context
+    assert "未找到与关键词精准匹配" in strict_context
 
 
 @pytest.mark.parametrize(
