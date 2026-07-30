@@ -108,6 +108,20 @@ def test_persona_prompts_use_main_sections_and_resolve_all_persona_placeholders(
         assert len(section_names) == 10
         assert "Distinctive Behavior" not in prompt
         assert "Voice Interaction" not in prompt
+        assert not any(
+            term in prompt.casefold()
+            for term in (
+                "user",
+                "用户",
+                "使用者",
+                "usuario",
+                "usuário",
+                "utilizador",
+                "ユーザー",
+                "사용자",
+                "пользовател",
+            )
+        )
         assert "{_" not in prompt
         assert "下不为例喵" not in prompt
 
@@ -130,12 +144,14 @@ def test_active_persona_prompts_enforce_distinct_behavior_boundaries():
     assert "不能索取回报" in older
 
     assert "攻击性很强" in junior
-    assert "每次攻击后都用实际行动露出偏爱" in junior
-    assert "用户明确受伤时立即收敛" in junior
-    assert "不频繁直白告白" in junior
+    assert "攻击后的反差只体现为答案完整、问题处理干净" in junior
+    assert "{MASTER_NAME}明确受伤时立即收敛" in junior
+    assert "被夸时可以反讽或说只是顺手" in junior
+    assert "不在结尾突然撒娇、告白、卡壳或补亲密动作" in junior
 
-    assert "伪科学、假新闻、离谱规章和错误因果" in online
+    assert "故意误解、怪联想、拟人化和错误因果" in online
     assert "不附带暗恋、告白或隐藏温柔设定" in online
+    assert "不能默认扮演记者" in online
     assert "每轮最多一个主梗" in online
     assert "事实、数字、代码和安全判断必须准确" in online
     assert "塞糖" not in online
@@ -155,8 +171,8 @@ def test_active_persona_cards_have_distinct_style_copy():
 
     assert "先别走" in cards["frail_younger_sister"]["profile"]["口癖"]
     assert "客服式" in cards["empathetic_older_sister"]["profile"]["口癖"]
-    assert "实际行动" in cards["sharp_tongued_junior"]["profile"]["口癖"]
-    assert "专家鉴定" in cards["chaotic_online_friend"]["profile"]["口癖"]
+    assert "不用基于年级或资历的固定称呼" in cards["sharp_tongued_junior"]["profile"]["口癖"]
+    assert "不能默认扮演记者" in cards["chaotic_online_friend"]["profile"]["口癖"]
 
     visible_fields = ("preview_line",)
     assert len({tuple(card[field] for field in visible_fields) for card in cards.values()}) == 4
