@@ -230,6 +230,48 @@ async def test_netease_crawler_scales_candidate_count_with_requested_limit():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_netease_crawler_backfills_free_candidates_after_paid_first_page():
+    crawler = NeteaseCrawler()
+    crawler._vip_checked = True
+    paid_response = MagicMock(status_code=200)
+    paid_response.json.return_value = {
+        'code': 200,
+        'result': {
+            'songs': [
+                {'id': index, 'name': f'Paid {index}', 'fee': 1}
+                for index in range(10)
+            ],
+        },
+    }
+    free_response = MagicMock(status_code=200)
+    free_response.json.return_value = {
+        'code': 200,
+        'result': {
+            'songs': [{
+                'id': 11,
+                'name': 'Free Song',
+                'artists': [{'name': 'Singer'}],
+                'fee': 0,
+            }],
+        },
+    }
+
+    with patch.object(
+        httpx.AsyncClient,
+        'post',
+        new=AsyncMock(side_effect=[paid_response, free_response]),
+    ) as post:
+        results = await crawler.search('test', limit=5)
+
+    assert [track['name'] for track in results] == ['Free Song']
+    assert post.await_count == 2
+    assert post.await_args_list[1].kwargs['data']['offset'] == 10
+    assert post.await_args_list[1].kwargs['data']['limit'] == 90
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_netease_personalized_recommendations_rotates_all_sources():
     crawler = NeteaseCrawler()
     snapshot = {
@@ -732,7 +774,7 @@ async def test_netease_daily_recommendations_are_requested_once_per_day():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_netease_daily_playlist_uses_first_valid_playlist_once_per_day():
+async def test_netease_daily_playlist_uses_first_playable_playlist_once_per_day():
     crawler = NeteaseCrawler()
     payload = {
         'code': 200,
@@ -746,6 +788,9 @@ async def test_netease_daily_playlist_uses_first_valid_playlist_once_per_day():
         {'id': index, 'name': f'Track {index}'}
         for index in range(1, 7)
     ]
+
+    async def fetch_playlist_tracks(playlist_id):
+        return playlist_tracks if playlist_id == 99 else []
 
     async def request_daily_playlists(call):
         assert call() == ('/api/v1/discovery/recommend/resource', {})
@@ -761,7 +806,7 @@ async def test_netease_daily_playlist_uses_first_valid_playlist_once_per_day():
         patch.object(
             crawler,
             '_fetch_playlist_tracks',
-            new=AsyncMock(return_value=playlist_tracks),
+            new=AsyncMock(side_effect=fetch_playlist_tracks),
         ) as fetch_playlist,
     ):
         first = await crawler.get_daily_playlist_recommendations(7)
@@ -770,10 +815,42 @@ async def test_netease_daily_playlist_uses_first_valid_playlist_once_per_day():
     assert first == second
     assert [item['id'] for item in first] == [1, 2, 3, 4, 5]
     assert all(item['recommendation_source'] == 'daily_playlist' for item in first)
-    assert all(item['playlist_id'] == 88 for item in first)
-    assert all(item['playlist_name'] == 'Daily Mix' for item in first)
+    assert all(item['playlist_id'] == 99 for item in first)
+    assert all(item['playlist_name'] == 'Later Mix' for item in first)
     assert api_call.await_count == 1
-    fetch_playlist.assert_awaited_once_with(88)
+    assert [item.args for item in fetch_playlist.await_args_list] == [(88,), (99,)]
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_empty_daily_playlists_retry_after_cooldown():
+    crawler = NeteaseCrawler()
+    payload = {'code': 200, 'recommend': [{'id': 88, 'name': 'Daily Mix'}]}
+
+    with (
+        patch('pyncm_async.apis.WeapiCryptoRequest', side_effect=lambda func: func),
+        patch.object(
+            crawler,
+            '_personalization_api_call',
+            new=AsyncMock(return_value=payload),
+        ) as api_call,
+        patch.object(
+            crawler,
+            '_fetch_playlist_tracks',
+            new=AsyncMock(return_value=[]),
+        ) as fetch_playlist,
+    ):
+        first = await crawler.get_daily_playlist_recommendations(7)
+        during_cooldown = await crawler.get_daily_playlist_recommendations(7)
+        crawler._daily_playlist_retry_after = 0.0
+        after_cooldown = await crawler.get_daily_playlist_recommendations(7)
+
+    assert first == during_cooldown == after_cooldown == []
+    assert crawler._daily_playlist_date == ''
+    assert crawler._daily_playlist_error_code == 'source_empty'
+    assert api_call.await_count == 2
+    assert fetch_playlist.await_count == 2
     await crawler.close()
 
 

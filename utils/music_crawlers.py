@@ -938,7 +938,7 @@ class NeteaseCrawler(BaseMusicCrawler):
         self,
         user_id: int,
     ) -> List[Dict[str, Any]]:
-        """Fetch up to five tracks from the first valid daily recommended playlist."""
+        """Fetch up to five tracks from the first playable daily playlist."""
         if self._cookie_invalid:
             self._personalization_error_code = 'cookie_invalid'
             return []
@@ -976,17 +976,18 @@ class NeteaseCrawler(BaseMusicCrawler):
                 payload = await self._personalization_api_call(
                     GetDailyRecommendedPlaylists,
                 )
-                playlist = next(
-                    (
-                        item for item in (payload or {}).get('recommend') or []
-                        if isinstance(item, dict) and item.get('id')
-                    ),
-                    None,
-                )
-                tracks = (
-                    await self._fetch_playlist_tracks(int(playlist['id']))
-                    if playlist else []
-                )
+                playlist = None
+                tracks: List[Dict[str, Any]] = []
+                for candidate in (payload or {}).get('recommend') or []:
+                    if not isinstance(candidate, dict) or not candidate.get('id'):
+                        continue
+                    candidate_tracks = await self._fetch_playlist_tracks(
+                        int(candidate['id'])
+                    )
+                    if candidate_tracks:
+                        playlist = candidate
+                        tracks = candidate_tracks
+                        break
             except Exception as exc:
                 self._daily_playlist_error_code = (
                     'cookie_invalid' if self._cookie_invalid else 'upstream_error'
@@ -1018,12 +1019,17 @@ class NeteaseCrawler(BaseMusicCrawler):
                 daily_tracks.append(item)
 
             self._daily_playlist_tracks = daily_tracks
-            self._daily_playlist_date = today
-            self._daily_playlist_user_id = user_id
-            self._daily_playlist_retry_after = 0.0
-            self._daily_playlist_error_code = '' if daily_tracks else 'source_empty'
-            if not daily_tracks:
+            if daily_tracks:
+                self._daily_playlist_date = today
+                self._daily_playlist_user_id = user_id
+                self._daily_playlist_retry_after = 0.0
+                self._daily_playlist_error_code = ''
+            else:
+                self._daily_playlist_error_code = 'source_empty'
                 self._personalization_error_code = self._daily_playlist_error_code
+                self._daily_playlist_retry_after = (
+                    time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
+                )
             return [dict(item) for item in daily_tracks]
 
     async def get_taste_snapshot(self) -> Dict[str, Any] | None:
@@ -1345,6 +1351,29 @@ class NeteaseCrawler(BaseMusicCrawler):
                 found_songs = [song for song in songs if song.get("fee", 1) == 0]
                 if self._has_cookies:
                     logger.info(f"[{self.platform_name}] 普通已登录用户，仅返回免费歌曲")
+                if len(found_songs) < limit and len(songs) >= search_limit:
+                    fallback_data = {
+                        **data,
+                        'offset': search_limit,
+                        'limit': 100 - search_limit,
+                    }
+                    fallback_response = await self.client.post(
+                        search_url,
+                        data=fallback_data,
+                        headers={'Cookie': ''},
+                        timeout=5.0,
+                    )
+                    fallback_response.raise_for_status()
+                    fallback_result = fallback_response.json()
+                    fallback_songs = (
+                        fallback_result.get("result", {}).get("songs") or []
+                        if fallback_result.get("code") == 200
+                        else []
+                    )
+                    found_songs.extend(
+                        song for song in fallback_songs
+                        if song.get("fee", 1) == 0
+                    )
             if not found_songs:
                 return []
 

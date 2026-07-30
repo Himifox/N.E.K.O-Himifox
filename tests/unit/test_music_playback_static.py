@@ -129,11 +129,15 @@ def test_music_player_reports_confirmed_state_to_backend():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     router_source = WEBSOCKET_ROUTER_PATH.read_text(encoding="utf-8")
 
-    assert "function reportMusicPlaybackState(state, track)" in player_source
+    assert "function reportMusicPlaybackState(state, track, playbackContext)" in player_source
+    assert "function createMusicPlaybackReportContext(playbackId, options, track)" in player_source
     assert "action: 'music_playback_state'" in player_source
-    assert "reportMusicPlaybackState('playing', currentPlayingTrack)" in player_source
-    assert "reportMusicPlaybackState('ended', currentPlayingTrack)" in player_source
-    assert "reportMusicPlaybackState('error', currentPlayingTrack)" in player_source
+    assert "localPlayer._musicPlaybackReportContext = playbackReportContext" in player_source
+    assert "const reportContext = boundPlayer._musicPlaybackReportContext" in player_source
+    assert "if (!boundPlayer.audio || boundPlayer.audio.paused) return;" in player_source
+    assert "reportMusicPlaybackState('playing', null, reportContext)" in player_source
+    assert "reportMusicPlaybackState('ended', null, reportContext)" in player_source
+    assert "reportMusicPlaybackState('error', null, reportContext)" in player_source
     assert 'elif action == "music_playback_state":' in router_source
     assert "handle_music_playback_state(" in router_source
 

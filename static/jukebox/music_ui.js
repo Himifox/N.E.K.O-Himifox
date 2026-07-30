@@ -130,19 +130,38 @@
         };
     }
 
-    function reportMusicPlaybackState(state, track) {
+    function createMusicPlaybackReportContext(playbackId, options, track) {
+        options = options || {};
+        track = track || {};
+        return {
+            playbackId: playbackId || '',
+            source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
+            requestId: options.requestId ?? null,
+            track: {
+                name: String(track.name || '').slice(0, 120),
+                artist: String(track.artist || '').slice(0, 120)
+            }
+        };
+    }
+
+    function reportMusicPlaybackState(state, track, playbackContext) {
         try {
             const appState = window.appState;
             const socket = appState && appState.socket;
             if (!socket || typeof socket.send !== 'function') return;
             if (socket.readyState !== 1 && typeof socket.readyState !== 'undefined') return;
-            const currentTrack = track || {};
+            const context = playbackContext || createMusicPlaybackReportContext(
+                getCurrentMusicPlaybackId(),
+                currentMusicPlaybackContext,
+                track
+            );
+            const currentTrack = track || context.track || {};
             socket.send(JSON.stringify({
                 action: 'music_playback_state',
                 state: state,
-                playback_id: getCurrentMusicPlaybackId(),
-                request_id: currentMusicPlaybackContext.requestId,
-                source: currentMusicPlaybackContext.source,
+                playback_id: context.playbackId,
+                request_id: context.requestId,
+                source: context.source,
                 track: {
                     name: String(currentTrack.name || '').slice(0, 120),
                     artist: String(currentTrack.artist || '').slice(0, 120)
@@ -2261,6 +2280,11 @@
         const playbackIdForRequest = createMusicPlaybackId(trackInfo, currentToken);
         currentMusicPlaybackId = playbackIdForRequest;
         setMusicPlaybackContext(playbackOptions);
+        const playbackReportContext = createMusicPlaybackReportContext(
+            playbackIdForRequest,
+            playbackOptions,
+            trackInfo
+        );
         currentMusicOwnerStartedAt = Date.now();
         currentPlayingTrack = trackInfo;
         // 广播一次占位 state —— APlayer 还在初始化/切曲，但 follower 现在
@@ -2381,6 +2405,7 @@
                 }
 
                 localPlayer = aplayerInstance;
+                localPlayer._musicPlaybackReportContext = playbackReportContext;
                 window.aplayer = localPlayer;
                 if (!window.aplayerInjected) window.aplayerInjected = {};
                 window.aplayerInjected.aplayer = localPlayer;
@@ -2390,19 +2415,22 @@
                 const boundPlayer = localPlayer;
 
                 boundPlayer.on('play', () => {
+                    if (!boundPlayer.audio || boundPlayer.audio.paused) return;
+                    const reportContext = boundPlayer._musicPlaybackReportContext;
                     if (autoDestroyTimer) { clearTimeout(autoDestroyTimer); autoDestroyTimer = null; }
                     updatePlayBtnState(true);
                     autoplayBlocked = false;
                     boundPlayer._loadError = false;
                     if (!playbackStartedAt) playbackStartedAt = Date.now();
                     updateMusicCard('playing', currentPlayingTrack);
-                    reportMusicPlaybackState('playing', currentPlayingTrack);
+                    reportMusicPlaybackState('playing', null, reportContext);
                     // 跨窗口协调：本地真正开始放歌后通知其他窗口
                     broadcastMusicCoord('music_started');
                     startMusicHeartbeat();
                     emitBarState();
                 });
                 boundPlayer.on('pause', () => {
+                    const reportContext = boundPlayer._musicPlaybackReportContext;
                     updatePlayBtnState(false);
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
@@ -2412,11 +2440,13 @@
                     updateMusicCard('paused', currentPlayingTrack);
                     reportMusicPlaybackState(
                         boundPlayer.audio && boundPlayer.audio.ended ? 'ended' : 'paused',
-                        currentPlayingTrack
+                        null,
+                        reportContext
                     );
                     emitBarState();
                 });
                 boundPlayer.on('ended', () => {
+                    const reportContext = boundPlayer._musicPlaybackReportContext;
                     updatePlayBtnState(false);
                     resetSkipCounter();
                     notifyMusicPlayedThrough(currentPlayingTrack);
@@ -2427,7 +2457,7 @@
                         if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
                     }, MUSIC_CONFIG.timeouts.ended);
                     updateMusicCard('ended', currentPlayingTrack);
-                    reportMusicPlaybackState('ended', currentPlayingTrack);
+                    reportMusicPlaybackState('ended', null, reportContext);
                     emitBarState();
                 });
                 boundPlayer.on('error', (err) => {
@@ -2442,6 +2472,7 @@
                     playbackStartedAt = 0;
 
                     const tokenAtEvent = boundPlayer._latestToken;
+                    const reportContext = boundPlayer._musicPlaybackReportContext;
                     boundPlayer._loadError = true;
 
                     setTimeout(() => {
@@ -2455,7 +2486,7 @@
                         showErrorToast('music.playError', errorDetail);
                         updatePlayBtnState(false);
                         setMusicBarVisualState(musicBar, 'error');
-                        reportMusicPlaybackState('error', currentPlayingTrack);
+                        reportMusicPlaybackState('error', null, reportContext);
 
                         if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                         autoDestroyTimer = setTimeout(() => {
@@ -2742,6 +2773,7 @@
 
             // 【核心修复】同步更新实例的最新 Token，确保复用模式下事件回调中的 Token 校验依然有效
             localPlayer._latestToken = currentToken;
+            localPlayer._musicPlaybackReportContext = playbackReportContext;
             localPlayer._loadError = false;
             const mediaReadyPromise = waitForMusicMediaReady(
                 localPlayer,
@@ -2774,7 +2806,7 @@
                     showErrorToast('music.loadTimeout', 'Music loading timed out');
                 }
                 setMusicBarVisualState(musicBar, 'error');
-                reportMusicPlaybackState('error', currentPlayingTrack);
+                reportMusicPlaybackState('error', null, playbackReportContext);
                 updateMusicCard('error', currentPlayingTrack);
                 emitBarState();
                 return musicPlayResult(
@@ -2795,7 +2827,7 @@
             // 回滚：前面已经发过 emitBarInitialState，但 APlayer 没建起来，
             // 后续事件不会广播，follower 会卡着占位 bar，这里补一条 destroyed
             broadcastBarDestroyed(false, playbackIdForRequest);
-            reportMusicPlaybackState('error', currentPlayingTrack);
+            reportMusicPlaybackState('error', null, playbackReportContext);
             showErrorToast('music.playError', 'Music playback failed to load');
             return musicPlayResult(false, 'player_error');
         }
@@ -2911,13 +2943,19 @@
                 destroyMusicPlayer(true, false, true);
             } else {
                 setMusicPlaybackContext(playbackOptions);
+                const playbackReportContext = createMusicPlaybackReportContext(
+                    getCurrentMusicPlaybackId(),
+                    playbackOptions,
+                    trackInfo
+                );
+                player._musicPlaybackReportContext = playbackReportContext;
                 if (shouldAutoPlay && player && player.audio && player.audio.paused) {
                     if (typeof window.setMusicUserDriven === 'function')
                         window.setMusicUserDriven();
                     player.play();
                     showNowPlayingToast(trackInfo.name);
                 } else if (player && player.audio && !player.audio.paused) {
-                    reportMusicPlaybackState('playing', trackInfo);
+                    reportMusicPlaybackState('playing', null, playbackReportContext);
                 }
                 releasePending();
                 return musicPlayResult(true, 'already_playing');
