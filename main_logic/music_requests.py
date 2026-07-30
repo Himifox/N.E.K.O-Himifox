@@ -157,6 +157,8 @@ _EN_NEGATIVE_MUSIC = re.compile(
     r"\b(?:do\s+not|don't|dont|stop|pause|cancel)\b.{0,20}\b(?:play|music|song|listen)\b",
     re.IGNORECASE,
 )
+_EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
+_EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
 _ZH_MUSIC_MOOD_OR_STYLE = {
     "安静",
     "悲伤",
@@ -291,7 +293,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
-        r"(?:some\s+)?(?:my\s+)?(?:liked|favou?rite)(?:\s+(?:songs?|music))?",
+        rf"(?:some\s+)?(?:my\s+)?{_EN_LIKED_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
     ):
@@ -299,7 +301,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
-        r"(?:some\s+)?(?:my\s+)?daily(?:\s+(?:recommendations?|mix|songs?|music))?",
+        rf"(?:some\s+)?(?:my\s+)?{_EN_DAILY_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
     ):
@@ -342,10 +344,15 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
 
 def _excluded_personalization_source(clause: str) -> str:
     folded = clause.casefold()
-    liked_tokens = ("红心", "我喜欢", "收藏", "liked", "favorite", "favourite")
-    if any(token in folded for token in liked_tokens):
+    if any(token in folded for token in ("红心", "我喜欢", "收藏")) or re.search(
+        rf"\b{_EN_LIKED_SOURCE_PATTERN}\b",
+        folded,
+    ):
         return "liked"
-    if any(token in folded for token in ("日推", "每日推荐", "daily recommendation", "daily mix")):
+    if any(token in folded for token in ("日推", "每日推荐")) or re.search(
+        rf"\b{_EN_DAILY_SOURCE_PATTERN}\b",
+        folded,
+    ):
         return "daily"
     return ""
 

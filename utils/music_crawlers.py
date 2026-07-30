@@ -997,6 +997,7 @@ class NeteaseCrawler(BaseMusicCrawler):
 
             playlist = None
             tracks: List[Dict[str, Any]] = []
+            candidate_error_code = ''
             for candidate in (payload or {}).get('recommend') or []:
                 if not isinstance(candidate, dict) or not candidate.get('id'):
                     continue
@@ -1005,6 +1006,16 @@ class NeteaseCrawler(BaseMusicCrawler):
                         int(candidate['id'])
                     )
                 except Exception as exc:
+                    candidate_error_code = (
+                        'cookie_invalid' if self._cookie_invalid else 'upstream_error'
+                    )
+                    if self._cookie_invalid:
+                        logger.warning(
+                            "[%s] 候选歌单 %s 抓取时凭证失效，停止后续请求",
+                            self.platform_name,
+                            candidate.get('id'),
+                        )
+                        break
                     logger.warning(
                         "[%s] 候选歌单 %s 抓取失败，已跳过: %s",
                         self.platform_name,
@@ -1038,7 +1049,9 @@ class NeteaseCrawler(BaseMusicCrawler):
                 self._daily_playlist_retry_after = 0.0
                 self._daily_playlist_error_code = ''
             else:
-                self._daily_playlist_error_code = 'source_empty'
+                self._daily_playlist_error_code = (
+                    candidate_error_code or 'source_empty'
+                )
                 self._personalization_error_code = self._daily_playlist_error_code
                 self._daily_playlist_retry_after = (
                     time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
@@ -1213,7 +1226,12 @@ class NeteaseCrawler(BaseMusicCrawler):
             if not user_id:
                 return []
             daily = await self.get_daily_recommendations(user_id)
+            daily_error_code = self._personalization_error_code
+            if self._cookie_invalid:
+                self._personalization_error_code = 'cookie_invalid'
+                return []
             daily_playlist = await self.get_daily_playlist_recommendations(user_id)
+            daily_playlist_error_code = self._personalization_error_code
             combined_daily: List[Dict[str, Any]] = []
             seen_ids = set()
             for track in daily + daily_playlist:
@@ -1224,8 +1242,16 @@ class NeteaseCrawler(BaseMusicCrawler):
             random.shuffle(combined_daily)
             if combined_daily:
                 self._personalization_error_code = ''
-            elif not self._personalization_error_code:
-                self._personalization_error_code = 'source_empty'
+            else:
+                source_errors = (daily_error_code, daily_playlist_error_code)
+                self._personalization_error_code = next(
+                    (
+                        code
+                        for code in ('cookie_invalid', 'upstream_error', 'source_empty')
+                        if code in source_errors
+                    ),
+                    'source_empty',
+                )
             return combined_daily[:bounded_limit]
 
         if personalization_source == 'liked':

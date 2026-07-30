@@ -706,6 +706,16 @@
                 return false;
             }
             return dispatchMusicPlayCandidatesResponse(response, reason);
+        }).catch(function (error) {
+            console.warn('[Music] 候选派发队列异常:', error);
+            if (response._clientDispatchEpoch === window._musicCandidateDispatchEpoch) {
+                try {
+                    showMusicRequestFailure({ error_code: 'playback_failed' });
+                } catch (failureError) {
+                    console.warn('[Music] 候选派发失败提示异常:', failureError);
+                }
+            }
+            return false;
         });
         window._musicCandidateDispatchQueue = queued;
     }
