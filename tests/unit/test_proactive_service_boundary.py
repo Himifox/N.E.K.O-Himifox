@@ -314,6 +314,17 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("来首歌", "", "", "", "", "auto"),
         ("放我的歌", "", "", "", "", "auto"),
         ("别放日推，只听红心", "", "", "", "", "liked"),
+        ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
+        ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
+        ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
+        (
+            "Could you please play Yellow by Coldplay?",
+            "Yellow Coldplay",
+            "Yellow",
+            "Coldplay",
+            "",
+            "auto",
+        ),
     ),
 )
 def test_parse_explicit_user_music_request(
@@ -342,6 +353,8 @@ def test_parse_explicit_user_music_request(
         "刚才听了晴天",
         "你喜欢邓紫棋吗？",
         "我想换成红色",
+        "Could you play a game?",
+        "Can you listen to me?",
     ),
 )
 def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
@@ -413,7 +426,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
             }],
         }
 
-    async def wait_for_reply(manager, epoch, elapsed):
+    async def wait_for_reply(manager, epoch, origin_websocket, elapsed):
         order.append("reply_end")
 
     async def push(manager, payload):
@@ -429,16 +442,19 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
         wait_for_reply,
     )
     monkeypatch.setattr(music_playback, "_push_music_payload", push)
+    websocket = object()
     manager = SimpleNamespace(
         lanlan_name="YUI",
         _music_request_epoch=1,
         user_language="zh",
+        websocket=websocket,
     )
 
     result = await music_playback._execute_music_request(
         manager,
         music_requests.MusicRequest(keyword="21", song_name="21"),
         1,
+        websocket,
     )
 
     assert result == {"status": "queued", "candidates": 1}
@@ -447,14 +463,58 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
 
 
 @pytest.mark.asyncio
+async def test_music_search_does_not_cross_websocket_reconnect(
+    monkeypatch,
+) -> None:
+    origin_websocket = object()
+    replacement_websocket = object()
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=1,
+        user_language="zh",
+        websocket=origin_websocket,
+    )
+
+    async def fetch(*args, **kwargs):
+        manager.websocket = replacement_websocket
+        return {
+            "success": True,
+            "data": [{
+                "name": "Yellow",
+                "artist": "Coldplay",
+                "url": "/api/music/play/netease/yellow",
+            }],
+        }
+
+    push = AsyncMock(return_value=True)
+    mark_query = MagicMock()
+    monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
+    monkeypatch.setattr(music_playback, "_push_music_payload", push)
+    monkeypatch.setattr(music_playback, "mark_music_request_query", mark_query)
+
+    result = await music_playback._execute_music_request(
+        manager,
+        music_requests.MusicRequest(keyword="Yellow", song_name="Yellow"),
+        1,
+        origin_websocket,
+    )
+
+    assert result == {"status": "superseded"}
+    push.assert_not_awaited()
+    mark_query.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_music_dispatch_waits_until_current_reply_finishes(
     monkeypatch,
 ) -> None:
+    websocket = object()
     manager = SimpleNamespace(
         _music_request_epoch=1,
         _active_text_request_id="turn-1",
         _voice_playback_active=False,
         session=None,
+        websocket=websocket,
     )
     sleep_calls = []
 
@@ -464,7 +524,7 @@ async def test_music_dispatch_waits_until_current_reply_finishes(
 
     monkeypatch.setattr(music_playback.asyncio, "sleep", finish_reply_on_sleep)
 
-    await music_playback._wait_for_current_reply(manager, 1, 1.25)
+    await music_playback._wait_for_current_reply(manager, 1, websocket, 1.25)
 
     assert sleep_calls == [music_playback._REPLY_WAIT_POLL_SECONDS]
 

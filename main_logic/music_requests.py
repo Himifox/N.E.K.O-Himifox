@@ -313,7 +313,8 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         return None
     normalized = clause.strip()
     action_prefix = (
-        r"(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?"
+        r"(?:(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?"
+        r"|(?:can|could|would)\s+you\s+(?:please\s+)?)"
         r"(?:play|listen\s+to)\s+"
     )
     if re.fullmatch(
@@ -343,7 +344,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         artist = _strip_request_payload(match.group(1))
         return MusicRequest(keyword=artist, song_artist=artist)
     match = re.fullmatch(
-        r"(?:please\s+)?play\s+(.{1,60}?)\s+by\s+(.{1,60})",
+        action_prefix + r"(.{1,60}?)\s+by\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
     )
@@ -356,7 +357,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
             song_artist=artist,
         )
     match = re.fullmatch(
-        r"(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?(?:play|listen\s+to)\s+(.{1,80})",
+        action_prefix + r"(.{1,80})",
         normalized,
         re.IGNORECASE,
     )
