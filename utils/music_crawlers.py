@@ -976,18 +976,6 @@ class NeteaseCrawler(BaseMusicCrawler):
                 payload = await self._personalization_api_call(
                     GetDailyRecommendedPlaylists,
                 )
-                playlist = None
-                tracks: List[Dict[str, Any]] = []
-                for candidate in (payload or {}).get('recommend') or []:
-                    if not isinstance(candidate, dict) or not candidate.get('id'):
-                        continue
-                    candidate_tracks = await self._fetch_playlist_tracks(
-                        int(candidate['id'])
-                    )
-                    if candidate_tracks:
-                        playlist = candidate
-                        tracks = candidate_tracks
-                        break
             except Exception as exc:
                 self._daily_playlist_error_code = (
                     'cookie_invalid' if self._cookie_invalid else 'upstream_error'
@@ -1003,6 +991,28 @@ class NeteaseCrawler(BaseMusicCrawler):
                     exc,
                 )
                 return []
+
+            playlist = None
+            tracks: List[Dict[str, Any]] = []
+            for candidate in (payload or {}).get('recommend') or []:
+                if not isinstance(candidate, dict) or not candidate.get('id'):
+                    continue
+                try:
+                    candidate_tracks = await self._fetch_playlist_tracks(
+                        int(candidate['id'])
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] 候选歌单 %s 抓取失败，已跳过: %s",
+                        self.platform_name,
+                        candidate.get('id'),
+                        exc,
+                    )
+                    continue
+                if candidate_tracks:
+                    playlist = candidate
+                    tracks = candidate_tracks
+                    break
 
             playlist_id = int(playlist['id']) if playlist else 0
             playlist_name = str((playlist or {}).get('name') or '').strip()
@@ -1352,28 +1362,35 @@ class NeteaseCrawler(BaseMusicCrawler):
                 if self._has_cookies:
                     logger.info(f"[{self.platform_name}] 普通已登录用户，仅返回免费歌曲")
                 if len(found_songs) < limit and len(songs) >= search_limit:
-                    fallback_data = {
-                        **data,
-                        'offset': search_limit,
-                        'limit': 100 - search_limit,
-                    }
-                    fallback_response = await self.client.post(
-                        search_url,
-                        data=fallback_data,
-                        headers={'Cookie': ''},
-                        timeout=5.0,
-                    )
-                    fallback_response.raise_for_status()
-                    fallback_result = fallback_response.json()
-                    fallback_songs = (
-                        fallback_result.get("result", {}).get("songs") or []
-                        if fallback_result.get("code") == 200
-                        else []
-                    )
-                    found_songs.extend(
-                        song for song in fallback_songs
-                        if song.get("fee", 1) == 0
-                    )
+                    try:
+                        fallback_data = {
+                            **data,
+                            'offset': search_limit,
+                            'limit': 100 - search_limit,
+                        }
+                        fallback_response = await self.client.post(
+                            search_url,
+                            data=fallback_data,
+                            headers={'Cookie': ''},
+                            timeout=5.0,
+                        )
+                        fallback_response.raise_for_status()
+                        fallback_result = fallback_response.json()
+                        fallback_songs = (
+                            fallback_result.get("result", {}).get("songs") or []
+                            if fallback_result.get("code") == 200
+                            else []
+                        )
+                        found_songs.extend(
+                            song for song in fallback_songs
+                            if song.get("fee", 1) == 0
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[%s] 补充搜索请求失败，沿用首页结果: %s",
+                            self.platform_name,
+                            exc,
+                        )
             if not found_songs:
                 return []
 

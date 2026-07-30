@@ -272,6 +272,42 @@ async def test_netease_crawler_backfills_free_candidates_after_paid_first_page()
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_netease_crawler_keeps_primary_results_when_backfill_fails():
+    crawler = NeteaseCrawler()
+    crawler._vip_checked = True
+    primary_response = MagicMock(status_code=200)
+    primary_response.json.return_value = {
+        'code': 200,
+        'result': {
+            'songs': [
+                {
+                    'id': 1,
+                    'name': 'Free Song',
+                    'artists': [{'name': 'Singer'}],
+                    'fee': 0,
+                },
+                *(
+                    {'id': index, 'name': f'Paid {index}', 'fee': 1}
+                    for index in range(2, 11)
+                ),
+            ],
+        },
+    }
+
+    with patch.object(
+        httpx.AsyncClient,
+        'post',
+        new=AsyncMock(side_effect=[primary_response, httpx.TimeoutException('timeout')]),
+    ) as post:
+        results = await crawler.search('test', limit=5)
+
+    assert [track['name'] for track in results] == ['Free Song']
+    assert post.await_count == 2
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_netease_personalized_recommendations_rotates_all_sources():
     crawler = NeteaseCrawler()
     snapshot = {
@@ -851,6 +887,45 @@ async def test_netease_empty_daily_playlists_retry_after_cooldown():
     assert crawler._daily_playlist_error_code == 'source_empty'
     assert api_call.await_count == 2
     assert fetch_playlist.await_count == 2
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_daily_playlist_skips_failed_candidate():
+    crawler = NeteaseCrawler()
+    payload = {
+        'code': 200,
+        'recommend': [
+            {'id': 88, 'name': 'Broken Mix'},
+            {'id': 99, 'name': 'Working Mix'},
+        ],
+    }
+    playlist_tracks = [{'id': 1, 'name': 'Playable'}]
+
+    async def fetch_playlist_tracks(playlist_id):
+        if playlist_id == 88:
+            raise RuntimeError('upstream failed')
+        return playlist_tracks
+
+    with (
+        patch('pyncm_async.apis.WeapiCryptoRequest', side_effect=lambda func: func),
+        patch.object(
+            crawler,
+            '_personalization_api_call',
+            new=AsyncMock(return_value=payload),
+        ),
+        patch.object(
+            crawler,
+            '_fetch_playlist_tracks',
+            new=AsyncMock(side_effect=fetch_playlist_tracks),
+        ) as fetch_playlist,
+    ):
+        results = await crawler.get_daily_playlist_recommendations(7)
+
+    assert [item['id'] for item in results] == [1]
+    assert results[0]['playlist_id'] == 99
+    assert [item.args for item in fetch_playlist.await_args_list] == [(88,), (99,)]
     await crawler.close()
 
 

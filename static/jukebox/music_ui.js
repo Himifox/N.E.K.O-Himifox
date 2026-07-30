@@ -2962,7 +2962,9 @@
         // 特殊优化：如果是一模一样的歌曲且播放器已存在，直接播放而不是重载整个库
         if (isSameTrack(trackInfo) && isPlayerInDOM()) {
             const player = getMusicPlayerInstance();
-            if (player && player._loadError) {
+            if (!player) {
+                destroyMusicPlayer(true, false, true);
+            } else if (player._loadError) {
                 destroyMusicPlayer(true, false, true);
             } else {
                 setMusicPlaybackContext(playbackOptions);

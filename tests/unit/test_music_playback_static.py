@@ -145,6 +145,20 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "handle_music_playback_state(" in router_source
 
 
+def test_same_track_fast_path_rebuilds_missing_player_instance():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+
+    fast_path = player_source.split(
+        "if (isSameTrack(trackInfo) && isPlayerInDOM()) {",
+        1,
+    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+    assert "if (!player) {" in fast_path
+    assert "destroyMusicPlayer(true, false, true);" in fast_path
+    assert fast_path.index("if (!player) {") < fast_path.index(
+        "player._musicPlaybackReportContext = playbackReportContext;"
+    )
+
+
 def test_missing_music_cover_stays_out_of_data_and_uses_frontend_placeholder():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     player_style = MUSIC_UI_CSS_PATH.read_text(encoding="utf-8")
