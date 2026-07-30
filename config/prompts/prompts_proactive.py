@@ -2132,6 +2132,10 @@ MUSIC_REQUEST_PENDING_PROMPTS = {
         "音乐模块已接管本轮明确的播放请求，正在自动搜索，并会在确认结果可播放后启动播放器。"
         "本轮只需简短表示正在处理；不要询问版本，不要声称已经开始播放，也不要再次调用音乐播放工具。"
     ),
+    "zh-TW": (
+        "音樂模組已接管本輪明確的播放請求，正在自動搜尋，並會在確認結果可播放後啟動播放器。"
+        "本輪只需簡短表示正在處理；不要詢問版本，不要聲稱已經開始播放，也不要再次呼叫音樂播放工具。"
+    ),
     "en": (
         "The music module has taken over this explicit playback request and is searching automatically. "
         "It will start the player only after confirming a playable result. Briefly acknowledge that the request "
