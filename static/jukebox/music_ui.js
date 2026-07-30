@@ -1926,6 +1926,7 @@
             else validateDuration('canplay');
         }
         function onError() {
+            if (!audio.error) return;
             if (isExpectedSource()) finish(false, 'media_error');
         }
 
@@ -2493,6 +2494,10 @@
                 });
                 boundPlayer.on('error', (err) => {
                     if (boundPlayer._destroying) return;
+                    if (!boundPlayer.audio || !boundPlayer.audio.error) {
+                        console.log('[Music UI] Ignoring stale media error without an active MediaError');
+                        return;
+                    }
                     const failedSource = err && err.target && (err.target.currentSrc || err.target.src);
                     const activeSource = boundPlayer.audio && (boundPlayer.audio.currentSrc || boundPlayer.audio.src);
                     if (failedSource && activeSource && resolveMusicUrl(failedSource) !== resolveMusicUrl(activeSource)) {
