@@ -659,6 +659,10 @@
                         source: 'user',
                         requestId: response.request_id
                     });
+                    if (accepted === 'queued') {
+                        console.log('[Music] 用户点歌仍在等待播放器接口就绪');
+                        return 'queued';
+                    }
                     dispatchResult = {
                         ok: accepted === true,
                         canTryNextCandidate: false

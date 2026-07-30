@@ -103,6 +103,8 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "catch (error)" in source
     assert "canTryNextCandidate: true" in source
     assert "没有可用的音乐派发接口" in source
+    assert "if (accepted === 'queued')" in source
+    assert "return 'queued';" in source
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
