@@ -217,6 +217,8 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     )
     if artist_match:
         artist = _strip_request_payload(artist_match.group(1))
+        if artist in {"我", "你", "他", "她", "它", "咱", "咱们", "我们", "自己"}:
+            return MusicRequest()
         return MusicRequest(keyword=artist, song_artist=artist)
 
     artist_song_match = re.fullmatch(

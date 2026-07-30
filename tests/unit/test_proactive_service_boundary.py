@@ -262,6 +262,7 @@ async def test_successful_proactive_query_is_remembered(monkeypatch) -> None:
         ("从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
         ("来点我喜欢的", "", "", "", "", "liked"),
         ("来首歌", "", "", "", "", "auto"),
+        ("放我的歌", "", "", "", "", "auto"),
         ("别放日推，只听红心", "", "", "", "", "liked"),
     ),
 )
