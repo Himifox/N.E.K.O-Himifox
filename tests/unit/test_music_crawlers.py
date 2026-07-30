@@ -135,6 +135,7 @@ async def test_netease_crawler_parsing():
         assert "12345" in results[0]['url']
         assert post.await_args.kwargs['headers'] == {'Cookie': ''}
         assert post.await_args.kwargs['data']['limit'] == 5
+        assert post.await_args.kwargs['timeout'] == 5.0
     await crawler.close()
 
 
@@ -918,6 +919,38 @@ async def test_fetch_music_content_orchestration():
             response = await fetch_music_content("keyword", limit=1)
             assert response['success'] is True
             assert any(r['name'] == "Mock Netease" for r in response['data'])
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_music_content_propagates_cancellation_to_primary_search():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocked_search(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    mock_netease = MagicMock()
+    mock_netease.search = blocked_search
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        task = asyncio.create_task(fetch_music_content("keyword", limit=1))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert cancelled.is_set()
 
 
 @pytest.mark.unit

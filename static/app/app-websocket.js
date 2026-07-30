@@ -651,6 +651,9 @@
         if (tracks.length === 0) return;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            window.cancelPendingMusicMediaReady();
+        }
         var firstTrack = tracks[0];
         var key = getMusicPlayUrlClaimKey(firstTrack);
         getMusicPlayUrlCoordChannel();

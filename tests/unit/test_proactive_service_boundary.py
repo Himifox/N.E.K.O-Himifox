@@ -253,6 +253,40 @@ def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
     assert music_requests.parse_explicit_user_music_request(text) is None
 
 
+def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
+    previous_task = MagicMock()
+    previous_task.done.return_value = False
+    next_task = MagicMock()
+    pending_coroutines = []
+
+    def fire_task(coro):
+        pending_coroutines.append(coro)
+        return next_task
+
+    manager = SimpleNamespace(
+        _music_request_task=previous_task,
+        _fire_task=fire_task,
+    )
+    monkeypatch.setattr(
+        music_playback,
+        "_session_manager_getter",
+        lambda _: manager,
+    )
+
+    try:
+        music_playback._on_user_utterance(
+            "YUI",
+            {"lanlan": "YUI", "content": "播放《大喜》"},
+        )
+    finally:
+        for coro in pending_coroutines:
+            coro.close()
+
+    previous_task.cancel.assert_called_once_with()
+    assert manager._music_request_task is next_task
+    assert manager._music_request_epoch == 1
+
+
 @pytest.mark.asyncio
 async def test_direct_music_request_preserves_failure_reason() -> None:
     fetch = AsyncMock(

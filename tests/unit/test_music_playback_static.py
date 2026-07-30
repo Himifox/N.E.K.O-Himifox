@@ -81,6 +81,24 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "_musicCandidateDispatchQueue" in source
 
 
+def test_new_track_cancels_pending_media_readiness_wait():
+    source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    send_source = source.split(
+        "window.sendMusicMessageDetailed = async function", 1
+    )[1].split("window.sendMusicMessage = async function", 1)[0]
+
+    assert "let pendingMusicMediaReadyCancel = null;" in source
+    assert "cancelWait = () => finish(false, 'superseded');" in source
+    assert "if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();" in send_source
+    assert send_source.index("++latestMusicRequestToken") < send_source.index(
+        "pendingMusicMediaReadyCancel()"
+    )
+    assert "window.cancelPendingMusicMediaReady = () =>" in source
+    assert "window.cancelPendingMusicMediaReady();" in APP_WEBSOCKET_PATH.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_music_player_reports_confirmed_state_to_backend():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     router_source = WEBSOCKET_ROUTER_PATH.read_text(encoding="utf-8")

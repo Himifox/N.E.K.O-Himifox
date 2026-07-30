@@ -1134,7 +1134,12 @@ class NeteaseCrawler(BaseMusicCrawler):
         
         try:
             # 搜索属于公开读取，不携带账号凭证；登录态仅用于个性化读取和播放鉴权。
-            response = await self.client.post(search_url, data=data, headers={'Cookie': ''})
+            response = await self.client.post(
+                search_url,
+                data=data,
+                headers={'Cookie': ''},
+                timeout=5.0,
+            )
             response.raise_for_status()
             result = response.json()
 
@@ -2028,8 +2033,11 @@ async def fetch_music_content(
                         await asyncio.gather(*primary_task_objs, return_exceptions=True)
                         break
                 except asyncio.CancelledError:
-                    # 任务被取消，忽略
-                    pass
+                    for task in primary_task_objs:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*primary_task_objs, return_exceptions=True)
+                    raise
                 except Exception as e:
                     logger.warning(f"[智能调度] 第一梯队某源异常: {e}")
                 
@@ -2062,8 +2070,11 @@ async def fetch_music_content(
                         await asyncio.gather(*fallback_task_objs, return_exceptions=True)
                         break
                 except asyncio.CancelledError:
-                    # 任务被取消，忽略
-                    pass
+                    for task in fallback_task_objs:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*fallback_task_objs, return_exceptions=True)
+                    raise
                 except Exception as e:
                     logger.warning(f"[智能调度] 兜底源异常: {e}")
 

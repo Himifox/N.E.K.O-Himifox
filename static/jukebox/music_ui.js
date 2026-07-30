@@ -164,6 +164,7 @@
     // currentPlayingTrack / musicCardMessageId 覆盖一次，第一个实例还会
     // 残留一个未受控的 <audio>。用 Promise 链把它们排成单线。
     let executePlayChain = Promise.resolve();
+    let pendingMusicMediaReadyCancel = null;
 
     // --- 跨窗口协调：当多个窗口（index.html + chat.html）同时开了主动搭话时，
     // 它们各自的播放器都会响应自己的 proactive_chat 响应。即使本地不在播，
@@ -1807,11 +1808,15 @@
 
         let settled = false;
         let timeoutId = null;
+        let cancelWait = null;
         const cleanup = () => {
             audio.removeEventListener('loadedmetadata', onMetadata);
             audio.removeEventListener('canplay', onCanPlay);
             audio.removeEventListener('error', onError);
             if (timeoutId) window.clearTimeout(timeoutId);
+            if (pendingMusicMediaReadyCancel === cancelWait) {
+                pendingMusicMediaReadyCancel = null;
+            }
         };
         const finish = (ok, reason) => {
             if (settled) return;
@@ -1819,6 +1824,8 @@
             cleanup();
             resolve({ ok: ok, reason: reason || '' });
         };
+        cancelWait = () => finish(false, 'superseded');
+        pendingMusicMediaReadyCancel = cancelWait;
         const isExpectedSource = () => {
             const activeUrl = audio.currentSrc || audio.src || '';
             return !expectedUrl || !activeUrl || resolveMusicUrl(activeUrl) === resolveMusicUrl(expectedUrl);
@@ -2899,6 +2906,7 @@
         }
 
         const currentToken = ++latestMusicRequestToken;
+        if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();
 
         try {
             await loadAPlayerLibrary();
@@ -3020,6 +3028,12 @@
     window.isMusicCooldown = isInMusicCooldown;
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;
+    window.cancelPendingMusicMediaReady = () => {
+        if (!pendingMusicMediaReadyCancel) return false;
+        latestMusicRequestToken++;
+        pendingMusicMediaReadyCancel();
+        return true;
+    };
 
     // 竞态拦截辅助：dispatch 流水线中（URL 校验/库加载/init）的占位标记
     window.isMusicPending = () => musicDispatchPendingCount > 0;

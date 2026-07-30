@@ -50,8 +50,13 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     request = parse_explicit_user_music_request(str(event.get("content") or ""))
     if request is None:
         return
+    previous_task = getattr(manager, "_music_request_task", None)
+    if previous_task is not None and not previous_task.done():
+        previous_task.cancel()
     epoch = _next_music_request_epoch(manager)
-    manager._fire_task(_execute_music_request(manager, request, epoch))
+    manager._music_request_task = manager._fire_task(
+        _execute_music_request(manager, request, epoch)
+    )
 
 
 def _next_music_request_epoch(manager: Any) -> int:
