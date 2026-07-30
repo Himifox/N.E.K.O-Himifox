@@ -263,19 +263,20 @@ sequenceDiagram
 
 | 来源 | 条目数 | 获取方式 | 运行状态 |
 | --- | ---: | --- | --- |
-| CHIME | 1,458 | 随安装包提供的固定 JSONL | ready |
+| CHIME | 1,458 | 已移至 `codex/knowledge-datasets` | 不再随功能分支启动导入 |
 | 梗指南 | 194 | 用户提供资料的本地导入 | available |
 | 萌娘百科 | 5 | 早期已入库的本地条目 | available，远程适配器隔离 |
 | 梗8 | 0 | 无运行时采集 | empty，远程适配器隔离 |
 | **合计** | **1,657** |  | SQLite 完整性通过 |
 
-CHIME 使用一条记录一行的 `chime_full.jsonl`，固定 1,458 行。当前文件 SHA-256 为：
+CHIME 使用一条记录一行的 `chime_full.jsonl`，固定 1,458 行。资产现保存在
+`codex/knowledge-datasets`，不进入功能分支的 wheel。文件 SHA-256 为：
 
 ```text
 e7eaea229d6d8a7af0c3273067bca8220d89c85bc1865b7907cc397e279e8e75
 ```
 
-加载器会校验文件摘要、行数、每行 JSON 对象、重复记录和字段规则。格式、数量或摘要异常时拒绝导入，不产生部分写入。
+当前功能分支不再自动加载该资产；运行时知识通过本地知识包安装。
 
 ### 7.2 显式工具
 
@@ -299,10 +300,9 @@ GET  /api/moegirl-knowledge/status
 GET  /api/moegirl-knowledge/entries
 GET  /api/moegirl-knowledge/entry
 POST /api/moegirl-knowledge/entry/disabled
-POST /api/moegirl-knowledge/chime/reimport
 ```
 
-查询接口支持分页、来源筛选、生产检索诊断和五字段详情。禁用词条及 CHIME 重导入使用现有 CSRF + Origin 校验。
+查询接口支持分页、来源筛选、生产检索诊断和五字段详情。禁用词条使用现有 CSRF + Origin 校验。
 
 ### 7.4 Corpora 精简演示集合
 
@@ -510,8 +510,8 @@ POST /api/moegirl-knowledge/chime/reimport
 | 本地知识包 | 完成 | 默认不参与自动上下文 |
 | 词条禁用与恢复 | 完成 | API 已接入 |
 | 状态、浏览、详情 API | 完成 | 尚缺完整管理 UI |
-| CHIME 固定数据导入 | 完成 | 1,458 条 JSONL，摘要校验 |
-| Corpora 精简演示集合 | 完成 | 229 条 CC0 JSONL，独立数据库，具体词条自动递卡，素材按需抽取 |
+| CHIME 固定数据导入 | 已拆出 | 1,458 条 JSONL 保存在 `codex/knowledge-datasets`，不随功能分支打包 |
+| Corpora 精简演示集合 | 已拆出 | 229 条 CC0 JSONL 保存在 `codex/knowledge-datasets`，通用集合能力仍保留 |
 | 梗指南本地导入 | 完成 | 当前 194 条 |
 | 未知梗自动补库 | 未实施 | 远程脚本已隔离，不属于当前运行时 |
 | 多个真实业务知识库联调 | 完成 | 梗库与 Corpora 共用全局路由和临时卡；已验证 `strong`、`material_sample` 及同名词条领域消歧 |

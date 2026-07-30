@@ -6,8 +6,9 @@ meme terminology. It is separate from character memory and never writes
 
 ## Runtime boundary
 
-The Main Server owns `<knowledge_dir>/moegirl-knowledge/knowledge.db` and imports
-the bundled CHIME asset during startup. Normal runtime code is local-only:
+The Main Server owns `<knowledge_dir>/moegirl-knowledge/knowledge.db`. Knowledge
+content is installed separately; startup no longer imports a bundled dataset.
+Normal runtime code is local-only:
 
 - ordinary text turns perform title, alias, and recognition matching in SQLite;
 - a confirmed match supplies one ephemeral response card to the current model
@@ -64,7 +65,7 @@ reaction, stance, light joke, or natural follow-up instead of merely repeating
 the user's sentence. It remains absent from history, memory, TTS input, and
 subsequent turns.
 
-The bundled CHIME entry “水灵灵” is currently tagged
+When the CHIME data package is installed, its “水灵灵” entry is tagged
 `quality:stale-usage` based on observed current usage. Explicit local search can
 still return it with an outdated-usage warning, but it cannot inject an
 automatic conversation card.
@@ -91,7 +92,6 @@ GET  /api/moegirl-knowledge/status
 GET  /api/moegirl-knowledge/entries
 GET  /api/moegirl-knowledge/entry
 POST /api/moegirl-knowledge/entry/disabled
-POST /api/moegirl-knowledge/chime/reimport
 ```
 
 The entries endpoint supports pagination, source filtering, and production
@@ -106,10 +106,9 @@ from both explicit retrieval and automatic turn delivery.
 ## Degradation
 
 Read operations return no results when the database is unavailable or corrupt.
-The store does not delete the database automatically. CHIME reimport is an
-explicit, authenticated local maintenance operation. External acquisition
-failures cannot affect chat because external acquisition is not part of the
-runtime.
+The store does not delete the database automatically. Knowledge data is
+installed through local packages; external acquisition is not part of the
+conversation runtime and cannot delay chat.
 
 ## Verification
 

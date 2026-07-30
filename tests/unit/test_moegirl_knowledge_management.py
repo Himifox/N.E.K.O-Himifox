@@ -14,6 +14,7 @@ from knowledge.moegirl_knowledge.catalog_overrides import (
     set_entry_disabled,
 )
 from knowledge.moegirl_knowledge.turn_context import build_meme_turn_context
+from knowledge.moegirl_knowledge.status import get_public_knowledge_status
 
 
 def _insert_fixture(database_path):
@@ -81,3 +82,17 @@ async def test_management_list_and_detail_return_five_field_cards(monkeypatch, t
     assert set(detail["entry"]) == {
         "title", "terms", "tags", "summary", "content", "source", "disabled",
     }
+
+
+def test_status_reports_installed_local_entries_without_bundled_assets(tmp_path):
+    knowledge_root = tmp_path / "knowledge"
+    _insert_fixture(knowledge_root / "moegirl-knowledge" / "knowledge.db")
+
+    status = get_public_knowledge_status(
+        SimpleNamespace(knowledge_dir=knowledge_root)
+    )
+
+    assert status["database"]["entries"] == 1
+    assert status["sources"]["chime"]["entries"] == 1
+    assert status["sources"]["chime"]["acquisition"] == "local_package"
+    assert status["sources"]["corpora"]["acquisition"] == "not_installed"

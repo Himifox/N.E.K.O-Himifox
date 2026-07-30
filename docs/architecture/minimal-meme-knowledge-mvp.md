@@ -1,8 +1,11 @@
 # 最小侵入式公共梗知识库 MVP
 
+> 状态：该内置数据方案已归档。CHIME 与 Corpora 资产保存在
+> `codex/knowledge-datasets`；当前功能分支不再随包携带或启动导入它们。
+
 ## 结论
 
-本 MVP 不下载、不爬取、也不运行外部仓库代码。应用包内直接携带
+本 MVP 原设计不下载、不爬取、也不运行外部仓库代码。应用包内直接携带
 [CHIME](https://github.com/yuboxie/chime) 的固定数据文件 `chime_full.json`，并在
 Main Server 启动后后台导入已有的本地 SQLite/FTS5 知识库。它是公共参考资料，和
 用户记忆、角色经历严格隔离。
@@ -91,7 +94,7 @@ SQLite、用户记忆或 INFO 日志。
 4. 哈希、格式、条数或转换任一失败时，不写入部分数据，不妨碍现有萌娘条目和对话。
 5. 全部测试使用内置文件和 mock，不对 CHIME 仓库或其他第三方站点发起请求。
 6. `GET /api/moegirl-knowledge/status` 能分别报告 CHIME 与萌娘百科的状态；萌娘百科降级不影响 CHIME 的 ready 状态。
-7. `POST /api/moegirl-knowledge/chime/reimport` 经现有 CSRF/Origin 校验后，只重新导入安装包内的固定 JSON；并发请求不会启动重复任务。
+7. CHIME 固定资产及其重导入流程已移至 `codex/knowledge-datasets`，不再随通用知识库功能分支打包。
 8. 本地、萌百和中文维基均未命中时，才调用已注册的网络搜索插件；插件失败或未启用时返回空上下文，
    不会中断对话或持久化正文。
 9. 普通句子中高置信出现内置梗标题时，模型在同一轮能看到临时参考卡；普通短词和无关句子不产生卡片。
