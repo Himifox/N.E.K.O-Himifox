@@ -314,6 +314,11 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("来首歌", "", "", "", "", "auto"),
         ("放我的歌", "", "", "", "", "auto"),
         ("别放日推，只听红心", "", "", "", "", "liked"),
+        ("我想听红心", "", "", "", "", "liked"),
+        ("我要听日推", "", "", "", "", "daily"),
+        ("我想听红心，别放日推", "", "", "", "", "liked"),
+        ("播放《别听慢歌》", "别听慢歌", "别听慢歌", "", "", "auto"),
+        ("play Don't Stop the Music", "Don't Stop the Music", "", "", "", "auto"),
         ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
@@ -502,6 +507,51 @@ async def test_music_search_does_not_cross_websocket_reconnect(
     assert result == {"status": "superseded"}
     push.assert_not_awaited()
     mark_query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_music_request_failure_carries_request_id(
+    monkeypatch,
+) -> None:
+    websocket = object()
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=7,
+        user_language="zh",
+        websocket=websocket,
+    )
+    monkeypatch.setattr(
+        music_playback,
+        "fetch_music_request",
+        AsyncMock(
+            return_value={
+                "success": False,
+                "error_code": "track_not_found",
+                "data": [],
+            }
+        ),
+    )
+    send_failure = AsyncMock()
+    monkeypatch.setattr(
+        music_playback,
+        "_send_music_request_failure",
+        send_failure,
+    )
+
+    result = await music_playback._execute_music_request(
+        manager,
+        music_requests.MusicRequest(keyword="missing"),
+        7,
+        websocket,
+    )
+
+    assert result["status"] == "failed"
+    send_failure.assert_awaited_once_with(
+        manager,
+        "missing",
+        "track_not_found",
+        7,
+    )
 
 
 @pytest.mark.asyncio

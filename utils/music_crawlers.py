@@ -2168,6 +2168,7 @@ async def fetch_music_content(
     personalization_source: str = "auto",
     requested_song: str = "",
     requested_artist: str = "",
+    bypass_recommendation_dedupe: bool = False,
 ) -> Dict[str, Any]:
     """
     Fetch music content with staged fallback and locale-aware source ordering.
@@ -2442,8 +2443,9 @@ async def fetch_music_content(
             unique_results.append(item)
             seen_urls.add(item['url'])
     
-    # 使用缓存进行短期去重（只过滤，不写入缓存）
-    unique_results = music_cache.filter_duplicates(unique_results)
+    # 主动推荐需要短期多样性；用户显式点播则必须允许重播刚推荐过的歌曲。
+    if not bypass_recommendation_dedupe:
+        unique_results = music_cache.filter_duplicates(unique_results)
     
     # 去重后可能为空，需要修正返回语义
     if not unique_results:

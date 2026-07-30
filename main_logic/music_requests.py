@@ -151,10 +151,14 @@ def parse_music_request(value: str) -> MusicRequest:
 
 _CLAUSE_SEPARATOR = re.compile(r"[，,。；;！？!?]+")
 _ZH_NEGATIVE_MUSIC = re.compile(
-    r"(?:不要|别|不想|不听|无需|停止|暂停|关掉|取消).{0,6}(?:播放|放|播|听|音乐|歌)"
+    r"^(?:(?:算了|还是算了)[，,\s]*)?(?:请|麻烦)?(?:我)?"
+    r"(?:不要|别|不想|不听|无需|停止|暂停|关掉|取消)"
+    r".{0,6}(?:播放|放|播|听|音乐|歌)"
 )
 _EN_NEGATIVE_MUSIC = re.compile(
-    r"\b(?:do\s+not|don't|dont|stop|pause|cancel)\b.{0,20}\b(?:play|music|song|listen)\b",
+    r"^(?:(?:actually|never\s*mind)[,\s]+)?(?:please\s+)?"
+    r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
+    r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|playback|playing)\b)",
     re.IGNORECASE,
 )
 _EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
@@ -215,12 +219,16 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         return None
 
     if re.fullmatch(
-        r"(?:请|麻烦)?(?:给我|帮我)?(?:只)?(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:我)?(?:的)?(?:红心|我喜欢|收藏)(?:的)?(?:歌|歌曲|音乐)?",
+        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:只)?"
+        r"(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:我)?(?:的)?"
+        r"(?:红心|我喜欢|收藏)(?:的)?(?:歌|歌曲|音乐)?",
         clause,
     ):
         return MusicRequest(personalization_source="liked")
     if re.fullmatch(
-        r"(?:请|麻烦)?(?:给我|帮我)?(?:只)?(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:网易云)?(?:的)?(?:日推|每日推荐)(?:歌|歌曲|音乐)?",
+        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:只)?"
+        r"(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:网易云)?(?:的)?"
+        r"(?:日推|每日推荐)(?:歌|歌曲|音乐)?",
         clause,
     ):
         return MusicRequest(personalization_source="daily")
@@ -424,6 +432,7 @@ async def fetch_music_request(
     fetcher: MusicFetcher | None = None,
     allow_keyword_fallback: bool = False,
     include_failure: bool = False,
+    bypass_recommendation_dedupe: bool = False,
 ) -> dict[str, Any] | None:
     """Resolve a request, falling back only for non-strict keyword searches."""
     if fetcher is None:
@@ -442,6 +451,7 @@ async def fetch_music_request(
                 personalization_source=request.personalization_source,
                 requested_song=request.song_name,
                 requested_artist=request.song_artist,
+                bypass_recommendation_dedupe=bypass_recommendation_dedupe,
             )
         except Exception as exc:
             logger.warning("音乐请求获取失败: %s", exc)

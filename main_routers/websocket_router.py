@@ -155,6 +155,11 @@ def _is_voice_path_message(message: dict) -> bool:
     return action == "stream_data" and message.get("input_type") == "audio"
 
 
+def _is_music_playback_state_message(message: dict) -> bool:
+    """True when the sender is the window currently hosting the local player."""
+    return message.get("action") == "music_playback_state"
+
+
 def _stamp_user_input_ingress(message: dict) -> dict:
     """Stamp genuine user input before fire-and-forget task dispatch."""
     if (
@@ -710,6 +715,16 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 # messages keep dispatching through the narrow helper above;
                 # any non-voice message from it, or any message once a newer
                 # socket re-claims voice, closes it exactly as before.
+                # Music playback ownership is also window-local: the socket
+                # reporting a real player event may be older than the newest
+                # chat window, so route only that narrow state message without
+                # handing it any general session authority.
+                if _is_music_playback_state_message(message):
+                    handle_music_playback_state(
+                        session_manager[lanlan_name],
+                        message,
+                    )
+                    continue
                 if _is_voice_path_message(message) and _owns_voice_connection():
                     await _dispatch_voice_message_while_superseded(message)
                     continue

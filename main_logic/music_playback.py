@@ -262,6 +262,7 @@ async def _execute_music_request(
         limit=5,
         source_locale=getattr(manager, "user_language", None),
         include_failure=True,
+        bypass_recommendation_dedupe=True,
     )
     if not _is_current_music_request(manager, epoch, origin_websocket):
         return {"status": "superseded"}
@@ -285,6 +286,7 @@ async def _execute_music_request(
             manager,
             request.display_query,
             error_code,
+            epoch,
         )
         return {
             "status": "failed",
@@ -317,11 +319,13 @@ async def _send_music_request_failure(
     manager: Any,
     query: str,
     error_code: str,
+    request_id: int,
 ) -> None:
     await _push_music_payload(
         manager,
         {
             "type": "music_request_failed",
+            "request_id": request_id,
             "query": query,
             "error_code": error_code,
         },

@@ -123,6 +123,17 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert queued_branch.index("_musicCandidateDispatchEpoch") < queued_branch.index(
         "return 'queued';"
     )
+    failure_handler = source.split(
+        "function handleMusicRequestFailureResponse(response)", 1
+    )[1].split("function readNewUserIcebreakerStore", 1)[0]
+    assert "Number(response && response.request_id)" in failure_handler
+    assert "window.cancelPendingMusicMediaReady(requestId);" in failure_handler
+    assert "window.cancelQueuedMusicDispatch(requestId);" in failure_handler
+    assert (
+        failure_handler.index("window.cancelQueuedMusicDispatch(requestId);")
+        < failure_handler.index("window._musicCandidateDispatchEpoch")
+        < failure_handler.index("showMusicRequestFailure(response);")
+    )
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
@@ -181,6 +192,13 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "reportMusicPlaybackState('error', null, reportContext)" in player_source
     assert 'elif action == "music_playback_state":' in router_source
     assert "handle_music_playback_state(" in router_source
+    superseded_gate = router_source.split(
+        "if session_id.get(lanlan_name) != this_session_id:", 1
+    )[1].split("action = message.get(\"action\")", 1)[0]
+    assert "if _is_music_playback_state_message(message):" in superseded_gate
+    assert superseded_gate.index("_is_music_playback_state_message") < superseded_gate.index(
+        "await websocket.close()"
+    )
 
 
 def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle():

@@ -773,6 +773,27 @@
         queueMusicPlayCandidatesResponse(response, 'websocket');
     }
 
+    function handleMusicRequestFailureResponse(response) {
+        var requestId = Number(response && response.request_id);
+        if (!Number.isFinite(requestId) || requestId <= 0) {
+            console.warn('[Music] 忽略缺少有效 request_id 的失败响应');
+            return;
+        }
+        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
+        if (latestRequestId > 0 && requestId < latestRequestId) return;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            var mediaCancelStatus = window.cancelPendingMusicMediaReady(requestId);
+            if (mediaCancelStatus === 'stale') return;
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            var queuedCancelStatus = window.cancelQueuedMusicDispatch(requestId);
+            if (queuedCancelStatus === 'stale') return;
+        }
+        window._latestMusicCandidateRequestId = requestId;
+        window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
+        showMusicRequestFailure(response);
+    }
+
     function readNewUserIcebreakerStore() {
         try {
             if (typeof localStorage === 'undefined') return null;
@@ -4087,7 +4108,7 @@
 
                 // -------- user music request failed --------
                 } else if (response.type === 'music_request_failed') {
-                    showMusicRequestFailure(response);
+                    handleMusicRequestFailureResponse(response);
 
                 // -------- repetition_warning --------
                 } else if (response.type === 'repetition_warning') {

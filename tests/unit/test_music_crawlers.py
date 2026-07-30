@@ -1683,6 +1683,38 @@ async def test_fetch_music_content_matches_requested_song_with_typo():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_explicit_playback_bypasses_recommendation_dedupe():
+    track = {
+        'name': 'Yellow',
+        'artist': 'Coldplay',
+        'url': '/api/music/play/netease/yellow',
+    }
+    music_cache.mark_as_played([track])
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease.search = AsyncMock(return_value=[track])
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        response = await fetch_music_content(
+            'Yellow',
+            limit=5,
+            personalized=True,
+            requested_song='Yellow',
+            bypass_recommendation_dedupe=True,
+        )
+
+    assert response['success'] is True
+    assert response['data'] == [track]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_fetch_music_content_rejects_unrelated_requested_song():
     mock_netease = MagicMock()
     mock_netease._cookie_invalid = False
