@@ -7,8 +7,8 @@ validation is safe enough to reconnect.
 
 from __future__ import annotations
 
-from config.moegirl_knowledge_settings import CHIME_KNOWLEDGE_ENABLED
 from config.knowledge_settings import CORPORA_DEMO_KNOWLEDGE_ENABLED
+from config.moegirl_knowledge_settings import CHIME_KNOWLEDGE_ENABLED
 from knowledge.corpora_runtime import (
     schedule_bundled_corpora_import,
     stop_bundled_corpora_import,
@@ -34,9 +34,3 @@ async def stop_moegirl_knowledge_runtime() -> None:
     """Cancel local import work during Main Server shutdown."""
     await stop_bundled_chime_import()
     await stop_bundled_corpora_import()
-
-
-# Compatibility aliases for entrypoints from builds created before the local-only
-# boundary was introduced.  They perform no remote synchronization.
-start_moegirl_knowledge_sync = start_moegirl_knowledge_runtime
-stop_moegirl_knowledge_sync = stop_moegirl_knowledge_runtime

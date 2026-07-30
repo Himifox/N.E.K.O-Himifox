@@ -216,12 +216,15 @@ async def set_public_knowledge_entry_disabled(request: Request):
     if not collection or not source_tag or not title or not isinstance(disabled, bool):
         return {"ok": False, "reason": "invalid_request"}
     service = _service()
-    entry = await asyncio.to_thread(
-        service.get_entry,
-        collection,
-        source_tag=source_tag,
-        title=title,
-    )
+    try:
+        entry = await asyncio.to_thread(
+            service.get_entry,
+            collection,
+            source_tag=source_tag,
+            title=title,
+        )
+    except ValueError:
+        return {"ok": False, "reason": "unknown_collection"}
     if entry is None:
         return {"ok": False, "reason": "not_found"}
     count = await asyncio.to_thread(
@@ -245,11 +248,14 @@ async def set_public_knowledge_collection_auto_context(request: Request):
     if not collection or not isinstance(enabled, bool):
         return {"ok": False, "reason": "invalid_request"}
     service = _service()
-    await asyncio.to_thread(
-        service.set_collection_auto_context,
-        collection,
-        enabled=enabled,
-    )
+    try:
+        await asyncio.to_thread(
+            service.set_collection_auto_context,
+            collection,
+            enabled=enabled,
+        )
+    except ValueError:
+        return {"ok": False, "reason": "unknown_collection"}
     return {"ok": True, "collection": collection, "auto_context": enabled}
 
 
@@ -257,7 +263,10 @@ async def set_public_knowledge_collection_auto_context(request: Request):
 async def list_public_knowledge_packs(
     collection: str = Query(..., min_length=1, max_length=64),
 ):
-    packs = await asyncio.to_thread(_service().list_packs, collection)
+    try:
+        packs = await asyncio.to_thread(_service().list_packs, collection)
+    except ValueError:
+        return {"ok": False, "reason": "unknown_collection"}
     return {"ok": True, "collection": collection, "packs": list(packs)}
 
 

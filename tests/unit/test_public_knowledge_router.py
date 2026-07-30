@@ -160,3 +160,29 @@ def test_subscription_size_limit_applies_to_pack_not_small_envelope(
     ).json()
 
     assert response["ok"] is True
+
+
+def test_unknown_collection_management_requests_do_not_raise(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    listing = client.get(
+        "/api/public-knowledge/packs",
+        params={"collection": "missing"},
+    ).json()
+    toggle = client.post(
+        "/api/public-knowledge/collection/auto-context",
+        json={"collection": "missing", "enabled": True},
+    ).json()
+    disable = client.post(
+        "/api/public-knowledge/entry/disabled",
+        json={
+            "collection": "missing",
+            "source": "fixture",
+            "title": "unknown",
+            "disabled": True,
+        },
+    ).json()
+
+    assert listing == {"ok": False, "reason": "unknown_collection"}
+    assert toggle == {"ok": False, "reason": "unknown_collection"}
+    assert disable == {"ok": False, "reason": "unknown_collection"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +48,21 @@ async def _import_bundled_corpora(database_path: Path, state_path: Path, logger)
     try:
         dataset = await asyncio.to_thread(load_bundled_corpora_dataset)
         store = MoegirlKnowledgeStore(database_path)
+        previous = await asyncio.to_thread(_load_state, state_path)
+        source_count = await asyncio.to_thread(
+            store.count_by_source_tag,
+            "source:corpora",
+        )
+        if (
+            previous.get("status") == "ready"
+            and previous.get("sha256") == dataset.sha256
+            and source_count == len(dataset.entries)
+        ):
+            logger.info(
+                "[knowledge:corpora] bundled import status=ready entries=%d unchanged_asset=true",
+                len(dataset.entries),
+            )
+            return
         results = await asyncio.to_thread(
             store.replace_source,
             "source:corpora",
@@ -90,3 +106,11 @@ async def _import_bundled_corpora(database_path: Path, state_path: Path, logger)
         except Exception:
             pass
         logger.warning("[knowledge:corpora] bundled import failed: %s", type(exc).__name__)
+
+
+def _load_state(state_path: Path) -> dict:
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}

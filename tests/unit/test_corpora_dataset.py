@@ -78,11 +78,13 @@ async def test_corpora_collection_import_search_management_and_isolation(
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["status"] == "ready"
     assert state["entries"] == CORPORA_ENTRY_COUNT
-    assert service.get_status("corpora") == {
-        "collection_id": "corpora",
-        "entries": CORPORA_ENTRY_COUNT,
-        "integrity_ok": True,
-    }
+    status = service.get_status("corpora")
+    assert status["collection_id"] == "corpora"
+    assert status["entries"] == CORPORA_ENTRY_COUNT
+    assert status["integrity_ok"] is True
+    assert status["auto_context"] is True
+    assert status["disabled_entries"] == 0
+    assert status["packs"] == 0
     assert service.count_entries("corpora", source_tag="source:corpora") == 229
     assert service.search("corpora", "Aphrodite", limit=1)[0].entry.title == "Aphrodite"
     assert service.search("corpora", "The Godfather", limit=1)[0].entry.title == (
@@ -212,3 +214,16 @@ async def test_builtin_collections_disambiguate_an_equal_title_by_context(tmp_pa
     assert service.build_turn_context("I drew The Moon today").collection_id == "corpora"
     assert service.build_turn_context("The Moon 是什么梗？").collection_id == "meme"
     assert service.build_turn_context("The Moon").collection_id == "meme"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_bundled_corpora_does_not_rewrite_database(tmp_path):
+    database_path = tmp_path / "corpora" / "knowledge.db"
+    state_path = tmp_path / "corpora" / "state.json"
+    logger = logging.getLogger("test.corpora.unchanged")
+
+    await _import_bundled_corpora(database_path, state_path, logger)
+    first_revision = KnowledgeStore(database_path).entries_revision()
+    await _import_bundled_corpora(database_path, state_path, logger)
+
+    assert KnowledgeStore(database_path).entries_revision() == first_revision

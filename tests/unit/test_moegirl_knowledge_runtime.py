@@ -28,6 +28,19 @@ async def test_bundled_chime_runtime_import_records_independent_state(tmp_path):
     assert MoegirlKnowledgeStore(database_path).count() == CHIME_ENTRY_COUNT
 
 
+@pytest.mark.asyncio
+async def test_unchanged_bundled_chime_does_not_rewrite_database(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    state_path = tmp_path / "chime_state.json"
+    logger = logging.getLogger("test.chime.unchanged")
+
+    await _import_bundled_chime(database_path, state_path, logger)
+    first_revision = MoegirlKnowledgeStore(database_path).entries_revision()
+    await _import_bundled_chime(database_path, state_path, logger)
+
+    assert MoegirlKnowledgeStore(database_path).entries_revision() == first_revision
+
+
 def test_status_reports_live_local_counts_and_isolated_remote_sources(tmp_path):
     config = SimpleNamespace(knowledge_dir=tmp_path)
     root = tmp_path / "moegirl-knowledge"

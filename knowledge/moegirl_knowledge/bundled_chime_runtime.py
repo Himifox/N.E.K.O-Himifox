@@ -114,6 +114,21 @@ async def _import_bundled_chime(database_path: Path, state_path: Path, logger) -
     try:
         dataset = await asyncio.to_thread(load_bundled_chime_dataset)
         store = MoegirlKnowledgeStore(database_path)
+        previous = await asyncio.to_thread(_load_public_state, state_path)
+        source_count = await asyncio.to_thread(
+            store.count_by_source_tag,
+            "source:chime",
+        )
+        if (
+            previous.get("status") == "ready"
+            and previous.get("sha256") == dataset.sha256
+            and source_count == len(dataset.entries)
+        ):
+            logger.info(
+                "[moegirl-knowledge] bundled CHIME status=ready entries=%d unchanged_asset=true",
+                len(dataset.entries),
+            )
+            return
         results = await asyncio.to_thread(store.replace_source, "source:chime", dataset.entries)
         from knowledge.service import KnowledgeService
 
@@ -152,7 +167,14 @@ def _load_public_state(state_path: Path) -> dict:
         return {}
     if not isinstance(payload, dict):
         return {}
-    allowed_keys = {"status", "last_success_at", "commit", "failed"}
+    allowed_keys = {
+        "status",
+        "last_success_at",
+        "commit",
+        "sha256",
+        "entries",
+        "failed",
+    }
     return {key: payload[key] for key in allowed_keys if key in payload}
 
 
