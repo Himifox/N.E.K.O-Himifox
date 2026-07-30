@@ -213,6 +213,58 @@ async def test_netease_crawler_scales_candidate_count_with_requested_limit():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_netease_personalized_recommendations_rotates_all_sources():
+    crawler = NeteaseCrawler()
+    snapshot = {
+        'user_id': 7,
+        'liked_tracks': [{'id': 1, 'recommendation_source': 'liked'}],
+        'liked_track_ids': {1},
+        'playlists': [],
+        'subscribed_artists': [],
+    }
+    daily = [{'id': 2, 'recommendation_source': 'daily'}]
+    daily_playlist = [{
+        'id': 3,
+        'recommendation_source': 'daily_playlist',
+    }]
+    artist = [{'id': 4, 'recommendation_source': 'artist'}]
+
+    with (
+        patch.object(crawler, 'get_taste_snapshot', new=AsyncMock(return_value=snapshot)),
+        patch.object(
+            crawler,
+            'get_daily_recommendations',
+            new=AsyncMock(side_effect=lambda *_: [dict(item) for item in daily]),
+        ),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(
+                side_effect=lambda *_: [dict(item) for item in daily_playlist]
+            ),
+        ),
+        patch.object(
+            crawler,
+            '_fetch_exploration_tracks',
+            new=AsyncMock(side_effect=lambda *_: [dict(item) for item in artist]),
+        ),
+        patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
+    ):
+        sources = [
+            (await crawler.personalized_recommendations('', limit=1))[0][
+                'recommendation_source'
+            ]
+            for _ in range(6)
+        ]
+
+    assert sources == [
+        'liked', 'daily_playlist', 'liked', 'daily', 'liked', 'artist',
+    ]
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_netease_personalized_recommendations_rotates_to_artist_lead():
     crawler = NeteaseCrawler()
     familiar = [
@@ -245,6 +297,11 @@ async def test_netease_personalized_recommendations_rotates_to_artist_lead():
     with (
         patch.object(crawler, 'get_taste_snapshot', new=AsyncMock(return_value=snapshot)),
         patch.object(crawler, 'get_daily_recommendations', new=AsyncMock(return_value=[])),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(return_value=[]),
+        ),
         patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock(return_value=exploration)),
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
     ):
@@ -283,6 +340,11 @@ async def test_netease_personalized_recommendations_prioritizes_artist_hint():
     with (
         patch.object(crawler, 'get_taste_snapshot', new=AsyncMock(return_value=snapshot)),
         patch.object(crawler, 'get_daily_recommendations', new=AsyncMock(return_value=[])),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(return_value=[]),
+        ),
         patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock(return_value=exploration)),
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
     ):
@@ -318,6 +380,11 @@ async def test_netease_personalized_recommendations_backfill_from_liked_pool():
     with (
         patch.object(crawler, 'get_taste_snapshot', new=AsyncMock(return_value=snapshot)),
         patch.object(crawler, 'get_daily_recommendations', new=AsyncMock(return_value=[])),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(return_value=[]),
+        ),
         patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock(return_value=[])) as explore,
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
     ):
@@ -359,6 +426,11 @@ async def test_netease_personalized_recommendations_can_restrict_to_liked():
         ),
         patch.object(crawler, 'get_taste_snapshot', new=AsyncMock()) as snapshot,
         patch.object(crawler, 'get_daily_recommendations', new=AsyncMock()) as daily,
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(),
+        ) as daily_playlist,
         patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock()) as artist,
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
     ):
@@ -370,6 +442,7 @@ async def test_netease_personalized_recommendations_can_restrict_to_liked():
     assert results == liked
     snapshot.assert_not_awaited()
     daily.assert_not_awaited()
+    daily_playlist.assert_not_awaited()
     artist.assert_not_awaited()
     await crawler.close()
 
@@ -385,6 +458,16 @@ async def test_netease_personalized_recommendations_can_restrict_to_daily():
         'url': '/api/music/play/netease/2',
         'recommendation_source': 'daily',
     }]
+    daily_playlist_tracks = [
+        dict(daily_tracks[0], recommendation_source='daily_playlist'),
+        {
+            'id': 3,
+            'name': 'Daily Playlist Song',
+            'artist': 'Playlist Artist',
+            'url': '/api/music/play/netease/3',
+            'recommendation_source': 'daily_playlist',
+        },
+    ]
     with (
         patch.object(
             crawler,
@@ -396,6 +479,11 @@ async def test_netease_personalized_recommendations_can_restrict_to_daily():
             'get_daily_recommendations',
             new=AsyncMock(return_value=daily_tracks),
         ),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(return_value=daily_playlist_tracks),
+        ),
         patch.object(crawler, 'get_taste_snapshot', new=AsyncMock()) as snapshot,
         patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock()) as artist,
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
@@ -405,9 +493,48 @@ async def test_netease_personalized_recommendations_can_restrict_to_daily():
             personalization_source='daily',
         )
 
-    assert results == daily_tracks
+    assert [item['id'] for item in results] == [2, 3]
     snapshot.assert_not_awaited()
     artist.assert_not_awaited()
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_daily_source_survives_playlist_failure():
+    crawler = NeteaseCrawler()
+    daily_tracks = [{
+        'id': 2,
+        'name': 'Daily Song',
+        'recommendation_source': 'daily',
+    }]
+
+    with (
+        patch.object(
+            crawler,
+            '_get_personalization_user_id',
+            new=AsyncMock(return_value=7),
+        ),
+        patch.object(
+            crawler,
+            'get_daily_recommendations',
+            new=AsyncMock(return_value=daily_tracks),
+        ),
+        patch('pyncm_async.apis.WeapiCryptoRequest', side_effect=lambda func: func),
+        patch.object(
+            crawler,
+            '_personalization_api_call',
+            new=AsyncMock(side_effect=RuntimeError('upstream unavailable')),
+        ),
+        patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
+    ):
+        results = await crawler.personalized_recommendations(
+            limit=5,
+            personalization_source='daily',
+        )
+
+    assert results == daily_tracks
+    assert crawler._personalization_error_code == ''
     await crawler.close()
 
 
@@ -583,6 +710,53 @@ async def test_netease_daily_recommendations_are_requested_once_per_day():
     assert first == second
     assert first[0]['recommendation_source'] == 'daily'
     assert api_call.await_count == 1
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_daily_playlist_uses_first_valid_playlist_once_per_day():
+    crawler = NeteaseCrawler()
+    payload = {
+        'code': 200,
+        'recommend': [
+            {'name': 'Missing ID'},
+            {'id': 88, 'name': 'Daily Mix'},
+            {'id': 99, 'name': 'Later Mix'},
+        ],
+    }
+    playlist_tracks = [
+        {'id': index, 'name': f'Track {index}'}
+        for index in range(1, 7)
+    ]
+
+    async def request_daily_playlists(call):
+        assert call() == ('/api/v1/discovery/recommend/resource', {})
+        return payload
+
+    with (
+        patch('pyncm_async.apis.WeapiCryptoRequest', side_effect=lambda func: func),
+        patch.object(
+            crawler,
+            '_personalization_api_call',
+            new=AsyncMock(side_effect=request_daily_playlists),
+        ) as api_call,
+        patch.object(
+            crawler,
+            '_fetch_playlist_tracks',
+            new=AsyncMock(return_value=playlist_tracks),
+        ) as fetch_playlist,
+    ):
+        first = await crawler.get_daily_playlist_recommendations(7)
+        second = await crawler.get_daily_playlist_recommendations(7)
+
+    assert first == second
+    assert [item['id'] for item in first] == [1, 2, 3, 4, 5]
+    assert all(item['recommendation_source'] == 'daily_playlist' for item in first)
+    assert all(item['playlist_id'] == 88 for item in first)
+    assert all(item['playlist_name'] == 'Daily Mix' for item in first)
+    assert api_call.await_count == 1
+    fetch_playlist.assert_awaited_once_with(88)
     await crawler.close()
 
 
