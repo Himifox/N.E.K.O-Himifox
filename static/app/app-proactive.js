@@ -1313,6 +1313,23 @@
                 return;
             }
 
+            // 前面的截图/窗口标题等待期间，播放器可能刚好开始加载或播放。
+            // 在序列化请求前使用最新状态收口，避免后端为过期的 music 模式再次搜歌。
+            var musicPlayingBeforeRequest = (typeof window.isMusicPlaying === 'function') && window.isMusicPlaying();
+            var musicPendingBeforeRequest = (typeof window.isMusicPending === 'function') && window.isMusicPending();
+            var remoteMusicActiveBeforeRequest = (typeof window.isRemoteMusicActive === 'function') && window.isRemoteMusicActive();
+            var musicRateLimitedBeforeRequest = (typeof window.isMusicRecommendRateLimited === 'function') && window.isMusicRecommendRateLimited();
+            var musicCooldownBeforeRequest = (typeof window.isMusicCooldown === 'function') && window.isMusicCooldown();
+            requestBody.is_playing_music = !!musicPlayingBeforeRequest;
+            requestBody.current_track = (typeof window.getMusicCurrentTrack === 'function') ? window.getMusicCurrentTrack() : null;
+            requestBody.music_cooldown = !!musicCooldownBeforeRequest;
+            if (musicPlayingBeforeRequest || musicPendingBeforeRequest || remoteMusicActiveBeforeRequest || musicRateLimitedBeforeRequest || musicCooldownBeforeRequest) {
+                requestBody.enabled_modes = requestBody.enabled_modes.filter(function (mode) { return mode !== 'music'; });
+                if (requestBody.enabled_modes.length === 0 && !S.proactiveMiniGameInviteEnabled) {
+                    return;
+                }
+            }
+
             var proactiveSec = window.nekoLocalMutationSecurity;
             var proactiveBody = JSON.stringify(requestBody);
 
