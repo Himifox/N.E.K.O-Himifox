@@ -3143,8 +3143,9 @@
     window.MusicPluginAPI = MusicPluginAPI;
     window.cancelPendingMusicMediaReady = (requestId) => {
         if (!pendingMusicMediaReadyCancel) return false;
-        const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
         const nextRequestId = Number(requestId);
+        if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return false;
+        const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
         if (
             Number.isFinite(pendingRequestId)
             && Number.isFinite(nextRequestId)

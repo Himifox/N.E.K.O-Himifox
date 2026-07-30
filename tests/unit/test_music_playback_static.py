@@ -106,8 +106,12 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "if (accepted === 'queued')" in source
     assert "return 'queued';" in source
     assert "window._latestMusicCandidateRequestId" in source
+    assert "if (!Number.isFinite(requestId) || requestId <= 0)" in source
     assert "if (latestRequestId > 0 && requestId <= latestRequestId) return;" in source
     assert "window.cancelPendingMusicMediaReady(response.request_id);" in source
+    invalid_guard = source.index("if (!Number.isFinite(requestId) || requestId <= 0)")
+    cancel_call = source.index("window.cancelPendingMusicMediaReady(response.request_id);")
+    assert invalid_guard < cancel_call
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
@@ -124,6 +128,7 @@ def test_new_track_cancels_pending_media_readiness_wait():
     )
     assert "cancelWait.requestId = requestId ?? null;" in source
     assert "window.cancelPendingMusicMediaReady = (requestId) =>" in source
+    assert "if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return false;" in source
     assert "nextRequestId < pendingRequestId" in source
     assert "window.cancelPendingMusicMediaReady(response.request_id);" in APP_WEBSOCKET_PATH.read_text(
         encoding="utf-8"

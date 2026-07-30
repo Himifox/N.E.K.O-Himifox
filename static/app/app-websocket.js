@@ -708,11 +708,13 @@
         var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
         if (tracks.length === 0) return;
         var requestId = Number(response.request_id);
-        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
-        if (Number.isFinite(requestId) && requestId > 0) {
-            if (latestRequestId > 0 && requestId <= latestRequestId) return;
-            window._latestMusicCandidateRequestId = requestId;
+        if (!Number.isFinite(requestId) || requestId <= 0) {
+            console.warn('[Music] 忽略缺少有效 request_id 的候选响应');
+            return;
         }
+        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
+        if (latestRequestId > 0 && requestId <= latestRequestId) return;
+        window._latestMusicCandidateRequestId = requestId;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
         if (typeof window.cancelPendingMusicMediaReady === 'function') {
