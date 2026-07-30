@@ -105,6 +105,9 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "没有可用的音乐派发接口" in source
     assert "if (accepted === 'queued')" in source
     assert "return 'queued';" in source
+    assert "window._latestMusicCandidateRequestId" in source
+    assert "if (latestRequestId > 0 && requestId <= latestRequestId) return;" in source
+    assert "window.cancelPendingMusicMediaReady(response.request_id);" in source
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
@@ -119,8 +122,10 @@ def test_new_track_cancels_pending_media_readiness_wait():
     assert send_source.index("++latestMusicRequestToken") < send_source.index(
         "pendingMusicMediaReadyCancel()"
     )
-    assert "window.cancelPendingMusicMediaReady = () =>" in source
-    assert "window.cancelPendingMusicMediaReady();" in APP_WEBSOCKET_PATH.read_text(
+    assert "cancelWait.requestId = requestId ?? null;" in source
+    assert "window.cancelPendingMusicMediaReady = (requestId) =>" in source
+    assert "nextRequestId < pendingRequestId" in source
+    assert "window.cancelPendingMusicMediaReady(response.request_id);" in APP_WEBSOCKET_PATH.read_text(
         encoding="utf-8"
     )
 
@@ -138,6 +143,8 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'playing')" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, playbackState)" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'ended')" in player_source
+    assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'error')" in player_source
+    assert ") !== reportContext" in player_source
     assert "reportMusicPlaybackState('playing', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('ended', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('error', null, reportContext)" in player_source

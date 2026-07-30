@@ -707,10 +707,16 @@
     function handleMusicPlayCandidatesResponse(response) {
         var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
         if (tracks.length === 0) return;
+        var requestId = Number(response.request_id);
+        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
+        if (Number.isFinite(requestId) && requestId > 0) {
+            if (latestRequestId > 0 && requestId <= latestRequestId) return;
+            window._latestMusicCandidateRequestId = requestId;
+        }
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
         if (typeof window.cancelPendingMusicMediaReady === 'function') {
-            window.cancelPendingMusicMediaReady();
+            window.cancelPendingMusicMediaReady(response.request_id);
         }
         var firstTrack = tracks[0];
         var key = getMusicPlayUrlClaimKey(firstTrack);

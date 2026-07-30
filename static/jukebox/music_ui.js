@@ -1856,7 +1856,13 @@
         'media_error'
     ].includes(reason);
 
-    const waitForMusicMediaReady = (player, token, expectedUrl, enforceRecommendationLimit) => new Promise((resolve) => {
+    const waitForMusicMediaReady = (
+        player,
+        token,
+        expectedUrl,
+        enforceRecommendationLimit,
+        requestId
+    ) => new Promise((resolve) => {
         const audio = player && player.audio;
         if (!audio) {
             resolve({ ok: false, reason: 'missing_audio' });
@@ -1882,6 +1888,7 @@
             resolve({ ok: ok, reason: reason || '' });
         };
         cancelWait = () => finish(false, 'superseded');
+        cancelWait.requestId = requestId ?? null;
         pendingMusicMediaReadyCancel = cancelWait;
         const isExpectedSource = () => {
             const activeUrl = audio.currentSrc || audio.src || '';
@@ -2491,15 +2498,19 @@
                         console.log('[Music UI] Ignoring stale media error from the previous source:', failedSource);
                         return;
                     }
+                    const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, 'error');
+                    if (!reportContext) return;
                     console.error('[Music UI] APlayer error:', err);
                     playbackStartedAt = 0;
 
-                    const tokenAtEvent = boundPlayer._latestToken;
-                    const reportContext = boundPlayer._musicPlaybackReportContext;
+                    const tokenAtEvent = reportContext.token;
                     boundPlayer._loadError = true;
 
                     setTimeout(() => {
                         if (tokenAtEvent !== latestMusicRequestToken) return;
+                        if (
+                            getOwnedMusicPlaybackReportContext(boundPlayer, 'error') !== reportContext
+                        ) return;
                         if (autoplayBlocked) return;
                         if (boundPlayer._destroying) return;
 
@@ -2802,7 +2813,8 @@
                 localPlayer,
                 currentToken,
                 trackInfo.url,
-                playbackOptions.source === 'proactive'
+                playbackOptions.source === 'proactive',
+                playbackOptions.requestId
             );
 
             // 执行播放
@@ -3129,8 +3141,15 @@
     window.isMusicCooldown = isInMusicCooldown;
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;
-    window.cancelPendingMusicMediaReady = () => {
+    window.cancelPendingMusicMediaReady = (requestId) => {
         if (!pendingMusicMediaReadyCancel) return false;
+        const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
+        const nextRequestId = Number(requestId);
+        if (
+            Number.isFinite(pendingRequestId)
+            && Number.isFinite(nextRequestId)
+            && nextRequestId < pendingRequestId
+        ) return false;
         latestMusicRequestToken++;
         pendingMusicMediaReadyCancel();
         return true;
