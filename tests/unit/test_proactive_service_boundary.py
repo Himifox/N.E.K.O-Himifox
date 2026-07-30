@@ -202,6 +202,49 @@ async def test_strict_music_request_does_not_fall_back(monkeypatch) -> None:
     fetch.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_recent_user_query_skips_proactive_search(monkeypatch) -> None:
+    scope = "YUI-query-dedupe"
+    user_request = music_requests.MusicRequest(
+        keyword="童年",
+        song_name="童年",
+    )
+    music_requests.mark_music_request_query(scope, user_request)
+    fetch = AsyncMock()
+    monkeypatch.setattr(music_recommendation, "fetch_music_content", fetch)
+
+    result = await music_recommendation._fetch_music_with_fallback(
+        "童年",
+        lanlan_name=scope,
+    )
+
+    assert result is None
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_proactive_query_is_remembered(monkeypatch) -> None:
+    scope = "YUI-proactive-query"
+    fetch = AsyncMock(
+        return_value={
+            "success": True,
+            "data": [{"name": "童年", "url": "/music/childhood"}],
+        }
+    )
+    monkeypatch.setattr(music_recommendation, "fetch_music_content", fetch)
+
+    result = await music_recommendation._fetch_music_with_fallback(
+        "童年",
+        lanlan_name=scope,
+    )
+
+    assert result is not None
+    assert music_requests.was_music_request_recent(
+        scope,
+        music_requests.MusicRequest(keyword="童年"),
+    )
+
+
 @pytest.mark.parametrize(
     ("text", "keyword", "song", "artist", "playlist", "source"),
     (
@@ -326,6 +369,8 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
         return True
 
     monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
+    mark_query = MagicMock()
+    monkeypatch.setattr(music_playback, "mark_music_request_query", mark_query)
     monkeypatch.setattr(
         music_playback,
         "_wait_for_current_reply",
@@ -333,6 +378,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
     )
     monkeypatch.setattr(music_playback, "_push_music_payload", push)
     manager = SimpleNamespace(
+        lanlan_name="YUI",
         _music_request_epoch=1,
         user_language="zh",
     )
@@ -345,6 +391,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
 
     assert result == {"status": "queued", "candidates": 1}
     assert order == ["search", "reply_end", "player"]
+    mark_query.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,9 @@ from config.prompts.prompts_proactive import (
 from main_logic.music_requests import (
     MusicRequest as _MusicRequest,
     fetch_music_request,
+    mark_music_request_query,
     parse_music_request as _parse_music_request,
+    was_music_request_recent,
 )
 from utils.logger_config import get_module_logger
 from utils.music_crawlers import fetch_music_content, mark_music_as_played
@@ -254,6 +256,9 @@ async def _fetch_music_with_fallback(
 ) -> dict | None:
     """Resolve a music directive, preserving strict source and song requests."""
     request = _parse_music_request(keyword)
+    if was_music_request_recent(lanlan_name, request):
+        logger.info("[%s] 跳过近期已搜索的音乐请求: %r", lanlan_name, keyword)
+        return None
 
     result = await fetch_music_request(
         request,
@@ -261,6 +266,8 @@ async def _fetch_music_with_fallback(
         fetcher=fetch_music_content,
         allow_keyword_fallback=True,
     )
+    if result and result.get("success") and result.get("data"):
+        mark_music_request_query(lanlan_name, request)
     if result is None:
         logger.warning("[%s] 音乐请求 %r 未命中", lanlan_name, keyword)
     return result

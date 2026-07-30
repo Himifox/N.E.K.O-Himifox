@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,9 @@ from utils.logger_config import get_module_logger
 logger = get_module_logger(__name__, "Main")
 
 MusicFetcher = Callable[..., Awaitable[dict[str, Any]]]
+_RECENT_QUERY_TTL_SECONDS = 300.0
+_RECENT_QUERY_LIMIT_PER_SCOPE = 20
+_recent_music_queries: dict[tuple[str, str], float] = {}
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,44 @@ class MusicRequest:
         return " ".join(
             part for part in (self.song_name or self.keyword, self.song_artist) if part
         )
+
+
+def _music_request_query_key(request: MusicRequest) -> str:
+    if request.playlist_name:
+        value = f"playlist:{request.playlist_name}"
+    elif request.personalization_source != "auto":
+        value = f"source:{request.personalization_source}"
+    else:
+        value = request.keyword
+    return " ".join(value.casefold().split())
+
+
+def was_music_request_recent(scope: str, request: MusicRequest) -> bool:
+    key = _music_request_query_key(request)
+    if not key:
+        return False
+    now = time.monotonic()
+    timestamp = _recent_music_queries.get((scope, key))
+    return timestamp is not None and now - timestamp < _RECENT_QUERY_TTL_SECONDS
+
+
+def mark_music_request_query(scope: str, request: MusicRequest) -> None:
+    key = _music_request_query_key(request)
+    if not key:
+        return
+    now = time.monotonic()
+    scope_items = [
+        (cache_key, timestamp)
+        for cache_key, timestamp in _recent_music_queries.items()
+        if cache_key[0] == scope
+    ]
+    for cache_key, timestamp in scope_items:
+        if now - timestamp >= _RECENT_QUERY_TTL_SECONDS:
+            _recent_music_queries.pop(cache_key, None)
+    scope_items = [item for item in scope_items if item[0] in _recent_music_queries]
+    if len(scope_items) >= _RECENT_QUERY_LIMIT_PER_SCOPE:
+        _recent_music_queries.pop(min(scope_items, key=lambda item: item[1])[0], None)
+    _recent_music_queries[(scope, key)] = now
 
 
 def parse_music_request(value: str) -> MusicRequest:

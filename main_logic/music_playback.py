@@ -25,6 +25,7 @@ from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_requests import (
     MusicRequest,
     fetch_music_request,
+    mark_music_request_query,
     parse_explicit_user_music_request,
 )
 from utils.logger_config import get_module_logger
@@ -242,6 +243,8 @@ async def _execute_music_request(
         source_locale=getattr(manager, "user_language", None),
         include_failure=True,
     )
+    if result and result.get("success") and result.get("data"):
+        mark_music_request_query(getattr(manager, "lanlan_name", ""), request)
     if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
 
