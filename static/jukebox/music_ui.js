@@ -130,12 +130,40 @@
         };
     }
 
+    function getMusicLifecycleTimestamp() {
+        if (
+            typeof performance !== 'undefined'
+            && Number.isFinite(performance.timeOrigin)
+            && typeof performance.now === 'function'
+        ) {
+            return performance.timeOrigin + performance.now();
+        }
+        return Date.now();
+    }
+
+    function normalizeMusicEventTimestamp(event) {
+        const eventTimestamp = Number(event && event.timeStamp);
+        if (!Number.isFinite(eventTimestamp) || eventTimestamp <= 0) return null;
+        // Modern browsers expose Event.timeStamp relative to performance.timeOrigin,
+        // while older WebKit variants may already expose an epoch timestamp.
+        if (eventTimestamp > 1e12) return eventTimestamp;
+        if (
+            typeof performance !== 'undefined'
+            && Number.isFinite(performance.timeOrigin)
+        ) {
+            return performance.timeOrigin + eventTimestamp;
+        }
+        return null;
+    }
+
     function createMusicPlaybackReportContext(playbackId, options, track, token) {
         options = options || {};
         track = track || {};
         return {
             playbackId: playbackId || '',
             token: token,
+            lifecycleStartedAt: getMusicLifecycleTimestamp(),
+            mediaReady: false,
             source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
             requestId: options.requestId ?? null,
             url: String(track.url || ''),
@@ -2446,6 +2474,7 @@
                 boundPlayer.on('play', () => {
                     const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, 'playing');
                     if (!reportContext) return;
+                    reportContext.mediaReady = true;
                     if (autoDestroyTimer) { clearTimeout(autoDestroyTimer); autoDestroyTimer = null; }
                     updatePlayBtnState(true);
                     autoplayBlocked = false;
@@ -2506,11 +2535,20 @@
                     }
                     const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, 'error');
                     if (!reportContext) return;
-                    console.error('[Music UI] APlayer error:', err);
-                    playbackStartedAt = 0;
+                    const eventTimestamp = normalizeMusicEventTimestamp(err);
+                    if (
+                        eventTimestamp !== null
+                        && eventTimestamp < reportContext.lifecycleStartedAt
+                    ) {
+                        console.log('[Music UI] Ignoring queued media error from the previous lifecycle');
+                        return;
+                    }
+                    if (eventTimestamp === null && reportContext.mediaReady !== true) {
+                        console.log('[Music UI] Ignoring unowned media error before readiness');
+                        return;
+                    }
 
                     const tokenAtEvent = reportContext.token;
-                    boundPlayer._loadError = true;
 
                     setTimeout(() => {
                         if (tokenAtEvent !== latestMusicRequestToken) return;
@@ -2519,6 +2557,10 @@
                         ) return;
                         if (autoplayBlocked) return;
                         if (boundPlayer._destroying) return;
+
+                        console.error('[Music UI] APlayer error:', err);
+                        playbackStartedAt = 0;
+                        boundPlayer._loadError = true;
 
                         let errorDetail = musicT('music.playError', 'Playback failed');
                         if (err && err.message) errorDetail = err.message;
@@ -2856,6 +2898,7 @@
                     canTryNextMusicCandidate(mediaResult.reason)
                 );
             }
+            playbackReportContext.mediaReady = true;
             if (!shouldAutoPlay) {
                 setMusicBarVisualState(musicBar, 'paused');
                 updateMusicCard('paused', currentPlayingTrack);
@@ -2990,6 +3033,7 @@
                     trackInfo,
                     latestMusicRequestToken
                 );
+                playbackReportContext.mediaReady = true;
                 player._musicPlaybackReportContext = playbackReportContext;
                 if (shouldAutoPlay && player && player.audio && player.audio.paused) {
                     if (typeof window.setMusicUserDriven === 'function')

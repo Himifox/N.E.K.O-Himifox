@@ -167,6 +167,7 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "function reportMusicPlaybackState(state, track, playbackContext)" in player_source
     assert "function createMusicPlaybackReportContext(playbackId, options, track, token)" in player_source
     assert "function getOwnedMusicPlaybackReportContext(player, state)" in player_source
+    assert "function normalizeMusicEventTimestamp(event)" in player_source
     assert "action: 'music_playback_state'" in player_source
     assert "localPlayer._musicPlaybackReportContext = playbackReportContext" in player_source
     assert "context.token !== latestMusicRequestToken" in player_source
@@ -180,6 +181,26 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "reportMusicPlaybackState('error', null, reportContext)" in player_source
     assert 'elif action == "music_playback_state":' in router_source
     assert "handle_music_playback_state(" in router_source
+
+
+def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    error_handler = player_source.split(
+        "boundPlayer.on('error', (err) => {",
+        1,
+    )[1].split("// 进度条与播放按钮点击", 1)[0]
+
+    assert "lifecycleStartedAt: getMusicLifecycleTimestamp()" in player_source
+    assert "mediaReady: false" in player_source
+    assert "const eventTimestamp = normalizeMusicEventTimestamp(err);" in error_handler
+    assert "eventTimestamp < reportContext.lifecycleStartedAt" in error_handler
+    assert "eventTimestamp === null && reportContext.mediaReady !== true" in error_handler
+    delayed_handler = error_handler.split("setTimeout(() => {", 1)[1]
+    assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'error') !== reportContext" in delayed_handler
+    assert delayed_handler.index("getOwnedMusicPlaybackReportContext") < delayed_handler.index(
+        "boundPlayer._loadError = true;"
+    )
+    assert "playbackReportContext.mediaReady = true;" in player_source
 
 
 def test_same_track_fast_path_rebuilds_missing_player_instance():
