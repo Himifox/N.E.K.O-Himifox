@@ -288,6 +288,7 @@ def test_parse_explicit_user_music_request(
     "text",
     (
         "不要放歌",
+        "放首歌，算了别放了",
         "刚才听了晴天",
         "你喜欢邓紫棋吗？",
         "我想换成红色",

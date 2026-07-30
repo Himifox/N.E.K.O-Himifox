@@ -623,20 +623,18 @@
         if (errorCode === 'cookie_invalid') {
             message = (window.t && window.t('music.cookieExpired')) || '音乐Cookie已失效';
         } else if (errorCode === 'login_required') {
-            message = '请先配置网易云音乐 Cookie';
+            message = (window.t && window.t('music.loginRequired')) || '请先配置网易云音乐 Cookie';
         } else if (errorCode === 'playlist_ambiguous') {
-            message = '存在重名歌单，请提供更明确的歌单名';
+            message = (window.t && window.t('music.playlistAmbiguous')) || '存在重名歌单，请提供更明确的歌单名';
         } else if (errorCode === 'source_empty') {
-            message = '该音乐来源暂无可播放歌曲';
+            message = (window.t && window.t('music.sourceEmpty')) || '该音乐来源暂无可播放歌曲';
         } else if (errorCode === 'upstream_error' || errorCode === 'playback_failed') {
-            message = window.safeT ? window.safeT('music.searchFailed', '音乐搜索失败') : '音乐搜索失败';
+            message = (window.t && window.t('music.searchFailed')) || '音乐搜索失败';
         } else {
-            message = window.t
-                ? window.t('music.notFound', {
+            message = (window.t && window.t('music.notFound', {
                     query: query,
                     defaultValue: '找不到歌曲: ' + query
-                })
-                : ('找不到歌曲: ' + query);
+                })) || ('找不到歌曲: ' + query);
         }
         window.showStatusToast(message, 3000);
     }
@@ -650,22 +648,28 @@
             var track = tracks[index];
             if (!track || !track.url) continue;
             var dispatchResult;
-            if (typeof window.dispatchMusicPlayDetailed === 'function') {
-                dispatchResult = await window.dispatchMusicPlayDetailed(track, {
-                    source: 'user',
-                    requestId: response.request_id
-                });
-            } else if (typeof window.dispatchMusicPlay === 'function') {
-                var accepted = await window.dispatchMusicPlay(track, {
-                    source: 'user',
-                    requestId: response.request_id
-                });
-                dispatchResult = {
-                    ok: accepted === true,
-                    canTryNextCandidate: false
-                };
-            } else {
-                return false;
+            try {
+                if (typeof window.dispatchMusicPlayDetailed === 'function') {
+                    dispatchResult = await window.dispatchMusicPlayDetailed(track, {
+                        source: 'user',
+                        requestId: response.request_id
+                    });
+                } else if (typeof window.dispatchMusicPlay === 'function') {
+                    var accepted = await window.dispatchMusicPlay(track, {
+                        source: 'user',
+                        requestId: response.request_id
+                    });
+                    dispatchResult = {
+                        ok: accepted === true,
+                        canTryNextCandidate: false
+                    };
+                } else {
+                    console.warn('[Music] 没有可用的音乐派发接口');
+                    break;
+                }
+            } catch (error) {
+                console.warn('[Music] 用户点歌派发异常，尝试下一条候选:', error);
+                dispatchResult = { ok: false, canTryNextCandidate: true };
             }
             if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
                 return false;

@@ -301,6 +301,10 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
         return None
     for clause in reversed(_CLAUSE_SEPARATOR.split(normalized)):
         clause = clause.strip()
+        if not clause:
+            continue
+        if _ZH_NEGATIVE_MUSIC.search(clause) or _EN_NEGATIVE_MUSIC.search(clause):
+            return None
         request = _parse_explicit_zh_clause(clause) or _parse_explicit_en_clause(clause)
         if request is not None:
             return request

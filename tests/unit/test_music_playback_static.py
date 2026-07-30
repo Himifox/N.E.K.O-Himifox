@@ -100,6 +100,9 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "dispatchResult.canTryNextCandidate !== true" in source
     assert "_musicCandidateDispatchEpoch" in source
     assert "_musicCandidateDispatchQueue" in source
+    assert "catch (error)" in source
+    assert "canTryNextCandidate: true" in source
+    assert "没有可用的音乐派发接口" in source
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
@@ -177,6 +180,9 @@ def test_all_locales_define_music_player_labels_and_failures():
         "loading",
         "playError",
         "loadError",
+        "loginRequired",
+        "playlistAmbiguous",
+        "sourceEmpty",
     }
 
     for locale_path in sorted(LOCALES_DIR.glob("*.json")):
