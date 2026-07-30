@@ -495,6 +495,7 @@
                 url: currentPlayingTrack.url
             } : null,
             paused: audio ? !!audio.paused : true,
+            ended: audio ? !!audio.ended : false,
             currentTime: audio ? (audio.currentTime || 0) : 0,
             duration: audio && isFinite(audio.duration) ? (audio.duration || 0) : 0,
             volume: (typeof localPlayer.volume === 'function') ? (localPlayer.volume() || 0) : 0,
@@ -532,6 +533,7 @@
                 url: trackInfo.url
             },
             paused: true,
+            ended: false,
             currentTime: 0,
             duration: 0,
             volume: MUSIC_CONFIG.defaultVolume,
@@ -2975,6 +2977,23 @@
         }
     };
 
+    const isMusicOccupied = () => {
+        try {
+            const localAudio = localPlayer && localPlayer.audio;
+            const localOccupied = !!(
+                localAudio && !localAudio.ended && !localPlayer._loadError && isPlayerInDOM()
+            );
+            const mirrorOccupied = !!(
+                mirrorBarLastState && mirrorBarLastState.track
+                && !mirrorBarLastState.ended && !mirrorBarLastState.loadError
+            );
+            return musicDispatchPendingCount > 0 || localOccupied || mirrorOccupied || isRemoteMusicActive();
+        } catch (e) {
+            console.error('[Music UI] Error checking if music is occupied:', e);
+            return false;
+        }
+    };
+
     const getMusicCurrentTrack = () => {
         try {
             return currentPlayingTrack || null;
@@ -3025,6 +3044,7 @@
     window.destroyMusicPlayer = destroyMusicPlayer;
     window.getMusicPlayerInstance = getMusicPlayerInstance;
     window.isMusicPlaying = isMusicPlaying;
+    window.isMusicOccupied = isMusicOccupied;
     window.isMusicCooldown = isInMusicCooldown;
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;

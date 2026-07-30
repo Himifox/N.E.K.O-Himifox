@@ -483,6 +483,14 @@ def test_proactive_router_is_a_thin_ordered_adapter() -> None:
     assert service_source.count("push_mini_game_invite_options(") >= 2
 
 
+def test_proactive_command_parses_music_occupied() -> None:
+    command = contracts.ProactiveChatCommand.from_payload(
+        {"is_music_occupied": True}
+    )
+
+    assert command.is_music_occupied is True
+
+
 def _wire_router_dependencies(monkeypatch, handle_result) -> tuple[object, object]:
     config_manager = SimpleNamespace(
         aget_character_data=AsyncMock(return_value=_CHARACTER_DATA),

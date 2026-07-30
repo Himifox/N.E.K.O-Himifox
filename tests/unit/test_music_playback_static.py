@@ -70,16 +70,21 @@ def test_proactive_music_only_retries_candidate_specific_failures():
 
 def test_proactive_request_rechecks_music_state_before_search():
     source = PROACTIVE_UI_PATH.read_text(encoding="utf-8")
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
 
+    assert "const isMusicOccupied = () =>" in player_source
+    assert "localAudio && !localAudio.ended && !localPlayer._loadError" in player_source
+    assert "mirrorBarLastState && mirrorBarLastState.track" in player_source
+    assert "window.isMusicOccupied = isMusicOccupied" in player_source
     assert "var musicPlayingBeforeRequest" in source
-    assert "var musicPendingBeforeRequest" in source
-    assert "var remoteMusicActiveBeforeRequest" in source
+    assert "var musicOccupiedBeforeRequest = isMusicOccupiedNow()" in source
     assert "var musicRateLimitedBeforeRequest" in source
+    assert "requestBody.is_music_occupied = !!musicOccupiedBeforeRequest" in source
     assert (
         "requestBody.enabled_modes = requestBody.enabled_modes.filter(function (mode) "
         "{ return mode !== 'music'; });"
     ) in source
-    assert source.index("var musicPlayingBeforeRequest") < source.index(
+    assert source.index("var musicOccupiedBeforeRequest") < source.index(
         "var proactiveBody = JSON.stringify(requestBody)"
     )
 
