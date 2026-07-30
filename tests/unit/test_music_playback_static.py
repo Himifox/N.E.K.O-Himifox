@@ -108,10 +108,21 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "window._latestMusicCandidateRequestId" in source
     assert "if (!Number.isFinite(requestId) || requestId <= 0)" in source
     assert "if (latestRequestId > 0 && requestId <= latestRequestId) return;" in source
-    assert "window.cancelPendingMusicMediaReady(response.request_id);" in source
+    assert "mediaCancelStatus === 'stale'" in source
+    assert "queuedCancelStatus === 'stale'" in source
+    assert "window.cancelQueuedMusicDispatch(requestId);" in source
     invalid_guard = source.index("if (!Number.isFinite(requestId) || requestId <= 0)")
-    cancel_call = source.index("window.cancelPendingMusicMediaReady(response.request_id);")
+    cancel_call = source.index("window.cancelPendingMusicMediaReady(requestId);")
+    epoch_update = source.index("window._latestMusicCandidateRequestId = requestId;")
     assert invalid_guard < cancel_call
+    assert cancel_call < epoch_update
+    queued_branch = source.split("if (accepted === 'queued')", 1)[1].split(
+        "dispatchResult = {", 1
+    )[0]
+    assert "response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch" in queued_branch
+    assert queued_branch.index("_musicCandidateDispatchEpoch") < queued_branch.index(
+        "return 'queued';"
+    )
 
 
 def test_new_track_cancels_pending_media_readiness_wait():
@@ -128,11 +139,25 @@ def test_new_track_cancels_pending_media_readiness_wait():
     )
     assert "cancelWait.requestId = requestId ?? null;" in source
     assert "window.cancelPendingMusicMediaReady = (requestId) =>" in source
-    assert "if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return false;" in source
+    assert "return 'invalid';" in source
+    assert "return 'no_pending';" in source
+    assert "return 'stale';" in source
+    assert "return 'cancelled';" in source
     assert "nextRequestId < pendingRequestId" in source
-    assert "window.cancelPendingMusicMediaReady(response.request_id);" in APP_WEBSOCKET_PATH.read_text(
+    assert "window.cancelPendingMusicMediaReady(requestId);" in APP_WEBSOCKET_PATH.read_text(
         encoding="utf-8"
     )
+
+
+def test_new_request_cancels_queued_player_dispatch():
+    dispatch_source = APP_CHAT_PATH.read_text(encoding="utf-8")
+
+    assert "let _queuedMusicDispatchCancel = null;" in dispatch_source
+    assert "cancelQueuedDispatch.requestId = options.requestId ?? null;" in dispatch_source
+    assert "window.cancelQueuedMusicDispatch = function (requestId)" in dispatch_source
+    assert "nextRequestId < pendingRequestId" in dispatch_source
+    assert "_queuedMusicDispatchCancel();" in dispatch_source
+    assert "musicDispatchResult(false, 'superseded', false)" in dispatch_source
 
 
 def test_music_player_reports_confirmed_state_to_backend():

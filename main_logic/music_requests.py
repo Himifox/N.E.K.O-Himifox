@@ -155,6 +155,27 @@ _EN_NEGATIVE_MUSIC = re.compile(
     r"\b(?:do\s+not|don't|dont|stop|pause|cancel)\b.{0,20}\b(?:play|music|song|listen)\b",
     re.IGNORECASE,
 )
+_ZH_MUSIC_MOOD_OR_STYLE = {
+    "安静",
+    "悲伤",
+    "电子",
+    "放松",
+    "古典",
+    "欢快",
+    "怀旧",
+    "爵士",
+    "开心",
+    "快乐",
+    "浪漫",
+    "民谣",
+    "轻松",
+    "热血",
+    "伤感",
+    "舒缓",
+    "温柔",
+    "摇滚",
+    "治愈",
+}
 
 
 def _strip_request_payload(value: str) -> str:
@@ -219,6 +240,8 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         artist = _strip_request_payload(artist_match.group(1))
         if artist in {"我", "你", "他", "她", "它", "咱", "咱们", "我们", "自己"}:
             return MusicRequest()
+        if artist in _ZH_MUSIC_MOOD_OR_STYLE:
+            return MusicRequest(keyword=artist)
         return MusicRequest(keyword=artist, song_artist=artist)
 
     artist_song_match = re.fullmatch(

@@ -297,6 +297,8 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
     ("text", "keyword", "song", "artist", "playlist", "source"),
     (
         ("我想听邓紫棋的歌", "邓紫棋", "", "邓紫棋", "", "auto"),
+        ("我想听轻松的音乐", "轻松", "", "", "", "auto"),
+        ("来点舒缓的音乐", "舒缓", "", "", "", "auto"),
         ("播放《晴天》", "晴天", "晴天", "", "", "auto"),
         ("播放周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
         ("播放邓紫棋", "邓紫棋", "", "", "", "auto"),

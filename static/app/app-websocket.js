@@ -660,6 +660,12 @@
                         requestId: response.request_id
                     });
                     if (accepted === 'queued') {
+                        if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
+                            if (typeof window.cancelQueuedMusicDispatch === 'function') {
+                                window.cancelQueuedMusicDispatch(response.request_id);
+                            }
+                            return false;
+                        }
                         console.log('[Music] 用户点歌仍在等待播放器接口就绪');
                         return 'queued';
                     }
@@ -714,12 +720,17 @@
         }
         var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
         if (latestRequestId > 0 && requestId <= latestRequestId) return;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            var mediaCancelStatus = window.cancelPendingMusicMediaReady(requestId);
+            if (mediaCancelStatus === 'stale') return;
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            var queuedCancelStatus = window.cancelQueuedMusicDispatch(requestId);
+            if (queuedCancelStatus === 'stale') return;
+        }
         window._latestMusicCandidateRequestId = requestId;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
-        if (typeof window.cancelPendingMusicMediaReady === 'function') {
-            window.cancelPendingMusicMediaReady(response.request_id);
-        }
         var firstTrack = tracks[0];
         var key = getMusicPlayUrlClaimKey(firstTrack);
         getMusicPlayUrlCoordChannel();

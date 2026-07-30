@@ -3142,18 +3142,18 @@
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;
     window.cancelPendingMusicMediaReady = (requestId) => {
-        if (!pendingMusicMediaReadyCancel) return false;
         const nextRequestId = Number(requestId);
-        if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return false;
+        if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return 'invalid';
+        if (!pendingMusicMediaReadyCancel) return 'no_pending';
         const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
         if (
             Number.isFinite(pendingRequestId)
             && Number.isFinite(nextRequestId)
             && nextRequestId < pendingRequestId
-        ) return false;
+        ) return 'stale';
         latestMusicRequestToken++;
         pendingMusicMediaReadyCancel();
-        return true;
+        return 'cancelled';
     };
 
     // 竞态拦截辅助：dispatch 流水线中（URL 校验/库加载/init）的占位标记
