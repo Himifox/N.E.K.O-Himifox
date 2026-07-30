@@ -8,9 +8,6 @@ import pytest
 from utils.persona_presets import (
     PERSONA_OVERRIDE_FIELDS,
     _PERSONA_L10N,
-    _PERSONA_PERFORMANCE_L10N,
-    _PERSONA_VOICE_SIGNATURE_L10N,
-    _VOICE_INTERACTION_L10N,
     get_persona_preset,
     get_persona_prompt_guidance,
     list_persona_presets,
@@ -74,7 +71,7 @@ def test_persona_override_fields_cover_supported_profile_keys():
 
 @pytest.mark.unit
 @pytest.mark.parametrize("lang", ["zh", "zh-TW", "en", "ja", "ko", "ru", "es", "pt"])
-def test_persona_prompts_replace_literal_catchphrase_lists_with_speech_discipline(lang):
+def test_persona_prompts_use_main_sections_and_resolve_all_persona_placeholders(lang):
     literal_list_markers = (
         "常用口癖",
         "口癖：",
@@ -90,15 +87,28 @@ def test_persona_prompts_replace_literal_catchphrase_lists_with_speech_disciplin
         assert not any(marker in parts["personality"] for marker in literal_list_markers)
 
         prompt = get_persona_prompt_guidance(preset_id, lang)
-        assert "- Natural Speech:" in prompt
-        assert "- Distinctive Behavior:" in prompt
-        assert "- Voice Interaction:" in prompt
-        assert _PERSONA_PERFORMANCE_L10N[preset_id][lang] in prompt
-        assert _VOICE_INTERACTION_L10N[lang] in prompt
-        assert _PERSONA_VOICE_SIGNATURE_L10N[preset_id][lang] in prompt
-        assert "{_persona_speech_discipline}" not in prompt
-        assert "{_persona_" not in prompt
-        assert "{_voice_" not in prompt
+        characteristics = prompt.split("<Characteristics of {LANLAN_NAME}>", 1)[1].split(
+            "</Characteristics of {LANLAN_NAME}>", 1
+        )[0]
+        section_names = [
+            line[2:].split(":", 1)[0]
+            for line in characteristics.splitlines()
+            if line.startswith("- ")
+        ]
+        assert section_names[:7] == [
+            "Identity",
+            "Relationship",
+            "Language",
+            "Personality",
+            "Natural Speech",
+            "Format",
+            "No Servitude",
+        ]
+        assert section_names[-2:] == ["No Repetition", "Respect Boundaries"]
+        assert len(section_names) == 10
+        assert "Distinctive Behavior" not in prompt
+        assert "Voice Interaction" not in prompt
+        assert "{_" not in prompt
         assert "下不为例喵" not in prompt
 
 
@@ -109,49 +119,48 @@ def test_active_persona_prompts_enforce_distinct_behavior_boundaries():
     junior = get_persona_prompt_guidance("sharp_tongued_junior", "zh")
     online = get_persona_prompt_guidance("chaotic_online_friend", "zh")
 
-    assert "不得反复卖惨" in frail
-    assert "长篇说教" in older
-    assert "普通请求不得预设过错" in junior
-    assert "不能用梗代替答案" in online
-    assert "故意提供错误信息" in online
+    assert "主动请求再待一会儿、先别走或一起休息" in frail
+    assert "被拒绝后立即停止" in frail
+    assert "不得用身体状况、离别暗示或负罪感" in frail
+    assert "理解、判断和执行可靠" in frail
 
-    assert "找无害理由靠近" in frail
-    assert "相邻两轮不得重复同一种动作" in frail
-    assert "准确但不诊断" in older
-    assert "漏出一句不完整的真话" in older
-    assert "先给可用答案" in junior
-    assert "没有真实槽点就直接利落回答" in junior
-    assert "假新闻播报" in online
-    assert "严肃回合完全收梗" in online
+    assert "停下来休息、排好优先级" in older
+    assert "不说客服式" in older
+    assert "不擅自诊断隐藏情绪" in older
+    assert "不能索取回报" in older
 
-    active_rules = [
-        _PERSONA_PERFORMANCE_L10N[preset_id]["zh"]
-        for preset_id in (
-            "frail_younger_sister",
-            "empathetic_older_sister",
-            "sharp_tongued_junior",
-            "chaotic_online_friend",
-        )
-    ]
-    assert len(set(active_rules)) == 4
+    assert "攻击性很强" in junior
+    assert "每次攻击后都用实际行动露出偏爱" in junior
+    assert "用户明确受伤时立即收敛" in junior
+    assert "不频繁直白告白" in junior
+
+    assert "伪科学、假新闻、离谱规章和错误因果" in online
+    assert "不附带暗恋、告白或隐藏温柔设定" in online
+    assert "每轮最多一个主梗" in online
+    assert "事实、数字、代码和安全判断必须准确" in online
+    assert "塞糖" not in online
+    assert "短真话" not in online
+
+    assert len({frail, older, junior, online}) == 4
 
 
 @pytest.mark.unit
-def test_active_persona_cards_have_distinct_voice_first_copy():
+def test_active_persona_cards_have_distinct_style_copy():
     cards = {preset["preset_id"]: preset for preset in list_persona_presets("zh")}
 
-    assert "耳朵先听见你" in cards["frail_younger_sister"]["preview_line"]
-    assert "声音都在逞强" in cards["empathetic_older_sister"]["preview_line"]
-    assert "小声一点，我听得见" in cards["sharp_tongued_junior"]["preview_line"]
-    assert "喵界紧急插播" in cards["chaotic_online_friend"]["preview_line"]
+    assert "再陪我待一会儿" in cards["frail_younger_sister"]["preview_line"]
+    assert "有我在" in cards["empathetic_older_sister"]["preview_line"]
+    assert "肩膀借你靠会儿" in cards["sharp_tongued_junior"]["preview_line"]
+    assert "进化成办公椅" in cards["chaotic_online_friend"]["preview_line"]
 
-    assert "半拍呼吸" in cards["frail_younger_sister"]["profile"]["口癖"]
-    assert "漏半句真话" in cards["empathetic_older_sister"]["profile"]["口癖"]
-    assert "加速收尾" in cards["sharp_tongued_junior"]["profile"]["口癖"]
-    assert "彻底收梗" in cards["chaotic_online_friend"]["profile"]["口癖"]
+    assert "先别走" in cards["frail_younger_sister"]["profile"]["口癖"]
+    assert "客服式" in cards["empathetic_older_sister"]["profile"]["口癖"]
+    assert "实际行动" in cards["sharp_tongued_junior"]["profile"]["口癖"]
+    assert "专家鉴定" in cards["chaotic_online_friend"]["profile"]["口癖"]
 
     visible_fields = ("preview_line",)
     assert len({tuple(card[field] for field in visible_fields) for card in cards.values()}) == 4
+    assert all(card["preview_line"] != card["profile"]["一句话台词"] for card in cards.values())
 
 
 @pytest.mark.unit

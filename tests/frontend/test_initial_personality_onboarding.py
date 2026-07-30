@@ -116,8 +116,8 @@ def _bootstrap_page(mock_page: Page) -> None:
                         presets: [{
                             preset_id: 'frail_younger_sister',
                             display_name: '病弱妹妹',
-                            summary_fallback: '轻声慢语，黏人却总怕给你添麻烦',
-                            preview_line: '你终于回来啦……第二杯热饮都快凉了。才、才不是在等你喵，是耳朵先听见你了。',
+                            summary_fallback: '会主动请你留下，又怕自己的依赖成为负担',
+                            preview_line: '你先别走嘛……再陪我待一会儿，好不好？我会很安静的。',
                             profile: {
                                 '性格原型': '病弱妹妹',
                                 '口癖': '短句轻声 / 偶尔停顿',
@@ -1346,7 +1346,7 @@ def test_onboarding_preview_streams_selected_personality_copy(mock_page: Page):
 
     mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
     expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_be_visible()
-    expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_contain_text("耳朵先听见你", timeout=5000)
+    expect(mock_page.locator("[data-testid='character-personality-preview-stream']")).to_contain_text("再陪我待一会儿", timeout=5000)
 
 
 @pytest.mark.frontend
@@ -1465,21 +1465,21 @@ def test_onboarding_uses_i18n_copy_for_user_visible_text(mock_page: Page):
                     'memory.characterSelection.currentCharacter': 'Current character: {{name}}',
                     'memory.characterSelection.stageOneIntro': 'Pick the vibe first, then preview how I will sound.',
                     'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
-                    'memory.characterSelection.frail_younger_sister.desc': 'Quietly affectionate and afraid to be a burden.',
-                    'memory.characterSelection.frail_younger_sister.previewLine': 'I only wanted to sit a little closer.',
-                    'memory.characterSelection.frail_younger_sister.tag1': 'Soft-spoken',
-                    'memory.characterSelection.frail_younger_sister.tag2': 'Restrained closeness',
-                    'memory.characterSelection.frail_younger_sister.tag3': 'Fears being a burden',
+                    'memory.characterSelection.frail_younger_sister.desc': 'Asks you to stay, then worries she was too clingy.',
+                    'memory.characterSelection.frail_younger_sister.previewLine': 'Stay with me a little longer. I will be quiet.',
+                    'memory.characterSelection.frail_younger_sister.tag1': 'Asks you to stay',
+                    'memory.characterSelection.frail_younger_sister.tag2': 'Hesitant closeness',
+                    'memory.characterSelection.frail_younger_sister.tag3': 'Accepts no',
                     'memory.characterSelection.previewLabel': 'Voice preview',
                     'memory.characterSelection.previewLead': 'If you pick {{name}} for me, this is how I will sound.',
-                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who watches your mood closely.',
-                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'Closeness is restrained and never uses health as leverage.',
+                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who finds the courage to ask you to stay.',
+                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'She accepts refusal immediately and never uses health or guilt as leverage.',
                     'memory.characterSelection.detailSpeechHabits': 'Speaking habits',
                     'memory.characterSelection.detailHobbies': 'Favorite moods',
                     'memory.characterSelection.detailBoundaries': 'Hard boundaries',
-                    'memory.characterSelection.frail_younger_sister.speechHabits': 'short gentle sentences / contextual pauses / no repeated illness performance',
-                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / quiet company',
-                    'memory.characterSelection.frail_younger_sister.boundaries': 'cruel health jokes / forced bravado / emotional coercion',
+                    'memory.characterSelection.frail_younger_sister.speechHabits': 'soft hesitant requests / asks once / accepts refusal',
+                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / resting together',
+                    'memory.characterSelection.frail_younger_sister.boundaries': 'repeated pleading / illness leverage / emotional coercion',
                 };
                 const options = (
                     fallbackOrOptions && typeof fallbackOrOptions === 'object' && !Array.isArray(fallbackOrOptions)
@@ -1526,9 +1526,9 @@ def test_onboarding_uses_i18n_copy_for_user_visible_text(mock_page: Page):
         timeout=5000,
     )
     expect(mock_page.locator(".detail-group-title").first).to_have_text("Speaking habits")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(0)).to_have_text("short gentle sentences")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(1)).to_have_text("contextual pauses")
-    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(2)).to_have_text("no repeated illness performance")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(0)).to_have_text("soft hesitant requests")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(1)).to_have_text("asks once")
+    expect(mock_page.locator("#detailSpeechHabits .detail-pill").nth(2)).to_have_text("accepts refusal")
 
 
 @pytest.mark.frontend
@@ -1547,18 +1547,18 @@ def test_settings_uses_i18n_copy_for_warning_and_user_visible_text(mock_page: Pa
                     'memory.characterSelection.stageOneIntro': 'Pick the mood first, then listen to how I sound, nya.',
                     'memory.characterSelection.contextWarning': 'Heads up, nya: switching my personality clears this character\\'s recent chat context.',
                     'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
-                    'memory.characterSelection.frail_younger_sister.desc': 'Quietly affectionate and afraid to be a burden.',
-                    'memory.characterSelection.frail_younger_sister.previewLine': 'I only wanted to sit a little closer.',
+                    'memory.characterSelection.frail_younger_sister.desc': 'Asks you to stay, then worries she was too clingy.',
+                    'memory.characterSelection.frail_younger_sister.previewLine': 'Stay with me a little longer. I will be quiet.',
                     'memory.characterSelection.previewLabel': 'Voice preview',
                     'memory.characterSelection.previewLead': 'If you pick {{name}} for me, this is how I will sound.',
-                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who watches your mood closely.',
-                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'Closeness is restrained and never uses health as leverage.',
+                    'memory.characterSelection.frail_younger_sister.profileSummary': 'A gentle adult younger-sister figure who finds the courage to ask you to stay.',
+                    'memory.characterSelection.frail_younger_sister.hiddenRule': 'She accepts refusal immediately and never uses health or guilt as leverage.',
                     'memory.characterSelection.detailSpeechHabits': 'Speaking habits',
                     'memory.characterSelection.detailHobbies': 'Favorite moods',
                     'memory.characterSelection.detailBoundaries': 'Hard boundaries',
-                    'memory.characterSelection.frail_younger_sister.speechHabits': 'short gentle sentences / contextual pauses / no repeated illness performance',
-                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / quiet company',
-                    'memory.characterSelection.frail_younger_sister.boundaries': 'cruel health jokes / forced bravado / emotional coercion',
+                    'memory.characterSelection.frail_younger_sister.speechHabits': 'soft hesitant requests / asks once / accepts refusal',
+                    'memory.characterSelection.frail_younger_sister.hobbies': 'warm drinks / blankets / resting together',
+                    'memory.characterSelection.frail_younger_sister.boundaries': 'repeated pleading / illness leverage / emotional coercion',
                     'memory.characterSelection.back': 'Pick again',
                     'memory.characterSelection.confirmGreeting': 'Use this vibe',
                     'memory.characterSelection.skip': 'Maybe later',

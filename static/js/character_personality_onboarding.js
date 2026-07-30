@@ -731,10 +731,10 @@
 
         getPresetHighlights(preset) {
             const highlightMap = {
-                frail_younger_sister: ['轻声慢语', '黏人克制', '怕添麻烦'],
-                empathetic_older_sister: ['情绪洞察', '温柔坚定', '藏起疲惫'],
-                sharp_tongued_junior: ['精准挑刺', '行动可靠', '嘴硬吃醋'],
-                chaotic_online_friend: ['高浓度接梗', '平等损友', '认真就卡壳'],
+                frail_younger_sister: ['主动留人', '黏人迟疑', '拒绝不纠缠'],
+                empathetic_older_sister: ['温柔接管', '从容坚定', '可靠承诺'],
+                sharp_tongued_junior: ['强势毒舌', '行动偏爱', '嘴硬不认'],
+                chaotic_online_friend: ['正经胡说', '玩梗装傻', '事实可靠'],
             };
             const presetId = preset && preset.preset_id;
             const fallbacks = highlightMap[presetId] || [];
