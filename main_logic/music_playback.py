@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -31,6 +32,9 @@ logger = get_module_logger(__name__, "Main")
 
 _session_manager_getter: Callable[[str], Any | None] | None = None
 _PLAYBACK_STATES = frozenset({"playing", "paused", "ended", "error"})
+_REPLY_START_GRACE_SECONDS = 0.2
+_REPLY_WAIT_TIMEOUT_SECONDS = 60.0
+_REPLY_WAIT_POLL_SECONDS = 0.05
 
 
 def register_music_session_manager_getter(
@@ -54,6 +58,7 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     if previous_task is not None and not previous_task.done():
         previous_task.cancel()
     epoch = _next_music_request_epoch(manager)
+    _enqueue_music_request_context(manager, request, epoch)
     manager._music_request_task = manager._fire_task(
         _execute_music_request(manager, request, epoch)
     )
@@ -67,6 +72,71 @@ def _next_music_request_epoch(manager: Any) -> int:
 
 def _is_current_music_request(manager: Any, epoch: int) -> bool:
     return int(getattr(manager, "_music_request_epoch", 0) or 0) == epoch
+
+
+def _enqueue_music_request_context(
+    manager: Any,
+    request: MusicRequest,
+    epoch: int,
+) -> None:
+    enqueue = getattr(manager, "enqueue_agent_callback", None)
+    if not callable(enqueue):
+        return
+    query = _clean_playback_text(request.display_query, 160) or "用户指定的音乐"
+    detail = (
+        f"音乐模块已接管用户对「{query}」的明确播放请求，正在自动搜索并会在确认可播放后启动播放器。"
+        "本轮请只简短表示正在处理；不要询问版本，不要声称已经开始播放，也不要再次调用音乐播放工具。"
+    )
+    enqueue(
+        {
+            "event": "agent_task_callback",
+            "origin": "event",
+            "task_id": f"music_request:{epoch}",
+            "channel": "music_playback",
+            "status": "in_progress",
+            "success": True,
+            "summary": detail,
+            "detail": detail,
+            "source_kind": "music",
+            "source_name": "music_request",
+            "delivery_mode": "passive",
+            "priority": 10,
+            "coalesce_key": (
+                f"music-playback-state:{getattr(manager, 'lanlan_name', '')}"
+            ),
+            "metadata": {
+                "context_type": "music_request_pending",
+                "request_id": epoch,
+            },
+            "context_type": "music_request_pending",
+        }
+    )
+
+
+def _reply_in_progress(manager: Any) -> bool:
+    if getattr(manager, "_active_text_request_id", None):
+        return True
+    if bool(getattr(manager, "_voice_playback_active", False)):
+        return True
+    session = getattr(manager, "session", None)
+    is_active_response = getattr(session, "is_active_response", None)
+    if callable(is_active_response):
+        try:
+            return bool(is_active_response())
+        except Exception:
+            return False
+    return False
+
+
+async def _wait_for_current_reply(manager: Any, epoch: int) -> None:
+    if not _reply_in_progress(manager):
+        await asyncio.sleep(_REPLY_START_GRACE_SECONDS)
+    deadline = asyncio.get_running_loop().time() + _REPLY_WAIT_TIMEOUT_SECONDS
+    while _is_current_music_request(manager, epoch) and _reply_in_progress(manager):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(_REPLY_WAIT_POLL_SECONDS, remaining))
 
 
 def _clean_playback_text(value: Any, limit: int) -> str:
@@ -197,6 +267,9 @@ async def _execute_music_request(
         "request_id": epoch,
         "tracks": candidates,
     }
+    await _wait_for_current_reply(manager, epoch)
+    if not _is_current_music_request(manager, epoch):
+        return {"status": "superseded"}
     if await _push_music_payload(manager, payload):
         return {
             "status": "queued",

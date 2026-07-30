@@ -264,8 +264,10 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
         return next_task
 
     manager = SimpleNamespace(
+        lanlan_name="YUI",
         _music_request_task=previous_task,
         _fire_task=fire_task,
+        enqueue_agent_callback=MagicMock(),
     )
     monkeypatch.setattr(
         music_playback,
@@ -285,6 +287,80 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     previous_task.cancel.assert_called_once_with()
     assert manager._music_request_task is next_task
     assert manager._music_request_epoch == 1
+    pending_context = manager.enqueue_agent_callback.call_args.args[0]
+    assert pending_context["delivery_mode"] == "passive"
+    assert pending_context["context_type"] == "music_request_pending"
+    assert "不要询问版本" in pending_context["detail"]
+    assert "不要声称已经开始播放" in pending_context["detail"]
+
+
+@pytest.mark.asyncio
+async def test_fast_music_search_waits_for_current_reply_before_player(
+    monkeypatch,
+) -> None:
+    order = []
+
+    async def fetch(*args, **kwargs):
+        order.append("search")
+        return {
+            "success": True,
+            "data": [{
+                "name": "21",
+                "artist": "Polo G",
+                "url": "/api/music/play/netease/21",
+            }],
+        }
+
+    async def wait_for_reply(manager, epoch):
+        order.append("reply_end")
+
+    async def push(manager, payload):
+        order.append("player")
+        return True
+
+    monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
+    monkeypatch.setattr(
+        music_playback,
+        "_wait_for_current_reply",
+        wait_for_reply,
+    )
+    monkeypatch.setattr(music_playback, "_push_music_payload", push)
+    manager = SimpleNamespace(
+        _music_request_epoch=1,
+        user_language="zh",
+    )
+
+    result = await music_playback._execute_music_request(
+        manager,
+        music_requests.MusicRequest(keyword="21", song_name="21"),
+        1,
+    )
+
+    assert result == {"status": "queued", "candidates": 1}
+    assert order == ["search", "reply_end", "player"]
+
+
+@pytest.mark.asyncio
+async def test_music_reply_wait_releases_when_current_turn_finishes(
+    monkeypatch,
+) -> None:
+    manager = SimpleNamespace(
+        _music_request_epoch=1,
+        _active_text_request_id="turn-1",
+        _voice_playback_active=False,
+        session=None,
+    )
+    sleep_calls = []
+
+    async def finish_reply_on_sleep(delay):
+        sleep_calls.append(delay)
+        manager._active_text_request_id = None
+
+    monkeypatch.setattr(music_playback.asyncio, "sleep", finish_reply_on_sleep)
+
+    await music_playback._wait_for_current_reply(manager, 1)
+
+    assert sleep_calls == [music_playback._REPLY_WAIT_POLL_SECONDS]
 
 
 @pytest.mark.asyncio
