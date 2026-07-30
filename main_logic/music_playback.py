@@ -20,6 +20,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_requests import (
     MusicRequest,
@@ -58,7 +59,7 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     if previous_task is not None and not previous_task.done():
         previous_task.cancel()
     epoch = _next_music_request_epoch(manager)
-    _enqueue_music_request_context(manager, request, epoch)
+    _enqueue_music_request_context(manager, epoch)
     manager._music_request_task = manager._fire_task(
         _execute_music_request(manager, request, epoch)
     )
@@ -76,16 +77,13 @@ def _is_current_music_request(manager: Any, epoch: int) -> bool:
 
 def _enqueue_music_request_context(
     manager: Any,
-    request: MusicRequest,
     epoch: int,
 ) -> None:
     enqueue = getattr(manager, "enqueue_agent_callback", None)
     if not callable(enqueue):
         return
-    query = _clean_playback_text(request.display_query, 160) or "用户指定的音乐"
-    detail = (
-        f"音乐模块已接管用户对「{query}」的明确播放请求，正在自动搜索并会在确认可播放后启动播放器。"
-        "本轮请只简短表示正在处理；不要询问版本，不要声称已经开始播放，也不要再次调用音乐播放工具。"
+    detail = get_music_request_pending_prompt(
+        getattr(manager, "user_language", None)
     )
     enqueue(
         {

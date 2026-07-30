@@ -265,6 +265,7 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
 
     manager = SimpleNamespace(
         lanlan_name="YUI",
+        user_language="zh",
         _music_request_task=previous_task,
         _fire_task=fire_task,
         enqueue_agent_callback=MagicMock(),
@@ -292,6 +293,12 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     assert pending_context["context_type"] == "music_request_pending"
     assert "不要询问版本" in pending_context["detail"]
     assert "不要声称已经开始播放" in pending_context["detail"]
+
+    playback_source = Path(music_playback.__file__).read_text(encoding="utf-8")
+    assert "不要询问版本" not in playback_source
+    assert "do not ask which version" in (
+        music_playback.get_music_request_pending_prompt("en-US")
+    )
 
 
 @pytest.mark.asyncio
