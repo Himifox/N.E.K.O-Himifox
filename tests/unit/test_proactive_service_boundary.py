@@ -302,7 +302,7 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fast_music_search_delays_before_player(
+async def test_fast_music_search_waits_for_current_reply_before_player(
     monkeypatch,
 ) -> None:
     order = []
@@ -318,8 +318,8 @@ async def test_fast_music_search_delays_before_player(
             }],
         }
 
-    async def delay_fast_result(elapsed):
-        order.append("delay")
+    async def wait_for_reply(manager, epoch, elapsed):
+        order.append("reply_end")
 
     async def push(manager, payload):
         order.append("player")
@@ -328,8 +328,8 @@ async def test_fast_music_search_delays_before_player(
     monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
     monkeypatch.setattr(
         music_playback,
-        "_delay_fast_music_result",
-        delay_fast_result,
+        "_wait_for_current_reply",
+        wait_for_reply,
     )
     monkeypatch.setattr(music_playback, "_push_music_payload", push)
     manager = SimpleNamespace(
@@ -344,20 +344,30 @@ async def test_fast_music_search_delays_before_player(
     )
 
     assert result == {"status": "queued", "candidates": 1}
-    assert order == ["search", "delay", "player"]
+    assert order == ["search", "reply_end", "player"]
 
 
 @pytest.mark.asyncio
-async def test_music_dispatch_delay_only_fills_first_second(
+async def test_music_dispatch_waits_until_current_reply_finishes(
     monkeypatch,
 ) -> None:
-    sleep = AsyncMock()
-    monkeypatch.setattr(music_playback.asyncio, "sleep", sleep)
+    manager = SimpleNamespace(
+        _music_request_epoch=1,
+        _active_text_request_id="turn-1",
+        _voice_playback_active=False,
+        session=None,
+    )
+    sleep_calls = []
 
-    await music_playback._delay_fast_music_result(0.25)
-    await music_playback._delay_fast_music_result(1.25)
+    async def finish_reply_on_sleep(delay):
+        sleep_calls.append(delay)
+        manager._active_text_request_id = None
 
-    sleep.assert_awaited_once_with(0.75)
+    monkeypatch.setattr(music_playback.asyncio, "sleep", finish_reply_on_sleep)
+
+    await music_playback._wait_for_current_reply(manager, 1, 1.25)
+
+    assert sleep_calls == [music_playback._REPLY_WAIT_POLL_SECONDS]
 
 
 @pytest.mark.asyncio
