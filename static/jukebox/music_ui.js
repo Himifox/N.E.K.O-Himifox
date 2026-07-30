@@ -2468,7 +2468,7 @@
                     autoDestroyTimer = setTimeout(() => {
                         if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
                     }, MUSIC_CONFIG.timeouts.paused);
-                    updateMusicCard('paused', currentPlayingTrack);
+                    updateMusicCard(playbackState, currentPlayingTrack);
                     reportMusicPlaybackState(
                         playbackState,
                         null,
@@ -2864,11 +2864,9 @@
         } catch (err) {
             if (currentToken !== latestMusicRequestToken) return musicPlayResult(false, 'superseded');
             console.error('[Music UI] 播放器处理异常:', err);
-            if (isFirstRender && musicBar) removeMusicBarWithoutRelocation(musicBar);
-            // 回滚：前面已经发过 emitBarInitialState，但 APlayer 没建起来，
-            // 后续事件不会广播，follower 会卡着占位 bar，这里补一条 destroyed
-            broadcastBarDestroyed(false, playbackIdForRequest);
             reportMusicPlaybackState('error', null, playbackReportContext);
+            updateMusicCard('error', currentPlayingTrack);
+            destroyMusicPlayer(true, false, true);
             showErrorToast('music.playError', 'Music playback failed to load');
             return musicPlayResult(false, 'player_error');
         }
