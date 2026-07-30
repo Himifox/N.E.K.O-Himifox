@@ -33,9 +33,7 @@ logger = get_module_logger(__name__, "Main")
 
 _session_manager_getter: Callable[[str], Any | None] | None = None
 _PLAYBACK_STATES = frozenset({"playing", "paused", "ended", "error"})
-_REPLY_START_GRACE_SECONDS = 0.2
-_REPLY_WAIT_TIMEOUT_SECONDS = 60.0
-_REPLY_WAIT_POLL_SECONDS = 0.05
+_FAST_SEARCH_MIN_DISPATCH_SECONDS = 1.0
 
 
 def register_music_session_manager_getter(
@@ -111,30 +109,10 @@ def _enqueue_music_request_context(
     )
 
 
-def _reply_in_progress(manager: Any) -> bool:
-    if getattr(manager, "_active_text_request_id", None):
-        return True
-    if bool(getattr(manager, "_voice_playback_active", False)):
-        return True
-    session = getattr(manager, "session", None)
-    is_active_response = getattr(session, "is_active_response", None)
-    if callable(is_active_response):
-        try:
-            return bool(is_active_response())
-        except Exception:
-            return False
-    return False
-
-
-async def _wait_for_current_reply(manager: Any, epoch: int) -> None:
-    if not _reply_in_progress(manager):
-        await asyncio.sleep(_REPLY_START_GRACE_SECONDS)
-    deadline = asyncio.get_running_loop().time() + _REPLY_WAIT_TIMEOUT_SECONDS
-    while _is_current_music_request(manager, epoch) and _reply_in_progress(manager):
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return
-        await asyncio.sleep(min(_REPLY_WAIT_POLL_SECONDS, remaining))
+async def _delay_fast_music_result(search_elapsed_seconds: float) -> None:
+    delay = _FAST_SEARCH_MIN_DISPATCH_SECONDS - search_elapsed_seconds
+    if delay > 0:
+        await asyncio.sleep(delay)
 
 
 def _clean_playback_text(value: Any, limit: int) -> str:
@@ -227,6 +205,8 @@ async def _execute_music_request(
     request: MusicRequest,
     epoch: int,
 ) -> dict:
+    loop = asyncio.get_running_loop()
+    search_started_at = loop.time()
     result = await fetch_music_request(
         request,
         limit=5,
@@ -265,7 +245,7 @@ async def _execute_music_request(
         "request_id": epoch,
         "tracks": candidates,
     }
-    await _wait_for_current_reply(manager, epoch)
+    await _delay_fast_music_result(loop.time() - search_started_at)
     if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
     if await _push_music_payload(manager, payload):
