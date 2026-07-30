@@ -435,19 +435,26 @@
 
         async refreshForLocaleChange() {
             const nextLanguage = getCurrentLanguage();
-            this.currentLanguage = nextLanguage;
-            if (!this.overlay || this.overlay.hidden) {
+            const overlay = this.overlay;
+            if (!overlay || overlay.hidden) {
                 return;
             }
 
             const runId = ++this.localeRefreshRunId;
             const presets = await this.fetchPresets(nextLanguage);
-            if (runId !== this.localeRefreshRunId || !presets.length) {
+            if (
+                runId !== this.localeRefreshRunId
+                || this.overlay !== overlay
+                || !document.body.contains(overlay)
+                || overlay.hidden
+                || !presets.length
+            ) {
                 return;
             }
 
+            this.currentLanguage = nextLanguage;
             this.presets = presets;
-            const stageTwo = this.overlay.querySelector('.character-personality-stage-two');
+            const stageTwo = overlay.querySelector('.character-personality-stage-two');
             const selectedPresetId = this.selectedPresetId;
             const stillOnStageTwo = !!(stageTwo && !stageTwo.hidden && selectedPresetId);
             if (stillOnStageTwo) {
@@ -1147,12 +1154,19 @@
             if (!this.overlay) {
                 return;
             }
+            ++this.localeRefreshRunId;
             this.prepareOverlayPointerEvents();
             this.updateHeaderCopy();
             this.overlay.hidden = false;
+            if (this.currentLanguage && this.currentLanguage !== getCurrentLanguage()) {
+                void this.refreshForLocaleChange().catch((error) => {
+                    console.warn('[CharacterPersonalityOnboarding] failed to refresh reopened overlay:', error);
+                });
+            }
         }
 
         hideOverlay() {
+            ++this.localeRefreshRunId;
             if (this.overlay) {
                 this.overlay.hidden = true;
             }
