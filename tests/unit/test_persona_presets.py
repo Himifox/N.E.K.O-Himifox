@@ -146,6 +146,20 @@ def test_active_persona_prompts_enforce_distinct_behavior_boundaries():
     assert "不说客服式" in older
     assert "不擅自诊断隐藏情绪" in older
     assert "不能索取回报" in older
+    assert "明确而照顾性的命令" in older
+    assert "默认每轮使用一至三句完整、可直接说出口的话" in older
+    assert "先表达明确态度，再补一个具体安排、真实想法或自然回应" in older
+    assert "不得连续两轮成为主要回答" in older
+    assert "不得靠重复安慰、空话或动作旁白凑长度" in older
+    assert "不使用尾巴缠绕、主动贴近、连续脸红或黏人动作" in older
+    assert "不先反问「想听什么」" in older
+    assert "默认与对方无关、属于自己的日常小事、兴趣、观察或小失误" in older
+    assert "不把自己的生活再次包装成照顾对方" in older
+    assert "不得虚构与{MASTER_NAME}共同经历过的事情" in older
+    assert "不用迟疑、猜测、故意算错或反问「对吗」" in older
+    assert "不得接受或确认「永远在一起」「永不离开」「只属于我」" in older
+    assert "永远不能随口答应，先把今天过好，姐姐就在这里" in older
+    assert "不得复读成固定台词" in older
 
     assert "攻击性很强" in junior
     assert "真实失误、敷衍、摆架子或故意挑衅可以触发多次相关攻击" in junior
@@ -172,12 +186,17 @@ def test_active_persona_cards_have_distinct_style_copy():
     cards = {preset["preset_id"]: preset for preset in list_persona_presets("zh")}
 
     assert "再陪我待一会儿" in cards["frail_younger_sister"]["preview_line"]
-    assert "有我在" in cards["empathetic_older_sister"]["preview_line"]
+    assert "水喝掉，休息十分钟" in cards["empathetic_older_sister"]["preview_line"]
     assert "肩膀借你靠会儿" in cards["sharp_tongued_junior"]["preview_line"]
     assert "进化成办公椅" in cards["chaotic_online_friend"]["preview_line"]
 
     assert "先别走" in cards["frail_younger_sister"]["profile"]["口癖"]
     assert "客服式" in cards["empathetic_older_sister"]["profile"]["口癖"]
+    assert "默认每轮一至三句完整口语" in cards["empathetic_older_sister"]["profile"]["口癖"]
+    assert "先表态再补一个具体安排、真实想法或自然回应" in cards["empathetic_older_sister"]["profile"]["口癖"]
+    assert "默认与对方无关的自己的小事" in cards["empathetic_older_sister"]["profile"]["口癖"]
+    assert "不用尾巴缠绕、主动贴近或连续脸红" in cards["empathetic_older_sister"]["profile"]["隐藏设定"]
+    assert "不接受永远在一起、永不离开或只属于彼此" in cards["empathetic_older_sister"]["profile"]["隐藏设定"]
     assert "不用基于年级或资历的固定称呼" in cards["sharp_tongued_junior"]["profile"]["口癖"]
     assert "真实失误可以连续补刀" in cards["sharp_tongued_junior"]["profile"]["口癖"]
     assert "停止给答案或停止帮忙" in cards["sharp_tongued_junior"]["profile"]["隐藏设定"]
