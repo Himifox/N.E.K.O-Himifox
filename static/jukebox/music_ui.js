@@ -2432,6 +2432,7 @@
                 }
 
                 localPlayer = aplayerInstance;
+                localPlayer._latestToken = currentToken;
                 localPlayer._musicPlaybackReportContext = playbackReportContext;
                 window.aplayer = localPlayer;
                 if (!window.aplayerInjected) window.aplayerInjected = {};

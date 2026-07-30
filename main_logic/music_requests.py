@@ -167,15 +167,19 @@ _EN_NON_MUSIC_TARGET = re.compile(
     r"|with\s+(?:me|us|him|her|them)",
     re.IGNORECASE,
 )
+_ZH_SPEECH_SUBJECT = r"(?:你|我|他|她|它|我们|咱们|他们|她们)(?:的)?"
+_ZH_SPEECH_TARGET = (
+    rf"(?:一段\s*)?{_ZH_SPEECH_SUBJECT}(?:说话|讲话)(?:的?声音)?"
+)
 _ZH_NON_MUSIC_TARGET = re.compile(
     r"(?:(?:一个|一段|一些|这个|那个|我的|你的|他的|她的)\s*)?"
     r"(?:视频|游戏|电影|电视剧|动画|动漫|播客|有声书)"
-    r"|(?:你|我|他|她|它|我们|咱们|他们|她们)(?:说话|讲话)(?:的声音)?"
+    rf"|{_ZH_SPEECH_TARGET}"
 )
 _ZH_NON_MUSIC_SPEECH_REQUEST = re.compile(
     r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?"
     r"(?:播放|放|听|想听|要听)(?:一下)?"
-    r"(?:你|我|他|她|它|我们|咱们|他们|她们)(?:说话|讲话)(?:的声音)?"
+    rf"{_ZH_SPEECH_TARGET}"
 )
 _ZH_MUSIC_MOOD_OR_STYLE = {
     "安静",
