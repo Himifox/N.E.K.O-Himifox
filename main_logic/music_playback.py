@@ -25,6 +25,7 @@ from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_requests import (
     MusicRequest,
     fetch_music_request,
+    is_explicit_music_cancellation,
     mark_music_request_query,
     parse_explicit_user_music_request,
 )
@@ -53,8 +54,14 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     manager = _session_manager_getter(lanlan_name)
     if manager is None:
         return
-    request = parse_explicit_user_music_request(str(event.get("content") or ""))
+    content = str(event.get("content") or "")
+    request = parse_explicit_user_music_request(content)
     if request is None:
+        if is_explicit_music_cancellation(content):
+            previous_task = getattr(manager, "_music_request_task", None)
+            if previous_task is not None and not previous_task.done():
+                previous_task.cancel()
+            _next_music_request_epoch(manager)
         return
     previous_task = getattr(manager, "_music_request_task", None)
     if previous_task is not None and not previous_task.done():

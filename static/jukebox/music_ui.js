@@ -3004,7 +3004,26 @@
         // 5秒去重逻辑
         if (lastPlayedMusicUrl === trackInfo.url && (now - lastMusicPlayTime) < 5000 && isPlayerInDOM()) {
             const duplicatePlayer = getMusicPlayerInstance();
-            if (!duplicatePlayer || !duplicatePlayer._loadError) {
+            const duplicateAudio = duplicatePlayer && duplicatePlayer.audio;
+            if (
+                duplicatePlayer
+                && !duplicatePlayer._loadError
+                && duplicateAudio
+                && !duplicateAudio.paused
+                && !duplicateAudio.ended
+                && duplicateAudio.readyState >= 2
+            ) {
+                setMusicPlaybackContext(playbackOptions);
+                const duplicateReportContext = createMusicPlaybackReportContext(
+                    getCurrentMusicPlaybackId(),
+                    playbackOptions,
+                    trackInfo,
+                    latestMusicRequestToken
+                );
+                duplicateReportContext.mediaReady = true;
+                duplicatePlayer._latestToken = latestMusicRequestToken;
+                duplicatePlayer._musicPlaybackReportContext = duplicateReportContext;
+                reportMusicPlaybackState('playing', null, duplicateReportContext);
                 console.log('[Music UI] 5秒内相同音乐且已在播放中，跳过播发请求:', trackInfo.name);
                 releasePending();
                 return musicPlayResult(true, 'duplicate');
@@ -3024,6 +3043,11 @@
             if (!player) {
                 destroyMusicPlayer(true, false, true);
             } else if (player._loadError) {
+                destroyMusicPlayer(true, false, true);
+            } else if (!player.audio || player.audio.readyState < 2) {
+                // A superseded request can leave the same source in the DOM
+                // while it is still loading. Rebuild it so this request owns
+                // a fresh readiness result and can fall back on failure.
                 destroyMusicPlayer(true, false, true);
             } else {
                 setMusicPlaybackContext(playbackOptions);
@@ -3124,11 +3148,19 @@
             const localOccupied = !!(
                 localAudio && !localAudio.ended && !localPlayer._loadError && isPlayerInDOM()
             );
+            const remoteOccupied = isRemoteMusicActive();
+            if (
+                mirrorBarLeaderSender
+                && !remoteMusicSenders.has(mirrorBarLeaderSender)
+            ) {
+                teardownMirrorBar(false);
+                setMirrorBarLeader(null);
+            }
             const mirrorOccupied = !!(
                 mirrorBarLastState && mirrorBarLastState.track
                 && !mirrorBarLastState.ended && !mirrorBarLastState.loadError
             );
-            return musicDispatchPendingCount > 0 || localOccupied || mirrorOccupied || isRemoteMusicActive();
+            return musicDispatchPendingCount > 0 || localOccupied || mirrorOccupied || remoteOccupied;
         } catch (e) {
             console.error('[Music UI] Error checking if music is occupied:', e);
             return false;

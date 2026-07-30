@@ -221,6 +221,27 @@ def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle(
     assert "playbackReportContext.mediaReady = true;" in player_source
 
 
+def test_same_track_retry_refreshes_context_and_rebuilds_loading_player():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    duplicate_path = player_source.split(
+        "// 5秒去重逻辑", 1
+    )[1].split("if (isSameTrack(trackInfo) && !isPlayerInDOM())", 1)[0]
+
+    assert "duplicateAudio.readyState >= 2" in duplicate_path
+    assert "setMusicPlaybackContext(playbackOptions);" in duplicate_path
+    assert "duplicatePlayer._musicPlaybackReportContext = duplicateReportContext;" in duplicate_path
+    assert "reportMusicPlaybackState('playing', null, duplicateReportContext);" in duplicate_path
+
+    fast_path = player_source.split(
+        "if (isSameTrack(trackInfo) && isPlayerInDOM()) {",
+        1,
+    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+    assert "player.audio.readyState < 2" in fast_path
+    assert fast_path.index("player.audio.readyState < 2") < fast_path.index(
+        "setMusicPlaybackContext(playbackOptions);"
+    )
+
+
 def test_same_track_fast_path_rebuilds_missing_player_instance():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
 
@@ -232,6 +253,21 @@ def test_same_track_fast_path_rebuilds_missing_player_instance():
     assert "destroyMusicPlayer(true, false, true);" in fast_path
     assert fast_path.index("if (!player) {") < fast_path.index(
         "player._musicPlaybackReportContext = playbackReportContext;"
+    )
+
+
+def test_stale_remote_owner_cannot_hold_music_occupancy_forever():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    occupancy = player_source.split(
+        "const isMusicOccupied = () => {", 1
+    )[1].split("const getMusicCurrentTrack", 1)[0]
+
+    assert "const remoteOccupied = isRemoteMusicActive();" in occupancy
+    assert "!remoteMusicSenders.has(mirrorBarLeaderSender)" in occupancy
+    assert "teardownMirrorBar(false);" in occupancy
+    assert "setMirrorBarLeader(null);" in occupancy
+    assert occupancy.index("isRemoteMusicActive()") < occupancy.index(
+        "const mirrorOccupied"
     )
 
 

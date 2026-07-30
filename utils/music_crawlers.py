@@ -2190,7 +2190,15 @@ async def fetch_music_content(
         or requested_artist
         or personalization_source != "auto"
     )
-    use_account_personalization = personalized and not (requested_song or requested_artist)
+    use_account_personalization = (
+        personalized
+        and not (requested_song or requested_artist)
+        and (
+            not keyword
+            or bool(playlist_id or playlist_name)
+            or personalization_source != "auto"
+        )
+    )
     strict_personalization = use_account_personalization and bool(
         playlist_id
         or playlist_name

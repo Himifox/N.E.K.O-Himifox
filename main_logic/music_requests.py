@@ -320,11 +320,25 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if not clause or _EN_NEGATIVE_MUSIC.search(clause):
         return None
     normalized = clause.strip()
-    action_prefix = (
+    request_prefix = (
         r"(?:(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?"
         r"|(?:can|could|would)\s+you\s+(?:please\s+)?)"
-        r"(?:play|listen\s+to)\s+"
     )
+    action_prefix = (
+        request_prefix
+        + r"(?:play|listen\s+to)\s+"
+    )
+    playlist_match = re.fullmatch(
+        request_prefix
+        + r"(?:play|listen\s+to)\s+"
+        r"(?:a\s+song\s+from\s+)?(?:my\s+)?(.{1,60}?)\s+playlist",
+        normalized,
+        re.IGNORECASE,
+    )
+    if playlist_match:
+        return MusicRequest(
+            playlist_name=_strip_request_payload(playlist_match.group(1))
+        )
     if re.fullmatch(
         action_prefix
         +
@@ -422,6 +436,19 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
                 continue
             return request
     return None
+
+
+def is_explicit_music_cancellation(text: str) -> bool:
+    """Return whether the utterance contains a direct music cancellation."""
+    normalized = " ".join(str(text or "").strip().split())
+    if not normalized or len(normalized) > 160:
+        return False
+    return any(
+        _ZH_NEGATIVE_MUSIC.search(clause.strip())
+        or _EN_NEGATIVE_MUSIC.search(clause.strip())
+        for clause in _CLAUSE_SEPARATOR.split(normalized)
+        if clause.strip()
+    )
 
 
 async def fetch_music_request(

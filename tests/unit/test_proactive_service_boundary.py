@@ -322,6 +322,15 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
+        ("play my Night Loop playlist", "", "", "", "Night Loop", "auto"),
+        (
+            "play a song from my Night Loop playlist",
+            "",
+            "",
+            "",
+            "Night Loop",
+            "auto",
+        ),
         (
             "Could you please play Yellow by Coldplay?",
             "Yellow Coldplay",
@@ -412,6 +421,33 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     assert "do not ask which version" in (
         music_playback.get_music_request_pending_prompt("en-US")
     )
+
+
+def test_explicit_music_cancellation_invalidates_pending_search(monkeypatch) -> None:
+    previous_task = MagicMock()
+    previous_task.done.return_value = False
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=4,
+        _music_request_task=previous_task,
+        _fire_task=MagicMock(),
+        enqueue_agent_callback=MagicMock(),
+    )
+    monkeypatch.setattr(
+        music_playback,
+        "_session_manager_getter",
+        lambda _: manager,
+    )
+
+    music_playback._on_user_utterance(
+        "YUI",
+        {"lanlan": "YUI", "content": "不要放歌"},
+    )
+
+    previous_task.cancel.assert_called_once_with()
+    assert manager._music_request_epoch == 5
+    manager._fire_task.assert_not_called()
+    manager.enqueue_agent_callback.assert_not_called()
 
 
 @pytest.mark.asyncio

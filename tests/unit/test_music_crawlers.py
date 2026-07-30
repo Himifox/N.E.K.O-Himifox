@@ -1653,6 +1653,41 @@ async def test_fetch_music_content_honors_personalized_keyword_request():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_ordinary_personalized_keyword_uses_public_search():
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease.personalized_recommendations = AsyncMock(return_value=[{
+        'name': 'Unrelated Daily Track',
+        'artist': 'Other Artist',
+        'url': '/api/music/play/netease/daily',
+    }])
+    mock_netease.search = AsyncMock(return_value=[{
+        'name': 'Yellow',
+        'artist': 'Coldplay',
+        'url': '/api/music/play/netease/yellow',
+    }])
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        response = await fetch_music_content(
+            'Yellow',
+            limit=5,
+            personalized=True,
+        )
+
+    assert response['success'] is True
+    assert [item['name'] for item in response['data']] == ['Yellow']
+    mock_netease.personalized_recommendations.assert_not_awaited()
+    mock_netease.search.assert_awaited_once_with('Yellow', 5)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_fetch_music_content_matches_requested_song_with_typo():
     mock_netease = MagicMock()
     mock_netease._cookie_invalid = False
