@@ -136,6 +136,7 @@ MAX_RECOMMENDED_TRACK_DURATION_SECONDS = 10 * 60
 NETEASE_TASTE_SNAPSHOT_TTL_SECONDS = 30 * 60
 NETEASE_PLAYLIST_LIST_LIMIT = 100
 NETEASE_TASTE_TRACKS_PER_PLAYLIST = 5
+NETEASE_TASTE_TRACK_CANDIDATE_LIMIT = 25
 NETEASE_TASTE_SUBSCRIPTION_LIMIT = 10
 NETEASE_PERSONALIZATION_REQUEST_INTERVAL_SECONDS = 1.0
 NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS = 30 * 60
@@ -725,14 +726,14 @@ class NeteaseCrawler(BaseMusicCrawler):
         playlist_info = await self._personalization_api_call(
             lambda: GetPlaylistInfo(
                 playlist_id,
-                limit=NETEASE_TASTE_TRACKS_PER_PLAYLIST,
+                limit=NETEASE_TASTE_TRACK_CANDIDATE_LIMIT,
             ),
         )
         track_ids = [
             item['id']
             for item in ((playlist_info or {}).get('playlist') or {}).get('trackIds') or []
             if isinstance(item, dict) and item.get('id')
-        ][:NETEASE_TASTE_TRACKS_PER_PLAYLIST]
+        ][:NETEASE_TASTE_TRACK_CANDIDATE_LIMIT]
         if not track_ids:
             return []
 
@@ -743,6 +744,8 @@ class NeteaseCrawler(BaseMusicCrawler):
             if not track or (not self._is_vip and track.get('fee') not in (0, None)):
                 continue
             tracks.append(track)
+            if len(tracks) >= NETEASE_TASTE_TRACKS_PER_PLAYLIST:
+                break
         self._playlist_tracks_cache[playlist_id] = (time.time(), tracks)
         return [dict(item) for item in tracks]
 

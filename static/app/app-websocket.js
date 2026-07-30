@@ -710,6 +710,20 @@
         window._musicCandidateDispatchQueue = queued;
     }
 
+    function resetMusicCandidateRequestScope(scope) {
+        var nextScope = String(scope || '');
+        if (window._musicCandidateRequestScope === nextScope) return;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            window.cancelPendingMusicMediaReady(Number.MAX_SAFE_INTEGER);
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            window.cancelQueuedMusicDispatch(Number.MAX_SAFE_INTEGER);
+        }
+        window._musicCandidateRequestScope = nextScope;
+        window._latestMusicCandidateRequestId = 0;
+        window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
+    }
+
     function handleMusicPlayCandidatesResponse(response) {
         var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
         if (tracks.length === 0) return;
@@ -1756,6 +1770,7 @@
         }
         _lanlanNameWaitAttempts = 0;
         _lanlanNameWaitLastLogAt = 0;
+        resetMusicCandidateRequestScope(currentLanlanName);
 
         var protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         // 对 lanlan_name 做 percent-encode：WebSocket.url 会把非 ASCII 字符（中文角色名）

@@ -69,6 +69,8 @@ def _music_request_query_key(request: MusicRequest) -> str:
         value = f"playlist:{request.playlist_name}"
     elif request.personalization_source != "auto":
         value = f"source:{request.personalization_source}"
+    elif not request.keyword:
+        value = "source:auto"
     else:
         value = request.keyword
     return " ".join(value.casefold().split())
@@ -282,8 +284,29 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if not clause or _EN_NEGATIVE_MUSIC.search(clause):
         return None
     normalized = clause.strip()
+    action_prefix = (
+        r"(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?"
+        r"(?:play|listen\s+to)\s+"
+    )
+    if re.fullmatch(
+        action_prefix
+        +
+        r"(?:some\s+)?(?:my\s+)?(?:liked|favou?rite)(?:\s+(?:songs?|music))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return MusicRequest(personalization_source="liked")
+    if re.fullmatch(
+        action_prefix
+        +
+        r"(?:some\s+)?(?:my\s+)?daily(?:\s+(?:recommendations?|mix|songs?|music))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return MusicRequest(personalization_source="daily")
     match = re.fullmatch(
-        r"(?:please\s+)?(?:i\s+(?:want|would like)\s+to\s+)?(?:play|listen\s+to)\s+"
+        action_prefix
+        +
         r"(?:some\s+)?songs?\s+(?:by|from)\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
@@ -317,19 +340,42 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     return MusicRequest(keyword=payload)
 
 
+def _excluded_personalization_source(clause: str) -> str:
+    folded = clause.casefold()
+    liked_tokens = ("红心", "我喜欢", "收藏", "liked", "favorite", "favourite")
+    if any(token in folded for token in liked_tokens):
+        return "liked"
+    if any(token in folded for token in ("日推", "每日推荐", "daily recommendation", "daily mix")):
+        return "daily"
+    return ""
+
+
 def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
     """Return only high-confidence, user-initiated playback requests."""
     normalized = " ".join(str(text or "").strip().split())
     if not normalized or len(normalized) > 160:
         return None
+    excluded_sources: set[str] = set()
     for clause in reversed(_CLAUSE_SEPARATOR.split(normalized)):
         clause = clause.strip()
         if not clause:
             continue
         if _ZH_NEGATIVE_MUSIC.search(clause) or _EN_NEGATIVE_MUSIC.search(clause):
+            excluded_source = _excluded_personalization_source(clause)
+            if excluded_source:
+                excluded_sources.add(excluded_source)
+                continue
             return None
         request = _parse_explicit_zh_clause(clause) or _parse_explicit_en_clause(clause)
         if request is not None:
+            if request.personalization_source in excluded_sources:
+                continue
+            if (
+                excluded_sources
+                and request.personalization_source == "auto"
+                and not (request.playlist_name or request.song_name or request.song_artist)
+            ):
+                continue
             return request
     return None
 
