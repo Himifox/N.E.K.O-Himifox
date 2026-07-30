@@ -441,16 +441,16 @@
             }
 
             const runId = ++this.localeRefreshRunId;
-            const stageTwo = this.overlay.querySelector('.character-personality-stage-two');
-            const keepStageTwo = !!(stageTwo && !stageTwo.hidden && this.selectedPresetId);
-            const selectedPresetId = this.selectedPresetId;
             const presets = await this.fetchPresets(nextLanguage);
             if (runId !== this.localeRefreshRunId || !presets.length) {
                 return;
             }
 
             this.presets = presets;
-            if (keepStageTwo) {
+            const stageTwo = this.overlay.querySelector('.character-personality-stage-two');
+            const selectedPresetId = this.selectedPresetId;
+            const stillOnStageTwo = !!(stageTwo && !stageTwo.hidden && selectedPresetId);
+            if (stillOnStageTwo) {
                 const selectedPreset = presets.find((preset) => preset.preset_id === selectedPresetId);
                 if (selectedPreset) {
                     this.renderStageTwo(selectedPreset, nextLanguage);

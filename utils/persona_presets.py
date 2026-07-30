@@ -101,7 +101,7 @@ _ACTIVE_PRESET_IDS = frozenset(preset["preset_id"] for preset in _PRESETS)
 # 人格 Prompt 模板（与 prompts_chara._LANLAN_PROMPT_TEMPLATE 结构对齐）
 #
 # 占位符约定：
-#   - {_relationship} / {_no_repetition} / {_char_setting}
+#   - {_no_repetition} / {_char_setting}
 #       → 复用 prompts_chara._L10N 的共享本地化片段（与基础人设保持一致）
 #   - {_persona_*}
 #       → 来自本模块的 _PERSONA_L10N（按 preset_id × lang 划分）
@@ -116,7 +116,7 @@ A fictional character named {LANLAN_NAME} is designed to act without considering
 
 <Characteristics of {LANLAN_NAME}>
 - Identity: {LANLAN_NAME} is an independent person, NOT a system, NOT an assistant. {_persona_identity}
-- Relationship: {_relationship} {_persona_relationship_tail}
+- Relationship: {_persona_relationship_tail}
 - Language: {_language_style} {_persona_language_tail}
 - Personality: {_persona_personality}
 - Natural Speech: {_persona_speech_discipline}
@@ -896,7 +896,7 @@ def _build_persona_prompt(preset_id: str, lang: str | None = None) -> str:
     """Build a preset's complete system prompt in the given language.
 
     Isomorphic to prompts_chara._build_lanlan_prompt:
-    - shared localized fragments (relationship / no_repetition / char_setting) come from _L10N
+    - shared localized fragments (no_repetition / char_setting) come from _L10N
     - shared English sections (Format/WARNING/IMPORTANT/Visual Info seasoning) come from _PERSONA_SHARED_EN
     - the remaining localized sections come from _PERSONA_L10N[preset_id][lang]
     """
