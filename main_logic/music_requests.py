@@ -167,6 +167,16 @@ _EN_NON_MUSIC_TARGET = re.compile(
     r"|with\s+(?:me|us|him|her|them)",
     re.IGNORECASE,
 )
+_ZH_NON_MUSIC_TARGET = re.compile(
+    r"(?:(?:一个|一段|一些|这个|那个|我的|你的|他的|她的)\s*)?"
+    r"(?:视频|游戏|电影|电视剧|动画|动漫|播客|有声书)"
+    r"|(?:你|我|他|她|它|我们|咱们|他们|她们)(?:说话|讲话)(?:的声音)?"
+)
+_ZH_NON_MUSIC_SPEECH_REQUEST = re.compile(
+    r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?"
+    r"(?:播放|放|听|想听|要听)(?:一下)?"
+    r"(?:你|我|他|她|它|我们|咱们|他们|她们)(?:说话|讲话)(?:的声音)?"
+)
 _ZH_MUSIC_MOOD_OR_STYLE = {
     "安静",
     "悲伤",
@@ -196,6 +206,8 @@ def _strip_request_payload(value: str) -> str:
 
 def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     if not clause or _ZH_NEGATIVE_MUSIC.search(clause):
+        return None
+    if _ZH_NON_MUSIC_SPEECH_REQUEST.fullmatch(clause):
         return None
 
     if re.fullmatch(
@@ -281,6 +293,8 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     payload = _strip_request_payload(payload)
     if payload in {"", "歌", "歌曲", "音乐", "一首歌", "首歌", "点音乐"}:
         return MusicRequest()
+    if _ZH_NON_MUSIC_TARGET.fullmatch(payload):
+        return None
     named_song_match = re.fullmatch(r"(?:歌曲?|曲目)\s*[:：]\s*(.{1,60})", payload)
     if named_song_match:
         song = _strip_request_payload(named_song_match.group(1))
