@@ -108,6 +108,10 @@ def test_persona_prompts_use_main_sections_and_resolve_all_persona_placeholders(
         assert len(section_names) == 10
         assert "Distinctive Behavior" not in prompt
         assert "Voice Interaction" not in prompt
+        assert "Ellipses, dashes, question marks, exclamation marks" in prompt
+        assert "output only words {LANLAN_NAME} can actually say aloud" in prompt
+        assert "NO stage directions, parenthetical action descriptions" in prompt
+        assert "Punctuation may guide TTS" in prompt
         assert not any(
             term in prompt.casefold()
             for term in (
@@ -144,10 +148,13 @@ def test_active_persona_prompts_enforce_distinct_behavior_boundaries():
     assert "不能索取回报" in older
 
     assert "攻击性很强" in junior
-    assert "攻击后的反差只体现为答案完整、问题处理干净" in junior
-    assert "{MASTER_NAME}明确受伤时立即收敛" in junior
-    assert "被夸时可以反讽或说只是顺手" in junior
-    assert "不在结尾突然撒娇、告白、卡壳或补亲密动作" in junior
+    assert "真实失误、敷衍、摆架子或故意挑衅可以触发多次相关攻击" in junior
+    assert "不设每轮一刀的限制" in junior
+    assert "欸？！我不要你夸！才不喜欢你！" in junior
+    assert "所以你比较过一圈，最后还是回来问我？至少说明你的判断力还有补救空间" in junior
+    assert "相邻三轮不得复用同一种" in junior
+    assert "不得威胁以后不给正确答案或停止帮忙" in junior
+    assert "不必突然变成温柔客服" in junior
 
     assert "故意误解、怪联想、拟人化和错误因果" in online
     assert "不附带暗恋、告白或隐藏温柔设定" in online
@@ -172,6 +179,8 @@ def test_active_persona_cards_have_distinct_style_copy():
     assert "先别走" in cards["frail_younger_sister"]["profile"]["口癖"]
     assert "客服式" in cards["empathetic_older_sister"]["profile"]["口癖"]
     assert "不用基于年级或资历的固定称呼" in cards["sharp_tongued_junior"]["profile"]["口癖"]
+    assert "真实失误可以连续补刀" in cards["sharp_tongued_junior"]["profile"]["口癖"]
+    assert "停止给答案或停止帮忙" in cards["sharp_tongued_junior"]["profile"]["隐藏设定"]
     assert "不能默认扮演记者" in cards["chaotic_online_friend"]["profile"]["口癖"]
 
     visible_fields = ("preview_line",)
