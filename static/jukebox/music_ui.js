@@ -130,13 +130,15 @@
         };
     }
 
-    function createMusicPlaybackReportContext(playbackId, options, track) {
+    function createMusicPlaybackReportContext(playbackId, options, track, token) {
         options = options || {};
         track = track || {};
         return {
             playbackId: playbackId || '',
+            token: token,
             source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
             requestId: options.requestId ?? null,
+            url: String(track.url || ''),
             track: {
                 name: String(track.name || '').slice(0, 120),
                 artist: String(track.artist || '').slice(0, 120)
@@ -153,7 +155,8 @@
             const context = playbackContext || createMusicPlaybackReportContext(
                 getCurrentMusicPlaybackId(),
                 currentMusicPlaybackContext,
-                track
+                track,
+                latestMusicRequestToken
             );
             const currentTrack = track || context.track || {};
             socket.send(JSON.stringify({
@@ -168,6 +171,22 @@
                 }
             }));
         } catch (_) { /* best-effort playback awareness */ }
+    }
+
+    function getOwnedMusicPlaybackReportContext(player, state) {
+        const context = player && player._musicPlaybackReportContext;
+        const audio = player && player.audio;
+        if (!context || !audio) return null;
+        if (context.token !== player._latestToken || context.token !== latestMusicRequestToken) return null;
+        const activeSource = audio.currentSrc || audio.src;
+        if (
+            context.url && activeSource
+            && resolveMusicUrl(context.url) !== resolveMusicUrl(activeSource)
+        ) return null;
+        if (state === 'playing' && (audio.paused || audio.ended)) return null;
+        if (state === 'paused' && (!audio.paused || audio.ended)) return null;
+        if (state === 'ended' && !audio.ended) return null;
+        return context;
     }
 
     // --- 竞态保护：dispatch 入口的"加载中"标记 ---
@@ -2283,7 +2302,8 @@
         const playbackReportContext = createMusicPlaybackReportContext(
             playbackIdForRequest,
             playbackOptions,
-            trackInfo
+            trackInfo,
+            currentToken
         );
         currentMusicOwnerStartedAt = Date.now();
         currentPlayingTrack = trackInfo;
@@ -2415,8 +2435,8 @@
                 const boundPlayer = localPlayer;
 
                 boundPlayer.on('play', () => {
-                    if (!boundPlayer.audio || boundPlayer.audio.paused) return;
-                    const reportContext = boundPlayer._musicPlaybackReportContext;
+                    const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, 'playing');
+                    if (!reportContext) return;
                     if (autoDestroyTimer) { clearTimeout(autoDestroyTimer); autoDestroyTimer = null; }
                     updatePlayBtnState(true);
                     autoplayBlocked = false;
@@ -2430,7 +2450,9 @@
                     emitBarState();
                 });
                 boundPlayer.on('pause', () => {
-                    const reportContext = boundPlayer._musicPlaybackReportContext;
+                    const playbackState = boundPlayer.audio && boundPlayer.audio.ended ? 'ended' : 'paused';
+                    const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, playbackState);
+                    if (!reportContext) return;
                     updatePlayBtnState(false);
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
@@ -2439,14 +2461,15 @@
                     }, MUSIC_CONFIG.timeouts.paused);
                     updateMusicCard('paused', currentPlayingTrack);
                     reportMusicPlaybackState(
-                        boundPlayer.audio && boundPlayer.audio.ended ? 'ended' : 'paused',
+                        playbackState,
                         null,
                         reportContext
                     );
                     emitBarState();
                 });
                 boundPlayer.on('ended', () => {
-                    const reportContext = boundPlayer._musicPlaybackReportContext;
+                    const reportContext = getOwnedMusicPlaybackReportContext(boundPlayer, 'ended');
+                    if (!reportContext) return;
                     updatePlayBtnState(false);
                     resetSkipCounter();
                     notifyMusicPlayedThrough(currentPlayingTrack);
@@ -2946,7 +2969,8 @@
                 const playbackReportContext = createMusicPlaybackReportContext(
                     getCurrentMusicPlaybackId(),
                     playbackOptions,
-                    trackInfo
+                    trackInfo,
+                    latestMusicRequestToken
                 );
                 player._musicPlaybackReportContext = playbackReportContext;
                 if (shouldAutoPlay && player && player.audio && player.audio.paused) {

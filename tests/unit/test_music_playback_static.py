@@ -130,11 +130,14 @@ def test_music_player_reports_confirmed_state_to_backend():
     router_source = WEBSOCKET_ROUTER_PATH.read_text(encoding="utf-8")
 
     assert "function reportMusicPlaybackState(state, track, playbackContext)" in player_source
-    assert "function createMusicPlaybackReportContext(playbackId, options, track)" in player_source
+    assert "function createMusicPlaybackReportContext(playbackId, options, track, token)" in player_source
+    assert "function getOwnedMusicPlaybackReportContext(player, state)" in player_source
     assert "action: 'music_playback_state'" in player_source
     assert "localPlayer._musicPlaybackReportContext = playbackReportContext" in player_source
-    assert "const reportContext = boundPlayer._musicPlaybackReportContext" in player_source
-    assert "if (!boundPlayer.audio || boundPlayer.audio.paused) return;" in player_source
+    assert "context.token !== latestMusicRequestToken" in player_source
+    assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'playing')" in player_source
+    assert "getOwnedMusicPlaybackReportContext(boundPlayer, playbackState)" in player_source
+    assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'ended')" in player_source
     assert "reportMusicPlaybackState('playing', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('ended', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('error', null, reportContext)" in player_source
