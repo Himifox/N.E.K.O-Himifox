@@ -155,6 +155,23 @@ def test_netease_library_track_upgrades_trusted_cover_to_https():
 
 
 @pytest.mark.unit
+def test_netease_library_track_builds_cover_from_pic_id():
+    track = NeteaseCrawler._normalize_library_track({
+        'id': 246935,
+        'name': 'Song',
+        'ar': [{'name': 'Artist'}],
+        'al': {'picId': 130841883718261},
+        'dt': 180000,
+    })
+
+    assert track is not None
+    assert track['cover'] == (
+        'https://p2.music.126.net/ykvStv36gO8D1JlW14Vr9A=='
+        '/130841883718261.jpg?param=130y130'
+    )
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_netease_crawler_skips_ten_minute_candidates_and_backfills_limit():
     crawler = NeteaseCrawler()

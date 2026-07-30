@@ -27,7 +27,9 @@ Music crawler module, for searching and fetching music from different platforms.
 """
 
 import asyncio
+import base64
 import difflib
+import hashlib
 import httpx
 import random
 import re
@@ -446,6 +448,24 @@ def _normalize_netease_cover_url(value: Any) -> str:
     return cover
 
 
+def _netease_album_cover(album: Any) -> str:
+    if not isinstance(album, dict):
+        return ''
+    cover = _normalize_netease_cover_url(album.get('picUrl'))
+    if cover:
+        return cover
+    pic_id = str(album.get('picId') or '').strip()
+    if not pic_id.isdecimal():
+        return ''
+    magic = b'3go8&$8*3*3h0k(2)2'
+    encoded = bytearray(pic_id.encode())
+    for index in range(len(encoded)):
+        encoded[index] ^= magic[index % len(magic)]
+    key = base64.b64encode(hashlib.md5(encoded).digest()).decode('ascii')
+    key = key.replace('/', '_').replace('+', '-')
+    return f'https://p2.music.126.net/{key}/{pic_id}.jpg?param=130y130'
+
+
 class NeteaseCrawler(BaseMusicCrawler):
     """
     NetEase Cloud Music crawler; supports search with VIP/paid song filtering.
@@ -684,9 +704,7 @@ class NeteaseCrawler(BaseMusicCrawler):
             'name': name,
             'artist': artist,
             'url': f"/api/music/play/netease/{song_id}",
-            'cover': _normalize_netease_cover_url(
-                album.get('picUrl') if isinstance(album, dict) else ''
-            ),
+            'cover': _netease_album_cover(album),
             'theme': '#44b7fe',
             'fee': song.get('fee'),
         }
@@ -1349,9 +1367,7 @@ class NeteaseCrawler(BaseMusicCrawler):
                     for artist in artists
                     if isinstance(artist, dict) and artist.get('name')
                 ) or "未知"
-                cover_url = _normalize_netease_cover_url(
-                    song.get("album", {}).get("picUrl", "")
-                )
+                cover_url = _netease_album_cover(song.get("album"))
                 # 使用本地代理路由，支持 VIP 歌曲解析重定向
                 audio_url = f"/api/music/play/netease/{song_id}"
                 final_results.append(self._format_item(
