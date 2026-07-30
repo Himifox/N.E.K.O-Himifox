@@ -243,3 +243,25 @@ def test_active_persona_cards_are_complete_in_every_locale(locale):
     active_cards = [selection_copy[preset["preset_id"]] for preset in list_persona_presets(locale)]
     for distinctive_field in ("previewLine", "hiddenRule", "speechHabits", "boundaries"):
         assert len({card[distinctive_field] for card in active_cards}) == 4
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("locale", "expected_names"),
+    [
+        ("zh-CN", ("病弱妹妹", "知心姐姐", "毒舌学妹", "沙雕网友")),
+        ("zh-TW", ("病弱妹妹", "知心姐姐", "毒舌學妹", "沙雕網友")),
+        ("en", ("Frail Little Sister", "Understanding Older Sister", "Sharp-Tongued Junior", "Chaotic Online Friend")),
+        ("ja", ("病弱な妹", "心優しいお姉さん", "毒舌な後輩", "カオスなネット友達")),
+        ("ko", ("병약한 여동생", "마음을 읽는 언니", "독설 후배", "혼돈의 온라인 친구")),
+        ("ru", ("Болезненная младшая сестра", "Понимающая старшая сестра", "Острая на язык младшекурсница", "Хаотичная подруга из сети")),
+        ("es", ("Hermana menor delicada", "Hermana mayor comprensiva", "Compañera menor mordaz", "Amiga caótica de internet")),
+        ("pt", ("Irmã mais nova delicada", "Irmã mais velha compreensiva", "Caloura de língua afiada", "Amiga caótica da internet")),
+    ],
+)
+def test_active_persona_names_match_each_locale(locale, expected_names):
+    locale_path = Path(__file__).parents[2] / "static" / "locales" / f"{locale}.json"
+    selection_copy = json.loads(locale_path.read_text(encoding="utf-8"))["memory"]["characterSelection"]
+    active_ids = [preset["preset_id"] for preset in list_persona_presets(locale)]
+
+    assert tuple(selection_copy[preset_id]["name"] for preset_id in active_ids) == expected_names

@@ -1532,6 +1532,128 @@ def test_onboarding_uses_i18n_copy_for_user_visible_text(mock_page: Page):
 
 
 @pytest.mark.frontend
+def test_open_persona_preview_refreshes_and_keeps_selection_on_localechange(mock_page: Page):
+    _bootstrap_page(mock_page)
+    mock_page.evaluate(
+        """
+        () => {
+            window.universalTutorialManager.isTutorialRunning = false;
+            window.i18next = { language: 'en' };
+            window.t = function(key, fallbackOrOptions) {
+                const translations = {
+                    en: {
+                        'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
+                        'memory.characterSelection.previewLabel': 'Voice preview',
+                    },
+                    ja: {
+                        'memory.characterSelection.frail_younger_sister.name': '病弱な妹',
+                        'memory.characterSelection.previewLabel': '声のプレビュー',
+                    },
+                };
+                const options = (
+                    fallbackOrOptions && typeof fallbackOrOptions === 'object' && !Array.isArray(fallbackOrOptions)
+                ) ? fallbackOrOptions : null;
+                const fallback = typeof fallbackOrOptions === 'string'
+                    ? fallbackOrOptions
+                    : (options && typeof options.defaultValue === 'string' ? options.defaultValue : key);
+                return (translations[window.i18next.language] || {})[key] || fallback;
+            };
+        }
+        """
+    )
+    mock_page.add_script_tag(path=str(PROJECT_ROOT / "static" / "js" / "character_personality_onboarding.js"))
+    mock_page.evaluate("() => { window.CharacterPersonalityOnboarding.bootstrap(); }")
+
+    expect(mock_page.locator(".character-personality-card-name")).to_have_text("Frail Little Sister")
+    mock_page.locator("[data-testid='character-personality-preset-frail_younger_sister']").click()
+    expect(mock_page.locator(".stage-two-subtitle")).to_have_text("Frail Little Sister")
+
+    mock_page.evaluate(
+        """
+        () => {
+            window.i18next.language = 'ja';
+            window.dispatchEvent(new CustomEvent('localechange'));
+        }
+        """
+    )
+
+    expect(mock_page.locator(".stage-two-subtitle")).to_have_text("病弱な妹")
+    expect(mock_page.locator(".stage-two-title")).to_have_text("声のプレビュー")
+    expect(mock_page.locator(".character-personality-stage-one")).to_be_hidden()
+    expect(mock_page.locator(".character-personality-stage-two")).to_be_visible()
+    mock_page.wait_for_function(
+        """
+        () => window.__requestLog.some((entry) => {
+            const url = new URL(entry.url, window.location.origin);
+            return url.pathname === '/api/characters/persona-presets'
+                && url.searchParams.get('language') === 'ja';
+        })
+        """
+    )
+
+
+@pytest.mark.frontend
+def test_onboarding_resolves_i18n_names_for_all_four_active_personas(mock_page: Page):
+    _bootstrap_page(mock_page)
+    mock_page.evaluate(
+        """
+        () => {
+            window.universalTutorialManager.isTutorialRunning = false;
+            window.i18next = { language: 'en' };
+            const baseFetch = window.fetch;
+            const ids = [
+                'frail_younger_sister',
+                'empathetic_older_sister',
+                'sharp_tongued_junior',
+                'chaotic_online_friend',
+            ];
+            window.fetch = async function(url, options) {
+                const requestUrl = String(url);
+                if (new URL(requestUrl, window.location.origin).pathname === '/api/characters/persona-presets') {
+                    window.__requestLog.push({ url: requestUrl, method: 'GET', body: null });
+                    return new Response(JSON.stringify({
+                        success: true,
+                        presets: ids.map((id) => ({
+                            preset_id: id,
+                            display_name: id,
+                            summary_fallback: id,
+                            preview_line: id,
+                            profile: {},
+                        })),
+                    }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    });
+                }
+                return baseFetch(url, options);
+            };
+            const names = {
+                'memory.characterSelection.frail_younger_sister.name': 'Frail Little Sister',
+                'memory.characterSelection.empathetic_older_sister.name': 'Understanding Older Sister',
+                'memory.characterSelection.sharp_tongued_junior.name': 'Sharp-Tongued Junior',
+                'memory.characterSelection.chaotic_online_friend.name': 'Chaotic Online Friend',
+            };
+            window.t = function(key, fallbackOrOptions) {
+                const fallback = typeof fallbackOrOptions === 'string'
+                    ? fallbackOrOptions
+                    : (fallbackOrOptions && fallbackOrOptions.defaultValue) || key;
+                return names[key] || fallback;
+            };
+        }
+        """
+    )
+    mock_page.add_script_tag(path=str(PROJECT_ROOT / "static" / "js" / "character_personality_onboarding.js"))
+    mock_page.evaluate("() => { window.CharacterPersonalityOnboarding.bootstrap(); }")
+
+    expect(mock_page.locator(".character-personality-card-name")).to_have_text([
+        "Frail Little Sister",
+        "Understanding Older Sister",
+        "Sharp-Tongued Junior",
+        "Chaotic Online Friend",
+    ])
+
+
+@pytest.mark.frontend
 def test_settings_uses_i18n_copy_for_warning_and_user_visible_text(mock_page: Page):
     _bootstrap_page(mock_page)
     mock_page.evaluate(

@@ -130,6 +130,7 @@
             this.originalBodyPointerEvents = '';
             this.openReason = 'onboarding';
             this.currentLanguage = '';
+            this.localeRefreshRunId = 0;
             this.typewriterRunId = 0;
             this.typewriterTimer = null;
             this.homeTutorialCompletedInSession = false;
@@ -432,6 +433,33 @@
             return Array.isArray(payload.presets) ? payload.presets : [];
         }
 
+        async refreshForLocaleChange() {
+            const nextLanguage = getCurrentLanguage();
+            this.currentLanguage = nextLanguage;
+            if (!this.overlay || this.overlay.hidden) {
+                return;
+            }
+
+            const runId = ++this.localeRefreshRunId;
+            const stageTwo = this.overlay.querySelector('.character-personality-stage-two');
+            const keepStageTwo = !!(stageTwo && !stageTwo.hidden && this.selectedPresetId);
+            const selectedPresetId = this.selectedPresetId;
+            const presets = await this.fetchPresets(nextLanguage);
+            if (runId !== this.localeRefreshRunId || !presets.length) {
+                return;
+            }
+
+            this.presets = presets;
+            if (keepStageTwo) {
+                const selectedPreset = presets.find((preset) => preset.preset_id === selectedPresetId);
+                if (selectedPreset) {
+                    this.renderStageTwo(selectedPreset, nextLanguage);
+                    return;
+                }
+            }
+            this.renderStageOne();
+        }
+
         ensureOverlay() {
             ensureStyles();
             if (this.overlay && document.body.contains(this.overlay)) {
@@ -563,8 +591,15 @@
                 }
             };
 
+            const refreshForLocaleChange = () => {
+                void this.refreshForLocaleChange().catch((error) => {
+                    console.warn('[CharacterPersonalityOnboarding] failed to refresh locale:', error);
+                });
+            };
+
             window.addEventListener(HOME_TUTORIAL_RESET_EVENT, resetHomeTutorialCompleted);
             window.addEventListener('storage', resetHomeTutorialCompletedFromStorage);
+            window.addEventListener('localechange', refreshForLocaleChange);
             window.addEventListener(STARTUP_GREETING_RELEASE_EVENT, handleHomeTutorialStartupRelease);
             window.addEventListener('neko:tutorial-started', queueResume);
             window.addEventListener('neko:tutorial-completed', markHomeTutorialCompleted);
@@ -589,13 +624,13 @@
             }
 
             window.addEventListener('beforeunload', () => {
-                if (!this.resetBroadcastChannel) {
-                    return;
+                window.removeEventListener('localechange', refreshForLocaleChange);
+                if (this.resetBroadcastChannel) {
+                    try {
+                        this.resetBroadcastChannel.close();
+                    } catch (_) {}
+                    this.resetBroadcastChannel = null;
                 }
-                try {
-                    this.resetBroadcastChannel.close();
-                } catch (_) {}
-                this.resetBroadcastChannel = null;
             });
         }
 
