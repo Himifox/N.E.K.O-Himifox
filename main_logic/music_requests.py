@@ -160,7 +160,7 @@ _EN_NEGATIVE_MUSIC = re.compile(
 _EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
 _EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
 _EN_NON_MUSIC_TARGET = re.compile(
-    r"(?:(?:a|the|this|that|my|your)\s+)?"
+    r"(?:(?:a|the|this|that|my|your|some)\s+)?"
     r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?|"
     r"chess|football|soccer|basketball)"
     r"|(?:me|us|him|her|them|it|this|that)"
