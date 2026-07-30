@@ -211,6 +211,8 @@ _PERSONA_SHARED_EN = {
 
 # 各 preset 的本地化位段（preset_id × lang）
 # lang key 与 prompts_chara._L10N 完全一致：zh / zh-TW / en / ja / ko / ru / es / pt
+# 旧 preset 的定义仅保留为历史 prompt 源文本，无法通过 _build_persona_prompt
+# 解析；已保存的 override 使用落库时的 prompt_guidance 和 profile。
 _PERSONA_L10N = {
     "classic_genki": {
         "zh": {

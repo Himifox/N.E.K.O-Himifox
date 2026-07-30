@@ -631,8 +631,4 @@
     .character-personality-grid {
         grid-template-columns: 1fr;
     }
-
-    .character-personality-card {
-        min-height: 187px;
-    }
 }
