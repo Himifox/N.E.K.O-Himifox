@@ -179,6 +179,25 @@ async def test_netease_crawler_skips_ten_minute_candidates_and_backfills_limit()
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_netease_crawler_scales_candidate_count_with_requested_limit():
+    crawler = NeteaseCrawler()
+    crawler._vip_checked = True
+    mock_response = MagicMock(status_code=200)
+    mock_response.json.return_value = {'code': 200, 'result': {'songs': []}}
+
+    with patch.object(
+        httpx.AsyncClient,
+        'post',
+        new=AsyncMock(return_value=mock_response),
+    ) as post:
+        await crawler.search('test', limit=8)
+
+    assert post.await_args.kwargs['data']['limit'] == 10
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_netease_personalized_recommendations_rotates_to_artist_lead():
     crawler = NeteaseCrawler()
     familiar = [
@@ -215,11 +234,46 @@ async def test_netease_personalized_recommendations_rotates_to_artist_lead():
         patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
     ):
         crawler._personalization_source_index = 5
-        results = await crawler.personalized_recommendations('Favorite Artist', limit=5)
+        results = await crawler.personalized_recommendations('', limit=5)
 
     assert len(results) == 5
     assert results[0]['id'] == 100
     assert sum(item['id'] < 100 for item in results) == 4
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_personalized_recommendations_prioritizes_artist_hint():
+    crawler = NeteaseCrawler()
+    snapshot = {
+        'user_id': 7,
+        'liked_tracks': [{
+            'id': 1,
+            'name': 'Familiar',
+            'artist': 'Known Artist',
+            'url': '/api/music/play/netease/1',
+        }],
+        'liked_track_ids': {1},
+        'playlists': [],
+        'subscribed_artists': [{'id': 99, 'name': 'Favorite Artist'}],
+    }
+    exploration = [{
+        'id': 100,
+        'name': 'Exploration',
+        'artist': 'Favorite Artist',
+        'url': '/api/music/play/netease/100',
+    }]
+
+    with (
+        patch.object(crawler, 'get_taste_snapshot', new=AsyncMock(return_value=snapshot)),
+        patch.object(crawler, 'get_daily_recommendations', new=AsyncMock(return_value=[])),
+        patch.object(crawler, '_fetch_exploration_tracks', new=AsyncMock(return_value=exploration)),
+        patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
+    ):
+        results = await crawler.personalized_recommendations('Favorite Artist', limit=1)
+
+    assert [item['id'] for item in results] == [100]
     await crawler.close()
 
 
@@ -371,6 +425,13 @@ def test_requested_song_combines_title_and_artist_similarity():
 
 
 @pytest.mark.unit
+def test_requested_song_rejects_single_character_artist_substring():
+    candidate = {'name': 'Hello', 'artist': 'A', 'url': 'wrong'}
+
+    assert _select_requested_song('Hello', 'Adele', [candidate]) is None
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_netease_taste_snapshot_failure_uses_retry_cooldown():
     crawler = NeteaseCrawler()
@@ -425,6 +486,53 @@ async def test_netease_exploration_tracks_are_cached():
     assert [item['id'] for item in first] == [100]
     assert [item['id'] for item in second] == [100]
     assert api_call.await_count == 1
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_exploration_cache_is_scoped_by_keyword():
+    crawler = NeteaseCrawler()
+    snapshot = {
+        'subscribed_artists': [
+            {'id': 1, 'name': 'First Artist'},
+            {'id': 2, 'name': 'Second Artist'},
+        ],
+        'liked_track_ids': set(),
+    }
+
+    def payload(track_id, artist):
+        return {
+            'code': 200,
+            'songs': [{
+                'id': track_id,
+                'name': f'{artist} Track',
+                'ar': [{'name': artist}],
+                'al': {},
+                'dt': 180000,
+                'fee': 0,
+            }],
+        }
+
+    with (
+        patch.object(
+            crawler,
+            '_personalization_api_call',
+            new=AsyncMock(side_effect=[
+                payload(101, 'First Artist'),
+                payload(202, 'Second Artist'),
+            ]),
+        ) as api_call,
+        patch('utils.music_crawlers.random.shuffle', side_effect=lambda items: None),
+    ):
+        first = await crawler._fetch_exploration_tracks(snapshot, 'First Artist', 1)
+        second = await crawler._fetch_exploration_tracks(snapshot, 'Second Artist', 1)
+        second_cached = await crawler._fetch_exploration_tracks(snapshot, 'Second Artist', 1)
+
+    assert [item['id'] for item in first] == [101]
+    assert [item['id'] for item in second] == [202]
+    assert [item['id'] for item in second_cached] == [202]
+    assert api_call.await_count == 2
     await crawler.close()
 
 
@@ -697,6 +805,94 @@ async def test_musopen_crawler_uses_public_player_api():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_musopen_crawler_falls_back_when_api_recordings_are_unusable():
+    crawler = MusopenCrawler()
+    search_response = MagicMock(status_code=200)
+    search_response.json.return_value = {
+        'results': [{'id': 108, 'entity': 'piece', 'title': 'Nocturnes, Op. 9'}],
+    }
+    recordings_response = MagicMock(status_code=200)
+    recordings_response.json.return_value = {
+        'results': [{'title': 'Unavailable', 'length': 345, 'fileurl': ''}],
+    }
+    page_response = MagicMock(status_code=200, text=MOCK_MUSOPEN_HTML)
+
+    with patch.object(
+        httpx.AsyncClient,
+        'get',
+        new=AsyncMock(side_effect=[search_response, recordings_response, page_response]),
+    ):
+        results = await crawler.search('Chopin', limit=1)
+
+    assert len(results) == 1
+    assert 'Test' in results[0]['name']
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_musopen_crawler_falls_back_when_api_search_fails():
+    crawler = MusopenCrawler()
+    failed_search = MagicMock(status_code=503)
+    failed_search.raise_for_status.side_effect = httpx.HTTPStatusError(
+        'service unavailable',
+        request=httpx.Request('GET', 'https://api.musopen.org/v2/search/'),
+        response=httpx.Response(503),
+    )
+    page_response = MagicMock(status_code=200, text=MOCK_MUSOPEN_HTML)
+
+    with patch.object(
+        httpx.AsyncClient,
+        'get',
+        new=AsyncMock(side_effect=[failed_search, page_response]),
+    ):
+        results = await crawler.search('Chopin', limit=1)
+
+    assert len(results) == 1
+    assert 'Test' in results[0]['name']
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_musopen_crawler_skips_failed_piece_recordings():
+    crawler = MusopenCrawler()
+    search_response = MagicMock(status_code=200)
+    search_response.json.return_value = {
+        'results': [
+            {'id': 108, 'entity': 'piece', 'title': 'Unavailable Piece'},
+            {'id': 109, 'entity': 'piece', 'title': 'Playable Piece'},
+        ],
+    }
+    failed_response = MagicMock(status_code=500)
+    failed_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        'server error',
+        request=httpx.Request('GET', 'https://api.musopen.org/v2/pieces/108/recordings/'),
+        response=httpx.Response(500),
+    )
+    playable_response = MagicMock(status_code=200)
+    playable_response.json.return_value = {
+        'results': [{
+            'title': 'Playable Recording',
+            'length': 345,
+            'fileurl': 'https://dl.musopen.org/recordings/playable.mp3',
+            'performer': {'name': 'Test Performer'},
+        }],
+    }
+
+    with patch.object(
+        httpx.AsyncClient,
+        'get',
+        new=AsyncMock(side_effect=[search_response, failed_response, playable_response]),
+    ):
+        results = await crawler.search('Chopin', limit=1)
+
+    assert [track['name'] for track in results] == ['Playable Recording']
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_bandcamp_crawler_uses_autocomplete_when_html_search_is_challenged():
     crawler = BandcampCrawler()
     autocomplete = MagicMock(status_code=200)
@@ -724,6 +920,47 @@ async def test_bandcamp_crawler_uses_autocomplete_when_html_search_is_challenged
 
     assert [track['name'] for track in results] == ['Bandcamp Song']
     assert get_mock.await_args_list[1].args[0] == 'https://artist.bandcamp.com/album/test'
+    await crawler.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_bandcamp_crawler_falls_back_when_autocomplete_fails():
+    crawler = BandcampCrawler()
+    html_search = MagicMock(
+        status_code=200,
+        text='''<div class="heading">
+            <a href="https://artist.bandcamp.com/track/test">Test</a>
+        </div>''',
+    )
+    track_page = MagicMock(
+        status_code=200,
+        text='''<script data-tralbum='{
+            "artist": "Bandcamp Artist",
+            "trackinfo": [{
+                "title": "Fallback Song",
+                "duration": 180,
+                "file": {"mp3-128": "https://audio.example/fallback.mp3"}
+            }]
+        }'></script>''',
+    )
+    get_mock = AsyncMock(side_effect=[
+        httpx.ConnectError(
+            'connection failed',
+            request=httpx.Request(
+                'GET',
+                'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete',
+            ),
+        ),
+        html_search,
+        track_page,
+    ])
+
+    with patch.object(httpx.AsyncClient, 'get', new=get_mock):
+        results = await crawler.search('lofi', limit=1)
+
+    assert [track['name'] for track in results] == ['Fallback Song']
+    assert get_mock.await_args_list[1].args[0] == 'https://bandcamp.com/search'
     await crawler.close()
 
 
@@ -974,6 +1211,81 @@ async def test_fetch_music_content_strict_liked_source_does_not_blind_fallback()
     assert response['success'] is False
     mock_netease.personalized_recommendations.assert_awaited_once_with(
         keyword='',
+        limit=5,
+        playlist_id=None,
+        playlist_name='',
+        personalization_source='liked',
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'strict_kwargs',
+    [
+        {'personalization_source': 'liked'},
+        {'playlist_id': 88},
+    ],
+)
+async def test_fetch_music_content_strict_personalization_with_keyword_does_not_fallback(
+    strict_kwargs,
+):
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease._personalization_error_code = 'source_empty'
+    mock_netease.personalized_recommendations = AsyncMock(return_value=[])
+    mock_netease.search = AsyncMock(return_value=[{
+        'name': 'Public Track',
+        'artist': 'Public Artist',
+        'url': '/api/music/play/netease/9',
+    }])
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={'netease': mock_netease},
+        ),
+        patch('utils.music_crawlers.is_china_region', return_value=True),
+    ):
+        response = await fetch_music_content(
+            '周杰伦',
+            limit=5,
+            personalized=True,
+            **strict_kwargs,
+        )
+
+    assert response['success'] is False
+    assert response['error_code'] == 'source_empty'
+    mock_netease.search.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_music_content_honors_personalized_keyword_request():
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+    mock_netease._personalization_error_code = ''
+    mock_netease.personalized_recommendations = AsyncMock(return_value=[{
+        'name': 'Account Track',
+        'artist': 'Favorite Artist',
+        'url': '/api/music/play/netease/7',
+    }])
+
+    with patch(
+        'utils.music_crawlers.get_music_crawlers',
+        return_value={'netease': mock_netease},
+    ):
+        response = await fetch_music_content(
+            'Favorite Artist',
+            limit=5,
+            personalized=True,
+            personalization_source='liked',
+        )
+
+    assert response['success'] is True
+    assert [item['name'] for item in response['data']] == ['Account Track']
+    mock_netease.personalized_recommendations.assert_awaited_once_with(
+        keyword='Favorite Artist',
         limit=5,
         playlist_id=None,
         playlist_name='',

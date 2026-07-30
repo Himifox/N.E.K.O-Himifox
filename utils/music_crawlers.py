@@ -463,7 +463,9 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_lock = asyncio.Lock()
         self._exploration_tracks: List[Dict[str, Any]] = []
         self._exploration_tracks_at = 0.0
+        self._exploration_keyword = ''
         self._exploration_retry_after = 0.0
+        self._exploration_retry_keyword = ''
         self._exploration_lock = asyncio.Lock()
         self._personalization_api_lock = asyncio.Lock()
         self._personalization_last_request_at = 0.0
@@ -486,7 +488,9 @@ class NeteaseCrawler(BaseMusicCrawler):
         self._daily_recommend_error_code = ''
         self._exploration_tracks = []
         self._exploration_tracks_at = 0.0
+        self._exploration_keyword = ''
         self._exploration_retry_after = 0.0
+        self._exploration_retry_keyword = ''
         self._account_profile = {}
         self._personalization_source_index = 0
         self._personalization_error_code = ''
@@ -933,25 +937,33 @@ class NeteaseCrawler(BaseMusicCrawler):
         artists = list(snapshot.get('subscribed_artists') or [])
         if not artists or limit <= 0:
             return []
+        keyword_key = keyword.strip().casefold()
         now = time.time()
-        if self._exploration_tracks and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS:
+        if (
+            self._exploration_tracks
+            and self._exploration_keyword == keyword_key
+            and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS
+        ):
             tracks = list(self._exploration_tracks)
             random.shuffle(tracks)
             return tracks[:limit]
-        if now < self._exploration_retry_after:
+        if self._exploration_retry_keyword == keyword_key and now < self._exploration_retry_after:
             return []
         async with self._exploration_lock:
             now = time.time()
-            if self._exploration_tracks and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS:
+            if (
+                self._exploration_tracks
+                and self._exploration_keyword == keyword_key
+                and now - self._exploration_tracks_at < NETEASE_TASTE_SNAPSHOT_TTL_SECONDS
+            ):
                 tracks = list(self._exploration_tracks)
                 random.shuffle(tracks)
                 return tracks[:limit]
-            if now < self._exploration_retry_after:
+            if self._exploration_retry_keyword == keyword_key and now < self._exploration_retry_after:
                 return []
-            keyword_lower = keyword.strip().lower()
             matching = [
                 item for item in artists
-                if keyword_lower and keyword_lower in str(item.get('name') or '').lower()
+                if keyword_key and keyword_key in str(item.get('name') or '').casefold()
             ]
             artist = random.choice(matching or artists)
             from pyncm_async.apis.artist import GetArtistTracks
@@ -968,6 +980,7 @@ class NeteaseCrawler(BaseMusicCrawler):
                 self._exploration_retry_after = (
                     time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
                 )
+                self._exploration_retry_keyword = keyword_key
                 raise
             songs = (payload or {}).get('songs') or (payload or {}).get('hotSongs') or []
             familiar_ids = set(snapshot.get('liked_track_ids') or set())
@@ -982,9 +995,11 @@ class NeteaseCrawler(BaseMusicCrawler):
                 tracks.append(track)
             self._exploration_tracks = tracks
             self._exploration_tracks_at = time.time()
+            self._exploration_keyword = keyword_key
             self._exploration_retry_after = (
                 0.0 if tracks else time.time() + NETEASE_PERSONALIZATION_RETRY_COOLDOWN_SECONDS
             )
+            self._exploration_retry_keyword = '' if tracks else keyword_key
             random.shuffle(tracks)
             return tracks[:limit]
 
@@ -1088,10 +1103,21 @@ class NeteaseCrawler(BaseMusicCrawler):
             )
             artist = []
 
-        lead_source = NETEASE_PERSONALIZATION_SOURCE_ORDER[
-            self._personalization_source_index % len(NETEASE_PERSONALIZATION_SOURCE_ORDER)
-        ]
-        self._personalization_source_index += 1
+        keyword_key = keyword.strip().casefold()
+        has_artist_hint = bool(
+            keyword_key
+            and any(
+                keyword_key in str(item.get('name') or '').casefold()
+                for item in snapshot.get('subscribed_artists') or []
+            )
+        )
+        if has_artist_hint and artist:
+            lead_source = 'artist'
+        else:
+            lead_source = NETEASE_PERSONALIZATION_SOURCE_ORDER[
+                self._personalization_source_index % len(NETEASE_PERSONALIZATION_SOURCE_ORDER)
+            ]
+            self._personalization_source_index += 1
         source_order = [lead_source] + [
             source for source in ('liked', 'daily', 'artist')
             if source != lead_source
@@ -1503,21 +1529,38 @@ class MusopenCrawler(BaseMusicCrawler):
                 'https://musopen.org/music/466-eine-kleine-nachtmusik/': 'Mozart',
                 'https://musopen.org/music/25172-cello-suite-no-1-in-g-major-bwv-1007/': 'Bach',
             }.get(url, keyword)
-            search_response = await self.client.get(
-                'https://api.musopen.org/v2/search/',
-                params={'query': search_term},
-            )
-            search_response.raise_for_status()
-            pieces = [
-                item for item in search_response.json().get('results', [])
-                if item.get('entity') == 'piece' and item.get('id')
-            ]
+            pieces = []
+            try:
+                search_response = await self.client.get(
+                    'https://api.musopen.org/v2/search/',
+                    params={'query': search_term},
+                )
+                search_response.raise_for_status()
+                pieces = [
+                    item for item in search_response.json().get('results', [])
+                    if item.get('entity') == 'piece' and item.get('id')
+                ]
+            except (httpx.HTTPError, AttributeError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "[%s] API 搜索失败，尝试页面兜底: %s",
+                    self.platform_name,
+                    type(exc).__name__,
+                )
             results = []
             for piece in pieces[:limit * 3]:
-                recordings_response = await self.client.get(
-                    f"https://api.musopen.org/v2/pieces/{piece['id']}/recordings/"
-                )
-                recordings_response.raise_for_status()
+                try:
+                    recordings_response = await self.client.get(
+                        f"https://api.musopen.org/v2/pieces/{piece['id']}/recordings/"
+                    )
+                    recordings_response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    logger.warning(
+                        "[%s] 曲目 %s 的录音接口失败，继续尝试其他曲目: %s",
+                        self.platform_name,
+                        piece['id'],
+                        type(exc).__name__,
+                    )
+                    continue
                 for recording in recordings_response.json().get('results', []):
                     audio_url = recording.get('fileurl')
                     duration_seconds = _parse_duration_seconds(recording.get('length'))
@@ -1534,10 +1577,10 @@ class MusopenCrawler(BaseMusicCrawler):
                     if len(results) >= limit:
                         return results
 
-            if pieces:
+            if results:
                 return results
 
-            logger.warning(f"[{self.platform_name}] API 未找到与 '{search_term}' 相关的曲目")
+            logger.warning(f"[{self.platform_name}] API 未找到与 '{search_term}' 相关的可播放录音，尝试页面兜底")
             response = await self.client.get(url)
             response.raise_for_status()
             # === Musopen 封面抓取 ===
@@ -1754,9 +1797,17 @@ class BandcampCrawler(BaseMusicCrawler):
                 return None
 
         try:
-            autocomplete_url = 'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete'
-            autocomplete = await self.client.get(autocomplete_url, params={'q': keyword})
-            if autocomplete.status_code == 200:
+            autocomplete = None
+            try:
+                autocomplete_url = 'https://bandcamp.com/api/fuzzysearch/2/app_autocomplete'
+                autocomplete = await self.client.get(autocomplete_url, params={'q': keyword})
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "[%s] 自动补全请求失败，尝试 HTML 搜索兜底: %s",
+                    self.platform_name,
+                    type(exc).__name__,
+                )
+            if autocomplete is not None and autocomplete.status_code == 200:
                 try:
                     autocomplete_items = autocomplete.json().get('results') or []
                 except (AttributeError, ValueError):
@@ -1905,8 +1956,15 @@ async def fetch_music_content(
         or requested_artist
         or personalization_source != "auto"
     )
+    use_account_personalization = personalized and not (requested_song or requested_artist)
+    strict_personalization = use_account_personalization and bool(
+        playlist_id
+        or playlist_name
+        or personalization_source != "auto"
+    )
 
-    if personalized and (not keyword or playlist_id or playlist_name):
+    # 明确点歌仍走公开搜索；其余个性化请求即使带关键词，也应尊重账号候选池。
+    if use_account_personalization:
         netease_used = True
         try:
             personalized_results = await all_crawlers['netease'].personalized_recommendations(
@@ -1932,7 +1990,7 @@ async def fetch_music_content(
             all_results.extend(personalized_results)
             logger.info(f"[个性化推荐] 使用网易云个性化候选 {len(personalized_results)} 首")
 
-    if not all_results and keyword:
+    if not all_results and keyword and not strict_personalization:
         # 场景 A: 用户指定了明确关键词 -> 开启"梯队降级"机制
         kw_lower = keyword.lower()
         # 1. 【强古典词】确保正确路由至 Musopen
@@ -2391,7 +2449,10 @@ def _select_requested_song(
             ).ratio()
             artist_matches = (
                 target_artist in candidate_artist
-                or candidate_artist in target_artist
+                or (
+                    len(candidate_artist) >= 2
+                    and candidate_artist in target_artist
+                )
                 or (
                     len(target_artist) >= 4
                     and len(candidate_artist) >= 4

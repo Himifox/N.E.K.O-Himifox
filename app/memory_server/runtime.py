@@ -62,6 +62,7 @@ from utils.cloudsave_runtime import (
 from utils.config_manager import get_config_manager
 from utils.storage_location_bootstrap import get_storage_startup_blocking_reason
 from utils.asgi_body_limit import InboundBodySizeLimitMiddleware
+from utils.host_origin_guard import HostOriginGuardMiddleware
 
 from . import gates
 from ._shared import logger, validate_lanlan_name
@@ -92,7 +93,7 @@ async def storage_limited_mode_guard(request: Request, call_next):
     if blocking_reason or _memory_storage_blocked_after_init:
         blocking_reason = blocking_reason or "storage_startup_blocked_after_init"
         logger.info(
-            "[Memory] limited-mode blocks request path=%s reason=%s",
+            "[Memory] limited-mode blocks request path=%r reason=%s",
             request.url.path,
             blocking_reason,
         )
@@ -108,7 +109,7 @@ async def storage_limited_mode_guard(request: Request, call_next):
         )
     runtime_blocking_reason = "runtime_initializing"
     logger.info(
-        "[Memory] limited-mode blocks request path=%s reason=%s",
+        "[Memory] limited-mode blocks request path=%r reason=%s",
         request.url.path,
         runtime_blocking_reason,
     )
@@ -129,6 +130,7 @@ async def storage_limited_mode_guard(request: Request, call_next):
 # agent_server 因 /openfang-llm-proxy 透明转发大 LLM 请求（vision/长上下文 JSON
 # 可超 16M）有意不装，见 PR 说明。
 app.add_middleware(InboundBodySizeLimitMiddleware)
+app.add_middleware(HostOriginGuardMiddleware)
 
 
 @app.exception_handler(MaintenanceModeError)
