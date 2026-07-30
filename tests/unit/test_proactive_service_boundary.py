@@ -246,7 +246,10 @@ async def test_successful_proactive_query_is_remembered(monkeypatch) -> None:
     )
 
 
-def test_music_failsafe_only_applies_to_strict_song_request() -> None:
+@pytest.mark.asyncio
+async def test_music_failsafe_only_applies_to_strict_song_request(
+    monkeypatch,
+) -> None:
     fuzzy_content = {
         "raw_data": {
             "best_match": {"status": "fuzzy"},
@@ -260,19 +263,32 @@ def test_music_failsafe_only_applies_to_strict_song_request() -> None:
         master_name="User",
         lang="zh",
     )
+    fetch = AsyncMock(
+        return_value={
+            "success": True,
+            "data": [{"name": "童年", "url": "/music/childhood"}],
+            "best_match": {"status": "fuzzy"},
+        }
+    )
+    monkeypatch.setattr(music_recommendation, "fetch_music_content", fetch)
+    strict_content, _ = await generation._fetch_phase1_followups(
+        parsed={"music_keyword": "song:童年", "music_pass": False},
+        has_music_task=True,
+        has_meme_task=False,
+        music_content=None,
+        meme_content=None,
+        proactive_lang="zh",
+        lanlan_name="YUI-fuzzy-data-flow",
+    )
     strict_context = music_recommendation._build_music_dynamic_context(
         selected_music_link={"title": "Track"},
-        music_content={
-            "raw_data": {
-                "best_match": {"status": "fuzzy"},
-                "_strict_song_request": True,
-            }
-        },
+        music_content=strict_content,
         is_playing_music=False,
         master_name="User",
         lang="zh",
     )
 
+    assert strict_content["raw_data"]["_strict_song_request"] is True
     assert "未找到与关键词精准匹配" not in normal_context
     assert "未找到与关键词精准匹配" in strict_context
 
