@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 from plugin.sdk.plugin import (
     NekoPluginBase,
     neko_plugin,
-    llm_tool,
     plugin_entry,
     lifecycle,
     Ok,
@@ -225,10 +224,9 @@ class WebSearchPlugin(NekoPluginBase):
         try:
             to = float(self._cfg.get("timeout_seconds", 15))
         except (TypeError, ValueError):
-            to = 4.0
-        # This plugin is used in the live dialogue path.  Keep its complete
-        # search attempt within the same short turn budget as knowledge lookup.
-        to = min(max(to, 2.0), 5.0)
+            to = 15.0
+        if to <= 0:
+            to = 15.0
         return {"max_results": mr, "timeout": to}
 
     async def _do_text_search(
@@ -247,43 +245,6 @@ class WebSearchPlugin(NekoPluginBase):
             self.logger.warning("DDG html failed, trying lite: {}", e)
 
         return await _search_ddg_lite(client, query, max_results, timeout=timeout)
-
-    @llm_tool(
-        name="web_search_public_meme_fallback",
-        description=(
-            "Search the web for a newly emerged public meme, livestream-chat phrase, or fandom term "
-            "only after local knowledge and encyclopedia lookup both failed."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The short unknown public meme phrase."},
-                "max_results": {"type": "integer", "minimum": 1, "maximum": 3, "default": 3},
-            },
-            "required": ["query"],
-        },
-        timeout=2.0,
-    )
-    async def search_public_meme_fallback(self, query: str, max_results: int = 3, **_) -> dict:
-        """Compact, tool-callable final fallback; no persistence in the knowledge DB."""
-        query = str(query or "").strip()
-        if not query:
-            return {"error": "empty query"}
-        defaults = self._defaults()
-        max_results = min(max(int(max_results or 3), 1), 3)
-        timeout_seconds = min(defaults["timeout"], 2.0)
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                results = await self._do_text_search(query, max_results, timeout_seconds)
-        except TimeoutError:
-            return {"error": "search timeout"}
-        except Exception as exc:
-            self.logger.warning("Public meme fallback failed: type={}", type(exc).__name__)
-            return {"error": type(exc).__name__}
-        return {
-            "summary": self._build_summary(query, results),
-            "results": results,
-        }
 
     @staticmethod
     def _build_summary(query: str, results: List[Dict[str, str]]) -> str:
@@ -340,11 +301,7 @@ class WebSearchPlugin(NekoPluginBase):
         )
 
         try:
-            async with asyncio.timeout(timeout):
-                results = await self._do_text_search(query, max_r, timeout)
-        except TimeoutError:
-            self.logger.info("Search timed out (query_len={}, timeout_s={})", len(query), timeout)
-            return Err(SdkError("搜索超时"))
+            results = await self._do_text_search(query, max_r, timeout)
         except SearchBlockedError as e:
             return Err(SdkError(str(e)))
         except Exception as e:

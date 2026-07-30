@@ -500,9 +500,8 @@ class _StreamingMixin:
         # 落 history，跟 voice mode user-role 注入对偶。
         _user_text = text.strip()
         _prefix_clean = (system_prefix or "").strip()
-        _prompt_prefix = _prefix_clean
         _user_text_with_prefix = (
-            f"{_prompt_prefix}\n\n{_user_text}" if _prompt_prefix else _user_text
+            f"{_prefix_clean}\n\n{_user_text}" if _prefix_clean else _user_text
         )
 
         # Prepare user message content
@@ -563,9 +562,6 @@ class _StreamingMixin:
         history_replacement_index = len(self._conversation_history) - 1
         _ephemeral_instruction_clean = (ephemeral_response_instruction or "").strip()
         _ephemeral_instruction_message = None
-        if _ephemeral_instruction_clean:
-            _ephemeral_instruction_message = HumanMessage(content=_ephemeral_instruction_clean)
-            self._conversation_history.append(_ephemeral_instruction_message)
         history_replacement_text = (
             str(history_replacement_text).strip()
             if history_replacement_text is not None
@@ -613,6 +609,11 @@ class _StreamingMixin:
             )
 
         try:
+            if _ephemeral_instruction_clean:
+                _ephemeral_instruction_message = HumanMessage(
+                    content=_ephemeral_instruction_clean
+                )
+                self._conversation_history.append(_ephemeral_instruction_message)
             self._is_responding = True
             reroll_count = 0
             set_call_type("conversation")

@@ -33,3 +33,20 @@ def test_only_one_generic_public_knowledge_tool_is_registered(monkeypatch):
         "sample",
     ]
     assert public_tool.parameters["properties"]["limit"]["maximum"] == 3
+
+
+def test_public_knowledge_registration_failure_keeps_memory_tool(monkeypatch):
+    import main_logic.moegirl_knowledge_tool as knowledge_tool
+
+    monkeypatch.delenv("NEKO_DISABLE_BUILTIN_TOOLS", raising=False)
+    monkeypatch.setattr(
+        knowledge_tool,
+        "register_public_knowledge_tool",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("broken")),
+    )
+    manager = _ToolManager()
+
+    manager._register_builtin_tools()
+
+    assert manager.tool_registry.get("recall_memory") is not None
+    assert manager.tool_registry.get("query_public_knowledge") is None

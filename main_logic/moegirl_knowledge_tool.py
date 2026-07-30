@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import time
 
+from config.prompts.prompts_sys import _loc
 from knowledge.api import open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
 from knowledge.service import CORPORA_RESPONSE_POLICY, get_reference_details, get_tag_value
+from main_logic.tool_calling import ToolDefinition
 from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
 
@@ -87,7 +89,10 @@ async def handle_public_knowledge_call(
     except (TypeError, ValueError):
         requested_limit = 3
     limit = min(max(requested_limit, 1), 3)
-    service = open_knowledge(get_config_manager().knowledge_dir)
+    service = await asyncio.to_thread(
+        open_knowledge,
+        get_config_manager().knowledge_dir,
+    )
 
     if mode == "sample":
         entries: list[tuple[str, object]] = []
@@ -197,3 +202,91 @@ async def handle_moegirl_knowledge_call(
 
 
 handle_public_meme_knowledge_call = handle_moegirl_knowledge_call
+
+
+def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
+    """Register the public-knowledge tool without exposing its schema to core."""
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": _loc(PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION, language),
+            },
+            "collection": {
+                "type": "string",
+                "enum": ["all", "meme", "corpora"],
+                "default": "all",
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["lookup", "sample"],
+                "default": "lookup",
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 3},
+        },
+        "required": ["query"],
+    }
+    tool_registry.register(
+        ToolDefinition(
+            name="query_public_knowledge",
+            description=_loc(PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION, language),
+            parameters=parameters,
+            handler=lambda arguments: handle_public_knowledge_call(
+                arguments,
+                language=language,
+            ),
+            metadata={"source": "builtin", "domain": "public_knowledge"},
+        ),
+        replace=True,
+    )
+
+
+async def build_public_knowledge_turn_context(user_text: str) -> str:
+    """Resolve one turn-local card without leaking knowledge concerns into core."""
+    try:
+        from config.moegirl_knowledge_settings import (
+            MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
+            MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+        )
+
+        if not MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
+            return ""
+        knowledge_root = get_config_manager().knowledge_dir
+
+        def _build_context():
+            return open_knowledge(knowledge_root).build_conversation_context(
+                user_text,
+                limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+            )
+
+        result = await asyncio.to_thread(_build_context)
+        from knowledge.diagnostics import record_knowledge_route
+
+        record_knowledge_route(
+            collection_id=result.collection_id,
+            entry_title=result.entry_title,
+            source_tag=result.source_tag,
+            match_mode=result.match_mode,
+            card_delivered=bool(result.text),
+            result="matched" if result.hit_count else "miss",
+        )
+        logger.info(
+            "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
+            result.hit_count,
+            result.match_mode,
+            result.collection_id or "none",
+        )
+        return result.text
+    except Exception as exc:
+        logger.warning(
+            "[public-knowledge] automatic turn context failed: %s",
+            type(exc).__name__,
+        )
+        try:
+            from knowledge.diagnostics import record_knowledge_route
+
+            record_knowledge_route(result="error", error_type=type(exc).__name__)
+        except Exception:
+            pass
+        return ""

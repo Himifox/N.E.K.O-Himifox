@@ -106,3 +106,27 @@ async def test_ephemeral_meme_instruction_is_removed_after_stream_error(monkeypa
         "temporary meme instruction" in str(getattr(message, "content", ""))
         for message in client._conversation_history
     )
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_instruction_is_not_added_when_transcript_callback_fails():
+    from utils.llm_client import HumanMessage
+
+    async def _fail(_text: str):
+        raise RuntimeError("test transcript failure")
+
+    client = _make_client()
+
+    with pytest.raises(RuntimeError, match="test transcript failure"):
+        await client.stream_text(
+            "raw user message",
+            ephemeral_response_instruction="must never persist",
+            input_transcript_callback=_fail,
+        )
+
+    human_messages = [
+        message.content
+        for message in client._conversation_history
+        if isinstance(message, HumanMessage)
+    ]
+    assert human_messages == ["raw user message"]

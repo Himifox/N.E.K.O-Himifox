@@ -23,7 +23,6 @@ import asyncio
 import json
 import struct
 import time
-from pathlib import Path
 from websockets import exceptions as web_exceptions
 from utils.screenshot_utils import overlay_avatar_annotation
 from main_logic.omni_realtime_client import OmniRealtimeClient
@@ -100,50 +99,6 @@ class StreamingMixin:
                 self._fire_task(self.websocket.send_json({'type': 'system', 'data': 'turn end'}))
         return True
 
-    async def _build_public_meme_turn_context(self, user_text: str) -> str:
-        """Resolve one turn-local card across enabled public knowledge collections."""
-        try:
-            from config.moegirl_knowledge_settings import (
-                MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
-                MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
-            )
-            if not MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
-                return ""
-            from knowledge.api import open_knowledge
-            from utils.config_manager import get_config_manager
-
-            knowledge_root = Path(get_config_manager().knowledge_dir)
-            service = open_knowledge(knowledge_root)
-            result = await asyncio.to_thread(
-                service.build_conversation_context,
-                user_text,
-                limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
-            )
-            from knowledge.diagnostics import record_knowledge_route
-            record_knowledge_route(
-                collection_id=result.collection_id,
-                entry_title=result.entry_title,
-                source_tag=result.source_tag,
-                match_mode=result.match_mode,
-                card_delivered=bool(result.text),
-                result="matched" if result.hit_count else "miss",
-            )
-            logger.info(
-                "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
-                result.hit_count,
-                result.match_mode,
-                result.collection_id or "none",
-            )
-            return result.text
-        except Exception as exc:
-            logger.warning("[public-knowledge] automatic turn context failed: %s", type(exc).__name__)
-            try:
-                from knowledge.diagnostics import record_knowledge_route
-                record_knowledge_route(result="error", error_type=type(exc).__name__)
-            except Exception:
-                pass
-            return ""
-    
     async def _flush_pending_input_data(self):
         """Send the cached input data to the session"""
         async with self.input_cache_lock:
@@ -592,7 +547,13 @@ class StreamingMixin:
                     # read a hidden scaffold prompt (e.g. avatar-drop file
                     # contents) the user never typed, mismatching the cadence
                     # signal and entering Focus on evidence the user didn't author.
-                    _meme_turn_context = await self._build_public_meme_turn_context(record_data)
+                    from main_logic.moegirl_knowledge_tool import (
+                        build_public_knowledge_turn_context,
+                    )
+
+                    _meme_turn_context = await build_public_knowledge_turn_context(
+                        record_data
+                    )
                     _focus_thinking = await self._focus_inline_decision(record_data)
                     input_transcript_callback = None
                     if memory_text:

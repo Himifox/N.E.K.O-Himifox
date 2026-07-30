@@ -31,11 +31,6 @@ from config.prompts.prompts_memory import (
     RECALL_MEMORY_TOOL_NO_RESULT_LOOSEN,
     RECALL_MEMORY_TOOL_FOUND_HEADER,
 )
-from main_logic.moegirl_knowledge_tool import (
-    PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION,
-    PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION,
-    handle_public_knowledge_call,
-)
 from utils.language_utils import normalize_language_code
 from ._shared import logger
 
@@ -170,35 +165,15 @@ class ToolCallingMixin:
             metadata={"source": "builtin"},
         )
         self.tool_registry.register(recall_tool, replace=True)
-        public_knowledge_parameters = {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": _loc(PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION, _lang),
-                },
-                "collection": {
-                    "type": "string",
-                    "enum": ["all", "meme", "corpora"],
-                    "default": "all",
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["lookup", "sample"],
-                    "default": "lookup",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 3},
-            },
-            "required": ["query"],
-        }
-        public_knowledge_tool = ToolDefinition(
-            name="query_public_knowledge",
-            description=_loc(PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION, _lang),
-            parameters=public_knowledge_parameters,
-            handler=lambda arguments: handle_public_knowledge_call(arguments, language=_lang),
-            metadata={"source": "builtin", "domain": "public_knowledge"},
-        )
-        self.tool_registry.register(public_knowledge_tool, replace=True)
+        try:
+            from main_logic.moegirl_knowledge_tool import register_public_knowledge_tool
+
+            register_public_knowledge_tool(self.tool_registry, language=_lang)
+        except Exception as exc:
+            logger.warning(
+                "[public-knowledge] builtin tool registration failed: %s",
+                type(exc).__name__,
+            )
 
     async def _handle_recall_memory_call(self, arguments: dict) -> str:
         """Handler for ``recall_memory`` — calls memory_server's
