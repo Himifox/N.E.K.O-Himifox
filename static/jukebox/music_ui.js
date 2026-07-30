@@ -1750,11 +1750,28 @@
         } catch { return false; }
     };
 
-    const getMusicCoverUrl = (cover) => (
-        cover && typeof cover === 'string' && isSafeUrl(cover)
-            ? cover
+    const normalizeMusicCoverUrl = (cover) => {
+        if (!cover || typeof cover !== 'string') return '';
+        const candidate = cover.startsWith('//') ? `https:${cover}` : cover;
+        try {
+            const parsed = new URL(candidate);
+            const hostname = parsed.hostname.toLowerCase();
+            if (parsed.protocol === 'http:' && (
+                hostname === 'music.126.net' || hostname.endsWith('.music.126.net')
+            )) {
+                parsed.protocol = 'https:';
+                return parsed.toString();
+            }
+        } catch (_) {}
+        return candidate;
+    };
+
+    const getMusicCoverUrl = (cover) => {
+        const normalizedCover = normalizeMusicCoverUrl(cover);
+        return normalizedCover && isSafeUrl(normalizedCover)
+            ? normalizedCover
             : MUSIC_CONFIG.assets.defaultCoverPath
-    );
+    };
 
     const toBackendMusicProxyUrl = (url) => {
         if (!url || typeof url !== 'string' || url.startsWith('/api/')) return url;

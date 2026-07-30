@@ -146,7 +146,10 @@ def test_missing_music_cover_stays_out_of_data_and_uses_frontend_placeholder():
     assert "'cover': cover or ''" in crawler_source
     assert "dummyimage.com" not in crawler_source
     assert "defaultCoverPath: '/static/assets/music/music-cover-placeholder.png'" in player_source
-    assert "const getMusicCoverUrl = (cover) =>" in player_source
+    assert "const normalizeMusicCoverUrl = (cover) =>" in player_source
+    assert "hostname.endsWith('.music.126.net')" in player_source
+    assert "parsed.protocol = 'https:'" in player_source
+    assert "const normalizedCover = normalizeMusicCoverUrl(cover)" in player_source
     assert "thumbnailUrl: displayCoverUrl" in player_source
     assert "applyMusicCover" not in player_source
     assert player_source.count('class="music-bar-equalizer"') == 2
