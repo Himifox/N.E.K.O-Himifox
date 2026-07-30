@@ -450,6 +450,34 @@ def test_explicit_music_cancellation_invalidates_pending_search(monkeypatch) -> 
     manager.enqueue_agent_callback.assert_not_called()
 
 
+def test_source_exclusion_does_not_cancel_unrelated_pending_search(
+    monkeypatch,
+) -> None:
+    previous_task = MagicMock()
+    previous_task.done.return_value = False
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=4,
+        _music_request_task=previous_task,
+        _fire_task=MagicMock(),
+        enqueue_agent_callback=MagicMock(),
+    )
+    monkeypatch.setattr(
+        music_playback,
+        "_session_manager_getter",
+        lambda _: manager,
+    )
+
+    music_playback._on_user_utterance(
+        "YUI",
+        {"lanlan": "YUI", "content": "不要日推"},
+    )
+
+    previous_task.cancel.assert_not_called()
+    assert manager._music_request_epoch == 4
+    manager._fire_task.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_fast_music_search_waits_for_current_reply_before_player(
     monkeypatch,

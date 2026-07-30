@@ -266,6 +266,9 @@ def test_stale_remote_owner_cannot_hold_music_occupancy_forever():
     assert "!remoteMusicSenders.has(mirrorBarLeaderSender)" in occupancy
     assert "teardownMirrorBar(false);" in occupancy
     assert "setMirrorBarLeader(null);" in occupancy
+    assert occupancy.index("teardownMirrorBar(false);") < occupancy.index(
+        "setMirrorBarLeader(null);"
+    )
     assert occupancy.index("isRemoteMusicActive()") < occupancy.index(
         "const mirrorOccupied"
     )

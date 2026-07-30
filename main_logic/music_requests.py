@@ -444,8 +444,11 @@ def is_explicit_music_cancellation(text: str) -> bool:
     if not normalized or len(normalized) > 160:
         return False
     return any(
-        _ZH_NEGATIVE_MUSIC.search(clause.strip())
-        or _EN_NEGATIVE_MUSIC.search(clause.strip())
+        (
+            _ZH_NEGATIVE_MUSIC.search(clause.strip())
+            or _EN_NEGATIVE_MUSIC.search(clause.strip())
+        )
+        and not _excluded_personalization_source(clause.strip())
         for clause in _CLAUSE_SEPARATOR.split(normalized)
         if clause.strip()
     )
