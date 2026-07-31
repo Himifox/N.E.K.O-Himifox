@@ -273,6 +273,15 @@ async def _execute_music_request(
     epoch: int,
     origin_websocket: Any,
 ) -> dict:
+    await _push_music_payload(
+        manager,
+        {
+            "type": "music_request_started",
+            "request_id": epoch,
+        },
+    )
+    if not _is_current_music_request(manager, epoch, origin_websocket):
+        return {"status": "superseded"}
     loop = asyncio.get_running_loop()
     search_started_at = loop.time()
     result = await fetch_music_request(

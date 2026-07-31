@@ -107,7 +107,8 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "return 'queued';" in source
     assert "window._latestMusicCandidateRequestId" in source
     assert "if (!Number.isFinite(requestId) || requestId <= 0)" in source
-    assert "if (latestRequestId > 0 && requestId <= latestRequestId) return;" in source
+    assert "window._pendingMusicCandidateRequestId" in source
+    assert "requestId === latestRequestId && requestId !== pendingRequestId" in source
     assert "mediaCancelStatus === 'stale'" in source
     assert "queuedCancelStatus === 'stale'" in source
     assert "window.cancelQueuedMusicDispatch(requestId);" in source
@@ -141,6 +142,13 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "window.cancelQueuedMusicDispatch(requestId);" in cancellation_handler
     assert "showMusicRequestFailure" not in cancellation_handler
     assert "response.type === 'music_request_cancelled'" in source
+    started_handler = source.split(
+        "function handleMusicRequestStartedResponse(response)", 1
+    )[1].split("function handleMusicPlayCandidatesResponse(response)", 1)[0]
+    assert "window.cancelPendingMusicMediaReady(requestId);" in started_handler
+    assert "window.cancelQueuedMusicDispatch(requestId);" in started_handler
+    assert "window._pendingMusicCandidateRequestId = requestId;" in started_handler
+    assert "response.type === 'music_request_started'" in source
 
 
 def test_music_request_scope_resets_on_same_character_reconnect():
@@ -180,6 +188,11 @@ def test_new_track_cancels_pending_media_readiness_wait():
     assert "return 'stale';" in source
     assert "return 'cancelled';" in source
     assert "nextRequestId < pendingRequestId" in source
+    no_pending_branch = source.split(
+        "if (!pendingMusicMediaReadyCancel) {", 1
+    )[1].split("}", 1)[0]
+    assert "latestMusicRequestToken++;" in no_pending_branch
+    assert "return 'no_pending';" in no_pending_branch
     assert "window.cancelPendingMusicMediaReady(requestId);" in APP_WEBSOCKET_PATH.read_text(
         encoding="utf-8"
     )

@@ -548,7 +548,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
         order.append("reply_end")
 
     async def push(manager, payload):
-        order.append("player")
+        order.append(payload["type"])
         return True
 
     monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
@@ -576,7 +576,12 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
     )
 
     assert result == {"status": "queued", "candidates": 1}
-    assert order == ["search", "reply_end", "player"]
+    assert order == [
+        "music_request_started",
+        "search",
+        "reply_end",
+        "music_play_candidates",
+    ]
     mark_query.assert_called_once()
 
 
@@ -618,7 +623,10 @@ async def test_music_search_does_not_cross_websocket_reconnect(
     )
 
     assert result == {"status": "superseded"}
-    push.assert_not_awaited()
+    push.assert_awaited_once_with(
+        manager,
+        {"type": "music_request_started", "request_id": 1},
+    )
     mark_query.assert_not_called()
 
 

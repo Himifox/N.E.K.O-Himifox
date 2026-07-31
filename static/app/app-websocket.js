@@ -731,15 +731,14 @@
         }
         window._musicCandidateRequestScope = nextScope;
         window._latestMusicCandidateRequestId = 0;
+        window._pendingMusicCandidateRequestId = 0;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
     }
 
-    function handleMusicPlayCandidatesResponse(response) {
-        var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
-        if (tracks.length === 0) return;
-        var requestId = Number(response.request_id);
+    function handleMusicRequestStartedResponse(response) {
+        var requestId = Number(response && response.request_id);
         if (!Number.isFinite(requestId) || requestId <= 0) {
-            console.warn('[Music] 忽略缺少有效 request_id 的候选响应');
+            console.warn('[Music] 忽略缺少有效 request_id 的开始响应');
             return;
         }
         var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
@@ -753,6 +752,37 @@
             if (queuedCancelStatus === 'stale') return;
         }
         window._latestMusicCandidateRequestId = requestId;
+        window._pendingMusicCandidateRequestId = requestId;
+        window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
+    }
+
+    function handleMusicPlayCandidatesResponse(response) {
+        var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
+        if (tracks.length === 0) return;
+        var requestId = Number(response.request_id);
+        if (!Number.isFinite(requestId) || requestId <= 0) {
+            console.warn('[Music] 忽略缺少有效 request_id 的候选响应');
+            return;
+        }
+        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
+        var pendingRequestId = Number(window._pendingMusicCandidateRequestId || 0);
+        if (
+            latestRequestId > 0
+            && (
+                requestId < latestRequestId
+                || (requestId === latestRequestId && requestId !== pendingRequestId)
+            )
+        ) return;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            var mediaCancelStatus = window.cancelPendingMusicMediaReady(requestId);
+            if (mediaCancelStatus === 'stale') return;
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            var queuedCancelStatus = window.cancelQueuedMusicDispatch(requestId);
+            if (queuedCancelStatus === 'stale') return;
+        }
+        window._latestMusicCandidateRequestId = requestId;
+        window._pendingMusicCandidateRequestId = 0;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         response._clientDispatchEpoch = window._musicCandidateDispatchEpoch;
         var firstTrack = tracks[0];
@@ -790,6 +820,7 @@
             if (queuedCancelStatus === 'stale') return;
         }
         window._latestMusicCandidateRequestId = requestId;
+        window._pendingMusicCandidateRequestId = 0;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         showMusicRequestFailure(response);
     }
@@ -811,6 +842,7 @@
             if (queuedCancelStatus === 'stale') return;
         }
         window._latestMusicCandidateRequestId = requestId;
+        window._pendingMusicCandidateRequestId = 0;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
     }
 
@@ -4121,6 +4153,9 @@
                 // -------- music play url --------
                 } else if (response.type === 'music_play_url') {
                     handleMusicPlayUrlResponse(response);
+
+                } else if (response.type === 'music_request_started') {
+                    handleMusicRequestStartedResponse(response);
 
                 } else if (response.type === 'music_play_candidates') {
                     handleMusicPlayCandidatesResponse(response);

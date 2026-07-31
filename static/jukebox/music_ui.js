@@ -3225,7 +3225,10 @@
     window.cancelPendingMusicMediaReady = (requestId) => {
         const nextRequestId = Number(requestId);
         if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return 'invalid';
-        if (!pendingMusicMediaReadyCancel) return 'no_pending';
+        if (!pendingMusicMediaReadyCancel) {
+            latestMusicRequestToken++;
+            return 'no_pending';
+        }
         const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
         if (
             Number.isFinite(pendingRequestId)
