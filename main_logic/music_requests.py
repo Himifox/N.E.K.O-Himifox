@@ -193,6 +193,10 @@ _EN_EXPLICIT_MUSIC_TARGET = re.compile(
     r"\b(?:music|songs?)\b",
     re.IGNORECASE,
 )
+_EN_DIRECT_MUSIC_STOP = re.compile(
+    r"\b(?:stop|pause|cancel|turn|shut)\b",
+    re.IGNORECASE,
+)
 _EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rites?)(?:\s+(?:songs?|music))?"
 _EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
 _EN_NON_MUSIC_TARGET = re.compile(
@@ -539,6 +543,13 @@ def _excluded_personalization_source(clause: str) -> str:
     return ""
 
 
+def _is_source_exclusion_preference(clause: str) -> bool:
+    return bool(
+        _excluded_personalization_source(clause)
+        and not _EN_DIRECT_MUSIC_STOP.search(clause)
+    )
+
+
 def _has_explicit_non_music_target(clause: str) -> bool:
     en_target = _EN_NON_MUSIC_TARGET.search(clause)
     bare_pronoun = (
@@ -611,7 +622,7 @@ def is_explicit_music_cancellation(text: str) -> bool:
             _ZH_NEGATIVE_MUSIC.search(clause.strip())
             or _EN_NEGATIVE_MUSIC.search(clause.strip())
         )
-        and not _excluded_personalization_source(clause.strip())
+        and not _is_source_exclusion_preference(clause.strip())
         and not _has_explicit_non_music_target(clause.strip())
         for clause in _split_music_request_clauses(normalized)
         if clause.strip()
