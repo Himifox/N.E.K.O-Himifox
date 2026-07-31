@@ -2244,12 +2244,16 @@ async def handle_proactive_chat(
         committed_delivery = delivery_commit.delivery
         if committed_delivery is None:  # Defensive: the stage contract is exhaustive.
             raise RuntimeError("delivery commit returned neither result nor delivery")
-        if is_music_used and selected_music_link:
+        if (
+            committed_delivery.is_music_used
+            and committed_delivery.delivered_music_link
+        ):
+            delivered_music_link = committed_delivery.delivered_music_link
             mark_music_as_played(
                 {
-                    "name": selected_music_link.get("title", ""),
-                    "artist": selected_music_link.get("artist", ""),
-                    "url": selected_music_link.get("url", ""),
+                    "name": delivered_music_link.get("title", ""),
+                    "artist": delivered_music_link.get("artist", ""),
+                    "url": delivered_music_link.get("url", ""),
                 }
             )
         recorded_result = await _record_committed_delivery(

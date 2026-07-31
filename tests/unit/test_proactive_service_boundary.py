@@ -944,6 +944,8 @@ def test_music_dedupe_is_recorded_only_after_delivery_commit() -> None:
     mark_played = source.index("mark_music_as_played(")
     record = source.index("recorded_result = await _record_committed_delivery(")
     assert commit < committed < mark_played < record
+    assert "committed_delivery.is_music_used" in source
+    assert "committed_delivery.delivered_music_link" in source
     assert "mark_music_as_played(track)" not in inspect.getsource(
         music_recommendation._select_music_recommendation
     )
