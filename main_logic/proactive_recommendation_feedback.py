@@ -22,6 +22,10 @@ from config import (
     PROACTIVE_RECOMMENDATION_BANDIT_MODE,
     PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE,
 )
+from main_logic.proactive_recommendation_bandit import BANDIT_ARMS
+from main_logic.proactive_recommendation_bandit_state import (
+    update_recommendation_bandit_reward,
+)
 from main_logic.proactive_recommendation_preference import (
     update_recommendation_source_preference,
 )
@@ -36,6 +40,7 @@ logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
 FEEDBACK_LOG_FILENAME = "proactive_recommendation_feedback.jsonl"
 FEEDBACK_SCORE_VERSION = "report_score_v1"
 REWARD_SCORE_V2_PREVIEW_VERSION = "reward_score_v2_preview_v2"
+BANDIT_ENCOUNTER_REWARD_VERSION = "bandit_encounter_reward_v1"
 DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024
 REPLY_FAST_SECONDS = 60
 REPLY_WINDOW_SECONDS = 10 * 60
@@ -213,6 +218,7 @@ class PendingRecommendationFeedback:
     seen_event_types: set[str] = field(default_factory=set)
     reply_seen: bool = False
     continue_seen: bool = False
+    reward_events: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +229,7 @@ class RecommendationFeedbackRecordResult:
     feedback_scope: str = "diagnostic_only"
     state_reason: str = "not_logged"
     preference_state_updated: bool = False
+    bandit_state_updated: bool = False
 
 
 _pending_feedback: dict[tuple[str, str], PendingRecommendationFeedback] = {}
@@ -436,6 +443,31 @@ def build_reward_score_v2_preview(
     }
 
 
+def build_bandit_encounter_reward(
+    feedback_events: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Promote the existing v2 rule score through a versioned Bandit contract."""
+    preview = build_reward_score_v2_preview(feedback_events)
+    recognized = tuple(preview.get("recognized_event_types") or ())
+    signal_events = tuple(
+        event_type
+        for event_type in recognized
+        if event_type not in _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS
+        and abs(float(_REWARD_V2_PREVIEW_EVENT_COMPONENTS[event_type][1])) > 0.0
+    )
+    reward = preview.get("reward_score_v2_preview")
+    eligible = bool(signal_events and isinstance(reward, (int, float)))
+    return {
+        "version": BANDIT_ENCOUNTER_REWARD_VERSION,
+        "rule_score_version": REWARD_SCORE_V2_PREVIEW_VERSION,
+        "eligible": eligible,
+        "reward": float(reward) if eligible else None,
+        "event_types": list(recognized),
+        "signal_event_types": list(signal_events),
+        "excluded_reason": None if eligible else "no_nontechnical_reward_signal",
+    }
+
+
 def append_recommendation_feedback_jsonl(
     event: Mapping[str, Any],
     *,
@@ -507,7 +539,7 @@ def register_pending_feedback_from_observation(
     policy_v2 = (
         policy
         if isinstance(policy, Mapping)
-        and policy.get("context_version") == "source-context-v2"
+        and policy.get("context_version") in {"source-context-v2", "source-context-v3"}
         else None
     )
     if policy_v2 is not None and policy_v2.get("actual_arm"):
@@ -649,6 +681,7 @@ def record_feedback_event_with_status(
     )
     state_updated = False
     preference_state_updated = False
+    bandit_state_updated = False
     feedback_scope = "diagnostic_only"
     state_reason = "not_logged"
     if wrote:
@@ -658,6 +691,27 @@ def record_feedback_event_with_status(
         )
         if pending is not None and _feedback_state_enabled(pending) and not duplicate_event:
             event_type = str(event.get("event_type") or "")
+            if _bandit_event_matches_pending(event, pending):
+                pending.reward_events[event_type] = event
+                bandit_reward = build_bandit_encounter_reward(
+                    pending.reward_events.values()
+                )
+                reward = bandit_reward.get("reward")
+                if bandit_reward.get("eligible") is True and isinstance(
+                    reward, (int, float)
+                ):
+                    try:
+                        update_recommendation_bandit_reward(
+                            config_dir=effective_config_dir,
+                            turn_id=event.get("turn_id"),
+                            arm=pending.source_type,
+                            reward=reward,
+                            event_types=bandit_reward.get("event_types") or (),
+                            now=_number(event.get("ts"), time.time()),
+                        )
+                        bandit_state_updated = True
+                    except Exception as exc:
+                        logger.debug("recommendation bandit reward update failed: %s", exc)
             component = _REWARD_V2_PREVIEW_EVENT_COMPONENTS.get(event_type)
             score = float(component[1]) if component is not None else 0.0
             persistent_eligible = (
@@ -737,6 +791,7 @@ def record_feedback_event_with_status(
         feedback_scope=feedback_scope,
         state_reason=state_reason,
         preference_state_updated=preference_state_updated,
+        bandit_state_updated=bandit_state_updated,
     )
 
 
@@ -750,6 +805,19 @@ def _source_affinity_event_matches_pending(
         pending_candidate
         and _normalize_source_type(event.get("source_type")) == pending.source_type
         and _clean_text(event.get("candidate_id")) == pending_candidate
+    )
+
+
+def _bandit_event_matches_pending(
+    event: Mapping[str, Any],
+    pending: PendingRecommendationFeedback,
+) -> bool:
+    """Bind encounter reward only to the material arm actually delivered."""
+    return bool(
+        pending.source_type in BANDIT_ARMS
+        and pending.candidate_id
+        and _normalize_source_type(event.get("source_type")) == pending.source_type
+        and _clean_text(event.get("candidate_id")) == pending.candidate_id
     )
 
 

@@ -421,8 +421,12 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     context_version = str(
         value.get("context_version") or "source-context-v1"
     ).strip()
-    is_v2 = context_version == "source-context-v2"
-    if context_version not in {"source-context-v1", "source-context-v2"}:
+    is_v2 = context_version in {"source-context-v2", "source-context-v3"}
+    if context_version not in {
+        "source-context-v1",
+        "source-context-v2",
+        "source-context-v3",
+    }:
         return {}
     eligible = [
         item for item in _clean_string_list(value.get("eligible_arms"))
@@ -562,18 +566,15 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
         is_v2 and any(number is None for number in arm_baseline_scores.values())
     ):
         return {}
-    raw_posteriors = value.get("arm_posteriors")
-    arm_posteriors: dict[str, dict[str, Any]] = {}
-    for arm in eligible:
-        bucket = raw_posteriors.get(arm) if isinstance(raw_posteriors, Mapping) else None
-        if not isinstance(bucket, Mapping):
-            bucket = {}
-        arm_posteriors[arm] = {
-            "alpha": _bounded_optional_number(bucket.get("alpha"), lower=0.0, upper=1_000_002.0),
-            "beta": _bounded_optional_number(bucket.get("beta"), lower=0.0, upper=1_000_002.0),
-            "mean": _bounded_optional_number(bucket.get("mean"), lower=0.0, upper=1.0),
-            "evidence": _bounded_optional_number(bucket.get("evidence"), lower=0.0, upper=1_000_000.0),
-        }
+    arm_posteriors = _sanitize_policy_posteriors(
+        value.get("arm_posteriors"), eligible
+    )
+    arm_bandit_posteriors = _sanitize_policy_posteriors(
+        value.get("arm_bandit_posteriors"), eligible
+    ) if context_version == "source-context-v3" else arm_posteriors
+    arm_preference_posteriors = _sanitize_policy_posteriors(
+        value.get("arm_preference_posteriors"), eligible
+    ) if context_version == "source-context-v3" else arm_posteriors
     return {
         "policy_id": "source_epsilon_greedy_v1",
         "mode": mode,
@@ -607,8 +608,36 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
         "arm_policy_scores": arm_policy_scores,
         "arm_scores": arm_policy_scores,
         "arm_posteriors": arm_posteriors,
+        "arm_bandit_posteriors": arm_bandit_posteriors,
+        "arm_preference_posteriors": arm_preference_posteriors,
         "fallback_reason": str(value.get("fallback_reason") or "")[:120] or None,
     }
+
+
+def _sanitize_policy_posteriors(
+    value: Any,
+    eligible: list[str],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for arm in eligible:
+        bucket = value.get(arm) if isinstance(value, Mapping) else None
+        if not isinstance(bucket, Mapping):
+            bucket = {}
+        result[arm] = {
+            "alpha": _bounded_optional_number(
+                bucket.get("alpha"), lower=0.0, upper=1_000_002.0
+            ),
+            "beta": _bounded_optional_number(
+                bucket.get("beta"), lower=0.0, upper=1_000_002.0
+            ),
+            "mean": _bounded_optional_number(
+                bucket.get("mean"), lower=0.0, upper=1.0
+            ),
+            "evidence": _bounded_optional_number(
+                bucket.get("evidence"), lower=0.0, upper=1_000_000.0
+            ),
+        }
+    return result
 
 
 def summarize_recommendation_policy(

@@ -47,6 +47,9 @@ from main_logic.proactive_recommendation_bandit import (
     bandit_preferred_candidate,
     build_source_bandit_decision,
 )
+from main_logic.proactive_recommendation_bandit_state import (
+    get_recommendation_bandit_state,
+)
 from main_logic.proactive_recommendation_preference import (
     ensure_recommendation_preference_state,
     preference_adjustments,
@@ -305,6 +308,7 @@ class RecommendationTurn:
     personalization_plan: dict[str, Any] = field(init=False)
     bandit_mode: str = field(init=False)
     preference_state_snapshot: dict[str, Any] = field(init=False)
+    bandit_state_snapshot: dict[str, Any] = field(init=False)
     policy_decision: dict[str, Any] | None = None
     activity_snapshot: Any = None
     source_decision: Any = None
@@ -328,6 +332,11 @@ class RecommendationTurn:
                 now=now,
             )
             if self.personalization_mode != "off" or self.bandit_mode != "off"
+            else {}
+        )
+        self.bandit_state_snapshot = (
+            get_recommendation_bandit_state(config_dir=self.config_dir, now=now)
+            if self.bandit_mode != "off"
             else {}
         )
         self.personalization_plan = build_personalization_plan(
@@ -439,6 +448,7 @@ class RecommendationTurn:
                 self.material_decision,
                 mode=effective_bandit_mode,
                 preference_state=self.preference_state_snapshot,
+                bandit_state=self.bandit_state_snapshot,
                 score_contract=(
                     BANDIT_PERSONALIZED_SCORE_CONTRACT
                     if self.personalization_mode in {"shadow_compare", "active"}

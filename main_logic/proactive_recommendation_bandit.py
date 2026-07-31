@@ -8,7 +8,7 @@ from typing import Any
 
 
 BANDIT_POLICY_ID = "source_epsilon_greedy_v1"
-BANDIT_CONTEXT_VERSION = "source-context-v2"
+BANDIT_CONTEXT_VERSION = "source-context-v3"
 BANDIT_BASELINE_SCORE_CONTRACT = "baseline-score-v1"
 BANDIT_PERSONALIZED_SCORE_CONTRACT = "personalized-policy-score-v1"
 BANDIT_ARMS = ("news", "music", "meme")
@@ -22,6 +22,7 @@ def build_source_bandit_decision(
     *,
     mode: Any,
     preference_state: Mapping[str, Any] | None = None,
+    bandit_state: Mapping[str, Any] | None = None,
     score_contract: Any = BANDIT_BASELINE_SCORE_CONTRACT,
     random_value: float | None = None,
     random_arm_value: float | None = None,
@@ -57,14 +58,28 @@ def build_source_bandit_decision(
             fallback_reason="no_bandit_arm",
         )
 
-    exploit_arm = eligible[0]
-    top_score = float(arm_candidates[exploit_arm]["policy_score"])
+    score_leader = eligible[0]
+    top_score = float(arm_candidates[score_leader]["policy_score"])
     near_tie = [
         arm
         for arm in eligible
         if top_score - float(arm_candidates[arm]["policy_score"])
         <= BANDIT_NEAR_TIE_GAP + 1e-12
     ]
+    bandit_posteriors = _arm_posteriors(eligible, bandit_state, bucket_key="arms")
+    preference_posteriors = _arm_posteriors(
+        eligible, preference_state, bucket_key="sources"
+    )
+    exploit_arm = score_leader
+    if normalized_mode in {"shadow", "canary"}:
+        exploit_arm = sorted(
+            near_tie,
+            key=lambda arm: (
+                -float(bandit_posteriors[arm]["mean"]),
+                -float(arm_candidates[arm]["policy_score"]),
+                arm,
+            ),
+        )[0]
     exploration_eligible = normalized_mode in {"shadow", "canary"} and len(near_tie) >= 2
     probabilities = {arm: 0.0 for arm in eligible}
     if exploration_eligible:
@@ -126,7 +141,9 @@ def build_source_bandit_decision(
             arm: round(float(arm_candidates[arm]["policy_score"]), 6)
             for arm in eligible
         },
-        "arm_posteriors": _arm_posteriors(eligible, preference_state),
+        "arm_posteriors": bandit_posteriors,
+        "arm_bandit_posteriors": bandit_posteriors,
+        "arm_preference_posteriors": preference_posteriors,
         "fallback_reason": None,
     }
 
@@ -253,9 +270,12 @@ def _best_candidate_per_arm(
 
 
 def _arm_posteriors(
-    arms: list[str], state: Mapping[str, Any] | None
+    arms: list[str],
+    state: Mapping[str, Any] | None,
+    *,
+    bucket_key: str,
 ) -> dict[str, dict[str, float]]:
-    sources = state.get("sources") if isinstance(state, Mapping) else None
+    sources = state.get(bucket_key) if isinstance(state, Mapping) else None
     result: dict[str, dict[str, float]] = {}
     for arm in arms:
         bucket = sources.get(arm) if isinstance(sources, Mapping) else None
@@ -302,6 +322,8 @@ def _empty_decision(
         "arm_policy_scores": {},
         "arm_scores": {},
         "arm_posteriors": {},
+        "arm_bandit_posteriors": {},
+        "arm_preference_posteriors": {},
         "fallback_reason": fallback_reason,
     }
 

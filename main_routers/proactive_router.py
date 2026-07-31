@@ -84,6 +84,9 @@ from main_logic.proactive_recommendation_preference import (
     get_recommendation_preference_state,
     reset_recommendation_preference_state,
 )
+from main_logic.proactive_recommendation_bandit_state import (
+    get_recommendation_bandit_state,
+)
 from main_logic.proactive_recommendation_tuning import (
     TUNING_FILENAME,
     load_recommendation_tuning,
@@ -462,6 +465,9 @@ async def get_proactive_recommendation_summary(
     except Exception:
         tuning_config_dir = None
     tuning = load_recommendation_tuning(config_dir=tuning_config_dir)
+    bandit_learning = get_recommendation_bandit_state(
+        config_dir=tuning_config_dir, now=now
+    )
 
     payload: dict[str, Any] = {
         "ok": True,
@@ -475,6 +481,7 @@ async def get_proactive_recommendation_summary(
         "reward_score_v2_preview": reward_score_v2_preview,
         "review_context_validation": review_context_validation,
         "policy_monitor": policy_monitor,
+        "bandit_learning": bandit_learning,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
         "runtime": get_recommendation_runtime_status(),
         "tuning": tuning_public_status(tuning),
@@ -603,6 +610,7 @@ async def record_proactive_recommendation_feedback(request: Request):
         "feedback_scope": result.feedback_scope,
         "state_reason": result.state_reason,
         "preference_state_updated": result.preference_state_updated,
+        "bandit_state_updated": result.bandit_state_updated,
         "log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
     }
 
