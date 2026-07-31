@@ -271,6 +271,8 @@ def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle(
     assert "const sourceLifecycleStartedAt = getMusicLifecycleTimestamp();" in readiness_handler
     assert "const eventTimestamp = normalizeMusicEventTimestamp(event);" in readiness_handler
     assert "eventTimestamp < sourceLifecycleStartedAt" in readiness_handler
+    assert "window.queueMicrotask(onError)" not in readiness_handler
+    assert "if (!audio.error && audio.readyState >= 1)" in readiness_handler
     assert "lifecycleStartedAt: getMusicLifecycleTimestamp()" in player_source
     assert "mediaReady: false" in player_source
     assert "const eventTimestamp = normalizeMusicEventTimestamp(err);" in error_handler

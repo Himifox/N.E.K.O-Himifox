@@ -607,7 +607,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
             }],
         }
 
-    async def wait_for_reply(manager, epoch, origin_websocket, elapsed):
+    async def wait_for_reply(manager, epoch, elapsed):
         order.append("reply_end")
 
     async def push(manager, payload):
@@ -635,7 +635,6 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
         manager,
         music_requests.MusicRequest(keyword="21", song_name="21"),
         1,
-        websocket,
     )
 
     assert result == {"status": "queued", "candidates": 1}
@@ -649,7 +648,7 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
 
 
 @pytest.mark.asyncio
-async def test_music_search_does_not_cross_websocket_reconnect(
+async def test_music_search_continues_across_websocket_reconnect(
     monkeypatch,
 ) -> None:
     origin_websocket = object()
@@ -672,25 +671,34 @@ async def test_music_search_does_not_cross_websocket_reconnect(
             }],
         }
 
-    push = AsyncMock(return_value=True)
+    deliveries = []
+
+    async def push(manager, payload):
+        deliveries.append((payload["type"], manager.websocket))
+        return True
+
     mark_query = MagicMock()
     monkeypatch.setattr(music_playback, "fetch_music_request", fetch)
     monkeypatch.setattr(music_playback, "_push_music_payload", push)
     monkeypatch.setattr(music_playback, "mark_music_request_query", mark_query)
+    monkeypatch.setattr(
+        music_playback,
+        "_wait_for_current_reply",
+        AsyncMock(),
+    )
 
     result = await music_playback._execute_music_request(
         manager,
         music_requests.MusicRequest(keyword="Yellow", song_name="Yellow"),
         1,
-        origin_websocket,
     )
 
-    assert result == {"status": "superseded"}
-    push.assert_awaited_once_with(
-        manager,
-        {"type": "music_request_started", "request_id": 1},
-    )
-    mark_query.assert_not_called()
+    assert result == {"status": "queued", "candidates": 1}
+    assert deliveries == [
+        ("music_request_started", origin_websocket),
+        ("music_play_candidates", replacement_websocket),
+    ]
+    mark_query.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -726,7 +734,6 @@ async def test_music_request_failure_carries_request_id(
         manager,
         music_requests.MusicRequest(keyword="missing"),
         7,
-        websocket,
     )
 
     assert result["status"] == "failed"
@@ -758,7 +765,7 @@ async def test_music_dispatch_waits_until_current_reply_finishes(
 
     monkeypatch.setattr(music_playback.asyncio, "sleep", finish_reply_on_sleep)
 
-    await music_playback._wait_for_current_reply(manager, 1, websocket, 1.25)
+    await music_playback._wait_for_current_reply(manager, 1, 1.25)
 
     assert sleep_calls == [music_playback._REPLY_WAIT_POLL_SECONDS]
 

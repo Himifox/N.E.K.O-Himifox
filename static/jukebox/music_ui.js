@@ -1968,9 +1968,7 @@
         audio.addEventListener('error', onError);
         timeoutId = window.setTimeout(() => finish(false, 'load_timeout'), MUSIC_MEDIA_LOAD_TIMEOUT_MS);
 
-        if (audio.error) {
-            window.queueMicrotask(onError);
-        } else if (audio.readyState >= 1) {
+        if (!audio.error && audio.readyState >= 1) {
             window.queueMicrotask(() => validateDuration('already_ready'));
         }
     });

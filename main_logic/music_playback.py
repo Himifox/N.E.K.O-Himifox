@@ -79,10 +79,9 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     if previous_task is not None and not previous_task.done():
         previous_task.cancel()
     epoch = _next_music_request_epoch(manager)
-    origin_websocket = getattr(manager, "websocket", None)
     _enqueue_music_request_context(manager, epoch)
     manager._music_request_task = manager._fire_task(
-        _execute_music_request(manager, request, epoch, origin_websocket)
+        _execute_music_request(manager, request, epoch)
     )
 
 
@@ -92,15 +91,8 @@ def _next_music_request_epoch(manager: Any) -> int:
     return epoch
 
 
-def _is_current_music_request(
-    manager: Any,
-    epoch: int,
-    origin_websocket: Any,
-) -> bool:
-    return (
-        int(getattr(manager, "_music_request_epoch", 0) or 0) == epoch
-        and getattr(manager, "websocket", None) is origin_websocket
-    )
+def _is_current_music_request(manager: Any, epoch: int) -> bool:
+    return int(getattr(manager, "_music_request_epoch", 0) or 0) == epoch
 
 
 def _enqueue_music_request_context(
@@ -157,7 +149,6 @@ def _reply_in_progress(manager: Any) -> bool:
 async def _wait_for_current_reply(
     manager: Any,
     epoch: int,
-    origin_websocket: Any,
     search_elapsed_seconds: float,
 ) -> None:
     if not _reply_in_progress(manager):
@@ -167,7 +158,7 @@ async def _wait_for_current_reply(
 
     deadline = asyncio.get_running_loop().time() + _REPLY_WAIT_TIMEOUT_SECONDS
     while (
-        _is_current_music_request(manager, epoch, origin_websocket)
+        _is_current_music_request(manager, epoch)
         and _reply_in_progress(manager)
     ):
         remaining = deadline - asyncio.get_running_loop().time()
@@ -306,7 +297,6 @@ async def _execute_music_request(
     manager: Any,
     request: MusicRequest,
     epoch: int,
-    origin_websocket: Any,
 ) -> dict:
     await _push_music_payload(
         manager,
@@ -315,7 +305,7 @@ async def _execute_music_request(
             "request_id": epoch,
         },
     )
-    if not _is_current_music_request(manager, epoch, origin_websocket):
+    if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
     loop = asyncio.get_running_loop()
     search_started_at = loop.time()
@@ -326,7 +316,7 @@ async def _execute_music_request(
         include_failure=True,
         bypass_recommendation_dedupe=True,
     )
-    if not _is_current_music_request(manager, epoch, origin_websocket):
+    if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
     if result and result.get("success") and result.get("data"):
         mark_music_request_query(getattr(manager, "lanlan_name", ""), request)
@@ -364,10 +354,9 @@ async def _execute_music_request(
     await _wait_for_current_reply(
         manager,
         epoch,
-        origin_websocket,
         loop.time() - search_started_at,
     )
-    if not _is_current_music_request(manager, epoch, origin_websocket):
+    if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
     if await _push_music_payload(manager, payload):
         return {
