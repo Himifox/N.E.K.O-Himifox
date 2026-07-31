@@ -3269,6 +3269,10 @@
         if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return 'invalid';
         if (!pendingMusicMediaReadyCancel) {
             latestMusicRequestToken++;
+            if (!localPlayer && currentPlayingTrack) {
+                updateMusicCard('ended', currentPlayingTrack);
+                destroyMusicPlayer(true, false, false);
+            }
             return 'no_pending';
         }
         const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);

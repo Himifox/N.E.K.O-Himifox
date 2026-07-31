@@ -221,8 +221,11 @@ def test_new_track_cancels_pending_media_readiness_wait():
     assert "nextRequestId < pendingRequestId" in source
     no_pending_branch = source.split(
         "if (!pendingMusicMediaReadyCancel) {", 1
-    )[1].split("}", 1)[0]
+    )[1].split("const pendingRequestId", 1)[0]
     assert "latestMusicRequestToken++;" in no_pending_branch
+    assert "!localPlayer && currentPlayingTrack" in no_pending_branch
+    assert "updateMusicCard('ended', currentPlayingTrack);" in no_pending_branch
+    assert "destroyMusicPlayer(true, false, false);" in no_pending_branch
     assert "return 'no_pending';" in no_pending_branch
     assert "window.cancelPendingMusicMediaReady(requestId);" in APP_WEBSOCKET_PATH.read_text(
         encoding="utf-8"

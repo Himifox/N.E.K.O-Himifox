@@ -364,7 +364,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         return MusicRequest(keyword=artist, song_artist=artist)
 
     artist_song_match = re.fullmatch(
-        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:播放|放|听|来一首)(?:一下)?"
+        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:播放|放|听|来一首)(?:一下)?(?:一首|首)?"
         r"(.{1,30}?)的(.{1,60})",
         clause,
     )
