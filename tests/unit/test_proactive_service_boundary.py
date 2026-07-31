@@ -881,6 +881,30 @@ def test_non_user_music_state_is_passive_and_coalesced() -> None:
     manager.submit_proactive_callback.assert_not_called()
 
 
+def test_music_playback_keeps_current_owner_during_replacement_search() -> None:
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=7,
+        submit_proactive_callback=MagicMock(),
+        enqueue_agent_callback=MagicMock(),
+    )
+    event = {
+        "state": "playing",
+        "playback_id": "player:current",
+        "playback_window_id": "window:current",
+        "playback_started_at": 100,
+        "request_id": 7,
+        "source": "user",
+    }
+
+    assert music_playback.handle_music_playback_state(manager, event) is True
+
+    manager._music_request_epoch = 8
+    event["state"] = "ended"
+    assert music_playback.handle_music_playback_state(manager, event) is True
+    manager.enqueue_agent_callback.assert_called_once()
+
+
 def test_music_playback_rejects_stale_windows_and_request_epochs() -> None:
     manager = SimpleNamespace(
         lanlan_name="YUI",

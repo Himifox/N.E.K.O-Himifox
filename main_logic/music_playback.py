@@ -201,16 +201,20 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     if not playback_id or not playback_window_id or playback_started_at is None:
         return False
 
+    owner_key = (playback_window_id, playback_id)
+    current_owner_key = getattr(manager, "_music_playback_owner_key", None)
+    current_started_at = getattr(manager, "_music_playback_owner_started_at", None)
+    is_current_owner = (
+        owner_key == current_owner_key
+        and playback_started_at == current_started_at
+    )
     current_request_epoch = getattr(manager, "_music_request_epoch", None)
     if request_id and current_request_epoch is not None:
-        if request_id != str(current_request_epoch):
+        if request_id != str(current_request_epoch) and not is_current_owner:
             return False
     elif source == "user":
         return False
 
-    owner_key = (playback_window_id, playback_id)
-    current_owner_key = getattr(manager, "_music_playback_owner_key", None)
-    current_started_at = getattr(manager, "_music_playback_owner_started_at", None)
     if current_started_at is not None and (
         playback_started_at < current_started_at
         or (

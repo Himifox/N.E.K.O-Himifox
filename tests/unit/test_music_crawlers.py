@@ -1117,6 +1117,11 @@ async def test_netease_ambiguous_named_playlist_does_not_use_daily_fallback():
             'get_daily_playlist_recommendations',
             new=AsyncMock(),
         ) as daily_playlist,
+        patch.object(
+            crawler,
+            '_fetch_playlist_tracks',
+            new=AsyncMock(),
+        ) as fetch_playlist,
     ):
         results = await crawler.personalized_recommendations(
             limit=5,
@@ -1126,6 +1131,7 @@ async def test_netease_ambiguous_named_playlist_does_not_use_daily_fallback():
     assert results == []
     assert crawler._personalization_error_code == 'playlist_ambiguous'
     daily_playlist.assert_not_awaited()
+    fetch_playlist.assert_not_awaited()
     await crawler.close()
 
 
