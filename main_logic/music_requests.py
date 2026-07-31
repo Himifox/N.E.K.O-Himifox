@@ -371,6 +371,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     if artist_song_match:
         artist = _strip_request_payload(artist_song_match.group(1))
         song = _strip_request_payload(artist_song_match.group(2))
+        song = re.sub(r"(?:这首歌|这首|歌曲)$", "", song).strip()
         return MusicRequest(
             keyword=f"{song} {artist}",
             song_name=song,

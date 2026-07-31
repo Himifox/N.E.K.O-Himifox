@@ -249,14 +249,20 @@
     function handleMusicPlayUrlCoordMessage(data) {
         if (!data || typeof data !== 'object') return;
         if (data.sender === MUSIC_PLAY_URL_SENDER_ID) return;
-        if (data.type === 'music_play_url_claim' && data.key && data.sender) {
+        if (data.type === 'music_play_url_claim' && data.key && data.sender && data.token) {
             _musicPlayUrlClaims[data.key] = {
                 sender: data.sender,
+                token: data.token,
                 expires: Date.now() + MUSIC_PLAY_URL_CLAIM_TTL_MS
             };
-        } else if (data.type === 'music_play_url_claim_release' && data.key && data.sender) {
+        } else if (
+            data.type === 'music_play_url_claim_release'
+            && data.key
+            && data.sender
+            && data.token
+        ) {
             var claim = getValidMusicPlayUrlClaim(data.key);
-            if (claim && claim.sender === data.sender) {
+            if (claim && claim.sender === data.sender && claim.token === data.token) {
                 delete _musicPlayUrlClaims[data.key];
             }
         }
@@ -405,7 +411,7 @@
         if (!key) return null;
         pruneMusicPlayUrlClaims();
         var claim = _musicPlayUrlClaims[key];
-        if (!claim || typeof claim !== 'object' || !claim.sender || !claim.expires) {
+        if (!claim || typeof claim !== 'object' || !claim.sender || !claim.token || !claim.expires) {
             if (claim) delete _musicPlayUrlClaims[key];
             return null;
         }
@@ -417,20 +423,24 @@
     }
 
     function claimMusicPlayUrl(key) {
-        if (!key) return;
+        if (!key) return '';
         pruneMusicPlayUrlClaims();
+        var token = MUSIC_PLAY_URL_SENDER_ID + ':' + Date.now().toString(36)
+            + ':' + Math.random().toString(36).slice(2, 10);
         _musicPlayUrlClaims[key] = {
             sender: MUSIC_PLAY_URL_SENDER_ID,
+            token: token,
             expires: Date.now() + MUSIC_PLAY_URL_CLAIM_TTL_MS
         };
         var channel = getMusicPlayUrlCoordChannel();
-        if (!channel) return;
+        if (!channel) return token;
         var timestamp = Date.now();
         try {
             channel.postMessage({
                 type: 'music_play_url_claim',
                 key: key,
                 sender: MUSIC_PLAY_URL_SENDER_ID,
+                token: token,
                 ts: timestamp
             });
         } catch (error) {
@@ -442,11 +452,17 @@
                 channelType: channel._nekoCoordType || 'unknown'
             });
         }
+        return token;
     }
 
-    function releaseMusicPlayUrlClaim(key) {
+    function releaseMusicPlayUrlClaim(key, token) {
         var claim = getValidMusicPlayUrlClaim(key);
-        if (!claim || claim.sender !== MUSIC_PLAY_URL_SENDER_ID) return;
+        if (
+            !claim
+            || claim.sender !== MUSIC_PLAY_URL_SENDER_ID
+            || !token
+            || claim.token !== token
+        ) return;
         delete _musicPlayUrlClaims[key];
         var channel = _musicPlayUrlCoordChannel;
         if (!channel || typeof channel.postMessage !== 'function') return;
@@ -456,6 +472,7 @@
                 type: 'music_play_url_claim_release',
                 key: key,
                 sender: MUSIC_PLAY_URL_SENDER_ID,
+                token: token,
                 ts: timestamp
             });
         } catch (error) {
@@ -474,7 +491,10 @@
             var claim = getValidMusicPlayUrlClaim(key);
             return claim && claim.sender === MUSIC_PLAY_URL_SENDER_ID;
         });
-        keys.forEach(releaseMusicPlayUrlClaim);
+        keys.forEach(function (key) {
+            var claim = getValidMusicPlayUrlClaim(key);
+            if (claim) releaseMusicPlayUrlClaim(key, claim.token);
+        });
     }
 
     function isStandaloneChatPageForMusic() {
@@ -652,7 +672,7 @@
             var track = tracks[index];
             if (!track || !track.url) continue;
             var candidateKey = getMusicPlayUrlClaimKey(track);
-            claimMusicPlayUrl(candidateKey);
+            var candidateClaimToken = claimMusicPlayUrl(candidateKey);
             var dispatchResult;
             try {
                 if (typeof window.dispatchMusicPlayDetailed === 'function') {
@@ -688,13 +708,13 @@
                 dispatchResult = { ok: false, canTryNextCandidate: true };
             }
             if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
-                releaseMusicPlayUrlClaim(candidateKey);
+                releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);
                 return false;
             }
             if (dispatchResult && dispatchResult.ok === true) {
                 return true;
             }
-            releaseMusicPlayUrlClaim(candidateKey);
+            releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);
             if (!dispatchResult || dispatchResult.canTryNextCandidate !== true) {
                 break;
             }

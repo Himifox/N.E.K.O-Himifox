@@ -117,10 +117,18 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     immutable_key = candidate_dispatch.index(
         "var candidateKey = getMusicPlayUrlClaimKey(track);"
     )
-    claim = candidate_dispatch.index("claimMusicPlayUrl(candidateKey);")
+    claim = candidate_dispatch.index(
+        "var candidateClaimToken = claimMusicPlayUrl(candidateKey);"
+    )
     dispatch = candidate_dispatch.index("window.dispatchMusicPlayDetailed(track")
     assert immutable_key < claim < dispatch
-    assert "releaseMusicPlayUrlClaim(candidateKey);" in candidate_dispatch
+    assert (
+        "releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);"
+        in candidate_dispatch
+    )
+    assert "claim.token === data.token" in source
+    assert "claim.token !== token" in source
+    assert "token: token" in source
     assert "window.cancelQueuedMusicDispatch(requestId);" in source
     invalid_guard = source.index("if (!Number.isFinite(requestId) || requestId <= 0)")
     cancel_call = source.index("window.cancelPendingMusicMediaReady(requestId);")
