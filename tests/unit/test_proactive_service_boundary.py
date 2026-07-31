@@ -359,6 +359,8 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("play my favourites", "", "", "", "", "liked"),
         ("play a song from my liked songs", "", "", "", "", "liked"),
         ("play a track from daily recommendations", "", "", "", "", "daily"),
+        ("play music from my liked songs", "", "", "", "", "liked"),
+        ("play tunes from daily recommendations", "", "", "", "", "daily"),
         ("play me a song", "", "", "", "", "auto"),
         ("please play me a song", "", "", "", "", "auto"),
         ("play some music for me", "", "", "", "", "auto"),
