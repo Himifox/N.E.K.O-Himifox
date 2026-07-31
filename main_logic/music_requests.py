@@ -149,15 +149,24 @@ def parse_music_request(value: str) -> MusicRequest:
     return MusicRequest(keyword=normalized)
 
 
-_EN_CLAUSE_START = (
-    r"(?:actually\b|never\s+mind\b|please\b|i\s+(?:want|would\s+like)\b|"
-    r"can\b|could\b|would\b|play\b|listen\b|do\s+not\b|don't\b|dont\b|"
-    r"stop\b|pause\b|cancel\b)"
-)
-_CLAUSE_SEPARATOR = re.compile(
-    rf"[，,。；;！？!?]+|\.(?=\s+{_EN_CLAUSE_START})",
+_EN_CLAUSE_AFTER_PERIOD = re.compile(
+    r"\s+(?:actually\b|never\s+mind\b|please\b|"
+    r"i\s+(?:want|would\s+like)\b|can\b|could\b|would\b|play\b|"
+    r"listen\b|do\s+not\b|don't\b|dont\b|stop\b|pause\b|cancel\b)",
     re.IGNORECASE,
 )
+_CLAUSE_SEPARATOR_CHARS = frozenset("，,。；;！？!?")
+_QUOTE_PAIRS = {
+    "'": "'",
+    '"': '"',
+    "“": "”",
+    "‘": "’",
+    "《": "》",
+    "〈": "〉",
+    "「": "」",
+    "『": "』",
+    "【": "】",
+}
 _ZH_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:算了|还是算了)[，,\s]*)?(?:请|麻烦)?(?:我)?"
     r"(?:不要|别|不想|不听|无需|停止|暂停|关掉|取消)"
@@ -224,6 +233,39 @@ def _strip_request_payload(value: str) -> str:
     return value.strip(" \t\r\n'\"“”‘’《》〈〉「」『』【】")
 
 
+def _split_music_request_clauses(text: str) -> list[str]:
+    clauses: list[str] = []
+    start = 0
+    quote_end = ""
+    for index, char in enumerate(text):
+        embedded_apostrophe = (
+            char == "'"
+            and 0 < index < len(text) - 1
+            and text[index - 1].isalnum()
+            and text[index + 1].isalnum()
+        )
+        if quote_end:
+            if char == quote_end and not embedded_apostrophe:
+                quote_end = ""
+            continue
+        if char in _QUOTE_PAIRS and not embedded_apostrophe:
+            quote_end = _QUOTE_PAIRS[char]
+            continue
+        is_separator = char in _CLAUSE_SEPARATOR_CHARS
+        if char == ".":
+            is_separator = bool(_EN_CLAUSE_AFTER_PERIOD.match(text, index + 1))
+        if not is_separator:
+            continue
+        clause = text[start:index].strip()
+        if clause:
+            clauses.append(clause)
+        start = index + 1
+    clause = text[start:].strip()
+    if clause:
+        clauses.append(clause)
+    return clauses
+
+
 def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     if not clause or _ZH_NEGATIVE_MUSIC.search(clause):
         return None
@@ -239,7 +281,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         return MusicRequest(personalization_source="liked")
     if re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:只)?"
-        r"(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:网易云)?(?:的)?"
+        r"(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:我)?(?:的)?(?:网易云)?(?:的)?"
         r"(?:日推|每日推荐)(?:歌|歌曲|音乐)?",
         clause,
     ):
@@ -308,7 +350,8 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
 
     generic_match = re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?"
-        r"(播放一首|播放首|播放|放一首|放首|听一下|想听|要听|来一首|来首|来点)(.{0,60})",
+        r"(播放一首|播放首|播放一下|播放下|播放|放一首|放首|听一下|想听|要听|来一首|来首|来点)"
+        r"(.{0,60})",
         clause,
     )
     if not generic_match:
@@ -398,8 +441,14 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if not match:
         return None
     payload = _strip_request_payload(match.group(1))
-    payload = re.sub(r"^(?:me|us)\s+", "", payload, flags=re.IGNORECASE)
-    payload = re.sub(r"\s+for\s+(?:me|us)$", "", payload, flags=re.IGNORECASE)
+    wrapper_match = re.fullmatch(
+        r"(?:(?:me|us)\s+)?(a song|some music|music|something)"
+        r"(?:\s+for\s+(?:me|us))?",
+        payload,
+        re.IGNORECASE,
+    )
+    if wrapper_match:
+        payload = wrapper_match.group(1)
     if _EN_NON_MUSIC_TARGET.fullmatch(payload):
         return None
     if payload.casefold() in {"music", "a song", "some music", "something"}:
@@ -438,7 +487,7 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
     if not normalized or len(normalized) > 160:
         return None
     excluded_sources: set[str] = set()
-    for clause in reversed(_CLAUSE_SEPARATOR.split(normalized)):
+    for clause in reversed(_split_music_request_clauses(normalized)):
         clause = clause.strip()
         if not clause:
             continue
@@ -481,7 +530,7 @@ def is_explicit_music_cancellation(text: str) -> bool:
         )
         and not _excluded_personalization_source(clause.strip())
         and not _has_explicit_non_music_target(clause.strip())
-        for clause in _CLAUSE_SEPARATOR.split(normalized)
+        for clause in _split_music_request_clauses(normalized)
         if clause.strip()
     )
 
