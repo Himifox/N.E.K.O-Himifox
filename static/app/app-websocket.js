@@ -444,33 +444,37 @@
         }
     }
 
-    function releaseOwnedMusicPlayUrlClaims() {
+    function releaseMusicPlayUrlClaim(key) {
+        var claim = getValidMusicPlayUrlClaim(key);
+        if (!claim || claim.sender !== MUSIC_PLAY_URL_SENDER_ID) return;
+        delete _musicPlayUrlClaims[key];
         var channel = _musicPlayUrlCoordChannel;
+        if (!channel || typeof channel.postMessage !== 'function') return;
+        var timestamp = Date.now();
+        try {
+            channel.postMessage({
+                type: 'music_play_url_claim_release',
+                key: key,
+                sender: MUSIC_PLAY_URL_SENDER_ID,
+                ts: timestamp
+            });
+        } catch (error) {
+            console.warn('[Music] music_play_url claim 释放广播失败:', error, {
+                key: key,
+                sender: MUSIC_PLAY_URL_SENDER_ID,
+                timestamp: timestamp,
+                channelId: channel._nekoCoordId || MUSIC_PLAY_URL_COORD_CHANNEL_NAME,
+                channelType: channel._nekoCoordType || 'unknown'
+            });
+        }
+    }
+
+    function releaseOwnedMusicPlayUrlClaims() {
         var keys = Object.keys(_musicPlayUrlClaims).filter(function (key) {
             var claim = getValidMusicPlayUrlClaim(key);
             return claim && claim.sender === MUSIC_PLAY_URL_SENDER_ID;
         });
-        keys.forEach(function (key) {
-            delete _musicPlayUrlClaims[key];
-            if (!channel || typeof channel.postMessage !== 'function') return;
-            var timestamp = Date.now();
-            try {
-                channel.postMessage({
-                    type: 'music_play_url_claim_release',
-                    key: key,
-                    sender: MUSIC_PLAY_URL_SENDER_ID,
-                    ts: timestamp
-                });
-            } catch (error) {
-                console.warn('[Music] music_play_url claim 释放广播失败:', error, {
-                    key: key,
-                    sender: MUSIC_PLAY_URL_SENDER_ID,
-                    timestamp: timestamp,
-                    channelId: channel._nekoCoordId || MUSIC_PLAY_URL_COORD_CHANNEL_NAME,
-                    channelType: channel._nekoCoordType || 'unknown'
-                });
-            }
-        });
+        keys.forEach(releaseMusicPlayUrlClaim);
     }
 
     function isStandaloneChatPageForMusic() {
@@ -647,6 +651,8 @@
             }
             var track = tracks[index];
             if (!track || !track.url) continue;
+            var candidateKey = getMusicPlayUrlClaimKey(track);
+            claimMusicPlayUrl(candidateKey);
             var dispatchResult;
             try {
                 if (typeof window.dispatchMusicPlayDetailed === 'function') {
@@ -682,12 +688,13 @@
                 dispatchResult = { ok: false, canTryNextCandidate: true };
             }
             if (response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch) {
+                releaseMusicPlayUrlClaim(candidateKey);
                 return false;
             }
             if (dispatchResult && dispatchResult.ok === true) {
-                claimMusicPlayUrl(getMusicPlayUrlClaimKey(track));
                 return true;
             }
+            releaseMusicPlayUrlClaim(candidateKey);
             if (!dispatchResult || dispatchResult.canTryNextCandidate !== true) {
                 break;
             }

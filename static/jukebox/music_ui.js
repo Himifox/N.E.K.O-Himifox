@@ -2105,6 +2105,12 @@
             domRemovalTimer = null;
         }
 
+        // Revoke event ownership before pause/destroy can emit callbacks.
+        if (localPlayer) {
+            localPlayer._musicPlaybackReportContext = null;
+            localPlayer._destroying = true;
+        }
+
         // 核心：优先执行本地暂停，避免声音残留
         if (localPlayer && typeof localPlayer.pause === 'function') {
             localPlayer.pause();
@@ -2133,7 +2139,6 @@
             // 切歌模式下，手动销毁旧实例以防泄露
             if (localPlayer && typeof localPlayer.destroy === 'function') {
                 try {
-                    localPlayer._destroying = true;
                     clearManagedListeners();
                     localPlayer.destroy();
                 } catch (e) {
@@ -3067,14 +3072,14 @@
         if (isSameTrack(trackInfo) && isPlayerInDOM()) {
             const player = getMusicPlayerInstance();
             if (!player) {
-                destroyMusicPlayer(true, false, true);
+                destroyMusicPlayer(true, false, false);
             } else if (player._loadError) {
-                destroyMusicPlayer(true, false, true);
+                destroyMusicPlayer(true, false, false);
             } else if (!player.audio || player.audio.readyState < 2) {
                 // A superseded request can leave the same source in the DOM
                 // while it is still loading. Rebuild it so this request owns
                 // a fresh readiness result and can fall back on failure.
-                destroyMusicPlayer(true, false, true);
+                destroyMusicPlayer(true, false, false);
             } else {
                 setMusicPlaybackContext(playbackOptions);
                 const playbackReportContext = createMusicPlaybackReportContext(
@@ -3109,7 +3114,7 @@
             currentAudioUrl
             && resolveMusicUrl(currentAudioUrl) === resolveMusicUrl(trackInfo.url)
         ) {
-            destroyMusicPlayer(true, false, true);
+            destroyMusicPlayer(true, false, false);
         }
 
         try {

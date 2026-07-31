@@ -111,6 +111,16 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     assert "requestId === latestRequestId && requestId !== pendingRequestId" in source
     assert "mediaCancelStatus === 'stale'" in source
     assert "queuedCancelStatus === 'stale'" in source
+    candidate_dispatch = source.split(
+        "async function dispatchMusicPlayCandidatesResponse", 1
+    )[1].split("function queueMusicPlayCandidatesResponse", 1)[0]
+    immutable_key = candidate_dispatch.index(
+        "var candidateKey = getMusicPlayUrlClaimKey(track);"
+    )
+    claim = candidate_dispatch.index("claimMusicPlayUrl(candidateKey);")
+    dispatch = candidate_dispatch.index("window.dispatchMusicPlayDetailed(track")
+    assert immutable_key < claim < dispatch
+    assert "releaseMusicPlayUrlClaim(candidateKey);" in candidate_dispatch
     assert "window.cancelQueuedMusicDispatch(requestId);" in source
     invalid_guard = source.index("if (!Number.isFinite(requestId) || requestId <= 0)")
     cancel_call = source.index("window.cancelPendingMusicMediaReady(requestId);")
@@ -323,7 +333,7 @@ def test_same_track_fast_path_rebuilds_missing_player_instance():
         1,
     )[1].split("// A single <audio> cannot identify", 1)[0]
     assert "if (!player) {" in fast_path
-    assert "destroyMusicPlayer(true, false, true);" in fast_path
+    assert "destroyMusicPlayer(true, false, false);" in fast_path
     assert fast_path.index("if (!player) {") < fast_path.index(
         "player._musicPlaybackReportContext = playbackReportContext;"
     )
@@ -340,7 +350,16 @@ def test_same_url_replacement_uses_a_fresh_audio_element():
 
     assert "currentAudioForRequest.currentSrc || currentAudioForRequest.src" in same_url_guard
     assert "resolveMusicUrl(currentAudioUrl) === resolveMusicUrl(trackInfo.url)" in same_url_guard
-    assert "destroyMusicPlayer(true, false, true);" in same_url_guard
+    assert "destroyMusicPlayer(true, false, false);" in same_url_guard
+
+    teardown_source = player_source.split(
+        "const destroyMusicPlayer =", 1
+    )[1].split("const cancelActiveMusicPlayback", 1)[0]
+    revoke_context = teardown_source.index(
+        "localPlayer._musicPlaybackReportContext = null;"
+    )
+    pause_player = teardown_source.index("localPlayer.pause();")
+    assert revoke_context < pause_player
 
 
 def test_stale_remote_owner_cannot_hold_music_occupancy_forever():
