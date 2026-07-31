@@ -984,9 +984,9 @@ def music_feedback_event_type(
     active = _number(active_playback_ms, -1.0)
     wall = _number(played_wall_ms, -1.0)
     played_ms = active if math.isfinite(active) and active >= 0 else wall
-    if math.isfinite(played_ms) and 0 <= played_ms <= 3000:
+    if math.isfinite(played_ms) and 0 <= played_ms <= 10_000:
         return "music_hard_skip"
-    if math.isfinite(played_ms) and 0 <= played_ms < 15000:
+    if math.isfinite(played_ms) and 0 <= played_ms < 30_000:
         return "music_early_close"
     ratio = _number(completion_ratio, -1.0)
     if ratio >= 0.70:

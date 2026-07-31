@@ -1538,8 +1538,8 @@
 
     // --- 音乐秒关检测 & 自动冷却 ---
     const SKIP_CONFIG = {
-        skipThresholdMs: 15000,              // 实际播放累计 < 15 秒关闭 = 视为"秒关"
-        hardSkipThresholdMs: 3000,           // 实际播放累计 ≤ 3 秒关闭 = "秒叉"，单次即触发冷却
+        skipThresholdMs: 30000,              // 实际播放累计 < 30 秒关闭 = 视为"秒关"
+        hardSkipThresholdMs: 10000,          // 实际播放累计 ≤ 10 秒关闭 = "秒叉"，单次即触发冷却
         consecutiveSkipsToTrigger: 2,        // 连续秒关 2 次触发冷却
         cooldownDurationMs: 20 * 60 * 1000   // 冷却 20 分钟
     };

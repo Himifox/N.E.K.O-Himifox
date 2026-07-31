@@ -70,21 +70,25 @@ test('close classification prefers active playback and falls back to wall time',
   assert.equal(api.musicCloseFeedbackEventType({
     active_playback_ms: 8_000,
     played_wall_ms: 24_000,
-  }), 'music_early_close');
+  }), 'music_hard_skip');
   assert.equal(api.musicCloseFeedbackEventType({
     active_playback_ms: 12_252,
     played_wall_ms: 23_940,
     completion_ratio: 0.037,
   }), 'music_early_close');
   assert.equal(api.musicCloseFeedbackEventType({
-    active_playback_ms: 18_000,
-    played_wall_ms: 24_000,
+    active_playback_ms: 29_999,
+    played_wall_ms: 35_000,
+  }), 'music_early_close');
+  assert.equal(api.musicCloseFeedbackEventType({
+    active_playback_ms: 30_000,
+    played_wall_ms: 35_000,
   }), 'music_normal_close');
   assert.equal(api.musicCloseFeedbackEventType({
     played_wall_ms: 8_000,
-  }), 'music_early_close');
+  }), 'music_hard_skip');
   assert.equal(api.musicCloseFeedbackEventType({
     active_playback_ms: null,
-    played_wall_ms: 8_000,
+    played_wall_ms: 20_000,
   }), 'music_early_close');
 });

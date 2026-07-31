@@ -763,14 +763,15 @@ def test_music_feedback_threshold_mapping():
     assert music_feedback_event_type(played_through=True) == "music_played_through"
     assert music_feedback_event_type(started=False) == "music_not_started"
     assert music_feedback_event_type(played_wall_ms=2500) == "music_hard_skip"
-    assert music_feedback_event_type(played_wall_ms=8000) == "music_early_close"
+    assert music_feedback_event_type(played_wall_ms=10_000) == "music_hard_skip"
+    assert music_feedback_event_type(played_wall_ms=10_001) == "music_early_close"
     assert (
         music_feedback_event_type(active_playback_ms=2500, played_wall_ms=24_000)
         == "music_hard_skip"
     )
     assert (
         music_feedback_event_type(active_playback_ms=8000, played_wall_ms=24_000)
-        == "music_early_close"
+        == "music_hard_skip"
     )
     assert (
         music_feedback_event_type(
@@ -781,11 +782,12 @@ def test_music_feedback_threshold_mapping():
         == "music_early_close"
     )
     assert (
-        music_feedback_event_type(active_playback_ms=18_000, played_wall_ms=24_000)
-        == "music_normal_close"
+        music_feedback_event_type(active_playback_ms=29_999, played_wall_ms=35_000)
+        == "music_early_close"
     )
-    assert music_feedback_event_type(played_wall_ms=20_000, completion_ratio=0.35) == "music_mid_completion"
-    assert music_feedback_event_type(played_wall_ms=20_000, completion_ratio=0.72) == "music_high_completion"
+    assert music_feedback_event_type(played_wall_ms=30_000, completion_ratio=0.29) == "music_normal_close"
+    assert music_feedback_event_type(played_wall_ms=30_000, completion_ratio=0.35) == "music_mid_completion"
+    assert music_feedback_event_type(played_wall_ms=30_000, completion_ratio=0.72) == "music_high_completion"
 
 
 def test_active_playback_metadata_is_finite_nonnegative_and_round_trips():
