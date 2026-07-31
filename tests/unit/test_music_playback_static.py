@@ -228,7 +228,11 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "function normalizeMusicEventTimestamp(event)" in player_source
     assert "action: 'music_playback_state'" in player_source
     assert "localPlayer._musicPlaybackReportContext = playbackReportContext" in player_source
-    assert "context.token !== latestMusicRequestToken" in player_source
+    ownership_source = player_source.split(
+        "function getOwnedMusicPlaybackReportContext(player, state)", 1
+    )[1].split("// ---", 1)[0]
+    assert "context.token !== player._latestToken" in ownership_source
+    assert "latestMusicRequestToken" not in ownership_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'playing')" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, playbackState)" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'ended')" in player_source
@@ -237,6 +241,7 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "reportMusicPlaybackState('playing', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('ended', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('error', null, reportContext)" in player_source
+    assert "localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent" in player_source
     assert 'elif action == "music_playback_state":' in router_source
     assert "handle_music_playback_state(" in router_source
     superseded_gate = router_source.split(

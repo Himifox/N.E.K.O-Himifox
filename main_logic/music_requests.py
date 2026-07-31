@@ -182,7 +182,7 @@ _EN_EXPLICIT_MUSIC_TARGET = re.compile(
     r"\b(?:music|songs?|playback|playing)\b",
     re.IGNORECASE,
 )
-_EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
+_EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rites?)(?:\s+(?:songs?|music))?"
 _EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
 _EN_NON_MUSIC_TARGET = re.compile(
     r"(?:(?:a|the|this|that|my|your|some)\s+)?"

@@ -205,7 +205,7 @@
         const context = player && player._musicPlaybackReportContext;
         const audio = player && player.audio;
         if (!context || !audio) return null;
-        if (context.token !== player._latestToken || context.token !== latestMusicRequestToken) return null;
+        if (context.token !== player._latestToken) return null;
         const activeSource = audio.currentSrc || audio.src;
         if (
             context.url && activeSource
@@ -2510,7 +2510,9 @@
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                     autoDestroyTimer = setTimeout(() => {
-                        if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
+                        if (localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent) {
+                            destroyMusicPlayer(true, true, true);
+                        }
                     }, MUSIC_CONFIG.timeouts.paused);
                     updateMusicCard(playbackState, currentPlayingTrack);
                     reportMusicPlaybackState(
@@ -2530,7 +2532,9 @@
                     const tokenAtEvent = boundPlayer._latestToken;
                     if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                     autoDestroyTimer = setTimeout(() => {
-                        if (latestMusicRequestToken === tokenAtEvent) destroyMusicPlayer(true, true, true);
+                        if (localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent) {
+                            destroyMusicPlayer(true, true, true);
+                        }
                     }, MUSIC_CONFIG.timeouts.ended);
                     updateMusicCard('ended', currentPlayingTrack);
                     reportMusicPlaybackState('ended', null, reportContext);
@@ -2566,7 +2570,6 @@
                     const tokenAtEvent = reportContext.token;
 
                     setTimeout(() => {
-                        if (tokenAtEvent !== latestMusicRequestToken) return;
                         if (
                             getOwnedMusicPlaybackReportContext(boundPlayer, 'error') !== reportContext
                         ) return;
@@ -2587,7 +2590,7 @@
 
                         if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                         autoDestroyTimer = setTimeout(() => {
-                            if (tokenAtEvent === latestMusicRequestToken) {
+                            if (localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent) {
                                 destroyMusicPlayer(true, true, true);
                             }
                         }, 3000);
