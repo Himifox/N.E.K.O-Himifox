@@ -325,6 +325,8 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("play Yellow, don't play daily recommendations", "Yellow", "", "", "", "auto"),
         ("play Yellow, don't play games", "Yellow", "", "", "", "auto"),
         ("播放晴天，别播放视频", "晴天", "", "", "", "auto"),
+        ("play a song by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
+        ("play music by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
         ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
@@ -390,6 +392,18 @@ def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
 )
 def test_non_music_commands_do_not_cancel_pending_music(text) -> None:
     assert music_requests.is_explicit_music_cancellation(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "don't play this music",
+        "don't play that song",
+        "stop that music",
+    ),
+)
+def test_explicit_music_targets_override_non_music_pronouns(text) -> None:
+    assert music_requests.is_explicit_music_cancellation(text) is True
 
 
 def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:

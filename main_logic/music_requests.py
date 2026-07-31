@@ -161,6 +161,10 @@ _EN_NEGATIVE_MUSIC = re.compile(
     r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|playback|playing)\b)",
     re.IGNORECASE,
 )
+_EN_EXPLICIT_MUSIC_TARGET = re.compile(
+    r"\b(?:music|songs?|playback|playing)\b",
+    re.IGNORECASE,
+)
 _EN_LIKED_SOURCE_PATTERN = r"(?:liked|favou?rite)(?:\s+(?:songs?|music))?"
 _EN_DAILY_SOURCE_PATTERN = r"daily(?:\s+(?:recommendations?|mix|songs?|music))?"
 _EN_NON_MUSIC_TARGET = re.compile(
@@ -358,7 +362,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     match = re.fullmatch(
         action_prefix
         +
-        r"(?:some\s+)?songs?\s+(?:by|from)\s+(.{1,60})",
+        r"(?:(?:a|some)\s+)?(?:songs?|music)\s+(?:by|from)\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
     )
@@ -409,9 +413,12 @@ def _excluded_personalization_source(clause: str) -> str:
 
 
 def _has_explicit_non_music_target(clause: str) -> bool:
+    en_target = _EN_NON_MUSIC_TARGET.search(clause)
+    if en_target and _EN_EXPLICIT_MUSIC_TARGET.search(clause):
+        en_target = None
     return bool(
         _ZH_NON_MUSIC_TARGET.search(clause)
-        or _EN_NON_MUSIC_TARGET.search(clause)
+        or en_target
     )
 
 

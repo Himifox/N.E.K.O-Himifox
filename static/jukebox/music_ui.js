@@ -3058,6 +3058,7 @@
                     latestMusicRequestToken
                 );
                 playbackReportContext.mediaReady = true;
+                player._latestToken = latestMusicRequestToken;
                 player._musicPlaybackReportContext = playbackReportContext;
                 if (shouldAutoPlay && player && player.audio && player.audio.paused) {
                     if (typeof window.setMusicUserDriven === 'function')

@@ -265,6 +265,10 @@ def test_same_track_retry_refreshes_context_and_rebuilds_loading_player():
     assert fast_path.index("player.audio.readyState < 2") < fast_path.index(
         "setMusicPlaybackContext(playbackOptions);"
     )
+    assert "player._latestToken = latestMusicRequestToken;" in fast_path
+    assert fast_path.index("player._latestToken = latestMusicRequestToken;") < fast_path.index(
+        "player._musicPlaybackReportContext = playbackReportContext;"
+    )
 
 
 def test_same_track_fast_path_rebuilds_missing_player_instance():
