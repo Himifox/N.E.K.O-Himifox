@@ -155,6 +155,13 @@ _EN_CLAUSE_AFTER_PERIOD = re.compile(
     r"listen\b|do\s+not\b|don't\b|dont\b|stop\b|pause\b|cancel\b)",
     re.IGNORECASE,
 )
+_EN_CLAUSE_CONJUNCTION = re.compile(
+    r"\s+(?:and|but)\s+(?="
+    r"(?:(?:actually|never\s+mind)[,\s]+)?(?:please\s+)?"
+    r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
+    r"|(?:play|listen\s+to|stop|pause|cancel)\b))",
+    re.IGNORECASE,
+)
 _CLAUSE_SEPARATOR_CHARS = frozenset("，,。；;！？!?")
 _QUOTE_PAIRS = {
     "'": "'",
@@ -250,6 +257,17 @@ def _split_music_request_clauses(text: str) -> list[str]:
             continue
         if char in _QUOTE_PAIRS and not embedded_apostrophe:
             quote_end = _QUOTE_PAIRS[char]
+            continue
+        conjunction = (
+            _EN_CLAUSE_CONJUNCTION.match(text, index)
+            if char.isspace()
+            else None
+        )
+        if conjunction:
+            clause = text[start:index].strip()
+            if clause:
+                clauses.append(clause)
+            start = conjunction.end()
             continue
         is_separator = char in _CLAUSE_SEPARATOR_CHARS
         if char == ".":
