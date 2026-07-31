@@ -176,16 +176,17 @@ _QUOTE_PAIRS = {
 }
 _ZH_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:算了|还是算了)[，,\s]*)?(?:请|麻烦)?(?:我)?"
-    r"(?:不要|别|不想|不听|无需|停止|暂停|关掉|取消)"
+    r"(?:(?:不要|别|不想|不听|无需|停止|暂停|关掉|关闭|停掉|取消)"
     r".{0,6}(?:播放|放|播|听|音乐|歌)"
+    r"|把(?:音乐|歌).{0,4}(?:关了|关掉|停掉))"
 )
 _EN_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:actually|never\s*mind)[,\s]+)?"
     r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
     r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
     r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|tracks?|tunes?|playback|playing)\b"
-    r"|(?:turn|shut)\s+(?:off\s+(?:the\s+)?(?:music|playback)"
-    r"|(?:the\s+)?(?:music|playback)\s+off)\b)",
+    r"|(?:turn|shut)\s+(?:off\s+(?:the\s+)?(?:music|songs?|tracks?|tunes?|playback)"
+    r"|(?:the\s+)?(?:music|songs?|tracks?|tunes?|playback)\s+off)\b)",
     re.IGNORECASE,
 )
 _EN_EXPLICIT_MUSIC_TARGET = re.compile(
