@@ -501,7 +501,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         r"(?:(?:me|us)\s+)?(?:"
         r"(?:a|any)\s+(?:song|track|tune)"
         r"|(?:some|any)\s+(?:songs|music|tracks|tunes)"
-        r"|songs|music|tracks|tunes|something)"
+        r"|songs|music|tracks|tunes|something|anything)"
         r"(?:\s+for\s+(?:me|us))?",
         payload,
         re.IGNORECASE,
