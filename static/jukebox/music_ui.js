@@ -2177,6 +2177,18 @@
         currentMusicOwnerStartedAt = 0;
     };
 
+    const cancelActiveMusicPlayback = () => {
+        if (localPlayer) {
+            destroyMusicPlayer(true, true, true);
+            return true;
+        }
+        if (mirrorBarLeaderSender) {
+            broadcastBarCtrl('close');
+            return true;
+        }
+        return false;
+    };
+
     // --- 查找并替换整个 loadAPlayerLibrary 函数 ---
     const loadAPlayerLibrary = () => {
         if (aplayerLoadPromise) return aplayerLoadPromise;
@@ -3216,6 +3228,7 @@
 
     // --- 暴露接口 ---
     window.destroyMusicPlayer = destroyMusicPlayer;
+    window.cancelActiveMusicPlayback = cancelActiveMusicPlayback;
     window.getMusicPlayerInstance = getMusicPlayerInstance;
     window.isMusicPlaying = isMusicPlaying;
     window.isMusicOccupied = isMusicOccupied;

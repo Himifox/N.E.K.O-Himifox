@@ -844,6 +844,9 @@
         window._latestMusicCandidateRequestId = requestId;
         window._pendingMusicCandidateRequestId = 0;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
+        if (typeof window.cancelActiveMusicPlayback === 'function') {
+            window.cancelActiveMusicPlayback();
+        }
     }
 
     function readNewUserIcebreakerStore() {

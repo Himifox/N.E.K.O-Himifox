@@ -140,8 +140,17 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
     )[1].split("function readNewUserIcebreakerStore", 1)[0]
     assert "window.cancelPendingMusicMediaReady(requestId);" in cancellation_handler
     assert "window.cancelQueuedMusicDispatch(requestId);" in cancellation_handler
+    assert "window.cancelActiveMusicPlayback();" in cancellation_handler
     assert "showMusicRequestFailure" not in cancellation_handler
     assert "response.type === 'music_request_cancelled'" in source
+
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    active_cancel = player_source.split(
+        "const cancelActiveMusicPlayback = () =>", 1
+    )[1].split("// ---", 1)[0]
+    assert "destroyMusicPlayer(true, true, true);" in active_cancel
+    assert "broadcastBarCtrl('close');" in active_cancel
+    assert "window.cancelActiveMusicPlayback = cancelActiveMusicPlayback;" in player_source
     started_handler = source.split(
         "function handleMusicRequestStartedResponse(response)", 1
     )[1].split("function handleMusicPlayCandidatesResponse(response)", 1)[0]
