@@ -690,6 +690,7 @@
                             if (typeof window.cancelQueuedMusicDispatch === 'function') {
                                 window.cancelQueuedMusicDispatch(response.request_id);
                             }
+                            releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);
                             return false;
                         }
                         console.log('[Music] 用户点歌仍在等待播放器接口就绪');

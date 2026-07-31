@@ -139,6 +139,7 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
         "dispatchResult = {", 1
     )[0]
     assert "response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch" in queued_branch
+    assert "releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);" in queued_branch
     assert queued_branch.index("_musicCandidateDispatchEpoch") < queued_branch.index(
         "return 'queued';"
     )
