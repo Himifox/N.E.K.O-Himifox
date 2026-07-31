@@ -149,7 +149,15 @@ def parse_music_request(value: str) -> MusicRequest:
     return MusicRequest(keyword=normalized)
 
 
-_CLAUSE_SEPARATOR = re.compile(r"[，,。；;！？!?]+")
+_EN_CLAUSE_START = (
+    r"(?:actually\b|never\s+mind\b|please\b|i\s+(?:want|would\s+like)\b|"
+    r"can\b|could\b|would\b|play\b|listen\b|do\s+not\b|don't\b|dont\b|"
+    r"stop\b|pause\b|cancel\b)"
+)
+_CLAUSE_SEPARATOR = re.compile(
+    rf"[，,。；;！？!?]+|\.(?=\s+{_EN_CLAUSE_START})",
+    re.IGNORECASE,
+)
 _ZH_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:算了|还是算了)[，,\s]*)?(?:请|麻烦)?(?:我)?"
     r"(?:不要|别|不想|不听|无需|停止|暂停|关掉|取消)"
@@ -390,6 +398,8 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if not match:
         return None
     payload = _strip_request_payload(match.group(1))
+    payload = re.sub(r"^(?:me|us)\s+", "", payload, flags=re.IGNORECASE)
+    payload = re.sub(r"\s+for\s+(?:me|us)$", "", payload, flags=re.IGNORECASE)
     if _EN_NON_MUSIC_TARGET.fullmatch(payload):
         return None
     if payload.casefold() in {"music", "a song", "some music", "something"}:

@@ -327,6 +327,10 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("播放晴天，别播放视频", "晴天", "", "", "", "auto"),
         ("play a song by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
         ("play music by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
+        ("play me a song", "", "", "", "", "auto"),
+        ("please play me a song", "", "", "", "", "auto"),
+        ("play some music for me", "", "", "", "", "auto"),
+        ("play Mr. Brightside", "Mr. Brightside", "", "", "", "auto"),
         ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
@@ -377,6 +381,7 @@ def test_parse_explicit_user_music_request(
         "我想换成红色",
         "Could you play a game?",
         "Can you listen to me?",
+        "play Yellow. don't play music",
     ),
 )
 def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
