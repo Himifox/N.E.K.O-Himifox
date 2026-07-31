@@ -9,11 +9,13 @@ from __future__ import annotations
 from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 import json
 import logging
 import math
 import os
 from pathlib import Path
+import re
 from statistics import median
 import time
 from typing import Any
@@ -47,6 +49,9 @@ REPLY_WINDOW_SECONDS = 10 * 60
 REPLY_SPEED_BASELINE_MIN_SAMPLES = 5
 REPLY_SPEED_BONUS_MAX = 0.05
 REPLY_SPEED_LOG_SCALE_FLOOR = 0.25
+_SOURCE_REJECTION_SCORE = -0.35
+_SOURCE_FATIGUE_SCORE = -0.20
+_CANDIDATE_REJECTION_SCORE = -0.10
 
 _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "user_reply_fast": ("generic_engagement", 0.25, "medium"),
@@ -56,7 +61,13 @@ _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "proactive_disabled_after": ("settings", -0.70, "high"),
     "source_disabled_after": ("settings", -0.35, "medium"),
     "proactive_not_now": ("interrupt", -0.35, "high"),
-    "source_not_interested": ("source_preference", -0.35, "high"),
+    "source_not_interested": ("source_preference", _SOURCE_REJECTION_SCORE, "high"),
+    "source_fatigue": ("source_preference", _SOURCE_FATIGUE_SCORE, "medium"),
+    "candidate_not_interested": (
+        "source_preference",
+        _CANDIDATE_REJECTION_SCORE,
+        "low",
+    ),
     "source_interested": ("source_preference", 0.35, "high"),
     "music_played_through": ("music", 0.90, "high"),
     "music_high_completion": ("music", 0.65, "high"),
@@ -86,7 +97,9 @@ _REWARD_V2_PREVIEW_EVENT_COMPONENTS: dict[str, tuple[str, float]] = {
     "proactive_disabled_after": ("settings", -0.70),
     "source_disabled_after": ("settings", -0.35),
     "proactive_not_now": ("interrupt", -0.35),
-    "source_not_interested": ("settings", -0.35),
+    "source_not_interested": ("settings", _SOURCE_REJECTION_SCORE),
+    "source_fatigue": ("settings", _SOURCE_FATIGUE_SCORE),
+    "candidate_not_interested": ("settings", _CANDIDATE_REJECTION_SCORE),
     "source_interested": ("settings", 0.35),
     "music_played_through": ("consumption", 0.90),
     "music_high_completion": ("consumption", 0.65),
@@ -126,6 +139,8 @@ _CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
 _SOURCE_AFFINITY_EVENT_TYPES = {
     "source_disabled_after",
     "source_not_interested",
+    "source_fatigue",
+    "candidate_not_interested",
     "source_interested",
     "music_played_through",
     "music_high_completion",
@@ -204,7 +219,7 @@ _EXPLICIT_TEXT_PREFERENCE_SOURCE_ALIASES = {
     "vision": ("屏幕内容", "屏幕信息", "窗口内容", "螢幕內容", "視窗內容", "vision"),
     "video": ("视频", "影片", "video"),
 }
-_EXPLICIT_TEXT_NEGATIVE_MARKERS = (
+_EXPLICIT_TEXT_SOURCE_REJECTION_MARKERS = (
     "少推荐",
     "少推薦",
     "别推荐",
@@ -219,6 +234,8 @@ _EXPLICIT_TEXT_NEGATIVE_MARKERS = (
     "不喜歡",
     "不感兴趣",
     "不感興趣",
+    "不太感兴趣",
+    "不太感興趣",
     "没兴趣",
     "沒興趣",
     "不想看",
@@ -228,6 +245,22 @@ _EXPLICIT_TEXT_NEGATIVE_MARKERS = (
     "not interested",
     "don't recommend",
     "do not recommend",
+)
+_EXPLICIT_TEXT_QUALITY_NEGATIVE_MARKERS = (
+    "不好看",
+    "不好笑",
+    "没意思",
+    "沒意思",
+    "无聊",
+    "無聊",
+    "不行",
+    "没用",
+    "沒用",
+    "不相关",
+    "不相關",
+    "boring",
+    "not useful",
+    "irrelevant",
 )
 _EXPLICIT_TEXT_POSITIVE_MARKERS = (
     "多推荐",
@@ -271,6 +304,28 @@ _EXPLICIT_TEXT_DEICTIC_POSITIVE = (
     "喜歡這類內容",
     "喜欢这种内容",
     "喜歡這種內容",
+)
+_EXPLICIT_TEXT_NEGATION_EXCEPTIONS = (
+    "不无聊",
+    "不無聊",
+    "不是没意思",
+    "不是沒意思",
+    "不是不喜欢",
+    "不是不喜歡",
+    "没觉得无聊",
+    "沒覺得無聊",
+    "别不推荐",
+    "別不推薦",
+)
+_EXPLICIT_TEXT_DEICTIC_RE = re.compile(
+    r"(?:这个|這個|这种|這種|这类|這類|这条|這條|这张|這張|刚才那个|剛才那個)"
+)
+_EXPLICIT_TEXT_SWITCH_RE = re.compile(
+    r"(?:换一个|換一個|换个|換個|下一个|下一個|来点别的|來點別的|"
+    r"聊点别的|聊點別的|跳过|跳過|somethingelse|nextone)"
+)
+_EXPLICIT_TEXT_FATIGUE_RE = re.compile(
+    r"(?:又是|老是|怎么还是|怎麼還是|太多了?|重复了?|重複了?|看腻了?|看膩了?)"
 )
 _WEAK_NEGATIVE_EVENT_TYPES = {"ignored", "mini_game_ignored"}
 _MUSIC_PLAYED_THROUGH_EVENT_TYPE = "music_played_through"
@@ -915,6 +970,8 @@ def source_preference_outcome(event_type: str) -> tuple[float, float, bool] | No
     outcomes = {
         "source_interested": (1.0, 0.0, True),
         "source_not_interested": (0.0, 1.0, True),
+        "source_fatigue": (0.0, 0.5, False),
+        "candidate_not_interested": (0.0, 0.25, False),
         "source_disabled_after": (0.0, 1.0, True),
         "music_played_through": (1.0, 0.0, False),
         "music_high_completion": (1.0, 0.0, False),
@@ -936,23 +993,73 @@ def _feedback_state_group(event: Mapping[str, Any]) -> str:
     return f"other:{event_group}"
 
 
+def _compact_feedback_text(text: str | None) -> str:
+    return "".join(
+        character
+        for character in _clean_text(text).casefold()[:256]
+        if character.isalnum()
+    )
+
+
+def _contains_feedback_phrase(
+    normalized: str,
+    phrases: Iterable[str],
+    *,
+    fuzzy: bool = False,
+) -> bool:
+    for raw_phrase in phrases:
+        phrase = _compact_feedback_text(raw_phrase)
+        if not phrase:
+            continue
+        if phrase in normalized:
+            return True
+        if not fuzzy or len(phrase) < 3:
+            continue
+        threshold = 0.66 if len(phrase) == 3 else 0.75 if len(phrase) == 4 else 0.82
+        for window_size in range(max(2, len(phrase) - 1), len(phrase) + 2):
+            for start in range(0, len(normalized) - window_size + 1):
+                window = normalized[start : start + window_size]
+                if SequenceMatcher(None, window, phrase).ratio() >= threshold:
+                    return True
+    return False
+
+
 def _explicit_text_source_preference_event_type(
     text: str | None,
     source_type: str,
-) -> str | None:
+) -> tuple[str, str] | None:
     aliases = _EXPLICIT_TEXT_PREFERENCE_SOURCE_ALIASES.get(source_type)
-    normalized = _clean_text(text).casefold()
+    normalized = _compact_feedback_text(text)
     if not aliases or not normalized:
         return None
-    source_named = any(alias.casefold() in normalized for alias in aliases)
-    if source_named and any(marker in normalized for marker in _EXPLICIT_TEXT_NEGATIVE_MARKERS):
-        return "source_not_interested"
-    if any(marker in normalized for marker in _EXPLICIT_TEXT_DEICTIC_NEGATIVE):
-        return "source_not_interested"
-    if source_named and any(marker in normalized for marker in _EXPLICIT_TEXT_POSITIVE_MARKERS):
-        return "source_interested"
-    if any(marker in normalized for marker in _EXPLICIT_TEXT_DEICTIC_POSITIVE):
-        return "source_interested"
+    if _contains_feedback_phrase(normalized, _EXPLICIT_TEXT_NEGATION_EXCEPTIONS):
+        return None
+    source_named = _contains_feedback_phrase(normalized, aliases, fuzzy=True)
+    deictic = bool(_EXPLICIT_TEXT_DEICTIC_RE.search(normalized))
+    if source_named and _contains_feedback_phrase(
+        normalized,
+        _EXPLICIT_TEXT_SOURCE_REJECTION_MARKERS,
+    ):
+        return "source_not_interested", "explicit_source_rejection"
+    if _contains_feedback_phrase(normalized, _EXPLICIT_TEXT_DEICTIC_NEGATIVE):
+        return "source_not_interested", "explicit_source_rejection"
+    if (source_named or deictic) and _EXPLICIT_TEXT_FATIGUE_RE.search(normalized):
+        return "source_fatigue", "explicit_source_fatigue"
+    quality_negative = _contains_feedback_phrase(
+        normalized,
+        _EXPLICIT_TEXT_QUALITY_NEGATIVE_MARKERS,
+    )
+    if _EXPLICIT_TEXT_SWITCH_RE.search(normalized) or (
+        quality_negative and (source_named or deictic)
+    ):
+        return "candidate_not_interested", "explicit_candidate_rejection"
+    if source_named and _contains_feedback_phrase(
+        normalized,
+        _EXPLICIT_TEXT_POSITIVE_MARKERS,
+    ):
+        return "source_interested", "explicit_source_interest"
+    if _contains_feedback_phrase(normalized, _EXPLICIT_TEXT_DEICTIC_POSITIVE):
+        return "source_interested", "explicit_source_interest"
     return None
 
 
@@ -974,13 +1081,14 @@ def note_user_turn_for_feedback(
     if text_allowed and text:
         metadata["reply_length"] = len(text)
         metadata["reply_length_bucket"] = _reply_length_bucket(len(text))
-        source_preference_event = _explicit_text_source_preference_event_type(
+        source_preference_match = _explicit_text_source_preference_event_type(
             text,
             pending.source_type,
         )
-        if source_preference_event is not None:
+        if source_preference_match is not None:
+            source_preference_event, reason = source_preference_match
             pending.reply_seen = True
-            metadata["reason"] = "explicit_source_text"
+            metadata["reason"] = reason
             return record_feedback_event(
                 lanlan_name=pending.lanlan_name,
                 turn_id=pending.turn_id,

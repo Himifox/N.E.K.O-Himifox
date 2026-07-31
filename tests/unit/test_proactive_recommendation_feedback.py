@@ -31,6 +31,9 @@ from main_logic.proactive_recommendation_feedback_state import (
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
+from main_logic.proactive_recommendation_preference import (
+    get_recommendation_preference_state,
+)
 
 
 def _observation(**overrides):
@@ -880,7 +883,7 @@ def test_explicit_text_feedback_updates_non_music_source_preference(tmp_path):
     assert event["event_type"] == "source_not_interested"
     assert event["source_type"] == "news"
     assert event["candidate_id"] == "news:verified"
-    assert event["metadata"]["reason"] == "explicit_source_text"
+    assert event["metadata"]["reason"] == "explicit_source_rejection"
     assert source["negative_evidence_count"] == 1
     assert "不感兴趣" not in json.dumps(event, ensure_ascii=False)
 
@@ -954,6 +957,112 @@ def test_explicit_text_source_feedback_excludes_music_and_ambiguous_text(tmp_pat
 
     assert music["event_type"] == "user_reply_fast"
     assert ambiguous["event_type"] == "user_reply_fast"
+
+
+def test_non_music_text_feedback_uses_shared_negative_gradient(tmp_path):
+    cases = (
+        ("news", "以后少推荐新闻", "source_not_interested", -0.35, 1.0),
+        ("meme", "怎么又是表情包，已经看腻了", "source_fatigue", -0.20, 0.5),
+        ("vision", "这个屏幕内容没意思", "candidate_not_interested", -0.10, 0.25),
+        ("video", "换一个", "candidate_not_interested", -0.10, 0.25),
+    )
+    for index, (source, text, event_type, score, failure) in enumerate(cases):
+        clear_pending_recommendation_feedback()
+        turn_id = f"gradient-{source}"
+        timestamp = 120.0 + index
+        register_pending_feedback(
+            lanlan_name="neko",
+            turn_id=turn_id,
+            source_type=source,
+            candidate_id=f"{source}:verified",
+            delivered_at=100.0,
+            log_mode="jsonl",
+            config_dir=tmp_path,
+            recommendation_mode="shadow",
+        )
+
+        event = note_user_turn_for_feedback(
+            "neko",
+            timestamp=timestamp,
+            had_text=True,
+            text_allowed=True,
+            text=text,
+        )
+        preference = get_recommendation_preference_state(
+            config_dir=tmp_path,
+            now=timestamp,
+        )["sources"][source]
+
+        assert event["event_type"] == event_type
+        assert event["report_score_v1"] == score
+        assert preference["effective_failure"] == failure
+
+
+def test_text_feedback_fuzzy_matches_source_alias_but_not_polarity(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="fuzzy-meme",
+        source_type="meme",
+        candidate_id="meme:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    typo = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="表情苞不好看",
+    )
+
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="positive-meme",
+        source_type="meme",
+        candidate_id="meme:positive",
+        delivered_at=200.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    positive = note_user_turn_for_feedback(
+        "neko",
+        timestamp=220.0,
+        had_text=True,
+        text_allowed=True,
+        text="这个表情包可以多推荐",
+    )
+
+    assert typo["event_type"] == "candidate_not_interested"
+    assert positive["event_type"] == "source_interested"
+
+
+def test_text_feedback_ignores_negation_reversal(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="negation-news",
+        source_type="news",
+        candidate_id="news:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="这个新闻并不无聊",
+    )
+
+    assert event["event_type"] == "user_reply_fast"
 
 
 def test_feedback_summary_aggregates_scores_and_infers_ignored():
