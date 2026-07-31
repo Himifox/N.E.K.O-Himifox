@@ -2479,12 +2479,12 @@ async def fetch_music_content(
         }
 
     if requested_song:
-        requested_match = _select_requested_song(
-            requested_song,
-            requested_artist,
+        matched_results = _filter_requested_music_results(
             unique_results,
+            requested_song=requested_song,
+            requested_artist=requested_artist,
         )
-        if not requested_match:
+        if not matched_results:
             logger.warning("指定歌曲未找到可靠候选: %s - %s", requested_song, requested_artist)
             return {
                 'success': False,
@@ -2493,16 +2493,13 @@ async def fetch_music_content(
                 'data': [],
                 'netease_cookie_invalid': netease_cookie_invalid,
             }
-        unique_results = [requested_match]
+        unique_results = matched_results
     elif requested_artist:
-        target_artist = _normalize_song_match_text(requested_artist)
-        unique_results = [
-            item
-            for item in unique_results
-            if target_artist
-            and target_artist
-            in _normalize_song_match_text(str(item.get('artist') or ''))
-        ]
+        unique_results = _filter_requested_music_results(
+            unique_results,
+            requested_song=requested_song,
+            requested_artist=requested_artist,
+        )
         if not unique_results:
             logger.warning("指定歌手未找到可靠候选: %s", requested_artist)
             return {
