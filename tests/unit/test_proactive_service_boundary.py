@@ -336,6 +336,8 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("播放晴天，别播放视频", "晴天", "", "", "", "auto"),
         ("play a song by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
         ("play music by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
+        ("play a track by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
+        ("play tunes by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
         ("play my favorites", "", "", "", "", "liked"),
         ("play favorites", "", "", "", "", "liked"),
         ("play my favourites", "", "", "", "", "liked"),
@@ -411,6 +413,9 @@ def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
     "text",
     (
         "don't play games with me",
+        "stop playing games",
+        "pause playing video",
+        "cancel video playback",
         "别播放视频",
     ),
 )
