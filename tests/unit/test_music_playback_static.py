@@ -250,11 +250,17 @@ def test_music_player_reports_confirmed_state_to_backend():
 
 def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    readiness_handler = player_source.split(
+        "const waitForMusicMediaReady = (", 1
+    )[1].split("const getMusicPlayerInstance", 1)[0]
     error_handler = player_source.split(
         "boundPlayer.on('error', (err) => {",
         1,
     )[1].split("// 进度条与播放按钮点击", 1)[0]
 
+    assert "const sourceLifecycleStartedAt = getMusicLifecycleTimestamp();" in readiness_handler
+    assert "const eventTimestamp = normalizeMusicEventTimestamp(event);" in readiness_handler
+    assert "eventTimestamp < sourceLifecycleStartedAt" in readiness_handler
     assert "lifecycleStartedAt: getMusicLifecycleTimestamp()" in player_source
     assert "mediaReady: false" in player_source
     assert "const eventTimestamp = normalizeMusicEventTimestamp(err);" in error_handler

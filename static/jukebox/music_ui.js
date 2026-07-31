@@ -1900,6 +1900,7 @@
         let settled = false;
         let timeoutId = null;
         let cancelWait = null;
+        const sourceLifecycleStartedAt = getMusicLifecycleTimestamp();
         const cleanup = () => {
             audio.removeEventListener('loadedmetadata', onMetadata);
             audio.removeEventListener('canplay', onCanPlay);
@@ -1953,8 +1954,10 @@
             else if (!Number.isFinite(duration) || duration <= 0) finish(true, 'canplay');
             else validateDuration('canplay');
         }
-        function onError() {
+        function onError(event) {
             if (!audio.error) return;
+            const eventTimestamp = normalizeMusicEventTimestamp(event);
+            if (eventTimestamp !== null && eventTimestamp < sourceLifecycleStartedAt) return;
             if (isExpectedSource()) finish(false, 'media_error');
         }
 
