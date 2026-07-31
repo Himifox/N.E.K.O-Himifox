@@ -190,6 +190,10 @@ def test_new_track_cancels_pending_media_readiness_wait():
     assert send_source.index("++latestMusicRequestToken") < send_source.index(
         "pendingMusicMediaReadyCancel()"
     )
+    allowlist_wait = send_source.index("await new Promise((resolve) => {")
+    stale_guard = send_source.index("if (currentToken !== latestMusicRequestToken) {")
+    assert send_source.index("const currentToken = ++latestMusicRequestToken;") < allowlist_wait
+    assert allowlist_wait < stale_guard < send_source.index("isUnsupportedMusicStream")
     assert "cancelWait.requestId = requestId ?? null;" in source
     assert "window.cancelPendingMusicMediaReady = (requestId) =>" in source
     assert "return 'invalid';" in source
@@ -300,7 +304,7 @@ def test_same_track_retry_refreshes_context_and_rebuilds_loading_player():
     fast_path = player_source.split(
         "if (isSameTrack(trackInfo) && isPlayerInDOM()) {",
         1,
-    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+    )[1].split("// A single <audio> cannot identify", 1)[0]
     assert "player.audio.readyState < 2" in fast_path
     assert fast_path.index("player.audio.readyState < 2") < fast_path.index(
         "setMusicPlaybackContext(playbackOptions);"
@@ -317,7 +321,7 @@ def test_same_track_fast_path_rebuilds_missing_player_instance():
     fast_path = player_source.split(
         "if (isSameTrack(trackInfo) && isPlayerInDOM()) {",
         1,
-    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+    )[1].split("// A single <audio> cannot identify", 1)[0]
     assert "if (!player) {" in fast_path
     assert "destroyMusicPlayer(true, false, true);" in fast_path
     assert fast_path.index("if (!player) {") < fast_path.index(
@@ -332,7 +336,7 @@ def test_same_url_replacement_uses_a_fresh_audio_element():
     )[1].split("window.sendMusicMessage = async function", 1)[0]
     same_url_guard = send_source.split(
         "const currentAudioForRequest = localPlayer && localPlayer.audio;", 1
-    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+    )[1].split("try {", 1)[0]
 
     assert "currentAudioForRequest.currentSrc || currentAudioForRequest.src" in same_url_guard
     assert "resolveMusicUrl(currentAudioUrl) === resolveMusicUrl(trackInfo.url)" in same_url_guard

@@ -468,6 +468,17 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     )
     if match:
         song = _strip_request_payload(match.group(1))
+        song_without_article = re.sub(
+            r"^(?:the|a)\s+song\s+",
+            "",
+            song,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if song_without_article != song:
+            song = song_without_article
+        elif song.startswith("song "):
+            song = song[5:]
         artist = _strip_request_payload(match.group(2))
         return MusicRequest(
             keyword=f"{song} {artist}",

@@ -2969,6 +2969,9 @@
             }
         }
 
+        const currentToken = ++latestMusicRequestToken;
+        if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();
+
         // 竞态保护：如果 URL 不在白名单，原地等待 500ms 看看是否会有插件注册进来
         if (trackInfo.url && !isSafeUrl(trackInfo.url)) {
             console.log('[Music UI] URL 暂未加入白名单，等待加白信号...', trackInfo.url);
@@ -2992,6 +2995,11 @@
             } catch (e) {
                 console.warn('[Music UI] 竞态等待异常:', e);
             }
+        }
+
+        if (currentToken !== latestMusicRequestToken) {
+            releasePending();
+            return musicPlayResult(false, 'superseded');
         }
 
         if (trackInfo.url && isUnsupportedMusicStream(trackInfo.url)) {
@@ -3103,9 +3111,6 @@
         ) {
             destroyMusicPlayer(true, false, true);
         }
-
-        const currentToken = ++latestMusicRequestToken;
-        if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();
 
         try {
             await loadAPlayerLibrary();

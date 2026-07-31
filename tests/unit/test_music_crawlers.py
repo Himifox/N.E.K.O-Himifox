@@ -1068,8 +1068,8 @@ async def test_netease_unknown_named_playlist_uses_daily_playlist_fallback():
         patch.object(
             crawler,
             '_fetch_visible_playlists',
-            new=AsyncMock(return_value=[]),
-        ),
+            new=AsyncMock(return_value=[{'id': 11, 'name': '其他歌单'}]),
+        ) as visible_playlists,
         patch.object(
             crawler,
             'get_daily_playlist_recommendations',
@@ -1087,6 +1087,7 @@ async def test_netease_unknown_named_playlist_uses_daily_playlist_fallback():
         )
 
     assert results == daily_tracks
+    visible_playlists.assert_awaited_once_with(7)
     daily_playlist.assert_awaited_once_with(7)
     fetch_playlist.assert_not_awaited()
     await crawler.close()
