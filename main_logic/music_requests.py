@@ -458,8 +458,9 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     match = re.fullmatch(
         action_prefix
         +
-        r"(?:(?:(?:a|some)\s+)?(?:songs?|music|tracks?|tunes?)|"
-        r"(?:some|any)thing|any\s+(?:song|track|tune))\s+(?:by|from)\s+(.{1,60})",
+        r"(?:(?:me|us)\s+)?(?:(?:(?:a|some|any)\s+)?"
+        r"(?:songs?|music|tracks?|tunes?)|(?:some|any)thing)"
+        r"\s+(?:by|from)\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
     )

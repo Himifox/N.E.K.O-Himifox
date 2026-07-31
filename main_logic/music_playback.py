@@ -440,12 +440,15 @@ async def _send_music_request_failure(
 async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
     websocket = getattr(manager, "websocket", None)
     targets = [websocket]
-    if payload.get("type") in {"music_request_started", "music_request_cancelled"}:
-        for candidate in tuple(
-            getattr(manager, "_music_playback_websockets", ()) or ()
-        ):
-            if candidate is not websocket:
-                targets.append(candidate)
+    broadcast = payload.get("type") in {
+        "music_request_started",
+        "music_request_cancelled",
+    }
+    for candidate in tuple(
+        getattr(manager, "_music_playback_websockets", ()) or ()
+    ):
+        if candidate is not websocket:
+            targets.append(candidate)
 
     delivered = False
     for target in targets:
@@ -457,6 +460,8 @@ async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
         try:
             await target.send_json(payload)
             delivered = True
+            if not broadcast:
+                break
         except Exception as exc:
             logger.warning(
                 "[%s] user music payload push failed: %s",
