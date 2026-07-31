@@ -198,6 +198,80 @@ _SOURCE_ALIASES = {
     "window": "window",
     "mini_game": "mini_game",
 }
+_EXPLICIT_TEXT_PREFERENCE_SOURCE_ALIASES = {
+    "news": ("新闻", "新聞", "资讯", "資訊", "news"),
+    "meme": ("表情包", "梗图", "梗圖", "meme", "sticker"),
+    "vision": ("屏幕内容", "屏幕信息", "窗口内容", "螢幕內容", "視窗內容", "vision"),
+    "video": ("视频", "影片", "video"),
+}
+_EXPLICIT_TEXT_NEGATIVE_MARKERS = (
+    "少推荐",
+    "少推薦",
+    "别推荐",
+    "別推薦",
+    "不要推荐",
+    "不要推薦",
+    "别发",
+    "別發",
+    "不要发",
+    "不要發",
+    "不喜欢",
+    "不喜歡",
+    "不感兴趣",
+    "不感興趣",
+    "没兴趣",
+    "沒興趣",
+    "不想看",
+    "stop recommending",
+    "stop sending",
+    "show me less",
+    "not interested",
+    "don't recommend",
+    "do not recommend",
+)
+_EXPLICIT_TEXT_POSITIVE_MARKERS = (
+    "多推荐",
+    "多推薦",
+    "多发",
+    "多發",
+    "再来点",
+    "再來點",
+    "喜欢",
+    "喜歡",
+    "感兴趣",
+    "感興趣",
+    "想看",
+    "爱看",
+    "愛看",
+    "show me more",
+    "more like this",
+    "i like",
+    "interested in",
+)
+_EXPLICIT_TEXT_DEICTIC_NEGATIVE = (
+    "少推荐这",
+    "少推薦這",
+    "别推荐这",
+    "別推薦這",
+    "不要推荐这",
+    "不要推薦這",
+    "不想看这类",
+    "不想看這類",
+    "不喜欢这类内容",
+    "不喜歡這類內容",
+    "不喜欢这种内容",
+    "不喜歡這種內容",
+)
+_EXPLICIT_TEXT_DEICTIC_POSITIVE = (
+    "多推荐这",
+    "多推薦這",
+    "想看这类",
+    "想看這類",
+    "喜欢这类内容",
+    "喜歡這類內容",
+    "喜欢这种内容",
+    "喜歡這種內容",
+)
 _WEAK_NEGATIVE_EVENT_TYPES = {"ignored", "mini_game_ignored"}
 _MUSIC_PLAYED_THROUGH_EVENT_TYPE = "music_played_through"
 _MUSIC_ACTIONABLE_PLAYED_THROUGH_MIN = 3
@@ -862,6 +936,26 @@ def _feedback_state_group(event: Mapping[str, Any]) -> str:
     return f"other:{event_group}"
 
 
+def _explicit_text_source_preference_event_type(
+    text: str | None,
+    source_type: str,
+) -> str | None:
+    aliases = _EXPLICIT_TEXT_PREFERENCE_SOURCE_ALIASES.get(source_type)
+    normalized = _clean_text(text).casefold()
+    if not aliases or not normalized:
+        return None
+    source_named = any(alias.casefold() in normalized for alias in aliases)
+    if source_named and any(marker in normalized for marker in _EXPLICIT_TEXT_NEGATIVE_MARKERS):
+        return "source_not_interested"
+    if any(marker in normalized for marker in _EXPLICIT_TEXT_DEICTIC_NEGATIVE):
+        return "source_not_interested"
+    if source_named and any(marker in normalized for marker in _EXPLICIT_TEXT_POSITIVE_MARKERS):
+        return "source_interested"
+    if any(marker in normalized for marker in _EXPLICIT_TEXT_DEICTIC_POSITIVE):
+        return "source_interested"
+    return None
+
+
 def note_user_turn_for_feedback(
     lanlan_name: str,
     *,
@@ -880,6 +974,22 @@ def note_user_turn_for_feedback(
     if text_allowed and text:
         metadata["reply_length"] = len(text)
         metadata["reply_length_bucket"] = _reply_length_bucket(len(text))
+        source_preference_event = _explicit_text_source_preference_event_type(
+            text,
+            pending.source_type,
+        )
+        if source_preference_event is not None:
+            pending.reply_seen = True
+            metadata["reason"] = "explicit_source_text"
+            return record_feedback_event(
+                lanlan_name=pending.lanlan_name,
+                turn_id=pending.turn_id,
+                event_type=source_preference_event,
+                source_type=pending.source_type,
+                candidate_id=pending.candidate_id,
+                metadata=metadata,
+                ts=timestamp,
+            )
     if pending.reply_seen and not pending.continue_seen:
         pending.continue_seen = True
         return record_feedback_event(

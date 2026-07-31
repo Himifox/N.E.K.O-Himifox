@@ -853,6 +853,109 @@ def test_user_turn_feedback_respects_privacy_and_records_continue(tmp_path):
     assert "private text" not in dumped
 
 
+def test_explicit_text_feedback_updates_non_music_source_preference(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="explicit-news",
+        source_type="news",
+        candidate_id="news:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="我对这个新闻不感兴趣，以后少推荐一些",
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
+    source = preview["source_affinity"]["persistent"]["sources"]["news"]
+    assert event["event_type"] == "source_not_interested"
+    assert event["source_type"] == "news"
+    assert event["candidate_id"] == "news:verified"
+    assert event["metadata"]["reason"] == "explicit_source_text"
+    assert source["negative_evidence_count"] == 1
+    assert "不感兴趣" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_explicit_text_feedback_supports_deictic_positive_meme(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="explicit-meme",
+        source_type="meme",
+        candidate_id="meme:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="我喜欢这类内容，可以多推荐这种",
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
+    source = preview["source_affinity"]["persistent"]["sources"]["meme"]
+    assert event["event_type"] == "source_interested"
+    assert source["positive_evidence_count"] == 1
+
+
+def test_explicit_text_source_feedback_excludes_music_and_ambiguous_text(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="explicit-music",
+        source_type="music",
+        candidate_id="music:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    music = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="这首音乐不好听，换一首",
+    )
+
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="ambiguous-news",
+        source_type="news",
+        candidate_id="news:verified",
+        delivered_at=200.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    ambiguous = note_user_turn_for_feedback(
+        "neko",
+        timestamp=220.0,
+        had_text=True,
+        text_allowed=True,
+        text="我不喜欢你这种说法",
+    )
+
+    assert music["event_type"] == "user_reply_fast"
+    assert ambiguous["event_type"] == "user_reply_fast"
+
+
 def test_feedback_summary_aggregates_scores_and_infers_ignored():
     observations = [
         _observation(turn_id="positive", ts=10_000.0, actual_primary_channel="music"),
