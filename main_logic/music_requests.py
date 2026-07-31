@@ -314,9 +314,10 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         clause,
     )
     if playlist_match:
-        return MusicRequest(
-            playlist_name=_strip_request_payload(playlist_match.group(1))
-        )
+        playlist = _strip_request_payload(playlist_match.group(1))
+        if playlist.startswith("我的"):
+            playlist = _strip_request_payload(playlist[2:])
+        return MusicRequest(playlist_name=playlist) if playlist else MusicRequest()
 
     direct_playlist_match = re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:播放|放|听)(?:一下)?"
@@ -427,7 +428,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     playlist_match = re.fullmatch(
         request_prefix
         + r"(?:play|listen\s+to)\s+"
-        r"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:some|any)thing)\s+from\s+)?"
+        r"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:some|any)thing)\s+from\s+|from\s+)?"
         r"(?:my\s+)?(.{1,60}?)\s+playlist",
         normalized,
         re.IGNORECASE,
@@ -439,7 +440,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
-        rf"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:music|songs|tracks|tunes))\s+from\s+)?"
+        rf"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:music|songs|tracks|tunes))\s+from\s+|from\s+)?"
         rf"(?:some\s+)?(?:my\s+)?{_EN_LIKED_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
@@ -448,7 +449,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
-        rf"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:music|songs|tracks|tunes))\s+from\s+)?"
+        rf"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:music|songs|tracks|tunes))\s+from\s+|from\s+)?"
         rf"(?:some\s+)?(?:my\s+)?{_EN_DAILY_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
