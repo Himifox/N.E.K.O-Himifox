@@ -424,6 +424,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
+        rf"(?:(?:(?:a|any)\s+(?:song|track)|some\s+(?:songs|music|tracks))\s+from\s+)?"
         rf"(?:some\s+)?(?:my\s+)?{_EN_LIKED_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
@@ -432,6 +433,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         action_prefix
         +
+        rf"(?:(?:(?:a|any)\s+(?:song|track)|some\s+(?:songs|music|tracks))\s+from\s+)?"
         rf"(?:some\s+)?(?:my\s+)?{_EN_DAILY_SOURCE_PATTERN}",
         normalized,
         re.IGNORECASE,
@@ -440,7 +442,8 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     match = re.fullmatch(
         action_prefix
         +
-        r"(?:(?:a|some)\s+)?(?:songs?|music|tracks?|tunes?)\s+(?:by|from)\s+(.{1,60})",
+        r"(?:(?:(?:a|some)\s+)?(?:songs?|music|tracks?|tunes?)|"
+        r"(?:some|any)thing|any\s+(?:song|track|tune))\s+(?:by|from)\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
     )
