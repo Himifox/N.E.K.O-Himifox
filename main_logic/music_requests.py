@@ -295,7 +295,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
     if re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:只)?"
         r"(?:来|放|播放|听)(?:一下)?(?:一首|首|点)?(?:我)?(?:的)?"
-        r"(?:红心|我喜欢|收藏)(?:的)?(?:歌|歌曲|音乐)?",
+        r"(?:红心|我喜欢|收藏)(?:的)?(?:歌|歌曲|音乐)?(?:歌单)?",
         clause,
     ):
         return MusicRequest(personalization_source="liked")
@@ -425,6 +425,13 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         request_prefix
         + r"(?:play|listen\s+to)\s+"
     )
+    if re.fullmatch(
+        action_prefix
+        + rf"(?:some\s+)?(?:my\s+)?{_EN_LIKED_SOURCE_PATTERN}\s+playlist",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return MusicRequest(personalization_source="liked")
     playlist_match = re.fullmatch(
         request_prefix
         + r"(?:play|listen\s+to)\s+"
@@ -532,7 +539,15 @@ def _excluded_personalization_source(clause: str) -> str:
 
 def _has_explicit_non_music_target(clause: str) -> bool:
     en_target = _EN_NON_MUSIC_TARGET.search(clause)
-    if en_target and _EN_EXPLICIT_MUSIC_TARGET.search(clause):
+    bare_pronoun = (
+        en_target
+        and en_target.group(0).casefold()
+        in {"me", "us", "him", "her", "them", "it", "this", "that"}
+    )
+    if en_target and (
+        _EN_EXPLICIT_MUSIC_TARGET.search(clause)
+        or (bare_pronoun and re.search(r"\bplayback\b", clause, re.IGNORECASE))
+    ):
         en_target = None
     return bool(
         _ZH_NON_MUSIC_TARGET.search(clause)
