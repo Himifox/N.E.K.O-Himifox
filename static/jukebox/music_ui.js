@@ -3091,6 +3091,19 @@
             }
         }
 
+        // A single <audio> cannot identify which load produced an error when
+        // successive lifecycles use the same URL. If no fast path above
+        // accepted the existing media, isolate the retry on a new element.
+        const currentAudioForRequest = localPlayer && localPlayer.audio;
+        const currentAudioUrl = currentAudioForRequest
+            && (currentAudioForRequest.currentSrc || currentAudioForRequest.src);
+        if (
+            currentAudioUrl
+            && resolveMusicUrl(currentAudioUrl) === resolveMusicUrl(trackInfo.url)
+        ) {
+            destroyMusicPlayer(true, false, true);
+        }
+
         const currentToken = ++latestMusicRequestToken;
         if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();
 

@@ -325,6 +325,20 @@ def test_same_track_fast_path_rebuilds_missing_player_instance():
     )
 
 
+def test_same_url_replacement_uses_a_fresh_audio_element():
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    send_source = player_source.split(
+        "window.sendMusicMessageDetailed = async function", 1
+    )[1].split("window.sendMusicMessage = async function", 1)[0]
+    same_url_guard = send_source.split(
+        "const currentAudioForRequest = localPlayer && localPlayer.audio;", 1
+    )[1].split("const currentToken = ++latestMusicRequestToken;", 1)[0]
+
+    assert "currentAudioForRequest.currentSrc || currentAudioForRequest.src" in same_url_guard
+    assert "resolveMusicUrl(currentAudioUrl) === resolveMusicUrl(trackInfo.url)" in same_url_guard
+    assert "destroyMusicPlayer(true, false, true);" in same_url_guard
+
+
 def test_stale_remote_owner_cannot_hold_music_occupancy_forever():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     occupancy = player_source.split(
