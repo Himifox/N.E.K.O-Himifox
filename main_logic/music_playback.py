@@ -61,7 +61,18 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
             previous_task = getattr(manager, "_music_request_task", None)
             if previous_task is not None and not previous_task.done():
                 previous_task.cancel()
-            _next_music_request_epoch(manager)
+            epoch = _next_music_request_epoch(manager)
+            fire_task = getattr(manager, "_fire_task", None)
+            if callable(fire_task):
+                fire_task(
+                    _push_music_payload(
+                        manager,
+                        {
+                            "type": "music_request_cancelled",
+                            "request_id": epoch,
+                        },
+                    )
+                )
         return
     previous_task = getattr(manager, "_music_request_task", None)
     if previous_task is not None and not previous_task.done():

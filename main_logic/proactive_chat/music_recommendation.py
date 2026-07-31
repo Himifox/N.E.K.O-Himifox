@@ -34,7 +34,7 @@ from main_logic.music_requests import (
     was_music_request_recent,
 )
 from utils.logger_config import get_module_logger
-from utils.music_crawlers import fetch_music_content, mark_music_as_played
+from utils.music_crawlers import fetch_music_content
 
 from .state import _clear_channel_from_proactive_history
 
@@ -190,7 +190,6 @@ def _select_music_recommendation(
             }
 
     track = tracks[picked_index]
-    mark_music_as_played(track)
     link = {
         "title": track.get("name", ""),
         "artist": track.get("artist", ""),

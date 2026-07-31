@@ -310,6 +310,8 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("来一首歌曲：21", "21", "21", "", "", "auto"),
         ("来一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
         ("从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
+        ("我想从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
+        ("我要从夜间循环歌单里听一首", "", "", "", "夜间循环", "auto"),
         ("来点我喜欢的", "", "", "", "", "liked"),
         ("来首歌", "", "", "", "", "auto"),
         ("放我的歌", "", "", "", "", "auto"),
@@ -317,8 +319,10 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("我想听红心", "", "", "", "", "liked"),
         ("我要听日推", "", "", "", "", "daily"),
         ("我想听红心，别放日推", "", "", "", "", "liked"),
+        ("播放晴天，别放日推", "晴天", "", "", "", "auto"),
         ("播放《别听慢歌》", "别听慢歌", "别听慢歌", "", "", "auto"),
         ("play Don't Stop the Music", "Don't Stop the Music", "", "", "", "auto"),
+        ("play Yellow, don't play daily recommendations", "Yellow", "", "", "", "auto"),
         ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
         ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
@@ -423,15 +427,32 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     )
 
 
-def test_explicit_music_cancellation_invalidates_pending_search(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_explicit_music_cancellation_invalidates_pending_search(
+    monkeypatch,
+) -> None:
     previous_task = MagicMock()
     previous_task.done.return_value = False
+    pushed = []
+
+    async def send_json(payload):
+        pushed.append(payload)
+
+    scheduled = []
+
+    def fire_task(coro):
+        task = asyncio.create_task(coro)
+        scheduled.append(task)
+        return task
+
     manager = SimpleNamespace(
         lanlan_name="YUI",
         _music_request_epoch=4,
         _music_request_task=previous_task,
-        _fire_task=MagicMock(),
+        _fire_task=fire_task,
         enqueue_agent_callback=MagicMock(),
+        websocket=SimpleNamespace(client_state=None, send_json=send_json),
+        sync_message_queue=MagicMock(),
     )
     monkeypatch.setattr(
         music_playback,
@@ -443,10 +464,11 @@ def test_explicit_music_cancellation_invalidates_pending_search(monkeypatch) -> 
         "YUI",
         {"lanlan": "YUI", "content": "不要放歌"},
     )
+    await asyncio.gather(*scheduled)
 
     previous_task.cancel.assert_called_once_with()
     assert manager._music_request_epoch == 5
-    manager._fire_task.assert_not_called()
+    assert pushed == [{"type": "music_request_cancelled", "request_id": 5}]
     manager.enqueue_agent_callback.assert_not_called()
 
 
@@ -754,6 +776,19 @@ def test_proactive_router_is_a_thin_ordered_adapter() -> None:
     assert ".websocket" not in service_source
     assert ".send_json(" not in service_source
     assert service_source.count("push_mini_game_invite_options(") >= 2
+
+
+def test_music_dedupe_is_recorded_only_after_delivery_commit() -> None:
+    source = inspect.getsource(service.handle_proactive_chat)
+
+    commit = source.index("delivery_commit = await _commit_proactive_delivery(")
+    committed = source.index("committed_delivery = delivery_commit.delivery")
+    mark_played = source.index("mark_music_as_played(")
+    record = source.index("recorded_result = await _record_committed_delivery(")
+    assert commit < committed < mark_played < record
+    assert "mark_music_as_played(track)" not in inspect.getsource(
+        music_recommendation._select_music_recommendation
+    )
 
 
 def test_proactive_command_parses_music_occupied() -> None:

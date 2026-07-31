@@ -134,6 +134,31 @@ def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
         < failure_handler.index("window._musicCandidateDispatchEpoch")
         < failure_handler.index("showMusicRequestFailure(response);")
     )
+    cancellation_handler = source.split(
+        "function handleMusicRequestCancelledResponse(response)", 1
+    )[1].split("function readNewUserIcebreakerStore", 1)[0]
+    assert "window.cancelPendingMusicMediaReady(requestId);" in cancellation_handler
+    assert "window.cancelQueuedMusicDispatch(requestId);" in cancellation_handler
+    assert "showMusicRequestFailure" not in cancellation_handler
+    assert "response.type === 'music_request_cancelled'" in source
+
+
+def test_music_request_scope_resets_on_same_character_reconnect():
+    source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
+    connect_source = source.split("function connectWebSocket()", 1)[1].split(
+        "mod.connectWebSocket = connectWebSocket", 1
+    )[0]
+
+    assert "function resetMusicCandidateRequestScope(scope, force)" in source
+    assert "if (!force && window._musicCandidateRequestScope === nextScope) return;" in source
+    assert "resetMusicCandidateRequestScope(currentLanlanName, true);" in connect_source
+    idempotent_guard = connect_source.index(
+        "S.socket && S.socket.readyState === WebSocket.OPEN && S.socket.url === wsUrl"
+    )
+    reset_call = connect_source.index(
+        "resetMusicCandidateRequestScope(currentLanlanName, true);"
+    )
+    assert idempotent_guard < reset_call
 
 
 def test_new_track_cancels_pending_media_readiness_wait():

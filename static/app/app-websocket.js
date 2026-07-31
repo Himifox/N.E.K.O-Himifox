@@ -720,9 +720,9 @@
         window._musicCandidateDispatchQueue = queued;
     }
 
-    function resetMusicCandidateRequestScope(scope) {
+    function resetMusicCandidateRequestScope(scope, force) {
         var nextScope = String(scope || '');
-        if (window._musicCandidateRequestScope === nextScope) return;
+        if (!force && window._musicCandidateRequestScope === nextScope) return;
         if (typeof window.cancelPendingMusicMediaReady === 'function') {
             window.cancelPendingMusicMediaReady(Number.MAX_SAFE_INTEGER);
         }
@@ -792,6 +792,26 @@
         window._latestMusicCandidateRequestId = requestId;
         window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
         showMusicRequestFailure(response);
+    }
+
+    function handleMusicRequestCancelledResponse(response) {
+        var requestId = Number(response && response.request_id);
+        if (!Number.isFinite(requestId) || requestId <= 0) {
+            console.warn('[Music] 忽略缺少有效 request_id 的取消响应');
+            return;
+        }
+        var latestRequestId = Number(window._latestMusicCandidateRequestId || 0);
+        if (latestRequestId > 0 && requestId < latestRequestId) return;
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            var mediaCancelStatus = window.cancelPendingMusicMediaReady(requestId);
+            if (mediaCancelStatus === 'stale') return;
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            var queuedCancelStatus = window.cancelQueuedMusicDispatch(requestId);
+            if (queuedCancelStatus === 'stale') return;
+        }
+        window._latestMusicCandidateRequestId = requestId;
+        window._musicCandidateDispatchEpoch = (window._musicCandidateDispatchEpoch || 0) + 1;
     }
 
     function readNewUserIcebreakerStore() {
@@ -1801,8 +1821,6 @@
         }
         _lanlanNameWaitAttempts = 0;
         _lanlanNameWaitLastLogAt = 0;
-        resetMusicCandidateRequestScope(currentLanlanName);
-
         var protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         // 对 lanlan_name 做 percent-encode：WebSocket.url 会把非 ASCII 字符（中文角色名）
         // 编成 %XX，下面幂等守卫用 S.socket.url === wsUrl 比对，两侧编码口径必须一致，
@@ -1816,6 +1834,7 @@
         if (S.socket && S.socket.readyState === WebSocket.OPEN && S.socket.url === wsUrl) {
             return;
         }
+        resetMusicCandidateRequestScope(currentLanlanName, true);
 
         // 新连接重置模型就绪标志，等待模型重新加载
         S._modelReady = false;
@@ -4109,6 +4128,9 @@
                 // -------- user music request failed --------
                 } else if (response.type === 'music_request_failed') {
                     handleMusicRequestFailureResponse(response);
+
+                } else if (response.type === 'music_request_cancelled') {
+                    handleMusicRequestCancelledResponse(response);
 
                 // -------- repetition_warning --------
                 } else if (response.type === 'repetition_warning') {

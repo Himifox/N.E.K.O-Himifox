@@ -234,7 +234,7 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
         return MusicRequest(personalization_source="daily")
 
     playlist_match = re.fullmatch(
-        r"(?:请|麻烦)?(?:给我|帮我)?(?:从|播放|放|听)(?:网易云)?(?:的)?(?:歌单)?"
+        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:从|播放|放|听)(?:网易云)?(?:的)?(?:歌单)?"
         r"[《「『【]?(.{1,40}?)[》」』】]?(?:这个|的)?(?:歌单)?(?:里|中)"
         r"(?:随机)?(?:放|播|听|来)?(?:一首|首|点)?(?:歌|音乐)?",
         clause,
@@ -431,7 +431,12 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
             if (
                 excluded_sources
                 and request.personalization_source == "auto"
-                and not (request.playlist_name or request.song_name or request.song_artist)
+                and not (
+                    request.keyword
+                    or request.playlist_name
+                    or request.song_name
+                    or request.song_artist
+                )
             ):
                 continue
             return request

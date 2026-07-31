@@ -2323,6 +2323,12 @@ async def fetch_music_content(
                 try:
                     res = await completed_task
                     if isinstance(res, list) and res:
+                        res = _filter_requested_music_results(
+                            res,
+                            requested_song=requested_song,
+                            requested_artist=requested_artist,
+                        )
+                    if isinstance(res, list) and res:
                         all_results.extend(res)
                         logger.info("[智能调度] 第一梯队某源命中，取消其他任务")
                         # 取消剩余任务
@@ -2359,6 +2365,12 @@ async def fetch_music_content(
             for completed_task in asyncio.as_completed(fallback_task_objs):
                 try:
                     res = await completed_task
+                    if isinstance(res, list) and res:
+                        res = _filter_requested_music_results(
+                            res,
+                            requested_song=requested_song,
+                            requested_artist=requested_artist,
+                        )
                     if isinstance(res, list) and res:
                         all_results.extend(res)
                         logger.info("[智能调度] 兜底源命中，取消其他任务")
@@ -2715,6 +2727,31 @@ def _select_requested_song(
             best_item = item
             best_score = score
     return best_item
+
+
+def _filter_requested_music_results(
+    search_results: List[Dict[str, Any]],
+    *,
+    requested_song: str,
+    requested_artist: str,
+) -> List[Dict[str, Any]]:
+    if requested_song:
+        match = _select_requested_song(
+            requested_song,
+            requested_artist,
+            search_results,
+        )
+        return [match] if match else []
+    if requested_artist:
+        target_artist = _normalize_song_match_text(requested_artist)
+        return [
+            item
+            for item in search_results
+            if target_artist
+            and target_artist
+            in _normalize_song_match_text(str(item.get("artist") or ""))
+        ]
+    return search_results
 
 
 def identify_best_music_resource(target_song: str, search_results: List[Dict[str, Any]]) -> Dict[str, Any]:

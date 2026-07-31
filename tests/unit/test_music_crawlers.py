@@ -1718,6 +1718,55 @@ async def test_fetch_music_content_matches_requested_song_with_typo():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_strict_request_waits_for_matching_provider_result():
+    unrelated = {
+        'name': 'Yellow Submarine',
+        'artist': 'The Beatles',
+        'url': 'https://soundcloud.example/yellow-submarine',
+    }
+    requested = {
+        'name': 'Yellow',
+        'artist': 'Coldplay',
+        'url': 'https://itunes.example/yellow',
+    }
+    mock_soundcloud = MagicMock()
+    mock_soundcloud.search = AsyncMock(return_value=[unrelated])
+    mock_itunes = MagicMock()
+
+    async def slower_exact_result(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return [requested]
+
+    mock_itunes.search = AsyncMock(side_effect=slower_exact_result)
+    mock_netease = MagicMock()
+    mock_netease._cookie_invalid = False
+
+    with (
+        patch(
+            'utils.music_crawlers.get_music_crawlers',
+            return_value={
+                'netease': mock_netease,
+                'soundcloud': mock_soundcloud,
+                'itunes': mock_itunes,
+            },
+        ),
+        patch('utils.music_crawlers.source_region_from_locale', return_value='global'),
+    ):
+        response = await fetch_music_content(
+            'Yellow Coldplay',
+            limit=5,
+            source_locale='en-US',
+            personalized=True,
+            requested_song='Yellow',
+            requested_artist='Coldplay',
+        )
+
+    assert response['success'] is True
+    assert response['data'] == [requested]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_explicit_playback_bypasses_recommendation_dedupe():
     track = {
         'name': 'Yellow',
@@ -1758,11 +1807,18 @@ async def test_fetch_music_content_rejects_unrelated_requested_song():
         'artist': '赵传',
         'url': '/api/music/play/netease/2',
     }])
+    empty_fallback = MagicMock()
+    empty_fallback.search = AsyncMock(return_value=[])
 
     with (
         patch(
             'utils.music_crawlers.get_music_crawlers',
-            return_value={'netease': mock_netease},
+            return_value={
+                'netease': mock_netease,
+                'fma': empty_fallback,
+                'soundcloud': empty_fallback,
+                'bandcamp': empty_fallback,
+            },
         ),
         patch('utils.music_crawlers.is_china_region', return_value=True),
     ):

@@ -134,6 +134,7 @@ from utils.language_utils import (
 )
 from utils.logger_config import get_module_logger
 from utils.meme_moderation import moderate_meme_image_url
+from utils.music_crawlers import mark_music_as_played
 from .break_reminders import (
     _compose_break_system_prompt,
     _deliver_break_reminder_via_llm,
@@ -2243,6 +2244,14 @@ async def handle_proactive_chat(
         committed_delivery = delivery_commit.delivery
         if committed_delivery is None:  # Defensive: the stage contract is exhaustive.
             raise RuntimeError("delivery commit returned neither result nor delivery")
+        if is_music_used and selected_music_link:
+            mark_music_as_played(
+                {
+                    "name": selected_music_link.get("title", ""),
+                    "artist": selected_music_link.get("artist", ""),
+                    "url": selected_music_link.get("url", ""),
+                }
+            )
         recorded_result = await _record_committed_delivery(
             mgr=mgr,
             delivery=committed_delivery,
