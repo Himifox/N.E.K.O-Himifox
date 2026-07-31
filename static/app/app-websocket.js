@@ -690,7 +690,7 @@
             var existingClaim = getValidMusicPlayUrlClaim(candidateKey);
             if (existingClaim && existingClaim.sender !== MUSIC_PLAY_URL_SENDER_ID) {
                 console.log('[Music] 跳过用户点歌候选：其他窗口已接管播放', track.url);
-                continue;
+                return false;
             }
             var candidateClaimToken = claimMusicPlayUrl(candidateKey);
             var dispatchResult;
@@ -722,6 +722,7 @@
                     };
                 } else {
                     console.warn('[Music] 没有可用的音乐派发接口');
+                    releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);
                     break;
                 }
             } catch (error) {

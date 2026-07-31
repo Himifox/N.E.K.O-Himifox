@@ -475,7 +475,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         artist = _strip_request_payload(match.group(1))
         return MusicRequest(keyword=artist, song_artist=artist)
     match = re.fullmatch(
-        action_prefix + r"(.{1,60}?)\s+by\s+(.{1,60})",
+        action_prefix + r"(?:(?:me|us)\s+)?(.{1,60}?)\s+by\s+(.{1,60})",
         normalized,
         re.IGNORECASE,
     )
