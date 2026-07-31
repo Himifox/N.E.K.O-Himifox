@@ -212,9 +212,39 @@ def build_recommendation_observation(
             actual_rank = rank
             actual_candidate_score = round(actual_candidate.score, 3)
             actual_candidate_id = actual_candidate.id
+    policy_actual_candidate = actual_candidate
+    arm_attribution_basis = "confirmed_material" if actual_candidate is not None else None
+    if (
+        delivered
+        and policy_actual_candidate is None
+        and active_bias_info.get("applied") is True
+    ):
+        preferred_candidate_id = _text(
+            active_bias_info.get("preferred_candidate_id")
+        )
+        policy_actual_candidate = next(
+            (
+                candidate
+                for candidate in decision.ranked_candidates
+                if candidate.id == preferred_candidate_id
+            ),
+            None,
+        )
+        if policy_actual_candidate is not None:
+            policy_mode = (
+                _text(policy_decision.get("mode"))
+                if isinstance(policy_decision, Mapping)
+                else ""
+            )
+            arm_attribution_basis = (
+                "applied_canary_policy"
+                if policy_mode == "canary"
+                else "applied_active_bias"
+            )
     finalized_policy_decision = finalize_source_bandit_decision(
         policy_decision,
-        actual_candidate=actual_candidate,
+        actual_candidate=policy_actual_candidate,
+        attribution_basis=arm_attribution_basis,
         delivered=delivered,
     )
     actual_aliases = _actual_source_aliases(actual_primary_channel, source_tag, active)

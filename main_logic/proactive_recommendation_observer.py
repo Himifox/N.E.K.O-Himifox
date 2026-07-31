@@ -421,11 +421,16 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     context_version = str(
         value.get("context_version") or "source-context-v1"
     ).strip()
-    is_v2 = context_version in {"source-context-v2", "source-context-v3"}
+    is_v2 = context_version in {
+        "source-context-v2",
+        "source-context-v3",
+        "source-context-v4",
+    }
     if context_version not in {
         "source-context-v1",
         "source-context-v2",
         "source-context-v3",
+        "source-context-v4",
     }:
         return {}
     eligible = [
@@ -528,6 +533,21 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
         if is_v2
         else None
     )
+    attribution_basis = (
+        str(value.get("arm_attribution_basis") or "").strip().lower() or None
+        if context_version == "source-context-v4"
+        else None
+    )
+    if context_version == "source-context-v4":
+        if attribution_basis not in {
+            None,
+            "confirmed_material",
+            "applied_active_bias",
+            "applied_canary_policy",
+        }:
+            return {}
+        if bool(actual) != bool(attribution_basis):
+            return {}
     if policy_applied and not (
         mode == "canary"
         and actual == proposed
@@ -571,10 +591,10 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
     )
     arm_bandit_posteriors = _sanitize_policy_posteriors(
         value.get("arm_bandit_posteriors"), eligible
-    ) if context_version == "source-context-v3" else arm_posteriors
+    ) if context_version in {"source-context-v3", "source-context-v4"} else arm_posteriors
     arm_preference_posteriors = _sanitize_policy_posteriors(
         value.get("arm_preference_posteriors"), eligible
-    ) if context_version == "source-context-v3" else arm_posteriors
+    ) if context_version in {"source-context-v3", "source-context-v4"} else arm_posteriors
     return {
         "policy_id": "source_epsilon_greedy_v1",
         "mode": mode,
@@ -592,6 +612,7 @@ def sanitize_recommendation_policy_decision(value: Any) -> dict[str, Any]:
         "proposed_candidate_id": proposed_candidate_id,
         "actual_arm": actual,
         "actual_candidate_id": actual_candidate_id,
+        "arm_attribution_basis": attribution_basis,
         "policy_applied": policy_applied,
         "chosen_arm": proposed,
         "chosen_candidate_id": proposed_candidate_id,

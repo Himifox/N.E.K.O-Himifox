@@ -8,7 +8,7 @@ from typing import Any
 
 
 BANDIT_POLICY_ID = "source_epsilon_greedy_v1"
-BANDIT_CONTEXT_VERSION = "source-context-v3"
+BANDIT_CONTEXT_VERSION = "source-context-v4"
 BANDIT_BASELINE_SCORE_CONTRACT = "baseline-score-v1"
 BANDIT_PERSONALIZED_SCORE_CONTRACT = "personalized-policy-score-v1"
 BANDIT_ARMS = ("news", "music", "meme")
@@ -163,6 +163,7 @@ def finalize_source_bandit_decision(
     policy_decision: Mapping[str, Any] | None,
     *,
     actual_candidate: Any = None,
+    attribution_basis: str | None = None,
     delivered: bool,
 ) -> dict[str, Any] | None:
     """Bind a proposed policy action to the material that was actually delivered."""
@@ -179,6 +180,11 @@ def finalize_source_bandit_decision(
         str(getattr(actual_candidate, "id", "") or "")
         if actual_arm is not None
         else ""
+    )
+    actual_attribution_basis = (
+        str(attribution_basis or "confirmed_material").strip().lower()
+        if actual_arm is not None
+        else None
     )
     proposed_arm = str(
         result.get("proposed_arm") or result.get("chosen_arm") or ""
@@ -218,6 +224,7 @@ def finalize_source_bandit_decision(
             "proposed_candidate_id": proposed_candidate_id,
             "actual_arm": actual_arm,
             "actual_candidate_id": actual_candidate_id or None,
+            "arm_attribution_basis": actual_attribution_basis,
             "policy_applied": policy_applied,
             "target_action_probabilities": target,
             "behavior_action_probabilities": behavior,

@@ -539,7 +539,8 @@ def register_pending_feedback_from_observation(
     policy_v2 = (
         policy
         if isinstance(policy, Mapping)
-        and policy.get("context_version") in {"source-context-v2", "source-context-v3"}
+        and policy.get("context_version")
+        in {"source-context-v2", "source-context-v3", "source-context-v4"}
         else None
     )
     if policy_v2 is not None and policy_v2.get("actual_arm"):
