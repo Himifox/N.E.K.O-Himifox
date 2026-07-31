@@ -208,6 +208,7 @@
         const audio = player && player.audio;
         if (!context || !audio) return null;
         if (context.token !== player._latestToken) return null;
+        if (context.token !== latestMusicRequestToken) return null;
         const activeSource = audio.currentSrc || audio.src;
         if (
             context.url && activeSource

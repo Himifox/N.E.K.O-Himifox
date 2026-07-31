@@ -1195,8 +1195,16 @@ class NeteaseCrawler(BaseMusicCrawler):
                 playlist_name,
             )
             if not requested_playlist:
+                normalized_name = playlist_name.strip().casefold()
+                matching_names = [
+                    item for item in playlists
+                    if str(item.get('name') or '').strip().casefold() == normalized_name
+                ]
+                if not playlist_id and normalized_name and len(matching_names) > 1:
+                    self._personalization_error_code = 'playlist_ambiguous'
+                    return []
                 logger.info(
-                    "[%s] 指定歌单不存在或名称不唯一，回退每日推荐歌单",
+                    "[%s] 指定歌单不存在，回退每日推荐歌单",
                     self.platform_name,
                 )
                 daily_playlist = await self.get_daily_playlist_recommendations(user_id)

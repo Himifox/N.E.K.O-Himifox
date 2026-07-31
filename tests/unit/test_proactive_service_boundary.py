@@ -380,6 +380,9 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
             "Night Loop",
             "auto",
         ),
+        ("play a track from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
+        ("play a tune from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
+        ("play anything from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
         (
             "Could you please play Yellow by Coldplay?",
             "Yellow Coldplay",
@@ -502,6 +505,9 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     assert "do not ask which version" in (
         music_playback.get_music_request_pending_prompt("en-US")
     )
+    traditional_prompt = music_playback.get_music_request_pending_prompt("zh-TW")
+    assert "音樂模組已接管" in traditional_prompt
+    assert "音乐模块已接管" not in traditional_prompt
 
 
 @pytest.mark.asyncio

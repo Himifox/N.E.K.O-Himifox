@@ -260,7 +260,7 @@ def test_music_player_reports_confirmed_state_to_backend():
         "function getOwnedMusicPlaybackReportContext(player, state)", 1
     )[1].split("// ---", 1)[0]
     assert "context.token !== player._latestToken" in ownership_source
-    assert "latestMusicRequestToken" not in ownership_source
+    assert "context.token !== latestMusicRequestToken" in ownership_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'playing')" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, playbackState)" in player_source
     assert "getOwnedMusicPlaybackReportContext(boundPlayer, 'ended')" in player_source

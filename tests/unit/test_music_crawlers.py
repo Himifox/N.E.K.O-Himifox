@@ -1094,6 +1094,42 @@ async def test_netease_unknown_named_playlist_uses_daily_playlist_fallback():
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_ambiguous_named_playlist_does_not_use_daily_fallback():
+    crawler = NeteaseCrawler()
+
+    with (
+        patch.object(
+            crawler,
+            '_get_personalization_user_id',
+            new=AsyncMock(return_value=7),
+        ),
+        patch.object(
+            crawler,
+            '_fetch_visible_playlists',
+            new=AsyncMock(return_value=[
+                {'id': 1, 'name': 'Same Name'},
+                {'id': 2, 'name': 'Same Name'},
+            ]),
+        ),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(),
+        ) as daily_playlist,
+    ):
+        results = await crawler.personalized_recommendations(
+            limit=5,
+            playlist_name='Same Name',
+        )
+
+    assert results == []
+    assert crawler._personalization_error_code == 'playlist_ambiguous'
+    daily_playlist.assert_not_awaited()
+    await crawler.close()
+
+
+@pytest.mark.unit
 def test_netease_playlist_name_must_be_unique():
     snapshot = {
         'playlists': [

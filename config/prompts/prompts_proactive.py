@@ -2181,7 +2181,12 @@ def get_proactive_music_keyword_prompt(lang: str = "zh") -> str:
 
 
 def get_music_request_pending_prompt(lang: str = "zh") -> str:
-    lang_key = _normalize_prompt_language(lang)
+    lang_lower = str(lang or "").lower()
+    lang_key = (
+        "zh-TW"
+        if lang_lower.startswith(("zh-tw", "zh_tw"))
+        else _normalize_prompt_language(lang)
+    )
     return MUSIC_REQUEST_PENDING_PROMPTS.get(
         lang_key,
         MUSIC_REQUEST_PENDING_PROMPTS["en"],
@@ -2439,7 +2444,7 @@ Rules:
 2. 会話でリラックス、疲れ、気分が落ち込んでいる状況が出てきたら、軽やかな音楽をおすすめ
 3. 特定の曲は song:曲名、歌手も指定された場合は song:曲名|歌手 を返す
 4. 一般的な歌手・ジャンル指定は通常の検索キーワードを返す
-5. お気に入り曲のみは source:liked、NetEaseの日次おすすめは source:daily を返す
+5. お気に入り曲のみは source:liked、NetEaseの日次おすすめは source:daily を返す。否定と肯定が同時にある場合は、最後に明示された肯定のソースを優先する
 6. NetEaseのプレイリストが明示された場合、playlist:正確な名前 を返す
 7. 曲、歌手、ジャンル、ソース、プレイリストの指定がなければ personalized を返す
 """,
@@ -2452,7 +2457,7 @@ Rules:
 2. 대화에서 휴식, 피로, 기분 우울 등의 상황이 나타나면 편안한 음악 추천
 3. 특정 곡은 song:곡명, 가수도 지정되면 song:곡명|가수 를 반환
 4. 일반 가수나 장르 요청은 보통 검색 키워드를 반환
-5. 좋아요 곡만 요청하면 source:liked, NetEase 일일 추천은 source:daily 를 반환
+5. 좋아요 곡만 요청하면 source:liked, NetEase 일일 추천은 source:daily 를 반환. 부정과 긍정이 함께 있으면 마지막으로 명시한 긍정 소스를 우선한다
 6. NetEase 재생목록이 명시되면 playlist:정확한 이름 을 반환
 7. 노래, 가수, 장르, 소스, 재생목록 지정이 없으면 personalized 를 반환
 """,
@@ -2465,7 +2470,7 @@ Rules:
 2. Когда в разговоре упоминается отдых, усталость, плохое настроение — рекомендуйте расслабляющую музыку
 3. Для конкретной песни верните song:название; если указан исполнитель — song:название|исполнитель
 4. Для общего запроса исполнителя или жанра верните обычное поисковое слово
-5. Для любимых песен верните source:liked, для ежедневных рекомендаций NetEase — source:daily
+5. Для любимых песен верните source:liked, для ежедневных рекомендаций NetEase — source:daily; при сочетании отрицания и утверждения используйте последний явно выбранный положительный источник
 6. Для явно указанного плейлиста NetEase верните playlist:точное название
 7. Если песня, исполнитель, жанр, источник или плейлист не указаны, верните personalized
 """,
@@ -2478,7 +2483,7 @@ Reglas:
 2. Si la conversación menciona relajarse, cansancio, bajón, etc., recomienda música relajante
 3. Para una canción concreta, devuelve song:título; con artista, song:título|artista
 4. Para una petición general de artista o género, devuelve la palabra de búsqueda normal
-5. Para canciones favoritas devuelve source:liked; para recomendaciones diarias de NetEase, source:daily
+5. Para canciones favoritas devuelve source:liked; para recomendaciones diarias de NetEase, source:daily; si hay negación y afirmación, respeta la última fuente elegida de forma positiva
 6. Para una playlist de NetEase explícita, devuelve playlist:nombre exacto
 7. Si no se especifica canción, artista, género, fuente ni playlist, devuelve personalized
 """,
@@ -2491,7 +2496,7 @@ Regras:
 2. Se a conversa mencionar relaxar, cansaço, desânimo etc., recomende música relaxante
 3. Para uma música específica, retorne song:título; com artista, song:título|artista
 4. Para um pedido geral de artista ou gênero, retorne a palavra de busca normal
-5. Para músicas favoritas retorne source:liked; para recomendações diárias do NetEase, source:daily
+5. Para músicas favoritas retorne source:liked; para recomendações diárias do NetEase, source:daily; se houver negação e afirmação, respeite a última fonte escolhida de forma positiva
 6. Para uma playlist do NetEase explicitamente nomeada, retorne playlist:nome exato
 7. Sem música, artista, gênero, fonte ou playlist especificados, retorne personalized
 """,

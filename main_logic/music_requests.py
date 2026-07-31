@@ -425,7 +425,8 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     playlist_match = re.fullmatch(
         request_prefix
         + r"(?:play|listen\s+to)\s+"
-        r"(?:a\s+song\s+from\s+)?(?:my\s+)?(.{1,60}?)\s+playlist",
+        r"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:some|any)thing)\s+from\s+)?"
+        r"(?:my\s+)?(.{1,60}?)\s+playlist",
         normalized,
         re.IGNORECASE,
     )
