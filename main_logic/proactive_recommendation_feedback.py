@@ -1024,6 +1024,17 @@ def _contains_feedback_phrase(
     return False
 
 
+def _explicit_text_named_source_types(text: str | None) -> tuple[str, ...]:
+    normalized = _compact_feedback_text(text)
+    if not normalized:
+        return ()
+    return tuple(
+        source_type
+        for source_type, aliases in _EXPLICIT_TEXT_PREFERENCE_SOURCE_ALIASES.items()
+        if _contains_feedback_phrase(normalized, aliases, fuzzy=True)
+    )
+
+
 def _explicit_text_source_preference_event_type(
     text: str | None,
     source_type: str,
@@ -1073,20 +1084,43 @@ def note_user_turn_for_feedback(
 ) -> dict[str, Any] | None:
     if not had_text:
         return None
-    pending = _latest_pending_for_lanlan(lanlan_name, now=timestamp)
-    if pending is None:
+    latest_pending = _latest_pending_for_lanlan(lanlan_name, now=timestamp)
+    if latest_pending is None:
         return None
+    pending = latest_pending
+    source_preference_match: tuple[str, str] | None = None
+    if text_allowed and text:
+        named_sources = _explicit_text_named_source_types(text)
+        if len(named_sources) == 1:
+            named_source = named_sources[0]
+            named_match = _explicit_text_source_preference_event_type(
+                text,
+                named_source,
+            )
+            if named_match is not None:
+                named_pending = _latest_verified_pending_for_source(
+                    lanlan_name,
+                    source_type=named_source,
+                    now=timestamp,
+                )
+                if named_pending is not None:
+                    pending = named_pending
+                    source_preference_match = named_match
+        elif not named_sources:
+            source_preference_match = _explicit_text_source_preference_event_type(
+                text,
+                pending.source_type,
+            )
+            if not pending.candidate_id:
+                source_preference_match = None
     latency = max(0.0, float(timestamp) - float(pending.delivered_at))
     metadata: dict[str, Any] = {"reply_latency_seconds": round(latency, 3)}
     if text_allowed and text:
         metadata["reply_length"] = len(text)
         metadata["reply_length_bucket"] = _reply_length_bucket(len(text))
-        source_preference_match = _explicit_text_source_preference_event_type(
-            text,
-            pending.source_type,
-        )
         if source_preference_match is not None:
             source_preference_event, reason = source_preference_match
+            latest_pending.reply_seen = True
             pending.reply_seen = True
             metadata["reason"] = reason
             return record_feedback_event(
@@ -2260,6 +2294,27 @@ def _latest_pending_for_lanlan(lanlan_name: str, *, now: float) -> PendingRecomm
         pending
         for pending in _pending_feedback.values()
         if pending.lanlan_name == lanlan_name
+        and 0 <= now - pending.delivered_at <= REPLY_WINDOW_SECONDS
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.delivered_at)
+
+
+def _latest_verified_pending_for_source(
+    lanlan_name: str,
+    *,
+    source_type: str,
+    now: float,
+) -> PendingRecommendationFeedback | None:
+    _prune_pending_feedback(now=now)
+    source = _normalize_source_type(source_type)
+    candidates = [
+        pending
+        for pending in _pending_feedback.values()
+        if pending.lanlan_name == lanlan_name
+        and pending.source_type == source
+        and pending.candidate_id
         and 0 <= now - pending.delivered_at <= REPLY_WINDOW_SECONDS
     ]
     if not candidates:

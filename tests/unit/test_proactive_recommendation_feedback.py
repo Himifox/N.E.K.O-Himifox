@@ -1065,6 +1065,132 @@ def test_text_feedback_ignores_negation_reversal(tmp_path):
     assert event["event_type"] == "user_reply_fast"
 
 
+def test_named_source_feedback_rebinds_recent_verified_pending(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="older-meme",
+        source_type="meme",
+        candidate_id="meme:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="newer-chat",
+        source_type="chat",
+        delivered_at=110.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="这个表情包不好看",
+    )
+    followup = note_user_turn_for_feedback(
+        "neko",
+        timestamp=125.0,
+        had_text=True,
+        text_allowed=True,
+        text="知道了",
+    )
+    source = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=125.0,
+    )["sources"]["meme"]
+
+    assert event["turn_id"] == "older-meme"
+    assert event["candidate_id"] == "meme:verified"
+    assert event["event_type"] == "candidate_not_interested"
+    assert source["effective_failure"] == 0.25
+    assert followup["turn_id"] == "newer-chat"
+    assert followup["event_type"] == "user_continue"
+
+
+def test_deictic_feedback_does_not_rebind_past_newer_chat(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="older-news",
+        source_type="news",
+        candidate_id="news:verified",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="newer-chat",
+        source_type="chat",
+        delivered_at=110.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="换一个",
+    )
+
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=120.0,
+    )
+    assert event["turn_id"] == "newer-chat"
+    assert event["event_type"] == "user_reply_fast"
+    assert preference["sources"] == {}
+
+
+def test_named_source_feedback_requires_verified_candidate(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="unverified-news",
+        source_type="news",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="newer-chat",
+        source_type="chat",
+        delivered_at=110.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="以后少推荐新闻",
+    )
+
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=120.0,
+    )
+    assert event["turn_id"] == "newer-chat"
+    assert event["event_type"] == "user_reply_fast"
+    assert preference["sources"] == {}
+
+
 def test_feedback_summary_aggregates_scores_and_infers_ignored():
     observations = [
         _observation(turn_id="positive", ts=10_000.0, actual_primary_channel="music"),
