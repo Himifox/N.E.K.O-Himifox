@@ -23,6 +23,7 @@ from typing import Any
 
 from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
+from main_logic.proactive_delivery import DELIVERY_RETRACTED_KEY
 from main_logic.music_requests import (
     MusicRequest,
     fetch_music_request,
@@ -63,6 +64,10 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
             if previous_task is not None and not previous_task.done():
                 previous_task.cancel()
             epoch = _next_music_request_epoch(manager)
+            pending_context = getattr(manager, "_music_request_pending_context", None)
+            if isinstance(pending_context, dict):
+                pending_context[DELIVERY_RETRACTED_KEY] = True
+                manager._music_request_pending_context = None
             fire_task = getattr(manager, "_fire_task", None)
             if callable(fire_task):
                 fire_task(
@@ -105,30 +110,30 @@ def _enqueue_music_request_context(
     detail = get_music_request_pending_prompt(
         getattr(manager, "user_language", None)
     )
-    enqueue(
-        {
-            "event": "agent_task_callback",
-            "origin": "event",
-            "task_id": f"music_request:{epoch}",
-            "channel": "music_playback",
-            "status": "in_progress",
-            "success": True,
-            "summary": detail,
-            "detail": detail,
-            "source_kind": "music",
-            "source_name": "music_request",
-            "delivery_mode": "passive",
-            "priority": 10,
-            "coalesce_key": (
-                f"music-playback-state:{getattr(manager, 'lanlan_name', '')}"
-            ),
-            "metadata": {
-                "context_type": "music_request_pending",
-                "request_id": epoch,
-            },
+    callback = {
+        "event": "agent_task_callback",
+        "origin": "event",
+        "task_id": f"music_request:{epoch}",
+        "channel": "music_playback",
+        "status": "in_progress",
+        "success": True,
+        "summary": detail,
+        "detail": detail,
+        "source_kind": "music",
+        "source_name": "music_request",
+        "delivery_mode": "passive",
+        "priority": 10,
+        "coalesce_key": (
+            f"music-playback-state:{getattr(manager, 'lanlan_name', '')}"
+        ),
+        "metadata": {
             "context_type": "music_request_pending",
-        }
-    )
+            "request_id": epoch,
+        },
+        "context_type": "music_request_pending",
+    }
+    enqueue(callback)
+    manager._music_request_pending_context = callback
 
 
 def _enqueue_music_request_failure_context(
