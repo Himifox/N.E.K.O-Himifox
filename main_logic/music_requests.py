@@ -195,8 +195,8 @@ _EN_NON_MUSIC_TARGET = re.compile(
     r"(?:(?:a|the|this|that|my|your|some)\s+)?"
     r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?|"
     r"chess|football|soccer|basketball)"
-    r"|(?:me|us|him|her|them|it|this|that)"
-    r"|with\s+(?:me|us|him|her|them)",
+    r"|\b(?:me|us|him|her|them|it|this|that)\b"
+    r"|\bwith\s+(?:me|us|him|her|them)\b",
     re.IGNORECASE,
 )
 _ZH_SPEECH_SUBJECT = r"(?:你|我|他|她|它|我们|咱们|他们|她们)(?:的)?"

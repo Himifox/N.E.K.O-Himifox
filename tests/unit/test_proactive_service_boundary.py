@@ -448,6 +448,8 @@ def test_non_music_commands_do_not_cancel_pending_music(text) -> None:
         "don't play this music",
         "don't play that song",
         "stop that music",
+        "pause playback",
+        "play Yellow, pause playback",
     ),
 )
 def test_explicit_music_targets_override_non_music_pronouns(text) -> None:
