@@ -131,6 +131,45 @@ def _enqueue_music_request_context(
     )
 
 
+def _enqueue_music_request_failure_context(
+    manager: Any,
+    epoch: int,
+    query: str,
+    error_code: str,
+) -> None:
+    enqueue = getattr(manager, "enqueue_agent_callback", None)
+    if not callable(enqueue):
+        return
+    detail = f"音乐请求未能完成（{error_code}）"
+    if query:
+        detail += f"：{query}"
+    enqueue(
+        {
+            "event": "agent_task_callback",
+            "origin": "event",
+            "task_id": f"music_request:{epoch}",
+            "channel": "music_playback",
+            "status": "failed",
+            "success": False,
+            "summary": detail,
+            "detail": detail,
+            "source_kind": "music",
+            "source_name": "music_request",
+            "delivery_mode": "passive",
+            "priority": 10,
+            "coalesce_key": (
+                f"music-playback-state:{getattr(manager, 'lanlan_name', '')}"
+            ),
+            "metadata": {
+                "context_type": "music_request_failed",
+                "request_id": epoch,
+                "error_code": error_code,
+            },
+            "context_type": "music_request_failed",
+        }
+    )
+
+
 def _reply_in_progress(manager: Any) -> bool:
     if getattr(manager, "_active_text_request_id", None):
         return True
@@ -338,6 +377,12 @@ async def _execute_music_request(
     ][:3]
     if not candidates:
         error_code = str((result or {}).get("error_code") or "track_not_found")
+        _enqueue_music_request_failure_context(
+            manager,
+            epoch,
+            request.display_query,
+            error_code,
+        )
         await _send_music_request_failure(
             manager,
             request.display_query,

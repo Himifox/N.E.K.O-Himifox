@@ -200,6 +200,7 @@
                     artist: String(currentTrack.artist || '').slice(0, 120)
                 }
             }));
+            context.lastReportedState = state;
         } catch (_) { /* best-effort playback awareness */ }
     }
 
@@ -2088,6 +2089,14 @@
         // 播放器销毁即结束当前曲目生命周期，清起播时间戳，避免残留到下一首
         playbackStartedAt = 0;
         const destroyedPlaybackId = getCurrentMusicPlaybackId();
+        const terminalReportContext = localPlayer && localPlayer._musicPlaybackReportContext;
+        if (
+            fullTeardown
+            && terminalReportContext
+            && ['playing', 'paused'].includes(terminalReportContext.lastReportedState)
+        ) {
+            reportMusicPlaybackState('ended', null, terminalReportContext);
+        }
         // 重要：销毁播放器意味着取消所有正在进行的异步加载令牌
         // 只有在 fullTeardown (手动关闭) 或明确要求时才更新 token
         if (updateToken || fullTeardown) {

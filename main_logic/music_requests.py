@@ -182,7 +182,9 @@ _ZH_NEGATIVE_MUSIC = re.compile(
 _EN_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:actually|never\s*mind)[,\s]+)?(?:please\s+)?"
     r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
-    r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|playback|playing)\b)",
+    r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|playback|playing)\b"
+    r"|(?:turn|shut)\s+(?:off\s+(?:the\s+)?(?:music|playback)"
+    r"|(?:the\s+)?(?:music|playback)\s+off)\b)",
     re.IGNORECASE,
 )
 _EN_EXPLICIT_MUSIC_TARGET = re.compile(
@@ -496,17 +498,18 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
         return None
     payload = _strip_request_payload(match.group(1))
     wrapper_match = re.fullmatch(
-        r"(?:(?:me|us)\s+)?(a song|some music|music|something)"
+        r"(?:(?:me|us)\s+)?(?:"
+        r"(?:a|any)\s+(?:song|track|tune)"
+        r"|(?:some|any)\s+(?:songs|music|tracks|tunes)"
+        r"|songs|music|tracks|tunes|something)"
         r"(?:\s+for\s+(?:me|us))?",
         payload,
         re.IGNORECASE,
     )
     if wrapper_match:
-        payload = wrapper_match.group(1)
+        return MusicRequest()
     if _EN_NON_MUSIC_TARGET.fullmatch(payload):
         return None
-    if payload.casefold() in {"music", "a song", "some music", "something"}:
-        return MusicRequest()
     return MusicRequest(keyword=payload)
 
 
