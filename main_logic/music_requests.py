@@ -182,7 +182,7 @@ _ZH_NEGATIVE_MUSIC = re.compile(
 _EN_NEGATIVE_MUSIC = re.compile(
     r"^(?:(?:actually|never\s*mind)[,\s]+)?(?:please\s+)?"
     r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
-    r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|playback|playing)\b"
+    r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|tracks?|tunes?|playback|playing)\b"
     r"|(?:turn|shut)\s+(?:off\s+(?:the\s+)?(?:music|playback)"
     r"|(?:the\s+)?(?:music|playback)\s+off)\b)",
     re.IGNORECASE,
@@ -546,7 +546,14 @@ def _has_explicit_non_music_target(clause: str) -> bool:
     )
     if en_target and (
         _EN_EXPLICIT_MUSIC_TARGET.search(clause)
-        or (bare_pronoun and re.search(r"\bplayback\b", clause, re.IGNORECASE))
+        or (
+            bare_pronoun
+            and re.search(
+                r"\b(?:tracks?|tunes?|playback)\b",
+                clause,
+                re.IGNORECASE,
+            )
+        )
     ):
         en_target = None
     return bool(
