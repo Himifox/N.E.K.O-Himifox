@@ -316,6 +316,17 @@ def _parse_explicit_zh_clause(clause: str) -> MusicRequest | None:
             playlist_name=_strip_request_payload(playlist_match.group(1))
         )
 
+    direct_playlist_match = re.fullmatch(
+        r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:播放|放|听)(?:一下)?"
+        r"(.{1,40}?)歌单",
+        clause,
+    )
+    if direct_playlist_match:
+        playlist = _strip_request_payload(direct_playlist_match.group(1))
+        if playlist.startswith("我的"):
+            playlist = _strip_request_payload(playlist[2:])
+        return MusicRequest(playlist_name=playlist) if playlist else MusicRequest()
+
     quoted_match = re.fullmatch(
         r"(?:请|麻烦)?(?:给我|帮我)?(?:我)?(?:想|要)?(?:播放|放|听|来)(?:一下)?(?:一首|首)?"
         r"(?:(.{1,30}?)的)?[《「『【](.{1,60}?)[》」』】](?:这首歌|这首|歌曲|歌)?",

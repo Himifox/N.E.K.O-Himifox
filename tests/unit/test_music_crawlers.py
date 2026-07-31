@@ -1048,6 +1048,51 @@ async def test_netease_named_playlist_restricts_personalized_results():
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_netease_unknown_named_playlist_uses_daily_playlist_fallback():
+    crawler = NeteaseCrawler()
+    daily_tracks = [{
+        'id': 302,
+        'name': 'Daily Playlist Song',
+        'artist': 'Artist',
+        'url': '/api/music/play/netease/302',
+        'recommendation_source': 'daily_playlist',
+    }]
+
+    with (
+        patch.object(
+            crawler,
+            '_get_personalization_user_id',
+            new=AsyncMock(return_value=7),
+        ),
+        patch.object(
+            crawler,
+            '_fetch_visible_playlists',
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            crawler,
+            'get_daily_playlist_recommendations',
+            new=AsyncMock(return_value=daily_tracks),
+        ) as daily_playlist,
+        patch.object(
+            crawler,
+            '_fetch_playlist_tracks',
+            new=AsyncMock(),
+        ) as fetch_playlist,
+    ):
+        results = await crawler.personalized_recommendations(
+            limit=5,
+            playlist_name='夜间循环',
+        )
+
+    assert results == daily_tracks
+    daily_playlist.assert_awaited_once_with(7)
+    fetch_playlist.assert_not_awaited()
+    await crawler.close()
+
+
+@pytest.mark.unit
 def test_netease_playlist_name_must_be_unique():
     snapshot = {
         'playlists': [
