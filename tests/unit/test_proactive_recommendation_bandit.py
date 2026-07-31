@@ -2,7 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import main_logic.proactive_recommendation_feedback as feedback_module
 from main_logic.proactive_recommendation import (
+    ProactiveActiveBias,
     ProactiveCandidate,
     ProactiveRecommendationDecision,
     build_recommendation_observation,
@@ -183,7 +185,7 @@ def test_shadow_and_canary_share_personalized_policy_score():
     ]
     assert sanitize_recommendation_policy_decision(finalized_shadow)[
         "context_version"
-    ] == "source-context-v3"
+    ] == "source-context-v4"
 
 
 def test_non_bandit_global_top_blocks_policy():
@@ -247,6 +249,194 @@ def test_shadow_observation_binds_behavior_to_actual_material():
     assert finalized["actual_candidate_id"] == "news:1"
     assert finalized["policy_applied"] is False
     assert finalized["actual_action_probability"] == 1.0
+
+
+def test_chat_delivery_binds_behavior_to_applied_active_bias(tmp_path, monkeypatch):
+    clear_pending_recommendation_feedback()
+    monkeypatch.setattr(
+        feedback_module,
+        "PROACTIVE_RECOMMENDATION_BANDIT_MODE",
+        "shadow",
+    )
+    news = ProactiveCandidate(
+        id="news:1",
+        source_type="news",
+        family="news",
+        topic="News",
+        score=0.60,
+    )
+    music = ProactiveCandidate(
+        id="music:1",
+        source_type="music",
+        family="music",
+        topic="Music",
+        score=0.59,
+    )
+    decision = ProactiveRecommendationDecision(
+        candidate_count=2,
+        selected_candidate=news,
+        ranked_candidates=(news, music),
+        shadow_selected_source_type="news",
+        score_breakdown={
+            "news:1": {"baseline_score": 0.60, "personalized_score": 0.60},
+            "music:1": {"baseline_score": 0.59, "personalized_score": 0.59},
+        },
+    )
+    policy = build_source_bandit_decision(decision, mode="shadow", random_value=1.0)
+    active_bias = ProactiveActiveBias(
+        applied=True,
+        preferred_source_type="news",
+        preferred_source_tag="WEB",
+        preferred_candidate_id="news:1",
+        score_gap=0.01,
+    )
+
+    observation = build_recommendation_observation(
+        decision,
+        recommendation_mode="active_source",
+        active_bias=active_bias,
+        action="chat",
+        reason_code="CHAT_DELIVERED",
+        source_mode="chat",
+        source_tag="CHAT",
+        lanlan_name="neko",
+        turn_id="chat-news",
+        ts=100,
+        policy_decision=policy,
+    )
+
+    assert observation["actual_candidate_id"] is None
+    assert observation["matched_actual_material"] is False
+    assert observation["policy_decision"]["context_version"] == "source-context-v4"
+    assert observation["policy_decision"]["actual_arm"] == "news"
+    assert observation["policy_decision"]["actual_candidate_id"] == "news:1"
+    assert (
+        observation["policy_decision"]["arm_attribution_basis"]
+        == "applied_active_bias"
+    )
+    assert observation["policy_decision"]["behavior_action_probabilities"] == {
+        "music": 0.0,
+        "news": 1.0,
+    }
+    sanitized = sanitize_recommendation_policy_decision(
+        observation["policy_decision"]
+    )
+    assert sanitized["arm_attribution_basis"] == "applied_active_bias"
+    missing_basis = dict(observation["policy_decision"])
+    missing_basis.pop("arm_attribution_basis")
+    assert sanitize_recommendation_policy_decision(missing_basis) == {}
+
+    pending = register_pending_feedback_from_observation(
+        observation,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+    )
+    assert pending is not None
+    assert pending.source_type == "news"
+    assert pending.candidate_id == "news:1"
+
+    result = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="chat-news",
+        event_type="user_reply",
+        ts=110,
+    )
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=110)
+    assert result.bandit_state_updated is True
+    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.2)
+
+
+def test_confirmed_material_overrides_applied_active_bias():
+    news = ProactiveCandidate(
+        id="news:1",
+        source_type="news",
+        family="news",
+        topic="News",
+        score=0.60,
+    )
+    meme = ProactiveCandidate(
+        id="meme:1",
+        source_type="meme",
+        family="meme",
+        topic="Meme",
+        score=0.59,
+    )
+    decision = ProactiveRecommendationDecision(
+        candidate_count=2,
+        selected_candidate=news,
+        ranked_candidates=(news, meme),
+        shadow_selected_source_type="news",
+        score_breakdown={
+            "news:1": {"baseline_score": 0.60, "personalized_score": 0.60},
+            "meme:1": {"baseline_score": 0.59, "personalized_score": 0.59},
+        },
+    )
+    policy = build_source_bandit_decision(decision, mode="shadow", random_value=1.0)
+    active_bias = ProactiveActiveBias(
+        applied=True,
+        preferred_source_type="news",
+        preferred_source_tag="WEB",
+        preferred_candidate_id="news:1",
+        score_gap=0.01,
+    )
+
+    observation = build_recommendation_observation(
+        decision,
+        recommendation_mode="active_source",
+        active_bias=active_bias,
+        action="chat",
+        reason_code="CHAT_DELIVERED",
+        source_mode="meme",
+        source_tag="MEME",
+        policy_decision=policy,
+    )
+
+    assert observation["policy_decision"]["actual_arm"] == "meme"
+    assert observation["policy_decision"]["actual_candidate_id"] == "meme:1"
+    assert (
+        observation["policy_decision"]["arm_attribution_basis"]
+        == "confirmed_material"
+    )
+
+
+def test_chat_delivery_without_applied_resource_remains_unattributed():
+    news = ProactiveCandidate(
+        id="news:1",
+        source_type="news",
+        family="news",
+        topic="News",
+        score=0.60,
+    )
+    music = ProactiveCandidate(
+        id="music:1",
+        source_type="music",
+        family="music",
+        topic="Music",
+        score=0.59,
+    )
+    decision = ProactiveRecommendationDecision(
+        candidate_count=2,
+        selected_candidate=news,
+        ranked_candidates=(news, music),
+        shadow_selected_source_type="news",
+    )
+    policy = build_source_bandit_decision(decision, mode="shadow", random_value=1.0)
+
+    observation = build_recommendation_observation(
+        decision,
+        recommendation_mode="active_source",
+        action="chat",
+        reason_code="CHAT_DELIVERED",
+        source_mode="chat",
+        source_tag="CHAT",
+        policy_decision=policy,
+    )
+
+    finalized = observation["policy_decision"]
+    assert finalized["actual_arm"] is None
+    assert finalized["actual_candidate_id"] is None
+    assert finalized["arm_attribution_basis"] is None
+    assert finalized["behavior_action_probabilities"] == {}
 
 
 def test_preference_state_deduplicates_and_explicit_feedback_wins(tmp_path):
