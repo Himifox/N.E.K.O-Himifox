@@ -180,7 +180,8 @@ _ZH_NEGATIVE_MUSIC = re.compile(
     r".{0,6}(?:播放|放|播|听|音乐|歌)"
 )
 _EN_NEGATIVE_MUSIC = re.compile(
-    r"^(?:(?:actually|never\s*mind)[,\s]+)?(?:please\s+)?"
+    r"^(?:(?:actually|never\s*mind)[,\s]+)?"
+    r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
     r"(?:(?:do\s+not|don't|dont)\s+(?:play|listen\s+to)\b"
     r"|(?:stop|pause|cancel)\b.{0,12}\b(?:music|song|tracks?|tunes?|playback|playing)\b"
     r"|(?:turn|shut)\s+(?:off\s+(?:the\s+)?(?:music|playback)"
@@ -435,7 +436,7 @@ def _parse_explicit_en_clause(clause: str) -> MusicRequest | None:
     playlist_match = re.fullmatch(
         request_prefix
         + r"(?:play|listen\s+to)\s+"
-        r"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:some|any)thing)\s+from\s+|from\s+)?"
+        r"(?:(?:(?:a|any)\s+(?:song|track|tune)|some\s+(?:songs|music|tracks|tunes)|(?:music|songs|tracks|tunes)|(?:some|any)thing)\s+from\s+|from\s+)?"
         r"(?:my\s+)?(.{1,60}?)\s+playlist",
         normalized,
         re.IGNORECASE,
