@@ -51,7 +51,10 @@ from utils.icebreaker_route_state import (
     finalize_icebreaker_route,
     get_active_icebreaker_route_session_id,
 )
-from main_logic.music_playback import handle_music_playback_state
+from main_logic.music_playback import (
+    handle_music_playback_state,
+    handle_music_request_playback_failed,
+)
 
 
 _VOICE_BINARY_MAGIC = b"NEKO"
@@ -158,6 +161,11 @@ def _is_voice_path_message(message: dict) -> bool:
 def _is_music_playback_state_message(message: dict) -> bool:
     """True when the sender is the window currently hosting the local player."""
     return message.get("action") == "music_playback_state"
+
+
+def _is_music_request_playback_failed_message(message: dict) -> bool:
+    """True when the window handling a request exhausts its candidates."""
+    return message.get("action") == "music_request_playback_failed"
 
 
 def _stamp_user_input_ingress(message: dict) -> dict:
@@ -730,6 +738,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                         message,
                     )
                     continue
+                if _is_music_request_playback_failed_message(message):
+                    handle_music_request_playback_failed(
+                        session_manager[lanlan_name],
+                        message,
+                    )
+                    continue
                 if _is_voice_path_message(message) and _owns_voice_connection():
                     await _dispatch_voice_message_while_superseded(message)
                     continue
@@ -1103,6 +1117,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
 
             elif action == "music_playback_state":
                 handle_music_playback_state(
+                    session_manager[lanlan_name],
+                    message,
+                )
+
+            elif action == "music_request_playback_failed":
+                handle_music_request_playback_failed(
                     session_manager[lanlan_name],
                     message,
                 )

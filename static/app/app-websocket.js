@@ -663,6 +663,21 @@
         window.showStatusToast(message, 3000);
     }
 
+    function reportMusicRequestPlaybackFailure(response) {
+        var requestId = Number(response && response.request_id);
+        if (!Number.isFinite(requestId) || requestId <= 0) return;
+        var socket = S.socket;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        try {
+            socket.send(JSON.stringify({
+                action: 'music_request_playback_failed',
+                request_id: requestId
+            }));
+        } catch (error) {
+            console.warn('[Music] 上报候选播放失败异常:', error);
+        }
+    }
+
     async function dispatchMusicPlayCandidatesResponse(response, reason) {
         var tracks = response && Array.isArray(response.tracks) ? response.tracks : [];
         for (var index = 0; index < tracks.length; index++) {
@@ -727,6 +742,7 @@
             console.warn('[Music] 用户点歌候选不可用，尝试下一条:', track.url, reason);
         }
         if (response._clientDispatchEpoch === window._musicCandidateDispatchEpoch) {
+            reportMusicRequestPlaybackFailure(response);
             showMusicRequestFailure({ error_code: 'playback_failed' });
         }
         return false;
@@ -743,6 +759,7 @@
             console.warn('[Music] 候选派发队列异常:', error);
             if (response._clientDispatchEpoch === window._musicCandidateDispatchEpoch) {
                 try {
+                    reportMusicRequestPlaybackFailure(response);
                     showMusicRequestFailure({ error_code: 'playback_failed' });
                 } catch (failureError) {
                     console.warn('[Music] 候选派发失败提示异常:', failureError);

@@ -223,6 +223,14 @@ def _clean_playback_started_at(value: Any) -> float | None:
     return started_at if math.isfinite(started_at) and started_at > 0 else None
 
 
+def _clean_music_request_id(value: Any) -> int | None:
+    try:
+        request_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return request_id if request_id > 0 else None
+
+
 def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     """Feed a player-confirmed state into the existing callback delivery path."""
     state = _clean_playback_text(event.get("state"), 16).lower()
@@ -341,6 +349,23 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     return True
 
 
+def handle_music_request_playback_failed(
+    manager: Any,
+    event: dict[str, Any],
+) -> bool:
+    """Replace a pending request cue after all browser candidates fail."""
+    request_id = _clean_music_request_id(event.get("request_id"))
+    if request_id is None or not _is_current_music_request(manager, request_id):
+        return False
+    _enqueue_music_request_failure_context(
+        manager,
+        request_id,
+        "",
+        "playback_failed",
+    )
+    return True
+
+
 async def _execute_music_request(
     manager: Any,
     request: MusicRequest,
@@ -417,6 +442,12 @@ async def _execute_music_request(
             "status": "queued",
             "candidates": len(candidates),
         }
+    _enqueue_music_request_failure_context(
+        manager,
+        epoch,
+        request.display_query,
+        "playback_unavailable",
+    )
     return {"status": "playback_unavailable"}
 
 
