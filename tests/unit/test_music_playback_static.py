@@ -251,6 +251,9 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert superseded_gate.index("_is_music_playback_state_message") < superseded_gate.index(
         "await websocket.close()"
     )
+    assert 'mgr._music_playback_websockets = music_websockets' in router_source
+    assert 'music_websockets.add(websocket)' in router_source
+    assert 'music_websockets.discard(websocket)' in router_source
 
 
 def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle():

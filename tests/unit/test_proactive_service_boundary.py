@@ -313,6 +313,9 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
         ("来一首邓紫棋的歌曲，下午好", "邓紫棋", "", "邓紫棋", "", "auto"),
         ("来一首歌曲：21", "21", "21", "", "", "auto"),
         ("来一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
+        ("听一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
+        ("听首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
+        ("放首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
         ("从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
         ("我想从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
         ("我要从夜间循环歌单里听一首", "", "", "", "夜间循环", "auto"),
@@ -546,6 +549,38 @@ def test_source_exclusion_does_not_cancel_unrelated_pending_search(
     previous_task.cancel.assert_not_called()
     assert manager._music_request_epoch == 4
     manager._fire_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_music_invalidations_reach_all_registered_windows() -> None:
+    current_payloads = []
+    owner_payloads = []
+
+    async def send_current(payload):
+        current_payloads.append(payload)
+
+    async def send_owner(payload):
+        owner_payloads.append(payload)
+
+    current = SimpleNamespace(send_json=send_current)
+    owner = SimpleNamespace(send_json=send_owner)
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        websocket=current,
+        _music_playback_websockets=(current, owner),
+        sync_message_queue=MagicMock(),
+    )
+    started = {"type": "music_request_started", "request_id": 2}
+    candidates = {"type": "music_play_candidates", "request_id": 2}
+
+    assert await music_playback._push_music_payload(manager, started) is True
+    assert current_payloads == [started]
+    assert owner_payloads == [started]
+
+    assert await music_playback._push_music_payload(manager, candidates) is True
+    assert current_payloads == [started, candidates]
+    assert owner_payloads == [started]
+    assert manager.sync_message_queue.put.call_count == 2
 
 
 @pytest.mark.asyncio

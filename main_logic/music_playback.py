@@ -360,23 +360,35 @@ async def _send_music_request_failure(
 
 
 async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
-    try:
-        websocket = getattr(manager, "websocket", None)
-        if websocket is None or not hasattr(websocket, "send_json"):
-            return False
-        ws_state = getattr(websocket, "client_state", None)
+    websocket = getattr(manager, "websocket", None)
+    targets = [websocket]
+    if payload.get("type") in {"music_request_started", "music_request_cancelled"}:
+        for candidate in tuple(
+            getattr(manager, "_music_playback_websockets", ()) or ()
+        ):
+            if candidate is not websocket:
+                targets.append(candidate)
+
+    delivered = False
+    for target in targets:
+        if target is None or not hasattr(target, "send_json"):
+            continue
+        ws_state = getattr(target, "client_state", None)
         if ws_state is not None and ws_state != ws_state.CONNECTED:
-            return False
-        await websocket.send_json(payload)
+            continue
+        try:
+            await target.send_json(payload)
+            delivered = True
+        except Exception as exc:
+            logger.warning(
+                "[%s] user music payload push failed: %s",
+                getattr(manager, "lanlan_name", ""),
+                exc,
+            )
+
+    if delivered:
         manager.sync_message_queue.put({"type": "json", "data": payload})
-        return True
-    except Exception as exc:
-        logger.warning(
-            "[%s] user music payload push failed: %s",
-            getattr(manager, "lanlan_name", ""),
-            exc,
-        )
-        return False
+    return delivered
 
 
 register_user_utterance_sink(_on_user_utterance)
