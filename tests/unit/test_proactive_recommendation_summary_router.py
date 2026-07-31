@@ -156,6 +156,13 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, t
     assert payload["reward_score_v2_preview"]["ranking_consumed"] is False
     assert payload["reward_score_v2_preview"]["tuning_consumed"] is False
     assert payload["reward_score_v2_preview"]["reward_scored_count"] == 0
+    assert payload["bandit_learning"] == {
+        "version": "recommendation_bandit_state_v1",
+        "half_life_seconds": 2592000,
+        "beta_prior": {"alpha": 2.0, "beta": 2.0},
+        "arms": {},
+        "finalized_outcome_count": 0,
+    }
     assert payload["runtime"]["effective_mode"] == "shadow"
     assert payload["runtime"]["runtime_activation_allowed"] is False
     assert payload["sample_count"] == 0

@@ -12,7 +12,18 @@ from main_logic.proactive_recommendation_bandit import (
     build_source_bandit_decision,
     finalize_source_bandit_decision,
 )
-from main_logic.proactive_recommendation_feedback import source_preference_outcome
+from main_logic.proactive_recommendation_feedback import (
+    build_bandit_encounter_reward,
+    clear_pending_recommendation_feedback,
+    record_feedback_event_with_status,
+    register_pending_feedback,
+    register_pending_feedback_from_observation,
+    source_preference_outcome,
+)
+from main_logic.proactive_recommendation_bandit_state import (
+    get_recommendation_bandit_state,
+    update_recommendation_bandit_reward,
+)
 from main_logic.proactive_recommendation_observer import (
     sanitize_recommendation_policy_decision,
 )
@@ -63,6 +74,57 @@ def test_shadow_logs_exact_probabilities_without_creating_arms():
     assert result["eligible_arms"] == ["news", "music"]
     assert result["action_probabilities"] == {"news": 0.975, "music": 0.025}
     assert sum(result["action_probabilities"].values()) == pytest.approx(1.0)
+
+
+def test_shadow_exploits_learned_reward_only_inside_near_tie():
+    bandit_state = {
+        "version": "recommendation_bandit_state_v1",
+        "arms": {
+            "news": {
+                "posterior_alpha": 2.0,
+                "posterior_beta": 5.0,
+                "posterior_mean": 2.0 / 7.0,
+                "effective_evidence": 3.0,
+            },
+            "music": {
+                "posterior_alpha": 5.0,
+                "posterior_beta": 2.0,
+                "posterior_mean": 5.0 / 7.0,
+                "effective_evidence": 3.0,
+            },
+        },
+    }
+    result = build_source_bandit_decision(
+        _decision(("news", 0.60), ("music", 0.59)),
+        mode="shadow",
+        bandit_state=bandit_state,
+        random_value=1.0,
+    )
+
+    assert result["exploit_arm"] == "music"
+    assert result["proposed_arm"] == "music"
+    assert result["action_probabilities"] == {"news": 0.025, "music": 0.975}
+    assert result["arm_bandit_posteriors"]["music"]["mean"] == pytest.approx(
+        5.0 / 7.0, abs=1e-6
+    )
+
+
+def test_learned_reward_cannot_override_policy_score_outside_near_tie():
+    result = build_source_bandit_decision(
+        _decision(("news", 0.70), ("music", 0.50)),
+        mode="shadow",
+        bandit_state={
+            "arms": {
+                "news": {"posterior_mean": 0.2},
+                "music": {"posterior_mean": 0.9},
+            }
+        },
+        random_value=1.0,
+    )
+
+    assert result["near_tie_arms"] == ["news"]
+    assert result["exploit_arm"] == result["proposed_arm"] == "news"
+    assert result["action_probabilities"] == {"news": 1.0, "music": 0.0}
 
 
 def test_canary_explores_only_safe_near_tie_arms():
@@ -121,7 +183,7 @@ def test_shadow_and_canary_share_personalized_policy_score():
     ]
     assert sanitize_recommendation_policy_decision(finalized_shadow)[
         "context_version"
-    ] == "source-context-v2"
+    ] == "source-context-v3"
 
 
 def test_non_bandit_global_top_blocks_policy():
@@ -226,6 +288,145 @@ def test_preference_state_deduplicates_and_explicit_feedback_wins(tmp_path):
     assert corrected["sources"]["music"]["effective_failure"] == pytest.approx(
         1.0, abs=1e-5
     )
+
+
+def test_bandit_reward_replaces_turn_aggregate_and_decays(tmp_path):
+    first = update_recommendation_bandit_reward(
+        config_dir=tmp_path,
+        turn_id="turn-1",
+        arm="news",
+        reward=0.2,
+        event_types=["user_reply"],
+        now=100,
+    )
+    assert first["arms"]["news"]["effective_success"] == pytest.approx(0.2)
+
+    combined = update_recommendation_bandit_reward(
+        config_dir=tmp_path,
+        turn_id="turn-1",
+        arm="news",
+        reward=0.55,
+        event_types=["user_reply", "user_continue"],
+        now=101,
+    )
+    assert combined["finalized_outcome_count"] == 1
+    assert combined["arms"]["news"]["effective_success"] == pytest.approx(
+        0.55, abs=1e-6
+    )
+
+    decayed = get_recommendation_bandit_state(
+        config_dir=tmp_path,
+        now=101 + 30 * 24 * 60 * 60,
+    )
+    assert decayed["arms"]["news"]["effective_success"] == pytest.approx(
+        0.275, abs=1e-6
+    )
+
+
+def test_bandit_reward_reuses_v2_rules_and_excludes_technical_only():
+    reward = build_bandit_encounter_reward(
+        [
+            {"event_type": "user_reply"},
+            {"event_type": "user_continue"},
+        ]
+    )
+    technical = build_bandit_encounter_reward([{"event_type": "music_error"}])
+
+    assert reward == {
+        "version": "bandit_encounter_reward_v1",
+        "rule_score_version": "reward_score_v2_preview_v2",
+        "eligible": True,
+        "reward": 0.55,
+        "event_types": ["user_reply", "user_continue"],
+        "signal_event_types": ["user_reply", "user_continue"],
+        "excluded_reason": None,
+    }
+    assert technical["eligible"] is False
+    assert technical["reward"] is None
+
+
+def test_generic_reply_updates_bandit_but_not_source_preference(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="news-turn",
+        source_type="news",
+        candidate_id="news:actual",
+        delivered_at=100,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    reply = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="news-turn",
+        event_type="user_reply",
+        ts=110,
+    )
+    continued = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="news-turn",
+        event_type="user_continue",
+        ts=111,
+    )
+
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=111)
+    preference = get_recommendation_preference_state(config_dir=tmp_path, now=111)
+    assert reply.bandit_state_updated is True
+    assert continued.bandit_state_updated is True
+    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.55)
+    assert bandit["finalized_outcome_count"] == 1
+    assert preference["sources"] == {}
+
+
+def test_v3_shadow_reward_binds_actual_arm_and_excludes_technical_zero(tmp_path):
+    clear_pending_recommendation_feedback()
+    observation = {
+        "delivered": True,
+        "lanlan_name": "neko",
+        "turn_id": "shadow-v3",
+        "ts": 100,
+        "recommendation_mode": "shadow",
+        "matched_actual_material": True,
+        "policy_decision": {
+            "context_version": "source-context-v3",
+            "mode": "shadow",
+            "proposed_arm": "news",
+            "proposed_candidate_id": "news:virtual",
+            "actual_arm": "music",
+            "actual_candidate_id": "music:actual",
+        },
+    }
+    pending = register_pending_feedback_from_observation(
+        observation,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+    )
+    assert pending is not None
+    assert pending.source_type == "music"
+
+    technical = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="shadow-v3",
+        event_type="music_error",
+        ts=101,
+    )
+    assert technical.bandit_state_updated is False
+    assert get_recommendation_bandit_state(
+        config_dir=tmp_path, now=101
+    )["arms"] == {}
+
+    played = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="shadow-v3",
+        event_type="music_played_through",
+        ts=102,
+    )
+    state = get_recommendation_bandit_state(config_dir=tmp_path, now=102)
+    assert played.bandit_state_updated is True
+    assert set(state["arms"]) == {"music"}
+    assert state["arms"]["music"]["effective_success"] == pytest.approx(0.9)
 
 
 def test_explicit_override_removes_decayed_natural_contribution(tmp_path):
