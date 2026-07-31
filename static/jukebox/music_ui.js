@@ -191,6 +191,8 @@
                 action: 'music_playback_state',
                 state: state,
                 playback_id: context.playbackId,
+                playback_window_id: MUSIC_COORD_SENDER_ID,
+                playback_started_at: context.lifecycleStartedAt,
                 request_id: context.requestId,
                 source: context.source,
                 track: {

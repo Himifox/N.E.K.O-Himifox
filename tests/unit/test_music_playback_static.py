@@ -227,6 +227,8 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "function getOwnedMusicPlaybackReportContext(player, state)" in player_source
     assert "function normalizeMusicEventTimestamp(event)" in player_source
     assert "action: 'music_playback_state'" in player_source
+    assert "playback_window_id: MUSIC_COORD_SENDER_ID" in player_source
+    assert "playback_started_at: context.lifecycleStartedAt" in player_source
     assert "localPlayer._musicPlaybackReportContext = playbackReportContext" in player_source
     ownership_source = player_source.split(
         "function getOwnedMusicPlaybackReportContext(player, state)", 1

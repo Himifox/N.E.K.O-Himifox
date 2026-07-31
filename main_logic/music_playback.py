@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -179,6 +180,14 @@ def _clean_playback_text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _clean_playback_started_at(value: Any) -> float | None:
+    try:
+        started_at = float(value)
+    except (TypeError, ValueError):
+        return None
+    return started_at if math.isfinite(started_at) and started_at > 0 else None
+
+
 def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     """Feed a player-confirmed state into the existing callback delivery path."""
     state = _clean_playback_text(event.get("state"), 16).lower()
@@ -190,16 +199,40 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     name = _clean_playback_text(track.get("name"), 120)
     artist = _clean_playback_text(track.get("artist"), 120)
     playback_id = _clean_playback_text(event.get("playback_id"), 512)
+    playback_window_id = _clean_playback_text(
+        event.get("playback_window_id"), 128
+    )
+    playback_started_at = _clean_playback_started_at(
+        event.get("playback_started_at")
+    )
     request_id = _clean_playback_text(event.get("request_id"), 64)
     source = _clean_playback_text(event.get("source"), 16).lower()
+    if not playback_id or not playback_window_id or playback_started_at is None:
+        return False
+
     current_request_epoch = getattr(manager, "_music_request_epoch", None)
-    if (
-        source == "user"
-        and current_request_epoch is not None
-        and request_id != str(current_request_epoch)
+    if request_id and current_request_epoch is not None:
+        if request_id != str(current_request_epoch):
+            return False
+    elif source == "user":
+        return False
+
+    owner_key = (playback_window_id, playback_id)
+    current_owner_key = getattr(manager, "_music_playback_owner_key", None)
+    current_started_at = getattr(manager, "_music_playback_owner_started_at", None)
+    if current_started_at is not None and (
+        playback_started_at < current_started_at
+        or (
+            playback_started_at == current_started_at
+            and owner_key != current_owner_key
+        )
     ):
         return False
-    event_key = (playback_id, request_id, state)
+    if playback_started_at > (current_started_at or 0):
+        manager._music_playback_owner_key = owner_key
+        manager._music_playback_owner_started_at = playback_started_at
+
+    event_key = (playback_id, request_id, state, playback_started_at)
     if getattr(manager, "_music_playback_event_key", None) == event_key:
         return False
     manager._music_playback_event_key = event_key
@@ -242,6 +275,8 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
             "context_type": "music_playback",
             "state": state,
             "playback_id": playback_id,
+            "playback_window_id": playback_window_id,
+            "playback_started_at": playback_started_at,
             "request_id": request_id,
         },
         "context_type": "music_playback",

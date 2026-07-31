@@ -791,12 +791,15 @@ def test_music_playback_keeps_core_entrypoints_thin() -> None:
 def test_confirmed_user_music_playback_uses_existing_callback_delivery() -> None:
     manager = SimpleNamespace(
         lanlan_name="YUI",
+        _music_request_epoch=7,
         submit_proactive_callback=MagicMock(),
         enqueue_agent_callback=MagicMock(),
     )
     event = {
         "state": "playing",
         "playback_id": "player:1",
+        "playback_window_id": "window:1",
+        "playback_started_at": 100,
         "request_id": 7,
         "source": "user",
         "track": {"name": "大喜", "artist": "泠鸢yousa"},
@@ -826,6 +829,8 @@ def test_non_user_music_state_is_passive_and_coalesced() -> None:
         {
             "state": "playing",
             "playback_id": "player:2",
+            "playback_window_id": "window:2",
+            "playback_started_at": 200,
             "source": "proactive",
             "track": {"name": "勾指起誓", "artist": "洛天依"},
         },
@@ -835,6 +840,43 @@ def test_non_user_music_state_is_passive_and_coalesced() -> None:
     assert callback["delivery_mode"] == "passive"
     assert callback["coalesce_key"] == "music-playback-state:YUI"
     manager.submit_proactive_callback.assert_not_called()
+
+
+def test_music_playback_rejects_stale_windows_and_request_epochs() -> None:
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_epoch=8,
+        submit_proactive_callback=MagicMock(),
+        enqueue_agent_callback=MagicMock(),
+    )
+
+    current_event = {
+        "state": "playing",
+        "playback_id": "player:new",
+        "playback_window_id": "window:new",
+        "playback_started_at": 200,
+        "source": "proactive",
+    }
+    stale_window_event = {
+        "state": "ended",
+        "playback_id": "player:old",
+        "playback_window_id": "window:old",
+        "playback_started_at": 100,
+        "source": "music_play_url",
+    }
+    stale_request_event = {
+        "state": "error",
+        "playback_id": "player:request",
+        "playback_window_id": "window:new",
+        "playback_started_at": 300,
+        "request_id": 7,
+        "source": "music_play_url",
+    }
+
+    assert music_playback.handle_music_playback_state(manager, current_event) is True
+    assert music_playback.handle_music_playback_state(manager, stale_window_event) is False
+    assert music_playback.handle_music_playback_state(manager, stale_request_event) is False
+    manager.enqueue_agent_callback.assert_called_once()
 
 
 def test_proactive_router_is_a_thin_ordered_adapter() -> None:
