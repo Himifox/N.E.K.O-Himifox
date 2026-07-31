@@ -408,6 +408,13 @@ def _excluded_personalization_source(clause: str) -> str:
     return ""
 
 
+def _has_explicit_non_music_target(clause: str) -> bool:
+    return bool(
+        _ZH_NON_MUSIC_TARGET.search(clause)
+        or _EN_NON_MUSIC_TARGET.search(clause)
+    )
+
+
 def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
     """Return only high-confidence, user-initiated playback requests."""
     normalized = " ".join(str(text or "").strip().split())
@@ -422,6 +429,8 @@ def parse_explicit_user_music_request(text: str) -> MusicRequest | None:
             excluded_source = _excluded_personalization_source(clause)
             if excluded_source:
                 excluded_sources.add(excluded_source)
+                continue
+            if _has_explicit_non_music_target(clause):
                 continue
             return None
         request = _parse_explicit_zh_clause(clause) or _parse_explicit_en_clause(clause)
@@ -454,6 +463,7 @@ def is_explicit_music_cancellation(text: str) -> bool:
             or _EN_NEGATIVE_MUSIC.search(clause.strip())
         )
         and not _excluded_personalization_source(clause.strip())
+        and not _has_explicit_non_music_target(clause.strip())
         for clause in _CLAUSE_SEPARATOR.split(normalized)
         if clause.strip()
     )
