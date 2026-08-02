@@ -4,25 +4,31 @@ import pytest
 
 from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
 
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.observation.reports import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
-    REVIEW_CONTEXT_DELIVERED_EXCERPT_MAX_LENGTH,
-    REVIEW_CONTEXT_SAFE_SUMMARY_MAX_LENGTH,
-    REVIEW_CONTEXT_SAFE_TITLE_MAX_LENGTH,
-    append_recommendation_observation_jsonl,
     get_recommendation_calibration_samples,
-    load_recommendation_observations_jsonl,
-    sanitize_recommendation_observation,
-    sanitize_recommendation_decision_context,
-    sanitize_recommendation_feedback_state_preview,
-    sanitize_recommendation_review_context,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
     summarize_recommendation_observations,
-    summarize_recommendation_review_context,
     summarize_recommendation_validation,
+)
+from main_logic.proactive_recommendation.observation.review import (
+    summarize_recommendation_review_context,
     validate_recommendation_review_context,
+)
+from main_logic.proactive_recommendation.observation.schema import (
+    REVIEW_CONTEXT_DELIVERED_EXCERPT_MAX_LENGTH,
+    REVIEW_CONTEXT_SAFE_SUMMARY_MAX_LENGTH,
+    REVIEW_CONTEXT_SAFE_TITLE_MAX_LENGTH,
+    sanitize_recommendation_decision_context,
+    sanitize_recommendation_feedback_state_preview,
+    sanitize_recommendation_observation,
+    sanitize_recommendation_review_context,
+)
+from main_logic.proactive_recommendation.observation.store import (
+    append_recommendation_observation_jsonl,
+    load_recommendation_observations_jsonl,
 )
 
 

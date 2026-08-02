@@ -1,6 +1,6 @@
 import json
 
-import main_logic.proactive_chat.recommendation_integration as recommendation_integration
+import main_logic.proactive_recommendation.turn as recommendation_turn
 
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
@@ -9,89 +9,15 @@ from main_logic.proactive_recommendation import (
     build_active_source_bias,
     build_recommendation_review_context,
 )
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.observation.store import (
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
 )
-from main_logic.proactive_recommendation_feedback_state import (
+from main_logic.proactive_recommendation.state.feedback import (
     clear_temporary_feedback_state_preview,
     update_source_affinity_preview,
 )
 from main_routers.system_router import _record_proactive_recommendation_observation
-
-
-def test_explicit_feedback_context_is_shadow_only_and_hides_candidate(monkeypatch):
-    observation = {
-        "turn_id": "turn-feedback",
-        "delivered": True,
-        "matched_actual_material": True,
-        "shadow_selected_source_type": "news",
-        "shadow_selected_candidate_id": "news:private-id",
-    }
-    monkeypatch.setattr(
-        recommendation_integration,
-        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
-        "shadow",
-    )
-
-    context = recommendation_integration._explicit_feedback_context(
-        observation,
-        recommendation_mode="shadow",
-    )
-
-    assert context == {
-        "turn_id": "turn-feedback",
-        "source_type": "news",
-        "source_feedback_available": True,
-        "ui_generation": "dual_scope_v1",
-    }
-    assert "candidate" not in json.dumps(context)
-    assert recommendation_integration._explicit_feedback_context(
-        observation,
-        recommendation_mode="active_source",
-    ) is None
-
-
-def test_explicit_feedback_context_keeps_timing_action_when_material_unverified(monkeypatch):
-    monkeypatch.setattr(
-        recommendation_integration,
-        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
-        "shadow",
-    )
-    context = recommendation_integration._explicit_feedback_context(
-        {
-            "turn_id": "turn-chat-only",
-            "delivered": True,
-            "matched_actual_material": False,
-            "shadow_selected_source_type": "news",
-        },
-        recommendation_mode="shadow",
-    )
-    assert context["source_feedback_available"] is False
-    assert context["source_type"] is None
-
-
-def test_explicit_feedback_context_can_be_enabled_for_active_personalization(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        recommendation_integration,
-        "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
-        "active",
-    )
-    context = recommendation_integration._explicit_feedback_context(
-        {
-            "turn_id": "turn-active",
-            "delivered": True,
-            "matched_actual_material": True,
-            "shadow_selected_source_type": "music",
-            "shadow_selected_candidate_id": "music:active",
-        },
-        recommendation_mode="active_source",
-    )
-
-    assert context["source_type"] == "music"
-    assert context["source_feedback_available"] is True
 
 
 def test_active_personalization_top1_change_can_drive_source_bias(
@@ -107,16 +33,16 @@ def test_active_personalization_top1_change_can_drive_source_bias(
             now=100.0 + index,
         )
     monkeypatch.setattr(
-        recommendation_integration,
+        recommendation_turn,
         "get_recommendation_runtime_mode",
         lambda: "active_source",
     )
     monkeypatch.setattr(
-        recommendation_integration,
+        recommendation_turn,
         "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
         "active",
     )
-    turn = recommendation_integration.RecommendationTurn(
+    turn = recommendation_turn.RecommendationTurn(
         lanlan_name="personalization-bias-test",
         config_dir=tmp_path,
     )

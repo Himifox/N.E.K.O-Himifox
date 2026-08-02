@@ -1,11 +1,12 @@
 """Bounded source-affinity mapping for proactive recommendation ranking."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 import math
 from typing import Any
 
-from main_logic.proactive_recommendation_feedback_state import (
+from main_logic.proactive_recommendation.state.feedback import (
     PERSISTENT_AFFINITY_MAX,
     PERSISTENT_INTEREST_MIN_EVIDENCE,
 )

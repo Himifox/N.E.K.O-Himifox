@@ -5,27 +5,34 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main_routers.proactive_router as proactive_router
-import main_logic.proactive_recommendation_feedback as feedback_module
+import main_logic.proactive_recommendation.feedback.service as feedback_module
 from config import AUTOSTART_CSRF_TOKEN
 from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
-from main_logic.proactive_recommendation_feedback import (
-    FEEDBACK_LOG_FILENAME,
-    append_recommendation_feedback_jsonl,
-    build_feedback_event,
+from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
     register_pending_feedback,
 )
-from main_logic.proactive_recommendation_feedback_state import (
+from main_logic.proactive_recommendation.feedback.events import build_feedback_event
+from main_logic.proactive_recommendation.feedback.store import (
+    FEEDBACK_LOG_FILENAME,
+    append_recommendation_feedback_jsonl,
+)
+from main_logic.proactive_recommendation.application import (
+    RecommendationApplication,
+)
+from main_logic.proactive_recommendation.state.feedback import (
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.observation.reports import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
+)
+from main_logic.proactive_recommendation.observation.store import (
     OBSERVATION_LOG_FILENAME,
     append_recommendation_observation_jsonl,
 )
-from main_logic.proactive_recommendation_tuning import (
+from main_logic.proactive_recommendation.tuning.store import (
     TUNING_FILENAME,
     save_recommendation_tuning,
 )
@@ -97,9 +104,9 @@ def _client(monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=1
         tuning_mode,
     )
     monkeypatch.setattr(
-        proactive_router,
-        "get_recommendation_runtime_status",
-        lambda: {
+        RecommendationApplication,
+        "get_runtime_status",
+        lambda self: {
             "configured_mode": "shadow",
             "effective_mode": "shadow",
             "active_source_enabled": False,
@@ -172,9 +179,9 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, t
 def test_recommendation_runtime_status_and_rollback_contract(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        proactive_router,
-        "rollback_recommendation_runtime",
-        lambda *, reason: {
+        RecommendationApplication,
+        "rollback_runtime",
+        lambda self, *, reason: {
             "applied": True,
             "previous_mode": "active_source",
             "status": {
@@ -627,8 +634,8 @@ def test_feedback_endpoint_updates_verified_music_negative_preview_once(
     tuning_calls = []
     monkeypatch.setattr(
         feedback_module,
-        "_maybe_auto_apply_tuning_after_feedback",
-        lambda *, config_dir: tuning_calls.append(config_dir),
+        "_after_feedback_logged",
+        lambda config_dir: tuning_calls.append(config_dir),
     )
     register_pending_feedback(
         lanlan_name="neko",

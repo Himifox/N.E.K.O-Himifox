@@ -5,6 +5,7 @@ Activation remains a developer startup decision through
 the API may demote ``active_source`` to ``shadow`` immediately, but it can
 never promote a process into active mode.
 """
+
 from __future__ import annotations
 
 from threading import RLock
@@ -65,7 +66,9 @@ class RecommendationRuntimeState:
                 ),
             }
 
-    def rollback(self, *, reason: Any = None, now: float | None = None) -> dict[str, Any]:
+    def rollback(
+        self, *, reason: Any = None, now: float | None = None
+    ) -> dict[str, Any]:
         clean_reason = str(reason or "developer_runtime_rollback").strip()[:120]
         with self._lock:
             previous = self._effective_mode
@@ -74,7 +77,9 @@ class RecommendationRuntimeState:
                 self._effective_mode = "shadow"
                 self._rollback_count += 1
                 self._last_rollback_at = time.time() if now is None else float(now)
-                self._last_rollback_reason = clean_reason or "developer_runtime_rollback"
+                self._last_rollback_reason = (
+                    clean_reason or "developer_runtime_rollback"
+                )
             return {
                 "applied": applied,
                 "previous_mode": previous,

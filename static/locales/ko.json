@@ -1,13 +1,4 @@
 {
-    "proactiveFeedback": {
-        "notNow": "지금은 곤란해요",
-        "lessSource": "{{source}} 추천 줄이기",
-        "moreSource": "이런 {{source}} 좋아요",
-        "saving": "기록 중…",
-        "recorded": "추천 개선용으로 기록했습니다",
-        "failed": "기록하지 못했습니다. 다시 시도해 주세요.",
-        "sources": { "news": "뉴스", "meme": "밈", "vision": "화면 콘텐츠", "video": "동영상", "music": "음악" }
-    },
     "common": {
         "load": "로드",
         "minimize": "최소화",

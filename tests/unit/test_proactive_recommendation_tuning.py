@@ -1,23 +1,29 @@
 from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
-from main_logic.proactive_recommendation_feedback import (
+from main_logic.proactive_recommendation.feedback.events import (
     build_feedback_event,
 )
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.observation.store import (
     OBSERVATION_LOG_FILENAME,
     append_recommendation_observation_jsonl,
 )
-from main_logic.proactive_recommendation_tuning import (
-    TUNING_FILENAME,
-    apply_recommendation_tuning_score,
-    evaluate_recommendation_tuning_health,
-    extract_auto_safe_feedback_suggestions,
-    load_recommendation_tuning,
+from main_logic.proactive_recommendation.tuning.service import (
     maybe_auto_apply_recommendation_tuning_from_logs,
     pause_recommendation_tuning,
-    reset_recommendation_tuning,
     resume_recommendation_tuning,
-    save_recommendation_tuning,
+)
+from main_logic.proactive_recommendation.tuning.model import (
+    apply_recommendation_tuning_score,
     sanitize_recommendation_tuning,
+)
+from main_logic.proactive_recommendation.tuning.policy import (
+    evaluate_recommendation_tuning_health,
+    extract_auto_safe_feedback_suggestions,
+)
+from main_logic.proactive_recommendation.tuning.store import (
+    TUNING_FILENAME,
+    load_recommendation_tuning,
+    reset_recommendation_tuning,
+    save_recommendation_tuning,
 )
 
 

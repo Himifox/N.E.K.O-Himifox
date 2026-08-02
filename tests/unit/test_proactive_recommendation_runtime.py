@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from main_logic.proactive_recommendation_runtime import RecommendationRuntimeState
+from main_logic.proactive_recommendation.runtime import RecommendationRuntimeState
 
 
 def test_active_source_can_only_roll_back_to_shadow():
@@ -51,12 +51,12 @@ def test_non_active_and_invalid_startup_modes_remain_safe():
         assert result["status"]["runtime_activation_allowed"] is False
 
 
-def test_proactive_flow_snapshots_mode_and_wires_real_activity_state():
+def test_recommendation_turn_snapshots_mode_and_wires_real_activity_state():
     source = (
         Path(__file__).parents[2]
         / "main_logic"
-        / "proactive_chat"
-        / "recommendation_integration.py"
+        / "proactive_recommendation"
+        / "turn.py"
     ).read_text(encoding="utf-8")
 
     assert source.count("self.mode = get_recommendation_runtime_mode()") == 1

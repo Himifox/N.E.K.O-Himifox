@@ -96,7 +96,7 @@ N.E.K.O. 的主动搭话不是传统的“用户打开页面后，从固定商�
 
 ### 2.1 已有实现
 
-当前推荐器位于 [`main_logic/proactive_recommendation.py`](../../main_logic/proactive_recommendation.py)，具备：
+当前推荐器位于 [`main_logic/proactive_recommendation/`](../../main_logic/proactive_recommendation/)，具备：
 
 - 来源开关、隐私状态、重复标记和 busy/activity 硬过滤；
 - 由来源权重、新鲜度、上下文匹配、静态兴趣、novelty、质量、交互价值、打扰成本和风险组成的线性分数；
@@ -117,9 +117,9 @@ s_{base}={}&0.20w_{source}+0.15f_{fresh}+0.25m_{context}+0.15m_{interest}\\
 
 其中 `_user_interest_match` 目前仍主要是按来源写死的静态值，尚未消费真实用户反馈。
 
-[`main_logic/proactive_recommendation_feedback.py`](../../main_logic/proactive_recommendation_feedback.py) 已记录 `user_reply_fast`、`user_reply`、`user_continue`、音乐播放完成度、关闭/跳过和设置关闭等事件，并坚持只保存白名单元数据。但当前 `user_reply_fast` 使用固定 `60s` 阈值，不能适配慢回复用户。
+[`main_logic/proactive_recommendation/feedback/`](../../main_logic/proactive_recommendation/feedback/) 已记录 `user_reply_fast`、`user_reply`、`user_continue`、音乐播放完成度、关闭/跳过和设置关闭等事件，并坚持只保存白名单元数据。但当前 `user_reply_fast` 使用固定 `60s` 阈值，不能适配慢回复用户。
 
-[`main_logic/proactive_recommendation_observer.py`](../../main_logic/proactive_recommendation_observer.py) 已实现：
+[`main_logic/proactive_recommendation/observation/`](../../main_logic/proactive_recommendation/observation/) 已实现：
 
 - observation schema v3；
 - 安全 `review_context`；
@@ -842,10 +842,10 @@ P44-F2 已正式得到 `no_candidate` 并停止。当前没有默认“下一项
 - [`docs/design/proactive-recommendation-current-scope.md`](./proactive-recommendation-current-scope.md)：当前唯一实施范围、组件边界与准入条件。
 - [`docs/design/proactive-recommendation-mvp-p0-p1-plan.md`](./proactive-recommendation-mvp-p0-p1-plan.md)：P0/P1 基线、历史候选与门禁记录。
 - [`docs/design/shadow-round-2-structure-audit.md`](./shadow-round-2-structure-audit.md)：P44 早期结构审计。
-- [`main_logic/proactive_recommendation.py`](../../main_logic/proactive_recommendation.py)：当前候选、硬过滤、评分、多样性与 active bias。
-- [`main_logic/proactive_recommendation_feedback.py`](../../main_logic/proactive_recommendation_feedback.py)：当前反馈事件、固定回复阈值与 turn 归因。
-- [`main_logic/proactive_recommendation_observer.py`](../../main_logic/proactive_recommendation_observer.py)：observation、review_context、隐私白名单和校验。
-- [`main_logic/proactive_recommendation_tuning.py`](../../main_logic/proactive_recommendation_tuning.py)：当前 tuning、健康监控和回滚逻辑。
+- [`main_logic/proactive_recommendation/engine/`](../../main_logic/proactive_recommendation/engine/)：当前候选、硬过滤、评分、多样性与 active bias。
+- [`main_logic/proactive_recommendation/feedback/`](../../main_logic/proactive_recommendation/feedback/)：当前反馈事件、固定回复阈值与 turn 归因。
+- [`main_logic/proactive_recommendation/observation/`](../../main_logic/proactive_recommendation/observation/)：observation、review_context、隐私白名单和校验。
+- [`main_logic/proactive_recommendation/tuning/`](../../main_logic/proactive_recommendation/tuning/)：当前 tuning、健康监控和回滚逻辑。
 - [`main_routers/system_router/proactive_chat_flow.py`](../../main_routers/system_router/proactive_chat_flow.py)：推荐器与主动搭话管线集成。
 - [`config/proactive_settings.py`](../../config/proactive_settings.py)：shadow/active_source/log/tuning/review_context 模式。
 - Recommendation Testbench 外部工作树产物：`shadow-p44e-golden-final-20260716-134814.json`、`shadow-p44e-golden-final-20260716-134814-audit.md`、`shadow-p44e-golden-final-20260716-134814-codex-first-pass-v5.json`。

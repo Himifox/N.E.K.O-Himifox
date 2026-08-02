@@ -2,34 +2,39 @@ from types import SimpleNamespace
 
 import pytest
 
-import main_logic.proactive_recommendation_feedback as feedback_module
+import main_logic.proactive_recommendation.feedback.service as feedback_module
+import main_logic.proactive_recommendation.feedback.learning as learning_module
 from main_logic.proactive_recommendation import (
     ProactiveActiveBias,
     ProactiveCandidate,
     ProactiveRecommendationDecision,
     build_recommendation_observation,
 )
-from main_logic.proactive_recommendation_bandit import (
+from main_logic.proactive_recommendation.policy.bandit import (
     BANDIT_PERSONALIZED_SCORE_CONTRACT,
     build_source_bandit_decision,
     finalize_source_bandit_decision,
 )
-from main_logic.proactive_recommendation_feedback import (
-    build_bandit_encounter_reward,
+from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
     record_feedback_event_with_status,
     register_pending_feedback,
     register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation.feedback.rewards import (
+    build_bandit_encounter_reward,
+)
+from main_logic.proactive_recommendation.feedback.learning import (
     source_preference_outcome,
 )
-from main_logic.proactive_recommendation_bandit_state import (
+from main_logic.proactive_recommendation.state.bandit import (
     get_recommendation_bandit_state,
     update_recommendation_bandit_reward,
 )
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.observation.schema import (
     sanitize_recommendation_policy_decision,
 )
-from main_logic.proactive_recommendation_preference import (
+from main_logic.proactive_recommendation.state.preference import (
     get_recommendation_preference_state,
     preference_adjustments,
     reset_recommendation_preference_state,
@@ -254,7 +259,7 @@ def test_shadow_observation_binds_behavior_to_actual_material():
 def test_chat_delivery_binds_behavior_to_applied_active_bias(tmp_path, monkeypatch):
     clear_pending_recommendation_feedback()
     monkeypatch.setattr(
-        feedback_module,
+        learning_module,
         "PROACTIVE_RECOMMENDATION_BANDIT_MODE",
         "shadow",
     )

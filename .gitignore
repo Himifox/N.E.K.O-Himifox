@@ -133,6 +133,7 @@ static/react/neko-chat/*
 runtime_hook_inflect.py
 backup/
 build*
+!main_logic/proactive_recommendation/observation/builder.py
 !build_frontend.bat
 !build_frontend.sh
 !build-desktop*.yml

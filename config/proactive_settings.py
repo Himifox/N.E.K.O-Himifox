@@ -169,13 +169,6 @@ PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE = _read_str_env(
 default and must never change ranking or delivery behavior.
 """
 
-PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI = _read_str_env(
-    "PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI",
-    "off",
-    allowed=("off", "shadow", "active"),
-)
-"""Expose scoped feedback actions for Shadow or active-source delivered turns."""
-
 PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE = _read_str_env(
     "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
     "off",

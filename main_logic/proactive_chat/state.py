@@ -360,7 +360,7 @@ def _record_proactive_chat(lanlan_name: str, message: str, channel: str = ''):
         _proactive_chat_history[lanlan_name] = deque(maxlen=PROACTIVE_CHAT_HISTORY_MAX)
     _proactive_chat_history[lanlan_name].append((recorded_at, message, channel))
     try:
-        from main_logic.proactive_recommendation_timing import (
+        from main_logic.proactive_recommendation.timing import (
             record_proactive_delivery_for_timing,
         )
 

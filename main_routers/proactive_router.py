@@ -50,51 +50,53 @@ from config import (
     PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
-from main_logic.proactive_recommendation_feedback import (
-    FEEDBACK_LOG_FILENAME,
-    has_forbidden_feedback_fields,
-    load_recommendation_feedback_jsonl,
-    record_feedback_event_with_status,
+from main_logic.proactive_recommendation.feedback.service import (
     record_recent_setting_feedback,
+)
+from main_logic.proactive_recommendation.feedback.events import (
+    has_forbidden_feedback_fields,
+)
+from main_logic.proactive_recommendation.feedback.reports import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
 )
-from main_logic.proactive_recommendation_observer import (
+from main_logic.proactive_recommendation.feedback.store import (
+    FEEDBACK_LOG_FILENAME,
+    load_recommendation_feedback_jsonl,
+)
+from main_logic.proactive_recommendation.application import (
+    get_recommendation_application,
+)
+from main_logic.proactive_recommendation.contracts import RecordFeedbackCommand
+from main_logic.proactive_recommendation.observation.reports import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
     DEFAULT_EXAMPLE_LIMIT,
     DEFAULT_HIGH_SCORE_THRESHOLD,
-    DEFAULT_ROTATE_BYTES,
     MAX_EXAMPLE_LIMIT,
-    OBSERVATION_LOG_FILENAME,
     get_recommendation_calibration_samples,
-    load_recommendation_observations_jsonl,
     select_recommendation_observation_examples,
     summarize_recommendation_calibration,
-    summarize_recommendation_review_context,
     summarize_recommendation_policy,
     summarize_recommendation_validation,
 )
-from main_logic.proactive_recommendation_runtime import (
-    get_recommendation_runtime_status,
-    rollback_recommendation_runtime,
+from main_logic.proactive_recommendation.observation.review import (
+    summarize_recommendation_review_context,
 )
-from main_logic.proactive_recommendation_preference import (
-    get_recommendation_preference_state,
-    reset_recommendation_preference_state,
+from main_logic.proactive_recommendation.observation.store import (
+    DEFAULT_ROTATE_BYTES,
+    OBSERVATION_LOG_FILENAME,
+    load_recommendation_observations_jsonl,
 )
-from main_logic.proactive_recommendation_bandit_state import (
+from main_logic.proactive_recommendation.state.bandit import (
     get_recommendation_bandit_state,
 )
-from main_logic.proactive_recommendation_tuning import (
+from main_logic.proactive_recommendation.tuning.store import (
     TUNING_FILENAME,
     load_recommendation_tuning,
-    pause_recommendation_tuning,
-    reset_recommendation_tuning,
-    resume_recommendation_tuning,
-    tuning_public_status,
 )
+from main_logic.proactive_recommendation.tuning.model import tuning_public_status
 from utils.cloudsave_runtime import MaintenanceModeError
 from utils.logger_config import get_module_logger
 from utils.preferences import (
@@ -483,7 +485,7 @@ async def get_proactive_recommendation_summary(
         "policy_monitor": policy_monitor,
         "bandit_learning": bandit_learning,
         "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
-        "runtime": get_recommendation_runtime_status(),
+        "runtime": get_recommendation_application().get_runtime_status(),
         "tuning": tuning_public_status(tuning),
         "sample_count": calibration["sample_count"],
         "retention": {
@@ -517,7 +519,7 @@ async def get_proactive_recommendation_runtime():
     """Return the non-sensitive startup flag and effective runtime mode."""
     return {
         "success": True,
-        "runtime": get_recommendation_runtime_status(),
+        "runtime": get_recommendation_application().get_runtime_status(),
     }
 
 
@@ -541,7 +543,7 @@ async def rollback_proactive_recommendation_runtime(request: Request):
     if validation_error is not None:
         return validation_error
     reason = str(data.get("reason") or "developer_runtime_rollback").strip()[:120]
-    result = rollback_recommendation_runtime(reason=reason)
+    result = get_recommendation_application().rollback_runtime(reason=reason)
     logger.warning(
         "proactive recommendation runtime rollback requested: applied=%s previous=%s",
         result.get("applied"),
@@ -591,16 +593,17 @@ async def record_proactive_recommendation_feedback(request: Request):
     if not lanlan_name:
         return {"success": False, "error": "lanlan_name missing"}
 
-    result = await asyncio.to_thread(
-        record_feedback_event_with_status,
-        lanlan_name=lanlan_name,
-        turn_id=turn_id,
-        event_type=event_type,
-        source_type=data.get("source_type"),
-        candidate_id=data.get("candidate_id"),
-        metadata=data.get("metadata") or {},
-        log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
-        config_dir=config_dir,
+    result = await get_recommendation_application().record_feedback(
+        RecordFeedbackCommand(
+            lanlan_name=lanlan_name,
+            turn_id=turn_id,
+            event_type=event_type,
+            source_type=data.get("source_type"),
+            candidate_id=data.get("candidate_id"),
+            metadata=data.get("metadata") or {},
+            log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
+            config_dir=config_dir,
+        )
     )
     return {
         "success": True,
@@ -622,8 +625,8 @@ async def get_proactive_recommendation_preference():
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    state = await asyncio.to_thread(
-        get_recommendation_preference_state, config_dir=config_dir
+    state = await get_recommendation_application().get_preference_state(
+        config_dir=config_dir
     )
     return {"success": True, "preference_state": state}
 
@@ -646,13 +649,12 @@ async def reset_proactive_recommendation_preference(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    reset = await asyncio.to_thread(
-        reset_recommendation_preference_state, config_dir=config_dir
-    )
+    application = get_recommendation_application()
+    reset = await application.reset_preference_state(config_dir=config_dir)
     return {
         "success": bool(reset),
-        "preference_state": await asyncio.to_thread(
-            get_recommendation_preference_state, config_dir=config_dir
+        "preference_state": await application.get_preference_state(
+            config_dir=config_dir
         ),
     }
 
@@ -664,11 +666,13 @@ async def get_proactive_recommendation_tuning():
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    tuning = await asyncio.to_thread(load_recommendation_tuning, config_dir=config_dir)
+    tuning = await get_recommendation_application().get_tuning_status(
+        config_dir=config_dir
+    )
     return {
         "ok": True,
         "mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
-        "tuning": tuning_public_status(tuning),
+        "tuning": tuning,
         "retention": {
             "filename": TUNING_FILENAME,
         },
@@ -695,10 +699,10 @@ async def reset_proactive_recommendation_tuning(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    reset = await asyncio.to_thread(reset_recommendation_tuning, config_dir=config_dir)
+    tuning = await get_recommendation_application().reset_tuning(config_dir=config_dir)
     return {
-        "success": bool(reset),
-        "tuning": tuning_public_status(load_recommendation_tuning(config_dir=config_dir)),
+        "success": True,
+        "tuning": tuning,
     }
 
 
@@ -727,8 +731,7 @@ async def pause_proactive_recommendation_tuning(request: Request):
         duration_seconds = int(data.get("duration_seconds") or 6 * 3600)
     except (TypeError, ValueError):
         duration_seconds = 6 * 3600
-    tuning = await asyncio.to_thread(
-        pause_recommendation_tuning,
+    tuning = await get_recommendation_application().pause_tuning(
         config_dir=config_dir,
         duration_seconds=duration_seconds,
         reason=reason,
@@ -756,7 +759,9 @@ async def resume_proactive_recommendation_tuning(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    tuning = await asyncio.to_thread(resume_recommendation_tuning, config_dir=config_dir)
+    tuning = await get_recommendation_application().resume_tuning(
+        config_dir=config_dir
+    )
     return {"success": True, "tuning": tuning}
 
 

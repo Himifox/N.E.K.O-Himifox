@@ -1,37 +1,46 @@
 import json
 from pathlib import Path
 
-import main_logic.proactive_recommendation_feedback as feedback_module
+import main_logic.proactive_recommendation.feedback.service as feedback_module
+import main_logic.proactive_recommendation.feedback.learning as learning_module
 
-from main_logic.proactive_recommendation_feedback import (
-    FEEDBACK_LOG_FILENAME,
-    append_recommendation_feedback_jsonl,
-    build_feedback_event,
-    build_reward_score_v2_preview,
+from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
-    join_observations_with_reward_score_v2_preview,
-    load_recommendation_feedback_jsonl,
-    music_feedback_event_type,
     note_user_turn_for_feedback,
     record_feedback_event,
     record_feedback_event_with_status,
     register_pending_feedback,
     register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation.feedback.events import (
+    build_feedback_event,
+    music_feedback_event_type,
     sanitize_feedback_metadata,
     sanitize_recommendation_feedback_event,
+)
+from main_logic.proactive_recommendation.feedback.rewards import (
+    build_reward_score_v2_preview,
+)
+from main_logic.proactive_recommendation.feedback.reports import (
     join_observations_with_feedback,
+    join_observations_with_reward_score_v2_preview,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
 )
-from main_logic.proactive_recommendation_feedback_state import (
+from main_logic.proactive_recommendation.feedback.store import (
+    FEEDBACK_LOG_FILENAME,
+    append_recommendation_feedback_jsonl,
+    load_recommendation_feedback_jsonl,
+)
+from main_logic.proactive_recommendation.state.feedback import (
     FEEDBACK_STATE_PREVIEW_FILENAME,
     LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME,
     TEMPORARY_INTEREST_TTL_SECONDS,
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
-from main_logic.proactive_recommendation_preference import (
+from main_logic.proactive_recommendation.state.preference import (
     get_recommendation_preference_state,
 )
 
@@ -319,8 +328,8 @@ def test_reward_score_v2_preview_uses_point_in_time_personal_reply_speed():
 def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
     project_root = Path(__file__).parents[2]
     policy_sources = (
-        project_root / "main_logic" / "proactive_recommendation.py",
-        project_root / "main_logic" / "proactive_recommendation_tuning.py",
+        project_root / "main_logic" / "proactive_recommendation" / "engine" / "decisions.py",
+        project_root / "main_logic" / "proactive_recommendation" / "tuning" / "service.py",
         project_root / "main_routers" / "system_router" / "proactive_chat_flow.py",
     )
 
@@ -334,8 +343,8 @@ def test_active_personalization_keeps_verified_source_learning_enabled(
     clear_pending_recommendation_feedback()
     clear_temporary_feedback_state_preview()
     monkeypatch.setattr(
-        feedback_module,
-        "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
+            learning_module,
+            "PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE",
         "active",
     )
     register_pending_feedback(
@@ -495,7 +504,7 @@ def test_shadow_turn_can_update_conversation_and_source_groups_independently(tmp
     )
 
 
-def test_scoped_explicit_feedback_separates_timing_from_source_preference(tmp_path):
+def test_explicit_source_feedback_updates_only_verified_source_preference(tmp_path):
     clear_temporary_feedback_state_preview()
     pending = register_pending_feedback_from_observation(
         _observation(
@@ -512,41 +521,24 @@ def test_scoped_explicit_feedback_separates_timing_from_source_preference(tmp_pa
     assert pending.source_type == "news"
     assert pending.candidate_id == "news:verified"
 
-    not_now = record_feedback_event_with_status(
-        lanlan_name="neko",
-        turn_id="scoped-news",
-        event_type="proactive_not_now",
-        metadata={"ui_generation": "dual_scope_v1"},
-        ts=10_001.0,
-    )
-    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_001.0)
-    assert not_now.state_updated is True
-    assert not_now.feedback_scope == "conversation_acceptance"
-    assert not_now.state_reason == "temporary_only"
-    assert preview["conversation_acceptance"]["temporary"]["negative_evidence_count"] == 1
-    assert preview["conversation_acceptance"]["persistent"]["negative_evidence_count"] == 0
-    assert preview["source_affinity"]["persistent"]["sources"] == {}
-
     source_negative = record_feedback_event_with_status(
         lanlan_name="neko",
         turn_id="scoped-news",
         event_type="source_not_interested",
-        metadata={"ui_generation": "dual_scope_v1"},
-        ts=10_002.0,
+        ts=10_001.0,
     )
     duplicate = record_feedback_event_with_status(
         lanlan_name="neko",
         turn_id="scoped-news",
         event_type="source_not_interested",
-        metadata={"ui_generation": "not-registered"},
-        ts=10_003.0,
+        ts=10_002.0,
     )
-    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_003.0)
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_002.0)
     source = preview["source_affinity"]["persistent"]["sources"]["news"]
     assert source_negative.state_updated is True
     assert source_negative.feedback_scope == "source_affinity"
     assert source_negative.state_reason == "exact_pending_match"
-    assert source_negative.event["metadata"] == {"ui_generation": "dual_scope_v1"}
+    assert source_negative.event["metadata"] == {}
     assert duplicate.state_updated is False
     assert duplicate.state_reason == "duplicate_event"
     assert duplicate.event["metadata"] == {}
@@ -756,8 +748,8 @@ def test_feedback_state_preview_does_not_update_outside_shadow(tmp_path):
 def test_feedback_state_preview_is_not_consumed_by_ranking_or_tuning():
     project_root = Path(__file__).parents[2]
     for source_path in (
-        project_root / "main_logic" / "proactive_recommendation.py",
-        project_root / "main_logic" / "proactive_recommendation_tuning.py",
+        project_root / "main_logic" / "proactive_recommendation" / "engine" / "decisions.py",
+        project_root / "main_logic" / "proactive_recommendation" / "tuning" / "service.py",
     ):
         assert "feedback_state_preview" not in source_path.read_text(encoding="utf-8")
 

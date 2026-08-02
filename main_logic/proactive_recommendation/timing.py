@@ -1,4 +1,5 @@
 """Observation-only timing and fatigue state for proactive recommendations."""
+
 from __future__ import annotations
 
 from collections import deque

@@ -119,7 +119,7 @@ class ProactiveLifecycle:
         )
         if self.recommendation_turn is not None:
             try:
-                self.recommendation_turn.finalize(body)
+                await self.recommendation_turn.finalize(body)
             except Exception as exc:
                 self._logger.debug(
                     "[%s] proactive recommendation observation failed: %s",

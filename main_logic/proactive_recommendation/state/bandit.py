@@ -1,4 +1,5 @@
 """Persistent encounter rewards for the constrained source bandit."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -10,11 +11,12 @@ import threading
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation_preference import (
+from main_logic.proactive_recommendation.state.preference import (
     PREFERENCE_BETA_PRIOR_ALPHA,
     PREFERENCE_BETA_PRIOR_BETA,
     PREFERENCE_HALF_LIFE_SECONDS,
 )
+from main_logic.proactive_recommendation.storage.atomic_json import locked_path
 
 
 BANDIT_STATE_VERSION = "recommendation_bandit_state_v1"
@@ -34,7 +36,7 @@ def get_recommendation_bandit_state(
     current = time.time() if now is None else float(now)
     if root is None:
         return _public_state(_empty_state(), current)
-    with _lock:
+    with _lock, locked_path(root / BANDIT_STATE_FILENAME):
         return _public_state(_load_state(root), current)
 
 
@@ -57,12 +59,15 @@ def update_recommendation_bandit_reward(
     if root is None or not turn or not source or not signature:
         return get_recommendation_bandit_state(config_dir=config_dir, now=current)
 
-    with _lock:
+    with _lock, locked_path(root / BANDIT_STATE_FILENAME):
         state = _load_state(root)
         outcomes = state["recent_arm_outcomes"]
         outcome_key = f"{turn}|{source}"
         previous = outcomes.get(outcome_key)
-        if isinstance(previous, Mapping) and tuple(previous.get("event_types", ())) == signature:
+        if (
+            isinstance(previous, Mapping)
+            and tuple(previous.get("event_types", ())) == signature
+        ):
             return _public_state(state, current)
 
         bucket = state["arms"].setdefault(source, _empty_bucket(current))
@@ -107,7 +112,7 @@ def reset_recommendation_bandit_state(
     root = _config_root(config_dir)
     if root is None:
         return False
-    with _lock:
+    with _lock, locked_path(root / BANDIT_STATE_FILENAME):
         try:
             (root / BANDIT_STATE_FILENAME).unlink(missing_ok=True)
             return True
@@ -147,7 +152,9 @@ def _public_state(state: Mapping[str, Any], now: float) -> dict[str, Any]:
             "beta": PREFERENCE_BETA_PRIOR_BETA,
         },
         "arms": arms,
-        "finalized_outcome_count": len(outcomes) if isinstance(outcomes, Mapping) else 0,
+        "finalized_outcome_count": len(outcomes)
+        if isinstance(outcomes, Mapping)
+        else 0,
     }
 
 
@@ -165,8 +172,12 @@ def _load_state(root: Path) -> dict[str, Any]:
             arm = _source_name(raw_arm)
             if arm and isinstance(raw_bucket, Mapping):
                 arms[arm] = {
-                    "effective_success": _bounded_count(raw_bucket.get("effective_success")),
-                    "effective_failure": _bounded_count(raw_bucket.get("effective_failure")),
+                    "effective_success": _bounded_count(
+                        raw_bucket.get("effective_success")
+                    ),
+                    "effective_failure": _bounded_count(
+                        raw_bucket.get("effective_failure")
+                    ),
                     "updated_at": max(0.0, _finite(raw_bucket.get("updated_at"))),
                 }
     outcomes: dict[str, dict[str, Any]] = {}
@@ -194,8 +205,12 @@ def _save_state(root: Path, state: Mapping[str, Any]) -> None:
 def _decay_bucket(bucket: dict[str, Any], now: float) -> None:
     updated_at = max(0.0, _finite(bucket.get("updated_at")))
     factor = _decay_factor(updated_at, now) if updated_at else 1.0
-    bucket["effective_success"] = _bounded_count(bucket.get("effective_success")) * factor
-    bucket["effective_failure"] = _bounded_count(bucket.get("effective_failure")) * factor
+    bucket["effective_success"] = (
+        _bounded_count(bucket.get("effective_success")) * factor
+    )
+    bucket["effective_failure"] = (
+        _bounded_count(bucket.get("effective_failure")) * factor
+    )
     bucket["updated_at"] = now
 
 

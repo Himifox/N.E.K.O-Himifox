@@ -1,13 +1,4 @@
 {
-    "proactiveFeedback": {
-        "notNow": "Agora não",
-        "lessSource": "Mostrar menos {{source}}",
-        "moreSource": "Gosto deste tipo de {{source}}",
-        "saving": "Salvando…",
-        "recorded": "Registrado apenas para melhorar as recomendações",
-        "failed": "Não foi possível registrar. Tente novamente.",
-        "sources": { "news": "notícias", "meme": "memes", "vision": "conteúdo da tela", "video": "vídeos", "music": "música" }
-    },
     "common": {
         "load": "Carregar",
         "minimize": "Minimizar",

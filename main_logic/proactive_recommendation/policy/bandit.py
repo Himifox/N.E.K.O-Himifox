@@ -1,4 +1,5 @@
 """Constrained source-level bandit for safe proactive material candidates."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -37,7 +38,10 @@ def build_source_bandit_decision(
         for candidate in getattr(recommendation_decision, "ranked_candidates", ())
         if _finite(getattr(candidate, "score", None)) is not None
     )
-    if not ranked or _arm_name(getattr(ranked[0], "source_type", None)) not in BANDIT_ARMS:
+    if (
+        not ranked
+        or _arm_name(getattr(ranked[0], "source_type", None)) not in BANDIT_ARMS
+    ):
         return _empty_decision(
             normalized_mode,
             score_contract=normalized_score_contract,
@@ -80,7 +84,9 @@ def build_source_bandit_decision(
                 arm,
             ),
         )[0]
-    exploration_eligible = normalized_mode in {"shadow", "canary"} and len(near_tie) >= 2
+    exploration_eligible = (
+        normalized_mode in {"shadow", "canary"} and len(near_tie) >= 2
+    )
     probabilities = {arm: 0.0 for arm in eligible}
     if exploration_eligible:
         share = BANDIT_EPSILON / len(near_tie)
@@ -93,7 +99,11 @@ def build_source_bandit_decision(
     chosen_arm = exploit_arm
     explored = False
     if exploration_eligible:
-        draw = random.SystemRandom().random() if random_value is None else _unit(random_value)
+        draw = (
+            random.SystemRandom().random()
+            if random_value is None
+            else _unit(random_value)
+        )
         if draw < BANDIT_EPSILON:
             arm_draw = (
                 random.SystemRandom().random()
@@ -177,23 +187,24 @@ def finalize_source_bandit_decision(
         else None
     )
     actual_candidate_id = (
-        str(getattr(actual_candidate, "id", "") or "")
-        if actual_arm is not None
-        else ""
+        str(getattr(actual_candidate, "id", "") or "") if actual_arm is not None else ""
     )
     actual_attribution_basis = (
         str(attribution_basis or "confirmed_material").strip().lower()
         if actual_arm is not None
         else None
     )
-    proposed_arm = str(
-        result.get("proposed_arm") or result.get("chosen_arm") or ""
-    ) or None
-    proposed_candidate_id = str(
-        result.get("proposed_candidate_id")
-        or result.get("chosen_candidate_id")
-        or ""
-    ) or None
+    proposed_arm = (
+        str(result.get("proposed_arm") or result.get("chosen_arm") or "") or None
+    )
+    proposed_candidate_id = (
+        str(
+            result.get("proposed_candidate_id")
+            or result.get("chosen_candidate_id")
+            or ""
+        )
+        or None
+    )
     target = {
         arm: float(probability)
         for arm, probability in (
@@ -264,10 +275,7 @@ def _best_candidate_per_arm(
             if score_contract == BANDIT_PERSONALIZED_SCORE_CONTRACT
             else baseline_score
         )
-        if (
-            arm not in result
-            or policy_score > float(result[arm]["policy_score"])
-        ):
+        if arm not in result or policy_score > float(result[arm]["policy_score"]):
             result[arm] = {
                 "candidate_id": candidate_id,
                 "baseline_score": baseline_score,

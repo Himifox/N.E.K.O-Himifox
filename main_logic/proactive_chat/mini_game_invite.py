@@ -35,7 +35,7 @@ from config import (
     MINI_GAME_LAUNCH_URL_BY_GAME,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
 )
-from main_logic.proactive_recommendation_feedback import record_feedback_event
+from main_logic.proactive_recommendation.feedback.service import record_feedback_event
 from config.prompts.prompts_proactive import (
     MINI_GAME_INVITE_KEYWORDS,
     MINI_GAME_INVITE_LINES_BY_GAME,

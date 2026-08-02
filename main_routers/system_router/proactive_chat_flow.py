@@ -42,9 +42,11 @@ from main_logic.proactive_chat.recommendation_integration import (
     _recent_proactive_recommendation_shadow_candidate_ids,
     _recent_proactive_recommendation_shadow_sources,
 )
-from main_logic.proactive_recommendation_feedback import (
-    music_feedback_event_type,
+from main_logic.proactive_recommendation.feedback.service import (
     record_feedback_event,
+)
+from main_logic.proactive_recommendation.feedback.events import (
+    music_feedback_event_type,
 )
 from config import PROACTIVE_RECOMMENDATION_FEEDBACK_LOG
 

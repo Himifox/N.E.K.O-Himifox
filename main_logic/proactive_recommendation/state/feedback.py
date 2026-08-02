@@ -1,4 +1,5 @@
 """Bounded feedback state used by optional recommendation personalization."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -8,6 +9,8 @@ from pathlib import Path
 import threading
 import time
 from typing import Any
+
+from main_logic.proactive_recommendation.storage.atomic_json import locked_path
 
 
 LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME = (
@@ -88,7 +91,7 @@ def _update_feedback_state_preview(
     if root is None or signal == 0:
         return get_feedback_state_preview(config_dir=config_dir, now=current)
 
-    with _state_lock:
+    with _state_lock, locked_path(root / FEEDBACK_STATE_PREVIEW_FILENAME):
         key = (str(root), scope, subject)
         previous = _temporary_state.get(key)
         if previous is None or float(previous.get("expires_at", 0.0)) <= current:
@@ -130,7 +133,7 @@ def get_feedback_state_preview(
     current = time.time() if now is None else float(now)
     if root is None:
         return _empty_snapshot()
-    with _state_lock:
+    with _state_lock, locked_path(root / FEEDBACK_STATE_PREVIEW_FILENAME):
         return _snapshot(root, current)
 
 

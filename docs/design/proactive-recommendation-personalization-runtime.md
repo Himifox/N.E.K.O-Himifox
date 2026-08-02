@@ -48,11 +48,8 @@ PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE=active
 PROACTIVE_RECOMMENDATION_MODE=active_source
 ```
 
-如需在 Active 投递后显示“现在不方便 / 少推荐此类内容”，可设置：
-
-```text
-PROACTIVE_RECOMMENDATION_EXPLICIT_FEEDBACK_UI=active
-```
+主动推荐后的显式反馈按钮已取消，避免每次投递额外插入反馈消息打扰用户。
+个性化继续从明确的文字反馈与音乐播放、关闭等自然行为中学习。
 
 当且仅当个性化积分改变 Top-1 时，该结果可作为接近候选的平局裁决，不再被旧的
 0.05 分差门二次挡回；没有个性化 Top-1 翻转时，原分差门保持不变。

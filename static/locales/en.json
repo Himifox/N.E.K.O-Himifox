@@ -1,13 +1,4 @@
 {
-    "proactiveFeedback": {
-        "notNow": "Not now",
-        "lessSource": "Show less {{source}}",
-        "moreSource": "I like this kind of {{source}}",
-        "saving": "Saving…",
-        "recorded": "Recorded for recommendation improvement only",
-        "failed": "Could not record. Please try again.",
-        "sources": { "news": "news", "meme": "memes", "vision": "screen content", "video": "videos", "music": "music" }
-    },
     "common": {
         "load": "Load",
         "minimize": "Minimize",

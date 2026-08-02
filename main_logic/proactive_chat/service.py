@@ -106,13 +106,16 @@ from main_logic.proactive_chat.music_recommendation import (
     _build_music_playing_hint,
     _select_music_recommendation,
 )
-from main_logic.proactive_chat.recommendation_integration import RecommendationTurn
+from main_logic.proactive_recommendation.application import (
+    get_recommendation_application,
+)
 from main_logic.proactive_chat.state import (
     _ensure_source_history_loaded,
     _format_recent_proactive_chats,
     _increment_proactive_chat_total,
     _record_invite_delivery_persistent,
     _record_source_used,
+    _recent_proactive_chat_entries,
     _source_hash,
 )
 from main_logic.proactive_chat.sources import collect_proactive_sources
@@ -469,11 +472,16 @@ async def handle_proactive_chat(
             lanlan_name=lanlan_name,
             log=logger,
         )
-        recommendation_turn = RecommendationTurn(
+        recommendation_turn = await get_recommendation_application().create_turn(
             lanlan_name=lanlan_name,
             configured_interval_seconds=command.base_interval_seconds,
             config_dir=getattr(_config_manager, "config_dir", None),
             log=logger,
+            recent_sources=tuple(
+                str(entry[2])
+                for entry in _recent_proactive_chat_entries(lanlan_name)
+                if len(entry) > 2 and entry[2]
+            ),
         )
         lifecycle.recommendation_turn = recommendation_turn
         proactive_started = await mgr.state.try_start_proactive(session=probe_session)

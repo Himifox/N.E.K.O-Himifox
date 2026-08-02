@@ -92,7 +92,7 @@
 
 ### 3.3 评分公式
 
-当前实现位于 [main_logic/proactive_recommendation.py](../../main_logic/proactive_recommendation.py)。
+当前实现位于 [main_logic/proactive_recommendation/](../../main_logic/proactive_recommendation/)。
 
 最终分数的计算方式如下：
 

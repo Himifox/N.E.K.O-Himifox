@@ -2,7 +2,7 @@ from main_logic.proactive_recommendation import (
     ProactiveRecommendationContext,
     build_phase1_material_shadow_decision,
 )
-from main_logic.proactive_recommendation_personalization import (
+from main_logic.proactive_recommendation.policy.personalization import (
     build_personalization_plan,
     personalization_adjustments,
 )
