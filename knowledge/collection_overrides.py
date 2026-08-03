@@ -7,6 +7,8 @@ from pathlib import Path
 
 from utils.file_utils import atomic_write_json
 
+from ._mutation_lock import mutation_lock
+
 
 def get_collection_override_path(knowledge_root: str | Path) -> Path:
     return Path(knowledge_root) / "collection.overrides.json"
@@ -37,12 +39,13 @@ def set_collection_auto_context(
     if not collection_id:
         raise ValueError("collection_id is required")
     output_path = Path(path)
-    values = load_auto_context_overrides(output_path)
-    values[collection_id] = bool(enabled)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(
-        output_path,
-        {"auto_context": dict(sorted(values.items()))},
-        ensure_ascii=False,
-        indent=2,
-    )
+    with mutation_lock(output_path):
+        values = load_auto_context_overrides(output_path)
+        values[collection_id] = bool(enabled)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            output_path,
+            {"auto_context": dict(sorted(values.items()))},
+            ensure_ascii=False,
+            indent=2,
+        )

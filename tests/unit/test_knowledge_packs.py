@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import json
 
 import pytest
 
@@ -133,6 +134,57 @@ def test_pack_update_replaces_only_its_own_source(tmp_path):
     assert service.search("meme", "old title", limit=1) == []
     assert service.search("meme", "new title", limit=1)
     assert service.search("meme", "built in entry", limit=1)
+
+
+def test_concurrent_pack_installs_preserve_database_and_registry(tmp_path):
+    service = open_knowledge(tmp_path)
+    packs = (
+        validate_pack(_payload(title="concurrent alpha", pack_id="concurrent-alpha")),
+        validate_pack(_payload(title="concurrent beta", pack_id="concurrent-beta")),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(service.install_pack, packs))
+
+    assert {result.pack_id for result in results} == {
+        "concurrent-alpha",
+        "concurrent-beta",
+    }
+    installed = {pack["pack_id"]: pack for pack in service.list_packs("meme")}
+    assert set(installed) == {"concurrent-alpha", "concurrent-beta"}
+    store = KnowledgeStore(service.database_path("meme"))
+    assert store.count_by_source_tag("source:community.concurrent-alpha") == 1
+    assert store.count_by_source_tag("source:community.concurrent-beta") == 1
+    registry = json.loads(
+        service.database_path("meme").with_name("packs.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(registry["packs"]) == {"concurrent-alpha", "concurrent-beta"}
+
+
+def test_concurrent_updates_of_one_pack_keep_one_complete_source(tmp_path):
+    service = open_knowledge(tmp_path)
+    packs = (
+        validate_pack(_payload(title="replacement alpha")),
+        validate_pack(_payload(title="replacement beta")),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tuple(executor.map(service.install_pack, packs))
+
+    installed = service.list_packs("meme")
+    assert len(installed) == 1
+    assert installed[0]["pack_id"] == "community-fixture"
+    entries = tuple(
+        entry
+        for entry in KnowledgeStore(
+            service.database_path("meme")
+        ).list_active_entries()
+        if entry.source_tag == "source:community.community-fixture"
+    )
+    assert len(entries) == 1
+    assert entries[0].title in {"replacement alpha", "replacement beta"}
 
 
 def test_pack_source_metadata_is_stored_outside_entries(tmp_path):

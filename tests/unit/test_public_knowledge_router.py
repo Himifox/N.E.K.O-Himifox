@@ -61,6 +61,8 @@ def test_generic_management_api_lists_multiple_collections(monkeypatch, tmp_path
     assert {item["collection_id"] for item in collections["collections"]} == {
         "meme", "corpora",
     }
+    assert listing["total"] == 1
+    assert listing["has_more"] is False
     assert listing["items"][0]["title"] == "reference fixture"
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
 
@@ -118,6 +120,42 @@ def test_search_source_filter_is_applied_before_pagination(monkeypatch, tmp_path
     assert missing["items"] == []
     assert missing["has_more"] is False
     assert unfiltered["items"][0]["source"]["tag"] == "source:a"
+
+
+def test_management_search_can_show_and_restore_a_disabled_entry(monkeypatch, tmp_path):
+    service = open_knowledge(tmp_path)
+    KnowledgeStore(service.database_path("meme")).upsert(
+        _entry("disabled query fixture", "source:chime")
+    )
+    service.set_entry_disabled(
+        "meme",
+        source_tag="source:chime",
+        title="disabled query fixture",
+        disabled=True,
+    )
+    client = _client(monkeypatch, tmp_path)
+
+    disabled = client.get(
+        "/api/public-knowledge/entries",
+        params={"collection": "meme", "query": "disabled query fixture"},
+    ).json()
+    restored = client.post(
+        "/api/public-knowledge/entry/disabled",
+        json={
+            "collection": "meme",
+            "source": "chime",
+            "title": "disabled query fixture",
+            "disabled": False,
+        },
+    ).json()
+    enabled = client.get(
+        "/api/public-knowledge/entries",
+        params={"collection": "meme", "query": "disabled query fixture"},
+    ).json()
+
+    assert disabled["items"][0]["disabled"] is True
+    assert restored["ok"] is True
+    assert enabled["items"][0]["disabled"] is False
 
 
 def test_subscription_handoff_verifies_hash_and_installs_pack(monkeypatch, tmp_path):

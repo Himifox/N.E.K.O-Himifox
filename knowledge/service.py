@@ -460,6 +460,7 @@ class KnowledgeService:
         limit: int = 50,
         offset: int = 0,
         source_tag: str = "",
+        include_disabled: bool = False,
     ) -> tuple[MoegirlKnowledgeHit, ...]:
         """Return one bounded ranked page without loading the whole collection."""
         limit = min(max(int(limit), 1), 100)
@@ -468,6 +469,7 @@ class KnowledgeService:
             query,
             limit=offset + limit + 1,
             allowed_source_tags=(source_tag,) if source_tag else None,
+            include_disabled=include_disabled,
         )
         return tuple(hits[offset:offset + limit + 1])
 

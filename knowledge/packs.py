@@ -10,6 +10,7 @@ from typing import Any
 
 from utils.file_utils import atomic_write_json
 
+from ._mutation_lock import mutation_lock
 from .moegirl_knowledge.filters import sanitize_external_text
 from .moegirl_knowledge.models import MoegirlKnowledgeEntry
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
@@ -118,28 +119,35 @@ def install_pack(
 ) -> PackInstallResult:
     """Replace one community source and its metadata with rollback on failure."""
     database_path = Path(database_path)
-    store = MoegirlKnowledgeStore(database_path)
-    old_entries = tuple(
-        entry for entry in store.list_active_entries() if entry.source_tag == pack.source_tag
-    )
     registry_path = get_pack_registry_path(database_path)
-    old_registry = _load_registry(registry_path)
-    existing = old_registry.get("packs", {}).get(pack.pack_id)
-    if isinstance(existing, dict):
-        existing_collection = str(existing.get("collection_id") or "")
-        if existing_collection and existing_collection != pack.collection_id:
-            raise ValueError("knowledge pack cannot change its collection")
-        _validate_subscription_identity(
-            existing.get("subscription"),
-            subscription,
+    with mutation_lock(registry_path):
+        store = MoegirlKnowledgeStore(database_path)
+        old_entries = tuple(
+            entry
+            for entry in store.list_active_entries()
+            if entry.source_tag == pack.source_tag
         )
-    new_registry = _registry_with_pack(old_registry, pack, subscription=subscription)
-    store.replace_source(pack.source_tag, pack.entries)
-    try:
-        atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
-    except Exception:
-        store.replace_source(pack.source_tag, old_entries)
-        raise
+        old_registry = _load_registry(registry_path)
+        existing = old_registry.get("packs", {}).get(pack.pack_id)
+        if isinstance(existing, dict):
+            existing_collection = str(existing.get("collection_id") or "")
+            if existing_collection and existing_collection != pack.collection_id:
+                raise ValueError("knowledge pack cannot change its collection")
+            _validate_subscription_identity(
+                existing.get("subscription"),
+                subscription,
+            )
+        new_registry = _registry_with_pack(
+            old_registry,
+            pack,
+            subscription=subscription,
+        )
+        store.replace_source(pack.source_tag, pack.entries)
+        try:
+            atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
+        except Exception:
+            store.replace_source(pack.source_tag, old_entries)
+            raise
     return PackInstallResult(
         pack_id=pack.pack_id,
         collection_id=pack.collection_id,
@@ -167,12 +175,13 @@ def set_pack_auto_context(
 ) -> None:
     pack_id = _identifier(pack_id, "pack_id")
     registry_path = get_pack_registry_path(database_path)
-    registry = _load_registry(registry_path)
-    packs = registry.get("packs")
-    if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
-        raise ValueError("knowledge pack is not installed")
-    packs[pack_id] = {**packs[pack_id], "auto_context": bool(enabled)}
-    atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+    with mutation_lock(registry_path):
+        registry = _load_registry(registry_path)
+        packs = registry.get("packs")
+        if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
+            raise ValueError("knowledge pack is not installed")
+        packs[pack_id] = {**packs[pack_id], "auto_context": bool(enabled)}
+        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
 
 
 def remove_pack(database_path: str | Path, pack_id: str) -> int:
@@ -180,32 +189,35 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
     pack_id = _identifier(pack_id, "pack_id")
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
-    registry = _load_registry(registry_path)
-    packs = registry.get("packs")
-    metadata = packs.get(pack_id) if isinstance(packs, dict) else None
-    if not isinstance(metadata, dict):
-        raise ValueError("knowledge pack is not installed")
-    source_tag = str(metadata.get("source_tag") or "")
-    if not source_tag.startswith("source:community."):
-        raise ValueError("only community packs can be removed")
+    with mutation_lock(registry_path):
+        registry = _load_registry(registry_path)
+        packs = registry.get("packs")
+        metadata = packs.get(pack_id) if isinstance(packs, dict) else None
+        if not isinstance(metadata, dict):
+            raise ValueError("knowledge pack is not installed")
+        source_tag = str(metadata.get("source_tag") or "")
+        if not source_tag.startswith("source:community."):
+            raise ValueError("only community packs can be removed")
 
-    store = MoegirlKnowledgeStore(database_path)
-    old_entries = tuple(
-        entry for entry in store.list_active_entries() if entry.source_tag == source_tag
-    )
-    new_packs = dict(packs)
-    new_packs.pop(pack_id, None)
-    store.replace_source(source_tag, ())
-    try:
-        atomic_write_json(
-            registry_path,
-            {"schema_version": 1, "packs": new_packs},
-            ensure_ascii=False,
-            indent=2,
+        store = MoegirlKnowledgeStore(database_path)
+        old_entries = tuple(
+            entry
+            for entry in store.list_active_entries()
+            if entry.source_tag == source_tag
         )
-    except Exception:
-        store.replace_source(source_tag, old_entries)
-        raise
+        new_packs = dict(packs)
+        new_packs.pop(pack_id, None)
+        store.replace_source(source_tag, ())
+        try:
+            atomic_write_json(
+                registry_path,
+                {"schema_version": 1, "packs": new_packs},
+                ensure_ascii=False,
+                indent=2,
+            )
+        except Exception:
+            store.replace_source(source_tag, old_entries)
+            raise
     return len(old_entries)
 
 

@@ -157,6 +157,7 @@ class MoegirlKnowledgeRetriever:
         *,
         limit: int = 3,
         allowed_source_tags: tuple[str, ...] | None = None,
+        include_disabled: bool = False,
     ) -> list[MoegirlKnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
@@ -180,7 +181,13 @@ class MoegirlKnowledgeRetriever:
         ):
             rows_by_id.setdefault(row["rowid"], row)
 
-        disabled = load_disabled_entries(get_catalog_override_path(self.store.database_path))
+        disabled = (
+            frozenset()
+            if include_disabled
+            else load_disabled_entries(
+                get_catalog_override_path(self.store.database_path)
+            )
+        )
         hits: list[MoegirlKnowledgeHit] = []
         for row in rows_by_id.values():
             try:

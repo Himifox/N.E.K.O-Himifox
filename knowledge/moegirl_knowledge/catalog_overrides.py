@@ -7,6 +7,8 @@ from pathlib import Path
 
 from utils.file_utils import atomic_write_json
 
+from knowledge._mutation_lock import mutation_lock
+
 
 EntryKey = tuple[str, str]
 
@@ -45,24 +47,26 @@ def set_entry_disabled(
     if not source_tag.startswith("source:") or not title:
         raise ValueError("source and title are required")
     output_path = Path(path)
-    entries = set(load_disabled_entries(output_path))
-    key = (source_tag, title)
-    if disabled:
-        entries.add(key)
-    else:
-        entries.discard(key)
-    payload = {
-        "disabled": [
-            {"source": source, "title": entry_title}
-            for source, entry_title in sorted(entries)
-        ]
-    }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
+    with mutation_lock(output_path):
+        entries = set(load_disabled_entries(output_path))
+        key = (source_tag, title)
+        if disabled:
+            entries.add(key)
+        else:
+            entries.discard(key)
+        payload = {
+            "disabled": [
+                {"source": source, "title": entry_title}
+                for source, entry_title in sorted(entries)
+            ]
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
+        count = len(entries)
     from knowledge.routing import notify_database_changed
 
     notify_database_changed(output_path.with_name("knowledge.db"))
-    return len(entries)
+    return count
 
 
 def entry_key(entry) -> EntryKey:

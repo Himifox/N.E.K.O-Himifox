@@ -81,6 +81,57 @@ def test_generic_disable_management_removes_an_entry_from_search(tmp_path):
     assert service.search("meme", "disable me", limit=1) == []
 
 
+def test_management_page_can_restore_disabled_without_changing_public_search(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path("meme"))
+    store.upsert(_entry("disabled management phrase", source="chime"))
+    store.upsert(_entry("disabled management phrase other", source="other"))
+    service.set_entry_disabled(
+        "meme",
+        source_tag="source:chime",
+        title="disabled management phrase",
+        disabled=True,
+    )
+
+    assert all(
+        hit.entry.title != "disabled management phrase"
+        for hit in service.search(
+            "meme",
+            "disabled management phrase",
+            limit=10,
+        )
+    )
+    assert service.search_page(
+        "meme",
+        "disabled management phrase",
+        source_tag="source:chime",
+        limit=10,
+    ) == ()
+    visible = service.search_page(
+        "meme",
+        "disabled management phrase",
+        source_tag="source:chime",
+        limit=10,
+        include_disabled=True,
+    )
+    assert [hit.entry.title for hit in visible] == ["disabled management phrase"]
+    assert service.build_conversation_context(
+        "disabled management phrase appears"
+    ).hit_count == 0
+
+    service.set_entry_disabled(
+        "meme",
+        source_tag="source:chime",
+        title="disabled management phrase",
+        disabled=False,
+    )
+
+    assert service.search("meme", "disabled management phrase", limit=1)
+    assert service.build_conversation_context(
+        "disabled management phrase appears"
+    ).hit_count == 1
+
+
 def test_collection_auto_context_override_does_not_disable_explicit_search(tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path("meme")).upsert(_entry(

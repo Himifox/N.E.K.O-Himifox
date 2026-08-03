@@ -73,36 +73,44 @@ async def list_moegirl_knowledge_entries(
     query: str = Query(default="", max_length=200),
     source: str = Query(default="", max_length=80),
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=10_000),
 ):
     """Browse local cards or diagnose retrieval using the production retriever."""
     service = _service()
     database_path = service.database_path("meme")
     source_tag = _source_tag(source)
-    disabled = load_disabled_entries(
-        get_catalog_override_path(database_path)
+    disabled = await asyncio.to_thread(
+        load_disabled_entries,
+        get_catalog_override_path(database_path),
     )
     if query.strip():
-        hits = await asyncio.to_thread(
-            service.search,
+        page = await asyncio.to_thread(
+            service.search_page,
             "meme",
             query.strip(),
-            limit=max(service.count_entries("meme"), 1),
+            source_tag=source_tag,
+            limit=limit,
+            offset=offset,
+            include_disabled=True,
         )
-        if source_tag:
-            hits = [hit for hit in hits if hit.entry.source_tag == source_tag]
-        total = len(hits)
+        has_more = len(page) > limit
+        visible = page[:limit]
+        total = None
         items = [
             _entry_payload(
                 hit.entry,
                 database_path=database_path,
-                disabled=False,
+                disabled=entry_key(hit.entry) in disabled,
                 score=hit.score,
             )
-            for hit in hits[offset:offset + limit]
+            for hit in visible
         ]
     else:
-        total = service.count_entries("meme", source_tag=source_tag)
+        total = await asyncio.to_thread(
+            service.count_entries,
+            "meme",
+            source_tag=source_tag,
+        )
         entries = await asyncio.to_thread(
             service.list_entries,
             "meme",
@@ -118,7 +126,15 @@ async def list_moegirl_knowledge_entries(
             )
             for entry in entries
         ]
-    return {"ok": True, "total": total, "offset": offset, "limit": limit, "items": items}
+        has_more = total > offset + len(entries)
+    return {
+        "ok": True,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "items": items,
+    }
 
 
 @router.get("/entry")

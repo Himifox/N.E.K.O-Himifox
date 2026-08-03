@@ -125,6 +125,7 @@ async def list_public_knowledge_entries(
             source_tag=source_tag,
             limit=limit,
             offset=offset,
+            include_disabled=True,
         )
         has_more = len(page) > limit
         items = [
