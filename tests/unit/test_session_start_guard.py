@@ -43,6 +43,7 @@ async def test_inactive_end_session_clears_starting_guard_for_frontend_timeout()
     assert mgr._starting_session_count == 0
     assert mgr.session_ready is False
     assert mgr.pending_input_data == []
+    assert mgr._asr_route_mode == "blocked"
 
 
 @pytest.mark.unit
@@ -150,7 +151,13 @@ async def test_cross_mode_start_waits_then_restarts_in_requested_mode():
 
     # 重入禁用二次跨模式重启（深度封顶 1）。
     restart_mock.assert_awaited_once_with(
-        ws, False, "audio", user_initiated=True, _allow_cross_mode_restart=False
+        ws,
+        False,
+        "audio",
+        user_initiated=True,
+        _allow_cross_mode_restart=False,
+        handshake_override=None,
+        resource_optimization_override=None,
     )
 
 
@@ -242,7 +249,13 @@ async def test_cross_mode_start_restarts_even_if_inflight_failed_internally():
 
     # param ws still connected + self.websocket is None ⇒ restart proceeds.
     restart_mock.assert_awaited_once_with(
-        ws, False, "audio", user_initiated=True, _allow_cross_mode_restart=False
+        ws,
+        False,
+        "audio",
+        user_initiated=True,
+        _allow_cross_mode_restart=False,
+        handshake_override=None,
+        resource_optimization_override=None,
     )
 
 

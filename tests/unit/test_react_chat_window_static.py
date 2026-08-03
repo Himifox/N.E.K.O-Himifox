@@ -1,5 +1,7 @@
 import json
 import re
+
+import pytest
 from pathlib import Path
 from tests.static_app_parts import read_js_parts
 
@@ -143,6 +145,41 @@ def test_chat_settings_auto_cat_and_cat_audio_toggles_are_independent():
     assert "Громкость" not in ru_locale["settings"]["toggles"]["catAudio"]
     assert zh_cn_locale["settings"]["toggles"]["catAudio"] == "猫猫音效"
     assert zh_tw_locale["settings"]["toggles"]["catAudio"] == "貓貓音效"
+
+
+def test_model_settings_proactive_controls_use_right_aligned_sliders():
+    source = AVATAR_UI_POPUP_PATH.read_text(encoding="utf-8")
+    settings_toggles_block = source.split("const settingsToggles = [", 1)[1].split("];", 1)[0]
+
+    for toggle_id in ("proactive-chat", "proactive-vision"):
+        toggle_object = re.search(
+            rf"\{{[^{{}}]*id:\s*'{re.escape(toggle_id)}'[^{{}}]*\}}",
+            settings_toggles_block,
+        )
+        assert toggle_object, f"missing settings toggle object for {toggle_id}"
+        assert "controlStyle: 'slider'" in toggle_object.group(0)
+
+    assert ".${prefix}-toggle-item.${prefix}-toggle-item-slider" in source
+    slider_label_style = source.split(
+        ".${prefix}-toggle-item-slider .${prefix}-toggle-label {", 1
+    )[1].split("}", 1)[0]
+    assert "flex: 1 1 auto;" in slider_label_style
+    assert ".${prefix}-toggle-indicator.${prefix}-toggle-slider" in source
+    assert "width: 36px;" in source
+    assert "height: 20px;" in source
+    assert ".${prefix}-toggle-slider[aria-checked=\"true\"] .${prefix}-toggle-thumb" in source
+    assert "transform: translateX(16px);" in source
+
+    settings_item_block = source.split("function createSettingsToggleItem", 1)[1].split(
+        "function createMenuItem", 1
+    )[0]
+    slider_order_block = settings_item_block.split("toggleItem.appendChild(checkbox);", 1)[1].split(
+        "toggleItem.addEventListener('mouseenter'", 1
+    )[0]
+    assert "if (usesSliderControl)" in slider_order_block
+    assert slider_order_block.index("toggleItem.appendChild(label);") < slider_order_block.index(
+        "toggleItem.appendChild(indicator);"
+    )
 
 
 def test_index_game_window_state_pauses_hidden_avatar_rendering():
@@ -1118,7 +1155,7 @@ def test_compact_tool_fan_uses_shell_local_anchor_not_fixed_viewport_position():
     assert "id: index === 0 ? 'toolFan:native' : 'toolFan:native:' + index" in script
 
 
-def test_compact_tool_fan_labels_are_plain_noninteractive_tags():
+def test_compact_tool_fan_tooltips_stay_noninteractive_and_anchored():
     styles = REACT_CHAT_STYLES_PATH.read_text(encoding="utf-8")
 
     tooltip_block = css_block(
@@ -1137,35 +1174,45 @@ def test_compact_tool_fan_labels_are_plain_noninteractive_tags():
     dark_tooltip_block = css_block(
         styles,
         '[data-theme="dark"] .compact-input-tool-fan .compact-input-tool-tooltip {',
-        '[data-theme="dark"] .compact-input-tool-fan .avatar-tool-quickbar {',
+        # 终止标记必须是紧邻的下一条规则：原来那个 .avatar-tool-quickbar 隔了
+        # 很远，切片会把 .neko-chat-tooltip::after 一起吞进来，对它做的断言其实
+        # 在断别的规则。
+        '[data-theme="dark"] .neko-chat-tooltip::after {',
     )
 
-    assert "pointer-events: none;" in tooltip_block
+    # 只钉行为性质，不钉观感取值：#2447 把这个 tooltip 从「白底方角平面标签」
+    # 重设计成了带圆角/渐变/backdrop-filter 的玻璃质感，原来那几条
+    # border-radius: 0 / background: #ffffff / box-shadow: none / 暗色具体色值
+    # 全是被有意改掉的外观，留着只会在每次视觉迭代时假报警。
+    assert "pointer-events: none;" in tooltip_block, "tooltip 不能吃掉指针事件"
     assert "user-select: none;" in tooltip_block
-    assert "left: calc(100% + 5px);" in tooltip_block
+    assert "left: calc(100% + 5px);" in tooltip_block, "tooltip 锚点定在按钮右侧"
     assert "top: calc(100% - 6px);" in tooltip_block
-    assert "border-radius: 0;" in tooltip_block
-    assert "background: #ffffff;" in tooltip_block
-    assert "box-shadow: none;" in tooltip_block
-    assert "scale(" not in tooltip_block
     assert "transform-origin: 0 0;" in tooltip_block
+    # 显示态必须落在静止几何上（不残留位移/缩放），否则标签会停在偏移位置。
     assert "transform: translate(0, 0);" in visible_block
     assert "scale(" not in visible_block
-    assert "border-color: #8b949e;" in dark_tooltip_block
-    assert "background: #202124;" in dark_tooltip_block
-    assert "color: #f3f4f6;" in dark_tooltip_block
+    # 暗色必须自带一套，不能继承亮色的底与字色（不钉具体色值）。
+    assert "background:" in dark_tooltip_block
+    assert "color:" in dark_tooltip_block
 
 
 def test_compact_tool_wheel_rotate_request_is_present_in_host_and_built_bundle():
     host_source = APP_REACT_CHAT_WINDOW_PATH.read_text(encoding="utf-8")
     app_source = REACT_CHAT_APP_PATH.read_text(encoding="utf-8")
-    bundle_source = REACT_CHAT_IIFE_PATH.read_text(encoding="utf-8")
 
     assert "rotateCompactToolWheel: rotateCompactToolWheel" in host_source
     assert "compactToolWheelRotateRequest = null" in app_source
     assert "rotateCompactInputToolWheelSteps(request.direction, request.stepCount" in app_source
+
+    # 产物断言放在源码断言之后，并且产物缺席时跳过而不是红：
+    # static/react/neko-chat/ 是 .gitignore 的 vite 输出，只有本地构建过或
+    # 打包流水线里才有。它还会「假绿」——一份陈旧产物同样能匹配到这个符号。
+    # 真正每次重建并校验产物的是 build-desktop 流水线，那才是该盯它的地方。
+    if not REACT_CHAT_IIFE_PATH.is_file():
+        pytest.skip("react chat bundle not built (static/react/ is a gitignored vite output)")
+    bundle_source = REACT_CHAT_IIFE_PATH.read_text(encoding="utf-8")
     assert "compactToolWheelRotateRequest:" in bundle_source
-    assert "compactToolWheelRotateRequest" in bundle_source
 
 
 def test_compact_history_open_request_drives_export_panel():
@@ -1349,10 +1396,13 @@ def test_externalized_chat_input_spotlight_uses_global_overlay_only():
 
     assert "var pcOverlayAvailable = isYuiGuidePcOverlayAvailable();" in update_block
     assert "if (pcOverlayAvailable) {" in update_block
-    assert "var sourceRectInfo = rect ? getYuiGuideChatSpotlightSourceRect(kind, yuiGuideChatSpotlightVariant, rect) : null;" in update_block
+    assert "var pcWindowMetrics = pcOverlayAvailable && typeof getYuiGuideWindowMetrics === 'function'" in update_block
+    assert "getYuiGuideChatSpotlightSourceRect(kind, yuiGuideChatSpotlightVariant, rect, pcWindowMetrics)" in update_block
+    assert "metrics.waylandWorkAreaCarrier === true" in script
+    assert "metrics.niriWaylandRuntime !== true" in script
     assert "var sourceRect = sourceRectInfo ? sourceRectInfo.rect : rect;" in update_block
     assert "toYuiGuideScreenRect({" in update_block
-    assert "}, kind, yuiGuideChatSpotlightVariant)" in update_block
+    assert "}, kind, yuiGuideChatSpotlightVariant, pcWindowMetrics)" in update_block
     assert "kind !== 'input' && isYuiGuidePcOverlayAvailable()" not in update_block
     assert "hideYuiGuideChatSpotlightElement" not in script
     assert "hideYuiGuideChatSpotlightElements" not in script
@@ -2811,7 +2861,7 @@ def test_chat_composer_user_images_use_text_attachment_input_type():
     assert "input_type: U.isMobile() ? 'camera' : 'screen'" not in send_block
 
 
-def test_text_mode_screenshot_payload_only_tags_paired_text_turn():
+def test_text_mode_screenshot_payload_always_tags_interaction_request():
     script = APP_BUTTONS_PATH.read_text(encoding="utf-8")
 
     screenshot_block = script.split("// Send screenshots first", 1)[1].split(
@@ -2823,7 +2873,7 @@ def test_text_mode_screenshot_payload_only_tags_paired_text_turn():
         1,
     )[0]
 
-    assert "request_id: requestId" not in screenshot_block
-    assert "if (text)" in screenshot_block
-    assert "msg.request_id = requestId" in screenshot_block
+    assert "request_id: requestId" in screenshot_block
+    assert "if (text)" not in screenshot_block
+    assert "msg.request_id = requestId" not in screenshot_block
     assert "request_id: requestId" in text_block

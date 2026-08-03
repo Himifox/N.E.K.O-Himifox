@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 import main_routers.proactive_router as proactive_router
 import main_logic.proactive_recommendation.feedback.service as feedback_module
 import main_logic.proactive_recommendation.service as recommendation_service
+import main_logic.proactive_recommendation.tuning.service as tuning_service
+from tests.fake_clock import patch_module_clock
 from config import AUTOSTART_CSRF_TOKEN
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
@@ -137,7 +139,8 @@ def _client(
             "restart_restores_configured_mode": False,
         },
     )
-    monkeypatch.setattr(recommendation_service.time, "time", lambda: now)
+    patch_module_clock(monkeypatch, recommendation_service, time=lambda: now)
+    patch_module_clock(monkeypatch, tuning_service, time=lambda: now)
     app = FastAPI()
     app.include_router(proactive_router.router)
     return TestClient(app)

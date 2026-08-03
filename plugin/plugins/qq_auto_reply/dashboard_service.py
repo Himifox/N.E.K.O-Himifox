@@ -68,6 +68,10 @@ class QQDashboardService:
                 "retroactive_review_max_messages": int(settings.get("retroactive_review_max_messages", 30) or 30),
                 "retroactive_review_max_reply": int(settings.get("retroactive_review_max_reply", 5) or 5),
                 "sticker_cooldown_messages": int(settings.get("sticker_cooldown_messages", 5) or 5),
+                "group_memory_enabled": bool(settings.get("group_memory_enabled", False)),
+                "group_member_memory_enabled": bool(settings.get("group_member_memory_enabled", False)),
+                "private_participant_memory_enabled": bool(settings.get("private_participant_memory_enabled", False)),
+                "allow_cross_group_context": bool(settings.get("allow_cross_group_context", False)),
             },
             "guide": {
                 "step_napcat_done": bool(settings.get("guide_step_napcat_done", False)) or bool(runtime["napcat_managed"] and runtime["napcat_running"]),
@@ -164,6 +168,10 @@ class QQDashboardService:
         sticker_cooldown_messages: Optional[int] = None,
         retroactive_review_max_messages: Optional[int] = None,
         retroactive_review_max_reply: Optional[int] = None,
+        group_memory_enabled: Optional[bool] = None,
+        group_member_memory_enabled: Optional[bool] = None,
+        private_participant_memory_enabled: Optional[bool] = None,
+        allow_cross_group_context: Optional[bool] = None,
         strategy_mode: Optional[str] = None,
         qq_connection_mode: Optional[str] = None,
         qq_open_app_id: Optional[str] = None,
@@ -186,6 +194,10 @@ class QQDashboardService:
                 sticker_cooldown_messages=sticker_cooldown_messages,
                 retroactive_review_max_messages=retroactive_review_max_messages,
                 retroactive_review_max_reply=retroactive_review_max_reply,
+                group_memory_enabled=group_memory_enabled,
+                group_member_memory_enabled=group_member_memory_enabled,
+                private_participant_memory_enabled=private_participant_memory_enabled,
+                allow_cross_group_context=allow_cross_group_context,
                 strategy_mode=strategy_mode,
                 qq_connection_mode=qq_connection_mode,
                 qq_open_app_id=qq_open_app_id,
@@ -217,7 +229,13 @@ class QQDashboardService:
             value = float(normal_relay_probability)
             if value < 0.0 or value > 1.0:
                 return Err(SdkError(f"INVALID_ARGUMENT: {self.plugin.i18n.t('errors.invalid_probability', default='normal_relay_probability 必须在 0 到 1 之间')}"))
-        self.plugin.permission_mgr.add_user(qq_number, level, normalized_nickname, normal_relay_probability=normal_relay_probability)
+        if not self.plugin.permission_mgr.add_user(
+            qq_number,
+            level,
+            normalized_nickname,
+            normal_relay_probability=normal_relay_probability,
+        ):
+            return Err(SdkError(f"SET_FAILED: {self.plugin.i18n.t('errors.set_nickname_failed', default='设置昵称失败')}"))
         self.plugin._refresh_admin_qq()
         await self.plugin._invalidate_private_session(qq_number)
         success = await self.plugin.settings_service.persist_business_config()

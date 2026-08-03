@@ -295,11 +295,25 @@ class _GeminiMixin:
                 if "closed" in str(e).lower():
                     self._fatal_error_occurred = True
             return
-        await self.send_event({"type": "input_audio_buffer.commit"})
         # The committed buffer excludes the ~21ms tail soxr still holds in the
         # uplink resampler; drop it so it isn't prepended to the next turn.
         self._clear_uplink_resampler()
-        await self.send_event({"type": "response.create"})
+        suffix = str(time.time_ns())
+        ticket = await self._response_arbiter.enqueue(
+            source="manual_audio_commit",
+            events_before_response=(
+                {
+                    "type": "input_audio_buffer.commit",
+                    "event_id": f"event_audio_commit_{suffix}",
+                },
+            ),
+            response_event={
+                "type": "response.create",
+                "event_id": f"event_audio_response_{suffix}",
+            },
+            priority=0,
+        )
+        await ticket.sent
 
     async def _gemini_send_user_turn(self, text: str) -> None:
         """Inject ``text`` as a Gemini user turn and trigger a response via
@@ -448,6 +462,10 @@ class _GeminiMixin:
                         break
         except Exception as e:
             logger.error(f"Gemini message handler error: {e}")
+        finally:
+            self._settle_gemini_proactive_inject(
+                error_msg="Gemini realtime message loop ended"
+            )
 
     async def _process_gemini_response(self, response) -> None:
         """Process a single Gemini response event."""
@@ -536,7 +554,23 @@ class _GeminiMixin:
                         or self._gemini_user_transcript_after_interrupt
                         or not _still_within_ai_window
                     )
+                    # The epoch bump below has no reader on this path today: a
+                    # Gemini client never enqueues through the arbiter (every
+                    # entry point takes an ``_is_gemini`` branch first), so
+                    # ``_on_arbiter_stuck_release`` — the epoch's only consumer
+                    # — cannot fire here. Maintained anyway because the
+                    # invariant is "every turn start advances the epoch", not
+                    # "every turn start something currently reads": once a turn
+                    # start stops advancing it, a release that DOES run cannot
+                    # tell that turn from its successor.
+                    #
+                    # Kept above the assignment, not between it and the bump:
+                    # ``test_every_turn_start_advances_the_epoch`` discovers
+                    # turn starts by proximity, so a comment wedged in there
+                    # reads as a missing bump.
                     self._is_responding = True
+                    self._turn_epoch += 1
+                    self._current_turn_epoch = self._turn_epoch
                     if _is_new_turn and _can_clear_interrupted:
                         # Gemini has no response.created event; clear stale interrupt state only
                         # after SDK transcription or a quiet gap proves this is not a canceled tail.
@@ -584,6 +618,18 @@ class _GeminiMixin:
                                     await self.on_audio_delta(part.inline_data.data)
 
                 # 检查是否 turn 完成（用 getattr 防止 SDK 无该字段时抛错）
+                was_interrupted = bool(
+                    getattr(server_content, 'interrupted', False)
+                )
+                # ⚠️ 这里刻意【不】触发 on_audio_done（issue #1566 的音频完结信号，
+                # 见 _transport.py 的 response.audio.done 分支）。Gemini（原生 +
+                # lanlan.app free 代理）唯一的结束信号就是 turn_complete，而它会
+                # 抢跑迟到音频 —— 本文件上下已有三处注释承认这点（"late content
+                # after premature turn_complete"、"turn_complete 后到达的迟到转录"、
+                # "Gemini turn_complete 抢跑的迟到音频"）。把 on_audio_done 挂在
+                # turn_complete 上等于把「音频还没放完就宣告放完」重新造一遍，正是
+                # 这个 issue 本身。Gemini 这条路继续靠前端的 give-up 计时器兜底：
+                # 漏发是可接受的降级，早发不是。
                 if getattr(server_content, 'turn_complete', False):
                     # Gemini Live API 不返回 token 数，仅记录调用次数
                     try:
@@ -597,6 +643,8 @@ class _GeminiMixin:
                     except Exception:
                         pass
                     self._is_responding = False
+                    if not was_interrupted:
+                        self._settle_gemini_proactive_inject()
                     if self._skip_until_next_response:
                         self._skip_until_next_response = False
                         logger.info("Gemini: skipped response (prime_context priming)")
@@ -604,7 +652,10 @@ class _GeminiMixin:
                         await self.on_response_done()
 
                 # 检查是否被中断
-                if hasattr(server_content, 'interrupted') and server_content.interrupted:
+                if was_interrupted:
+                    self._settle_gemini_proactive_inject(
+                        error_msg="Gemini proactive response interrupted"
+                    )
                     if self._skip_until_next_response:
                         self._skip_until_next_response = False
                         logger.info("Gemini: skipped response interrupted, reset skip flag")

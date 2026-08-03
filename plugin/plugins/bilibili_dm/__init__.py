@@ -1153,19 +1153,23 @@ class BiliDMPlugin(NekoPluginBase):
                 async with httpx.AsyncClient(
                     timeout=5.0, proxy=None, trust_env=False
                 ) as client:
+                    # Bilibili has no explicit per-user locale.  Let Memory
+                    # Server restore the durable character locale instead of
+                    # persisting the host process fallback.
                     response = await client.get(
-                        f"http://127.0.0.1:{MEMORY_SERVER_PORT}/new_dialog/{her_name}"
+                        f"http://127.0.0.1:{MEMORY_SERVER_PORT}/new_dialog/{her_name}",
                     )
                     if response.is_success:
                         memory_context = response.text.strip()
                         if memory_context:
-                            from config.prompts.prompts_sys import CONTEXT_SUMMARY_READY
+                            from config.prompts.prompts_sys import (
+                                get_context_summary_ready,
+                            )
 
-                            context_ready_template = CONTEXT_SUMMARY_READY.get(
-                                short_language,
-                                CONTEXT_SUMMARY_READY.get(
-                                    user_language, CONTEXT_SUMMARY_READY["en"]
-                                ),
+                            # B站私聊是文字一对一，不是语音（与 QQ 插件、
+                            # 桌面 text 模式同一口径）。
+                            context_ready_template = get_context_summary_ready(
+                                short_language, input_mode="text",
                             )
                             system_prompt_parts.append(
                                 memory_context
@@ -1390,9 +1394,13 @@ class BiliDMPlugin(NekoPluginBase):
         from config import MEMORY_SERVER_PORT
 
         async with httpx.AsyncClient() as client:
+            # No Bilibili session locale is user-declared, so persistence-
+            # bearing endpoints must not receive the process fallback.
             response = await client.post(
                 f"http://localhost:{MEMORY_SERVER_PORT}/{endpoint}/{her_name}",
-                json={"input_history": json.dumps(messages, ensure_ascii=False)},
+                json={
+                    "input_history": json.dumps(messages, ensure_ascii=False),
+                },
                 timeout=timeout,
             )
             response.raise_for_status()
