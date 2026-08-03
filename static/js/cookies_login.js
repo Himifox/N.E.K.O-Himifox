@@ -6,6 +6,26 @@
  * 3. 支持自定义字段配置
  * 4. 自动检测并刷新状态
  */
+if (!window.nekoWindowControl) {
+    window.nekoWindowControl = {
+        minimize() {
+            document.body.classList.toggle('neko-page-minimized');
+            return { ok: true };
+        },
+        async maximize() {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else {
+                await document.documentElement.requestFullscreen();
+            }
+            return { ok: true, isMaximized: !!document.fullscreenElement };
+        },
+        isMaximized() {
+            return !!document.fullscreenElement;
+        }
+    };
+}
+
 const PLATFORM_CONFIG_DATA = {
     'netease': {
         name: '网易云音乐',
@@ -304,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const mascotButton = document.querySelector('.char-avatar-wrap');
     const mascotBubble = document.querySelector('.mascot-bubble');
-    const reactionClasses = ['mascot-angry', 'mascot-success', 'mascot-failure', 'mascot-curious', 'mascot-ear-twitch'];
+    const reactionClasses = ['mascot-angry', 'mascot-success', 'mascot-failure', 'mascot-curious'];
     let mascotReactionTimer = null;
     let mascotDeferredTimer = null;
     let mascotBubbleTimer = null;
@@ -335,16 +355,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target instanceof Element && event.target.closest('.char-status-dot')) {
             window.triggerMascotReaction('curious', 650);
             return;
-        }
-
-        if (event.detail > 0) {
-            const rect = mascotButton.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-            if (y < 0.34 && (x < 0.38 || x > 0.62)) {
-                window.triggerMascotReaction('ear-twitch', 620);
-                return;
-            }
         }
 
         const now = Date.now();

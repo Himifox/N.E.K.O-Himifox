@@ -276,6 +276,13 @@
             z-index: 1;
         }
         .console-main > * { flex-shrink: 0; }
+        body.neko-page-minimized {
+            min-height: 0;
+            overflow: hidden;
+        }
+        body.neko-page-minimized .console-main {
+            display: none;
+        }
 
         /* ==============================
            CHARACTER BANNER
@@ -403,11 +410,31 @@
             opacity: 0;
         }
         .mascot-anger-mark {
-            top: -12px;
-            right: -12px;
-            color: #ff665d;
-            font: 800 24px/1 var(--font-ui);
-            text-shadow: 0 2px 8px rgba(255, 82, 73, 0.38);
+            top: -9px;
+            right: -8px;
+            display: grid;
+            width: 25px;
+            height: 25px;
+            place-items: center;
+            border: 2px solid color-mix(in oklch, #ff6b62 76%, white);
+            border-radius: 50% 50% 44% 50%;
+            background: linear-gradient(145deg, #ff8278, #f44f58);
+            box-shadow: 0 4px 12px rgba(244, 79, 88, 0.3);
+            color: white;
+            font: 850 17px/1 var(--font-ui);
+            transform: rotate(8deg);
+        }
+        .mascot-anger-mark::after {
+            content: '';
+            position: absolute;
+            left: 1px;
+            bottom: -4px;
+            width: 7px;
+            height: 7px;
+            border-left: 2px solid color-mix(in oklch, #ff6b62 76%, white);
+            border-bottom: 2px solid color-mix(in oklch, #ff6b62 76%, white);
+            background: #f44f58;
+            transform: rotate(-34deg) skew(-8deg);
         }
         .mascot-steam {
             width: 15px;
@@ -432,19 +459,11 @@
             font: 800 28px/1 var(--font-display);
             text-shadow: 0 0 12px var(--accent-glow);
         }
-        .mascot-ear-lines {
-            inset: 1px -12px auto;
-            color: var(--accent);
-            font: 800 18px/1 var(--font-ui);
-            letter-spacing: 74px;
-            white-space: nowrap;
-        }
         .character-banner.mascot-angry .mascot-anger-mark,
         .character-banner.mascot-angry .mascot-steam,
         .character-banner.mascot-success .mascot-stars,
         .character-banner.mascot-failure .mascot-question,
-        .character-banner.mascot-curious .mascot-question,
-        .character-banner.mascot-ear-twitch .mascot-ear-lines {
+        .character-banner.mascot-curious .mascot-question {
             opacity: 1;
             animation: mascotEffectPop 0.56s ease-out both;
         }
@@ -641,10 +660,37 @@
             font-size: 13px;
             font-weight: 600;
             color: var(--accent-dim);
-            margin-bottom: 12px;
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+        .tutorial-disclosure > .tutorial-title {
+            justify-content: space-between;
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+        }
+        .tutorial-disclosure > .tutorial-title::-webkit-details-marker { display: none; }
+        .tutorial-disclosure > .tutorial-title::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            margin-right: 3px;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            transform: rotate(45deg);
+            transition: transform 0.2s ease;
+        }
+        .tutorial-disclosure[open] > .tutorial-title {
+            margin-bottom: 12px;
+        }
+        .tutorial-disclosure[open] > .tutorial-title::after {
+            transform: translateY(3px) rotate(225deg);
+        }
+        .tutorial-disclosure > .tutorial-title:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 5px;
+            border-radius: 4px;
         }
         .tutorial-steps {
             display: grid;
@@ -877,15 +923,42 @@
         #status-area {
             padding: 0 28px 28px;
         }
-        #status-area > h3 {
+        #status-area > summary {
             font-family: var(--font-display);
             font-size: 14px;
             color: var(--fg);
-            margin-bottom: 14px;
             border-top: 1px dashed var(--border);
             padding-top: 20px;
             font-weight: 700;
             letter-spacing: -0.01em;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+        }
+        #status-area > summary::-webkit-details-marker { display: none; }
+        #status-area > summary::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            margin-right: 3px;
+            border-right: 2px solid var(--muted);
+            border-bottom: 2px solid var(--muted);
+            transform: rotate(45deg);
+            transition: transform 0.2s ease;
+        }
+        #status-area[open] > summary {
+            margin-bottom: 14px;
+        }
+        #status-area[open] > summary::after {
+            transform: translateY(3px) rotate(225deg);
+        }
+        #status-area > summary:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 5px;
+            border-radius: 4px;
         }
         #platform-list-content {
             display: grid !important;
@@ -1040,7 +1113,7 @@
             .submit-btn { width: 100%; min-height: 52px; margin-left: 0; padding: 10px 16px 10px 12px; }
 
             #status-area { padding: 0 18px 20px; }
-            #status-area > h3 { font-size: 13px; }
+            #status-area > summary { font-size: 13px; }
         }
 
         @media (max-width: 480px) {
@@ -1106,7 +1179,7 @@
         [data-theme="dark"] .plat-icon svg [fill="#000"] { fill: var(--fg) !important; }
         [data-theme="dark"] .plat-icon svg [stroke="#E6162D"] { stroke: var(--fg) !important; }
         [data-theme="dark"] .plat-icon svg [fill="#E6162D"] { fill: var(--fg) !important; }
-        [data-theme="dark"] #status-area > h3 { border-top-color: var(--border); }
+        [data-theme="dark"] #status-area > summary { border-top-color: var(--border); }
         [data-theme="dark"] .field-group input,
         [data-theme="dark"] .field-group textarea {
             background: color-mix(in oklch, var(--surface) 95%, transparent);
@@ -1178,12 +1251,11 @@
                 <img class="char-avatar char-avatar-privacy char-avatar-theme-dark" src="/static/images/cookies/yui-credential-privacy.webp" alt="" draggable="false">
                 <img class="char-avatar char-avatar-angry char-avatar-theme-dark" src="/static/images/cookies/yui-credential-angry.webp" alt="" draggable="false">
                 <span class="char-status-dot" aria-hidden="true"></span>
-                <span class="mascot-effect mascot-anger-mark" aria-hidden="true">╬</span>
+                <span class="mascot-effect mascot-anger-mark" aria-hidden="true">!</span>
                 <span class="mascot-effect mascot-steam mascot-steam-left" aria-hidden="true"></span>
                 <span class="mascot-effect mascot-steam mascot-steam-right" aria-hidden="true"></span>
                 <span class="mascot-effect mascot-stars" aria-hidden="true">✦ ✧</span>
                 <span class="mascot-effect mascot-question" aria-hidden="true">?</span>
-                <span class="mascot-effect mascot-ear-lines" aria-hidden="true">⌁⌁</span>
             </button>
             <span class="mascot-bubble" aria-live="polite"></span>
             <div class="char-speech">
@@ -1212,10 +1284,10 @@
             <div class="tab-content" id="main-panel">
 
                 <!-- Tutorial banner -->
-                <div class="tutorial-banner">
-                    <div class="tutorial-title">
+                <details class="tutorial-banner tutorial-disclosure">
+                    <summary class="tutorial-title">
                         <span data-i18n="cookiesLogin.guide.title">获取教程</span>
-                    </div>
+                    </summary>
                     <div class="tutorial-steps">
                         <div class="step-item">
                             <div class="step-num">1</div>
@@ -1234,7 +1306,7 @@
                             <div id="guide-step4">左侧找到 <span class="highlight-text">Cookies</span>，点击域名后在右侧复制对应的值。</div>
                         </div>
                     </div>
-                </div>
+                </details>
 
                 <div id="panel-desc"></div>
                 <div id="QRLogin"></div>
@@ -1257,10 +1329,10 @@
             </div>
 
             <!-- Status monitoring -->
-            <div id="status-area">
-                <h3 data-i18n="cookiesLogin.localMonitoring">本地状态监控</h3>
+            <details id="status-area" open>
+                <summary><span data-i18n="cookiesLogin.localMonitoring">本地状态监控</span></summary>
                 <div id="platform-list-content" data-empty-text="还没有保存的凭证呢，选个平台开始添加吧"></div>
-            </div>
+            </details>
 
         </div>
     </main>
