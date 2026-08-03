@@ -1,4 +1,4 @@
-"""One-shot, idempotent importer for a user-provided ??? Markdown export."""
+"""One-shot, idempotent importer for a user-provided meme-guide Markdown export."""
 
 from __future__ import annotations
 

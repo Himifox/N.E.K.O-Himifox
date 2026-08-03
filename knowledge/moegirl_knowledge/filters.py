@@ -36,9 +36,9 @@ def normalize_meme_phrase(value: str, *, already_normalized: bool = False) -> st
     """Normalize a conversational rendering of a known meme title.
 
     This is deliberately narrower than semantic search: it removes common
-    sentence glue and maps Chinese personal pronouns to one placeholder.  It
-    lets a title such as ``他在 CPU 你`` match ``他这是在 CPU 我吧`` without
-    treating unrelated prose or source content as a meme alias.
+    sentence glue and maps personal pronouns to one placeholder. This lets a
+    pronoun-bearing title match its conversational variant without treating
+    unrelated prose or source content as a meme alias.
     """
     normalized = str(value) if already_normalized else normalize_search_text(value)
     normalized = _MEME_FILLER_RE.sub("", normalized)
