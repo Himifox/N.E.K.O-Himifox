@@ -11,15 +11,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .engine.catalog_overrides import (
+from .catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .engine.filters import normalize_meme_phrase, normalize_search_text
-from .engine.models import KnowledgeEntry
-from .engine.retrieval import MatchPolicy
-from .engine.store import KnowledgeStore, register_database_change_listener
+from .filters import normalize_meme_phrase, normalize_search_text
+from .models import KnowledgeEntry
+from .retrieval import MatchPolicy
+from .store import KnowledgeStore, register_database_change_listener
 
 
 _CARD_CACHE_LIMIT = 256

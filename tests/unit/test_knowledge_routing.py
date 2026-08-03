@@ -105,7 +105,7 @@ def test_global_route_selects_one_high_priority_card_across_five_collections(tmp
 
 
 def test_context_hint_disambiguates_equal_cross_collection_matches(tmp_path, caplog):
-    caplog.set_level(logging.INFO, logger="knowledge.routing")
+    caplog.set_level(logging.INFO, logger="knowledge.engine.routing")
     meme = _spec(
         "meme",
         priority=100,
@@ -481,7 +481,7 @@ def test_replaced_database_file_is_initialized_again(tmp_path):
 
 
 def test_user_text_is_normalized_once_across_five_collections(monkeypatch, tmp_path):
-    import knowledge.routing as routing
+    import knowledge.engine.routing as routing
 
     specs = tuple(_spec(f"collection-{index}") for index in range(5))
     service = _service_with_entries(

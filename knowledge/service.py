@@ -26,7 +26,7 @@ from .engine.retrieval import (
     MatchPolicy,
 )
 from .engine.store import KnowledgeStore
-from .routing import (
+from .engine.routing import (
     ContextHint,
     KnowledgeRoutingState,
     RouteCollection,

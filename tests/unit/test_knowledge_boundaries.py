@@ -7,13 +7,14 @@ import threading
 
 import pytest
 
-from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
+from knowledge.api import ContextHint, KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.collection_overrides import (
     load_auto_context_overrides,
     set_collection_auto_context,
 )
 from knowledge.engine.mutation_lock import mutation_lock
 from knowledge.engine.retrieval import MatchPolicy
+from knowledge.engine.routing import ContextHint as EngineContextHint
 from knowledge.packs import (
     list_installed_packs,
     load_pack,
@@ -65,6 +66,10 @@ def _pack_payload(*, pack_id: str = "boundary-pack", collection_id: str = "meme"
             }
         ],
     }
+
+
+def test_api_context_hint_is_the_engine_contract():
+    assert ContextHint is EngineContextHint
 
 
 def test_entry_contract_cleans_and_deduplicates_only_five_business_fields():

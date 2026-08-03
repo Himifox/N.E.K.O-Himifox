@@ -12,7 +12,7 @@ from .engine.retrieval import (
 from .engine.models import KnowledgeEntry, KnowledgeHit, UpsertResult
 from .engine.store import KnowledgeStore, KnowledgeStoreError
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
-from .routing import ContextHint
+from .engine.routing import ContextHint
 from .subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,
     KnowledgeSubscription,
