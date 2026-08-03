@@ -1,6 +1,6 @@
 """Proactive recommendation domain package."""
 
-from .contracts import (
+from .domain_models import (
     ProactiveActiveBias,
     ProactiveCandidate,
     ProactiveRecommendationContext,

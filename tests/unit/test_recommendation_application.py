@@ -5,7 +5,7 @@ import pytest
 
 from main_logic.proactive_recommendation import application as application_module
 from main_logic.proactive_recommendation.application import RecommendationApplication
-from main_logic.proactive_recommendation.contracts import RecordFeedbackCommand
+from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 from main_logic.proactive_recommendation.feedback.contracts import (
     RecommendationFeedbackRecordResult,
 )

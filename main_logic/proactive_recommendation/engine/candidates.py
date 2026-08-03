@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 import hashlib
 from typing import Any
 
-from main_logic.proactive_recommendation.contracts import (
+from main_logic.proactive_recommendation.domain_models import (
     ProactiveCandidate,
     ProactiveRecommendationContext,
 )

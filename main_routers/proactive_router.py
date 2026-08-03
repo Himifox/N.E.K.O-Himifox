@@ -68,7 +68,7 @@ from main_logic.proactive_recommendation.feedback.store import (
 from main_logic.proactive_recommendation.application import (
     get_recommendation_application,
 )
-from main_logic.proactive_recommendation.contracts import RecordFeedbackCommand
+from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 from main_logic.proactive_recommendation.observation.reports import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,

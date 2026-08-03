@@ -1,4 +1,4 @@
-"""Stable, side-effect-free contracts for proactive recommendation."""
+"""Stable, side-effect-free domain models for proactive recommendation."""
 
 from __future__ import annotations
 
@@ -6,9 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
+from .normalization import clamp_to_unit_interval
 
 
 @dataclass(slots=True)
@@ -31,9 +29,9 @@ class ProactiveCandidate:
             "family": self.family,
             "topic": self.topic,
             "summary": self.summary,
-            "freshness": round(_clamp01(self.freshness), 3),
+            "freshness": round(clamp_to_unit_interval(self.freshness), 3),
             "risk_flags": list(self.risk_flags),
-            "quality": round(_clamp01(self.quality), 3),
+            "quality": round(clamp_to_unit_interval(self.quality), 3),
             "score": round(float(self.score), 3),
         }
 

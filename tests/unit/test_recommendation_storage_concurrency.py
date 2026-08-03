@@ -7,8 +7,8 @@ from main_logic.proactive_recommendation.feedback.contracts import (
 from main_logic.proactive_recommendation.feedback.pending import (
     PendingFeedbackRegistry,
 )
-from main_logic.proactive_recommendation.storage.atomic_json import AtomicJsonStore
-from main_logic.proactive_recommendation.storage.jsonl import JsonlStore
+from main_logic.proactive_recommendation.persistence import AtomicJsonStore
+from main_logic.proactive_recommendation.persistence import JsonlStore
 
 
 def _sanitize_mapping(value):

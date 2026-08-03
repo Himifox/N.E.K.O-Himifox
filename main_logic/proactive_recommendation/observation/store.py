@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from main_logic.proactive_recommendation.storage.jsonl import JsonlStore
+from main_logic.proactive_recommendation.persistence import JsonlStore
 from .schema import sanitize_recommendation_observation
 
 logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_observer")

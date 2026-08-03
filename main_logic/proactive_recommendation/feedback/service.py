@@ -13,7 +13,7 @@ import os
 import time
 from typing import Any, Callable
 
-from main_logic.proactive_recommendation.contracts import RecordFeedbackCommand
+from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 
 from main_logic.proactive_recommendation.state.bandit import (
     update_recommendation_bandit_reward,

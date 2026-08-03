@@ -16,7 +16,7 @@ from main_logic.proactive_recommendation.state.preference import (
     PREFERENCE_BETA_PRIOR_BETA,
     PREFERENCE_HALF_LIFE_SECONDS,
 )
-from main_logic.proactive_recommendation.storage.atomic_json import locked_path
+from main_logic.proactive_recommendation.persistence import locked_path
 
 
 BANDIT_STATE_VERSION = "recommendation_bandit_state_v1"

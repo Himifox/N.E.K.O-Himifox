@@ -7,7 +7,7 @@ import os
 from typing import Any
 
 from config.application import APP_VERSION
-from main_logic.proactive_recommendation.contracts import (
+from main_logic.proactive_recommendation.domain_models import (
     ProactiveActiveBias,
     ProactiveCandidate,
     ProactiveRecommendationDecision,

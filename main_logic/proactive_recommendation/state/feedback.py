@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation.storage.atomic_json import locked_path
+from main_logic.proactive_recommendation.persistence import locked_path
 
 
 LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME = (

@@ -9,7 +9,7 @@ from typing import Any
 
 from config import PROACTIVE_RECOMMENDATION_TUNING_MODE
 
-from .contracts import RecordFeedbackCommand
+from .domain_models import RecordFeedbackCommand
 from .feedback.contracts import RecommendationFeedbackRecordResult
 from .feedback.service import (
     FeedbackService,
