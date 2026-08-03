@@ -4,13 +4,14 @@ Networking, scheduling, and conversation-tool registration intentionally land
 in later phases.  This package only owns the offline data model and retrieval.
 """
 
-from ..engine.models import (
+from ..engine import (
     KnowledgeEntry as MoegirlKnowledgeEntry,
     KnowledgeHit as MoegirlKnowledgeHit,
+    KnowledgeRetriever as MoegirlKnowledgeRetriever,
+    KnowledgeStore as MoegirlKnowledgeStore,
+    KnowledgeStoreError,
     UpsertResult,
 )
-from .retrieval import MoegirlKnowledgeRetriever
-from .store import MoegirlKnowledgeStore, KnowledgeStoreError
 
 __all__ = [
     "KnowledgeStoreError",

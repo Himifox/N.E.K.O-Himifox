@@ -12,7 +12,7 @@ from knowledge.moegirl_knowledge import (
     MoegirlKnowledgeRetriever,
     MoegirlKnowledgeStore,
 )
-from knowledge.moegirl_knowledge.catalog_overrides import (
+from knowledge.engine.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,

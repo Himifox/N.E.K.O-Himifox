@@ -1,4 +1,4 @@
-"""Read-only retrieval over the local Moegirl knowledge database."""
+"""Read-only retrieval over a local knowledge database."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
-from ..engine.filters import make_fts_query, normalize_meme_phrase, normalize_search_text
-from ..engine.models import KnowledgeHit
-from .store import MoegirlKnowledgeStore, _entry_from_row
+from .filters import make_fts_query, normalize_meme_phrase, normalize_search_text
+from .models import KnowledgeHit
+from .store import KnowledgeStore, _entry_from_row
 
 
 _AUTO_MENTION_MIN_LENGTH = 3
@@ -51,7 +51,7 @@ class _TrieNode:
     entries: list[tuple[object, int]] = field(default_factory=list)
 
 
-class MemeMentionMatcher:
+class KnowledgeMentionMatcher:
     """Rebuildable multi-phrase matcher for complete conversational messages.
 
     This is deliberately a database-derived dictionary, not a list of hand-written
@@ -145,10 +145,10 @@ class MemeMentionMatcher:
             for _, _, _, entry in ordered[:limit]
         ]
 
-class MoegirlKnowledgeRetriever:
+class KnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
 
-    def __init__(self, store: MoegirlKnowledgeStore) -> None:
+    def __init__(self, store: KnowledgeStore) -> None:
         self.store = store
 
     def search(
@@ -263,16 +263,16 @@ class MoegirlKnowledgeRetriever:
 class _CachedMentionMatcher:
     revision: int
     disabled: frozenset[tuple[str, str]]
-    matcher: MemeMentionMatcher
+    matcher: KnowledgeMentionMatcher
 
 
 _MENTION_MATCHER_CACHE: dict[tuple[str, MatchPolicy], _CachedMentionMatcher] = {}
 
 
 def _get_cached_mention_matcher(
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     policy: MatchPolicy = MEME_MATCH_POLICY,
-) -> MemeMentionMatcher:
+) -> KnowledgeMentionMatcher:
     """Refresh the per-database matcher only after a committed upsert batch."""
     cache_key = (str(store.database_path.resolve()), policy)
     revision = store.entries_revision()
@@ -282,7 +282,7 @@ def _get_cached_mention_matcher(
         cached = _CachedMentionMatcher(
             revision=revision,
             disabled=disabled,
-            matcher=MemeMentionMatcher(
+            matcher=KnowledgeMentionMatcher(
                 (
                     entry
                     for entry in store.list_active_entries()
@@ -321,10 +321,6 @@ def _is_weak_entry(entry: object, policy: MatchPolicy) -> bool:
             for line in entry.content.splitlines()
         )
     return True
-
-
-KnowledgeRetriever = MoegirlKnowledgeRetriever
-KnowledgeMentionMatcher = MemeMentionMatcher
 
 
 def _score(entry, normalized_query: str, fts_rank: float) -> float:

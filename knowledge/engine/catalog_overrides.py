@@ -7,7 +7,8 @@ from pathlib import Path
 
 from utils.file_utils import atomic_write_json
 
-from knowledge.engine.mutation_lock import mutation_lock
+from .mutation_lock import mutation_lock
+from .store import publish_database_changed
 
 
 EntryKey = tuple[str, str]
@@ -63,9 +64,7 @@ def set_entry_disabled(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
         count = len(entries)
-    from knowledge.routing import notify_database_changed
-
-    notify_database_changed(output_path.with_name("knowledge.db"))
+    publish_database_changed(output_path.with_name("knowledge.db"))
     return count
 
 

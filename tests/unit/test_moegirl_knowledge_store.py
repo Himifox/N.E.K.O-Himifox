@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from knowledge.engine.retrieval import KnowledgeRetriever
+from knowledge.engine.store import KnowledgeStore
 from knowledge.moegirl_knowledge import (
     MoegirlKnowledgeEntry,
     MoegirlKnowledgeRetriever,
     MoegirlKnowledgeStore,
 )
+
+
+def test_generic_and_legacy_store_exports_share_identity():
+    assert KnowledgeStore is MoegirlKnowledgeStore
+    assert KnowledgeRetriever is MoegirlKnowledgeRetriever
 
 
 def _entry(index: int, *, content: str | None = None) -> MoegirlKnowledgeEntry:

@@ -13,7 +13,7 @@ from utils.file_utils import atomic_write_json
 from .engine.filters import sanitize_external_text
 from .engine.models import KnowledgeEntry
 from .engine.mutation_lock import mutation_lock
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .engine.store import KnowledgeStore
 
 
 PACK_SCHEMA_VERSION = 1
@@ -121,7 +121,7 @@ def install_pack(
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
-        store = MoegirlKnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
         old_entries = tuple(
             entry
             for entry in store.list_active_entries()
@@ -199,7 +199,7 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
         if not source_tag.startswith("source:community."):
             raise ValueError("only community packs can be removed")
 
-        store = MoegirlKnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
         old_entries = tuple(
             entry
             for entry in store.list_active_entries()

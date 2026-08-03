@@ -13,19 +13,19 @@ from .collection_overrides import (
     load_auto_context_overrides,
     set_collection_auto_context,
 )
-from .moegirl_knowledge.catalog_overrides import (
+from .engine.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,
 )
 from .engine.models import KnowledgeEntry, KnowledgeHit
 from .engine.source_registry import SOURCES, get_source
-from .moegirl_knowledge.retrieval import (
+from .engine.retrieval import (
     MEME_MATCH_POLICY,
+    KnowledgeRetriever,
     MatchPolicy,
-    MoegirlKnowledgeRetriever,
 )
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .engine.store import KnowledgeStore
 from .routing import (
     ContextHint,
     KnowledgeRoutingState,
@@ -821,11 +821,11 @@ class KnowledgeService:
         except KeyError as exc:
             raise ValueError(f"unknown knowledge collection: {collection_id}") from exc
 
-    def _store(self, collection_id: str) -> MoegirlKnowledgeStore:
-        return MoegirlKnowledgeStore(self.database_path(collection_id))
+    def _store(self, collection_id: str) -> KnowledgeStore:
+        return KnowledgeStore(self.database_path(collection_id))
 
-    def _retriever(self, collection_id: str) -> MoegirlKnowledgeRetriever:
-        return MoegirlKnowledgeRetriever(self._store(collection_id))
+    def _retriever(self, collection_id: str) -> KnowledgeRetriever:
+        return KnowledgeRetriever(self._store(collection_id))
 
     def _get_routing_state(self) -> KnowledgeRoutingState:
         if self._routing_state is None:

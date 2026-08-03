@@ -13,7 +13,7 @@ from knowledge.collection_overrides import (
     set_collection_auto_context,
 )
 from knowledge.engine.mutation_lock import mutation_lock
-from knowledge.moegirl_knowledge.retrieval import MatchPolicy
+from knowledge.engine.retrieval import MatchPolicy
 from knowledge.packs import (
     list_installed_packs,
     load_pack,

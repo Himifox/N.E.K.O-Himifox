@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .engine.models import KnowledgeEntry, KnowledgeHit, UpsertResult
-from .moegirl_knowledge.retrieval import (
+from .engine.retrieval import (
     KnowledgeMentionMatcher,
     KnowledgeRetriever,
     MatchPolicy,
 )
-from .moegirl_knowledge.store import (
-    KnowledgeStoreError,
-    MoegirlKnowledgeStore as KnowledgeStore,
-)
+from .engine.models import KnowledgeEntry, KnowledgeHit, UpsertResult
+from .engine.store import KnowledgeStore, KnowledgeStoreError
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
 from .routing import ContextHint
 from .subscriptions import (

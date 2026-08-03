@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
+from ..engine.catalog_overrides import (
+    entry_key,
+    get_catalog_override_path,
+    load_disabled_entries,
+)
 from ..engine.source_registry import SOURCES
-from .store import MoegirlKnowledgeStore
+from ..engine.store import KnowledgeStore
 
 
 def get_public_knowledge_status(config_manager) -> dict:
     """Return source-scoped local diagnostics without exposing knowledge text."""
     root = Path(config_manager.knowledge_dir) / "moegirl-knowledge"
     database_path = root / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path) if database_path.is_file() else None
+    store = KnowledgeStore(database_path) if database_path.is_file() else None
     disabled = load_disabled_entries(get_catalog_override_path(database_path))
     entries = store.list_active_entries() if store is not None else ()
     existing_keys = {entry_key(entry) for entry in entries}

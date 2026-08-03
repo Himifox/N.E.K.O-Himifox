@@ -11,15 +11,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .moegirl_knowledge.catalog_overrides import (
+from .engine.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
 from .engine.filters import normalize_meme_phrase, normalize_search_text
 from .engine.models import KnowledgeEntry
-from .moegirl_knowledge.retrieval import MatchPolicy
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .engine.retrieval import MatchPolicy
+from .engine.store import KnowledgeStore, register_database_change_listener
 
 
 _CARD_CACHE_LIMIT = 256
@@ -368,7 +368,7 @@ class KnowledgeRoutingState:
             if cached is not None:
                 self._cards.move_to_end(key)
                 return cached
-        entry = MoegirlKnowledgeStore(record.database_path).get_entry(
+        entry = KnowledgeStore(record.database_path).get_entry(
             record.source_tag,
             record.title,
         )
@@ -388,7 +388,7 @@ class KnowledgeRoutingState:
 
 
 def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
-    store = MoegirlKnowledgeStore(collection.database_path)
+    store = KnowledgeStore(collection.database_path)
     revision, entries = store.load_routing_entries()
     disabled = load_disabled_entries(get_catalog_override_path(collection.database_path))
     records: list[RouteRecord] = []
@@ -534,3 +534,6 @@ def notify_database_changed(database_path: str | Path) -> None:
         states = tuple(_STATES.values())
     for state in states:
         state.mark_database_dirty(database_path)
+
+
+register_database_change_listener(notify_database_changed)

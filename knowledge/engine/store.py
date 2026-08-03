@@ -8,21 +8,48 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
-from ..engine.models import KnowledgeEntry, UpsertResult
+from .models import KnowledgeEntry, UpsertResult
 
 
 SCHEMA_VERSION = 5
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
 _INITIALIZE_LOCK = threading.Lock()
+_DATABASE_CHANGE_LISTENERS: list[Callable[[Path], None]] = []
+_DATABASE_CHANGE_LISTENERS_LOCK = threading.Lock()
+
+
+def register_database_change_listener(listener: Callable[[Path], None]) -> None:
+    """Register one process-local callback for committed database changes."""
+    with _DATABASE_CHANGE_LISTENERS_LOCK:
+        if listener not in _DATABASE_CHANGE_LISTENERS:
+            _DATABASE_CHANGE_LISTENERS.append(listener)
+
+
+def unregister_database_change_listener(listener: Callable[[Path], None]) -> None:
+    """Remove a previously registered database-change callback."""
+    with _DATABASE_CHANGE_LISTENERS_LOCK:
+        try:
+            _DATABASE_CHANGE_LISTENERS.remove(listener)
+        except ValueError:
+            pass
+
+
+def publish_database_changed(database_path: str | Path) -> None:
+    """Notify a stable snapshot of listeners after a successful write."""
+    with _DATABASE_CHANGE_LISTENERS_LOCK:
+        listeners = tuple(_DATABASE_CHANGE_LISTENERS)
+    resolved_path = Path(database_path)
+    for listener in listeners:
+        listener(resolved_path)
 
 
 class KnowledgeStoreError(RuntimeError):
     pass
 
 
-class MoegirlKnowledgeStore:
+class KnowledgeStore:
     """Own a small rebuildable database without touching character memory."""
 
     def __init__(self, database_path: str | Path) -> None:
@@ -127,7 +154,7 @@ class MoegirlKnowledgeStore:
             connection.execute("UPDATE entries_fts SET tags=? WHERE entry_rowid=?", (" ".join(tags), row["rowid"]))
             changed = True
         if changed:
-            MoegirlKnowledgeStore._increment_entries_revision(connection)
+            KnowledgeStore._increment_entries_revision(connection)
 
     def _migrate_legacy_entries(self, connection: sqlite3.Connection) -> None:
         """Copy the old attributed schema into a five-field table once.
@@ -197,10 +224,7 @@ class MoegirlKnowledgeStore:
         return results
 
     def _notify_routing_changed(self) -> None:
-        # Local import avoids a persistence -> routing import cycle.
-        from knowledge.routing import notify_database_changed
-
-        notify_database_changed(self.database_path)
+        publish_database_changed(self.database_path)
 
     @staticmethod
     def _entry_key(entry: KnowledgeEntry) -> str:

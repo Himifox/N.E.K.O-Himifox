@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from knowledge.api import ContextHint, KnowledgeEntry, KnowledgeStore
-from knowledge.moegirl_knowledge.retrieval import MatchPolicy
+from knowledge.engine.retrieval import MatchPolicy
 from knowledge.service import (
     MEME_RESPONSE_POLICY,
     CollectionSpec,

@@ -12,7 +12,7 @@ from utils.file_utils import atomic_write_json
 
 from ..engine.filters import is_relevant_source_page
 from ..engine.models import KnowledgeEntry
-from .store import MoegirlKnowledgeStore
+from ..engine.store import KnowledgeStore
 
 
 class PageSource(Protocol):
@@ -36,7 +36,7 @@ class MoegirlKnowledgeSynchronizer:
         *,
         request_delay_seconds: float = 0.0,
     ) -> None:
-        self.store = MoegirlKnowledgeStore(database_path)
+        self.store = KnowledgeStore(database_path)
         self.state_path = Path(state_path)
         self.source = source
         self.request_delay_seconds = max(0.0, request_delay_seconds)

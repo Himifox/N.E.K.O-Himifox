@@ -7,12 +7,12 @@ import asyncio
 from fastapi import APIRouter, Query, Request
 
 from knowledge.api import KnowledgeService, open_knowledge
-from knowledge.engine.source_registry import get_source
-from knowledge.moegirl_knowledge.catalog_overrides import (
+from knowledge.engine.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
+from knowledge.engine.source_registry import get_source
 from knowledge.moegirl_knowledge.status import get_public_knowledge_status
 from main_routers.shared_state import get_config_manager
 

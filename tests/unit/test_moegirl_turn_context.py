@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from knowledge.moegirl_knowledge import MoegirlKnowledgeEntry, MoegirlKnowledgeStore
-from knowledge.moegirl_knowledge.catalog_overrides import (
+from knowledge.engine.catalog_overrides import (
     get_catalog_override_path,
     set_entry_disabled,
 )
