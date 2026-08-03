@@ -1,0 +1,494 @@
+推荐系统模块化重构详细方案
+1. 目标与原则
+本次是“等价重构”，不调整推荐算法、权重、HTTP 接口、状态文件格式和生产开关。
+核心目标：
+将候选生成、排序、反馈、观察、学习、调参、状态存储分离。
+消除反馈模块和调参模块之间的循环依赖。
+异步请求链不再直接执行同步磁盘 I/O。
+反馈、状态文件和 JSONL 日志具备并发安全性。
+保留旧模块作为兼容入口，现有调用方不需要一次性全部修改。
+当前已经取消的显式反馈按钮保持取消，不得在重构中恢复。
+不扩大到整个 proactive_chat/service.py、生成模块或前端架构。
+新包使用 main_logic/recommendation/，不使用 main_logic/proactive_recommendation/，避免与现有 proactive_recommendation.py 兼容文件产生导入歧义。
+2. 最终目录结构
+main_logic/
+├── recommendation/
+│   ├── __init__.py
+│   ├── contracts.py
+│   ├── application.py
+│   ├── turn.py
+│   ├── history.py
+│   ├── runtime.py
+│   ├── timing.py
+│   │
+│   ├── storage/
+│   │   ├── __init__.py
+│   │   ├── atomic_json.py
+│   │   └── jsonl.py
+│   │
+│   ├── engine/
+│   │   ├── __init__.py
+│   │   ├── candidates.py
+│   │   ├── scoring.py
+│   │   ├── decisions.py
+│   │   └── active_bias.py
+│   │
+│   ├── policy/
+│   │   ├── __init__.py
+│   │   ├── personalization.py
+│   │   └── bandit.py
+│   │
+│   ├── state/
+│   │   ├── __init__.py
+│   │   ├── feedback.py
+│   │   ├── preference.py
+│   │   └── bandit.py
+│   │
+│   ├── feedback/
+│   │   ├── __init__.py
+│   │   ├── contracts.py
+│   │   ├── events.py
+│   │   ├── text_signals.py
+│   │   ├── pending.py
+│   │   ├── rewards.py
+│   │   ├── store.py
+│   │   ├── learning.py
+│   │   ├── reports.py
+│   │   └── service.py
+│   │
+│   ├── observation/
+│   │   ├── __init__.py
+│   │   ├── builder.py
+│   │   ├── schema.py
+│   │   ├── review.py
+│   │   ├── store.py
+│   │   └── reports.py
+│   │
+│   └── tuning/
+│       ├── __init__.py
+│       ├── model.py
+│       ├── store.py
+│       ├── policy.py
+│       └── service.py
+│
+├── proactive_recommendation.py
+├── proactive_recommendation_feedback.py
+├── proactive_recommendation_observer.py
+├── proactive_recommendation_tuning.py
+├── proactive_recommendation_preference.py
+├── proactive_recommendation_feedback_state.py
+├── proactive_recommendation_bandit.py
+├── proactive_recommendation_bandit_state.py
+├── proactive_recommendation_personalization.py
+├── proactive_recommendation_runtime.py
+└── proactive_recommendation_timing.py
+最后一组旧文件只保留显式导入和 __all__，作为兼容门面，不再包含业务实现。
+3. 模块职责和函数放置
+3.1 公共契约
+recommendation/contracts.py 只放纯数据结构：
+ProactiveCandidate
+ProactiveRecommendationContext
+ProactiveRecommendationDecision
+ProactiveActiveBias
+RecordFeedbackCommand
+RecommendationSummaryQuery
+规则：
+不访问配置、文件或全局状态。
+不导入 Router、proactive_chat 或具体 Store。
+HTTP 请求字典先在 Router 转成 Command，再交给应用层。
+3.2 候选生成和排序
+engine/candidates.py 只负责把来源数据转成候选：
+build_candidates()
+build_phase1_material_candidates()
+build_source_candidates()
+build_topic_material_candidate()
+create_candidate()
+make_candidate_id()
+现有函数迁移：
+_phase1_material_candidates → build_phase1_material_candidates
+_source_candidates → build_source_candidates
+_topic_material_candidate → build_topic_material_candidate
+_candidate → create_candidate
+_candidate_id → make_candidate_id
+链接清洗、来源类型映射、候选 ID 生成等私有函数留在本文件。
+engine/scoring.py 只负责过滤、打分和排序：
+rank_candidates()
+candidate_filter_reason()
+score_candidate()
+以下函数与其权重常量放在本文件并继续保持私有：
+_context_match
+_user_interest_match
+_novelty
+_interaction_value
+_interruption_cost
+_risk_penalty
+_diversity_penalty
+_tuning_score_adjustment
+_personalization_diagnostics
+engine/decisions.py 负责组合候选与评分结果：
+build_shadow_recommendation_decision()
+build_phase1_material_shadow_decision()
+resolve_recommendation_activity_state()
+engine/active_bias.py 负责生产模式对已有素材顺序施加偏置：
+build_active_source_bias()
+reorder_phase1_topics_for_bias()
+source_type_to_phase2_tag()
+这里不允许加载状态或写日志。
+3.3 Bandit 和个性化策略
+policy/personalization.py：
+build_personalization_plan()
+personalization_adjustments()
+PERSONALIZATION_MAX_ABS_DELTA
+policy/bandit.py：
+build_source_bandit_decision()
+bandit_preferred_candidate()
+finalize_source_bandit_decision()
+Bandit arm 和 score contract 常量。
+策略模块只消费已经加载好的状态快照，不自行读写文件。
+3.4 通用存储
+storage/atomic_json.py 提供：
+class AtomicJsonStore:
+    def read(...)
+    def write(...)
+    def update(...)
+    def delete(...)
+要求：
+使用现有依赖 portalocker。
+锁定独立的 文件名.lock，而不是正在替换的目标文件。
+update() 在同一把锁中完成“读取—修改—写入”。
+临时文件名包含 PID 和线程 ID，避免多个线程共用 .tmp。
+写入完成后使用 os.replace() 原子替换。
+状态文件内容、字段、版本保持不变。
+storage/jsonl.py 提供：
+class JsonlStore:
+    def append(record, *, sanitizer, rotate_bytes) -> bool
+    def load(*, sanitizer, limit=None) -> list[dict]
+要求：
+旋转和追加必须处在同一把跨线程、跨进程文件锁中。
+保留 .1 轮转规则和 10 MB 默认大小。
+一次 API 反馈仍记录一条原始事件；并发去重只针对学习状态，不擅自丢弃原始事件。
+遇到损坏行继续跳过，保持现有容错行为。
+3.5 状态模块
+state/feedback.py：
+get_feedback_state_preview()
+update_conversation_acceptance_preview()
+update_source_affinity_preview()
+clear_temporary_feedback_state_preview()
+state/preference.py：
+get_preference_state()
+ensure_preference_state()
+update_source_preference()
+reset_preference_state()
+preference_adjustments()
+state/bandit.py：
+get_bandit_state()
+update_bandit_reward()
+reset_bandit_state()
+三个模块都通过 AtomicJsonStore.update() 完成事务式更新。衰减、去重、裁剪逻辑仍由各自领域模块负责，不合并三类状态的业务语义。
+旧函数名通过兼容门面映射，例如：
+get_recommendation_preference_state → get_preference_state
+update_recommendation_bandit_reward → update_bandit_reward
+3.6 反馈子系统
+feedback/contracts.py：
+PendingRecommendationFeedback
+PendingFeedbackClaim
+RecommendationFeedbackRecordResult
+FeedbackLearningResult
+feedback/events.py：
+反馈事件分值和允许字段常量。
+build_feedback_event()
+sanitize_feedback_event()
+sanitize_feedback_metadata()
+has_forbidden_feedback_fields()
+music_feedback_event_type()
+旧名 sanitize_recommendation_feedback_event 由兼容门面映射到 sanitize_feedback_event。
+feedback/text_signals.py：
+显式文字正负反馈正则。
+来源名称识别、指代识别、疲劳识别。
+纯函数 detect_source_feedback_signals(text, pending) -> tuple[DetectedFeedbackSignal, ...]。
+不记录事件、不访问文件。
+feedback/pending.py 提供进程内注册表：
+class PendingFeedbackRegistry:
+    def register(...)
+    def register_from_observation(...)
+    def claim_event(...)
+    def mark_reply(...)
+    def mark_continue(...)
+    def add_reward_event(...)
+    def latest_for_user(...)
+    def consecutive_unanswered(...)
+    def clear(...)
+要求：
+内部使用 threading.RLock。
+claim_event() 在同一临界区内读取 pending、判断重复、写入 seen_event_types 和 seen_groups。
+所有 _pending_feedback 访问都必须经过该类。
+不再允许其他模块直接操作全局字典。
+feedback/rewards.py：
+build_reward_score_v2_preview()
+build_bandit_encounter_reward()
+奖励组件、版本和技术性零分事件常量。
+feedback/store.py：
+class FeedbackStore:
+    def append(event, *, log_mode, config_dir) -> bool
+    def load(path, *, limit=None) -> list[dict]
+只封装 JsonlStore 和反馈路径解析。
+feedback/learning.py：
+source_preference_outcome()
+apply_feedback_learning()
+校验 delivered source/candidate 是否与 pending 精确匹配。
+更新 feedback state、preference state 和 Bandit state。
+返回 FeedbackLearningResult，不触发调参。
+feedback/service.py：
+class FeedbackService:
+    def register_delivery(...)
+    def record_event(command) -> RecommendationFeedbackRecordResult
+    def note_user_turn(...)
+    def record_setting_change(...)
+    def consecutive_unanswered(...)
+record_event() 固定执行顺序：
+校验身份和事件。
+通过 Registry 原子 claim。
+构造、脱敏并写入原始事件日志。
+日志写入成功后调用 apply_feedback_learning()。
+返回现有字段完全一致的结果对象。
+调参不放在这里，从而消除 feedback → tuning 的依赖。
+feedback/reports.py：
+summarize_recommendation_feedback()
+join_observations_with_feedback()
+join_observations_with_reward_score_v2_preview()
+summarize_reward_score_v2_preview()
+summarize_feedback_calibration()
+其余只服务于报表的 bucket、pressure、suggestion 私有函数。
+3.7 观察子系统
+observation/builder.py：
+build_recommendation_observation()
+build_recommendation_review_context()
+实际投递素材匹配、候选排名匹配、source alias 等辅助函数。
+算法版本和 Git revision 常量也放在这里。
+observation/schema.py：
+sanitize_observation()
+sanitize_decision_context()
+sanitize_feedback_state_preview()
+sanitize_personalization()
+sanitize_preference_state()
+sanitize_policy_decision()
+observation/review.py：
+sanitize_review_context()
+validate_review_context()
+summarize_review_context()
+URL、敏感字段、文本长度和候选身份检查。
+observation/store.py：
+class ObservationStore:
+    def append(observation, *, log_mode, config_dir) -> bool
+    def load(path, *, limit=None) -> list[dict]
+observation/reports.py：
+summarize_observations()
+get_calibration_samples()
+summarize_calibration()
+summarize_validation()
+summarize_policy()
+select_observation_examples()
+所有报表函数保持纯计算，不自行打开文件。
+3.8 调参子系统
+tuning/model.py：
+default_tuning()
+sanitize_tuning()
+public_tuning_status()
+apply_tuning_score()
+调参文件版本、模式和边界常量。
+tuning/store.py：
+class TuningStore:
+    def load(config_dir) -> dict
+    def save(config_dir, tuning) -> bool
+    def reset(config_dir) -> bool
+使用 AtomicJsonStore，文件名继续为 proactive_recommendation_tuning.json。
+tuning/policy.py 只放纯策略：
+extract_auto_safe_feedback_suggestions()
+evaluate_tuning_health()
+自动应用阻断条件、回滚判断、健康窗口判断。
+tuning/service.py：
+class TuningService:
+    def maybe_auto_apply_from_logs(config_dir) -> dict
+    def update_health_from_logs(config_dir) -> dict
+    def pause(config_dir, reason) -> dict
+    def resume(config_dir) -> dict
+    def reset(config_dir) -> bool
+依赖方向固定为：
+tuning.service
+  ├── feedback.reports
+  ├── observation.reports
+  ├── feedback.store
+  ├── observation.store
+  └── tuning.store
+反馈模块不得反向导入调参模块。
+3.9 应用层
+application.py 是 Router 和领域模块之间唯一的业务入口：
+class RecommendationApplication:
+    async def create_turn(...)
+    async def record_feedback(command)
+    def record_feedback_sync(command)
+    async def build_summary(query, *, config_dir)
+    async def get_preference_state(...)
+    async def reset_preference_state(...)
+    async def get_tuning_status(...)
+    async def reset_tuning(...)
+    async def pause_tuning(...)
+    async def resume_tuning(...)
+    def get_runtime_status(...)
+    def rollback_runtime(...)
+同时提供：
+def get_recommendation_application() -> RecommendationApplication
+返回进程级单例，确保所有入口共享同一个 PendingFeedbackRegistry。
+record_feedback() 的应用层顺序：
+在线程池中执行完整反馈事务。
+若事件确实写入日志，再调用 TuningService.maybe_auto_apply_from_logs()。
+FeedbackService 本身不知道 TuningService，循环依赖因此消失。
+build_summary() 负责并发读取观察和反馈日志，再调用纯报表模块组装现有响应。Router 不再自行拼接十多个报表。
+3.10 Turn 生命周期
+turn.py 提供 RecommendationTurn：
+class RecommendationTurn:
+    @classmethod
+    async def create(...) -> RecommendationTurn
+
+    def decide_source(...) -> None
+    def decide_material(...) -> list[tuple[str, str]]
+    async def finalize(response_body) -> None
+create()：
+一次性记录统一的 now。
+使用 asyncio.to_thread() 加载 feedback、preference、bandit、tuning 状态。
+可独立的加载任务通过 asyncio.gather() 并行执行。
+preference 的 legacy 初始化在 feedback snapshot 完成后执行。
+tuning adjustment 缓存在 Turn 中，_context() 不再读取磁盘。
+recent_sources 由 proactive_chat 调用方传入，推荐包不反向导入聊天模块。
+decide_source()、decide_material() 保持同步，因为它们是纯内存计算。
+finalize()：
+在线程池中构造、脱敏和写入 observation。
+写入后注册 pending feedback。
+更新进程内 shadow history。
+不把日志失败扩散为主动聊天失败，继续保持 fail-soft。
+生产调用修改为：
+recommendation_turn = await recommendation_app.create_turn(...)
+...
+await recommendation_turn.finalize(body)
+history.py 负责现有 shadow history：
+record_shadow_selection()
+recent_shadow_sources()
+recent_shadow_candidate_ids()
+内部使用锁保护多请求访问。
+4. 依赖规则
+Router / proactive_chat adapters
+              ↓
+recommendation.application
+              ↓
+recommendation.turn
+      ┌───────┼────────┐
+      ↓       ↓        ↓
+   engine   policy   observation
+                         ↓
+                      feedback
+                         ↓
+                       state
+                         ↓
+                      storage
+
+application ──→ tuning ──→ feedback.reports + observation.reports
+强制规则：
+storage 不导入任何业务模块。
+state 不导入 engine、feedback service、tuning、Router。
+engine 和 policy 不读写文件。
+feedback 不导入 tuning。
+tuning 只能依赖 feedback/observation 的 store 和 reports。
+recommendation 包不得导入旧的 proactive_recommendation*.py 门面。
+Router 不直接更新状态文件，也不自行生成诊断汇总。
+5. 兼容层和公开接口
+以下保持不变：
+所有 /api/proactive/recommendation/* 路径。
+请求体和响应字段。
+环境变量和配置项。
+JSON、JSONL 文件名、字段和版本。
+推荐算法版本；纯重构不提升算法版本。
+旧模块导入路径。
+显式文字反馈、自然音乐行为反馈和个性化学习。
+已取消的前端显式反馈按钮继续不存在。
+旧文件采用显式导出：
+from main_logic.recommendation.feedback.events import build_feedback_event
+from main_logic.recommendation.feedback.service import ...
+禁止 import *。每个兼容文件声明完整 __all__。
+main_logic/proactive_chat/recommendation_integration.py 最终只保留：
+RecommendationTurn 兼容导出。
+现有 _record_proactive_recommendation_observation 等历史内部入口的薄包装。
+proactive_chat 状态到 recent_sources 的适配逻辑。
+6. 实施顺序
+阶段一：锁定当前行为
+以当前已取消显式反馈 UI 的工作区为基线。
+运行现有 763 项 proactive 单元测试、两个前端测试、Ruff 和语法检查。
+不恢复已经删除的按钮配置、翻译和前端事件监听。
+阶段二：存储和并发安全
+落地 AtomicJsonStore、JsonlStore 和 PendingFeedbackRegistry。
+preference、feedback state、bandit、tuning 先迁移到新 Store。
+增加线程并发测试，确认一个反馈 turn 只产生一次学习更新。
+原始日志仍按实际收到的 API 事件逐条保存。
+阶段三：拆分 feedback、observation、tuning
+先移动纯函数，再移动 Store，最后移动 Service。
+应用层接管“反馈成功后触发自动调参”。
+删除 feedback 中对 tuning 的局部导入。
+旧模块同步改为兼容导出。
+阶段四：拆分 engine 和 Turn
+拆候选生成、评分、决策、active bias、observation builder。
+引入异步 RecommendationTurn.create() 和 finalize()。
+修改主动聊天生命周期中的两个调用点。
+保证固定输入下候选 ID、分值、顺序和 observation 内容不变。
+阶段五：Router 变薄及清理
+反馈接口转为 RecommendationApplication.record_feedback()。
+summary 接口转为 build_summary()。
+preference、runtime、tuning 接口只做 HTTP 校验和应用层调用。
+添加架构依赖测试，防止重新形成循环依赖。
+更新设计文档中的最终目录与依赖方向。
+7. 测试方案
+继续使用 uv，不直接调用本地 pytest。
+新增测试：
+test_recommendation_storage_concurrency.py
+多线程同时更新同一 preference/bandit 状态。
+状态文件始终是合法 JSON。
+同一 turn 的学习证据只结算一次。
+JSONL 并发追加不产生半行或轮转冲突。
+
+test_recommendation_application.py
+FeedbackService 成功记录后才触发调参。
+日志关闭或写入失败时不更新学习状态。
+summary 响应字段与现有接口一致。
+async create/finalize 不在事件循环线程执行磁盘 I/O。
+
+test_recommendation_architecture.py
+新包不导入旧兼容模块。
+feedback 不导入 tuning。
+state/storage 不向上依赖 application、Router。
+Router 推荐接口只调用应用层。
+
+保留并适配现有测试：
+推荐候选和评分。
+observation 脱敏和匹配。
+feedback 文本识别、去重和 reward。
+preference、personalization 和 Bandit。
+tuning 自动应用、暂停、恢复和回滚。
+summary Router 契约。
+前端显式反馈 UI 不存在。
+音乐反馈时序。
+完整验收命令均使用 uv run：
+Ruff 检查所有修改的 Python 文件。
+proactive 单元测试全量运行。
+Node 前端反馈测试。
+locale JSON 解析。
+git diff --check。
+8. 验收标准和默认约束
+现有 763 项 proactive 测试继续通过，并通过新增并发和架构测试。
+HTTP 接口、状态文件和推荐输出无行为变化。
+同一反馈 turn 在并发请求下最多更新一次对应学习证据。
+JSONL 日志无交叉写、损坏行或轮转竞争。
+主动聊天异步主路径不直接执行文件读写。
+feedback 与 tuning 之间不存在直接或局部循环导入。
+所有旧导入路径继续有效。
+单个业务模块原则上控制在 800 行以内；报表复杂文件允许接近 900 行，但不得重新混入存储或状态更新。
+不创建 utils.py、helpers.py 等职责不清的文件；私有函数放在其唯一调用者所在模块。
+当前工作区已有未提交修改，重构必须在其上增量进行，不覆盖用户修改。
+实施会新增和调整测试文件；按照仓库指令，后续若要求创建 commit，必须先单独确认是否允许提交这些测试变更，不能自动提交。
