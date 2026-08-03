@@ -1,6 +1,6 @@
 import json
 
-import main_logic.proactive_recommendation.turn as recommendation_turn
+import main_logic.proactive_recommendation.service as recommendation_turn
 
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,

@@ -4,7 +4,7 @@ from main_logic.proactive_recommendation.feedback.service import (
     note_user_turn_for_feedback,
     register_pending_feedback,
 )
-from main_logic.proactive_recommendation.timing import (
+from main_logic.proactive_recommendation.service import (
     clear_proactive_delivery_timing_history,
     proactive_delivery_timing_snapshot,
     record_proactive_delivery_for_timing,

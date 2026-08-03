@@ -6,19 +6,24 @@ from fastapi.testclient import TestClient
 
 import main_routers.proactive_router as proactive_router
 import main_logic.proactive_recommendation.feedback.service as feedback_module
+import main_logic.proactive_recommendation.service as recommendation_service
 from config import AUTOSTART_CSRF_TOKEN
-from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
+from main_logic.proactive_recommendation import (
+    PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
+)
 from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
     register_pending_feedback,
 )
-from main_logic.proactive_recommendation.feedback.event_processing import build_feedback_event
+from main_logic.proactive_recommendation.feedback.event_processing import (
+    build_feedback_event,
+)
 from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
 )
-from main_logic.proactive_recommendation.application import (
-    RecommendationApplication,
+from main_logic.proactive_recommendation.service import (
+    RecommendationService,
 )
 from main_logic.proactive_recommendation.state.feedback_preview import (
     clear_temporary_feedback_state_preview,
@@ -82,14 +87,16 @@ def _observation(**overrides):
     return base
 
 
-def _client(monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=10_000.0):
+def _client(
+    monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=10_000.0
+):
     monkeypatch.setattr(
         proactive_router,
         "get_config_manager",
         lambda: _ConfigManagerStub(tmp_path),
     )
     monkeypatch.setattr(
-        proactive_router,
+        recommendation_service,
         "PROACTIVE_RECOMMENDATION_OBSERVATION_LOG",
         log_mode,
     )
@@ -99,12 +106,22 @@ def _client(monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=1
         log_mode,
     )
     monkeypatch.setattr(
+        recommendation_service,
+        "PROACTIVE_RECOMMENDATION_FEEDBACK_LOG",
+        log_mode,
+    )
+    monkeypatch.setattr(
         proactive_router,
         "PROACTIVE_RECOMMENDATION_TUNING_MODE",
         tuning_mode,
     )
     monkeypatch.setattr(
-        RecommendationApplication,
+        recommendation_service,
+        "PROACTIVE_RECOMMENDATION_TUNING_MODE",
+        tuning_mode,
+    )
+    monkeypatch.setattr(
+        RecommendationService,
         "get_runtime_status",
         lambda self: {
             "configured_mode": "shadow",
@@ -120,7 +137,7 @@ def _client(monkeypatch, tmp_path, *, log_mode="jsonl", tuning_mode="off", now=1
             "restart_restores_configured_mode": False,
         },
     )
-    monkeypatch.setattr(proactive_router.time, "time", lambda: now)
+    monkeypatch.setattr(recommendation_service.time, "time", lambda: now)
     app = FastAPI()
     app.include_router(proactive_router.router)
     return TestClient(app)
@@ -142,7 +159,9 @@ def _append_feedback(tmp_path, event):
     )
 
 
-def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, tmp_path):
+def test_recommendation_summary_returns_missing_when_jsonl_absent(
+    monkeypatch, tmp_path
+):
     client = _client(monkeypatch, tmp_path, log_mode="off")
 
     response = client.get("/api/proactive/recommendation/summary")
@@ -179,7 +198,7 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(monkeypatch, t
 def test_recommendation_runtime_status_and_rollback_contract(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        RecommendationApplication,
+        RecommendationService,
         "rollback_runtime",
         lambda self, *, reason: {
             "applied": True,
@@ -215,9 +234,14 @@ def test_recommendation_runtime_status_and_rollback_contract(monkeypatch, tmp_pa
     assert accepted.json()["status"]["last_rollback_reason"] == "unit_test"
 
 
-def test_recommendation_summary_uses_recent_hour_window_and_ignores_limit(monkeypatch, tmp_path):
+def test_recommendation_summary_uses_recent_hour_window_and_ignores_limit(
+    monkeypatch, tmp_path
+):
     now = 10_000.0
-    _append(tmp_path, _observation(turn_id="too-old", ts=now - CALIBRATION_WINDOW_SECONDS - 1))
+    _append(
+        tmp_path,
+        _observation(turn_id="too-old", ts=now - CALIBRATION_WINDOW_SECONDS - 1),
+    )
     _append(tmp_path, _observation(turn_id="match", ts=now - 3))
     _append(
         tmp_path,
@@ -273,9 +297,18 @@ def test_recommendation_summary_uses_recent_hour_window_and_ignores_limit(monkey
     assert "examples" not in payload
 
 
-def test_recommendation_summary_examples_are_sanitized_and_prioritized(monkeypatch, tmp_path):
+def test_recommendation_summary_examples_are_sanitized_and_prioritized(
+    monkeypatch, tmp_path
+):
     now = 10_000.0
-    _append(tmp_path, _observation(turn_id="stale-mismatch", ts=now - CALIBRATION_WINDOW_SECONDS - 1, matched_actual_material=False))
+    _append(
+        tmp_path,
+        _observation(
+            turn_id="stale-mismatch",
+            ts=now - CALIBRATION_WINDOW_SECONDS - 1,
+            matched_actual_material=False,
+        ),
+    )
     _append(tmp_path, _observation(turn_id="match", ts=now - 3))
     _append(
         tmp_path,
@@ -335,7 +368,9 @@ def test_recommendation_summary_examples_are_sanitized_and_prioritized(monkeypat
     assert "must-not-leak" not in dumped
 
 
-def test_recommendation_summary_uses_fixed_sample_limit_without_returning_path(monkeypatch, tmp_path):
+def test_recommendation_summary_uses_fixed_sample_limit_without_returning_path(
+    monkeypatch, tmp_path
+):
     now = 10_000.0
     for idx in range(60):
         _append(tmp_path, _observation(turn_id=f"row-{idx}", ts=now - 60 + idx))
@@ -358,7 +393,9 @@ def test_recommendation_summary_uses_fixed_sample_limit_without_returning_path(m
     assert str(tmp_path) not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_recommendation_summary_returns_validation_without_sensitive_fields(monkeypatch, tmp_path):
+def test_recommendation_summary_returns_validation_without_sensitive_fields(
+    monkeypatch, tmp_path
+):
     now = 10_000.0
     _append(
         tmp_path,
@@ -418,7 +455,12 @@ def test_recommendation_summary_returns_validation_without_sensitive_fields(monk
 
 def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     now = 10_000.0
-    _append(tmp_path, _observation(turn_id="music-positive", ts=now - 10, actual_primary_channel="music"))
+    _append(
+        tmp_path,
+        _observation(
+            turn_id="music-positive", ts=now - 10, actual_primary_channel="music"
+        ),
+    )
     _append(
         tmp_path,
         _observation(
@@ -468,18 +510,30 @@ def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     assert feedback_calibration["feedback_joined_count"] == 1
     assert feedback_calibration["feedback_inferred_count"] == 1
     assert feedback_calibration["feedback_scored_count"] == 2
-    assert feedback_calibration["score_bucket_feedback"]["high"]["average_feedback_score"] == 0.425
+    assert (
+        feedback_calibration["score_bucket_feedback"]["high"]["average_feedback_score"]
+        == 0.425
+    )
     assert feedback_calibration["top1_positive_rate"] == 0.5
     assert feedback_calibration["top1_negative_rate"] == 0.5
-    assert feedback_calibration["feedback_signal_summary"]["music"]["played_through_count"] == 1
+    assert (
+        feedback_calibration["feedback_signal_summary"]["music"]["played_through_count"]
+        == 1
+    )
     assert feedback_calibration["feedback_signal_summary"]["meme"]["ignored_count"] == 1
-    assert feedback_calibration["source_feedback_pressure"]["meme"]["level"] == "weak_ignored_pressure"
+    assert (
+        feedback_calibration["source_feedback_pressure"]["meme"]["level"]
+        == "weak_ignored_pressure"
+    )
     assert feedback_calibration["feedback_actionable_suggestions"]["meme"] == {
         "adjustment": 0.0,
         "reasons": ["weak_ignored_pressure"],
         "confidence": "low",
     }
-    assert payload["manual_tuning_preview"] == feedback_calibration["manual_tuning_preview"]
+    assert (
+        payload["manual_tuning_preview"]
+        == feedback_calibration["manual_tuning_preview"]
+    )
     assert payload["tuning"]["auto_apply_count"] == 0
     assert payload["retention"]["tuning_mode"] == "auto_safe"
     assert not (tmp_path / TUNING_FILENAME).exists()
@@ -583,7 +637,9 @@ def test_recommendation_tuning_pause_and_resume_require_csrf(monkeypatch, tmp_pa
     assert str(tmp_path) not in json.dumps(resumed.json(), ensure_ascii=False)
 
 
-def test_feedback_endpoint_requires_csrf_and_rejects_sensitive_fields(monkeypatch, tmp_path):
+def test_feedback_endpoint_requires_csrf_and_rejects_sensitive_fields(
+    monkeypatch, tmp_path
+):
     client = _client(monkeypatch, tmp_path, now=10_000.0)
 
     missing_csrf = client.post(
@@ -692,7 +748,9 @@ def test_feedback_endpoint_updates_verified_music_negative_preview_once(
 
     rows = [
         json.loads(line)
-        for line in (tmp_path / FEEDBACK_LOG_FILENAME).read_text(encoding="utf-8").splitlines()
+        for line in (tmp_path / FEEDBACK_LOG_FILENAME)
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert len(rows) == 2
     assert all(row["candidate_id"] == "music:verified" for row in rows)

@@ -3,18 +3,20 @@ import time
 
 import pytest
 
-from main_logic.proactive_recommendation import application as application_module
-from main_logic.proactive_recommendation.application import RecommendationApplication
+from main_logic.proactive_recommendation import service as service_module
+from main_logic.proactive_recommendation.service import RecommendationService
 from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 from main_logic.proactive_recommendation.domain_models import (
     RecommendationFeedbackRecordResult,
 )
-from main_logic.proactive_recommendation.turn import RecommendationTurn
+from main_logic.proactive_recommendation.service import RecommendationTurn
 
 
 @pytest.mark.asyncio
 async def test_turn_create_does_not_block_event_loop(monkeypatch):
-    monkeypatch.setattr(RecommendationTurn, "__post_init__", lambda self: time.sleep(0.05))
+    monkeypatch.setattr(
+        RecommendationTurn, "__post_init__", lambda self: time.sleep(0.05)
+    )
 
     create_task = asyncio.create_task(RecommendationTurn.create(lanlan_name="neko"))
     heartbeat = asyncio.create_task(asyncio.sleep(0.005, result="responsive"))
@@ -30,7 +32,9 @@ async def test_application_records_feedback_off_event_loop(monkeypatch):
     def record(**kwargs):
         time.sleep(0.05)
         calls.append(kwargs)
-        return RecommendationFeedbackRecordResult(event={"event_type": kwargs["event_type"]}, logged=True)
+        return RecommendationFeedbackRecordResult(
+            event={"event_type": kwargs["event_type"]}, logged=True
+        )
 
     def record_command(self, command):
         return record(
@@ -46,18 +50,18 @@ async def test_application_records_feedback_off_event_loop(monkeypatch):
         )
 
     monkeypatch.setattr(
-        application_module.FeedbackService,
+        service_module.FeedbackService,
         "record_event",
         record_command,
     )
-    application = RecommendationApplication()
+    service = RecommendationService()
     command = RecordFeedbackCommand(
         lanlan_name="neko",
         turn_id="turn-1",
         event_type="user_reply",
     )
 
-    record_task = asyncio.create_task(application.record_feedback(command))
+    record_task = asyncio.create_task(service.record_feedback(command))
     heartbeat = asyncio.create_task(asyncio.sleep(0.005, result="responsive"))
 
     assert await asyncio.wait_for(heartbeat, timeout=0.03) == "responsive"

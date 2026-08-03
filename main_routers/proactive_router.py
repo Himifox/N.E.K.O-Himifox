@@ -38,16 +38,12 @@ so the whitelist / type validation / atomic-write logic is maintained in one pla
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-import time
 from typing import Any, Mapping
 
 from fastapi import APIRouter, Request
 
 from config import (
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
-    PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
-    PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
     PROACTIVE_RECOMMENDATION_TUNING_MODE,
 )
 from main_logic.proactive_recommendation.feedback.service import (
@@ -56,47 +52,19 @@ from main_logic.proactive_recommendation.feedback.service import (
 from main_logic.proactive_recommendation.feedback.event_processing import (
     has_forbidden_feedback_fields,
 )
-from main_logic.proactive_recommendation.feedback.analytics import (
-    summarize_feedback_calibration,
-    summarize_recommendation_feedback,
-    summarize_reward_score_v2_preview,
+from main_logic.proactive_recommendation.service import (
+    get_recommendation_service,
 )
-from main_logic.proactive_recommendation.feedback.service import (
-    FEEDBACK_LOG_FILENAME,
-    load_recommendation_feedback_jsonl,
+from main_logic.proactive_recommendation.domain_models import (
+    RecordFeedbackCommand,
+    RecommendationSummaryQuery,
 )
-from main_logic.proactive_recommendation.application import (
-    get_recommendation_application,
-)
-from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 from main_logic.proactive_recommendation.observation.analytics import (
-    CALIBRATION_SAMPLE_LIMIT,
-    CALIBRATION_WINDOW_SECONDS,
-    DEFAULT_EXAMPLE_LIMIT,
     DEFAULT_HIGH_SCORE_THRESHOLD,
-    MAX_EXAMPLE_LIMIT,
-    get_recommendation_calibration_samples,
-    select_recommendation_observation_examples,
-    summarize_recommendation_calibration,
-    summarize_recommendation_policy,
-    summarize_recommendation_validation,
-)
-from main_logic.proactive_recommendation.observation.validation import (
-    summarize_recommendation_review_context,
-)
-from main_logic.proactive_recommendation.observation.storage import (
-    DEFAULT_ROTATE_BYTES,
-    OBSERVATION_LOG_FILENAME,
-    load_recommendation_observations_jsonl,
-)
-from main_logic.proactive_recommendation.state.bandit_posteriors import (
-    get_recommendation_bandit_state,
 )
 from main_logic.proactive_recommendation.tuning.storage import (
     TUNING_FILENAME,
-    load_recommendation_tuning,
 )
-from main_logic.proactive_recommendation.tuning.configuration import tuning_public_status
 from utils.cloudsave_runtime import MaintenanceModeError
 from utils.logger_config import get_module_logger
 from utils.preferences import (
@@ -113,9 +81,11 @@ logger = get_module_logger(__name__, "Main")
 # ``proactiveVisionEnabled`` 是前端"隐私模式"开关的反面
 # (``is_privacy_mode_enabled() == not proactiveVisionEnabled``)，
 # 涉及屏幕内容采集，必须由用户本人在 UI 决定，任何 API 写入路径都要拒绝。
-_USER_OWNED_FIELDS = frozenset({
-    "proactiveVisionEnabled",
-})
+_USER_OWNED_FIELDS = frozenset(
+    {
+        "proactiveVisionEnabled",
+    }
+)
 
 # 主动搭话所有可调字段（白名单子集；与 utils/preferences 的
 # _ALLOWED_CONVERSATION_SETTINGS 保持同步，但只暴露搭话相关字段）。
@@ -218,41 +188,23 @@ def _filter_proactive_subset(settings: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in settings.items() if k in _PROACTIVE_FIELDS}
 
 
-def _clamp_float(value: Any, *, default: float, lower: float, upper: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(lower, min(upper, parsed))
-
-
-def _recommendation_observation_log_path() -> Path | None:
-    try:
-        config_dir = getattr(get_config_manager(), "config_dir", None)
-    except Exception as exc:
-        logger.debug("proactive recommendation summary config dir unavailable: %s", exc)
-        return None
-    if not config_dir:
-        return None
-    return Path(config_dir) / OBSERVATION_LOG_FILENAME
-
-
-def _recommendation_feedback_log_path() -> Path | None:
-    try:
-        config_dir = getattr(get_config_manager(), "config_dir", None)
-    except Exception as exc:
-        logger.debug("proactive recommendation feedback config dir unavailable: %s", exc)
-        return None
-    if not config_dir:
-        return None
-    return Path(config_dir) / FEEDBACK_LOG_FILENAME
-
-
 async def _current_lanlan_name_and_config_dir() -> tuple[str, Any]:
     try:
         config_manager = get_config_manager()
-        _, her_name_default, _, _, _, _, _, _, _ = await config_manager.aget_character_data()
-        return str(her_name_default or "").strip(), getattr(config_manager, "config_dir", None)
+        (
+            _,
+            her_name_default,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = await config_manager.aget_character_data()
+        return str(her_name_default or "").strip(), getattr(
+            config_manager, "config_dir", None
+        )
     except Exception:
         return "", None
 
@@ -277,7 +229,9 @@ def _value_matches(actual: Any, expected: Any) -> bool:
     return type(actual) is type(expected) and actual == expected
 
 
-async def _readback_persisted(payload: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+async def _readback_persisted(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
     """Read back after saving; returns ``(applied, rejected)``.
 
     The check is a **strict by-value + by-type comparison**:
@@ -326,7 +280,12 @@ async def get_proactive_mode():
         }
     except Exception as e:
         logger.exception(f"获取主动搭话模式失败: {e}")
-        return {"success": False, "error": "Internal server error", "mode": "custom", "settings": {}}
+        return {
+            "success": False,
+            "error": "Internal server error",
+            "mode": "custom",
+            "settings": {},
+        }
 
 
 @router.post("/mode")
@@ -391,127 +350,19 @@ async def get_proactive_recommendation_summary(
     high_score_threshold: float = DEFAULT_HIGH_SCORE_THRESHOLD,
     include_examples: bool = False,
 ):
-    """Read-only calibration summary for proactive recommendation shadow observations."""
-    safe_threshold = _clamp_float(
-        high_score_threshold,
-        default=DEFAULT_HIGH_SCORE_THRESHOLD,
-        lower=0.0,
-        upper=1.0,
-    )
-    log_path = _recommendation_observation_log_path()
-    missing = log_path is None or not log_path.exists()
-    feedback_path = _recommendation_feedback_log_path()
-    feedback_missing = feedback_path is None or not feedback_path.exists()
-    observations = []
-    if not missing and log_path is not None:
-        observations = await asyncio.to_thread(
-            load_recommendation_observations_jsonl,
-            log_path,
-            limit=CALIBRATION_SAMPLE_LIMIT,
-        )
-    feedback_events = []
-    if not feedback_missing and feedback_path is not None:
-        feedback_events = await asyncio.to_thread(
-            load_recommendation_feedback_jsonl,
-            feedback_path,
-            limit=CALIBRATION_SAMPLE_LIMIT * 4,
-        )
-    now = time.time()
-    calibration_samples = get_recommendation_calibration_samples(
-        observations,
-        now=now,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    calibration = summarize_recommendation_calibration(
-        observations,
-        now=now,
-        high_score_threshold=safe_threshold,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    validation = summarize_recommendation_validation(
-        observations,
-        now=now,
-        high_score_threshold=safe_threshold,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    feedback = summarize_recommendation_feedback(
-        calibration_samples,
-        feedback_events,
-        now=now,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    feedback_calibration = summarize_feedback_calibration(
-        calibration_samples,
-        feedback_events,
-        now=now,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    reward_score_v2_preview = summarize_reward_score_v2_preview(
-        calibration_samples,
-        feedback_events,
-        now=now,
-        window_seconds=CALIBRATION_WINDOW_SECONDS,
-        sample_limit=CALIBRATION_SAMPLE_LIMIT,
-    )
-    review_context_validation = summarize_recommendation_review_context(
-        calibration_samples
-    )
-    policy_monitor = summarize_recommendation_policy(calibration_samples)
+    """Read-only calibration summary for proactive recommendation observations."""
     try:
-        tuning_config_dir = getattr(get_config_manager(), "config_dir", None)
+        config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
-        tuning_config_dir = None
-    tuning = load_recommendation_tuning(config_dir=tuning_config_dir)
-    bandit_learning = get_recommendation_bandit_state(
-        config_dir=tuning_config_dir, now=now
+        config_dir = None
+    return await get_recommendation_service().build_summary(
+        RecommendationSummaryQuery(
+            limit=limit,
+            high_score_threshold=high_score_threshold,
+            include_examples=include_examples,
+        ),
+        config_dir=config_dir,
     )
-
-    payload: dict[str, Any] = {
-        "ok": True,
-        "missing": missing,
-        "log_enabled": PROACTIVE_RECOMMENDATION_OBSERVATION_LOG == "jsonl",
-        "summary": calibration["summary"],
-        "calibration": calibration,
-        "validation": validation,
-        "feedback": feedback,
-        "feedback_calibration": feedback_calibration,
-        "reward_score_v2_preview": reward_score_v2_preview,
-        "review_context_validation": review_context_validation,
-        "policy_monitor": policy_monitor,
-        "bandit_learning": bandit_learning,
-        "manual_tuning_preview": feedback_calibration.get("manual_tuning_preview", {}),
-        "runtime": get_recommendation_application().get_runtime_status(),
-        "tuning": tuning_public_status(tuning),
-        "sample_count": calibration["sample_count"],
-        "retention": {
-            "filename": OBSERVATION_LOG_FILENAME,
-            "feedback_filename": FEEDBACK_LOG_FILENAME,
-            "tuning_filename": TUNING_FILENAME,
-            "sample_window_seconds": CALIBRATION_WINDOW_SECONDS,
-            "sample_limit": CALIBRATION_SAMPLE_LIMIT,
-            "requested_limit_ignored": limit is not None,
-            "high_score_threshold": safe_threshold,
-            "examples_default_limit": DEFAULT_EXAMPLE_LIMIT,
-            "examples_max_limit": MAX_EXAMPLE_LIMIT,
-            "rotate_bytes": DEFAULT_ROTATE_BYTES,
-            "feedback_missing": feedback_missing,
-            "feedback_log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG == "jsonl",
-            "tuning_mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
-            "review_context_mode": PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
-        },
-    }
-    if include_examples:
-        payload["examples"] = select_recommendation_observation_examples(
-            calibration_samples,
-            high_score_threshold=safe_threshold,
-            limit=DEFAULT_EXAMPLE_LIMIT,
-        )
-    return payload
 
 
 @router.get("/recommendation/runtime")
@@ -519,7 +370,7 @@ async def get_proactive_recommendation_runtime():
     """Return the non-sensitive startup flag and effective runtime mode."""
     return {
         "success": True,
-        "runtime": get_recommendation_application().get_runtime_status(),
+        "runtime": get_recommendation_service().get_runtime_status(),
     }
 
 
@@ -543,7 +394,7 @@ async def rollback_proactive_recommendation_runtime(request: Request):
     if validation_error is not None:
         return validation_error
     reason = str(data.get("reason") or "developer_runtime_rollback").strip()[:120]
-    result = get_recommendation_application().rollback_runtime(reason=reason)
+    result = get_recommendation_service().rollback_runtime(reason=reason)
     logger.warning(
         "proactive recommendation runtime rollback requested: applied=%s previous=%s",
         result.get("applied"),
@@ -584,7 +435,17 @@ async def record_proactive_recommendation_feedback(request: Request):
 
     try:
         config_manager = get_config_manager()
-        _, her_name_default, _, _, _, _, _, _, _ = await config_manager.aget_character_data()
+        (
+            _,
+            her_name_default,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = await config_manager.aget_character_data()
         config_dir = getattr(config_manager, "config_dir", None)
     except Exception:
         her_name_default = ""
@@ -593,7 +454,7 @@ async def record_proactive_recommendation_feedback(request: Request):
     if not lanlan_name:
         return {"success": False, "error": "lanlan_name missing"}
 
-    result = await get_recommendation_application().record_feedback(
+    result = await get_recommendation_service().record_feedback(
         RecordFeedbackCommand(
             lanlan_name=lanlan_name,
             turn_id=turn_id,
@@ -625,7 +486,7 @@ async def get_proactive_recommendation_preference():
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    state = await get_recommendation_application().get_preference_state(
+    state = await get_recommendation_service().get_preference_state(
         config_dir=config_dir
     )
     return {"success": True, "preference_state": state}
@@ -649,11 +510,11 @@ async def reset_proactive_recommendation_preference(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    application = get_recommendation_application()
-    reset = await application.reset_preference_state(config_dir=config_dir)
+    recommendation_service = get_recommendation_service()
+    reset = await recommendation_service.reset_preference_state(config_dir=config_dir)
     return {
         "success": bool(reset),
-        "preference_state": await application.get_preference_state(
+        "preference_state": await recommendation_service.get_preference_state(
             config_dir=config_dir
         ),
     }
@@ -666,9 +527,7 @@ async def get_proactive_recommendation_tuning():
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    tuning = await get_recommendation_application().get_tuning_status(
-        config_dir=config_dir
-    )
+    tuning = await get_recommendation_service().get_tuning_status(config_dir=config_dir)
     return {
         "ok": True,
         "mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
@@ -699,7 +558,7 @@ async def reset_proactive_recommendation_tuning(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    tuning = await get_recommendation_application().reset_tuning(config_dir=config_dir)
+    tuning = await get_recommendation_service().reset_tuning(config_dir=config_dir)
     return {
         "success": True,
         "tuning": tuning,
@@ -731,7 +590,7 @@ async def pause_proactive_recommendation_tuning(request: Request):
         duration_seconds = int(data.get("duration_seconds") or 6 * 3600)
     except (TypeError, ValueError):
         duration_seconds = 6 * 3600
-    tuning = await get_recommendation_application().pause_tuning(
+    tuning = await get_recommendation_service().pause_tuning(
         config_dir=config_dir,
         duration_seconds=duration_seconds,
         reason=reason,
@@ -759,9 +618,7 @@ async def resume_proactive_recommendation_tuning(request: Request):
         config_dir = getattr(get_config_manager(), "config_dir", None)
     except Exception:
         config_dir = None
-    tuning = await get_recommendation_application().resume_tuning(
-        config_dir=config_dir
-    )
+    tuning = await get_recommendation_service().resume_tuning(config_dir=config_dir)
     return {"success": True, "tuning": tuning}
 
 
@@ -780,7 +637,10 @@ async def update_proactive_settings(request: Request):
         rejected_user_owned = sorted(set(data.keys()) & _USER_OWNED_FIELDS)
         payload = {k: v for k, v in data.items() if k in _PROACTIVE_WRITABLE_FIELDS}
         if not payload:
-            err: dict[str, Any] = {"success": False, "error": "没有可识别的主动搭话字段"}
+            err: dict[str, Any] = {
+                "success": False,
+                "error": "没有可识别的主动搭话字段",
+            }
             if rejected_user_owned:
                 err["rejected_user_owned"] = rejected_user_owned
             return err

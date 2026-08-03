@@ -178,11 +178,11 @@ def create_default_turn_dispatcher(
         )
     )
     try:
-        from main_logic.proactive_recommendation.application import (
-            get_recommendation_application,
+        from main_logic.proactive_recommendation.service import (
+            get_recommendation_service,
         )
         dispatcher.add_sink(
-            get_recommendation_application().feedback_turn_sink()
+            get_recommendation_service().feedback_turn_sink()
         )
     except Exception:
         logger.debug(

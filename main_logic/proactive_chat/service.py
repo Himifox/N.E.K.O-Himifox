@@ -106,8 +106,8 @@ from main_logic.proactive_chat.music_recommendation import (
     _build_music_playing_hint,
     _select_music_recommendation,
 )
-from main_logic.proactive_recommendation.application import (
-    get_recommendation_application,
+from main_logic.proactive_recommendation.service import (
+    get_recommendation_service,
 )
 from main_logic.proactive_chat.state import (
     _ensure_source_history_loaded,
@@ -472,7 +472,7 @@ async def handle_proactive_chat(
             lanlan_name=lanlan_name,
             log=logger,
         )
-        recommendation_turn = await get_recommendation_application().create_turn(
+        recommendation_turn = await get_recommendation_service().create_turn(
             lanlan_name=lanlan_name,
             configured_interval_seconds=command.base_interval_seconds,
             config_dir=getattr(_config_manager, "config_dir", None),

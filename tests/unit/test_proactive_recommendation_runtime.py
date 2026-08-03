@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from main_logic.proactive_recommendation.runtime import RecommendationRuntimeState
+from main_logic.proactive_recommendation.service import RecommendationRuntimeState
 
 
 def test_active_source_can_only_roll_back_to_shadow():
@@ -40,7 +40,11 @@ def test_repeated_rollback_is_a_noop_and_never_promotes_mode():
 
 
 def test_non_active_and_invalid_startup_modes_remain_safe():
-    for startup_mode, expected in (("shadow", "shadow"), ("off", "off"), ("invalid", "shadow")):
+    for startup_mode, expected in (
+        ("shadow", "shadow"),
+        ("off", "off"),
+        ("invalid", "shadow"),
+    ):
         runtime = RecommendationRuntimeState(startup_mode)
 
         result = runtime.rollback(reason="must not activate", now=1.0)
@@ -56,7 +60,7 @@ def test_recommendation_turn_snapshots_mode_and_wires_real_activity_state():
         Path(__file__).parents[2]
         / "main_logic"
         / "proactive_recommendation"
-        / "turn.py"
+        / "service.py"
     ).read_text(encoding="utf-8")
 
     assert source.count("self.mode = get_recommendation_runtime_mode()") == 1
