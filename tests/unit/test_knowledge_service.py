@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
+from knowledge.moegirl_knowledge import MoegirlKnowledgeEntry
 from knowledge.moegirl_knowledge.retrieval import MatchPolicy
 from knowledge.service import (
     MEME_COLLECTION,
@@ -8,6 +9,10 @@ from knowledge.service import (
     CollectionSpec,
     KnowledgeService,
 )
+
+
+def test_stable_and_legacy_entry_exports_share_identity():
+    assert KnowledgeEntry is MoegirlKnowledgeEntry
 
 
 def _entry(title: str, *, source: str, tags=(), content="Meaning\n- Example"):

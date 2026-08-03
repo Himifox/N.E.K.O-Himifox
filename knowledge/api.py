@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .moegirl_knowledge.models import (
-    MoegirlKnowledgeEntry as KnowledgeEntry,
-    MoegirlKnowledgeHit as KnowledgeHit,
-    UpsertResult,
-)
+from .engine.models import KnowledgeEntry, KnowledgeHit, UpsertResult
 from .moegirl_knowledge.retrieval import (
     KnowledgeMentionMatcher,
     KnowledgeRetriever,

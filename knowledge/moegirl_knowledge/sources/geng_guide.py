@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-from ..filters import normalize_search_text, sanitize_external_text
-from ..models import MoegirlKnowledgeEntry
+from knowledge.engine.filters import normalize_search_text, sanitize_external_text
+from knowledge.engine.models import KnowledgeEntry
 
 
 GENG_GUIDE_SOURCE_URL = "local-import://geng-guide-output.md"
@@ -23,14 +23,14 @@ _TAG_RE = re.compile(r"#([^\s#]+)")
 _GENERIC_TAGS = frozenset({"梗", "网络梗", "网络热词", "聊天", "游戏", "创作", "视频"})
 
 
-def load_geng_guide_markdown(raw: bytes) -> tuple[MoegirlKnowledgeEntry, ...]:
+def load_geng_guide_markdown(raw: bytes) -> tuple[KnowledgeEntry, ...]:
     """Parse the trusted local export without importing its question prompts."""
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ValueError("geng guide export must be UTF-8") from exc
 
-    entries: list[MoegirlKnowledgeEntry] = []
+    entries: list[KnowledgeEntry] = []
     seen_terms: set[str] = set()
     for block_match in _BLOCK_RE.finditer(text):
         entry = _entry_from_block(block_match.group("body"))
@@ -48,7 +48,7 @@ def load_geng_guide_markdown(raw: bytes) -> tuple[MoegirlKnowledgeEntry, ...]:
     return tuple(entries)
 
 
-def _entry_from_block(block: str) -> MoegirlKnowledgeEntry | None:
+def _entry_from_block(block: str) -> KnowledgeEntry | None:
     lines = [line.strip() for line in block.splitlines()]
     title_line = next((line for line in lines if line), "")
     title = _normalize_title(title_line)
@@ -63,7 +63,7 @@ def _entry_from_block(block: str) -> MoegirlKnowledgeEntry | None:
     if highlights:
         content_parts.append(f"要点：{highlights}")
     content = "\n\n".join(content_parts)
-    return MoegirlKnowledgeEntry(
+    return KnowledgeEntry(
         title=title,
         terms={"alias": (), "recognition": ()},
         # The export has no reliable taxonomy.  Do not invent one, because the

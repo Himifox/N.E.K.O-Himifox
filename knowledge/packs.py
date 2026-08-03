@@ -10,9 +10,9 @@ from typing import Any
 
 from utils.file_utils import atomic_write_json
 
-from ._mutation_lock import mutation_lock
-from .moegirl_knowledge.filters import sanitize_external_text
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry
+from .engine.filters import sanitize_external_text
+from .engine.models import KnowledgeEntry
+from .engine.mutation_lock import mutation_lock
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
@@ -36,7 +36,7 @@ class KnowledgePack:
     pack_id: str
     collection_id: str
     source: KnowledgePackSource
-    entries: tuple[MoegirlKnowledgeEntry, ...]
+    entries: tuple[KnowledgeEntry, ...]
 
     @property
     def source_tag(self) -> str:
@@ -93,7 +93,7 @@ def validate_pack(payload: object) -> KnowledgePack:
     if len(rows) > MAX_PACK_ENTRIES:
         raise ValueError("knowledge pack contains too many entries")
     source_tag = f"source:community.{pack_id}"
-    entries: list[MoegirlKnowledgeEntry] = []
+    entries: list[KnowledgeEntry] = []
     seen_titles: set[str] = set()
     for index, row in enumerate(rows):
         entry = _entry_from_payload(row, source_tag=source_tag, index=index)
@@ -234,7 +234,7 @@ def _entry_from_payload(
     *,
     source_tag: str,
     index: int,
-) -> MoegirlKnowledgeEntry:
+) -> KnowledgeEntry:
     if not isinstance(payload, dict):
         raise ValueError(f"entries[{index}] must be an object")
     _reject_unknown_keys(
@@ -256,7 +256,7 @@ def _entry_from_payload(
         raise ValueError(f"entries[{index}].tags must be a string array")
     if any(tag.startswith("source:") for tag in tags):
         raise ValueError("community entries cannot declare source tags")
-    return MoegirlKnowledgeEntry(
+    return KnowledgeEntry(
         title=_required_text(payload.get("title"), f"entries[{index}].title", 500),
         terms=normalized_terms,
         tags=(source_tag, *tags),

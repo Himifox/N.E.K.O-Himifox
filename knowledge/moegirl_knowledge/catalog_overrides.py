@@ -7,7 +7,7 @@ from pathlib import Path
 
 from utils.file_utils import atomic_write_json
 
-from knowledge._mutation_lock import mutation_lock
+from knowledge.engine.mutation_lock import mutation_lock
 
 
 EntryKey = tuple[str, str]

@@ -9,7 +9,7 @@ from urllib.parse import quote_plus, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ..filters import is_relevant_source_page
+from knowledge.engine.filters import is_relevant_source_page
 from .moegirl_wiki_api import SourcePage
 
 

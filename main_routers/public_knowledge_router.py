@@ -10,12 +10,12 @@ from fastapi import APIRouter, Query, Request
 
 from knowledge.api import open_knowledge
 from knowledge.diagnostics import list_recent_knowledge_routes
+from knowledge.engine.source_registry import get_source
 from knowledge.moegirl_knowledge.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
-from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
 from knowledge.subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,

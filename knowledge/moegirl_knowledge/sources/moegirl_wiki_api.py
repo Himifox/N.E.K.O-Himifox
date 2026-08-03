@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 import httpx
 
-from ..filters import is_relevant_source_page
+from knowledge.engine.filters import is_relevant_source_page
 
 
 API_BASE = "https://mzh.moegirl.org.cn/api.php"

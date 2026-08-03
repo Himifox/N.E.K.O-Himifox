@@ -34,7 +34,7 @@ def normalize_terms(value: Mapping[str, Iterable[str]] | None) -> dict[str, tupl
 
 
 @dataclass(frozen=True, slots=True)
-class MoegirlKnowledgeEntry:
+class KnowledgeEntry:
     """A compact public knowledge card; never a user or character memory."""
 
     title: str
@@ -84,8 +84,8 @@ class MoegirlKnowledgeEntry:
 
 
 @dataclass(frozen=True, slots=True)
-class MoegirlKnowledgeHit:
-    entry: MoegirlKnowledgeEntry
+class KnowledgeHit:
+    entry: KnowledgeEntry
     score: float
 
 

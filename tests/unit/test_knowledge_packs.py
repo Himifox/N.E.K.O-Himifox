@@ -7,7 +7,7 @@ import json
 import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
-from knowledge.moegirl_knowledge.source_registry import get_source
+from knowledge.engine.source_registry import get_source
 from knowledge.packs import install_pack, validate_pack
 from knowledge.subscriptions import (
     canonical_pack_bytes,

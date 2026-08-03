@@ -16,8 +16,8 @@ from .moegirl_knowledge.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .moegirl_knowledge.filters import normalize_meme_phrase, normalize_search_text
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry
+from .engine.filters import normalize_meme_phrase, normalize_search_text
+from .engine.models import KnowledgeEntry
 from .moegirl_knowledge.retrieval import MatchPolicy
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
@@ -257,7 +257,7 @@ class KnowledgeRoutingState:
             collection.collection_id: 0 for collection in collections
         }
         self._cards: OrderedDict[
-            tuple[str, str, str, int], MoegirlKnowledgeEntry
+            tuple[str, str, str, int], KnowledgeEntry
         ] = OrderedDict()
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -360,7 +360,7 @@ class KnowledgeRoutingState:
             allowed_collections=allowed_collections,
         ) if snapshot is not None else None
 
-    def get_card(self, match: RouteMatch) -> MoegirlKnowledgeEntry | None:
+    def get_card(self, match: RouteMatch) -> KnowledgeEntry | None:
         record = match.record
         key = (*record.key, record.revision)
         with self._lock:
@@ -461,7 +461,7 @@ def _normalize_latin_boundary_text(value: str) -> str:
 
 
 def _entry_context_terms(
-    entry: MoegirlKnowledgeEntry,
+    entry: KnowledgeEntry,
     hints: tuple[ContextHint, ...],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     ordinary: list[str] = []
@@ -490,7 +490,7 @@ def _safe_load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
         return ()
 
 
-def _weak_entry_is_eligible(entry: MoegirlKnowledgeEntry, policy: MatchPolicy) -> bool:
+def _weak_entry_is_eligible(entry: KnowledgeEntry, policy: MatchPolicy) -> bool:
     tags = entry.tags
     if any(tag not in tags for tag in policy.weak_required_tags):
         return False

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
-from .source_registry import SOURCES
+from ..engine.source_registry import SOURCES
 from .store import MoegirlKnowledgeStore
 
 

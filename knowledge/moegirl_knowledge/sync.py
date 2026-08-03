@@ -10,8 +10,8 @@ from typing import Iterable, Protocol
 
 from utils.file_utils import atomic_write_json
 
-from .filters import is_relevant_source_page
-from .models import MoegirlKnowledgeEntry
+from ..engine.filters import is_relevant_source_page
+from ..engine.models import KnowledgeEntry
 from .store import MoegirlKnowledgeStore
 
 
@@ -133,9 +133,9 @@ class MoegirlKnowledgeSynchronizer:
                 )
 
     @staticmethod
-    def _entry_from_page(page, synced_at: datetime, recognition_query: str = "") -> MoegirlKnowledgeEntry:
+    def _entry_from_page(page, synced_at: datetime, recognition_query: str = "") -> KnowledgeEntry:
         source_name = str(getattr(page, "source_name", "moegirl") or "moegirl")
-        return MoegirlKnowledgeEntry(
+        return KnowledgeEntry(
             title=page.title,
             terms={"alias": (), "recognition": (recognition_query,) if len(recognition_query.strip()) >= 3 else ()},
             tags=(f"source:{source_name}", "scope:public", *getattr(page, "tags", ())),

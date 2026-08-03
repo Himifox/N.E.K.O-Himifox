@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knowledge.moegirl_knowledge.filters import normalize_meme_phrase
+from knowledge.engine.filters import normalize_meme_phrase
 
 
 def test_phrase_normalization_handles_cpu_pronoun_and_sentence_glue():

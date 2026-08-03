@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
-from .filters import make_fts_query, normalize_meme_phrase, normalize_search_text
-from .models import MoegirlKnowledgeHit
+from ..engine.filters import make_fts_query, normalize_meme_phrase, normalize_search_text
+from ..engine.models import KnowledgeHit
 from .store import MoegirlKnowledgeStore, _entry_from_row
 
 
@@ -103,7 +103,7 @@ class MemeMentionMatcher:
         if not any(existing.content_hash == entry.content_hash for existing, _ in terminal):
             terminal.append((entry, len(phrase)))
 
-    def find(self, text: str, *, limit: int) -> list[MoegirlKnowledgeHit]:
+    def find(self, text: str, *, limit: int) -> list[KnowledgeHit]:
         if limit <= 0:
             return []
         best_by_id: dict[str, tuple[object, int]] = {}
@@ -120,13 +120,13 @@ class MemeMentionMatcher:
                     if previous is None or length > previous[1]:
                         best_by_id[entry_key] = (entry, length)
         hits = [
-            MoegirlKnowledgeHit(entry=entry, score=float(length))
+            KnowledgeHit(entry=entry, score=float(length))
             for entry, length in best_by_id.values()
         ]
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
-    def find_weak_short(self, text: str, *, limit: int) -> list[MoegirlKnowledgeHit]:
+    def find_weak_short(self, text: str, *, limit: int) -> list[KnowledgeHit]:
         """Find eligible two-character CHIME terms by exact continuous text."""
         if limit <= 0:
             return []
@@ -141,7 +141,7 @@ class MemeMentionMatcher:
                 best_by_id[entry.content_hash] = candidate
         ordered = sorted(best_by_id.values(), key=lambda value: value[:3])
         return [
-            MoegirlKnowledgeHit(entry=entry, score=float(self._policy.weak_term_length))
+            KnowledgeHit(entry=entry, score=float(self._policy.weak_term_length))
             for _, _, _, entry in ordered[:limit]
         ]
 
@@ -158,7 +158,7 @@ class MoegirlKnowledgeRetriever:
         limit: int = 3,
         allowed_source_tags: tuple[str, ...] | None = None,
         include_disabled: bool = False,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
             return []
@@ -188,7 +188,7 @@ class MoegirlKnowledgeRetriever:
                 get_catalog_override_path(self.store.database_path)
             )
         )
-        hits: list[MoegirlKnowledgeHit] = []
+        hits: list[KnowledgeHit] = []
         for row in rows_by_id.values():
             try:
                 entry = _entry_from_row(row)
@@ -199,7 +199,7 @@ class MoegirlKnowledgeRetriever:
             if entry_key(entry) in disabled:
                 continue
             score = _score(entry, query_text, float(row["rank"]) if "rank" in row.keys() else 0.0)
-            hits.append(MoegirlKnowledgeHit(entry=entry, score=score))
+            hits.append(KnowledgeHit(entry=entry, score=score))
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
@@ -209,7 +209,7 @@ class MoegirlKnowledgeRetriever:
         *,
         limit: int = 1,
         policy: MatchPolicy = MEME_MATCH_POLICY,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         """Find known phrases anywhere in a normal conversational sentence."""
         normalized_text = normalize_search_text(user_text)
         if len(normalized_text) < 2 or limit <= 0:
@@ -219,7 +219,7 @@ class MoegirlKnowledgeRetriever:
         results = matcher.find(normalized_text, limit=max(limit * 2, limit))
         if phrase_text and phrase_text != normalized_text:
             results.extend(matcher.find(phrase_text, limit=max(limit * 2, limit)))
-        best_by_id: dict[str, MoegirlKnowledgeHit] = {}
+        best_by_id: dict[str, KnowledgeHit] = {}
         for hit in results:
             entry_key = hit.entry.content_hash
             previous = best_by_id.get(entry_key)
@@ -233,7 +233,7 @@ class MoegirlKnowledgeRetriever:
         *,
         limit: int = 1,
         policy: MatchPolicy = MEME_MATCH_POLICY,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         """Find cautious two-character candidates after strong matching misses."""
         normalized_text = normalize_search_text(user_text)
         if policy.weak_term_length <= 0 or len(normalized_text) < policy.weak_term_length or limit <= 0:
@@ -249,7 +249,7 @@ class MoegirlKnowledgeRetriever:
         *,
         policy: MatchPolicy = MEME_MATCH_POLICY,
         limit: int = 1,
-    ) -> tuple[str, list[MoegirlKnowledgeHit]]:
+    ) -> tuple[str, list[KnowledgeHit]]:
         """Return strong matches first, then policy-approved weak matches."""
         strong = self.find_mentions(user_text, limit=limit, policy=policy)
         if strong:

@@ -18,13 +18,13 @@ from .moegirl_knowledge.catalog_overrides import (
     load_disabled_entries,
     set_entry_disabled,
 )
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry, MoegirlKnowledgeHit
+from .engine.models import KnowledgeEntry, KnowledgeHit
+from .engine.source_registry import SOURCES, get_source
 from .moegirl_knowledge.retrieval import (
     MEME_MATCH_POLICY,
     MatchPolicy,
     MoegirlKnowledgeRetriever,
 )
-from .moegirl_knowledge.source_registry import SOURCES, get_source
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 from .routing import (
     ContextHint,
@@ -86,7 +86,7 @@ class CollectionSpec:
 @dataclass(frozen=True, slots=True)
 class KnowledgeTurnMatch:
     collection_id: str
-    hit: MoegirlKnowledgeHit
+    hit: KnowledgeHit
     match_mode: str
     collection_priority: int = 0
 
@@ -449,7 +449,7 @@ class KnowledgeService:
         query: str,
         *,
         limit: int = 3,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         return self._retriever(collection_id).search(query, limit=limit)
 
     def search_page(
@@ -461,7 +461,7 @@ class KnowledgeService:
         offset: int = 0,
         source_tag: str = "",
         include_disabled: bool = False,
-    ) -> tuple[MoegirlKnowledgeHit, ...]:
+    ) -> tuple[KnowledgeHit, ...]:
         """Return one bounded ranked page without loading the whole collection."""
         limit = min(max(int(limit), 1), 100)
         offset = min(max(int(offset), 0), 10_000)
@@ -479,7 +479,7 @@ class KnowledgeService:
         sample_tag: str,
         *,
         limit: int = 1,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         """Return a small random selection from a collection-approved material tag."""
         return self._sample_entries(
             collection_id,
@@ -495,7 +495,7 @@ class KnowledgeService:
         *,
         limit: int,
         allowed_source_tags: tuple[str, ...] | None,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         spec = self._spec(collection_id)
         if sample_tag not in spec.sample_tags:
             raise ValueError("sample tag is not enabled for this collection")
@@ -574,7 +574,7 @@ class KnowledgeService:
             return KnowledgeTurnContext()
         selected = KnowledgeTurnMatch(
             collection_id=route_match.record.collection_id,
-            hit=MoegirlKnowledgeHit(entry=entry, score=route_match.score),
+            hit=KnowledgeHit(entry=entry, score=route_match.score),
             match_mode=route_match.match_mode,
             collection_priority=route_match.record.priority,
         )
@@ -638,7 +638,7 @@ class KnowledgeService:
                 continue
             selected = KnowledgeTurnMatch(
                 collection_id=spec.collection_id,
-                hit=MoegirlKnowledgeHit(entry=entries[0], score=0.0),
+                hit=KnowledgeHit(entry=entries[0], score=0.0),
                 match_mode="material_sample",
                 collection_priority=spec.priority,
             )
@@ -659,7 +659,7 @@ class KnowledgeService:
         source_tag: str = "",
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         return self._store(collection_id).list_entries(
             source_tag=source_tag,
             limit=limit,
@@ -672,7 +672,7 @@ class KnowledgeService:
         *,
         source_tag: str,
         title: str,
-    ) -> MoegirlKnowledgeEntry | None:
+    ) -> KnowledgeEntry | None:
         return self._store(collection_id).get_entry(source_tag, title)
 
     def set_entry_disabled(
