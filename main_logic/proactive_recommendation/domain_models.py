@@ -9,6 +9,10 @@ from typing import Any
 from .normalization import clamp_to_unit_interval
 
 
+PERSISTENT_INTEREST_MIN_EVIDENCE = 3
+PERSISTENT_AFFINITY_MAX = 0.20
+
+
 @dataclass(slots=True)
 class ProactiveCandidate:
     id: str

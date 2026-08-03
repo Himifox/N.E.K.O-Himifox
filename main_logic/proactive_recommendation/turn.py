@@ -39,23 +39,23 @@ from main_logic.proactive_recommendation.feedback.service import (
     consecutive_unanswered_recommendation_deliveries,
     register_pending_feedback_from_observation,
 )
-from main_logic.proactive_recommendation.state.feedback import (
+from main_logic.proactive_recommendation.state.feedback_preview import (
     get_feedback_state_preview,
 )
-from main_logic.proactive_recommendation.policy.bandit import (
+from main_logic.proactive_recommendation.engine.source_selection import (
     BANDIT_BASELINE_SCORE_CONTRACT,
     BANDIT_PERSONALIZED_SCORE_CONTRACT,
     bandit_preferred_candidate,
     build_source_bandit_decision,
 )
-from main_logic.proactive_recommendation.state.bandit import (
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
     get_recommendation_bandit_state,
 )
-from main_logic.proactive_recommendation.state.preference import (
+from main_logic.proactive_recommendation.state.source_preferences import (
     ensure_recommendation_preference_state,
     preference_adjustments,
 )
-from main_logic.proactive_recommendation.policy.personalization import (
+from main_logic.proactive_recommendation.engine.source_selection import (
     build_personalization_plan,
     personalization_adjustments,
 )

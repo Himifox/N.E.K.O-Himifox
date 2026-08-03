@@ -10,7 +10,7 @@ from config import (
     PROACTIVE_RECOMMENDATION_PERSONALIZATION_MODE,
 )
 
-from ..policy.bandit import BANDIT_ARMS
+from ..engine.source_selection import BANDIT_ARMS
 from .contracts import PendingRecommendationFeedback
 from .events import _clean_text, _normalize_source_type
 

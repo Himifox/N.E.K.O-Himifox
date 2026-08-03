@@ -20,7 +20,7 @@ from main_logic.proactive_recommendation.feedback.store import (
 from main_logic.proactive_recommendation.application import (
     RecommendationApplication,
 )
-from main_logic.proactive_recommendation.state.feedback import (
+from main_logic.proactive_recommendation.state.feedback_preview import (
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )

@@ -10,13 +10,17 @@ from main_logic.proactive_recommendation.domain_models import (
     ProactiveCandidate,
     ProactiveRecommendationDecision,
 )
+from main_logic.proactive_recommendation.normalization import (
+    coerce_float_or_default,
+    to_stripped_text,
+)
 
 _ACTIVE_DIVERSITY_OVERUSE_THRESHOLD = 0.12
 
 
 def source_type_to_phase2_tag(source_type: Any) -> str | None:
     """Map active-safe material source types to existing Phase-2 tags."""
-    normalized = _text(source_type)
+    normalized = to_stripped_text(source_type)
     if normalized in {"web", "news", "video", "home"}:
         return "WEB"
     if normalized == "music":
@@ -56,7 +60,9 @@ def build_active_source_bias(
             score_gap=_score_gap(ranked),
         )
     top_breakdown = decision.score_breakdown.get(top.id, {})
-    diversity_penalty = _number(top_breakdown.get("diversity_penalty"), 0.0)
+    diversity_penalty = coerce_float_or_default(
+        top_breakdown.get("diversity_penalty"), default=0.0
+    )
     if diversity_penalty >= _ACTIVE_DIVERSITY_OVERUSE_THRESHOLD:
         return _active_bias_fallback(
             "diversity_overuse",
@@ -94,14 +100,14 @@ def reorder_phase1_topics_for_bias(
     bias: ProactiveActiveBias | Mapping[str, Any] | None,
 ) -> list[Any]:
     """Move the preferred material channel first without dropping candidates."""
-    info = _active_bias_info(bias)
+    info = serialize_active_source_bias(bias)
     if info.get("applied") is not True:
         return list(phase1_topics or ())
     target = {
         "WEB": "web",
         "MUSIC": "music",
         "MEME": "meme",
-    }.get(_text(info.get("preferred_source_tag")).upper())
+    }.get(to_stripped_text(info.get("preferred_source_tag")).upper())
     if not target:
         return list(phase1_topics or ())
 
@@ -114,7 +120,7 @@ def reorder_phase1_topics_for_bias(
             and not isinstance(item, (str, bytes))
             and len(item) >= 1
         ):
-            channel = _text(item[0])
+            channel = to_stripped_text(item[0])
         if channel == target:
             preferred.append(item)
         else:
@@ -122,15 +128,15 @@ def reorder_phase1_topics_for_bias(
     return preferred + rest
 
 
-def _candidate_url(candidate: ProactiveCandidate) -> str:
+def candidate_material_url(candidate: ProactiveCandidate) -> str:
     link = candidate.payload.get("link")
     if isinstance(link, Mapping):
-        return _text(link.get("url"))
+        return to_stripped_text(link.get("url"))
     return ""
 
 
 def _candidate_has_material_link(candidate: ProactiveCandidate) -> bool:
-    return bool(_candidate_url(candidate))
+    return bool(candidate_material_url(candidate))
 
 
 def _score_gap(candidates: Sequence[ProactiveCandidate]) -> float | None:
@@ -156,7 +162,7 @@ def _active_bias_fallback(
     )
 
 
-def _active_bias_info(
+def serialize_active_source_bias(
     active_bias: ProactiveActiveBias | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if isinstance(active_bias, ProactiveActiveBias):
@@ -164,20 +170,22 @@ def _active_bias_info(
     if isinstance(active_bias, Mapping):
         return {
             "applied": active_bias.get("applied") is True,
-            "preferred_source_type": _text(active_bias.get("preferred_source_type"))
+            "preferred_source_type": to_stripped_text(active_bias.get("preferred_source_type"))
             or None,
-            "preferred_source_tag": _text(
+            "preferred_source_tag": to_stripped_text(
                 active_bias.get("preferred_source_tag")
             ).upper()
             or None,
-            "preferred_candidate_id": _text(active_bias.get("preferred_candidate_id"))
+            "preferred_candidate_id": to_stripped_text(active_bias.get("preferred_candidate_id"))
             or None,
             "score_gap": (
-                _number(active_bias.get("score_gap"), 0.0)
+                coerce_float_or_default(
+                    active_bias.get("score_gap"), default=0.0
+                )
                 if active_bias.get("score_gap") is not None
                 else None
             ),
-            "fallback_reason": _text(active_bias.get("fallback_reason")) or None,
+            "fallback_reason": to_stripped_text(active_bias.get("fallback_reason")) or None,
         }
     return {
         "applied": False,
@@ -189,12 +197,3 @@ def _active_bias_info(
     }
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _number(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default

@@ -10,7 +10,7 @@ from main_logic.proactive_recommendation import (
     ProactiveRecommendationDecision,
     build_recommendation_observation,
 )
-from main_logic.proactive_recommendation.policy.bandit import (
+from main_logic.proactive_recommendation.engine.source_selection import (
     BANDIT_PERSONALIZED_SCORE_CONTRACT,
     build_source_bandit_decision,
     finalize_source_bandit_decision,
@@ -27,14 +27,14 @@ from main_logic.proactive_recommendation.feedback.rewards import (
 from main_logic.proactive_recommendation.feedback.learning import (
     source_preference_outcome,
 )
-from main_logic.proactive_recommendation.state.bandit import (
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
     get_recommendation_bandit_state,
     update_recommendation_bandit_reward,
 )
 from main_logic.proactive_recommendation.observation.schema import (
     sanitize_recommendation_policy_decision,
 )
-from main_logic.proactive_recommendation.state.preference import (
+from main_logic.proactive_recommendation.state.source_preferences import (
     get_recommendation_preference_state,
     preference_adjustments,
     reset_recommendation_preference_state,

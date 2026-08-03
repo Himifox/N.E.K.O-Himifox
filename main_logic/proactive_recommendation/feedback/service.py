@@ -15,13 +15,13 @@ from typing import Any, Callable
 
 from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
 
-from main_logic.proactive_recommendation.state.bandit import (
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
     update_recommendation_bandit_reward,
 )
-from main_logic.proactive_recommendation.state.preference import (
+from main_logic.proactive_recommendation.state.source_preferences import (
     update_recommendation_source_preference,
 )
-from main_logic.proactive_recommendation.state.feedback import (
+from main_logic.proactive_recommendation.state.feedback_preview import (
     update_conversation_acceptance_preview,
     update_source_affinity_preview,
 )

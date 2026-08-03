@@ -20,7 +20,7 @@ from .runtime import (
     get_recommendation_runtime_status,
     rollback_recommendation_runtime,
 )
-from .state.preference import (
+from .state.source_preferences import (
     get_recommendation_preference_state,
     reset_recommendation_preference_state,
 )

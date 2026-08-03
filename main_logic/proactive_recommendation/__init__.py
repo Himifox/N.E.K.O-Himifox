@@ -6,13 +6,13 @@ from .domain_models import (
     ProactiveRecommendationContext,
     ProactiveRecommendationDecision,
 )
-from .engine.active_bias import (
+from .engine.active_source_bias import (
     build_active_source_bias,
     reorder_phase1_topics_for_bias,
     source_type_to_phase2_tag,
 )
-from .engine.candidates import build_candidates
-from .engine.decisions import (
+from .engine.candidate_builder import build_candidates
+from .engine.source_selection import (
     build_phase1_material_shadow_decision,
     build_shadow_recommendation_decision,
     resolve_recommendation_activity_state,

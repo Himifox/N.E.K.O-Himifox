@@ -89,7 +89,7 @@ from main_logic.proactive_recommendation.observation.store import (
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
 )
-from main_logic.proactive_recommendation.state.bandit import (
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
     get_recommendation_bandit_state,
 )
 from main_logic.proactive_recommendation.tuning.store import (

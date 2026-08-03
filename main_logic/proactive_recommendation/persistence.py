@@ -86,6 +86,17 @@ class AtomicJsonStore:
             self._write_unlocked(sanitized_value)
             return sanitized_value
 
+    def initialize_if_missing(
+        self,
+        value_factory: Callable[[], StoredValue],
+    ) -> StoredValue:
+        with locked_path(self.target_path):
+            if self.target_path.exists():
+                return self._read_unlocked()
+            sanitized_value = self._sanitizer(value_factory())
+            self._write_unlocked(sanitized_value)
+            return sanitized_value
+
     def delete(self) -> bool:
         with locked_path(self.target_path):
             if self.target_path.exists():

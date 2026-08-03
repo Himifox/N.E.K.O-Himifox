@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
-import math
 import os
 from pathlib import Path
-import threading
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation.persistence import locked_path
+from main_logic.proactive_recommendation.normalization import (
+    clamp_to_range,
+    clamp_to_unit_interval,
+    coerce_bounded_evidence_weight,
+    coerce_finite_float,
+    normalize_source_identifier,
+    to_stripped_text,
+)
+from main_logic.proactive_recommendation.persistence import AtomicJsonStore
+from main_logic.proactive_recommendation.state.decay import (
+    apply_decay_to_evidence_bucket,
+    build_empty_evidence_bucket,
+    calculate_half_life_decay_factor,
+    trim_oldest_outcomes,
+)
 
 
 PREFERENCE_STATE_VERSION = "recommendation_preference_state_v1"
@@ -24,21 +35,18 @@ PREFERENCE_SATURATION_EVIDENCE = 12.0
 PREFERENCE_MAX_ABS_DELTA = 0.03
 PREFERENCE_RECENT_OUTCOME_LIMIT = 2000
 
-_lock = threading.RLock()
-
-
 def get_recommendation_preference_state(
     *,
     config_dir: str | os.PathLike[str] | None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Return a decayed, point-in-time state snapshot."""
-    root = _config_root(config_dir)
+    root = _resolve_config_directory(config_dir)
     current = time.time() if now is None else float(now)
     if root is None:
-        return _public_state(_empty_state(), current)
-    with _lock, locked_path(root / PREFERENCE_STATE_FILENAME):
-        return _public_state(_load_state(root), current)
+        return _build_source_preference_snapshot(_new_source_preference_state(), current)
+    stored_state = _source_preference_store(root).read()
+    return _build_source_preference_snapshot(stored_state, current)
 
 
 def ensure_recommendation_preference_state(
@@ -48,15 +56,12 @@ def ensure_recommendation_preference_state(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Seed the official state once from the existing v2 aggregate contract."""
-    root = _config_root(config_dir)
+    root = _resolve_config_directory(config_dir)
     current = time.time() if now is None else float(now)
     if root is None:
         return get_recommendation_preference_state(config_dir=None, now=current)
-    path = root / PREFERENCE_STATE_FILENAME
-    with _lock, locked_path(path):
-        if path.exists():
-            return _public_state(_load_state(root), current)
-        state = _empty_state()
+    def build_seed_state() -> dict[str, Any]:
+        state = _new_source_preference_state()
         affinity = (
             legacy_preview.get("source_affinity")
             if isinstance(legacy_preview, Mapping)
@@ -69,13 +74,13 @@ def ensure_recommendation_preference_state(
         sources = persistent.get("sources") if isinstance(persistent, Mapping) else None
         if isinstance(sources, Mapping):
             for raw_source, raw_bucket in sources.items():
-                source = _source_name(raw_source)
+                source = normalize_source_identifier(raw_source)
                 if source and isinstance(raw_bucket, Mapping):
                     state["sources"][source] = {
-                        "effective_success": _bounded_count(
+                        "effective_success": coerce_bounded_evidence_weight(
                             raw_bucket.get("positive_evidence_count")
                         ),
-                        "effective_failure": _bounded_count(
+                        "effective_failure": coerce_bounded_evidence_weight(
                             raw_bucket.get("negative_evidence_count")
                         ),
                         # v2 counters had no decay contract. Start the new
@@ -83,8 +88,12 @@ def ensure_recommendation_preference_state(
                         # preserved instead of being retroactively expired.
                         "updated_at": current,
                     }
-        _save_state(root, state)
-        return _public_state(state, current)
+        return state
+
+    stored_state = _source_preference_store(root).initialize_if_missing(
+        build_seed_state
+    )
+    return _build_source_preference_snapshot(stored_state, current)
 
 
 def update_recommendation_source_preference(
@@ -99,62 +108,69 @@ def update_recommendation_source_preference(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Apply at most one source outcome per turn, with explicit feedback winning."""
-    root = _config_root(config_dir)
-    turn = _text(turn_id)
-    source = _source_name(source_type)
+    root = _resolve_config_directory(config_dir)
+    turn = to_stripped_text(turn_id)
+    source = normalize_source_identifier(source_type)
     current = time.time() if now is None else float(now)
-    win = _bounded_reward(success)
-    loss = _bounded_reward(failure)
-    strength = _bounded_reward(
+    win = _coerce_reward_component(success)
+    loss = _coerce_reward_component(failure)
+    strength = _coerce_reward_component(
         max(win, loss) if outcome_strength is None else outcome_strength
     )
     if root is None or not turn or not source or (win == 0 and loss == 0):
         return get_recommendation_preference_state(config_dir=config_dir, now=current)
 
-    with _lock, locked_path(root / PREFERENCE_STATE_FILENAME):
-        state = _load_state(root)
+    def apply_outcome(state: dict[str, Any]) -> dict[str, Any]:
         outcomes = state["recent_source_outcomes"]
         outcome_key = f"{turn}|{source}"
         previous = outcomes.get(outcome_key)
         priority = 2 if explicit else 1
         if isinstance(previous, Mapping):
             previous_priority = int(previous.get("priority", 0))
-            previous_strength = _bounded_reward(
+            previous_strength = _coerce_reward_component(
                 previous.get(
                     "outcome_strength",
                     max(
-                        _bounded_reward(previous.get("success")),
-                        _bounded_reward(previous.get("failure")),
+                        _coerce_reward_component(previous.get("success")),
+                        _coerce_reward_component(previous.get("failure")),
                     ),
                 )
             )
             if previous_priority > priority or (
                 previous_priority == priority and previous_strength >= strength
             ):
-                return _public_state(state, current)
+                return state
 
-        bucket = state["sources"].setdefault(source, _empty_bucket(current))
-        _decay_bucket(bucket, current)
+        bucket = state["sources"].setdefault(source, build_empty_evidence_bucket(current))
+        apply_decay_to_evidence_bucket(
+            bucket,
+            current,
+            half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+        )
         if isinstance(previous, Mapping):
-            recorded_at = max(0.0, _finite(previous.get("recorded_at")))
+            recorded_at = max(0.0, coerce_finite_float(previous.get("recorded_at")))
             if recorded_at <= 0.0:
-                recorded_at = max(0.0, _finite(previous.get("updated_at")))
+                recorded_at = max(0.0, coerce_finite_float(previous.get("updated_at")))
             if recorded_at <= 0.0:
                 previous_factor = 1.0
                 state["legacy_replacement_approximation_count"] = (
                     int(state.get("legacy_replacement_approximation_count", 0)) + 1
                 )
             else:
-                previous_factor = _decay_factor(recorded_at, current)
+                previous_factor = calculate_half_life_decay_factor(
+                    recorded_at,
+                    current,
+                    half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+                )
             bucket["effective_success"] = max(
                 0.0,
                 float(bucket["effective_success"])
-                - _bounded_reward(previous.get("success")) * previous_factor,
+                - _coerce_reward_component(previous.get("success")) * previous_factor,
             )
             bucket["effective_failure"] = max(
                 0.0,
                 float(bucket["effective_failure"])
-                - _bounded_reward(previous.get("failure")) * previous_factor,
+                - _coerce_reward_component(previous.get("failure")) * previous_factor,
             )
         bucket["effective_success"] += win
         bucket["effective_failure"] += loss
@@ -169,23 +185,27 @@ def update_recommendation_source_preference(
             "recorded_at": current,
             "updated_at": current,
         }
-        _trim_outcomes(outcomes)
-        _save_state(root, state)
-        return _public_state(state, current)
+        trim_oldest_outcomes(
+            outcomes,
+            maximum_count=PREFERENCE_RECENT_OUTCOME_LIMIT,
+            timestamp_field="updated_at",
+        )
+        return state
+
+    stored_state = _source_preference_store(root).update(apply_outcome)
+    return _build_source_preference_snapshot(stored_state, current)
 
 
 def reset_recommendation_preference_state(
     *, config_dir: str | os.PathLike[str] | None
 ) -> bool:
-    root = _config_root(config_dir)
+    root = _resolve_config_directory(config_dir)
     if root is None:
         return False
-    with _lock, locked_path(root / PREFERENCE_STATE_FILENAME):
-        try:
-            (root / PREFERENCE_STATE_FILENAME).unlink(missing_ok=True)
-            return True
-        except OSError:
-            return False
+    try:
+        return _source_preference_store(root).delete()
+    except OSError:
+        return False
 
 
 def preference_adjustments(state: Mapping[str, Any] | None) -> dict[str, float]:
@@ -200,12 +220,12 @@ def preference_adjustments(state: Mapping[str, Any] | None) -> dict[str, float]:
         return {}
     result: dict[str, float] = {}
     for raw_source, raw_bucket in sources.items():
-        source = _source_name(raw_source)
+        source = normalize_source_identifier(raw_source)
         if not source or not isinstance(raw_bucket, Mapping):
             continue
         result[source] = round(
-            _clamp(
-                _finite(raw_bucket.get("personalization_delta")),
+            clamp_to_range(
+                coerce_finite_float(raw_bucket.get("personalization_delta")),
                 -PREFERENCE_MAX_ABS_DELTA,
                 PREFERENCE_MAX_ABS_DELTA,
             ),
@@ -214,16 +234,20 @@ def preference_adjustments(state: Mapping[str, Any] | None) -> dict[str, float]:
     return result
 
 
-def _public_state(state: Mapping[str, Any], now: float) -> dict[str, Any]:
+def _build_source_preference_snapshot(state: Mapping[str, Any], now: float) -> dict[str, Any]:
     public_sources: dict[str, dict[str, Any]] = {}
     raw_sources = state.get("sources")
     if isinstance(raw_sources, Mapping):
         for raw_source, raw_bucket in sorted(raw_sources.items()):
-            source = _source_name(raw_source)
+            source = normalize_source_identifier(raw_source)
             if not source or not isinstance(raw_bucket, Mapping):
                 continue
             bucket = dict(raw_bucket)
-            _decay_bucket(bucket, now)
+            apply_decay_to_evidence_bucket(
+                bucket,
+                now,
+                half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+            )
             success = float(bucket["effective_success"])
             failure = float(bucket["effective_failure"])
             evidence = success + failure
@@ -247,7 +271,7 @@ def _public_state(state: Mapping[str, Any], now: float) -> dict[str, Any]:
                 "direction": round(direction, 6),
                 "confidence": round(confidence, 6),
                 "personalization_delta": round(
-                    _clamp(delta, -PREFERENCE_MAX_ABS_DELTA, PREFERENCE_MAX_ABS_DELTA),
+                    clamp_to_range(delta, -PREFERENCE_MAX_ABS_DELTA, PREFERENCE_MAX_ABS_DELTA),
                     6,
                 ),
                 "updated_at": round(float(bucket["updated_at"]), 6),
@@ -269,26 +293,25 @@ def _public_state(state: Mapping[str, Any], now: float) -> dict[str, Any]:
     }
 
 
-def _load_state(root: Path) -> dict[str, Any]:
-    try:
-        raw = json.loads((root / PREFERENCE_STATE_FILENAME).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty_state()
+def _sanitize_source_preference_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping) or raw.get("version") != PREFERENCE_STATE_VERSION:
-        return _empty_state()
+        return _new_source_preference_state()
     sources: dict[str, dict[str, float]] = {}
     if isinstance(raw.get("sources"), Mapping):
         for raw_source, raw_bucket in raw["sources"].items():
-            source = _source_name(raw_source)
+            source = normalize_source_identifier(raw_source)
             if source and isinstance(raw_bucket, Mapping):
                 sources[source] = {
-                    "effective_success": _bounded_count(
+                    "effective_success": coerce_bounded_evidence_weight(
                         raw_bucket.get("effective_success")
                     ),
-                    "effective_failure": _bounded_count(
+                    "effective_failure": coerce_bounded_evidence_weight(
                         raw_bucket.get("effective_failure")
                     ),
-                    "updated_at": max(0.0, _finite(raw_bucket.get("updated_at"))),
+                    "updated_at": max(
+                        0.0,
+                        coerce_finite_float(raw_bucket.get("updated_at")),
+                    ),
                 }
     outcomes: dict[str, dict[str, Any]] = {}
     if isinstance(raw.get("recent_source_outcomes"), Mapping):
@@ -300,45 +323,22 @@ def _load_state(root: Path) -> dict[str, Any]:
         "sources": sources,
         "recent_source_outcomes": outcomes,
         "legacy_replacement_approximation_count": int(
-            _bounded_count(raw.get("legacy_replacement_approximation_count"))
+            coerce_bounded_evidence_weight(
+                raw.get("legacy_replacement_approximation_count")
+            )
         ),
     }
 
 
-def _save_state(root: Path, state: Mapping[str, Any]) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / PREFERENCE_STATE_FILENAME
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(state, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+def _source_preference_store(root: Path) -> AtomicJsonStore[dict[str, Any]]:
+    return AtomicJsonStore(
+        root / PREFERENCE_STATE_FILENAME,
+        default_factory=_new_source_preference_state,
+        sanitizer=_sanitize_source_preference_state,
     )
-    os.replace(temporary, path)
 
 
-def _decay_bucket(bucket: dict[str, Any], now: float) -> None:
-    updated_at = max(0.0, _finite(bucket.get("updated_at")))
-    factor = _decay_factor(updated_at, now) if updated_at else 1.0
-    bucket["effective_success"] = (
-        _bounded_count(bucket.get("effective_success")) * factor
-    )
-    bucket["effective_failure"] = (
-        _bounded_count(bucket.get("effective_failure")) * factor
-    )
-    bucket["updated_at"] = now if updated_at else now
-
-
-def _trim_outcomes(outcomes: dict[str, dict[str, Any]]) -> None:
-    if len(outcomes) <= PREFERENCE_RECENT_OUTCOME_LIMIT:
-        return
-    oldest = sorted(
-        outcomes,
-        key=lambda key: _finite(outcomes[key].get("updated_at")),
-    )[: len(outcomes) - PREFERENCE_RECENT_OUTCOME_LIMIT]
-    for key in oldest:
-        outcomes.pop(key, None)
-
-
-def _empty_state() -> dict[str, Any]:
+def _new_source_preference_state() -> dict[str, Any]:
     return {
         "version": PREFERENCE_STATE_VERSION,
         "sources": {},
@@ -347,46 +347,12 @@ def _empty_state() -> dict[str, Any]:
     }
 
 
-def _empty_bucket(now: float) -> dict[str, float]:
-    return {"effective_success": 0.0, "effective_failure": 0.0, "updated_at": now}
-
-
-def _config_root(value: str | os.PathLike[str] | None) -> Path | None:
+def _resolve_config_directory(value: str | os.PathLike[str] | None) -> Path | None:
     return Path(value).resolve() if value is not None else None
 
 
-def _source_name(value: Any) -> str:
-    source = _text(value).lower()
-    return source if source and source.replace("_", "").isalnum() else ""
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _bounded_reward(value: Any) -> float:
-    return _clamp(_finite(value), 0.0, 1.0)
-
-
-def _bounded_count(value: Any) -> float:
-    return _clamp(_finite(value), 0.0, 1_000_000.0)
-
-
-def _decay_factor(recorded_at: float, now: float) -> float:
-    elapsed = max(0.0, now - max(0.0, recorded_at))
-    return 0.5 ** (elapsed / PREFERENCE_HALF_LIFE_SECONDS)
-
-
-def _finite(value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return number if math.isfinite(number) else 0.0
-
-
-def _clamp(value: float, lower: float, upper: float) -> float:
-    return max(lower, min(upper, value))
+def _coerce_reward_component(value: Any) -> float:
+    return clamp_to_unit_interval(coerce_finite_float(value))
 
 
 __all__ = [

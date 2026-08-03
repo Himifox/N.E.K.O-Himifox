@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from main_logic.proactive_recommendation.domain_models import (
@@ -10,8 +10,10 @@ from main_logic.proactive_recommendation.domain_models import (
     ProactiveRecommendationContext,
     ProactiveRecommendationDecision,
 )
-from main_logic.proactive_recommendation.policy.personalization import (
-    PERSONALIZATION_MAX_ABS_DELTA,
+from main_logic.proactive_recommendation.normalization import (
+    clamp_to_unit_interval,
+    coerce_float_or_default,
+    to_stripped_text,
 )
 
 _PRIVACY_CLOSED_STATES = {"closed", "private", "privacy", "privacy_closed"}
@@ -27,10 +29,11 @@ _DIVERSITY_SOURCE_STREAK_MAX = 0.12
 _DIVERSITY_CANDIDATE_REPEAT_PENALTY = 0.12
 _DIVERSITY_PENALTY_MAX = 0.30
 _SOURCE_TYPE_SCORE_ADJUSTMENTS = {"news": -0.05}
+PERSONALIZATION_MAX_ABS_DELTA = 0.03
 
 
 def rank_candidates(
-    ctx: ProactiveRecommendationContext,
+    context: ProactiveRecommendationContext,
     candidates: Sequence[ProactiveCandidate],
     *,
     decision_stage: str,
@@ -40,11 +43,11 @@ def rank_candidates(
     ranked: list[ProactiveCandidate] = []
 
     for candidate in candidates:
-        filter_reason = candidate_filter_reason(ctx, candidate)
+        filter_reason = candidate_filter_reason(context, candidate)
         if filter_reason:
             filtered[candidate.id] = filter_reason
             continue
-        score, breakdown = score_candidate(ctx, candidate)
+        score, breakdown = score_candidate(context, candidate)
         candidate.score = score
         score_breakdown[candidate.id] = breakdown
         ranked.append(candidate)
@@ -52,7 +55,7 @@ def rank_candidates(
     ranked.sort(key=lambda item: item.score, reverse=True)
     selected = ranked[0] if ranked else None
     personalization = _personalization_diagnostics(
-        ctx,
+        context,
         ranked,
         score_breakdown,
     )
@@ -69,14 +72,14 @@ def rank_candidates(
 
 
 def candidate_filter_reason(
-    ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate
+    context: ProactiveRecommendationContext, candidate: ProactiveCandidate
 ) -> str | None:
     if candidate.source_type not in ("topic_hook", "mini_game"):
-        enabled = set(ctx.enabled_modes or ())
+        enabled = set(context.enabled_modes or ())
         if enabled and candidate.source_type not in enabled:
             return "source_disabled"
 
-    if ctx.privacy_state in _PRIVACY_CLOSED_STATES and (
+    if context.privacy_state in _PRIVACY_CLOSED_STATES and (
         candidate.source_type in _PRIVACY_SENSITIVE_SOURCES
         or "screen" in candidate.risk_flags
         or "privacy" in candidate.risk_flags
@@ -86,7 +89,7 @@ def candidate_filter_reason(
     if "duplicate" in candidate.risk_flags:
         return "duplicate"
 
-    if ctx.activity_state in _BUSY_STATES and candidate.source_type not in (
+    if context.activity_state in _BUSY_STATES and candidate.source_type not in (
         "topic_hook",
         "vision",
     ):
@@ -96,21 +99,21 @@ def candidate_filter_reason(
 
 
 def score_candidate(
-    ctx: ProactiveRecommendationContext,
+    context: ProactiveRecommendationContext,
     candidate: ProactiveCandidate,
 ) -> tuple[float, dict[str, float]]:
-    source_weight = _clamp01(float(ctx.source_weights.get(candidate.source_type, 0.5)))
-    freshness = _clamp01(candidate.freshness)
-    context_match = _context_match(ctx, candidate)
-    user_interest_match = _user_interest_match(candidate)
-    novelty = _novelty(ctx, candidate)
-    source_quality = _clamp01(candidate.quality)
-    interaction_value = _interaction_value(candidate)
-    interruption_cost = _interruption_cost(ctx, candidate)
-    risk_penalty = _risk_penalty(ctx, candidate)
-    source_type_adjustment = _source_type_score_adjustment(candidate)
-    tuning_adjustment = _tuning_score_adjustment(ctx, candidate)
-    diversity_penalty, diversity_stats = _diversity_penalty(ctx, candidate)
+    source_weight = clamp_to_unit_interval(float(context.source_weights.get(candidate.source_type, 0.5)))
+    freshness = clamp_to_unit_interval(candidate.freshness)
+    context_match = _context_relevance_score(context, candidate)
+    user_interest_match = _user_interest_score(candidate)
+    novelty = _novelty_score(context, candidate)
+    source_quality = clamp_to_unit_interval(candidate.quality)
+    interaction_value = _interaction_value_score(candidate)
+    interruption_cost = _interruption_cost_score(context, candidate)
+    risk_penalty = _risk_penalty_score(context, candidate)
+    source_type_adjustment = _source_type_score_delta(candidate)
+    tuning_adjustment = _tuning_score_delta(context, candidate)
+    diversity_penalty, diversity_stats = _diversity_penalty_score(context, candidate)
 
     base_score = (
         0.20 * source_weight
@@ -123,23 +126,25 @@ def score_candidate(
         - 0.25 * interruption_cost
         - 0.30 * risk_penalty
     )
-    baseline_score = _clamp01(
+    baseline_score = clamp_to_unit_interval(
         base_score + source_type_adjustment + tuning_adjustment - diversity_penalty
     )
-    personalization_mode = _personalization_mode(ctx.personalization_mode)
+    personalization_mode = _personalization_mode(context.personalization_mode)
     personalization_adjustment = 0.0
     if personalization_mode in {"shadow_compare", "active"}:
         personalization_adjustment = max(
             -PERSONALIZATION_MAX_ABS_DELTA,
             min(
                 PERSONALIZATION_MAX_ABS_DELTA,
-                _number(
-                    ctx.personalization_adjustments.get(candidate.source_type),
-                    0.0,
+                coerce_float_or_default(
+                    context.personalization_adjustments.get(candidate.source_type),
+                    default=0.0,
                 ),
             ),
         )
-    personalized_score = _clamp01(baseline_score + personalization_adjustment)
+    personalized_score = clamp_to_unit_interval(
+        baseline_score + personalization_adjustment
+    )
     score = personalized_score if personalization_mode == "active" else baseline_score
     breakdown = {
         "source_weight": source_weight,
@@ -174,27 +179,27 @@ def score_candidate(
 
 
 def _personalization_diagnostics(
-    ctx: ProactiveRecommendationContext,
+    context: ProactiveRecommendationContext,
     ranked: Sequence[ProactiveCandidate],
     score_breakdown: Mapping[str, Mapping[str, float]],
 ) -> dict[str, Any]:
-    mode = _personalization_mode(ctx.personalization_mode)
+    mode = _personalization_mode(context.personalization_mode)
     if mode == "off" or not ranked:
         return {}
 
     baseline_ranked = sorted(
         ranked,
-        key=lambda candidate: _number(
+        key=lambda candidate: coerce_float_or_default(
             score_breakdown.get(candidate.id, {}).get("baseline_score"),
-            candidate.score,
+            default=candidate.score,
         ),
         reverse=True,
     )
     personalized_ranked = sorted(
         ranked,
-        key=lambda candidate: _number(
+        key=lambda candidate: coerce_float_or_default(
             score_breakdown.get(candidate.id, {}).get("personalized_score"),
-            candidate.score,
+            default=candidate.score,
         ),
         reverse=True,
     )
@@ -217,13 +222,22 @@ def _personalization_diagnostics(
                 "baseline_rank": baseline_positions[candidate.id],
                 "personalized_rank": personalized_positions[candidate.id],
                 "baseline_score": round(
-                    _number(breakdown.get("baseline_score"), candidate.score), 6
+                    coerce_float_or_default(
+                        breakdown.get("baseline_score"), default=candidate.score
+                    ),
+                    6,
                 ),
                 "delta": round(
-                    _number(breakdown.get("personalization_adjustment"), 0.0), 6
+                    coerce_float_or_default(
+                        breakdown.get("personalization_adjustment"), default=0.0
+                    ),
+                    6,
                 ),
                 "personalized_score": round(
-                    _number(breakdown.get("personalized_score"), candidate.score), 6
+                    coerce_float_or_default(
+                        breakdown.get("personalized_score"), default=candidate.score
+                    ),
+                    6,
                 ),
             }
         )
@@ -240,27 +254,32 @@ def _personalization_diagnostics(
 
 
 def _personalization_mode(value: Any) -> str:
-    mode = _text(value)
+    mode = to_stripped_text(value)
     return mode if mode in {"off", "shadow_compare", "active"} else "off"
 
 
-def _context_match(
-    ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate
+def _context_relevance_score(
+    context: ProactiveRecommendationContext, candidate: ProactiveCandidate
 ) -> float:
-    if ctx.activity_state == "restricted_screen_only":
+    if context.activity_state == "restricted_screen_only":
         return 1.0 if candidate.source_type == "vision" else 0.2
-    if ctx.activity_state in _RESTRICTED_STATES:
+    if context.activity_state in _RESTRICTED_STATES:
         if candidate.source_type in ("vision", "window", "topic_hook"):
             return 0.8
         return 0.35
-    if ctx.activity_state == "stale_returning":
+    if context.activity_state == "stale_returning":
         return 0.9 if candidate.source_type in ("topic_hook", "personal") else 0.65
     return 0.7 if candidate.source_type != "mini_game" else 0.55
 
 
-def _user_interest_match(candidate: ProactiveCandidate) -> float:
+def _user_interest_score(candidate: ProactiveCandidate) -> float:
     if candidate.source_type == "topic_hook":
-        return _clamp01(_number(candidate.payload.get("relevance"), 70.0) / 100.0)
+        return clamp_to_unit_interval(
+            coerce_float_or_default(
+                candidate.payload.get("relevance"), default=70.0
+            )
+            / 100.0
+        )
     if candidate.source_type == "personal":
         return 0.75
     if candidate.source_type in ("music", "meme"):
@@ -268,17 +287,17 @@ def _user_interest_match(candidate: ProactiveCandidate) -> float:
     return 0.5
 
 
-def _novelty(
-    ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate
+def _novelty_score(
+    context: ProactiveRecommendationContext, candidate: ProactiveCandidate
 ) -> float:
-    recent = [str(item or "") for item in (ctx.recent_sources or ())]
+    recent = [str(item or "") for item in (context.recent_sources or ())]
     if candidate.source_type not in recent:
         return 1.0
     repeats = sum(1 for item in recent if item == candidate.source_type)
     return max(0.15, 1.0 - 0.35 * repeats)
 
 
-def _interaction_value(candidate: ProactiveCandidate) -> float:
+def _interaction_value_score(candidate: ProactiveCandidate) -> float:
     if candidate.source_type == "topic_hook":
         return 0.85
     if candidate.source_type == "meme":
@@ -292,20 +311,20 @@ def _interaction_value(candidate: ProactiveCandidate) -> float:
     return 0.5
 
 
-def _interruption_cost(
-    ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate
+def _interruption_cost_score(
+    context: ProactiveRecommendationContext, candidate: ProactiveCandidate
 ) -> float:
-    if ctx.activity_state in _BUSY_STATES:
+    if context.activity_state in _BUSY_STATES:
         return 0.9
-    if ctx.activity_state in _RESTRICTED_STATES:
+    if context.activity_state in _RESTRICTED_STATES:
         return 0.65 if candidate.source_type not in ("vision", "topic_hook") else 0.25
-    if ctx.activity_state == "stale_returning":
+    if context.activity_state == "stale_returning":
         return 0.15
     return 0.25 if candidate.source_type in ("meme", "mini_game") else 0.2
 
 
-def _risk_penalty(
-    ctx: ProactiveRecommendationContext, candidate: ProactiveCandidate
+def _risk_penalty_score(
+    context: ProactiveRecommendationContext, candidate: ProactiveCandidate
 ) -> float:
     penalty = 0.0
     flags = set(candidate.risk_flags)
@@ -314,37 +333,37 @@ def _risk_penalty(
     if "duplicate" in flags:
         penalty += 0.8
     if "screen" in flags:
-        penalty += 0.35 if ctx.privacy_state in _PRIVACY_CLOSED_STATES else 0.1
+        penalty += 0.35 if context.privacy_state in _PRIVACY_CLOSED_STATES else 0.1
     if "placeholder" in flags:
         penalty += 0.15
     if "topic_risk" in flags:
         penalty += 0.3
-    return _clamp01(penalty)
+    return clamp_to_unit_interval(penalty)
 
 
-def _source_type_score_adjustment(candidate: ProactiveCandidate) -> float:
+def _source_type_score_delta(candidate: ProactiveCandidate) -> float:
     return float(_SOURCE_TYPE_SCORE_ADJUSTMENTS.get(candidate.source_type, 0.0))
 
 
-def _tuning_score_adjustment(
-    ctx: ProactiveRecommendationContext,
+def _tuning_score_delta(
+    context: ProactiveRecommendationContext,
     candidate: ProactiveCandidate,
 ) -> float:
     try:
-        value = float(ctx.source_type_adjustments.get(candidate.source_type, 0.0))
+        value = float(context.source_type_adjustments.get(candidate.source_type, 0.0))
     except (TypeError, ValueError):
         return 0.0
     return max(-0.15, min(0.15, value))
 
 
-def _diversity_penalty(
-    ctx: ProactiveRecommendationContext,
+def _diversity_penalty_score(
+    context: ProactiveRecommendationContext,
     candidate: ProactiveCandidate,
 ) -> tuple[float, dict[str, int]]:
-    recent_sources = _clean_recent_items(ctx.recent_shadow_sources)[
+    recent_sources = _clean_recent_items(context.recent_shadow_sources)[
         -_DIVERSITY_RECENT_SOURCE_LIMIT:
     ]
-    recent_candidate_ids = _clean_recent_items(ctx.recent_candidate_ids)
+    recent_candidate_ids = _clean_recent_items(context.recent_candidate_ids)
     source_repeat_count = sum(
         1 for source in recent_sources if source == candidate.source_type
     )
@@ -379,19 +398,8 @@ def _diversity_penalty(
 
 
 def _clean_recent_items(values: Sequence[Any]) -> list[str]:
-    return [_text(item) for item in values or () if _text(item)]
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _number(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
+    return [
+        text
+        for item in values or ()
+        if (text := to_stripped_text(item))
+    ]

@@ -13,7 +13,7 @@ from main_logic.proactive_recommendation.observation.store import (
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
 )
-from main_logic.proactive_recommendation.state.feedback import (
+from main_logic.proactive_recommendation.state.feedback_preview import (
     clear_temporary_feedback_state_preview,
     update_source_affinity_preview,
 )

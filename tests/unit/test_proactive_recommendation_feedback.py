@@ -33,14 +33,14 @@ from main_logic.proactive_recommendation.feedback.store import (
     append_recommendation_feedback_jsonl,
     load_recommendation_feedback_jsonl,
 )
-from main_logic.proactive_recommendation.state.feedback import (
+from main_logic.proactive_recommendation.state.feedback_preview import (
     FEEDBACK_STATE_PREVIEW_FILENAME,
     LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME,
     TEMPORARY_INTEREST_TTL_SECONDS,
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
-from main_logic.proactive_recommendation.state.preference import (
+from main_logic.proactive_recommendation.state.source_preferences import (
     get_recommendation_preference_state,
 )
 
@@ -328,7 +328,11 @@ def test_reward_score_v2_preview_uses_point_in_time_personal_reply_speed():
 def test_reward_score_v2_preview_is_not_consumed_by_runtime_policy():
     project_root = Path(__file__).parents[2]
     policy_sources = (
-        project_root / "main_logic" / "proactive_recommendation" / "engine" / "decisions.py",
+        project_root
+        / "main_logic"
+        / "proactive_recommendation"
+        / "engine"
+        / "scoring.py",
         project_root / "main_logic" / "proactive_recommendation" / "tuning" / "service.py",
         project_root / "main_routers" / "system_router" / "proactive_chat_flow.py",
     )
@@ -748,7 +752,11 @@ def test_feedback_state_preview_does_not_update_outside_shadow(tmp_path):
 def test_feedback_state_preview_is_not_consumed_by_ranking_or_tuning():
     project_root = Path(__file__).parents[2]
     for source_path in (
-        project_root / "main_logic" / "proactive_recommendation" / "engine" / "decisions.py",
+        project_root
+        / "main_logic"
+        / "proactive_recommendation"
+        / "engine"
+        / "scoring.py",
         project_root / "main_logic" / "proactive_recommendation" / "tuning" / "service.py",
     ):
         assert "feedback_state_preview" not in source_path.read_text(encoding="utf-8")

@@ -12,7 +12,7 @@ from main_logic.proactive_recommendation.domain_models import (
     ProactiveCandidate,
     ProactiveRecommendationDecision,
 )
-from main_logic.proactive_recommendation.policy.bandit import (
+from main_logic.proactive_recommendation.engine.source_selection import (
     finalize_source_bandit_decision,
 )
 

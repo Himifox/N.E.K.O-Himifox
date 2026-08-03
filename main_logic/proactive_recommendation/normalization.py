@@ -23,12 +23,12 @@ def coerce_finite_float(value: Any, *, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-def clamp_to_range(value: float, *, minimum: float, maximum: float) -> float:
+def clamp_to_range(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
 def clamp_to_unit_interval(value: float) -> float:
-    return clamp_to_range(float(value), minimum=0.0, maximum=1.0)
+    return clamp_to_range(float(value), 0.0, 1.0)
 
 
 def sanitize_string_sequence(value: Any) -> list[str]:
@@ -70,11 +70,7 @@ def coerce_bounded_evidence_weight(
     *,
     maximum: float = 1_000_000.0,
 ) -> float:
-    return clamp_to_range(
-        coerce_finite_float(value),
-        minimum=0.0,
-        maximum=maximum,
-    )
+    return clamp_to_range(coerce_finite_float(value), 0.0, maximum)
 
 
 def rounded_ratio_or_none(

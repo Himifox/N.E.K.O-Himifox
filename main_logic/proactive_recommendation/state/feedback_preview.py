@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 import os
 from pathlib import Path
 import threading
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation.persistence import locked_path
+from main_logic.proactive_recommendation.domain_models import (
+    PERSISTENT_AFFINITY_MAX,
+    PERSISTENT_INTEREST_MIN_EVIDENCE,
+)
+from main_logic.proactive_recommendation.normalization import (
+    clamp_to_range,
+    coerce_float_or_default,
+    coerce_nonnegative_integer_count,
+    normalize_source_identifier,
+)
+from main_logic.proactive_recommendation.persistence import AtomicJsonStore
 
 
 LEGACY_FEEDBACK_STATE_PREVIEW_FILENAME = (
@@ -21,9 +30,6 @@ FEEDBACK_STATE_PREVIEW_FILENAME = (
 )
 FEEDBACK_STATE_PREVIEW_VERSION = "feedback_state_preview_v2"
 TEMPORARY_INTEREST_TTL_SECONDS = 2 * 60 * 60
-PERSISTENT_INTEREST_MIN_EVIDENCE = 3
-PERSISTENT_AFFINITY_MAX = 0.20
-
 _CONVERSATION_SCOPE = "conversation_acceptance"
 _SOURCE_SCOPE = "source_affinity"
 _temporary_state: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -63,7 +69,7 @@ def update_source_affinity_preview(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Apply one verified material signal to a source-level preview."""
-    source = _source_name(source_type)
+    source = normalize_source_identifier(source_type)
     if not source:
         return get_feedback_state_preview(config_dir=config_dir, now=now)
     return _update_feedback_state_preview(
@@ -85,20 +91,20 @@ def _update_feedback_state_preview(
     persistent_eligible: bool,
     now: float | None,
 ) -> dict[str, Any]:
-    root = _config_root(config_dir)
+    root = _resolve_config_directory(config_dir)
     current = time.time() if now is None else float(now)
-    signal = _clamp(float(score), -1.0, 1.0)
+    signal = clamp_to_range(float(score), -1.0, 1.0)
     if root is None or signal == 0:
         return get_feedback_state_preview(config_dir=config_dir, now=current)
 
-    with _state_lock, locked_path(root / FEEDBACK_STATE_PREVIEW_FILENAME):
+    with _state_lock:
         key = (str(root), scope, subject)
         previous = _temporary_state.get(key)
         if previous is None or float(previous.get("expires_at", 0.0)) <= current:
-            previous = _empty_evidence_bucket()
+            previous = _new_feedback_evidence_bucket()
         temporary = {
             "interest_preview": round(
-                _clamp(float(previous["interest_preview"]) + signal, -1.0, 1.0),
+                clamp_to_range(float(previous["interest_preview"]) + signal, -1.0, 1.0),
                 3,
             ),
             "positive_evidence_count": int(previous["positive_evidence_count"])
@@ -111,16 +117,22 @@ def _update_feedback_state_preview(
         _temporary_state[key] = temporary
 
         if persistent_eligible:
-            state = _load_persistent_state(root)
-            bucket = _persistent_bucket(state, scope, subject, current)
-            count_key = (
-                "positive_evidence_count" if signal > 0 else "negative_evidence_count"
-            )
-            bucket[count_key] = int(bucket[count_key]) + 1
-            bucket["updated_at"] = current
-            _save_persistent_state(root, state)
+            def apply_persistent_evidence(
+                state: dict[str, Any],
+            ) -> dict[str, Any]:
+                bucket = _persistent_bucket(state, scope, subject, current)
+                count_key = (
+                    "positive_evidence_count"
+                    if signal > 0
+                    else "negative_evidence_count"
+                )
+                bucket[count_key] = int(bucket[count_key]) + 1
+                bucket["updated_at"] = current
+                return state
 
-        return _snapshot(root, current)
+            _feedback_preview_store(root).update(apply_persistent_evidence)
+
+        return _build_feedback_preview_snapshot(root, current)
 
 
 def get_feedback_state_preview(
@@ -129,15 +141,15 @@ def get_feedback_state_preview(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Return a point-in-time snapshot; tuning never consumes it."""
-    root = _config_root(config_dir)
+    root = _resolve_config_directory(config_dir)
     current = time.time() if now is None else float(now)
     if root is None:
-        return _empty_snapshot()
-    with _state_lock, locked_path(root / FEEDBACK_STATE_PREVIEW_FILENAME):
-        return _snapshot(root, current)
+        return _new_feedback_preview_snapshot()
+    with _state_lock:
+        return _build_feedback_preview_snapshot(root, current)
 
 
-def _snapshot(root: Path, now: float) -> dict[str, Any]:
+def _build_feedback_preview_snapshot(root: Path, now: float) -> dict[str, Any]:
     root_key = str(root)
     expired = [
         key
@@ -149,14 +161,14 @@ def _snapshot(root: Path, now: float) -> dict[str, Any]:
 
     conversation_temporary = _temporary_state.get(
         (root_key, _CONVERSATION_SCOPE, ""),
-        _empty_evidence_bucket(),
+        _new_feedback_evidence_bucket(),
     )
     source_temporary = {
         subject: _temporary_snapshot(bucket, now)
         for (config_key, scope, subject), bucket in sorted(_temporary_state.items())
         if config_key == root_key and scope == _SOURCE_SCOPE
     }
-    persistent = _load_persistent_state(root)
+    persistent = _feedback_preview_store(root).read()
     conversation_persistent = persistent["conversation_acceptance"]
     source_persistent = {
         source: {
@@ -194,8 +206,8 @@ def _snapshot(root: Path, now: float) -> dict[str, Any]:
     }
 
 
-def _empty_snapshot() -> dict[str, Any]:
-    empty = _empty_evidence_bucket()
+def _new_feedback_preview_snapshot() -> dict[str, Any]:
+    empty = _new_feedback_evidence_bucket()
     return {
         "version": FEEDBACK_STATE_PREVIEW_VERSION,
         "preview_only": True,
@@ -227,12 +239,7 @@ def _empty_snapshot() -> dict[str, Any]:
     }
 
 
-def _load_persistent_state(root: Path) -> dict[str, Any]:
-    path = root / FEEDBACK_STATE_PREVIEW_FILENAME
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = {}
+def _sanitize_feedback_preview_persistent_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping) or raw.get("schema_version") != 2:
         raw = {}
     conversation = _sanitize_persistent_bucket(raw.get("conversation_acceptance"))
@@ -240,7 +247,7 @@ def _load_persistent_state(root: Path) -> dict[str, Any]:
     sources: dict[str, dict[str, Any]] = {}
     if isinstance(raw_sources, Mapping):
         for raw_source, raw_bucket in raw_sources.items():
-            source = _source_name(raw_source)
+            source = normalize_source_identifier(raw_source)
             if source and isinstance(raw_bucket, Mapping):
                 sources[source] = _sanitize_persistent_bucket(raw_bucket)
     return {
@@ -250,21 +257,16 @@ def _load_persistent_state(root: Path) -> dict[str, Any]:
     }
 
 
-def _save_persistent_state(root: Path, state: Mapping[str, Any]) -> None:
-    path = root / FEEDBACK_STATE_PREVIEW_FILENAME
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text(
-            json.dumps(state, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
-        os.replace(temp_path, path)
-    except OSError:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+def _new_feedback_preview_persistent_state() -> dict[str, Any]:
+    return _sanitize_feedback_preview_persistent_state({})
+
+
+def _feedback_preview_store(root: Path) -> AtomicJsonStore[dict[str, Any]]:
+    return AtomicJsonStore(
+        root / FEEDBACK_STATE_PREVIEW_FILENAME,
+        default_factory=_new_feedback_preview_persistent_state,
+        sanitizer=_sanitize_feedback_preview_persistent_state,
+    )
 
 
 def _persistent_bucket(
@@ -287,11 +289,21 @@ def _persistent_bucket(
 
 def _temporary_snapshot(bucket: Mapping[str, Any], now: float) -> dict[str, Any]:
     return {
-        "interest_preview": _number(bucket.get("interest_preview"), 0.0),
-        "positive_evidence_count": _count(bucket.get("positive_evidence_count")),
-        "negative_evidence_count": _count(bucket.get("negative_evidence_count")),
+        "interest_preview": coerce_float_or_default(
+            bucket.get("interest_preview"), default=0.0
+        ),
+        "positive_evidence_count": coerce_nonnegative_integer_count(
+            bucket.get("positive_evidence_count")
+        ),
+        "negative_evidence_count": coerce_nonnegative_integer_count(
+            bucket.get("negative_evidence_count")
+        ),
         "expires_in_seconds": round(
-            max(0.0, _number(bucket.get("expires_at"), 0.0) - now),
+            max(
+                0.0,
+                coerce_float_or_default(bucket.get("expires_at"), default=0.0)
+                - now,
+            ),
             3,
         ),
     }
@@ -300,13 +312,20 @@ def _temporary_snapshot(bucket: Mapping[str, Any], now: float) -> dict[str, Any]
 def _sanitize_persistent_bucket(value: Any) -> dict[str, Any]:
     bucket = value if isinstance(value, Mapping) else {}
     return {
-        "positive_evidence_count": _count(bucket.get("positive_evidence_count")),
-        "negative_evidence_count": _count(bucket.get("negative_evidence_count")),
-        "updated_at": max(0.0, _number(bucket.get("updated_at"), 0.0)),
+        "positive_evidence_count": coerce_nonnegative_integer_count(
+            bucket.get("positive_evidence_count")
+        ),
+        "negative_evidence_count": coerce_nonnegative_integer_count(
+            bucket.get("negative_evidence_count")
+        ),
+        "updated_at": max(
+            0.0,
+            coerce_float_or_default(bucket.get("updated_at"), default=0.0),
+        ),
     }
 
 
-def _empty_evidence_bucket() -> dict[str, Any]:
+def _new_feedback_evidence_bucket() -> dict[str, Any]:
     return {
         "interest_preview": 0.0,
         "positive_evidence_count": 0,
@@ -317,13 +336,17 @@ def _empty_evidence_bucket() -> dict[str, Any]:
 
 
 def _persistent_score(bucket: Mapping[str, Any]) -> float:
-    positive = _count(bucket.get("positive_evidence_count"))
-    negative = _count(bucket.get("negative_evidence_count"))
+    positive = coerce_nonnegative_integer_count(
+        bucket.get("positive_evidence_count")
+    )
+    negative = coerce_nonnegative_integer_count(
+        bucket.get("negative_evidence_count")
+    )
     total = positive + negative
     if total < PERSISTENT_INTEREST_MIN_EVIDENCE:
         return 0.0
     return round(
-        _clamp(
+        clamp_to_range(
             PERSISTENT_AFFINITY_MAX * (positive - negative) / total,
             -PERSISTENT_AFFINITY_MAX,
             PERSISTENT_AFFINITY_MAX,
@@ -332,28 +355,5 @@ def _persistent_score(bucket: Mapping[str, Any]) -> float:
     )
 
 
-def _config_root(config_dir: str | os.PathLike[str] | None) -> Path | None:
+def _resolve_config_directory(config_dir: str | os.PathLike[str] | None) -> Path | None:
     return Path(config_dir).resolve() if config_dir is not None else None
-
-
-def _source_name(value: Any) -> str:
-    source = str(value or "").strip().lower()
-    return source if source.replace("_", "").isalnum() else ""
-
-
-def _count(value: Any) -> int:
-    try:
-        return max(0, min(1_000_000, int(value)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _number(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _clamp(value: float, lower: float, upper: float) -> float:
-    return max(lower, min(upper, value))
