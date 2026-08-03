@@ -59,20 +59,20 @@ from main_logic.proactive_recommendation.engine.source_selection import (
     build_personalization_plan,
     personalization_adjustments,
 )
-from main_logic.proactive_recommendation.observation.schema import (
+from main_logic.proactive_recommendation.observation.validation import (
     sanitize_recommendation_observation,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     append_recommendation_observation_jsonl,
 )
 from main_logic.proactive_recommendation.runtime import get_recommendation_runtime_mode
 from main_logic.proactive_recommendation.timing import (
     proactive_delivery_timing_snapshot,
 )
-from main_logic.proactive_recommendation.tuning.store import (
+from main_logic.proactive_recommendation.tuning.storage import (
     load_recommendation_tuning,
 )
-from main_logic.proactive_recommendation.tuning.model import (
+from main_logic.proactive_recommendation.tuning.configuration import (
     tuning_public_status,
 )
 from main_logic.proactive_recommendation.history import (

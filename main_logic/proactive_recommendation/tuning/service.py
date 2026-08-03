@@ -14,43 +14,46 @@ from pathlib import Path
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation.feedback.store import (
+from main_logic.proactive_recommendation.normalization import (
+    clamp_to_range,
+    coerce_float_or_default,
+    normalize_source_identifier,
+    to_stripped_text,
+)
+from main_logic.proactive_recommendation.persistence import resolve_persistence_path
+
+from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     load_recommendation_feedback_jsonl,
 )
-from main_logic.proactive_recommendation.feedback.reports import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
 )
-from main_logic.proactive_recommendation.observation.reports import (
+from main_logic.proactive_recommendation.observation.analytics import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
 )
-from main_logic.proactive_recommendation.tuning.model import (
-    _clean_text,
-    _clamp,
-    _default_health,
-    _default_tuning,
-    _mode,
-    _normalize_source,
-    _number,
-    _optional_number,
-    _sanitize_health,
+from main_logic.proactive_recommendation.tuning.configuration import (
+    _new_default_tuning_health,
+    _new_default_tuning_configuration,
+    _normalize_tuning_mode,
+    _coerce_optional_finite_float,
+    _sanitize_tuning_health,
     _sanitize_source_adjustments,
     apply_recommendation_tuning_score,
     sanitize_recommendation_tuning,
     tuning_public_status,
 )
-from main_logic.proactive_recommendation.tuning.store import (
-    _config_file,
+from main_logic.proactive_recommendation.tuning.storage import (
     load_recommendation_tuning,
     reset_recommendation_tuning,
     save_recommendation_tuning,
 )
-from main_logic.proactive_recommendation.tuning.policy import (
+from main_logic.proactive_recommendation.tuning.health_policy import (
     _apply_rollback,
     _auto_apply_blocked_reason,
     _calibration_signature,
@@ -96,17 +99,25 @@ def maybe_auto_apply_recommendation_tuning_from_logs(
     now: float | None = None,
 ) -> dict[str, Any]:
     current = time.time() if now is None else float(now)
-    if _mode(mode) != "auto_safe":
+    if _normalize_tuning_mode(mode) != "auto_safe":
         return {"applied": False, "reason": "mode_not_auto_safe"}
     obs_path = (
         Path(observation_path)
         if observation_path is not None
-        else _config_file(config_dir, OBSERVATION_LOG_FILENAME)
+        else resolve_persistence_path(
+            explicit_path=None,
+            config_directory=config_dir,
+            filename=OBSERVATION_LOG_FILENAME,
+        )
     )
     fb_path = (
         Path(feedback_path)
         if feedback_path is not None
-        else _config_file(config_dir, FEEDBACK_LOG_FILENAME)
+        else resolve_persistence_path(
+            explicit_path=None,
+            config_directory=config_dir,
+            filename=FEEDBACK_LOG_FILENAME,
+        )
     )
     if (
         obs_path is None
@@ -171,22 +182,26 @@ def maybe_auto_apply_recommendation_tuning_from_logs(
     reasons_by_source: dict[str, list[str]] = {}
 
     for source, suggestion in auto_safe_suggestions.items():
-        normalized = _normalize_source(source)
+        normalized = normalize_source_identifier(source)
         if normalized not in AUTO_TUNING_SOURCE_TYPES:
             continue
-        last_applied = _number(source_last_applied.get(normalized), 0.0)
+        last_applied = coerce_float_or_default(
+            source_last_applied.get(normalized), default=0.0
+        )
         if last_applied and current - last_applied < AUTO_APPLY_SOURCE_COOLDOWN_SECONDS:
             continue
-        raw_adjustment = _number(
+        raw_adjustment = coerce_float_or_default(
             suggestion.get("adjustment") if isinstance(suggestion, Mapping) else 0.0,
-            0.0,
+            default=0.0,
         )
-        step = _clamp(raw_adjustment, -AUTO_APPLY_MAX_STEP, AUTO_APPLY_MAX_STEP)
+        step = clamp_to_range(raw_adjustment, -AUTO_APPLY_MAX_STEP, AUTO_APPLY_MAX_STEP)
         if step == 0:
             continue
-        previous = _number(current_adjustments.get(normalized), 0.0)
+        previous = coerce_float_or_default(
+            current_adjustments.get(normalized), default=0.0
+        )
         updated = round(
-            _clamp(
+            clamp_to_range(
                 previous + step,
                 -AUTO_APPLY_MAX_ABS_ADJUSTMENT,
                 AUTO_APPLY_MAX_ABS_ADJUSTMENT,
@@ -201,9 +216,9 @@ def maybe_auto_apply_recommendation_tuning_from_logs(
         applied[normalized] = actual_step
         if isinstance(suggestion, Mapping):
             reasons_by_source[normalized] = [
-                _clean_text(reason)
+                to_stripped_text(reason)
                 for reason in (suggestion.get("reasons") or [])
-                if _clean_text(reason)
+                if to_stripped_text(reason)
             ]
 
     if not applied:
@@ -220,7 +235,8 @@ def maybe_auto_apply_recommendation_tuning_from_logs(
         "source_type_adjustment": current_adjustments,
         "created_from": tuning.get("created_from") or "feedback_calibration",
         "sample_count": int(calibration.get("sample_count") or 0),
-        "created_at": _number(tuning.get("created_at"), current) or current,
+        "created_at": coerce_float_or_default(tuning.get("created_at"), default=current)
+        or current,
         "updated_at": current,
         "auto_apply_count": int(tuning.get("auto_apply_count") or 0) + 1,
         "source_last_applied_at": source_last_applied,
@@ -259,17 +275,25 @@ def maybe_update_recommendation_tuning_health_from_logs(
     now: float | None = None,
 ) -> dict[str, Any]:
     current = time.time() if now is None else float(now)
-    if _mode(mode) != "auto_safe":
+    if _normalize_tuning_mode(mode) != "auto_safe":
         return {"updated": False, "reason": "mode_not_auto_safe"}
     obs_path = (
         Path(observation_path)
         if observation_path is not None
-        else _config_file(config_dir, OBSERVATION_LOG_FILENAME)
+        else resolve_persistence_path(
+            explicit_path=None,
+            config_directory=config_dir,
+            filename=OBSERVATION_LOG_FILENAME,
+        )
     )
     fb_path = (
         Path(feedback_path)
         if feedback_path is not None
-        else _config_file(config_dir, FEEDBACK_LOG_FILENAME)
+        else resolve_persistence_path(
+            explicit_path=None,
+            config_directory=config_dir,
+            filename=FEEDBACK_LOG_FILENAME,
+        )
     )
     if (
         obs_path is None
@@ -319,12 +343,12 @@ def pause_recommendation_tuning(
 ) -> dict[str, Any]:
     current = time.time() if now is None else float(now)
     tuning = load_recommendation_tuning(path=path, config_dir=config_dir)
-    health = dict(tuning.get("health") or _default_health())
+    health = dict(tuning.get("health") or _new_default_tuning_health())
     health.update(
         {
             "status": "paused",
             "paused_until": current + max(0, int(duration_seconds)),
-            "pause_reason": _clean_text(reason) or "manual_pause",
+            "pause_reason": to_stripped_text(reason) or "manual_pause",
             "last_evaluation": {
                 **dict(health.get("last_evaluation") or {}),
                 "decision": "manual_pause",
@@ -344,7 +368,7 @@ def resume_recommendation_tuning(
 ) -> dict[str, Any]:
     current = time.time() if now is None else float(now)
     tuning = load_recommendation_tuning(path=path, config_dir=config_dir)
-    health = dict(tuning.get("health") or _default_health())
+    health = dict(tuning.get("health") or _new_default_tuning_health())
     health.update(
         {
             "status": "healthy",

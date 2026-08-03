@@ -4,7 +4,7 @@ import pytest
 
 from main_logic.proactive_recommendation import PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
 
-from main_logic.proactive_recommendation.observation.reports import (
+from main_logic.proactive_recommendation.observation.analytics import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
     get_recommendation_calibration_samples,
@@ -13,11 +13,11 @@ from main_logic.proactive_recommendation.observation.reports import (
     summarize_recommendation_observations,
     summarize_recommendation_validation,
 )
-from main_logic.proactive_recommendation.observation.review import (
+from main_logic.proactive_recommendation.observation.validation import (
     summarize_recommendation_review_context,
     validate_recommendation_review_context,
 )
-from main_logic.proactive_recommendation.observation.schema import (
+from main_logic.proactive_recommendation.observation.validation import (
     REVIEW_CONTEXT_DELIVERED_EXCERPT_MAX_LENGTH,
     REVIEW_CONTEXT_SAFE_SUMMARY_MAX_LENGTH,
     REVIEW_CONTEXT_SAFE_TITLE_MAX_LENGTH,
@@ -26,7 +26,7 @@ from main_logic.proactive_recommendation.observation.schema import (
     sanitize_recommendation_observation,
     sanitize_recommendation_review_context,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     append_recommendation_observation_jsonl,
     load_recommendation_observations_jsonl,
 )

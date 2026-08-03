@@ -17,7 +17,7 @@ from .engine.source_selection import (
     build_shadow_recommendation_decision,
     resolve_recommendation_activity_state,
 )
-from .observation.builder import (
+from .observation.construction import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
     PROACTIVE_RECOMMENDATION_GIT_REVISION,
     build_recommendation_observation,

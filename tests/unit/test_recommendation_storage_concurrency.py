@@ -1,10 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 
-from main_logic.proactive_recommendation.feedback.contracts import (
+from main_logic.proactive_recommendation.domain_models import (
     PendingRecommendationFeedback,
 )
-from main_logic.proactive_recommendation.feedback.pending import (
+from main_logic.proactive_recommendation.feedback.service import (
     PendingFeedbackRegistry,
 )
 from main_logic.proactive_recommendation.persistence import AtomicJsonStore

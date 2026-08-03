@@ -15,6 +15,15 @@ from main_logic.proactive_recommendation.domain_models import (
 from main_logic.proactive_recommendation.engine.source_selection import (
     finalize_source_bandit_decision,
 )
+from main_logic.proactive_recommendation.engine.active_source_bias import (
+    candidate_material_url,
+    serialize_active_source_bias,
+)
+from main_logic.proactive_recommendation.normalization import (
+    coerce_float_or_default,
+    sanitize_string_sequence,
+    to_stripped_text,
+)
 
 PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION = (
     f"{APP_VERSION}:proactive-recommendation-observation-v5"
@@ -53,13 +62,17 @@ def build_recommendation_observation(
     top_n: int = 3,
 ) -> dict[str, Any]:
     shadow_source = decision.shadow_selected_source_type
-    actual_primary_channel = _text(source_mode) or _text(channel)
-    normalized_reason = _text(reason_code)
-    active_bias_info = _active_bias_info(active_bias)
-    active_preferred_tag = _text(active_bias_info.get("preferred_source_tag")).upper()
-    actual_source_tag = _text(source_tag).upper()
-    delivered = _text(action) == "chat" and normalized_reason == "CHAT_DELIVERED"
-    active = _clean_string_list(active_channels)
+    actual_primary_channel = to_stripped_text(source_mode) or to_stripped_text(channel)
+    normalized_reason = to_stripped_text(reason_code)
+    active_bias_info = serialize_active_source_bias(active_bias)
+    active_preferred_tag = to_stripped_text(
+        active_bias_info.get("preferred_source_tag")
+    ).upper()
+    actual_source_tag = to_stripped_text(source_tag).upper()
+    delivered = (
+        to_stripped_text(action) == "chat" and normalized_reason == "CHAT_DELIVERED"
+    )
+    active = sanitize_string_sequence(active_channels)
     actual_rank = None
     actual_candidate = None
     actual_candidate_score = None
@@ -85,7 +98,9 @@ def build_recommendation_observation(
         and policy_actual_candidate is None
         and active_bias_info.get("applied") is True
     ):
-        preferred_candidate_id = _text(active_bias_info.get("preferred_candidate_id"))
+        preferred_candidate_id = to_stripped_text(
+            active_bias_info.get("preferred_candidate_id")
+        )
         policy_actual_candidate = next(
             (
                 candidate
@@ -96,7 +111,7 @@ def build_recommendation_observation(
         )
         if policy_actual_candidate is not None:
             policy_mode = (
-                _text(policy_decision.get("mode"))
+                to_stripped_text(policy_decision.get("mode"))
                 if isinstance(policy_decision, Mapping)
                 else ""
             )
@@ -113,12 +128,12 @@ def build_recommendation_observation(
     )
     actual_aliases = _actual_source_aliases(actual_primary_channel, source_tag, active)
     policy_mode = (
-        _text(finalized_policy_decision.get("mode"))
+        to_stripped_text(finalized_policy_decision.get("mode"))
         if isinstance(finalized_policy_decision, Mapping)
         else ""
     )
     expected_source = (
-        _text(active_bias_info.get("preferred_source_type"))
+        to_stripped_text(active_bias_info.get("preferred_source_type"))
         if policy_mode == "canary" and active_bias_info.get("applied") is True
         else shadow_source
     )
@@ -131,7 +146,7 @@ def build_recommendation_observation(
         decision.selected_candidate.id if decision.selected_candidate else None
     )
     expected_candidate_id = (
-        _text(active_bias_info.get("preferred_candidate_id"))
+        to_stripped_text(active_bias_info.get("preferred_candidate_id"))
         if policy_mode == "canary" and active_bias_info.get("applied") is True
         else shadow_candidate_id
     )
@@ -149,16 +164,19 @@ def build_recommendation_observation(
         and actual_source_tag == active_preferred_tag
     )
     observation = {
-        "ts": _number(ts, 0.0) if ts is not None else None,
-        "lanlan_name": _text(lanlan_name) or None,
-        "turn_id": _text(turn_id) or None,
-        "activity_state": _text(activity_state) or "unknown",
-        "activity_propensity": _text(activity_propensity) or "unknown",
+        "ts": coerce_float_or_default(ts, default=0.0) if ts is not None else None,
+        "lanlan_name": to_stripped_text(lanlan_name) or None,
+        "turn_id": to_stripped_text(turn_id) or None,
+        "activity_state": to_stripped_text(activity_state) or "unknown",
+        "activity_propensity": to_stripped_text(activity_propensity) or "unknown",
         "algorithm_version": (
-            _text(algorithm_version) or PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
+            to_stripped_text(algorithm_version)
+            or PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION
         ),
         "git_revision": (
-            _text(git_revision) or PROACTIVE_RECOMMENDATION_GIT_REVISION or None
+            to_stripped_text(git_revision)
+            or PROACTIVE_RECOMMENDATION_GIT_REVISION
+            or None
         ),
         "review_context": dict(review_context)
         if isinstance(review_context, Mapping)
@@ -171,7 +189,7 @@ def build_recommendation_observation(
             if isinstance(finalized_policy_decision, Mapping)
             else None
         ),
-        "recommendation_mode": _text(recommendation_mode) or None,
+        "recommendation_mode": to_stripped_text(recommendation_mode) or None,
         "decision_stage": decision.decision_stage,
         "candidate_count": decision.candidate_count,
         "shadow_selected_source_type": shadow_source,
@@ -183,9 +201,9 @@ def build_recommendation_observation(
         ),
         "top_candidates": _top_candidate_logs(decision.ranked_candidates, limit=top_n),
         "actual_primary_channel": actual_primary_channel or None,
-        "actual_source_tag": _text(source_tag) or None,
+        "actual_source_tag": to_stripped_text(source_tag) or None,
         "actual_reason_code": normalized_reason or None,
-        "actual_stage": _text(stage) or None,
+        "actual_stage": to_stripped_text(stage) or None,
         "active_channels": active,
         "delivered": delivered,
         "actual_rank": actual_rank,
@@ -218,7 +236,7 @@ def build_recommendation_review_context(
     summary. Other candidate text is still treated as untrusted and is passed
     through the review-context sanitizer before persistence.
     """
-    normalized_mode = _text(mode)
+    normalized_mode = to_stripped_text(mode)
     if normalized_mode not in _REVIEW_CONTEXT_MODES:
         return None
 
@@ -252,8 +270,8 @@ def build_recommendation_review_context(
     return {
         "schema_version": 1,
         "candidate_labels": labels,
-        "activity_state": _text(activity_state) or "unknown",
-        "delivered_excerpt": _text(delivered_text),
+        "activity_state": to_stripped_text(activity_state) or "unknown",
+        "delivered_excerpt": to_stripped_text(delivered_text),
         "redaction_notes": redaction_notes,
     }
 
@@ -289,7 +307,7 @@ def _find_actual_candidate_match(
     actual_urls = _source_link_urls(source_links)
     if actual_urls:
         for rank, candidate in enumerate(candidates, start=1):
-            if _candidate_url(candidate) in actual_urls:
+            if candidate_material_url(candidate) in actual_urls:
                 return rank, candidate
 
     aliases = _actual_source_aliases(source_mode, source_tag, active_channels)
@@ -309,57 +327,17 @@ def _source_link_urls(source_links: Any) -> set[str]:
     urls = set()
     for link in source_links:
         if isinstance(link, Mapping):
-            url = _text(link.get("url"))
+            url = to_stripped_text(link.get("url"))
             if url:
                 urls.add(url)
     return urls
 
 
-def _candidate_url(candidate: ProactiveCandidate) -> str:
-    link = candidate.payload.get("link")
-    if isinstance(link, Mapping):
-        return _text(link.get("url"))
-    return ""
-
-
-def _active_bias_info(
-    active_bias: ProactiveActiveBias | Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    if isinstance(active_bias, ProactiveActiveBias):
-        return active_bias.to_log_dict()
-    if isinstance(active_bias, Mapping):
-        return {
-            "applied": active_bias.get("applied") is True,
-            "preferred_source_type": _text(active_bias.get("preferred_source_type"))
-            or None,
-            "preferred_source_tag": _text(
-                active_bias.get("preferred_source_tag")
-            ).upper()
-            or None,
-            "preferred_candidate_id": _text(active_bias.get("preferred_candidate_id"))
-            or None,
-            "score_gap": (
-                _number(active_bias.get("score_gap"), 0.0)
-                if active_bias.get("score_gap") is not None
-                else None
-            ),
-            "fallback_reason": _text(active_bias.get("fallback_reason")) or None,
-        }
-    return {
-        "applied": False,
-        "preferred_source_type": None,
-        "preferred_source_tag": None,
-        "preferred_candidate_id": None,
-        "score_gap": None,
-        "fallback_reason": None,
-    }
-
-
 def _actual_source_aliases(
     source_mode: Any, source_tag: Any, active_channels: Sequence[str]
 ) -> set[str]:
-    aliases = set(_clean_string_list([source_mode]))
-    tag = _text(source_tag).upper()
+    aliases = set(sanitize_string_sequence([source_mode]))
+    tag = to_stripped_text(source_tag).upper()
     if tag == "WEB":
         aliases.add("web")
     elif tag == "MUSIC":
@@ -372,29 +350,10 @@ def _actual_source_aliases(
 
 
 def _source_type_matches(source_type: Any, aliases: set[str]) -> bool:
-    source = _text(source_type)
+    source = to_stripped_text(source_type)
     if not source or not aliases:
         return False
     if source in aliases:
         return True
     web_sources = {"web", "news", "video", "home", "personal"}
     return source in web_sources and bool(aliases & web_sources)
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _number(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _clean_string_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value] if value else []
-    if not isinstance(value, Sequence):
-        return []
-    return [_text(item) for item in value if _text(item)]

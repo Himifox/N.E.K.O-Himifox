@@ -12,23 +12,23 @@ from main_logic.proactive_recommendation.feedback.service import (
     register_pending_feedback,
     register_pending_feedback_from_observation,
 )
-from main_logic.proactive_recommendation.feedback.events import (
+from main_logic.proactive_recommendation.feedback.event_processing import (
     build_feedback_event,
     music_feedback_event_type,
     sanitize_feedback_metadata,
     sanitize_recommendation_feedback_event,
 )
-from main_logic.proactive_recommendation.feedback.rewards import (
+from main_logic.proactive_recommendation.feedback.learning import (
     build_reward_score_v2_preview,
 )
-from main_logic.proactive_recommendation.feedback.reports import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     join_observations_with_feedback,
     join_observations_with_reward_score_v2_preview,
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
 )
-from main_logic.proactive_recommendation.feedback.store import (
+from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
     load_recommendation_feedback_jsonl,

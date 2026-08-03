@@ -21,7 +21,7 @@ from main_logic.proactive_recommendation.feedback.service import (
     register_pending_feedback,
     register_pending_feedback_from_observation,
 )
-from main_logic.proactive_recommendation.feedback.rewards import (
+from main_logic.proactive_recommendation.feedback.learning import (
     build_bandit_encounter_reward,
 )
 from main_logic.proactive_recommendation.feedback.learning import (
@@ -31,7 +31,7 @@ from main_logic.proactive_recommendation.state.bandit_posteriors import (
     get_recommendation_bandit_state,
     update_recommendation_bandit_reward,
 )
-from main_logic.proactive_recommendation.observation.schema import (
+from main_logic.proactive_recommendation.observation.validation import (
     sanitize_recommendation_policy_decision,
 )
 from main_logic.proactive_recommendation.state.source_preferences import (

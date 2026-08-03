@@ -9,7 +9,7 @@ from main_logic.proactive_recommendation import (
     build_active_source_bias,
     build_recommendation_review_context,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
 )

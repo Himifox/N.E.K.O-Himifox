@@ -5,13 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .model import (
-    _clean_text,
-    _default_health,
-    _normalize_source,
-    _number,
-    _optional_number,
-    _sanitize_health,
+from main_logic.proactive_recommendation.normalization import (
+    coerce_float_or_default,
+    normalize_source_identifier,
+    to_stripped_text,
+)
+
+from .configuration import (
+    _new_default_tuning_health,
+    _coerce_optional_finite_float,
+    _sanitize_tuning_health,
     _sanitize_source_adjustments,
     sanitize_recommendation_tuning,
 )
@@ -43,18 +46,20 @@ def extract_auto_safe_feedback_suggestions(
         return {}
     suggestions: dict[str, dict[str, Any]] = {}
     for source, suggestion in _iter_calibration_suggestions(calibration):
-        normalized = _normalize_source(source)
+        normalized = normalize_source_identifier(source)
         if normalized not in AUTO_TUNING_SOURCE_TYPES or not isinstance(
             suggestion, Mapping
         ):
             continue
-        raw_adjustment = _number(suggestion.get("adjustment"), 0.0)
+        raw_adjustment = coerce_float_or_default(
+            suggestion.get("adjustment"), default=0.0
+        )
         if raw_adjustment == 0:
             continue
         reasons = [
-            _clean_text(reason)
+            to_stripped_text(reason)
             for reason in (suggestion.get("reasons") or [])
-            if _clean_text(reason)
+            if to_stripped_text(reason)
         ]
         if "weak_ignored_pressure" in reasons:
             continue
@@ -92,16 +97,16 @@ def evaluate_recommendation_tuning_health(
 ) -> dict[str, Any]:
     current = time.time() if now is None else float(now)
     safe = sanitize_recommendation_tuning(tuning)
-    health = dict(safe.get("health") or _default_health())
+    health = dict(safe.get("health") or _new_default_tuning_health())
 
     if health.get("status") == "paused":
-        paused_until = _optional_number(health.get("paused_until"))
+        paused_until = _coerce_optional_finite_float(health.get("paused_until"))
         if paused_until is not None and paused_until > current:
             health["last_evaluation"] = {
                 **dict(health.get("last_evaluation") or {}),
                 "decision": "paused",
             }
-            safe["health"] = _sanitize_health(health)
+            safe["health"] = _sanitize_tuning_health(health)
             return safe
         health["status"] = "watch"
         health["paused_until"] = None
@@ -111,7 +116,7 @@ def evaluate_recommendation_tuning_health(
             decision="pause_expired_watch",
             previous=safe.get("last_calibration"),
         )
-        safe["health"] = _sanitize_health(health)
+        safe["health"] = _sanitize_tuning_health(health)
         return safe
 
     if (
@@ -123,7 +128,7 @@ def evaluate_recommendation_tuning_health(
             decision="insufficient_feedback_for_health",
             previous=safe.get("last_calibration"),
         )
-        safe["health"] = _sanitize_health(health)
+        safe["health"] = _sanitize_tuning_health(health)
         return safe
 
     previous = safe.get("last_calibration")
@@ -133,7 +138,7 @@ def evaluate_recommendation_tuning_health(
             decision="baseline_missing",
             previous=previous,
         )
-        safe["health"] = _sanitize_health(health)
+        safe["health"] = _sanitize_tuning_health(health)
         return safe
 
     signature = _calibration_signature(calibration)
@@ -166,7 +171,7 @@ def evaluate_recommendation_tuning_health(
             previous=previous,
             reason=reason,
         )
-        safe["health"] = _sanitize_health(health)
+        safe["health"] = _sanitize_tuning_health(health)
         return safe
 
     if _is_good_health_window(previous, calibration):
@@ -180,7 +185,7 @@ def evaluate_recommendation_tuning_health(
             decision="keep",
             previous=previous,
         )
-        safe["health"] = _sanitize_health(health)
+        safe["health"] = _sanitize_tuning_health(health)
         return safe
 
     health["last_evaluation"] = _evaluation_payload(
@@ -188,31 +193,35 @@ def evaluate_recommendation_tuning_health(
         decision="neutral",
         previous=previous,
     )
-    safe["health"] = _sanitize_health(health)
+    safe["health"] = _sanitize_tuning_health(health)
     return safe
 
 
 def _calibration_snapshot(calibration: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "average_feedback_score": _optional_number(
+        "average_feedback_score": _coerce_optional_finite_float(
             calibration.get("average_feedback_score")
         ),
-        "top1_positive_rate": _optional_number(calibration.get("top1_positive_rate")),
-        "top1_negative_rate": _optional_number(calibration.get("top1_negative_rate")),
+        "top1_positive_rate": _coerce_optional_finite_float(
+            calibration.get("top1_positive_rate")
+        ),
+        "top1_negative_rate": _coerce_optional_finite_float(
+            calibration.get("top1_negative_rate")
+        ),
     }
 
 
 def _health_auto_apply_block_reason(
     tuning: Mapping[str, Any], *, now: float
 ) -> str | None:
-    health = _sanitize_health(
+    health = _sanitize_tuning_health(
         tuning.get("health") if isinstance(tuning, Mapping) else None
     )
     status = health.get("status")
     if status == "watch":
         return "tuning_health_watch"
     if status == "paused":
-        paused_until = _optional_number(health.get("paused_until"))
+        paused_until = _coerce_optional_finite_float(health.get("paused_until"))
         if paused_until is None or paused_until > now:
             return "tuning_health_paused"
         return "tuning_health_watch"
@@ -223,13 +232,21 @@ def _health_bad_reason(
     previous: Mapping[str, Any],
     calibration: Mapping[str, Any],
 ) -> str | None:
-    previous_average = _optional_number(previous.get("average_feedback_score"))
-    current_average = _optional_number(calibration.get("average_feedback_score"))
+    previous_average = _coerce_optional_finite_float(
+        previous.get("average_feedback_score")
+    )
+    current_average = _coerce_optional_finite_float(
+        calibration.get("average_feedback_score")
+    )
     if previous_average is not None and current_average is not None:
         if previous_average - current_average >= ROLLBACK_AVERAGE_DROP:
             return "average_feedback_score_drop"
-    previous_negative = _optional_number(previous.get("top1_negative_rate"))
-    current_negative = _optional_number(calibration.get("top1_negative_rate"))
+    previous_negative = _coerce_optional_finite_float(
+        previous.get("top1_negative_rate")
+    )
+    current_negative = _coerce_optional_finite_float(
+        calibration.get("top1_negative_rate")
+    )
     if previous_negative is not None and current_negative is not None:
         if current_negative - previous_negative >= ROLLBACK_NEGATIVE_RATE_INCREASE:
             return "top1_negative_rate_increase"
@@ -243,10 +260,18 @@ def _is_good_health_window(
     previous: Mapping[str, Any],
     calibration: Mapping[str, Any],
 ) -> bool:
-    previous_average = _optional_number(previous.get("average_feedback_score"))
-    current_average = _optional_number(calibration.get("average_feedback_score"))
-    previous_negative = _optional_number(previous.get("top1_negative_rate"))
-    current_negative = _optional_number(calibration.get("top1_negative_rate"))
+    previous_average = _coerce_optional_finite_float(
+        previous.get("average_feedback_score")
+    )
+    current_average = _coerce_optional_finite_float(
+        calibration.get("average_feedback_score")
+    )
+    previous_negative = _coerce_optional_finite_float(
+        previous.get("top1_negative_rate")
+    )
+    current_negative = _coerce_optional_finite_float(
+        calibration.get("top1_negative_rate")
+    )
     high_average = _high_bucket_feedback(calibration)
     return bool(
         previous_average is not None
@@ -268,15 +293,27 @@ def _evaluation_payload(
     reason: str | None = None,
 ) -> dict[str, Any]:
     previous = previous if isinstance(previous, Mapping) else {}
-    current_average = _optional_number(calibration.get("average_feedback_score"))
-    previous_average = _optional_number(previous.get("average_feedback_score"))
-    current_negative = _optional_number(calibration.get("top1_negative_rate"))
-    previous_negative = _optional_number(previous.get("top1_negative_rate"))
+    current_average = _coerce_optional_finite_float(
+        calibration.get("average_feedback_score")
+    )
+    previous_average = _coerce_optional_finite_float(
+        previous.get("average_feedback_score")
+    )
+    current_negative = _coerce_optional_finite_float(
+        calibration.get("top1_negative_rate")
+    )
+    previous_negative = _coerce_optional_finite_float(
+        previous.get("top1_negative_rate")
+    )
     return {
         "decision": decision,
         "reason": reason,
-        "average_feedback_delta": _delta(current_average, previous_average),
-        "negative_rate_delta": _delta(current_negative, previous_negative),
+        "average_feedback_delta": _rounded_metric_delta(
+            current_average, previous_average
+        ),
+        "negative_rate_delta": _rounded_metric_delta(
+            current_negative, previous_negative
+        ),
         "high_bucket_feedback": _high_bucket_feedback(calibration),
         "calibration_signature": _calibration_signature(calibration),
     }
@@ -289,7 +326,7 @@ def _high_bucket_feedback(calibration: Mapping[str, Any]) -> float | None:
     high = buckets.get("high")
     if not isinstance(high, Mapping):
         return None
-    return _optional_number(high.get("average_feedback_score"))
+    return _coerce_optional_finite_float(high.get("average_feedback_score"))
 
 
 def _calibration_signature(calibration: Mapping[str, Any]) -> str:
@@ -298,14 +335,16 @@ def _calibration_signature(calibration: Mapping[str, Any]) -> str:
         for item in (
             int(calibration.get("sample_count") or 0),
             int(calibration.get("feedback_joined_count") or 0),
-            _optional_number(calibration.get("average_feedback_score")),
-            _optional_number(calibration.get("top1_negative_rate")),
+            _coerce_optional_finite_float(calibration.get("average_feedback_score")),
+            _coerce_optional_finite_float(calibration.get("top1_negative_rate")),
             _high_bucket_feedback(calibration),
         )
     )
 
 
-def _delta(current: float | None, previous: float | None) -> float | None:
+def _rounded_metric_delta(
+    current: float | None, previous: float | None
+) -> float | None:
     if current is None or previous is None:
         return None
     return round(current - previous, 3)
@@ -321,10 +360,10 @@ def _auto_apply_blocked_reason(
         < AUTO_APPLY_MIN_FEEDBACK_COUNT
     ):
         return "feedback_sample_count_below_threshold"
-    average = _optional_number(calibration.get("average_feedback_score"))
+    average = _coerce_optional_finite_float(calibration.get("average_feedback_score"))
     if average is None or average <= 0:
         return "average_feedback_score_not_positive"
-    negative_rate = _optional_number(calibration.get("top1_negative_rate"))
+    negative_rate = _coerce_optional_finite_float(calibration.get("top1_negative_rate"))
     if negative_rate is None or negative_rate > AUTO_APPLY_MAX_NEGATIVE_RATE:
         return "top1_negative_rate_above_threshold"
     if not auto_safe_suggestions:
@@ -342,7 +381,7 @@ def _iter_calibration_suggestions(
             continue
         for source, suggestion in value.items():
             if isinstance(suggestion, Mapping):
-                items.append((_clean_text(source), suggestion))
+                items.append((to_stripped_text(source), suggestion))
     return items
 
 
@@ -390,7 +429,7 @@ def _source_average_feedback(
     score_by_source = calibration.get("score_by_source_type")
     if not isinstance(score_by_source, Mapping):
         return None
-    return _optional_number(score_by_source.get(source))
+    return _coerce_optional_finite_float(score_by_source.get(source))
 
 
 def _rollback_reason(
@@ -402,16 +441,20 @@ def _rollback_reason(
     last = tuning.get("last_calibration") if isinstance(tuning, Mapping) else None
     if not isinstance(last, Mapping) or not last:
         return None
-    updated_at = _number(tuning.get("updated_at"), 0.0)
+    updated_at = coerce_float_or_default(tuning.get("updated_at"), default=0.0)
     if updated_at and now - updated_at < AUTO_APPLY_SOURCE_COOLDOWN_SECONDS:
         return None
-    previous_average = _optional_number(last.get("average_feedback_score"))
-    current_average = _optional_number(calibration.get("average_feedback_score"))
+    previous_average = _coerce_optional_finite_float(last.get("average_feedback_score"))
+    current_average = _coerce_optional_finite_float(
+        calibration.get("average_feedback_score")
+    )
     if previous_average is not None and current_average is not None:
         if previous_average - current_average >= ROLLBACK_AVERAGE_DROP:
             return "average_feedback_score_drop"
-    previous_negative = _optional_number(last.get("top1_negative_rate"))
-    current_negative = _optional_number(calibration.get("top1_negative_rate"))
+    previous_negative = _coerce_optional_finite_float(last.get("top1_negative_rate"))
+    current_negative = _coerce_optional_finite_float(
+        calibration.get("top1_negative_rate")
+    )
     if previous_negative is not None and current_negative is not None:
         if current_negative - previous_negative >= ROLLBACK_NEGATIVE_RATE_INCREASE:
             return "top1_negative_rate_increase"
@@ -419,7 +462,9 @@ def _rollback_reason(
     if isinstance(high_bucket, Mapping):
         high = high_bucket.get("high")
         if isinstance(high, Mapping):
-            high_average = _optional_number(high.get("average_feedback_score"))
+            high_average = _coerce_optional_finite_float(
+                high.get("average_feedback_score")
+            )
             if high_average is not None and high_average <= 0:
                 return "high_bucket_feedback_not_positive"
     return None
@@ -438,7 +483,7 @@ def _apply_rollback(
         previous = _sanitize_source_adjustments(
             rollback.get("previous_source_type_adjustment")
         )
-    health = _sanitize_health(
+    health = _sanitize_tuning_health(
         tuning.get("health") if isinstance(tuning, Mapping) else None
     )
     bad_count = int(health.get("bad_window_count") or 0) + 1

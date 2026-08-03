@@ -11,10 +11,14 @@ from collections.abc import Iterable, Mapping, Sequence
 import time
 from typing import Any
 
-from main_logic.proactive_recommendation.observation.schema import (
-    _number,
+from main_logic.proactive_recommendation.normalization import rounded_ratio_or_none
+
+from main_logic.proactive_recommendation.observation.validation import (
     sanitize_recommendation_observation,
     sanitize_recommendation_policy_decision,
+)
+from main_logic.proactive_recommendation.normalization import (
+    coerce_float_or_default,
 )
 
 
@@ -136,18 +140,19 @@ def summarize_recommendation_observations(
     pass_high_score_count = sum(
         1
         for row in passes
-        if _number(row.get("shadow_selected_score"), 0.0) >= high_score_threshold
+        if coerce_float_or_default(row.get("shadow_selected_score"), default=0.0)
+        >= high_score_threshold
     )
 
     return {
         "total": total,
         "delivered_count": len(delivered),
         "pass_count": len(passes),
-        "source_match_rate": _rate(
+        "source_match_rate": rounded_ratio_or_none(
             sum(1 for row in delivered if row.get("matched_actual_source") is True),
             len(delivered),
         ),
-        "material_match_rate": _rate(
+        "material_match_rate": rounded_ratio_or_none(
             sum(1 for row in delivered if row.get("matched_actual_material") is True),
             len(delivered),
         ),
@@ -205,7 +210,9 @@ def summarize_recommendation_calibration(
         high_score_threshold=high_score_threshold,
     )
     sample_count = summary["total"]
-    pass_high_score_rate = _rate(summary["pass_high_score_count"], sample_count)
+    pass_high_score_rate = rounded_ratio_or_none(
+        summary["pass_high_score_count"], sample_count
+    )
 
     issues: list[str] = []
     reasons: list[str] = []
@@ -298,7 +305,8 @@ def summarize_recommendation_validation(
         for row in samples
         if (
             row.get("delivered") is not True
-            and _number(row.get("shadow_selected_score"), 0.0) >= high_score_threshold
+            and coerce_float_or_default(row.get("shadow_selected_score"), default=0.0)
+            >= high_score_threshold
         )
     ]
     low_quality_top1 = [row for row in samples if _is_low_quality_top1(row)]
@@ -312,7 +320,7 @@ def summarize_recommendation_validation(
     dominant_source_count = 0
     if top1_counts:
         dominant_source_type, dominant_source_count = top1_counts.most_common(1)[0]
-    dominant_source_rate = _rate(dominant_source_count, len(samples))
+    dominant_source_rate = rounded_ratio_or_none(dominant_source_count, len(samples))
     source_overuse = bool(
         len(samples) >= VALIDATION_SOURCE_OVERUSE_MIN_SAMPLE_COUNT
         and dominant_source_type
@@ -325,7 +333,9 @@ def summarize_recommendation_validation(
         dominant_candidate_id, dominant_candidate_count = (
             top1_candidate_counts.most_common(1)[0]
         )
-    dominant_candidate_rate = _rate(dominant_candidate_count, len(samples))
+    dominant_candidate_rate = rounded_ratio_or_none(
+        dominant_candidate_count, len(samples)
+    )
     candidate_overuse = bool(
         len(samples) >= VALIDATION_CANDIDATE_OVERUSE_MIN_SAMPLE_COUNT
         and dominant_candidate_id
@@ -350,12 +360,16 @@ def summarize_recommendation_validation(
         "issues": issues,
         "issue_counts": issue_counts,
         "rates": {
-            "source_drift": _rate(len(source_drift), len(delivered)),
-            "material_drift": _rate(len(material_drift), len(delivered)),
-            "pass_conflict": _rate(len(pass_conflict), len(samples)),
+            "source_drift": rounded_ratio_or_none(len(source_drift), len(delivered)),
+            "material_drift": rounded_ratio_or_none(
+                len(material_drift), len(delivered)
+            ),
+            "pass_conflict": rounded_ratio_or_none(len(pass_conflict), len(samples)),
             "source_overuse": dominant_source_rate if source_overuse else 0.0,
             "candidate_overuse": dominant_candidate_rate if candidate_overuse else 0.0,
-            "low_quality_top1": _rate(len(low_quality_top1), len(samples)),
+            "low_quality_top1": rounded_ratio_or_none(
+                len(low_quality_top1), len(samples)
+            ),
         },
         "dominant_source_type": dominant_source_type or None,
         "dominant_source_rate": dominant_source_rate,
@@ -419,7 +433,8 @@ def select_recommendation_observation_examples(
         )
         pass_high_score = (
             row.get("delivered") is not True
-            and _number(row.get("shadow_selected_score"), 0.0) >= high_score_threshold
+            and coerce_float_or_default(row.get("shadow_selected_score"), default=0.0)
+            >= high_score_threshold
         )
         if mismatch:
             group = 0
@@ -427,7 +442,7 @@ def select_recommendation_observation_examples(
             group = 1
         else:
             group = 2
-        return (group, -_number(row.get("ts"), 0.0))
+        return (group, -coerce_float_or_default(row.get("ts"), default=0.0))
 
     selected = sorted(rows, key=priority)[:example_limit]
     return [_example_from_observation(row) for row in selected]
@@ -475,15 +490,9 @@ def _is_low_quality_top1(row: Mapping[str, Any]) -> bool:
         return True
     source_type = str(top.get("source_type") or "").strip()
     candidate_id = str(top.get("id") or "").strip()
-    score = _number(top.get("score"), -1.0)
+    score = coerce_float_or_default(top.get("score"), default=-1.0)
     topic_usable = top.get("topic_usable") is True
     return not source_type or not candidate_id or not topic_usable or score < 0.2
-
-
-def _rate(numerator: int, denominator: int) -> float | None:
-    if denominator <= 0:
-        return None
-    return round(numerator / denominator, 3)
 
 
 def _is_recent_observation(
@@ -492,7 +501,7 @@ def _is_recent_observation(
     now: float,
     window_seconds: int,
 ) -> bool:
-    ts = _number(row.get("ts"), -1.0)
+    ts = coerce_float_or_default(row.get("ts"), default=-1.0)
     if ts < 0:
         return False
     return 0 <= now - ts <= window_seconds

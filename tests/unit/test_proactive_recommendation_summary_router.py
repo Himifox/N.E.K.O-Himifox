@@ -12,8 +12,8 @@ from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
     register_pending_feedback,
 )
-from main_logic.proactive_recommendation.feedback.events import build_feedback_event
-from main_logic.proactive_recommendation.feedback.store import (
+from main_logic.proactive_recommendation.feedback.event_processing import build_feedback_event
+from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     append_recommendation_feedback_jsonl,
 )
@@ -24,15 +24,15 @@ from main_logic.proactive_recommendation.state.feedback_preview import (
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
-from main_logic.proactive_recommendation.observation.reports import (
+from main_logic.proactive_recommendation.observation.analytics import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     OBSERVATION_LOG_FILENAME,
     append_recommendation_observation_jsonl,
 )
-from main_logic.proactive_recommendation.tuning.store import (
+from main_logic.proactive_recommendation.tuning.storage import (
     TUNING_FILENAME,
     save_recommendation_tuning,
 )

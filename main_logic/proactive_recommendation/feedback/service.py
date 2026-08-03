@@ -1,16 +1,34 @@
-"""Feedback event sink for proactive recommendation observations.
-
-This module records what the user did after a proactive recommendation was
-delivered. It keeps raw event types separate from report-only scores so future
-calibration can recompute scores without losing the original signal.
-"""
+"""Thread-safe process-local registry for delivered recommendation turns."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+
+from collections.abc import Iterable
+
+import threading
+
+from collections.abc import Mapping
+
 import logging
+
 import os
+
+from pathlib import Path
+
+from typing import Any
+
+from main_logic.proactive_recommendation.persistence import JsonlStore
+from main_logic.proactive_recommendation.normalization import (
+    coerce_float_or_default,
+    to_stripped_text,
+)
+
+from .event_processing import sanitize_recommendation_feedback_event
+
+from collections.abc import Iterable, Mapping
+
 import time
+
 from typing import Any, Callable
 
 from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
@@ -18,54 +36,247 @@ from main_logic.proactive_recommendation.domain_models import RecordFeedbackComm
 from main_logic.proactive_recommendation.state.bandit_posteriors import (
     update_recommendation_bandit_reward,
 )
+
 from main_logic.proactive_recommendation.state.source_preferences import (
     update_recommendation_source_preference,
 )
+
 from main_logic.proactive_recommendation.state.feedback_preview import (
     update_conversation_acceptance_preview,
     update_source_affinity_preview,
 )
-from main_logic.proactive_recommendation.feedback.contracts import (
+
+from main_logic.proactive_recommendation.domain_models import (
+    PendingFeedbackClaim,
     PendingRecommendationFeedback,
     RecommendationFeedbackRecordResult,
 )
-from main_logic.proactive_recommendation.feedback.pending import (
-    PendingFeedbackRegistry,
-)
+
 from main_logic.proactive_recommendation.feedback.learning import (
     bandit_event_matches_pending,
     feedback_learning_enabled,
     source_affinity_event_matches_pending,
     source_preference_outcome,
 )
-from main_logic.proactive_recommendation.feedback.events import (
-    _clean_text,
-    _normalize_source_type,
-    _number,
+
+from main_logic.proactive_recommendation.feedback.event_processing import (
+    normalize_feedback_source_identifier,
     build_feedback_event,
 )
-from main_logic.proactive_recommendation.feedback.rewards import (
+
+from main_logic.proactive_recommendation.feedback.learning import (
     build_bandit_encounter_reward,
     reward_event_score,
 )
-from main_logic.proactive_recommendation.feedback.store import (
-    append_recommendation_feedback_jsonl,
-)
-from main_logic.proactive_recommendation.feedback.text_signals import (
+
+from main_logic.proactive_recommendation.feedback.event_processing import (
     _explicit_text_named_source_types,
     _explicit_text_source_preference_event_type,
 )
 
+
+class PendingFeedbackRegistry:
+    def __init__(self, *, reply_window_seconds: float) -> None:
+        self._reply_window_seconds = float(reply_window_seconds)
+        self._items: dict[tuple[str, str], PendingRecommendationFeedback] = {}
+        self._lock = threading.RLock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+    def register(
+        self, pending: PendingRecommendationFeedback
+    ) -> PendingRecommendationFeedback:
+        with self._lock:
+            self._items[(pending.lanlan_name, pending.turn_id)] = pending
+            self._prune_unlocked(now=pending.delivered_at)
+            return pending
+
+    def claim_event(
+        self,
+        lanlan_name: str,
+        turn_id: str,
+        *,
+        event_type: str,
+        state_group: str,
+    ) -> PendingFeedbackClaim:
+        with self._lock:
+            pending = self._items.get((lanlan_name, turn_id))
+            if pending is None:
+                return PendingFeedbackClaim(pending=None)
+            duplicate_event = event_type in pending.seen_event_types
+            duplicate_group = state_group in pending.seen_groups
+            pending.seen_event_types.add(event_type)
+            pending.seen_groups.add(state_group)
+            return PendingFeedbackClaim(
+                pending=pending,
+                duplicate_event=duplicate_event,
+                duplicate_group=duplicate_group,
+            )
+
+    def get(
+        self, lanlan_name: str, turn_id: str
+    ) -> PendingRecommendationFeedback | None:
+        with self._lock:
+            return self._items.get((lanlan_name, turn_id))
+
+    def add_reward_event(
+        self,
+        pending: PendingRecommendationFeedback,
+        event_type: str,
+        event: dict,
+    ) -> tuple[dict, ...]:
+        with self._lock:
+            current = self._items.get((pending.lanlan_name, pending.turn_id))
+            if current is None:
+                return ()
+            current.reward_events[event_type] = event
+            return tuple(current.reward_events.values())
+
+    def latest(
+        self,
+        lanlan_name: str,
+        *,
+        now: float,
+        source_type: str | None = None,
+        require_candidate: bool = False,
+    ) -> PendingRecommendationFeedback | None:
+        with self._lock:
+            self._prune_unlocked(now=now)
+            candidates = [
+                pending
+                for pending in self._items.values()
+                if pending.lanlan_name == lanlan_name
+                and (source_type is None or pending.source_type == source_type)
+                and (not require_candidate or bool(pending.candidate_id))
+                and 0 <= now - pending.delivered_at <= self._reply_window_seconds
+            ]
+            return max(candidates, key=lambda item: item.delivered_at, default=None)
+
+    def claim_reply_action(self, pending: PendingRecommendationFeedback) -> str | None:
+        with self._lock:
+            current = self._items.get((pending.lanlan_name, pending.turn_id))
+            if current is None:
+                return None
+            if current.reply_seen and not current.continue_seen:
+                current.continue_seen = True
+                return "continue"
+            if not current.reply_seen:
+                current.reply_seen = True
+                return "reply"
+            return None
+
+    def mark_replied(
+        self, pending_items: Iterable[PendingRecommendationFeedback]
+    ) -> None:
+        with self._lock:
+            for pending in pending_items:
+                current = self._items.get((pending.lanlan_name, pending.turn_id))
+                if current is not None:
+                    current.reply_seen = True
+
+    def consecutive_unanswered(self, lanlan_name: str, *, now: float) -> int:
+        with self._lock:
+            self._prune_unlocked(now=now)
+            rows = sorted(
+                (
+                    pending
+                    for pending in self._items.values()
+                    if pending.lanlan_name == lanlan_name
+                    and pending.delivered_at <= now
+                ),
+                key=lambda pending: pending.delivered_at,
+                reverse=True,
+            )
+            count = 0
+            for pending in rows:
+                if pending.reply_seen:
+                    break
+                count += 1
+            return count
+
+    def _prune_unlocked(self, *, now: float) -> None:
+        retention = self._reply_window_seconds * 2
+        expired = [
+            key
+            for key, pending in self._items.items()
+            if now - pending.delivered_at > retention
+        ]
+        for key in expired:
+            self._items.pop(key, None)
+
+
+logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
+
+FEEDBACK_LOG_FILENAME = "proactive_recommendation_feedback.jsonl"
+
+DEFAULT_ROTATE_BYTES = 10 * 1024 * 1024
+
+
+def append_recommendation_feedback_jsonl(
+    event: Mapping[str, Any],
+    *,
+    log_mode: str = "off",
+    path: str | os.PathLike[str] | None = None,
+    config_dir: str | os.PathLike[str] | None = None,
+    rotate_bytes: int = DEFAULT_ROTATE_BYTES,
+) -> bool:
+    if log_mode != "jsonl":
+        return False
+    target = _resolve_feedback_path(path=path, config_dir=config_dir)
+    if target is None:
+        return False
+    try:
+        return JsonlStore(
+            target,
+            sanitizer=sanitize_recommendation_feedback_event,
+        ).append(event, rotate_bytes=rotate_bytes)
+    except Exception as exc:
+        logger.debug("proactive recommendation feedback append failed: %s", exc)
+        return False
+
+
+def load_recommendation_feedback_jsonl(
+    path: str | os.PathLike[str],
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        return JsonlStore(
+            path,
+            sanitizer=sanitize_recommendation_feedback_event,
+        ).load(limit=limit)
+    except Exception as exc:
+        logger.debug("proactive recommendation feedback read failed: %s", exc)
+        return []
+
+
+def _resolve_feedback_path(
+    *,
+    path: str | os.PathLike[str] | None,
+    config_dir: str | os.PathLike[str] | None,
+) -> Path | None:
+    if path is not None:
+        return Path(path)
+    if config_dir is None:
+        return None
+    return Path(config_dir) / FEEDBACK_LOG_FILENAME
+
+
 logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
 
 REPLY_FAST_SECONDS = 60
+
 REPLY_WINDOW_SECONDS = 10 * 60
+
 _CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
     "user_reply_fast",
     "user_reply",
     "user_continue",
     "proactive_disabled_after",
 }
+
 _SOURCE_AFFINITY_EVENT_TYPES = {
     "source_disabled_after",
     "source_not_interested",
@@ -89,7 +300,9 @@ _SETTING_SOURCE_FIELDS = {
     "proactiveMiniGameInviteEnabled": ("mini_game",),
     "proactiveVisionChatEnabled": ("vision", "window"),
 }
+
 _pending_registry = PendingFeedbackRegistry(reply_window_seconds=REPLY_WINDOW_SECONDS)
+
 _after_feedback_logged: Callable[[Any], None] | None = None
 
 
@@ -117,7 +330,7 @@ def consecutive_unanswered_recommendation_deliveries(
     delivery behavior and only considers pending turns retained by the existing
     feedback reply window.
     """
-    name = _clean_text(lanlan_name)
+    name = to_stripped_text(lanlan_name)
     if not name:
         return 0
     current = time.time() if now is None else float(now)
@@ -132,8 +345,8 @@ def register_pending_feedback_from_observation(
 ) -> PendingRecommendationFeedback | None:
     if not isinstance(observation, Mapping) or observation.get("delivered") is not True:
         return None
-    lanlan_name = _clean_text(observation.get("lanlan_name"))
-    turn_id = _clean_text(observation.get("turn_id"))
+    lanlan_name = to_stripped_text(observation.get("lanlan_name"))
+    turn_id = to_stripped_text(observation.get("turn_id"))
     if not lanlan_name or not turn_id:
         return None
     matched_material = observation.get("matched_actual_material") is True
@@ -147,10 +360,10 @@ def register_pending_feedback_from_observation(
         else None
     )
     if policy_v2 is not None and policy_v2.get("actual_arm"):
-        source_type = _normalize_source_type(policy_v2.get("actual_arm"))
-        candidate_id = _clean_text(policy_v2.get("actual_candidate_id")) or None
+        source_type = normalize_feedback_source_identifier(policy_v2.get("actual_arm"))
+        candidate_id = to_stripped_text(policy_v2.get("actual_candidate_id")) or None
     else:
-        source_type = _normalize_source_type(
+        source_type = normalize_feedback_source_identifier(
             observation.get("active_preferred_source_type")
             if matched_material and active_preference
             else observation.get("shadow_selected_source_type")
@@ -160,7 +373,7 @@ def register_pending_feedback_from_observation(
         candidate_id = None
         if matched_material:
             candidate_id = (
-                _clean_text(
+                to_stripped_text(
                     observation.get("active_preferred_candidate_id")
                     if active_preference
                     else observation.get("shadow_selected_candidate_id")
@@ -172,10 +385,12 @@ def register_pending_feedback_from_observation(
         turn_id=turn_id,
         source_type=source_type,
         candidate_id=candidate_id,
-        delivered_at=_number(observation.get("ts"), time.time()),
+        delivered_at=coerce_float_or_default(
+            observation.get("ts"), default=time.time()
+        ),
         log_mode=log_mode,
         config_dir=config_dir,
-        recommendation_mode=_clean_text(observation.get("recommendation_mode")),
+        recommendation_mode=to_stripped_text(observation.get("recommendation_mode")),
     )
 
 
@@ -190,19 +405,19 @@ def register_pending_feedback(
     config_dir: str | os.PathLike[str] | None = None,
     recommendation_mode: str = "off",
 ) -> PendingRecommendationFeedback | None:
-    name = _clean_text(lanlan_name)
-    tid = _clean_text(turn_id)
+    name = to_stripped_text(lanlan_name)
+    tid = to_stripped_text(turn_id)
     if not name or not tid:
         return None
     pending = PendingRecommendationFeedback(
         lanlan_name=name,
         turn_id=tid,
-        source_type=_normalize_source_type(source_type),
-        candidate_id=_clean_text(candidate_id) or None,
+        source_type=normalize_feedback_source_identifier(source_type),
+        candidate_id=to_stripped_text(candidate_id) or None,
         delivered_at=time.time() if delivered_at is None else float(delivered_at),
         log_mode=log_mode,
         config_dir=config_dir,
-        recommendation_mode=_clean_text(recommendation_mode),
+        recommendation_mode=to_stripped_text(recommendation_mode),
     )
     return _pending_registry.register(pending)
 
@@ -245,8 +460,8 @@ def record_feedback_event_with_status(
     ts: float | None = None,
 ) -> RecommendationFeedbackRecordResult:
     """Record one event through the shared log, state, and tuning chokepoint."""
-    name = _clean_text(lanlan_name)
-    tid = _clean_text(turn_id)
+    name = to_stripped_text(lanlan_name)
+    tid = to_stripped_text(turn_id)
     if not name or not tid:
         return RecommendationFeedbackRecordResult(
             event=None, logged=False, state_reason="invalid_identity"
@@ -327,7 +542,9 @@ def record_feedback_event_with_status(
                             arm=pending.source_type,
                             reward=reward,
                             event_types=bandit_reward.get("event_types") or (),
-                            now=_number(event.get("ts"), time.time()),
+                            now=coerce_float_or_default(
+                                event.get("ts"), default=time.time()
+                            ),
                         )
                         bandit_state_updated = True
                     except Exception as exc:
@@ -347,7 +564,9 @@ def record_feedback_event_with_status(
                         config_dir=effective_config_dir,
                         score=score,
                         persistent_eligible=persistent_eligible,
-                        now=_number(event.get("ts"), time.time()),
+                        now=coerce_float_or_default(
+                            event.get("ts"), default=time.time()
+                        ),
                     )
                     state_updated = True
                     state_reason = "applied"
@@ -361,7 +580,9 @@ def record_feedback_event_with_status(
                         source_type=event.get("source_type"),
                         score=score,
                         persistent_eligible=persistent_eligible,
-                        now=_number(event.get("ts"), time.time()),
+                        now=coerce_float_or_default(
+                            event.get("ts"), default=time.time()
+                        ),
                     )
                     state_updated = True
                     state_reason = "exact_pending_match"
@@ -389,7 +610,9 @@ def record_feedback_event_with_status(
                         failure=outcome[1],
                         explicit=outcome[2],
                         outcome_strength=max(outcome[0], outcome[1]),
-                        now=_number(event.get("ts"), time.time()),
+                        now=coerce_float_or_default(
+                            event.get("ts"), default=time.time()
+                        ),
                     )
                     preference_state_updated = True
                 except Exception as exc:
@@ -415,7 +638,9 @@ def _feedback_state_group(event: Mapping[str, Any]) -> str:
     if event_type in _CONVERSATION_ACCEPTANCE_EVENT_TYPES:
         return f"conversation:{event_group}"
     if event_type in _SOURCE_AFFINITY_EVENT_TYPES:
-        source = _normalize_source_type(event.get("source_type")) or "unknown"
+        source = (
+            normalize_feedback_source_identifier(event.get("source_type")) or "unknown"
+        )
         return f"source:{source}:{event_group}"
     return f"other:{event_group}"
 
@@ -525,7 +750,7 @@ def record_recent_setting_feedback(
         )
         return [event] if event else []
     events: list[dict[str, Any]] = []
-    pending_source = _normalize_source_type(pending.source_type)
+    pending_source = normalize_feedback_source_identifier(pending.source_type)
     for field_name in disabled:
         source_types = _SETTING_SOURCE_FIELDS.get(field_name, ())
         if pending_source and pending_source not in source_types:
@@ -614,7 +839,7 @@ def _latest_verified_pending_for_source(
     source_type: str,
     now: float,
 ) -> PendingRecommendationFeedback | None:
-    source = _normalize_source_type(source_type)
+    source = normalize_feedback_source_identifier(source_type)
     return _pending_registry.latest(
         lanlan_name,
         now=now,

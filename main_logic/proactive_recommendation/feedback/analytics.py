@@ -9,14 +9,19 @@ from statistics import median
 import time
 from typing import Any
 
-from .events import (
-    _clean_text,
-    _normalize_source_type,
-    _number,
+from ..normalization import (
+    clamp_to_range,
+    coerce_float_or_default,
+    rounded_mean_or_none,
+    rounded_ratio_or_none,
+    to_stripped_text,
+)
+from .event_processing import (
     build_feedback_event,
+    normalize_feedback_source_identifier,
     sanitize_recommendation_feedback_event,
 )
-from .rewards import build_reward_score_v2_preview
+from .learning import build_reward_score_v2_preview
 
 FEEDBACK_SCORE_VERSION = "report_score_v1"
 
@@ -107,7 +112,10 @@ def summarize_recommendation_feedback(
         if not isinstance(event, Mapping):
             continue
         safe = sanitize_recommendation_feedback_event(event)
-        key = (_clean_text(safe.get("lanlan_name")), _clean_text(safe.get("turn_id")))
+        key = (
+            to_stripped_text(safe.get("lanlan_name")),
+            to_stripped_text(safe.get("turn_id")),
+        )
         if key[0] and key[1]:
             events_by_turn[key].append(safe)
 
@@ -124,11 +132,14 @@ def summarize_recommendation_feedback(
     inferred_count = 0
 
     for row in samples:
-        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        key = (
+            to_stripped_text(row.get("lanlan_name")),
+            to_stripped_text(row.get("turn_id")),
+        )
         events = list(events_by_turn.get(key, ()))
         feedback_inferred = False
         if key[0] and key[1] and not events and row.get("delivered") is True:
-            ts = _number(row.get("ts"), -1.0)
+            ts = coerce_float_or_default(row.get("ts"), default=-1.0)
             if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
                 events = [
                     build_feedback_event(
@@ -149,13 +160,16 @@ def summarize_recommendation_feedback(
         else:
             explicit_count += 1
         selected = _select_feedback_events_for_turn(events)
-        score = _clamp(
-            sum(_number(event.get("report_score_v1"), 0.0) for event in selected),
+        score = clamp_to_range(
+            sum(
+                coerce_float_or_default(event.get("report_score_v1"), default=0.0)
+                for event in selected
+            ),
             -1.0,
             1.0,
         )
         feedback_scores.append(score)
-        source_type = _normalize_source_type(
+        source_type = normalize_feedback_source_identifier(
             row.get("actual_primary_channel") or row.get("shadow_selected_source_type")
         )
         source_scores[source_type].append(score)
@@ -168,7 +182,9 @@ def summarize_recommendation_feedback(
         for event in selected:
             event_counts[str(event.get("event_type") or "unknown")] += 1
             confidence = str(event.get("confidence") or "")
-            event_score = _number(event.get("report_score_v1"), 0.0)
+            event_score = coerce_float_or_default(
+                event.get("report_score_v1"), default=0.0
+            )
             if confidence == "high" and event_score > 0:
                 high_positive += 1
             if confidence == "high" and event_score < 0:
@@ -183,9 +199,9 @@ def summarize_recommendation_feedback(
         "average_turn_feedback_score": round(sum(feedback_scores) / count, 3)
         if count
         else None,
-        "positive_rate": _rate(positive, count),
-        "negative_rate": _rate(negative, count),
-        "neutral_rate": _rate(neutral, count),
+        "positive_rate": rounded_ratio_or_none(positive, count),
+        "negative_rate": rounded_ratio_or_none(negative, count),
+        "neutral_rate": rounded_ratio_or_none(neutral, count),
         "score_by_source_type": {
             source: round(sum(values) / len(values), 3)
             for source, values in sorted(source_scores.items())
@@ -221,11 +237,14 @@ def join_observations_with_feedback(
     events_by_turn = _feedback_events_by_turn(feedback_events)
     joined: list[dict[str, Any]] = []
     for row in samples:
-        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        key = (
+            to_stripped_text(row.get("lanlan_name")),
+            to_stripped_text(row.get("turn_id")),
+        )
         events = list(events_by_turn.get(key, ()))
         feedback_inferred = False
         if key[0] and key[1] and not events and row.get("delivered") is True:
-            ts = _number(row.get("ts"), -1.0)
+            ts = coerce_float_or_default(row.get("ts"), default=-1.0)
             if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
                 events = [
                     build_feedback_event(
@@ -243,9 +262,12 @@ def join_observations_with_feedback(
         turn_feedback_score = None
         if selected:
             turn_feedback_score = round(
-                _clamp(
+                clamp_to_range(
                     sum(
-                        _number(event.get("report_score_v1"), 0.0) for event in selected
+                        coerce_float_or_default(
+                            event.get("report_score_v1"), default=0.0
+                        )
+                        for event in selected
                     ),
                     -1.0,
                     1.0,
@@ -261,7 +283,7 @@ def join_observations_with_feedback(
                 "source_type": top1_source_type,
                 "shadow_selected_score": shadow_score,
                 "top1_source_type": top1_source_type,
-                "actual_primary_channel": _normalize_source_type(
+                "actual_primary_channel": normalize_feedback_source_identifier(
                     row.get("actual_primary_channel")
                 ),
                 "matched_actual_source": row.get("matched_actual_source") is True,
@@ -301,11 +323,14 @@ def join_observations_with_reward_score_v2_preview(
     )
     joined: list[dict[str, Any]] = []
     for row in samples:
-        key = (_clean_text(row.get("lanlan_name")), _clean_text(row.get("turn_id")))
+        key = (
+            to_stripped_text(row.get("lanlan_name")),
+            to_stripped_text(row.get("turn_id")),
+        )
         events = list(events_by_turn.get(key, ()))
         feedback_inferred = False
         if key[0] and key[1] and not events and row.get("delivered") is True:
-            ts = _number(row.get("ts"), -1.0)
+            ts = coerce_float_or_default(row.get("ts"), default=-1.0)
             if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
                 events = [
                     build_feedback_event(
@@ -334,7 +359,7 @@ def join_observations_with_reward_score_v2_preview(
         if attribution_valid is not True:
             reward_score = None
         expected_candidate_id = (
-            _clean_text(row.get("shadow_selected_candidate_id")) or None
+            to_stripped_text(row.get("shadow_selected_candidate_id")) or None
             if row.get("matched_actual_material") is True
             else None
         )
@@ -342,7 +367,7 @@ def join_observations_with_reward_score_v2_preview(
             {
                 "turn_id": key[1],
                 "lanlan_name": key[0],
-                "source_type": _normalize_source_type(
+                "source_type": normalize_feedback_source_identifier(
                     row.get("actual_primary_channel")
                     or row.get("shadow_selected_source_type")
                 ),
@@ -401,14 +426,14 @@ def summarize_reward_score_v2_preview(
     source_rewards: dict[str, list[float]] = defaultdict(list)
     component_values: dict[str, list[float]] = defaultdict(list)
     for row in explicit_scored:
-        source_rewards[_normalize_source_type(row.get("source_type"))].append(
-            float(row["reward_score_v2_preview"])
-        )
+        source_rewards[
+            normalize_feedback_source_identifier(row.get("source_type"))
+        ].append(float(row["reward_score_v2_preview"]))
         components = row.get("reward_components_v2_preview")
         if isinstance(components, Mapping):
             for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER:
                 component_values[component].append(
-                    _number(components.get(component), 0.0)
+                    coerce_float_or_default(components.get(component), default=0.0)
                 )
 
     attribution_issues = Counter(
@@ -436,19 +461,21 @@ def summarize_reward_score_v2_preview(
         ),
         "attribution_issue_count": sum(attribution_issues.values()),
         "attribution_issue_distribution": dict(sorted(attribution_issues.items())),
-        "average_reward_score_v2_preview": _average(rewards),
-        "average_all_reward_score_v2_preview": _average(all_rewards),
-        "average_inferred_reward_score_v2_preview": _average(inferred_rewards),
-        "positive_rate": _rate(positive_count, len(rewards)),
-        "negative_rate": _rate(negative_count, len(rewards)),
-        "neutral_rate": _rate(neutral_count, len(rewards)),
+        "average_reward_score_v2_preview": rounded_mean_or_none(rewards),
+        "average_all_reward_score_v2_preview": rounded_mean_or_none(all_rewards),
+        "average_inferred_reward_score_v2_preview": rounded_mean_or_none(
+            inferred_rewards
+        ),
+        "positive_rate": rounded_ratio_or_none(positive_count, len(rewards)),
+        "negative_rate": rounded_ratio_or_none(negative_count, len(rewards)),
+        "neutral_rate": rounded_ratio_or_none(neutral_count, len(rewards)),
         "score_by_source_type": {
-            source: _average(values)
+            source: rounded_mean_or_none(values)
             for source, values in sorted(source_rewards.items())
             if values
         },
         "average_components": {
-            component: _average(component_values.get(component, []))
+            component: rounded_mean_or_none(component_values.get(component, []))
             for component in _REWARD_V2_PREVIEW_COMPONENT_ORDER
         },
         "relative_speed_neutral_count": sum(
@@ -465,11 +492,11 @@ def summarize_reward_score_v2_preview(
         "relative_speed_bonus_count": sum(
             1
             for row in explicit_scored
-            if _number(
+            if coerce_float_or_default(
                 (row.get("reward_components_v2_preview") or {}).get("relative_speed")
                 if isinstance(row.get("reward_components_v2_preview"), Mapping)
                 else None,
-                0.0,
+                default=0.0,
             )
             > 0
         ),
@@ -530,7 +557,7 @@ def summarize_feedback_calibration(
     mid_low_source_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     top1_counts: Counter[str] = Counter()
     for row in joined:
-        source = _normalize_source_type(row.get("source_type"))
+        source = normalize_feedback_source_identifier(row.get("source_type"))
         if source:
             top1_counts[source] += 1
         if row.get("feedback_missing") is True or not isinstance(
@@ -582,9 +609,9 @@ def summarize_feedback_calibration(
     )
     active_ready_reasons = _feedback_active_ready_reasons(
         feedback_joined_count=feedback_joined_count,
-        average_feedback_score=_average(feedback_scores),
-        top1_positive_rate=_rate(positive_count, feedback_scored_count),
-        top1_negative_rate=_rate(negative_count, feedback_scored_count),
+        average_feedback_score=rounded_mean_or_none(feedback_scores),
+        top1_positive_rate=rounded_ratio_or_none(positive_count, feedback_scored_count),
+        top1_negative_rate=rounded_ratio_or_none(negative_count, feedback_scored_count),
         bucket_feedback=bucket_feedback,
         dominant_low_feedback_sources=dominant_low_feedback_sources,
     )
@@ -595,9 +622,13 @@ def summarize_feedback_calibration(
         "feedback_inferred_count": feedback_inferred_count,
         "feedback_scored_count": feedback_scored_count,
         "feedback_missing_count": len(joined) - feedback_scored_count,
-        "average_feedback_score": _average(feedback_scores),
-        "top1_positive_rate": _rate(positive_count, feedback_scored_count),
-        "top1_negative_rate": _rate(negative_count, feedback_scored_count),
+        "average_feedback_score": rounded_mean_or_none(feedback_scores),
+        "top1_positive_rate": rounded_ratio_or_none(
+            positive_count, feedback_scored_count
+        ),
+        "top1_negative_rate": rounded_ratio_or_none(
+            negative_count, feedback_scored_count
+        ),
         "feedback_score_population": "explicit_and_inferred",
         "feedback_rate_denominator": "feedback_scored_count",
         "score_by_source_type": score_by_source_type,
@@ -627,7 +658,10 @@ def _feedback_events_by_turn(
         if not isinstance(event, Mapping):
             continue
         safe = sanitize_recommendation_feedback_event(event)
-        key = (_clean_text(safe.get("lanlan_name")), _clean_text(safe.get("turn_id")))
+        key = (
+            to_stripped_text(safe.get("lanlan_name")),
+            to_stripped_text(safe.get("turn_id")),
+        )
         if key[0] and key[1]:
             events_by_turn[key].append(safe)
     return events_by_turn
@@ -641,8 +675,8 @@ def _relative_reply_speed_previews(
     records: list[tuple[tuple[str, str], float, float | None]] = []
     for observation in observations:
         key = (
-            _clean_text(observation.get("lanlan_name")),
-            _clean_text(observation.get("turn_id")),
+            to_stripped_text(observation.get("lanlan_name")),
+            to_stripped_text(observation.get("turn_id")),
         )
         events = list(events_by_turn.get(key, ()))
         if not key[0] or not key[1] or not events:
@@ -652,17 +686,22 @@ def _relative_reply_speed_previews(
         replies = [
             event
             for event in events
-            if _clean_text(event.get("event_type")) in _REWARD_V2_PREVIEW_REPLY_EVENTS
+            if to_stripped_text(event.get("event_type"))
+            in _REWARD_V2_PREVIEW_REPLY_EVENTS
         ]
         if not replies:
             continue
         reply = min(
             replies,
-            key=lambda event: _number(event.get("ts"), float("inf")),
+            key=lambda event: coerce_float_or_default(
+                event.get("ts"), default=float("inf")
+            ),
         )
-        event_ts = _number(
+        event_ts = coerce_float_or_default(
             reply.get("ts"),
-            _number(observation.get("ts"), float("inf")),
+            default=coerce_float_or_default(
+                observation.get("ts"), default=float("inf")
+            ),
         )
         latency = _reply_latency_seconds(reply)
         records.append((key, event_ts, latency))
@@ -686,7 +725,9 @@ def _reply_latency_seconds(event: Mapping[str, Any]) -> float | None:
     metadata = event.get("metadata")
     if not isinstance(metadata, Mapping):
         return None
-    latency = _number(metadata.get("reply_latency_seconds"), float("nan"))
+    latency = coerce_float_or_default(
+        metadata.get("reply_latency_seconds"), default=float("nan")
+    )
     if not math.isfinite(latency) or latency < 0 or latency > REPLY_WINDOW_SECONDS:
         return None
     return latency
@@ -728,28 +769,34 @@ def _top1_source_type(row: Mapping[str, Any]) -> str:
     if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
         for candidate in candidates:
             if isinstance(candidate, Mapping):
-                source = _normalize_source_type(candidate.get("source_type"))
+                source = normalize_feedback_source_identifier(
+                    candidate.get("source_type")
+                )
                 if source:
                     return source
-    return _normalize_source_type(row.get("shadow_selected_source_type"))
+    return normalize_feedback_source_identifier(row.get("shadow_selected_source_type"))
 
 
 def _shadow_selected_score(row: Mapping[str, Any]) -> float | None:
-    score = _number(row.get("shadow_selected_score"), float("nan"))
+    score = coerce_float_or_default(
+        row.get("shadow_selected_score"), default=float("nan")
+    )
     if score == score:
         return round(score, 3)
     candidates = row.get("top_candidates")
     if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
         for candidate in candidates:
             if isinstance(candidate, Mapping):
-                score = _number(candidate.get("score"), float("nan"))
+                score = coerce_float_or_default(
+                    candidate.get("score"), default=float("nan")
+                )
                 if score == score:
                     return round(score, 3)
     return None
 
 
 def _score_bucket(score: Any) -> str | None:
-    value = _number(score, float("nan"))
+    value = coerce_float_or_default(score, default=float("nan"))
     if value != value:
         return None
     if value >= 0.75:
@@ -759,19 +806,13 @@ def _score_bucket(score: Any) -> str | None:
     return "low"
 
 
-def _average(values: Sequence[float]) -> float | None:
-    if not values:
-        return None
-    return round(sum(values) / len(values), 3)
-
-
 def _average_joined_feedback(rows: Sequence[Mapping[str, Any]]) -> float:
     scores = [
         float(row["turn_feedback_score"])
         for row in rows
         if isinstance(row.get("turn_feedback_score"), (int, float))
     ]
-    average = _average(scores)
+    average = rounded_mean_or_none(scores)
     return 0.0 if average is None else average
 
 
@@ -790,9 +831,9 @@ def _score_bucket_feedback(
         negative = sum(1 for score in scores if score < 0)
         result[bucket] = {
             "count": len(scores),
-            "average_feedback_score": _average(scores),
-            "positive_rate": _rate(positive, len(scores)),
-            "negative_rate": _rate(negative, len(scores)),
+            "average_feedback_score": rounded_mean_or_none(scores),
+            "positive_rate": rounded_ratio_or_none(positive, len(scores)),
+            "negative_rate": rounded_ratio_or_none(negative, len(scores)),
         }
     return result
 
@@ -808,8 +849,8 @@ def _dominant_low_feedback_sources(
     return sorted(
         source
         for source, count in top1_counts.items()
-        if _rate(count, total) is not None
-        and float(_rate(count, total) or 0.0) >= 0.60
+        if rounded_ratio_or_none(count, total) is not None
+        and float(rounded_ratio_or_none(count, total) or 0.0) >= 0.60
         and float(score_by_source_type.get(source, 0.0)) < 0.10
     )
 
@@ -883,7 +924,7 @@ def _feedback_signal_summary(
         }
     )
     for row in rows:
-        source = _normalize_source_type(row.get("source_type"))
+        source = normalize_feedback_source_identifier(row.get("source_type"))
         if not source:
             continue
         bucket = stats[source]
@@ -926,7 +967,7 @@ def _feedback_signal_summary(
             "high_confidence_negative_count": int(
                 bucket["high_confidence_negative_count"]
             ),
-            "confidence_positive_rate": _rate(
+            "confidence_positive_rate": rounded_ratio_or_none(
                 int(bucket["strong_positive_count"]),
                 denominator,
             ),
@@ -1016,7 +1057,9 @@ def _manual_tuning_preview(
 ) -> dict[str, dict[str, Any]]:
     preview: dict[str, dict[str, Any]] = {}
     for source, suggestion in sorted(feedback_actionable_suggestions.items()):
-        adjustment = round(_number(suggestion.get("adjustment"), 0.0), 3)
+        adjustment = round(
+            coerce_float_or_default(suggestion.get("adjustment"), default=0.0), 3
+        )
         preview[source] = {
             "current_adjustment": 0.0,
             "suggested_delta": adjustment,
@@ -1066,9 +1109,9 @@ def _select_feedback_events_for_turn(
         event = sanitize_recommendation_feedback_event(raw)
         group = str(event.get("event_group") or "unknown")
         previous = by_group.get(group)
-        if previous is None or abs(_number(event.get("report_score_v1"), 0.0)) > abs(
-            _number(previous.get("report_score_v1"), 0.0)
-        ):
+        if previous is None or abs(
+            coerce_float_or_default(event.get("report_score_v1"), default=0.0)
+        ) > abs(coerce_float_or_default(previous.get("report_score_v1"), default=0.0)):
             by_group[group] = event
     return list(by_group.values())
 
@@ -1080,25 +1123,25 @@ def _reward_v2_preview_attribution_issue(
     """Validate that feedback belongs to the material actually delivered."""
     if observation.get("delivered") is not True:
         return "observation_not_delivered"
-    expected_source = _normalize_source_type(
+    expected_source = normalize_feedback_source_identifier(
         observation.get("actual_primary_channel")
         or observation.get("shadow_selected_source_type")
     )
     expected_candidate_id = (
-        _clean_text(observation.get("shadow_selected_candidate_id")) or None
+        to_stripped_text(observation.get("shadow_selected_candidate_id")) or None
         if observation.get("matched_actual_material") is True
         else None
     )
     for raw_event in feedback_events:
         event = sanitize_recommendation_feedback_event(raw_event)
-        event_source = _normalize_source_type(event.get("source_type"))
+        event_source = normalize_feedback_source_identifier(event.get("source_type"))
         if (
             event_source != "unknown"
             and expected_source != "unknown"
             and event_source != expected_source
         ):
             return "source_mismatch"
-        event_candidate_id = _clean_text(event.get("candidate_id")) or None
+        event_candidate_id = to_stripped_text(event.get("candidate_id")) or None
         if event_candidate_id is None:
             continue
         if expected_candidate_id is None:
@@ -1119,17 +1162,9 @@ def _calibration_observation_samples(
     recent = [
         row
         for row in rows
-        if 0 <= now - _number(row.get("ts"), -1.0) <= max(0, int(window_seconds))
+        if 0
+        <= now - coerce_float_or_default(row.get("ts"), default=-1.0)
+        <= max(0, int(window_seconds))
     ]
     limit = max(0, int(sample_limit))
     return recent[-limit:] if limit else []
-
-
-def _rate(numerator: int, denominator: int) -> float | None:
-    if denominator <= 0:
-        return None
-    return round(numerator / denominator, 3)
-
-
-def _clamp(value: float, lower: float, upper: float) -> float:
-    return max(lower, min(upper, value))

@@ -45,7 +45,7 @@ from main_logic.proactive_chat.recommendation_integration import (
 from main_logic.proactive_recommendation.feedback.service import (
     record_feedback_event,
 )
-from main_logic.proactive_recommendation.feedback.events import (
+from main_logic.proactive_recommendation.feedback.event_processing import (
     music_feedback_event_type,
 )
 from config import PROACTIVE_RECOMMENDATION_FEEDBACK_LOG

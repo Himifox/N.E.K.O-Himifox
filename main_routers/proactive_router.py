@@ -53,15 +53,15 @@ from config import (
 from main_logic.proactive_recommendation.feedback.service import (
     record_recent_setting_feedback,
 )
-from main_logic.proactive_recommendation.feedback.events import (
+from main_logic.proactive_recommendation.feedback.event_processing import (
     has_forbidden_feedback_fields,
 )
-from main_logic.proactive_recommendation.feedback.reports import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
 )
-from main_logic.proactive_recommendation.feedback.store import (
+from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     load_recommendation_feedback_jsonl,
 )
@@ -69,7 +69,7 @@ from main_logic.proactive_recommendation.application import (
     get_recommendation_application,
 )
 from main_logic.proactive_recommendation.domain_models import RecordFeedbackCommand
-from main_logic.proactive_recommendation.observation.reports import (
+from main_logic.proactive_recommendation.observation.analytics import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
     DEFAULT_EXAMPLE_LIMIT,
@@ -81,10 +81,10 @@ from main_logic.proactive_recommendation.observation.reports import (
     summarize_recommendation_policy,
     summarize_recommendation_validation,
 )
-from main_logic.proactive_recommendation.observation.review import (
+from main_logic.proactive_recommendation.observation.validation import (
     summarize_recommendation_review_context,
 )
-from main_logic.proactive_recommendation.observation.store import (
+from main_logic.proactive_recommendation.observation.storage import (
     DEFAULT_ROTATE_BYTES,
     OBSERVATION_LOG_FILENAME,
     load_recommendation_observations_jsonl,
@@ -92,11 +92,11 @@ from main_logic.proactive_recommendation.observation.store import (
 from main_logic.proactive_recommendation.state.bandit_posteriors import (
     get_recommendation_bandit_state,
 )
-from main_logic.proactive_recommendation.tuning.store import (
+from main_logic.proactive_recommendation.tuning.storage import (
     TUNING_FILENAME,
     load_recommendation_tuning,
 )
-from main_logic.proactive_recommendation.tuning.model import tuning_public_status
+from main_logic.proactive_recommendation.tuning.configuration import tuning_public_status
 from utils.cloudsave_runtime import MaintenanceModeError
 from utils.logger_config import get_module_logger
 from utils.preferences import (

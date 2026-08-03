@@ -7,6 +7,11 @@ import math
 from typing import Any
 
 
+_SOURCE_IDENTIFIER_ALIASES = {
+    "home": "web",
+}
+
+
 def to_stripped_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -50,7 +55,7 @@ def sanitize_json_value(value: Any) -> Any:
 def normalize_source_identifier(value: Any) -> str:
     source_identifier = to_stripped_text(value).lower()
     if source_identifier and source_identifier.replace("_", "").isalnum():
-        return source_identifier
+        return _SOURCE_IDENTIFIER_ALIASES.get(source_identifier, source_identifier)
     return ""
 
 

@@ -10,7 +10,7 @@ from typing import Any
 from config import PROACTIVE_RECOMMENDATION_TUNING_MODE
 
 from .domain_models import RecordFeedbackCommand
-from .feedback.contracts import RecommendationFeedbackRecordResult
+from .domain_models import RecommendationFeedbackRecordResult
 from .feedback.service import (
     FeedbackService,
     ProactiveRecommendationFeedbackTurnSink,
