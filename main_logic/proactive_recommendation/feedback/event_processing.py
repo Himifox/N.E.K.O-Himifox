@@ -87,6 +87,7 @@ _METADATA_KEYS = {
     "mini_game_choice",
     "game_type",
     "reason",
+    "attribution_basis",
 }
 
 _MAX_PLAYBACK_FEEDBACK_MS = 24 * 60 * 60 * 1000

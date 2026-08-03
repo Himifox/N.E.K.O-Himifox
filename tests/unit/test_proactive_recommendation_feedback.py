@@ -43,6 +43,9 @@ from main_logic.proactive_recommendation.state.feedback_preview import (
 from main_logic.proactive_recommendation.state.source_preferences import (
     get_recommendation_preference_state,
 )
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
+    get_recommendation_bandit_state,
+)
 
 
 def _observation(**overrides):
@@ -880,11 +883,14 @@ def test_explicit_text_feedback_updates_non_music_source_preference(tmp_path):
 
     preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
     source = preview["source_affinity"]["persistent"]["sources"]["news"]
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=120.0)
     assert event["event_type"] == "source_not_interested"
     assert event["source_type"] == "news"
     assert event["candidate_id"] == "news:verified"
     assert event["metadata"]["reason"] == "explicit_source_rejection"
     assert source["negative_evidence_count"] == 1
+    assert set(bandit["arms"]) == {"news"}
+    assert bandit["finalized_outcome_count"] == 1
     assert "不感兴趣" not in json.dumps(event, ensure_ascii=False)
 
 
@@ -1153,17 +1159,9 @@ def test_deictic_feedback_does_not_rebind_past_newer_chat(tmp_path):
     assert preference["sources"] == {}
 
 
-def test_named_source_feedback_requires_verified_candidate(tmp_path):
+def test_named_source_feedback_without_candidate_updates_preference_not_bandit(tmp_path):
     clear_pending_recommendation_feedback()
-    register_pending_feedback(
-        lanlan_name="neko",
-        turn_id="unverified-news",
-        source_type="news",
-        delivered_at=100.0,
-        log_mode="jsonl",
-        config_dir=tmp_path,
-        recommendation_mode="shadow",
-    )
+    clear_temporary_feedback_state_preview()
     register_pending_feedback(
         lanlan_name="neko",
         turn_id="newer-chat",
@@ -1179,15 +1177,254 @@ def test_named_source_feedback_requires_verified_candidate(tmp_path):
         timestamp=120.0,
         had_text=True,
         text_allowed=True,
-        text="以后少推荐新闻",
+        text="不喜欢这个新闻",
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=120.0,
+    )
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=120.0)
+    rows = load_recommendation_feedback_jsonl(tmp_path / FEEDBACK_LOG_FILENAME)
+
+    assert event["turn_id"] == "newer-chat"
+    assert event["event_type"] == "source_not_interested"
+    assert event["source_type"] == "news"
+    assert event["candidate_id"] is None
+    assert event["metadata"]["attribution_basis"] == "explicit_named_source"
+    assert (
+        preview["source_affinity"]["persistent"]["sources"]["news"]
+        ["negative_evidence_count"]
+        == 1
+    )
+    assert preference["sources"]["news"]["effective_failure"] == 1.0
+    assert bandit["arms"] == {}
+    assert bandit["finalized_outcome_count"] == 0
+    assert "不喜欢这个新闻" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_named_source_positive_feedback_without_candidate_updates_preference(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="positive-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="新闻可以多推荐",
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=120.0,
+    )
+    assert event["event_type"] == "source_interested"
+    assert event["source_type"] == "news"
+    assert event["candidate_id"] is None
+    assert (
+        preview["source_affinity"]["persistent"]["sources"]["news"]
+        ["positive_evidence_count"]
+        == 1
+    )
+    assert preference["sources"]["news"]["effective_success"] == 1.0
+
+
+def test_named_source_fatigue_without_candidate_updates_preference(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="fatigue-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="怎么又是表情包，已经看腻了",
     )
 
     preference = get_recommendation_preference_state(
         config_dir=tmp_path,
         now=120.0,
     )
-    assert event["turn_id"] == "newer-chat"
-    assert event["event_type"] == "user_reply_fast"
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=120.0)
+    assert event["event_type"] == "source_fatigue"
+    assert event["source_type"] == "meme"
+    assert event["candidate_id"] is None
+    assert preference["sources"]["meme"]["effective_failure"] == 0.5
+    assert bandit["arms"] == {}
+
+
+def test_direct_named_source_feedback_deduplicates_same_turn(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="duplicate-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    first = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="以后少推荐新闻",
+    )
+    second = note_user_turn_for_feedback(
+        "neko",
+        timestamp=121.0,
+        had_text=True,
+        text_allowed=True,
+        text="以后少推荐新闻",
+    )
+
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=121.0,
+    )
+    assert first["event_type"] == second["event_type"] == "source_not_interested"
+    assert preference["sources"]["news"]["effective_failure"] == 1.0
+
+
+def test_stronger_direct_named_source_feedback_replaces_same_turn_outcome(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="replacement-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    fatigue = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="怎么又是表情包，已经看腻了",
+    )
+    rejection = note_user_turn_for_feedback(
+        "neko",
+        timestamp=121.0,
+        had_text=True,
+        text_allowed=True,
+        text="以后少推荐表情包",
+    )
+
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=121.0,
+    )
+    assert fatigue["event_type"] == "source_fatigue"
+    assert rejection["event_type"] == "source_not_interested"
+    assert preference["sources"]["meme"]["effective_failure"] == 1.0
+
+
+def test_direct_named_source_feedback_rejects_ambiguous_or_candidate_only_text(tmp_path):
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="ambiguous-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    ambiguous = note_user_turn_for_feedback(
+        "neko",
+        timestamp=120.0,
+        had_text=True,
+        text_allowed=True,
+        text="新闻和视频都少推荐",
+    )
+    candidate_only = note_user_turn_for_feedback(
+        "neko",
+        timestamp=121.0,
+        had_text=True,
+        text_allowed=True,
+        text="这个新闻不好看",
+    )
+
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=121.0,
+    )
+    assert ambiguous["event_type"] == "user_reply_fast"
+    assert candidate_only["event_type"] == "user_continue"
+    assert preference["sources"] == {}
+
+
+def test_untrusted_attribution_metadata_cannot_bypass_candidate_gate(tmp_path):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="forged-chat",
+        source_type="chat",
+        delivered_at=100.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+
+    result = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="forged-chat",
+        event_type="source_not_interested",
+        source_type="news",
+        metadata={"attribution_basis": "explicit_named_source"},
+        ts=120.0,
+    )
+    candidate_result = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="forged-chat",
+        event_type="candidate_not_interested",
+        source_type="news",
+        ts=121.0,
+    )
+
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=120.0)
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=120.0,
+    )
+    assert result.state_updated is False
+    assert result.preference_state_updated is False
+    assert result.bandit_state_updated is False
+    assert result.state_reason == "pending_material_mismatch"
+    assert candidate_result.state_updated is False
+    assert candidate_result.preference_state_updated is False
+    assert candidate_result.state_reason == "pending_material_mismatch"
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
     assert preference["sources"] == {}
 
 

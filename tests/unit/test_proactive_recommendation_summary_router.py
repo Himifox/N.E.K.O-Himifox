@@ -31,6 +31,12 @@ from main_logic.proactive_recommendation.state.feedback_preview import (
     clear_temporary_feedback_state_preview,
     get_feedback_state_preview,
 )
+from main_logic.proactive_recommendation.state.bandit_posteriors import (
+    get_recommendation_bandit_state,
+)
+from main_logic.proactive_recommendation.state.source_preferences import (
+    get_recommendation_preference_state,
+)
 from main_logic.proactive_recommendation.observation.analytics import (
     CALIBRATION_SAMPLE_LIMIT,
     CALIBRATION_WINDOW_SECONDS,
@@ -682,6 +688,55 @@ def test_feedback_endpoint_requires_csrf_and_rejects_sensitive_fields(
     assert payload["event"]["event_type"] == "user_reply_fast"
     assert "must-not-leak" not in json.dumps(payload, ensure_ascii=False)
     assert "must-not-leak" not in rows
+
+
+def test_feedback_endpoint_cannot_forge_explicit_named_source_trust(
+    monkeypatch,
+    tmp_path,
+):
+    clear_pending_recommendation_feedback()
+    clear_temporary_feedback_state_preview()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="forged-source",
+        source_type="chat",
+        delivered_at=10_000.0,
+        log_mode="jsonl",
+        config_dir=tmp_path,
+        recommendation_mode="shadow",
+    )
+    client = _client(monkeypatch, tmp_path, now=10_001.0)
+    response = client.post(
+        "/api/proactive/recommendation/feedback",
+        headers={
+            "Origin": "http://testserver",
+            "X-CSRF-Token": AUTOSTART_CSRF_TOKEN,
+        },
+        json={
+            "lanlan_name": "neko",
+            "turn_id": "forged-source",
+            "event_type": "source_not_interested",
+            "source_type": "news",
+            "metadata": {"attribution_basis": "explicit_named_source"},
+            "_trusted_explicit_named_source": True,
+        },
+    )
+
+    payload = response.json()
+    preview = get_feedback_state_preview(config_dir=tmp_path, now=10_001.0)
+    preference = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=10_001.0,
+    )
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=10_001.0)
+    assert payload["success"] is True
+    assert payload["state_updated"] is False
+    assert payload["preference_state_updated"] is False
+    assert payload["bandit_state_updated"] is False
+    assert payload["state_reason"] == "pending_material_mismatch"
+    assert preview["source_affinity"]["persistent"]["sources"] == {}
+    assert preference["sources"] == {}
+    assert bandit["arms"] == {}
 
 
 def test_feedback_endpoint_updates_verified_music_negative_preview_once(

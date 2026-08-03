@@ -291,6 +291,14 @@ _SOURCE_AFFINITY_EVENT_TYPES = {
     "music_hard_skip",
 }
 
+_DIRECT_NAMED_SOURCE_EVENT_TYPES = {
+    "source_interested",
+    "source_not_interested",
+    "source_fatigue",
+}
+
+_DIRECT_NAMED_SOURCE_TYPES = {"news", "meme", "vision", "video"}
+
 _SETTING_SOURCE_FIELDS = {
     "proactiveNewsChatEnabled": ("news", "web"),
     "proactiveVideoChatEnabled": ("video",),
@@ -458,6 +466,7 @@ def record_feedback_event_with_status(
     log_mode: str | None = None,
     config_dir: str | os.PathLike[str] | None = None,
     ts: float | None = None,
+    _trusted_explicit_named_source: bool = False,
 ) -> RecommendationFeedbackRecordResult:
     """Record one event through the shared log, state, and tuning chokepoint."""
     name = to_stripped_text(lanlan_name)
@@ -467,6 +476,18 @@ def record_feedback_event_with_status(
             event=None, logged=False, state_reason="invalid_identity"
         )
     pending = _pending_registry.get(name, tid)
+    normalized_direct_source = normalize_feedback_source_identifier(source_type)
+    direct_named_source_feedback = bool(
+        _trusted_explicit_named_source
+        and event_type in _DIRECT_NAMED_SOURCE_EVENT_TYPES
+        and normalized_direct_source in _DIRECT_NAMED_SOURCE_TYPES
+    )
+    if direct_named_source_feedback:
+        resolved_candidate_id = None
+    elif candidate_id is not None:
+        resolved_candidate_id = candidate_id
+    else:
+        resolved_candidate_id = pending.candidate_id if pending else None
     event = build_feedback_event(
         lanlan_name=name,
         turn_id=tid,
@@ -474,9 +495,7 @@ def record_feedback_event_with_status(
         source_type=source_type
         if source_type is not None
         else (pending.source_type if pending else None),
-        candidate_id=candidate_id
-        if candidate_id is not None
-        else (pending.candidate_id if pending else None),
+        candidate_id=resolved_candidate_id,
         metadata=metadata,
         ts=ts,
     )
@@ -524,7 +543,10 @@ def record_feedback_event_with_status(
             and not duplicate_event
         ):
             event_type = str(event.get("event_type") or "")
-            if bandit_event_matches_pending(event, pending):
+            if (
+                not direct_named_source_feedback
+                and bandit_event_matches_pending(event, pending)
+            ):
                 reward_events = _pending_registry.add_reward_event(
                     pending,
                     event_type,
@@ -572,7 +594,10 @@ def record_feedback_event_with_status(
                     state_reason = "applied"
                 elif (
                     event_type in _SOURCE_AFFINITY_EVENT_TYPES
-                    and source_affinity_event_matches_pending(event, pending)
+                    and (
+                        direct_named_source_feedback
+                        or source_affinity_event_matches_pending(event, pending)
+                    )
                 ):
                     feedback_scope = "source_affinity"
                     update_source_affinity_preview(
@@ -585,7 +610,11 @@ def record_feedback_event_with_status(
                         ),
                     )
                     state_updated = True
-                    state_reason = "exact_pending_match"
+                    state_reason = (
+                        "explicit_named_source"
+                        if direct_named_source_feedback
+                        else "exact_pending_match"
+                    )
                 elif event_type in _SOURCE_AFFINITY_EVENT_TYPES:
                     feedback_scope = "source_affinity"
                     state_reason = "pending_material_mismatch"
@@ -598,7 +627,10 @@ def record_feedback_event_with_status(
             outcome = source_preference_outcome(event_type)
             if (
                 outcome is not None
-                and source_affinity_event_matches_pending(event, pending)
+                and (
+                    direct_named_source_feedback
+                    or source_affinity_event_matches_pending(event, pending)
+                )
                 and not duplicate_event
             ):
                 try:
@@ -608,7 +640,7 @@ def record_feedback_event_with_status(
                         source_type=event.get("source_type"),
                         success=outcome[0],
                         failure=outcome[1],
-                        explicit=outcome[2],
+                        explicit=outcome[2] or direct_named_source_feedback,
                         outcome_strength=max(outcome[0], outcome[1]),
                         now=coerce_float_or_default(
                             event.get("ts"), default=time.time()
@@ -660,6 +692,7 @@ def note_user_turn_for_feedback(
         return None
     pending = latest_pending
     source_preference_match: tuple[str, str] | None = None
+    direct_named_source: str | None = None
     if text_allowed and text:
         named_sources = _explicit_text_named_source_types(text)
         if len(named_sources) == 1:
@@ -677,6 +710,9 @@ def note_user_turn_for_feedback(
                 if named_pending is not None:
                     pending = named_pending
                     source_preference_match = named_match
+                elif named_match[0] in _DIRECT_NAMED_SOURCE_EVENT_TYPES:
+                    source_preference_match = named_match
+                    direct_named_source = named_source
         elif not named_sources:
             source_preference_match = _explicit_text_source_preference_event_type(
                 text,
@@ -693,6 +729,18 @@ def note_user_turn_for_feedback(
             source_preference_event, reason = source_preference_match
             _pending_registry.mark_replied((latest_pending, pending))
             metadata["reason"] = reason
+            if direct_named_source is not None:
+                metadata["attribution_basis"] = "explicit_named_source"
+                return record_feedback_event_with_status(
+                    lanlan_name=pending.lanlan_name,
+                    turn_id=pending.turn_id,
+                    event_type=source_preference_event,
+                    source_type=direct_named_source,
+                    candidate_id=None,
+                    metadata=metadata,
+                    ts=timestamp,
+                    _trusted_explicit_named_source=True,
+                ).event
             return record_feedback_event(
                 lanlan_name=pending.lanlan_name,
                 turn_id=pending.turn_id,
