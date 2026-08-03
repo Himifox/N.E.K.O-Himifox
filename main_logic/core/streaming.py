@@ -97,7 +97,7 @@ class StreamingMixin:
             if self.websocket and hasattr(self.websocket, 'client_state') and self.websocket.client_state == self.websocket.client_state.CONNECTED:
                 self._fire_task(self.websocket.send_json({'type': 'system', 'data': 'turn end'}))
         return True
-    
+
     async def _flush_pending_input_data(self):
         """Send the cached input data to the session"""
         async with self.input_cache_lock:
@@ -481,6 +481,13 @@ class StreamingMixin:
                     # read a hidden scaffold prompt (e.g. avatar-drop file
                     # contents) the user never typed, mismatching the cadence
                     # signal and entering Focus on evidence the user didn't author.
+                    from main_logic.moegirl_knowledge_tool import (
+                        build_public_knowledge_turn_context,
+                    )
+
+                    _meme_turn_context = await build_public_knowledge_turn_context(
+                        record_data
+                    )
                     _focus_thinking = await self._focus_inline_decision(record_data)
 
                     async def response_discarded_callback(
@@ -521,6 +528,7 @@ class StreamingMixin:
 
                     stream_text_kwargs = {
                         "system_prefix": _agent_cb_ctx or None,
+                        "ephemeral_response_instruction": _meme_turn_context or None,
                         "thinking_on": _focus_thinking,
                         "response_discarded_callback": response_discarded_callback,
                     }

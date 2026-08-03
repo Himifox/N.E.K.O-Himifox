@@ -62,3 +62,4 @@ Text input uses `OmniOfflineClient`; audio input uses `OmniRealtimeClient`. The 
 - [Session Management](/architecture/session-management) — mode selection and hot-swap lifecycle
 - [Memory System](/architecture/memory-system) — persistence, automatic rendering, and on-demand recall
 - [Agent System](/architecture/agent-system) — assessment, channels, event delivery, and task state
+- [Generic Knowledge Implementation Report](/architecture/generic-knowledge-implementation-report) — local collections, automatic card delivery, multi-collection routing, and validation results

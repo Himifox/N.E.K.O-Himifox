@@ -166,6 +166,15 @@ class ToolCallingMixin:
             metadata={"source": "builtin"},
         )
         self.tool_registry.register(recall_tool, replace=True)
+        try:
+            from main_logic.moegirl_knowledge_tool import register_public_knowledge_tool
+
+            register_public_knowledge_tool(self.tool_registry, language=_lang)
+        except Exception as exc:
+            logger.warning(
+                "[public-knowledge] builtin tool registration failed: %s",
+                type(exc).__name__,
+            )
 
     async def _handle_recall_memory_call(self, arguments: dict) -> str:
         """Handler for ``recall_memory`` — calls memory_server's
