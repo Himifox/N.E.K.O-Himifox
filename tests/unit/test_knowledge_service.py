@@ -1,18 +1,109 @@
 from __future__ import annotations
 
-from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
+from knowledge.api import (
+    CollectionSpec as ApiCollectionSpec,
+    KnowledgeEntry,
+    KnowledgeStore,
+    MaterialRoute as ApiMaterialRoute,
+    ResponsePolicy as ApiResponsePolicy,
+    open_knowledge,
+)
+from knowledge.collection_specs import (
+    CollectionSpec as SpecsCollectionSpec,
+    MaterialRoute as SpecsMaterialRoute,
+    ResponsePolicy as SpecsResponsePolicy,
+)
 from knowledge.moegirl_knowledge import MoegirlKnowledgeEntry
 from knowledge.engine.retrieval import MatchPolicy
 from knowledge.service import (
+    BUILTIN_COLLECTIONS,
+    CORPORA_COLLECTION,
+    CORPORA_RESPONSE_POLICY,
     MEME_COLLECTION,
     MEME_RESPONSE_POLICY,
     CollectionSpec,
     KnowledgeService,
+    MaterialRoute,
+    ResponsePolicy,
 )
 
 
 def test_stable_and_legacy_entry_exports_share_identity():
     assert KnowledgeEntry is MoegirlKnowledgeEntry
+
+
+def test_collection_contract_exports_share_identity():
+    assert ApiResponsePolicy is ResponsePolicy is SpecsResponsePolicy
+    assert ApiMaterialRoute is MaterialRoute is SpecsMaterialRoute
+    assert ApiCollectionSpec is CollectionSpec is SpecsCollectionSpec
+
+
+def test_builtin_collection_specs_preserve_their_boundaries_and_policies():
+    assert BUILTIN_COLLECTIONS == (MEME_COLLECTION, CORPORA_COLLECTION)
+    assert [spec.collection_id for spec in BUILTIN_COLLECTIONS] == ["meme", "corpora"]
+    assert [
+        (
+            spec.storage_directory,
+            spec.display_name,
+            spec.database_filename,
+            spec.priority,
+            spec.auto_context_enabled,
+            spec.restrict_auto_context_to_registered_sources,
+            spec.auto_context_source_tags,
+        )
+        for spec in BUILTIN_COLLECTIONS
+    ] == [
+        (
+            "moegirl-knowledge",
+            "Public Meme Knowledge",
+            "knowledge.db",
+            100,
+            True,
+            True,
+            (
+                "source:chime",
+                "source:geng-guide",
+                "source:moegirl",
+                "source:geng8",
+            ),
+        ),
+        (
+            "corpora",
+            "Corpora",
+            "knowledge.db",
+            10,
+            True,
+            True,
+            ("source:corpora",),
+        ),
+    ]
+    assert MEME_COLLECTION.response_policy is MEME_RESPONSE_POLICY
+    assert CORPORA_COLLECTION.response_policy is CORPORA_RESPONSE_POLICY
+    assert (
+        MEME_COLLECTION.match_policy.title_min_length,
+        MEME_COLLECTION.match_policy.alias_min_length,
+        MEME_COLLECTION.match_policy.recognition_min_length,
+        MEME_COLLECTION.match_policy.weak_term_length,
+        MEME_COLLECTION.match_policy.latin_word_boundaries,
+    ) == (3, 3, 2, 2, False)
+    assert (
+        CORPORA_COLLECTION.match_policy.title_min_length,
+        CORPORA_COLLECTION.match_policy.alias_min_length,
+        CORPORA_COLLECTION.match_policy.recognition_min_length,
+        CORPORA_COLLECTION.match_policy.weak_term_length,
+        CORPORA_COLLECTION.match_policy.latin_word_boundaries,
+    ) == (5, 5, 5, 0, True)
+    assert tuple(route.sample_tag for route in CORPORA_COLLECTION.material_routes) == (
+        "dataset:tarot-interpretations",
+        "dataset:occupations",
+        "dataset:greek-gods",
+        "dataset:popular-movies",
+        "dataset:web-colors",
+        "dataset:common-animals",
+        "dataset:fruits",
+        "dataset:vegetables",
+        "dataset:moods",
+    )
 
 
 def _entry(title: str, *, source: str, tags=(), content="Meaning\n- Example"):

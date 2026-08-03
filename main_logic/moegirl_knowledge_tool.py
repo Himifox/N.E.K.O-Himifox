@@ -6,10 +6,14 @@ import asyncio
 import time
 
 from config.prompts.prompts_sys import _loc
-from knowledge.api import open_knowledge
+from knowledge.api import (
+    CORPORA_RESPONSE_POLICY,
+    get_reference_details,
+    get_tag_value,
+    open_knowledge,
+)
 from knowledge.engine.source_registry import get_source
 from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
-from knowledge.service import CORPORA_RESPONSE_POLICY, get_reference_details, get_tag_value
 from main_logic.tool_calling import ToolDefinition
 from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger

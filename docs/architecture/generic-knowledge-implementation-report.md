@@ -77,6 +77,32 @@ flowchart LR
   AUTO -->|"单轮一张临时卡"| MODEL
 ```
 
+代码目录按运行职责分为通用引擎、应用编排和萌娘兼容三层：
+
+```text
+knowledge/
+├── api.py                    # 稳定公共入口
+├── service.py                # 应用服务与用例编排
+├── collection_specs.py       # 集合规格、匹配和回应策略
+├── packs.py                  # 知识包事务
+├── engine/                   # 通用知识执行内核
+│   ├── models.py
+│   ├── filters.py
+│   ├── store.py
+│   ├── retrieval.py
+│   ├── routing.py
+│   ├── source_registry.py
+│   ├── catalog_overrides.py
+│   └── mutation_lock.py
+└── moegirl_knowledge/        # 萌娘兼容入口、同步和来源适配器
+```
+
+`main_routers` 与 `main_logic` 通过 `knowledge.api` 使用服务层；服务层组合
+`collection_specs`、知识包能力和 `knowledge.engine`。`engine` 只实现通用
+模型、存储、检索和路由，不依赖服务层、Router、Main Logic 或
+`moegirl_knowledge`。萌娘目录向通用层依赖，并保留既有萌娘名称作为兼容
+入口，不再承载通用知识库实现。
+
 架构上有两个相互独立的查询路径：
 
 1. **自动搭话路径**：只做标题、可信别名和固定引用的本地匹配，用于当前回复。

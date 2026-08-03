@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from knowledge.service import (
+from knowledge.api import (
     MEME_RESPONSE_POLICY,
     KnowledgeService,
     KnowledgeTurnContext,

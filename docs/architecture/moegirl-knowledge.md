@@ -24,11 +24,19 @@ by Main Server startup, chat streaming, the public-knowledge tool, or the normal
 
 ## Generic service boundary
 
-New project code uses `knowledge.api` and `KnowledgeService`. The existing
-`build_meme_turn_context`, `MoegirlKnowledgeStore`, and
+New project code uses `knowledge.api` and `KnowledgeService`. Generic models,
+storage, retrieval, routing, source metadata, and catalog overrides live in
+`knowledge.engine`; collection-owned configuration lives in
+`knowledge.collection_specs`, while `knowledge.service` keeps application
+orchestration. The engine does not import the service, routers, Main Logic, or
+the Moegirl compatibility layer.
+
+`knowledge.moegirl_knowledge` now contains only compatibility entrypoints,
+source synchronization, status adaptation, and isolated source adapters. The
+existing `build_meme_turn_context`, `MoegirlKnowledgeStore`, and
 `MoegirlKnowledgeRetriever` names remain compatibility entrypoints, so the
 conversation core, tool registration, memory service, and Main Server lifecycle
-do not depend on the generic implementation.
+do not depend on domain-named generic implementations.
 
 Collection behaviour is project-owned `CollectionSpec` data: storage location,
 priority, automatic-context permission, matching thresholds, and response
