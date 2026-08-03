@@ -67,7 +67,7 @@
           <el-input v-model="query" clearable :placeholder="t('knowledge.searchPlaceholder')" @keyup.enter="loadEntries(true)" />
           <el-button type="primary" @click="loadEntries(true)">{{ t('common.search') }}</el-button>
         </div>
-        <el-table :data="entries" v-loading="entriesLoading" row-key="title">
+        <el-table :data="entries" v-loading="entriesLoading" :row-key="knowledgeEntryRowKey">
           <el-table-column prop="title" :label="t('knowledge.term')" min-width="180" />
           <el-table-column prop="summary" :label="t('knowledge.summary')" min-width="320" show-overflow-tooltip />
           <el-table-column :label="t('knowledge.source')" width="170">
@@ -179,6 +179,14 @@ const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const marketOpening = ref(false)
+
+function knowledgeEntryRowKey(row: KnowledgeEntrySummary): string {
+  return JSON.stringify([
+    row.collection_id,
+    row.source?.tag || '',
+    row.title,
+  ])
+}
 
 async function openKnowledgeMarket() {
   if (!marketAuth.value.authenticated) {

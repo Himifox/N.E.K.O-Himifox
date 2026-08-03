@@ -35,6 +35,15 @@ def _payload(*, title="community phrase", pack_id="community-fixture"):
     }
 
 
+def _material_payload(*, pack_id="community-tarot"):
+    payload = _payload(title="Community Tarot", pack_id=pack_id)
+    payload["collection_id"] = "corpora"
+    payload["entries"][0]["tags"] = ["dataset:tarot-interpretations"]
+    payload["entries"][0]["summary"] = "Community tarot material"
+    payload["entries"][0]["content"] = "Community tarot material"
+    return payload
+
+
 def _write_pack(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return path
@@ -56,6 +65,56 @@ def test_imported_pack_is_searchable_but_not_automatic_until_enabled(tmp_path):
     assert context.hit_count == 1
     assert context.collection_id == "meme"
     assert "Source: Community Fixture" in context.text
+
+
+def test_material_pack_is_explicitly_available_but_not_automatic_by_default(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+
+    installed = service.list_packs("corpora")
+    explicit = service.sample_entries(
+        "corpora",
+        "dataset:tarot-interpretations",
+        limit=1,
+    )
+    automatic = service.build_conversation_context("please draw a tarot card")
+
+    assert installed[0]["auto_context"] is False
+    assert explicit[0].source_tag == "source:community.community-tarot"
+    assert automatic.hit_count == 0
+
+
+def test_disabled_material_pack_does_not_hide_enabled_builtin_material(tmp_path):
+    service = open_knowledge(tmp_path)
+    KnowledgeStore(service.database_path("corpora")).upsert(KnowledgeEntry(
+        title="Built-in Tarot",
+        terms={},
+        tags=("source:corpora", "dataset:tarot-interpretations"),
+        summary="Built-in tarot material",
+        content="Built-in tarot material",
+    ))
+    service.install_pack(validate_pack(_material_payload()))
+
+    context = service.build_conversation_context("please draw a tarot card")
+
+    assert context.hit_count == 1
+    assert context.match_mode == "material_sample"
+    assert context.source_tag == "source:corpora"
+
+
+def test_material_pack_auto_context_can_be_enabled_and_disabled_again(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+
+    service.set_pack_auto_context("corpora", "community-tarot", enabled=True)
+    enabled = service.build_conversation_context("please draw a tarot card")
+    service.set_pack_auto_context("corpora", "community-tarot", enabled=False)
+    disabled = service.build_conversation_context("please draw a tarot card")
+
+    assert enabled.hit_count == 1
+    assert enabled.match_mode == "material_sample"
+    assert enabled.source_tag == "source:community.community-tarot"
+    assert disabled.hit_count == 0
 
 
 def test_pack_update_replaces_only_its_own_source(tmp_path):

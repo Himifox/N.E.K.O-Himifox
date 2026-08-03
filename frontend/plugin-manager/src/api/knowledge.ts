@@ -2,6 +2,24 @@ import axios from 'axios'
 
 let bridgeToken = ''
 
+interface KnowledgeEnvelope {
+  ok?: boolean
+  reason?: string
+  error_type?: string
+}
+
+export class KnowledgeApiError extends Error {
+  readonly reason: string
+  readonly errorType?: string
+
+  constructor(reason = 'operation_failed', errorType?: string) {
+    super(reason)
+    this.name = 'KnowledgeApiError'
+    this.reason = reason
+    this.errorType = errorType
+  }
+}
+
 async function token(): Promise<string> {
   if (bridgeToken) return bridgeToken
   const response = await axios.get('/market/bridge-token', { timeout: 3000 })
@@ -10,7 +28,10 @@ async function token(): Promise<string> {
   return bridgeToken
 }
 
-async function request<T>(path: string, options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {}): Promise<T> {
+async function request<T extends KnowledgeEnvelope>(
+  path: string,
+  options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {},
+): Promise<T> {
   const value = await token()
   const response = await axios.request<T>({
     url: `/market/knowledge/${path}`,
@@ -19,7 +40,14 @@ async function request<T>(path: string, options: { method?: 'GET' | 'POST'; para
     data: options.data,
     timeout: 15000,
   })
-  return response.data
+  const data = response.data
+  if (data?.ok === false) {
+    throw new KnowledgeApiError(
+      String(data.reason || 'operation_failed'),
+      data.error_type ? String(data.error_type) : undefined,
+    )
+  }
+  return data
 }
 
 export interface KnowledgeCollection {

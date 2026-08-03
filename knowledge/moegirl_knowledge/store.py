@@ -361,27 +361,79 @@ class MoegirlKnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
-    def query_fts(self, fts_query: str, *, limit: int):
+    def query_fts(
+        self,
+        fts_query: str,
+        *,
+        limit: int,
+        allowed_source_tags: tuple[str, ...] | None = None,
+    ):
+        if allowed_source_tags is not None and not allowed_source_tags:
+            return ()
+        source_clause = ""
+        source_parameters: tuple[str, ...] = ()
+        if allowed_source_tags is not None:
+            placeholders = ", ".join("?" for _ in allowed_source_tags)
+            source_clause = (
+                " AND EXISTS (SELECT 1 FROM json_each(entries.tags) source_filter "
+                f"WHERE source_filter.value IN ({placeholders}))"
+            )
+            source_parameters = allowed_source_tags
         try:
             with self._connection() as connection:
                 return connection.execute(
-                    "SELECT entries.rowid, entries.*, bm25(entries_fts) rank FROM entries_fts JOIN entries ON entries.rowid = entries_fts.entry_rowid WHERE entries_fts MATCH ? ORDER BY rank LIMIT ?",
-                    (fts_query, limit),
+                    "SELECT entries.rowid, entries.*, bm25(entries_fts) rank "
+                    "FROM entries_fts JOIN entries "
+                    "ON entries.rowid = entries_fts.entry_rowid "
+                    "WHERE entries_fts MATCH ?"
+                    f"{source_clause} ORDER BY rank LIMIT ?",
+                    (fts_query, *source_parameters, limit),
                 ).fetchall()
         except (KnowledgeStoreError, sqlite3.OperationalError):
             return ()
 
-    def query_like(self, normalized_query: str, *, limit: int):
+    def query_like(
+        self,
+        normalized_query: str,
+        *,
+        limit: int,
+        allowed_source_tags: tuple[str, ...] | None = None,
+    ):
         if not normalized_query:
             return ()
+        if allowed_source_tags is not None and not allowed_source_tags:
+            return ()
+        source_clause = ""
+        source_parameters: tuple[str, ...] = ()
+        if allowed_source_tags is not None:
+            placeholders = ", ".join("?" for _ in allowed_source_tags)
+            source_clause = (
+                " AND EXISTS (SELECT 1 FROM json_each(entries.tags) source_filter "
+                f"WHERE source_filter.value IN ({placeholders}))"
+            )
+            source_parameters = allowed_source_tags
         pattern = f"%{normalized_query}%"
         try:
             with self._connection() as connection:
                 return connection.execute(
-                    "SELECT rowid, * FROM entries WHERE lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ? LIMIT ?",
-                    (pattern, pattern, pattern, pattern, pattern, limit),
+                    "SELECT rowid, * FROM entries WHERE ("
+                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? "
+                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? "
+                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? "
+                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? "
+                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ?)"
+                    f"{source_clause} LIMIT ?",
+                    (
+                        pattern,
+                        pattern,
+                        pattern,
+                        pattern,
+                        pattern,
+                        *source_parameters,
+                        limit,
+                    ),
                 ).fetchall()
-        except KnowledgeStoreError:
+        except (KnowledgeStoreError, sqlite3.OperationalError):
             return ()
 
 

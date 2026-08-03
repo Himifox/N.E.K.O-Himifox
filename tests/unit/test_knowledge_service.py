@@ -95,3 +95,77 @@ def test_collection_auto_context_override_does_not_disable_explicit_search(tmp_p
     assert service.search("meme", "known phrase", limit=1)
     restarted = open_knowledge(tmp_path)
     assert restarted.get_status("meme")["auto_context"] is False
+
+
+def test_missing_database_is_degraded_without_being_created(tmp_path):
+    knowledge_root = tmp_path / "knowledge"
+    database_parent = knowledge_root / "moegirl-knowledge"
+    database_parent.mkdir(parents=True)
+    database_path = database_parent / "knowledge.db"
+    service = open_knowledge(knowledge_root)
+
+    collections = service.list_collections()
+    meme = next(item for item in collections if item["collection_id"] == "meme")
+
+    assert meme["status"] == "degraded"
+    assert meme["integrity_ok"] is False
+    assert meme["entries"] == 0
+    assert not database_path.exists()
+
+
+def test_missing_knowledge_root_stays_absent_after_status_check(tmp_path):
+    knowledge_root = tmp_path / "absent-knowledge"
+    service = open_knowledge(knowledge_root)
+
+    collections = service.list_collections()
+
+    assert all(item["status"] == "degraded" for item in collections)
+    assert all(item["integrity_ok"] is False for item in collections)
+    assert not knowledge_root.exists()
+
+
+def test_valid_empty_database_is_ready(tmp_path):
+    service = open_knowledge(tmp_path)
+    database_path = service.database_path("meme")
+    KnowledgeStore(database_path).replace_source("source:fixture", ())
+
+    status = service.list_collections()
+    meme = next(item for item in status if item["collection_id"] == "meme")
+
+    assert meme["status"] == "ready"
+    assert meme["integrity_ok"] is True
+    assert meme["entries"] == 0
+
+
+def test_one_corrupt_database_does_not_degrade_another_collection(tmp_path):
+    service = open_knowledge(tmp_path)
+    meme_path = service.database_path("meme")
+    corpora_path = service.database_path("corpora")
+    meme_path.parent.mkdir(parents=True)
+    meme_path.write_bytes(b"not a sqlite database")
+    KnowledgeStore(corpora_path).replace_source("source:fixture", ())
+
+    status = {
+        item["collection_id"]: item
+        for item in service.list_collections()
+    }
+
+    assert status["meme"]["status"] == "degraded"
+    assert status["meme"]["integrity_ok"] is False
+    assert status["corpora"]["status"] == "ready"
+    assert status["corpora"]["integrity_ok"] is True
+
+
+def test_database_directory_is_degraded_without_replacement(tmp_path):
+    service = open_knowledge(tmp_path)
+    database_path = service.database_path("meme")
+    database_path.mkdir(parents=True)
+
+    status = {
+        item["collection_id"]: item
+        for item in service.list_collections()
+    }
+
+    assert status["meme"]["status"] == "degraded"
+    assert status["meme"]["integrity_ok"] is False
+    assert database_path.is_dir()

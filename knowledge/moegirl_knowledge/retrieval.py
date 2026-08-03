@@ -151,15 +151,33 @@ class MoegirlKnowledgeRetriever:
     def __init__(self, store: MoegirlKnowledgeStore) -> None:
         self.store = store
 
-    def search(self, query: str, *, limit: int = 3) -> list[MoegirlKnowledgeHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 3,
+        allowed_source_tags: tuple[str, ...] | None = None,
+    ) -> list[MoegirlKnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
             return []
+        if allowed_source_tags is not None:
+            allowed_source_tags = tuple(dict.fromkeys(allowed_source_tags))
+            if not allowed_source_tags:
+                return []
         candidate_limit = max(12, limit * 4)
         rows_by_id = {}
-        for row in self.store.query_fts(make_fts_query(query), limit=candidate_limit):
+        for row in self.store.query_fts(
+            make_fts_query(query),
+            limit=candidate_limit,
+            allowed_source_tags=allowed_source_tags,
+        ):
             rows_by_id[row["rowid"]] = row
-        for row in self.store.query_like(query_text, limit=candidate_limit):
+        for row in self.store.query_like(
+            query_text,
+            limit=candidate_limit,
+            allowed_source_tags=allowed_source_tags,
+        ):
             rows_by_id.setdefault(row["rowid"], row)
 
         disabled = load_disabled_entries(get_catalog_override_path(self.store.database_path))

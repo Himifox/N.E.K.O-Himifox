@@ -10,13 +10,13 @@ from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.subscriptions import canonical_pack_bytes
 
 
-def _entry(title: str, source: str) -> KnowledgeEntry:
+def _entry(title: str, source: str, *, content: str = "Meaning\n- A typical use") -> KnowledgeEntry:
     return KnowledgeEntry(
         title=title,
         terms={"alias": (), "recognition": ()},
         tags=(source, "type:reference"),
         summary="A compact summary",
-        content="Meaning\n- A typical use",
+        content=content,
     )
 
 
@@ -63,6 +63,61 @@ def test_generic_management_api_lists_multiple_collections(monkeypatch, tmp_path
     }
     assert listing["items"][0]["title"] == "reference fixture"
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
+
+
+def test_search_source_filter_is_applied_before_pagination(monkeypatch, tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path("meme"))
+    store.upsert_many((
+        _entry("needle alpha", "source:a"),
+        _entry("needle beta", "source:a"),
+        _entry("target one", "source:b", content="needle reference one"),
+        _entry("target two", "source:b", content="needle reference two"),
+    ))
+    client = _client(monkeypatch, tmp_path)
+
+    first = client.get(
+        "/api/public-knowledge/entries",
+        params={
+            "collection": "meme",
+            "query": "needle",
+            "source": "b",
+            "limit": 1,
+            "offset": 0,
+        },
+    ).json()
+    second = client.get(
+        "/api/public-knowledge/entries",
+        params={
+            "collection": "meme",
+            "query": "needle",
+            "source": "b",
+            "limit": 1,
+            "offset": 1,
+        },
+    ).json()
+    missing = client.get(
+        "/api/public-knowledge/entries",
+        params={
+            "collection": "meme",
+            "query": "needle",
+            "source": "missing",
+            "limit": 1,
+        },
+    ).json()
+    unfiltered = client.get(
+        "/api/public-knowledge/entries",
+        params={"collection": "meme", "query": "needle", "limit": 1},
+    ).json()
+
+    assert first["items"][0]["source"]["tag"] == "source:b"
+    assert first["has_more"] is True
+    assert second["items"][0]["source"]["tag"] == "source:b"
+    assert second["items"][0]["title"] != first["items"][0]["title"]
+    assert second["has_more"] is False
+    assert missing["items"] == []
+    assert missing["has_more"] is False
+    assert unfiltered["items"][0]["source"]["tag"] == "source:a"
 
 
 def test_subscription_handoff_verifies_hash_and_installs_pack(monkeypatch, tmp_path):

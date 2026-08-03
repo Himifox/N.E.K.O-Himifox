@@ -459,6 +459,7 @@ class KnowledgeService:
         *,
         limit: int = 50,
         offset: int = 0,
+        source_tag: str = "",
     ) -> tuple[MoegirlKnowledgeHit, ...]:
         """Return one bounded ranked page without loading the whole collection."""
         limit = min(max(int(limit), 1), 100)
@@ -466,6 +467,7 @@ class KnowledgeService:
         hits = self._retriever(collection_id).search(
             query,
             limit=offset + limit + 1,
+            allowed_source_tags=(source_tag,) if source_tag else None,
         )
         return tuple(hits[offset:offset + limit + 1])
 
@@ -477,13 +479,32 @@ class KnowledgeService:
         limit: int = 1,
     ) -> tuple[MoegirlKnowledgeEntry, ...]:
         """Return a small random selection from a collection-approved material tag."""
+        return self._sample_entries(
+            collection_id,
+            sample_tag,
+            limit=limit,
+            allowed_source_tags=None,
+        )
+
+    def _sample_entries(
+        self,
+        collection_id: str,
+        sample_tag: str,
+        *,
+        limit: int,
+        allowed_source_tags: tuple[str, ...] | None,
+    ) -> tuple[MoegirlKnowledgeEntry, ...]:
         spec = self._spec(collection_id)
         if sample_tag not in spec.sample_tags:
             raise ValueError("sample tag is not enabled for this collection")
         limit = min(max(int(limit), 1), 3)
         # Tags are already indexed by FTS. The largest bundled material group has
         # fewer than 100 entries, so this remains bounded and avoids a full scan.
-        hits = self._retriever(collection_id).search(sample_tag, limit=100)
+        hits = self._retriever(collection_id).search(
+            sample_tag,
+            limit=100,
+            allowed_source_tags=allowed_source_tags,
+        )
         candidates = [hit.entry for hit in hits if sample_tag in hit.entry.tags]
         if len(candidates) <= limit:
             return tuple(candidates)
@@ -605,7 +626,12 @@ class KnowledgeService:
             ), None)
             if route is None:
                 continue
-            entries = self.sample_entries(spec.collection_id, route.sample_tag, limit=1)
+            entries = self._sample_entries(
+                spec.collection_id,
+                route.sample_tag,
+                limit=1,
+                allowed_source_tags=self._effective_match_policy(spec).allowed_source_tags,
+            )
             if not entries:
                 continue
             selected = KnowledgeTurnMatch(
@@ -670,19 +696,21 @@ class KnowledgeService:
         return count
 
     def get_status(self, collection_id: str) -> dict:
-        store = self._store(collection_id)
         spec = self._spec(collection_id)
+        database_path = self.database_path(collection_id)
+        database_exists = database_path.is_file()
+        store = self._store(collection_id) if database_exists else None
         disabled = load_disabled_entries(
-            get_catalog_override_path(self.database_path(collection_id))
+            get_catalog_override_path(database_path)
         )
         return {
             "collection_id": collection_id,
             "name": spec.display_name or collection_id,
-            "entries": store.count(),
-            "integrity_ok": store.integrity_ok(),
+            "entries": store.count() if store is not None else 0,
+            "integrity_ok": store.integrity_ok() if store is not None else False,
             "auto_context": self._auto_context_enabled(spec),
             "disabled_entries": len(disabled),
-            "sources": store.count_by_source_tags(),
+            "sources": store.count_by_source_tags() if store is not None else (),
             "packs": len(self.list_packs(collection_id)),
         }
 
@@ -690,7 +718,9 @@ class KnowledgeService:
         results: list[dict] = []
         for collection_id in sorted(self._collections):
             try:
-                results.append({"status": "ready", **self.get_status(collection_id)})
+                payload = self.get_status(collection_id)
+                status = "ready" if payload["integrity_ok"] is True else "degraded"
+                results.append({"status": status, **payload})
             except Exception as exc:
                 spec = self._spec(collection_id)
                 results.append({

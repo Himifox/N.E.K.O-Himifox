@@ -122,14 +122,11 @@ async def list_public_knowledge_entries(
             service.search_page,
             collection,
             query.strip(),
+            source_tag=source_tag,
             limit=limit,
             offset=offset,
         )
-        filtered = [
-            hit for hit in page
-            if not source_tag or hit.entry.source_tag == source_tag
-        ]
-        has_more = len(filtered) > limit
+        has_more = len(page) > limit
         items = [
             _entry_payload(
                 service,
@@ -140,7 +137,7 @@ async def list_public_knowledge_entries(
                 disabled_entries=disabled_entries,
                 source_cache=source_cache,
             )
-            for hit in filtered[:limit]
+            for hit in page[:limit]
         ]
         total = None
     else:
