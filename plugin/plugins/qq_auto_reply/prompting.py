@@ -267,6 +267,7 @@ class QQAutoReplyPromptingMixin:
         is_group: bool = False,
         group_id: Optional[str] = None,
         use_memory_context: Optional[bool] = None,
+        participant_memory: bool = False,
         address_user_by_name: bool = True,
         group_facing: bool = False,
         shared_group_session: bool = False,
@@ -287,6 +288,7 @@ class QQAutoReplyPromptingMixin:
             is_group=is_group,
             group_id=group_id,
             use_memory_context=use_memory_context,
+            participant_memory=participant_memory,
             address_user_by_name=address_user_by_name,
             group_facing=group_facing,
             shared_group_session=shared_group_session,
@@ -336,9 +338,6 @@ class QQAutoReplyPromptingMixin:
             login_self_id=login_self_id,
             login_nickname=login_nickname,
         )
-
-    async def _ensure_session_for_user(self, user_data: dict[str, object]) -> Optional[dict[str, object]]:
-        return await self.session_bootstrap_service.ensure_session_for_user(user_data)
 
     async def _generate_reply(
         self,

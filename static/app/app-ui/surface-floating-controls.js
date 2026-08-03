@@ -630,7 +630,7 @@
                 try {
                     const r = btn.getBoundingClientRect();
                     if (r.width > 0 && r.height > 0) {
-                        savedGoodbyeRect = r;
+                        savedGoodbyeRect = I.toNekoVirtualTransitionRect(r);
                         break;
                     }
                 } catch (_) { /* ignore */ }
@@ -1042,7 +1042,8 @@
                             revealActiveReturnBall('return-ball-legacy-ball');
                             return;
                         }
-                        const transitionAnchorRect = savedGoodbyeRect || activeReturnButtonContainer.getBoundingClientRect();
+                        const transitionAnchorRect = savedGoodbyeRect
+                            || I.toNekoVirtualTransitionRect(activeReturnButtonContainer.getBoundingClientRect());
                         I.playNekoModelCatTransition({
                             direction: 'model-to-cat',
                             anchorRect: transitionAnchorRect,
@@ -1655,7 +1656,18 @@
             I.S.isTextSessionActive = false;
 
             // 显示欢迎消息
-            I.showStatusToast(window.t ? window.t('app.welcomeBack', { name: lanlan_config.lanlan_name }) : `\u{1FAF4} ${lanlan_config.lanlan_name}回来了！`, 3000);
+            // Desktop preload owns window.showStatusToast and routes it to the
+            // independent top-right Toast window. Calling the private in-page
+            // helper here would pin this bubble to the physically cropped Pet
+            // carrier, so it would move and clip together with the avatar.
+            const welcomeBackText = window.t
+                ? window.t('app.welcomeBack', { name: lanlan_config.lanlan_name })
+                : `\u{1FAF4} ${lanlan_config.lanlan_name}回来了！`;
+            if (typeof window.showStatusToast === 'function') {
+                window.showStatusToast(welcomeBackText, 3000);
+            } else if (typeof I.showStatusToast === 'function') {
+                I.showStatusToast(welcomeBackText, 3000);
+            }
 
             // 恢复主动搭话与主动视觉调度
             try {

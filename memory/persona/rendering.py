@@ -78,6 +78,7 @@ class RenderingMixin:
             SCOPED_PERSONA_PREFIX,
             normalize_subjects,
             persona_subject_from_section,
+            subject_from_entry,
         )
         allowed = normalize_subjects(subjects)
         if include_legacy_private is None:
@@ -116,6 +117,19 @@ class RenderingMixin:
                     continue
                 filtered = dict(section)
                 filtered['facts'] = scoped_facts
+                rendered_subjects = {
+                    (entry_subject.key, entry_subject.scope)
+                    for entry in scoped_facts
+                    if (entry_subject := subject_from_entry(entry)) is not None
+                }
+                if rendered_subjects != {
+                    (scoped_subject.key, scoped_subject.scope),
+                }:
+                    # Section metadata belongs to the last writer, while this
+                    # view is authorized entry-by-entry. Do not carry that
+                    # writer's label into another scope's rendered header (or
+                    # into a mixed-scope header where no single label applies).
+                    filtered.pop('display_name', None)
                 view[section_key] = filtered
             elif (scoped_subject.key, scoped_subject.scope) in allowed_keys:
                 view[section_key] = section
@@ -425,11 +439,21 @@ class RenderingMixin:
             for entry in section.get('facts', []):
                 if not isinstance(entry, dict):
                     # Pre-PR-1 schema sometimes stored facts as bare
-                    # strings; the legacy render path (`_render_fact_entries`)
-                    # used to emit them. Normalize ad-hoc here so they keep
-                    # appearing in prompt context until a write touches the
-                    # entry and migrates it to dict form via _normalize_entry.
-                    if entry:
+                    # strings; the legacy render path used to emit them.
+                    # Normalize ad-hoc here so they keep appearing in
+                    # prompt context until a write touches the entry and
+                    # migrates it to dict form via _normalize_entry.
+                    # Blank check matches the dict path's _renderable_text
+                    # (strip, not truthiness): a whitespace-only bare
+                    # string is truthy, and promoting it would sail past
+                    # the blank gate below and render an empty bullet.
+                    # _renderable_text itself returns "" for every
+                    # non-dict, so the string must be judged before the
+                    # promotion, not through that helper. isinstance 限定
+                    # str：裸 str() 会把 None/False/0 变成非空文本
+                    # "None"/"False"/"0" 渲染出来，而 legacy 数据形态
+                    # 只有裸字符串这一种。
+                    if isinstance(entry, str) and entry.strip():
                         entry = {
                             'text': str(entry),
                             'protected': False,
@@ -472,15 +496,14 @@ class RenderingMixin:
         would silently take another subject's character-card lines with
         it.
 
-        Entries with no renderable text are dropped before counting, for
-        the same reason: compose emits nothing for them, so letting them
-        occupy slots spends the allowance on blank lines. A hand-edited or
-        half-migrated persona.json is where they come from.
+        Blank entries never reach here: `_split_persona_for_render` is the
+        sole producer of the `protected_entries` this is called with, and
+        it already drops them at the `_renderable_text` check. This used to
+        repeat that filter, which read like a second line of defence but
+        was unreachable — the reason it matters is that the guard for the
+        blank rule then had no anchor in the layer that actually enforces
+        it (see `test_blank_protected_entries_do_not_spend_the_count_cap`).
         """
-        protected_entries = [
-            (entity_key, entry) for entity_key, entry in protected_entries
-            if cls._renderable_text(entry)
-        ]
         if len(protected_entries) <= PERSONA_RENDER_PROTECTED_MAX_ENTRIES:
             return protected_entries
         logger.warning(
@@ -491,15 +514,36 @@ class RenderingMixin:
         )
         return protected_entries[:PERSONA_RENDER_PROTECTED_MAX_ENTRIES]
 
-    @staticmethod
+    @classmethod
     def _filter_reflections_for_render(
+        cls,
         reflections: list[dict] | None, persona: dict,
         suppressed_text_set: set[str],
         subjects=None,
         include_legacy_private: bool | None = None,
     ) -> list[dict]:
         """Drop reflections whose text matches a suppressed persona entry
-        (existing semantic — see `_is_suppressed_text` callers below)."""
+        (existing semantic — see `_is_suppressed_text` callers below).
+
+        Blank-rejection goes through `_renderable_text`, the same single
+        definition the persona split and the suppressed section use (those
+        two plus this one are its only callers — the protected cap used to
+        be a fourth, until this PR deleted that repeat as unreachable).
+        This branch used to run its own `if not text:`, which
+        accepts a whitespace-only string: the reflection then entered the
+        bucket, was charged text + markup against the overall gate, and
+        composed into an empty `- ` bullet. Paying the gate for a line that
+        says nothing is exactly what can push the next subject under
+        `SCOPED_RENDER_SUBJECT_MIN_TOKENS`.
+
+        Only the blank decision moves to the shared definition. The
+        suppression match still compares the RAW text, because
+        `_suppressed_text_set` is built from raw text and
+        `_partition_trimmed_reflections` matches against it the same way —
+        stripping on one side of that comparison and not the other is how
+        the two spellings would start disagreeing about which reflections
+        are suppressed.
+        """
         if not reflections:
             return []
         from memory.scopes import filter_entries_for_subjects
@@ -511,10 +555,9 @@ class RenderingMixin:
         ):
             if not isinstance(r, dict):
                 continue
-            text = r.get('text', '')
-            if not text:
+            if not cls._renderable_text(r):
                 continue
-            if text in suppressed_text_set:
+            if r.get('text', '') in suppressed_text_set:
                 continue
             out.append(r)
         return out
@@ -555,10 +598,17 @@ class RenderingMixin:
         """  # noqa: DOCSTRING_CJK
         master_name = name_mapping.get('human', '主人')
         ai_name = name
+        from config.prompts.prompts_memory import get_persona_section_header
+        from utils.language_utils import get_global_language_full
+        render_lang = get_global_language_full()
         _headers = {
-            'master': f"关于{master_name}",
-            'neko': f"关于{ai_name}",
-            'relationship': "关系动态",
+            section: get_persona_section_header(
+                section,
+                render_lang,
+                ai_name=ai_name,
+                master_name=master_name,
+            )
+            for section in ('master', 'neko', 'relationship')
         }
 
         # Suppressed entries always render (the whole point is "AI
@@ -618,9 +668,10 @@ class RenderingMixin:
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
-                text = entry.get('text', '')
-                if text:
-                    lines.append(f"- {text}")
+                # 与拆分侧同一空白判据（#2578 修了 reflection 那半，这里是
+                # persona 半）：裸 truthiness 会把 '   ' 渲成空 bullet。
+                if self._renderable_text(entry):
+                    lines.append(f"- {entry.get('text', '')}")
             if lines:
                 section_meta = persona.get(entity_key, {})
                 subject_kind = section_meta.get('subject_kind')
@@ -631,9 +682,17 @@ class RenderingMixin:
                     from config.prompts.prompts_memory import (
                         get_scoped_persona_section_header,
                     )
-                    from utils.language_utils import get_global_language
+                    from memory.facts import FactStore
+                    # display_name 是不可信用户输入（群名/群名片），路由入口
+                    # 已中和过一次，这里再过一次——渲染是唯一把它拼进 prompt
+                    # 的地方，而 persona.json 可被手改（与 speaker_label 的
+                    # 双侧中和同一道理，#2605）。中和后为空按无名回退。
+                    display_name = FactStore.sanitize_speaker_label(
+                        section_meta.get('display_name'),
+                    )
                     header = get_scoped_persona_section_header(
-                        subject_kind, subject_id, get_global_language(),
+                        subject_kind, subject_id, render_lang,
+                        display_name=display_name or None,
                     )
                 else:
                     header = _headers.get(entity_key, entity_key)
@@ -644,7 +703,15 @@ class RenderingMixin:
                      if r.get('text')]
             if lines:
                 sections.append(
-                    f"### {ai_name}最近的印象（还不太确定）\n" + "\n".join(lines)
+                    "### "
+                    + get_persona_section_header(
+                        "pending_reflections",
+                        render_lang,
+                        ai_name=ai_name,
+                        master_name=master_name,
+                    )
+                    + "\n"
+                    + "\n".join(lines)
                 )
 
         # Split confirmed reflections into active vs past at render time.
@@ -667,7 +734,15 @@ class RenderingMixin:
         if active_confirmed:
             lines = [f"- {r.get('text', '')}" for r in active_confirmed]
             sections.append(
-                f"### {ai_name}比较确定的印象\n" + "\n".join(lines)
+                "### "
+                + get_persona_section_header(
+                    "confirmed_reflections",
+                    render_lang,
+                    ai_name=ai_name,
+                    master_name=master_name,
+                )
+                + "\n"
+                + "\n".join(lines)
             )
 
         if past_confirmed:
@@ -675,11 +750,10 @@ class RenderingMixin:
             # feedback_prompt_delimiters_above_below.md：分隔符内部禁冒号
             # 和破折号）。每条前缀 [X 天前 / X 周前 / X 月前] 由
             # time_since_label 按 0-6d / 7-29d / 30d+ 三档生成。整段按
-            # get_global_language() 本地化（Codex review on PR #1316
+            # get_global_language_full() 本地化（Codex review on PR #1316
             # P2 catch：之前硬编码 zh 让非 zh locale 看到中文时间标签）。
-            from utils.language_utils import get_global_language
             from config.prompts.prompts_memory import render_past_memory_block
-            lang = get_global_language()
+            lang = render_lang
             past_lines = []
             for r in past_confirmed:
                 anchor = (
@@ -704,7 +778,14 @@ class RenderingMixin:
 
         if suppressed_lines:
             sections.append(
-                f"### 暂不主动提及的内容（{ai_name}记得，但最近提到太多次了，不要再主动提起）\n"
+                "### "
+                + get_persona_section_header(
+                    "suppressed",
+                    render_lang,
+                    ai_name=ai_name,
+                    master_name=master_name,
+                )
+                + "\n"
                 + "\n".join(suppressed_lines)
             )
 
@@ -813,6 +894,29 @@ class RenderingMixin:
                     )
 
     @classmethod
+    def _sort_kept_reflections(cls, kept: list, now: datetime) -> list:
+        """Restore the global `(evidence_score, importance)` DESC order the
+        reflection sections are read in.
+
+        Per-subject allocation hands back one trimmed list per slot and the
+        allocator concatenates them, so the flat list comes out ordered by
+        the CALLER's subject order first and by score only within a slot.
+        Allocation order is deliberately the caller's — that is the whole
+        contract of `_trim_scoped_by_subject` — but the reflection sections
+        render as a single flat bullet list under one heading, with no
+        subject boundary the model can see. Leaving the concatenation order
+        in place puts a low-confidence impression of the group above a
+        high-confidence one about the person actually being replied to, and
+        the model reads position as confidence.
+
+        Sort only: everything here already survived its slot's trim, so
+        re-running the trim would be re-charging a budget that is spent.
+        The legacy path never needed this — it trims one global pool and
+        comes out sorted already.
+        """
+        return cls._score_trim_sort(kept, now)
+
+    @classmethod
     def _trim_scoped_by_subject(
         cls, prep: _RenderPrep, now: datetime,
     ) -> tuple[list, list, set]:
@@ -878,7 +982,7 @@ class RenderingMixin:
         cls._log_unslotted_buckets(
             prep.subject_slots, persona_buckets, reflection_buckets,
         )
-        return kept_persona, kept_reflections, skipped
+        return kept_persona, cls._sort_kept_reflections(kept_reflections, now), skipped
 
     @classmethod
     async def _atrim_scoped_by_subject(
@@ -939,7 +1043,7 @@ class RenderingMixin:
         cls._log_unslotted_buckets(
             prep.subject_slots, persona_buckets, reflection_buckets,
         )
-        return kept_persona, kept_reflections, skipped
+        return kept_persona, cls._sort_kept_reflections(kept_reflections, now), skipped
 
     def _prepare_render(
         self, persona: dict,
@@ -1169,18 +1273,3 @@ class RenderingMixin:
             if isinstance(entry, dict) and entry.get('suppress') and entry.get('text') == text:
                 return True
         return False
-
-    @staticmethod
-    def _render_fact_entries(entries: list) -> list[str]:
-        """Render the fact entry list. Suppressed entries are not rendered here (moved to the dedicated section)."""
-        lines = []
-        for entry in entries:
-            if isinstance(entry, dict):
-                if entry.get('suppress'):
-                    continue  # suppress 的条目在专用区域渲染
-                text = entry.get('text', '')
-                if text:
-                    lines.append(f"- {text}")
-            elif entry:
-                lines.append(f"- {entry}")
-        return lines

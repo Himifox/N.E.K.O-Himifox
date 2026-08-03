@@ -44,6 +44,9 @@ import pytest
 from main_logic.omni_realtime_client import OmniRealtimeClient
 from main_logic.omni_realtime_client import _response_arbiter as _arbiter_module
 from main_logic.omni_realtime_client._response_arbiter import RealtimeResponseArbiter
+from main_logic.omni_realtime_client._shared import (
+    _IMAGE_ANALYSIS_PENDING_DESCRIPTION,
+)
 from main_logic.tool_calling import ToolResult
 
 
@@ -303,6 +306,264 @@ async def test_reconnect_restores_dispatch_for_a_native_client():
     assert [event["type"] for event in sent] == ["response.create"]
     _complete_turn(arbiter, "resp-1")
     await asyncio.wait_for(revived.done, timeout=1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_terminal_resets_the_per_turn_output_state():
+    # The per-turn cleanup in the response.done handler had no coverage at
+    # all: deleting the whole block turned nothing red. It is worth pinning on
+    # its own — _image_sent_this_turn in particular, because a stale one makes
+    # stream_image withhold the NEXT turn's visual context for its whole
+    # duration, so that response answers about a screen it cannot see.
+    #
+    # It is also the safety net for the extraction this commit performs: a
+    # helper nobody tests can be moved wrong without anything noticing.
+    client = _native_client()
+    socket = _RecordingSocket()
+    client.ws = socket
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    socket.feed({"type": "response.created", "response": {"id": "resp-1"}})
+    await _settle()
+    # Dirty the state AFTER response.created: that handler clears the
+    # transcript buffer itself, so seeding before it would leave this test
+    # asserting a value nobody had to produce. Every field the helper clears
+    # is seeded — a field left at its default makes its reset deletable
+    # without this test noticing.
+    client._audio_delta_count = 5
+    client._output_transcript_buffer = "leftover"
+    client._print_input_transcript = True
+    client._image_sent_this_turn = True
+    client._image_recognized_this_turn = True
+
+    socket.feed({"type": "response.done", "response": {"id": "resp-1"}})
+    await _settle()
+
+    assert client._audio_delta_count == 0
+    assert client._output_transcript_buffer == ""
+    assert client._print_input_transcript is False
+    assert client._image_sent_this_turn is False, (
+        "a stale image flag makes stream_image withhold the next turn's "
+        "visual context for its whole duration"
+    )
+    assert client._image_recognized_this_turn is False
+
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_terminal_clears_the_in_progress_flags():
+    # The other half of ending a turn: the flags that say a response is in
+    # flight. Untested before this, same as the per-turn reset was.
+    client = _native_client()
+    socket = _RecordingSocket()
+    client.ws = socket
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    socket.feed({"type": "response.created", "response": {"id": "resp-1"}})
+    await _settle()
+    assert client._is_responding is True
+    client._current_item_id = "item-1"
+    client._skip_until_next_response = True
+    client._interrupted = True
+
+    socket.feed({"type": "response.done", "response": {"id": "resp-1"}})
+    await _settle()
+
+    assert client._is_responding is False
+    assert client._current_response_id is None
+    assert client._current_item_id is None
+    assert client._skip_until_next_response is False, (
+        "left raised, the next turn's text and audio are suppressed"
+    )
+    assert client._interrupted is False
+
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_terminal_notifies_the_host_and_rotates_only_without_server_vad():
+    # The host-facing half. Rotation is conditional: routes WITH server VAD
+    # rotate from speech_stopped, so firing here too would be a second,
+    # unpaired rotation on a live turn.
+    from main_logic.omni_realtime_client import OmniRealtimeClient
+
+    async def _build(base: str):
+        done: list[str] = []
+        rotations: list[str] = []
+
+        async def _on_done() -> None:
+            done.append("done")
+
+        async def _on_rotate() -> None:
+            rotations.append("rotate")
+
+        client = OmniRealtimeClient(
+            base,
+            "test-key",
+            model="free-model",
+            api_type="free",
+            on_response_done=_on_done,
+            on_sid_rotate=_on_rotate,
+        )
+        socket = _RecordingSocket()
+        client.ws = socket
+        loop_task = asyncio.create_task(client.handle_messages())
+        socket.feed({"type": "response.created", "response": {"id": "r"}})
+        await _settle()
+        socket.feed({"type": "response.done", "response": {"id": "r"}})
+        await _settle()
+        socket.finish()
+        await asyncio.wait_for(loop_task, timeout=1)
+        return client, done, rotations
+
+    # lanlan.app free is _is_free_proxy and NOT _is_gemini: arbitrated, and
+    # response.done is its only rotation point.
+    proxy, proxy_done, proxy_rotations = await _build(
+        "wss://lanlan.app/api/v1/realtime"
+    )
+    assert proxy._has_server_vad is False
+    assert proxy_done == ["done"]
+    assert proxy_rotations == ["rotate"], (
+        "without this the speech id never advances and TTS upstream drops "
+        "every later turn's text"
+    )
+
+    direct, direct_done, direct_rotations = await _build(
+        "wss://example.invalid/realtime"
+    )
+    assert direct._has_server_vad is True
+    assert direct_done == ["done"]
+    assert direct_rotations == [], (
+        "a server-VAD route already rotates from speech_stopped"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_second_terminal_for_a_finished_turn_does_not_finalize_it_again():
+    # Ending a turn clears _current_response_id, which is what makes a late
+    # terminal for that same response read as stale: the filter forwards it to
+    # the arbiter (so the lane still releases) and drops it otherwise.
+    #
+    # Worth pinning because the temptation runs the other way. handle_
+    # interruption deliberately KEEPS the identity, so the cancelled
+    # response's own terminal still finalizes the turn — the opposite need.
+    # A path that ends a turn early and keeps the identity would let the late
+    # terminal finalize a second time, over whatever turn came next.
+    from main_logic.omni_realtime_client import OmniRealtimeClient
+
+    done_calls: list[str] = []
+
+    async def _on_done() -> None:
+        done_calls.append("done")
+
+    client = OmniRealtimeClient(
+        "wss://example.invalid/realtime",
+        "test-key",
+        model="qwen-omni-turbo-realtime",
+        api_type="qwen",
+        on_response_done=_on_done,
+    )
+    socket = _RecordingSocket()
+    client.ws = socket
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    socket.feed({"type": "response.created", "response": {"id": "resp-a"}})
+    await _settle()
+    socket.feed({"type": "response.done", "response": {"id": "resp-a"}})
+    await _settle()
+    assert done_calls == ["done"]
+    assert client._current_response_id is None
+
+    # The provider repeats itself, or a buffered duplicate lands late.
+    socket.feed({"type": "response.done", "response": {"id": "resp-a"}})
+    await _settle()
+
+    assert done_calls == ["done"], (
+        "a turn already finalized must not be finalized again by its own "
+        "late terminal"
+    )
+
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_raising_host_hook_does_not_skip_the_rotation():
+    # The hooks are independent: a host that blows up ending the turn must
+    # not take the speech-id rotation down with it, or the failure silently
+    # mutes every later turn on a no-server-VAD route.
+    from main_logic.omni_realtime_client import OmniRealtimeClient
+
+    rotations: list[str] = []
+
+    async def _on_done() -> None:
+        raise RuntimeError("frontend went away")
+
+    async def _on_rotate() -> None:
+        rotations.append("rotate")
+
+    client = OmniRealtimeClient(
+        "wss://lanlan.app/api/v1/realtime",
+        "test-key",
+        model="free-model",
+        api_type="free",
+        on_response_done=_on_done,
+        on_sid_rotate=_on_rotate,
+    )
+    socket = _RecordingSocket()
+    client.ws = socket
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    socket.feed({"type": "response.created", "response": {"id": "r"}})
+    await _settle()
+    socket.feed({"type": "response.done", "response": {"id": "r"}})
+    await _settle()
+
+    assert rotations == ["rotate"]
+
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_terminal_rearms_analysis_on_a_non_native_image_provider():
+    # The helper has two branches and the case above only exercises one.
+    # Standard StepFun is the sole provider without native image input: it
+    # re-arms the pending sentinel instead, and only while the cached frame is
+    # absent or already consumed. Without this, the elif could be deleted
+    # wholesale and the suite would stay green.
+    client = _native_client(api_type="step", model="step-realtime")
+    assert client._supports_native_image is False, "this is the elif branch"
+    socket = _RecordingSocket()
+    client.ws = socket
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    socket.feed({"type": "response.created", "response": {"id": "resp-1"}})
+    await _settle()
+    client._image_recognized_this_turn = True
+    client._image_description = "an analysis from the turn being ended"
+    client._latest_image_b64 = None  # absent frame -> re-arm
+
+    socket.feed({"type": "response.done", "response": {"id": "resp-1"}})
+    await _settle()
+
+    assert client._image_recognized_this_turn is False
+    assert client._image_description == _IMAGE_ANALYSIS_PENDING_DESCRIPTION, (
+        "StepFun analyzes only while the sentinel is present, so ending a "
+        "turn with no cached frame has to re-arm it"
+    )
+
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
 
 
 @pytest.mark.unit
@@ -910,6 +1171,124 @@ async def test_prime_dispatch_failure_surfaces_a_type_the_swap_must_catch():
 
     await client._response_arbiter.wait_until_idle(timeout=1)
     await _finish_loop(socket, receive_loop)
+
+
+class _RiggedUUIDModule:
+    """A ``uuid`` stand-in whose hex always embeds ``needle``.
+
+    Every client event_id in ``_responses`` is ``<prefix>_<uuid4().hex>``, and
+    hex is 0-9a-f -- so '429', '1008' and '503' are all spellable by chance.
+    Rigging the id is not inventing an exotic input; it is pinning one of the
+    ~0.7%-per-error draws that CI kept hitting.
+    """
+
+    def __init__(self, needle: str) -> None:
+        self._needle = needle
+        self._counter = 0
+
+    def uuid4(self):
+        self._counter += 1
+        rigged = (f"{self._counter:08x}" + self._needle).ljust(32, "0")[:32]
+
+        class _U:
+            hex = rigged
+
+        return _U()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("needle", ["429", "1008", "503"])
+async def test_a_rejection_id_that_spells_a_quota_code_never_kills_the_transport(
+    needle, monkeypatch
+):
+    # The fatal-error classifier used to substring-match on str(event['error']),
+    # which echoes OUR OWN client event_id. A uuid4 hex that happens to contain
+    # '429'/'1008' turned an ordinary single-event rejection into a full
+    # connection teardown -- she goes silent mid-sentence, and it reproduces
+    # roughly once in 140 rejections. It was also the whole story behind two
+    # Windows CI flakes in this very file (run 30549810820): the prime failed
+    # with ConnectionError('realtime client closed') instead of the RuntimeError
+    # the swap handler is written against.
+    from main_logic.omni_realtime_client import _responses as responses_mod
+
+    monkeypatch.setattr(responses_mod, "uuid", _RiggedUUIDModule(needle))
+
+    connection_errors: list[str] = []
+
+    async def _on_connection_error(msg) -> None:
+        connection_errors.append(msg)
+
+    client, socket = _wired_client(api_type="free", model="free-model")
+    client.on_connection_error = _on_connection_error
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    prime = asyncio.create_task(
+        client.prime_context("[context] the task finished", skipped=False)
+    )
+    await _settle()
+    item_event_id = socket.sent[0]["event_id"]
+    assert needle in item_event_id, "the rigged id must actually spell the code"
+
+    socket.feed(
+        {
+            "type": "error",
+            "error": {"message": "invalid item payload", "event_id": item_event_id},
+        }
+    )
+    await _settle()
+
+    assert prime.done()
+    assert isinstance(prime.exception(), RuntimeError)
+    assert not isinstance(prime.exception(), ConnectionError), (
+        "a rejection whose event_id merely spells a quota code must not be "
+        "escalated into a transport teardown"
+    )
+    assert socket.closed is False
+    assert client.ws is socket, "the transport must stay attached"
+    assert connection_errors == [], "no fatal error was reported by the provider"
+    assert client._is_throttled is False, "nor is this a 503 backpressure signal"
+
+    await _finish_loop(socket, receive_loop)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_payload",
+    [
+        {"message": "HTTP 429 Too Many Requests"},
+        {"message": "rejected", "code": 1008},
+        {"message": "your account is not in good standing"},
+    ],
+)
+async def test_a_real_quota_error_still_closes_the_transport(error_payload):
+    # The other half of the contract: dropping correlation ids from the
+    # classifier must not blunt it. A code carried in a semantic field --
+    # message, code, type -- is still fatal and still tears the session down.
+    connection_errors: list[str] = []
+
+    async def _on_connection_error(msg) -> None:
+        connection_errors.append(msg)
+
+    client, socket = _wired_client(api_type="free", model="free-model")
+    client.on_connection_error = _on_connection_error
+    receive_loop = asyncio.create_task(client.handle_messages())
+
+    create = asyncio.create_task(client.create_response("hello"))
+    await _settle()
+    payload = dict(error_payload)
+    payload["event_id"] = socket.sent[0]["event_id"]
+    socket.feed({"type": "error", "error": payload})
+    await _settle()
+
+    assert socket.closed is True, "a genuine quota/policy error must fail closed"
+    assert client.ws is None
+    assert connection_errors, "the frontend must be told the session died"
+
+    assert create.done()
+    socket.finish()
+    await asyncio.wait_for(receive_loop, timeout=1)
 
 
 # ---------------------------------------------------------------------------
