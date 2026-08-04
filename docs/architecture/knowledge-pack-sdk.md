@@ -36,7 +36,10 @@ A pack targeting a new `collection_id` must include
 `collection.display_name`. A pack targeting an existing collection may omit
 that object. Collection identifiers contain only lowercase letters, digits,
 dots, underscores, and hyphens; they cannot use platform-reserved or built-in
-identifiers.
+identifiers. `pack_id` and `collection_id` share one portable rule: 1–64
+unpadded lowercase letters, digits, dots, underscores, or hyphens; the first
+and last character must be alphanumeric, and Windows-reserved stems such as
+`nul`, `com1`, and `lpt9` are rejected.
 
 Community collections use an application-managed database path. Packs cannot
 choose a path or override collection policy. Automatic conversation context is
@@ -58,7 +61,8 @@ uv run --python 3.11 python scripts/validate_knowledge_pack.py --strict dist/exa
 ```
 
 Strict mode additionally requires canonical bytes: UTF-8, object keys sorted,
-compact JSON separators, no ASCII escaping, and exactly one final LF. This
+compact JSON separators, no ASCII escaping, no `NaN`/`Infinity` constants, and
+exactly one final LF. This
 makes the artifact SHA-256 reproducible. Exit code `0` means valid, `2` means
 invalid (including strict warnings), and `1` means the file could not be read
 or the validator failed internally. Diagnostics identify fields but never
@@ -66,7 +70,7 @@ print entry content.
 
 The current limits are 10 MiB per file, 10,000 entries, 100 values per term
 role, 100 tags per entry, 500 characters for a title, 4,000 for a summary,
-and 80,000 for entry content. Source name,
+300 characters for each term or tag, and 80,000 for entry content. Source name,
 homepage, and license metadata describe provenance; publishers remain
 responsible for redistribution rights and attribution.
 

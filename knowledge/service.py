@@ -360,10 +360,16 @@ class KnowledgeService:
                     {
                         "collection_id": collection_id,
                         "name": spec.display_name or collection_id,
+                        "storage_directory": spec.storage_directory,
+                        "priority": spec.priority,
+                        "entries": 0,
                         "status": "degraded",
                         "integrity_ok": False,
                         "error_type": type(exc).__name__,
                         "auto_context": self._auto_context_enabled(spec),
+                        "disabled_entries": 0,
+                        "sources": (),
+                        "packs": 0,
                     }
                 )
         return tuple(results)
@@ -391,6 +397,8 @@ class KnowledgeService:
                 database_path = self.database_path(pack.collection_id)
                 new_record = None
             elif existing is None:
+                if record is not None and record.status != "active":
+                    raise ValueError("community collection is unavailable")
                 if pack.collection is None:
                     raise ValueError("new community collection requires collection.display_name")
                 new_record = new_community_collection(
@@ -574,10 +582,16 @@ class KnowledgeService:
             ]
         else:
             lines = [policy.confirmed_header, policy.confirmed_preamble, policy.task_instruction]
-        meaning = (entry.summary or entry.content).replace("\n", " ").strip()[:280]
+        meaning = (
+            (entry.summary or entry.content)
+            .replace("\r", " ")
+            .replace("\n", " ")
+            .strip()[:280]
+        )
+        term = entry.title.replace("\r", " ").replace("\n", " ").strip()[:500]
         classification = get_tag_value(entry, policy.classification_tag_prefix)
         details = get_reference_details(entry, policy.detail_line_prefixes, max_chars=420)
-        lines.extend((f"{policy.term_label}: {entry.title}\n", f"{policy.summary_label}: {meaning}\n"))
+        lines.extend((f"{policy.term_label}: {term}\n", f"{policy.summary_label}: {meaning}\n"))
         if classification:
             lines.append(f"{policy.classification_label}: {classification}\n")
         if details:

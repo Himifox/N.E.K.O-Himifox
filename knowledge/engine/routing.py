@@ -16,7 +16,6 @@ from .catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .filters import normalize_search_text
 from .models import KnowledgeEntry
 from .retrieval import MatchPolicy
 from .store import KnowledgeStore, register_database_change_listener
@@ -102,11 +101,25 @@ class RoutingSnapshot:
         if value not in terminal:
             terminal.append(value)
 
-    def find(self, user_text: str) -> RouteMatch | None:
-        normalized = self._policy.normalizer(user_text)
+    def find(
+        self,
+        user_text: str,
+        *,
+        normalized: str | None = None,
+        boundary_text: str | None = None,
+    ) -> RouteMatch | None:
+        normalized = (
+            self._policy.normalizer(user_text)
+            if normalized is None
+            else normalized
+        )
         if len(normalized) < 2:
             return None
-        boundary_text = _normalize_latin_boundary_text(user_text)
+        boundary_text = (
+            _normalize_latin_boundary_text(user_text)
+            if boundary_text is None
+            else boundary_text
+        )
         candidates = self._scan(normalized)
         if boundary_text:
             candidates.extend(self._scan(boundary_text))
@@ -124,6 +137,10 @@ class RoutingSnapshot:
             selected.score,
             _context_evidence_score(selected.record, normalized, boundary_text),
         )
+
+    @property
+    def normalizer(self):
+        return self._policy.normalizer
 
     def _scan(
         self,
@@ -154,14 +171,23 @@ class SegmentedRoutingSnapshot:
         *,
         allowed_collections: frozenset[str],
     ) -> RouteMatch | None:
-        if len(normalize_search_text(user_text)) < 2:
-            return None
-        matches = (
-            matcher.find(user_text)
-            for collection_id, matcher in self._matchers.items()
-            if collection_id in allowed_collections
-        )
-        candidates = [match for match in matches if match is not None]
+        boundary_text = _normalize_latin_boundary_text(user_text)
+        normalized_by_policy: dict[object, str] = {}
+        candidates: list[RouteMatch] = []
+        for collection_id, matcher in self._matchers.items():
+            if collection_id not in allowed_collections:
+                continue
+            normalizer = matcher.normalizer
+            if normalizer not in normalized_by_policy:
+                normalized_by_policy[normalizer] = normalizer(user_text)
+            normalized = normalized_by_policy[normalizer]
+            match = matcher.find(
+                user_text,
+                normalized=normalized,
+                boundary_text=boundary_text,
+            )
+            if match is not None:
+                candidates.append(match)
         if not candidates:
             return None
         if len(candidates) == 1:
@@ -416,7 +442,10 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
             minimum = policy.title_min_length if index == 0 else policy.alias_min_length
             if len(phrase) >= minimum:
                 if policy.latin_word_boundaries and _contains_latin(value):
-                    boundary.append(_normalize_latin_boundary_text(value))
+                    strong.append(phrase)
+                    boundary_phrase = _normalize_latin_boundary_text(value)
+                    if len(boundary_phrase.replace("\0", "")) >= minimum:
+                        boundary.append(boundary_phrase)
                 else:
                     strong.append(phrase)
             elif (
@@ -429,7 +458,13 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
             phrase = policy.normalizer(value)
             if len(phrase) >= policy.recognition_min_length:
                 if policy.latin_word_boundaries and _contains_latin(value):
-                    boundary.append(_normalize_latin_boundary_text(value))
+                    strong.append(phrase)
+                    boundary_phrase = _normalize_latin_boundary_text(value)
+                    if (
+                        len(boundary_phrase.replace("\0", ""))
+                        >= policy.recognition_min_length
+                    ):
+                        boundary.append(boundary_phrase)
                 else:
                     strong.append(phrase)
         if strong or boundary or weak:

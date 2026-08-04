@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -15,17 +14,10 @@ from .collection_specs import (
     GENERIC_REFERENCE_RESPONSE_POLICY,
     CollectionSpec,
 )
+from .identifiers import validate_knowledge_identifier
 
 
 COMMUNITY_REGISTRY_VERSION = 1
-_COLLECTION_ID_RE = re.compile(
-    r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$"
-)
-_WINDOWS_RESERVED_NAMES = frozenset(
-    {"con", "prn", "aux", "nul", "clock$"}
-    | {f"com{value}" for value in range(1, 10)}
-    | {f"lpt{value}" for value in range(1, 10)}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,16 +31,7 @@ class CommunityCollectionRecord:
 
 def validate_collection_id(value: object) -> str:
     """Validate a portable identifier before deriving a directory from it."""
-    text = str(value or "").strip()
-    if not _COLLECTION_ID_RE.fullmatch(text):
-        raise ValueError(
-            "collection_id must be 1-64 lowercase letters, numbers, dots, "
-            "dashes or underscores and must start and end with a letter or number"
-        )
-    stem = text.split(".", 1)[0]
-    if stem in _WINDOWS_RESERVED_NAMES:
-        raise ValueError("collection_id is reserved by the operating system")
-    return text
+    return validate_knowledge_identifier(value)
 
 
 def community_storage_directory(collection_id: str) -> str:
@@ -76,7 +59,10 @@ def load_community_collections(
     if not isinstance(payload, dict):
         return {}
     rows = payload.get("collections")
-    if payload.get("schema_version") != COMMUNITY_REGISTRY_VERSION or not isinstance(rows, dict):
+    version = payload.get("schema_version")
+    if isinstance(version, int) and version > COMMUNITY_REGISTRY_VERSION:
+        raise ValueError("community collection registry version is newer than supported")
+    if version != COMMUNITY_REGISTRY_VERSION or not isinstance(rows, dict):
         return {}
     records: dict[str, CommunityCollectionRecord] = {}
     for collection_id, raw in rows.items():

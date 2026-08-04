@@ -168,11 +168,17 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     previous = validate_pack(_payload(title="previous title"))
     install_pack(database_path, previous)
     replacement = validate_pack(_payload(title="replacement title"))
-    monkeypatch.setattr(
-        packs,
-        "atomic_write_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
-    )
+    real_atomic_write_json = packs.atomic_write_json
+    calls = 0
+
+    def failing_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("fixture failure")
+        return real_atomic_write_json(*args, **kwargs)
+
+    monkeypatch.setattr(packs, "atomic_write_json", failing_once)
 
     with pytest.raises(OSError):
         install_pack(database_path, replacement)
@@ -180,6 +186,10 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     store = KnowledgeStore(database_path)
     assert store.get_entry(previous.source_tag, "previous title") is not None
     assert store.get_entry(previous.source_tag, "replacement title") is None
+    registry = json.loads(
+        packs.get_pack_registry_path(database_path).read_text(encoding="utf-8")
+    )
+    assert registry["packs"]["community-fixture"]["entries"] == 1
 
 
 def test_subscription_metadata_is_stored_outside_entries(tmp_path):
@@ -261,4 +271,8 @@ def test_removing_pack_does_not_remove_another_source(tmp_path):
         item["collection_id"] == "community-demo"
         for item in service.list_collections()
     )
+    assert KnowledgeStore(database_path).get_entry(
+        "source:trusted",
+        "built in entry",
+    ) is not None
     assert database_path.is_file()

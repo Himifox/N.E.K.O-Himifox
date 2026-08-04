@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from .engine.filters import sanitize_external_text
 from .engine.models import KnowledgeEntry
 from .engine.mutation_lock import mutation_lock
 from .engine.store import KnowledgeStore, KnowledgeStoreError
+from .identifiers import validate_knowledge_identifier
 
 
 PACK_SCHEMA_VERSION = 1
@@ -23,8 +23,8 @@ MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_PACK_ENTRIES = 10_000
 MAX_TERMS_PER_ROLE = 100
 MAX_TAGS_PER_ENTRY = 100
-_PACK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
-_TERM_ROLES = frozenset(("alias", "recognition"))
+MAX_TERM_OR_TAG_CHARS = 300
+_TERM_ROLES = ("alias", "recognition")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +93,13 @@ class PackStorageSnapshot:
 def canonical_pack_bytes(payload: object) -> bytes:
     """Return canonical publishing bytes with exactly one final LF."""
     return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        )
         + "\n"
     ).encode("utf-8")
 
@@ -104,15 +110,25 @@ def get_pack_registry_path(database_path: str | Path) -> Path:
 
 def load_pack(path: str | Path) -> KnowledgePack:
     input_path = Path(path)
-    if input_path.stat().st_size > MAX_PACK_BYTES:
+    size = input_path.stat().st_size
+    if size > MAX_PACK_BYTES:
         _fail("$", "size_limit", "knowledge pack exceeds the size limit")
     try:
-        payload = json.loads(input_path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        payload = decode_json_document(input_path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise KnowledgePackValidationError(
             KnowledgeValidationIssue("error", "$", "invalid_json", "not valid UTF-8 JSON")
         ) from exc
     return validate_pack(payload)
+
+
+def decode_json_document(value: str) -> object:
+    """Decode strict JSON and reject non-standard numeric constants."""
+    return json.loads(value, parse_constant=_reject_json_constant)
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant is not allowed: {value}")
 
 
 def validate_pack(payload: object) -> KnowledgePack:
@@ -314,12 +330,16 @@ def _entry_from_payload(payload: object, *, source_tag: str, index: int) -> Know
             _fail(f"{path}.terms.{role}", "type", "must be a string array")
         if len(values) > MAX_TERMS_PER_ROLE:
             _fail(f"{path}.terms.{role}", "item_limit", "contains too many values")
+        if any(len(value) > MAX_TERM_OR_TAG_CHARS for value in values):
+            _fail(f"{path}.terms.{role}", "length_limit", "contains an overlong value")
         normalized_terms[role] = tuple(values)
     tags = payload.get("tags", [])
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
         _fail(f"{path}.tags", "type", "must be a string array")
     if len(tags) > MAX_TAGS_PER_ENTRY:
         _fail(f"{path}.tags", "item_limit", "contains too many values")
+    if any(len(tag) > MAX_TERM_OR_TAG_CHARS for tag in tags):
+        _fail(f"{path}.tags", "length_limit", "contains an overlong value")
     if any(tag.startswith("source:") for tag in tags):
         _fail(f"{path}.tags", "reserved_tag", "cannot declare source tags")
     try:
@@ -337,10 +357,10 @@ def _entry_from_payload(payload: object, *, source_tag: str, index: int) -> Know
 
 
 def _identifier(value: object, path: str) -> str:
-    text = str(value or "").strip()
-    if not _PACK_ID_RE.fullmatch(text):
-        _fail(path, "invalid_identifier", "must use 1-64 portable lowercase characters")
-    return text
+    try:
+        return validate_knowledge_identifier(value)
+    except ValueError as exc:
+        _fail(path, "invalid_identifier", str(exc))
 
 
 def _required_text(value: object, path: str, max_chars: int) -> str:

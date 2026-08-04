@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from types import MappingProxyType
 from typing import Iterable, Mapping
 
 from .filters import sanitize_external_text
@@ -27,10 +28,14 @@ def _clean_values(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def normalize_terms(value: Mapping[str, Iterable[str]] | None) -> dict[str, tuple[str, ...]]:
+def normalize_terms(
+    value: Mapping[str, Iterable[str]] | None,
+) -> Mapping[str, tuple[str, ...]]:
     """Return the only supported term roles with cleaned, distinct values."""
     value = value or {}
-    return {role: _clean_values(value.get(role, ())) for role in TERM_ROLES}
+    return MappingProxyType(
+        {role: _clean_values(value.get(role, ())) for role in TERM_ROLES}
+    )
 
 
 @dataclass(frozen=True, slots=True)

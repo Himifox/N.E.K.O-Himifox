@@ -9,6 +9,7 @@ from knowledge.diagnostics import (
 
 def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
     clear_knowledge_route_diagnostics()
+    assert list_recent_knowledge_routes() == ()
 
     for index in range(25):
         record_knowledge_route(

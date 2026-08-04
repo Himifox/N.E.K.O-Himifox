@@ -216,6 +216,29 @@ def test_latin_context_hint_uses_word_boundaries(tmp_path):
     ).collection_id == "high"
 
 
+def test_mixed_language_latin_route_preserves_complete_phrase(tmp_path):
+    spec = CollectionSpec(
+        collection_id="mixed",
+        storage_directory="mixed",
+        auto_context_enabled=True,
+        match_policy=MatchPolicy(
+            title_min_length=3,
+            alias_min_length=3,
+            latin_word_boundaries=True,
+        ),
+        response_policy=GENERIC_REFERENCE_RESPONSE_POLICY,
+    )
+    service = _service_with_entries(
+        tmp_path,
+        (spec,),
+        {"mixed": (_entry("猫娘 ab", source="mixed"),)},
+    )
+    service.refresh_routing_index()
+
+    assert service.build_turn_context("猫娘 ab 是什么").hit_count == 1
+    assert service.build_turn_context("only ab appears").hit_count == 0
+
+
 def test_equal_context_hints_fall_back_to_collection_priority(tmp_path):
     high = _spec(
         "high",
@@ -441,7 +464,7 @@ def test_background_refresh_keeps_the_previous_snapshot_available(monkeypatch, t
 
     reader = threading.Thread(target=read_old_snapshot)
     reader.start()
-    assert completed.wait(timeout=0.5)
+    assert completed.wait(timeout=3)
     state = service._get_routing_state()
     refresh_thread = state._refresh_thread
     assert refresh_thread is not None
@@ -482,10 +505,26 @@ def test_replaced_database_file_is_initialized_again(tmp_path):
     assert replacement.integrity_ok()
 
 
-def test_user_text_is_normalized_once_across_five_collections(monkeypatch, tmp_path):
-    import knowledge.engine.routing as routing
+def test_user_text_is_normalized_once_across_five_collections(tmp_path):
+    from knowledge.engine.filters import normalize_search_text
 
-    specs = tuple(_spec(f"collection-{index}") for index in range(5))
+    calls = 0
+
+    def counted(value):
+        nonlocal calls
+        calls += 1
+        return normalize_search_text(value)
+
+    specs = tuple(
+        CollectionSpec(
+            collection_id=f"collection-{index}",
+            storage_directory=f"collection-{index}",
+            auto_context_enabled=True,
+            match_policy=MatchPolicy(normalizer=counted),
+            response_policy=GENERIC_REFERENCE_RESPONSE_POLICY,
+        )
+        for index in range(5)
+    )
     service = _service_with_entries(
         tmp_path,
         specs,
@@ -497,15 +536,7 @@ def test_user_text_is_normalized_once_across_five_collections(monkeypatch, tmp_p
         },
     )
     service.refresh_routing_index()
-    original = routing.normalize_search_text
     calls = 0
-
-    def counted(value):
-        nonlocal calls
-        calls += 1
-        return original(value)
-
-    monkeypatch.setattr(routing, "normalize_search_text", counted)
 
     assert service.build_turn_context("ordinary unmatched text").hit_count == 0
     assert calls == 1

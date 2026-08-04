@@ -4,7 +4,13 @@ from unittest.mock import patch
 from utils.config_manager import ConfigManager
 
 
-def test_knowledge_directory_is_owned_by_the_runtime_root(tmp_path: Path) -> None:
+def test_knowledge_directory_is_owned_by_the_runtime_root(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("NEKO_STORAGE_SELECTED_ROOT", raising=False)
+    monkeypatch.delenv("NEKO_STORAGE_ANCHOR_ROOT", raising=False)
+    monkeypatch.delenv("NEKO_STORAGE_CLOUDSAVE_ROOT", raising=False)
     with (
         patch.object(ConfigManager, "_get_documents_directory", return_value=tmp_path),
         patch.object(

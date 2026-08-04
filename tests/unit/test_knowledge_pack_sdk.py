@@ -8,7 +8,16 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from knowledge.packs import canonical_pack_bytes, load_pack, validate_pack
+from knowledge.api import (
+    CollectionSpec,
+    MAX_PACK_BYTES,
+    PACK_SCHEMA_VERSION,
+    canonical_pack_bytes,
+    load_canonical_pack_artifact,
+    load_pack,
+    validate_knowledge_identifier,
+    validate_pack,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +62,10 @@ def test_schema_is_draft_2020_12_and_accepts_example() -> None:
         lambda payload: payload["entries"][0].update({"content": ""}),
         lambda payload: payload["entries"][0].update({"tags": ["source:forged"]}),
         lambda payload: payload["source"].update({"homepage": "javascript:alert(1)"}),
+        lambda payload: payload.update({"pack_id": "nul"}),
+        lambda payload: payload.update({"collection_id": "com1.fixture"}),
+        lambda payload: payload["entries"][0]["terms"].update({"alias": ["x" * 301]}),
+        lambda payload: payload["entries"][0].update({"tags": ["x" * 301]}),
     ],
 )
 def test_schema_and_runtime_reject_shared_invalid_fixtures(mutate) -> None:
@@ -76,11 +89,16 @@ def test_normal_validation_accepts_formatted_json() -> None:
 
 
 def test_strict_validation_requires_canonical_bytes(tmp_path: Path) -> None:
-    formatted = _run_cli(EXAMPLE_PATH, strict=True)
+    payload = _example_payload()
+    formatted_path = tmp_path / "formatted.neko-knowledge.json"
+    formatted_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    formatted = _run_cli(formatted_path, strict=True)
     assert formatted.returncode == 2
     assert "[WARN] canonical_json" in formatted.stderr
 
-    payload = _example_payload()
     canonical_path = tmp_path / "canonical.neko-knowledge.json"
     canonical_bytes = canonical_pack_bytes(payload)
     assert canonical_bytes.endswith(b"\n")
@@ -90,6 +108,62 @@ def test_strict_validation_requires_canonical_bytes(tmp_path: Path) -> None:
 
     assert canonical.returncode == 0
     assert "[PASS] canonical_json" in canonical.stdout
+
+
+def test_canonical_artifact_requires_exactly_one_final_lf() -> None:
+    canonical = canonical_pack_bytes(_example_payload())
+
+    assert canonical.endswith(b"\n")
+    assert not canonical.endswith(b"\n\n")
+    assert load_canonical_pack_artifact(canonical)["pack_id"] == "example-colors"
+    for invalid in (canonical[:-1], canonical + b"\n", canonical[:-1] + b"\r\n"):
+        with pytest.raises(ValueError, match="canonical JSON"):
+            load_canonical_pack_artifact(invalid)
+
+
+def test_non_standard_json_constants_are_rejected(tmp_path: Path) -> None:
+    raw = canonical_pack_bytes(_example_payload()).replace(
+        b'"schema_version":1',
+        b'"schema_version":NaN',
+    )
+    path = tmp_path / "nan.neko-knowledge.json"
+    path.write_bytes(raw)
+
+    with pytest.raises(ValueError):
+        load_pack(path)
+    with pytest.raises(ValueError):
+        load_canonical_pack_artifact(raw)
+
+
+def test_public_sdk_exports_portable_v1_contract() -> None:
+    assert CollectionSpec is not None
+    assert MAX_PACK_BYTES == 10 * 1024 * 1024
+    assert PACK_SCHEMA_VERSION == 1
+    assert validate_knowledge_identifier("a") == "a"
+    assert validate_knowledge_identifier("a" * 64) == "a" * 64
+    for invalid in (
+        "",
+        "-a",
+        "a-",
+        "A",
+        "nul",
+        "lpt9.data",
+        " a ",
+        "a" * 65,
+        1,
+    ):
+        with pytest.raises(ValueError):
+            validate_knowledge_identifier(invalid)
+
+
+def test_term_and_tag_item_length_boundary_matches_schema() -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    payload = _example_payload()
+    payload["entries"][0]["terms"]["alias"] = ["x" * 300]
+    payload["entries"][0]["tags"] = ["x" * 300]
+
+    jsonschema.validate(payload, schema, cls=jsonschema.Draft202012Validator)
+    assert validate_pack(payload).entries[0].aliases == ("x" * 300,)
 
 
 def test_invalid_pack_reports_field_without_content(tmp_path: Path) -> None:

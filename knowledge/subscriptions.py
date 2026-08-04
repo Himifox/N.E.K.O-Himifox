@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 
-from .packs import canonical_pack_bytes
+from .packs import canonical_pack_bytes, decode_json_document, validate_pack
 
 
 SUBSCRIPTION_PROTOCOL_VERSION = 1
@@ -41,14 +41,21 @@ def validate_subscription(payload: object) -> KnowledgeSubscription:
     return KnowledgeSubscription(provider, remote_id, version, channel, digest)
 
 
-def load_canonical_pack_artifact(raw: bytes) -> object:
+def load_canonical_pack_artifact(raw: bytes) -> dict:
     """Decode a market artifact and require its bytes to be canonical JSON."""
     try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        payload = decode_json_document(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("knowledge artifact is not valid UTF-8 JSON") from exc
-    if raw != canonical_pack_bytes(payload):
+    try:
+        canonical = canonical_pack_bytes(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("knowledge artifact is not valid JSON") from exc
+    if raw != canonical:
         raise ValueError("knowledge artifact is not canonical JSON")
+    if not isinstance(payload, dict):
+        raise ValueError("knowledge artifact root must be an object")
+    validate_pack(payload)
     return payload
 
 

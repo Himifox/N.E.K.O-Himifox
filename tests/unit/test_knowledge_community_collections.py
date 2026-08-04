@@ -132,6 +132,19 @@ def test_damaged_collection_registry_degrades_to_no_community_collections(
     assert service.list_collections() == ()
 
 
+def test_newer_collection_registry_is_not_silently_overwritten(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "collections.json"
+    original = '{"schema_version":2,"collections":{"future":{}}}'
+    registry.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="newer than supported"):
+        open_knowledge(tmp_path)
+
+    assert registry.read_text(encoding="utf-8") == original
+
+
 @pytest.mark.parametrize(
     "collection_id",
     (

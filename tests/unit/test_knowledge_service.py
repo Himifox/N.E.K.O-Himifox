@@ -49,9 +49,18 @@ def _service(tmp_path, *, automatic: bool = True, restricted: bool = False):
 
 def test_public_api_is_small_and_does_not_export_engine_primitives() -> None:
     assert "KnowledgeService" in public_api.__all__
+    assert "CollectionSpec" in public_api.__all__
+    assert "validate_knowledge_identifier" in public_api.__all__
     assert "validate_pack" in public_api.__all__
     assert "KnowledgeStore" not in public_api.__all__
     assert "MatchPolicy" not in public_api.__all__
+
+
+def test_knowledge_entry_terms_are_immutable() -> None:
+    entry = _entry("immutable phrase")
+
+    with pytest.raises(TypeError):
+        entry.terms["alias"] = ("changed",)
 
 
 def test_service_has_no_implicit_builtin_domains(tmp_path) -> None:

@@ -106,7 +106,7 @@ class KnowledgeStore:
             row["name"] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
         }
         if columns and "terms" not in columns:
-            self._migrate_legacy_entries(connection)
+            self._migrate_legacy_entries(connection, columns)
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS metadata (
@@ -136,7 +136,11 @@ class KnowledgeStore:
             (str(SCHEMA_VERSION),),
         )
 
-    def _migrate_legacy_entries(self, connection: sqlite3.Connection) -> None:
+    def _migrate_legacy_entries(
+        self,
+        connection: sqlite3.Connection,
+        columns: set[str],
+    ) -> None:
         """Copy the old attributed schema into a five-field table once.
 
         The external backup is intentionally retained so callers can recover
@@ -153,14 +157,16 @@ class KnowledgeStore:
             "CREATE TABLE entries (title TEXT NOT NULL, terms TEXT NOT NULL, tags TEXT NOT NULL, summary TEXT NOT NULL, content TEXT NOT NULL)"
         )
         for row in rows:
-            tags = _json_values(row["tags"])
-            aliases = _json_values(row["aliases"])
+            tags = _json_values(row["tags"]) if "tags" in columns else ()
+            aliases = _json_values(row["aliases"]) if "aliases" in columns else ()
             terms = {"alias": list(aliases), "recognition": []}
             connection.execute(
                 "INSERT INTO entries(title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?)",
                 (
                     row["title"], json.dumps(terms, ensure_ascii=False),
-                    json.dumps(tags, ensure_ascii=False), row["summary"], row["content"],
+                    json.dumps(tags, ensure_ascii=False),
+                    row["summary"] if "summary" in columns else "",
+                    row["content"],
                 ),
             )
         connection.execute("DROP TABLE entries_legacy")
@@ -415,16 +421,21 @@ class KnowledgeStore:
                 f"WHERE source_filter.value IN ({placeholders}))"
             )
             source_parameters = allowed_source_tags
-        pattern = f"%{normalized_query}%"
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped_query}%"
         try:
             with self._connection() as connection:
                 return connection.execute(
                     "SELECT rowid, * FROM entries WHERE ("
-                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ?)"
+                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ? ESCAPE '\\')"
                     f"{source_clause} LIMIT ?",
                     (
                         pattern,
