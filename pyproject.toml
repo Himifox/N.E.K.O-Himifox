@@ -145,6 +145,7 @@ include = [
   "LICENSE",
   "scripts/validate_knowledge_pack.py",
   "docs/architecture/knowledge-pack-sdk.md",
+  "docs/architecture/builtin-knowledge-domains.md",
   "examples/knowledge-packs",
 ]
 exclude = [
