@@ -1195,7 +1195,10 @@
 
     I.setCompactToolFanOpen = function setCompactToolFanOpen(open, reason) {
         var requestReason = typeof reason === 'string' ? reason : '';
-        if (requestReason.indexOf('desktop-compact-tool-toggle') === 0) {
+        if (
+            requestReason === 'desktop-compact-tool-toggle-cursor-poll'
+            || requestReason === 'desktop-compact-tool-toggle-hover-keepalive'
+        ) {
             return false;
         }
         if (open === true && I.getCurrentChatSurfaceMode() === 'compact') {

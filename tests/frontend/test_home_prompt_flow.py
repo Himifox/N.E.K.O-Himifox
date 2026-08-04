@@ -641,6 +641,19 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
             const compactStateAfterHoverOpen = host.getState().compactChatState;
             const requestAfterHoverOpen = window.__lastReactChatProps.compactToolFanOpenRequest || null;
 
+            const desktopClickOpenAccepted = host.setCompactToolFanOpen(
+                true,
+                'desktop-compact-tool-toggle-click',
+            );
+            const compactStateAfterDesktopClickOpen = host.getState().compactChatState;
+            const requestAfterDesktopClickOpen = window.__lastReactChatProps.compactToolFanOpenRequest;
+            const desktopClickCloseAccepted = host.setCompactToolFanOpen(
+                false,
+                'desktop-compact-tool-toggle-click',
+            );
+            const requestAfterDesktopClickClose = window.__lastReactChatProps.compactToolFanOpenRequest;
+            host.setCompactChatState('options');
+
             host.setHomeTutorialInputLocked(true, 'avatar-floating-guide-day2');
             const hiddenDuringTutorial = window.__lastReactChatProps.composerHidden;
             const attachmentsVisibleDuringTutorial = document.body.classList.contains('composer-has-attachments');
@@ -671,6 +684,11 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
                 hoverOpenAccepted,
                 compactStateAfterHoverOpen,
                 requestAfterHoverOpen,
+                desktopClickOpenAccepted,
+                compactStateAfterDesktopClickOpen,
+                requestAfterDesktopClickOpenReason: requestAfterDesktopClickOpen.reason,
+                desktopClickCloseAccepted,
+                requestAfterDesktopClickCloseOpen: requestAfterDesktopClickClose.open,
                 hoverCloseAccepted,
                 compactStateAfterHoverClose,
                 requestAfterHoverCloseOpen: requestAfterHoverClose.open,
@@ -695,6 +713,11 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
         "hoverOpenAccepted": False,
         "compactStateAfterHoverOpen": "options",
         "requestAfterHoverOpen": None,
+        "desktopClickOpenAccepted": True,
+        "compactStateAfterDesktopClickOpen": "input",
+        "requestAfterDesktopClickOpenReason": "desktop-compact-tool-toggle-click",
+        "desktopClickCloseAccepted": True,
+        "requestAfterDesktopClickCloseOpen": False,
         "hoverCloseAccepted": False,
         "compactStateAfterHoverClose": "input",
         "requestAfterHoverCloseOpen": True,

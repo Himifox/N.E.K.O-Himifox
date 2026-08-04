@@ -4841,7 +4841,10 @@ function CompactChatApp({
     if (!request || !request.id || request.id === lastCompactToolFanOpenRequestIdRef.current) return;
     lastCompactToolFanOpenRequestIdRef.current = request.id;
     const requestReason = typeof request.reason === 'string' ? request.reason : '';
-    if (requestReason.startsWith('desktop-compact-tool-toggle')) return;
+    if (
+      requestReason === 'desktop-compact-tool-toggle-cursor-poll'
+      || requestReason === 'desktop-compact-tool-toggle-hover-keepalive'
+    ) return;
     if (request.open) {
       const opened = openCompactInputToolFan('click', { ignoreDisabled: true });
       if (!opened) return;
