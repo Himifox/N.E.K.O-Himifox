@@ -3633,8 +3633,8 @@ function CompactChatApp({
     updateCompactInputToolFanPosition,
   ]);
 
-  const shouldOpenCompactToolFanOnHover = useCallback((pointerType: string) => {
-    return pointerType === 'mouse' || pointerType === '';
+  const shouldOpenCompactToolFanOnHover = useCallback((pointerType: string, buttons: number) => {
+    return buttons === 0 && (pointerType === 'mouse' || pointerType === '');
   }, []);
 
   const isCompactInputToolPointerInToggleHoverRegion = useCallback((clientX: number, clientY: number, relatedTarget?: EventTarget | null) => {
@@ -3680,7 +3680,7 @@ function CompactChatApp({
   ]);
 
   const handleCompactInputToolHoverEnter = useCallback((event: ReactPointerEvent) => {
-    if (!shouldOpenCompactToolFanOnHover(event.pointerType)) return;
+    if (!shouldOpenCompactToolFanOnHover(event.pointerType, event.buttons)) return;
     if (compactInputToolFanSuppressHoverUntilLeaveRef.current) return;
     if (compactInputToolFanHoverInsideRef.current && compactInputToolFanOpenRef.current) return;
     compactInputToolFanHoverInsideRef.current = true;
@@ -4311,7 +4311,7 @@ function CompactChatApp({
       if (
         !compactInputHasPayload
         && !composerDisabled
-        && shouldOpenCompactToolFanOnHover(event.pointerType)
+        && shouldOpenCompactToolFanOnHover(event.pointerType, event.buttons)
         && isCompactInputToolPointerInToggleHoverRegion(event.clientX, event.clientY, event.target)
       ) {
         if (!compactInputToolFanOpenRef.current) {

@@ -6145,6 +6145,38 @@ describe('App', () => {
     }
   });
 
+  it('does not open compact input tools while dragging across the hover region', () => {
+    render(<App chatSurfaceMode="compact" compactChatState="input" />);
+
+    const actionButton = document.body.querySelector('.compact-input-tool-toggle') as HTMLButtonElement;
+    const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
+    const toggleRectSpy = vi.spyOn(actionButton, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 142,
+      top: 100,
+      bottom: 142,
+      width: 42,
+      height: 42,
+      x: 100,
+      y: 100,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    try {
+      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse', buttons: 1 });
+      fireEvent.pointerMove(window, {
+        clientX: 121,
+        clientY: 121,
+        pointerType: 'mouse',
+        buttons: 1,
+      });
+
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+    } finally {
+      toggleRectSpy.mockRestore();
+    }
+  });
+
   it('opens compact input tools on mouse hover even when fine-hover media query is false', () => {
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia(false);

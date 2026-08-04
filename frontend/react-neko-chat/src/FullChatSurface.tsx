@@ -1678,7 +1678,7 @@ export default function FullChatSurface({
   ]);
 
   const shouldOpenCompactToolFanOnHover = useCallback((event: ReactPointerEvent) => {
-    return event.pointerType === 'mouse';
+    return event.buttons === 0 && event.pointerType === 'mouse';
   }, []);
 
   const isCompactInputToolPointerInHoverRegion = useCallback((clientX: number, clientY: number, relatedTarget?: EventTarget | null) => {
