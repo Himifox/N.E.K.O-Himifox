@@ -309,6 +309,29 @@ class KnowledgeService:
     ) -> KnowledgeEntry | None:
         return self._store(collection_id).get_entry(source_tag, title)
 
+    def list_disabled_entries(
+        self,
+        collection_id: str,
+    ) -> frozenset[tuple[str, str]]:
+        """Return the bounded local override keys for management views."""
+        database_path = self.database_path(collection_id)
+        return load_disabled_entries(get_catalog_override_path(database_path))
+
+    def get_source_metadata(self, collection_id: str, source_tag: str) -> dict:
+        """Resolve bounded display metadata for a trusted or installed source."""
+        spec = self._spec(collection_id)
+        source = resolve_source(
+            source_tag,
+            registered_sources=spec.sources,
+            database_path=self.database_path(collection_id),
+        )
+        return {
+            "tag": source.tag,
+            "name": source.name,
+            "homepage": source.homepage,
+            "license": source.license,
+        }
+
     def set_entry_disabled(
         self,
         collection_id: str,

@@ -46,7 +46,20 @@ export default {
     adapters: 'Adaptadores',
     adapterUI: 'UI del adaptador',
     packageManager: 'Gestor de paquetes',
-    market: 'Mercado de plugins'
+    market: 'Mercado de plugins',
+    knowledge: 'Conocimiento'
+  },
+  knowledge: {
+    title: 'Gestor de conocimiento', subtitle: 'Gestiona conocimiento público local, paquetes de datos y coincidencias de conversación',
+    marketNotice: 'La conexión del protocolo del mercado de conocimiento está reservada. Ya se pueden gestionar colecciones integradas y paquetes locales.',
+    overview: 'Resumen', ready: 'Listo', degraded: 'Degradado', entries: 'Entradas', disabled: 'Desactivadas', packs: 'Paquetes',
+    autoContext: 'Usar en conversación automática', catalog: 'Catálogo', searchPlaceholder: 'Buscar títulos, alias, resúmenes o contenido',
+    term: 'Entrada', summary: 'Resumen', source: 'Fuente', actions: 'Acciones', details: 'Detalles', restore: 'Restaurar', disable: 'Desactivar',
+    previous: 'Anterior', next: 'Siguiente', packId: 'ID del paquete', subscription: 'Suscripción', localImport: 'Importación local',
+    importPack: 'Importar paquete', diagnostics: 'Coincidencias recientes', time: 'Hora', collection: 'Colección', matchMode: 'Modo de coincidencia',
+    delivered: 'Tarjeta enviada', result: 'Resultado', errorType: 'Tipo de error', yes: 'Sí', no: 'No', terms: 'Términos', tags: 'Etiquetas', content: 'Contenido',
+    loadFailed: 'No se pudieron cargar los datos', operationFailed: 'La operación falló', importSuccess: 'Paquete importado',
+    invalidPack: 'Paquete no válido', removeConfirm: '¿Eliminar el paquete {name}?'
   },
   market: {
     title: 'Obtener nuevos plugins',
