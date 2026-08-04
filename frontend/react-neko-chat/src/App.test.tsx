@@ -6210,7 +6210,7 @@ describe('App', () => {
     expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
   });
 
-  it('ignores desktop hover open requests', () => {
+  it('ignores desktop hover open and close requests', () => {
     const { rerender } = render(
       <App
         chatSurfaceMode="compact"
@@ -6223,6 +6223,7 @@ describe('App', () => {
       />,
     );
 
+    const actionButton = screen.getByRole('button', { name: '更多工具' });
     const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
     expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
 
@@ -6239,6 +6240,23 @@ describe('App', () => {
     );
 
     expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+
+    fireEvent.click(actionButton);
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+
+    rerender(
+      <App
+        chatSurfaceMode="compact"
+        compactChatState="input"
+        compactToolFanOpenRequest={{
+          id: 'desktop-hover-close-1',
+          open: false,
+          reason: 'desktop-compact-tool-toggle-cursor-poll',
+        }}
+      />,
+    );
+
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
   });
 
   it('opens compact input tools when a click follows hover', () => {

@@ -634,12 +634,25 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
             }]);
             host.setCompactChatState('options');
 
+            const hoverOpenAccepted = host.setCompactToolFanOpen(
+                true,
+                'desktop-compact-tool-toggle-cursor-poll',
+            );
+            const compactStateAfterHoverOpen = host.getState().compactChatState;
+            const requestAfterHoverOpen = window.__lastReactChatProps.compactToolFanOpenRequest || null;
+
             host.setHomeTutorialInputLocked(true, 'avatar-floating-guide-day2');
             const hiddenDuringTutorial = window.__lastReactChatProps.composerHidden;
             const attachmentsVisibleDuringTutorial = document.body.classList.contains('composer-has-attachments');
             host.setCompactToolFanOpen(true, 'avatar-floating-guide-open-tool-fan');
             const stateDuringTutorial = host.getState();
             const propsDuringTutorial = window.__lastReactChatProps;
+            const hoverCloseAccepted = host.setCompactToolFanOpen(
+                false,
+                'desktop-compact-tool-toggle-cursor-poll',
+            );
+            const compactStateAfterHoverClose = host.getState().compactChatState;
+            const requestAfterHoverClose = window.__lastReactChatProps.compactToolFanOpenRequest;
             host.setCompactToolFanOpen(false, 'avatar-floating-guide-close-tool-fan');
             const compactChatStateAfterFanClose = host.getState().compactChatState;
             host.setCompactToolFanOpen(true, 'avatar-floating-guide-reopen-tool-fan');
@@ -655,6 +668,13 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
                 hiddenAfterTutorial: window.__lastReactChatProps.composerHidden,
                 attachmentsVisibleDuringTutorial,
                 attachmentsVisibleAfterTutorial: document.body.classList.contains('composer-has-attachments'),
+                hoverOpenAccepted,
+                compactStateAfterHoverOpen,
+                requestAfterHoverOpen,
+                hoverCloseAccepted,
+                compactStateAfterHoverClose,
+                requestAfterHoverCloseOpen: requestAfterHoverClose.open,
+                requestAfterHoverCloseReason: requestAfterHoverClose.reason,
                 attachmentVisibilityEvents,
                 composerHiddenRequestedAfterTutorial: host.getState().composerHiddenRequested,
                 goodbyeComposerHiddenAfterTutorial: host.getState().goodbyeComposerHidden,
@@ -672,6 +692,13 @@ def test_home_tutorial_input_lock_temporarily_reveals_hidden_compact_tools(
         "hiddenAfterTutorial": True,
         "attachmentsVisibleDuringTutorial": True,
         "attachmentsVisibleAfterTutorial": False,
+        "hoverOpenAccepted": False,
+        "compactStateAfterHoverOpen": "options",
+        "requestAfterHoverOpen": None,
+        "hoverCloseAccepted": False,
+        "compactStateAfterHoverClose": "input",
+        "requestAfterHoverCloseOpen": True,
+        "requestAfterHoverCloseReason": "avatar-floating-guide-open-tool-fan",
         "attachmentVisibilityEvents": [True, False],
         "composerHiddenRequestedAfterTutorial": True,
         "goodbyeComposerHiddenAfterTutorial": True,

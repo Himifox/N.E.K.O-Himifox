@@ -4840,9 +4840,9 @@ function CompactChatApp({
     const request = compactToolFanOpenRequest;
     if (!request || !request.id || request.id === lastCompactToolFanOpenRequestIdRef.current) return;
     lastCompactToolFanOpenRequestIdRef.current = request.id;
+    const requestReason = typeof request.reason === 'string' ? request.reason : '';
+    if (requestReason.startsWith('desktop-compact-tool-toggle')) return;
     if (request.open) {
-      const requestReason = typeof request.reason === 'string' ? request.reason : '';
-      if (requestReason.startsWith('desktop-compact-tool-toggle')) return;
       const opened = openCompactInputToolFan('click', { ignoreDisabled: true });
       if (!opened) return;
       return;
