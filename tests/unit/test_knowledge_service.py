@@ -191,12 +191,12 @@ def test_mention_matcher_cache_is_lru_bounded_across_database_paths(
     assert {str(path) for path in paths[1:]} == cached_paths
 
 
-def test_reference_details_strip_configured_prefix_and_include_separators_in_budget() -> None:
+def test_reference_details_preserve_named_prefix_and_apply_total_budget() -> None:
     entry = SimpleNamespace(content="Heading\nFact: abcdef\nFact: ghijkl")
 
     details = get_reference_details(entry, ("Fact: ",), max_chars=10)
 
-    assert details == "abcdef | g"
+    assert details == "Fact: abcd"
     assert len(details) == 10
 
 

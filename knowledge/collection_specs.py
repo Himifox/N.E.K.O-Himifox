@@ -114,7 +114,8 @@ def get_reference_details(
         )
         if not candidate or prefix is None:
             continue
-        candidate = candidate.removeprefix(prefix).strip()
+        if prefix == "- ":
+            candidate = candidate.removeprefix(prefix).strip()
         if not candidate:
             continue
         separator = " | " if selected else ""
