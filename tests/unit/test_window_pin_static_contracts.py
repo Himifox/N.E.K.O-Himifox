@@ -182,18 +182,21 @@ def test_credentials_page_and_guide_share_window_control_buttons():
 
 def test_credentials_guide_uses_the_five_step_screenshot_sequence():
     guide = read_text("templates/cookies_guide.html")
-    expected_assets = (
-        "step-1-site.png",
-        "step-1-login.png",
-        "step-2-devtools.png",
-        "step-3-application.png",
-        "step-4-cookies.png",
-        "step-5-value.png",
-    )
+    expected_assets = {
+        "step-1-site.png": (417, 181),
+        "step-1-login.png": (386, 425),
+        "step-2-devtools.png": (1218, 802),
+        "step-3-application.png": (784, 800),
+        "step-4-cookies.png": (1052, 899),
+        "step-5-value.png": (1159, 998),
+    }
 
     assert guide.count('class="step" data-step=') == 5
-    for asset in expected_assets:
+    assert "contain: layout paint style;" in guide
+    assert "backdrop-filter: none;" in guide
+    for asset, (width, height) in expected_assets.items():
         assert f"/static/images/cookies/guide/{asset}" in guide
+        assert f'width="{width}" height="{height}"' in guide
         assert (PROJECT_ROOT / "static" / "images" / "cookies" / "guide" / asset).is_file()
 
     for locale_path in (PROJECT_ROOT / "static" / "locales").glob("*.json"):
