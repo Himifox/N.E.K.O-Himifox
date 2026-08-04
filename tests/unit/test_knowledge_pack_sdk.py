@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -26,6 +27,10 @@ EXAMPLE_PATH = (
     REPO_ROOT / "examples" / "knowledge-packs" / "minimal.neko-knowledge.json"
 )
 CLI_PATH = REPO_ROOT / "scripts" / "validate_knowledge_pack.py"
+GOLDEN_PATH = (
+    REPO_ROOT / "tests" / "fixtures" / "knowledge-pack-v1.golden.neko-knowledge.json"
+)
+GOLDEN_SHA256 = "7acfed9562006b5404e5e668ca373f72f720b6ea47fe21c1484c00323a2bead6"
 
 
 def _example_payload() -> dict:
@@ -119,6 +124,15 @@ def test_canonical_artifact_requires_exactly_one_final_lf() -> None:
     for invalid in (canonical[:-1], canonical + b"\n", canonical[:-1] + b"\r\n"):
         with pytest.raises(ValueError, match="canonical JSON"):
             load_canonical_pack_artifact(invalid)
+
+
+def test_market_golden_artifact_matches_sdk_contract() -> None:
+    raw = GOLDEN_PATH.read_bytes()
+    payload = load_canonical_pack_artifact(raw)
+
+    assert hashlib.sha256(raw).hexdigest() == GOLDEN_SHA256
+    assert canonical_pack_bytes(payload) == raw
+    assert payload["collection"]["display_name"] == "Community Colors"
 
 
 def test_non_standard_json_constants_are_rejected(tmp_path: Path) -> None:
