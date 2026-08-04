@@ -5986,6 +5986,7 @@ function CompactChatApp({
       data-compact-export-selected-count={isCompactSurface ? compactExportSelectedCount : 0}
       data-compact-export-auto-scroll={isCompactSurface && compactExportAutoScrollToBottom ? 'true' : 'false'}
       data-compact-tool-layer-open={isCompactSurface && compactInputToolFanOpen ? 'true' : 'false'}
+      data-compact-tool-wheel-layout={isCompactSurface && compactInputToolFanOpen ? compactInputToolWheelLayout : undefined}
       data-focus-active={focusActive ? 'true' : 'false'}
     >
       {focusActive ? (
