@@ -3845,11 +3845,18 @@
             "securityTitle": "Security reminder",
             "securityText": "Credentials grant access to your account. Never share them, and only paste them into your local N.E.K.O. page.",
             "back": "Back to Credential Manager",
-            "step1": "Open the target platform website in browser and <span class=\"highlight-text\">log in</span>.",
-            "step2_prefix": "Press",
-            "step2_suffix": "to open Developer Tools.",
-            "step3": "Find and click <span class=\"highlight-text\">Application</span> tab at the top.",
-            "step4": "Find <span class=\"highlight-text\">Cookies</span> on the left sidebar, click the domain, and copy the required values on the right."
+            "step1Title": "Open the platform website and sign in",
+            "step1": "Open the platform whose credentials you need and confirm that your account is signed in. In the NetEase Cloud Music example, the avatar in the upper-right confirms the login state.",
+            "step1LoginAlt": "Confirm that the account is signed in",
+            "step2Title": "Open browser developer tools",
+            "step2": "Press F12 to open Developer Tools. If the shortcut does not work, open it from the browser menu.",
+            "step3Title": "Switch to the Application panel",
+            "step3": "Select Application at the top of Developer Tools. If it is hidden, open the overflow menu on the right first.",
+            "step4Title": "Expand Cookies and select the domain",
+            "step4": "Under Storage in the left sidebar, expand Cookies and select the domain of the platform where you are signed in.",
+            "step5Title": "Copy the Cookie Value for each required field",
+            "step5": "Find each Cookie listed on the Credential Manager page, double-click its Cookie Value to select it, copy it, and return to fill in the field.",
+            "step5Tip": "Copy only the Cookie Value; the other columns can be ignored."
         },
         "fields": {
             "user_heybox_id": {

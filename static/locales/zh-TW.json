@@ -3845,11 +3845,18 @@
             "securityTitle": "安全提醒",
             "securityText": "憑證等同於登入身分，請勿分享給他人；僅在本機的 N.E.K.O. 頁面中貼上。",
             "back": "返回憑證管理",
-            "step1": "在瀏覽器開啟目標平台網頁並<span class=\"highlight-text\">完成登入</span>。",
-            "step2_prefix": "按下鍵盤",
-            "step2_suffix": "開啟開發者工具。",
-            "step3": "在頂部找到並點擊 <span class=\"highlight-text\">Application (應用程式)</span> 面板。",
-            "step4": "在左側找到 <span class=\"highlight-text\">Cookies</span>，點擊網域後在右側複製對應的值。"
+            "step1Title": "開啟平台網站並確認登入",
+            "step1": "在瀏覽器中開啟需要取得憑證的平台網站，並確認帳號已登入。以網易雲音樂為例，可從右上角頭像確認登入狀態。",
+            "step1LoginAlt": "確認帳號已經登入",
+            "step2Title": "開啟瀏覽器開發者工具",
+            "step2": "按下 F12 開啟開發者工具；若快捷鍵無效，也可以從瀏覽器選單中開啟。",
+            "step3Title": "切換至 Application 面板",
+            "step3": "在開發者工具頂部選擇 Application（應用程式）。若未顯示，請先展開右側的隱藏面板選單。",
+            "step4Title": "展開 Cookies 並選擇網域",
+            "step4": "在左側 Storage（儲存空間）區域展開 Cookies，然後選擇目前登入平台的網域。",
+            "step5Title": "複製所需欄位的 Cookie Value",
+            "step5": "依照憑證管理頁列出的欄位名稱找到對應 Cookie，雙擊下方 Cookie Value 全選並複製，再返回填寫。",
+            "step5Tip": "只需複製 Cookie Value，其他欄位不必處理。"
         },
         "fields": {
             "user_heybox_id": {

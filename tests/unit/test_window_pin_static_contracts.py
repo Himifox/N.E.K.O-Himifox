@@ -162,6 +162,38 @@ def test_credentials_page_opens_the_universal_guide_in_a_named_window():
     assert "window.open(guideUrl.toString(), windowName, features)" in script
 
 
+def test_credentials_guide_uses_the_five_step_screenshot_sequence():
+    guide = read_text("templates/cookies_guide.html")
+    expected_assets = (
+        "step-1-site.png",
+        "step-1-login.png",
+        "step-2-devtools.png",
+        "step-3-application.png",
+        "step-4-cookies.png",
+        "step-5-value.png",
+    )
+
+    assert guide.count('class="step" data-step=') == 5
+    for asset in expected_assets:
+        assert f"/static/images/cookies/guide/{asset}" in guide
+        assert (PROJECT_ROOT / "static" / "images" / "cookies" / "guide" / asset).is_file()
+
+    for locale_path in (PROJECT_ROOT / "static" / "locales").glob("*.json"):
+        guide_copy = json.loads(locale_path.read_text(encoding="utf-8"))["cookiesLogin"]["guide"]
+        for key in (
+            "step1Title",
+            "step1LoginAlt",
+            "step2Title",
+            "step2",
+            "step3Title",
+            "step4Title",
+            "step5Title",
+            "step5",
+            "step5Tip",
+        ):
+            assert guide_copy[key], f"{locale_path.name}: {key}"
+
+
 def test_jukebox_has_an_explicit_pin_before_minimize_without_touching_manager():
     shell = read_text("static/jukebox/jukebox/shell.js")
     template = read_text("templates/jukebox.html")

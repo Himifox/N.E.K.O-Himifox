@@ -3845,11 +3845,18 @@
             "securityTitle": "보안 알림",
             "securityText": "자격 증명은 계정 로그인 권한과 같습니다. 다른 사람과 공유하지 말고 로컬 N.E.K.O. 페이지에만 붙여 넣으세요.",
             "back": "자격 증명 관리로 돌아가기",
-            "step1": "브라우저에서 대상 플랫폼 웹사이트를 열고 <span class=\"highlight-text\">로그인</span>합니다.",
-            "step2_prefix": "키보드에서",
-            "step2_suffix": "키를 눌러 개발자 도구를 엽니다.",
-            "step3": "상단에서 <span class=\"highlight-text\">Application (애플리케이션)</span> 탭을 찾아 클릭합니다.",
-            "step4": "왼쪽 사이드바에서 <span class=\"highlight-text\">Cookies</span>를 찾아 도메인을 클릭한 후, 오른쪽에서 필요한 값을 복사합니다."
+            "step1Title": "플랫폼 사이트를 열고 로그인 확인",
+            "step1": "자격 증명을 가져올 플랫폼을 브라우저에서 열고 계정이 로그인되어 있는지 확인합니다. NetEase Cloud Music 예시에서는 오른쪽 위 아바타로 확인할 수 있습니다.",
+            "step1LoginAlt": "계정 로그인 상태 확인",
+            "step2Title": "브라우저 개발자 도구 열기",
+            "step2": "F12를 눌러 개발자 도구를 엽니다. 단축키가 작동하지 않으면 브라우저 메뉴에서 열 수 있습니다.",
+            "step3Title": "Application 패널로 전환",
+            "step3": "개발자 도구 상단에서 Application(애플리케이션)을 선택합니다. 보이지 않으면 오른쪽의 숨겨진 패널 메뉴를 먼저 여세요.",
+            "step4Title": "Cookies를 펼치고 도메인 선택",
+            "step4": "왼쪽 Storage(저장소) 영역에서 Cookies를 펼친 다음 로그인한 플랫폼의 도메인을 선택합니다.",
+            "step5Title": "필요한 필드의 Cookie Value 복사",
+            "step5": "자격 증명 관리 화면에 표시된 이름의 Cookie를 찾고, 아래 Cookie Value를 두 번 클릭해 전체 선택한 뒤 복사하여 입력 화면으로 돌아갑니다.",
+            "step5Tip": "Cookie Value만 복사하면 되며 다른 열은 건드리지 않아도 됩니다."
         },
         "fields": {
             "user_heybox_id": {

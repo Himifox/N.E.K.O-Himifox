@@ -3845,11 +3845,18 @@
             "securityTitle": "安全提醒",
             "securityText": "凭证等同于登录身份，请勿分享给他人；仅在本机的 N.E.K.O. 页面中粘贴。",
             "back": "返回凭证管理",
-            "step1": "在浏览器打开目标平台网页并完成登录。",
-            "step2_prefix": "按下键盘",
-            "step2_suffix": "打开开发者工具。",
-            "step3": "在顶部找到并点击 Application（应用程序）面板。",
-            "step4": "在左侧找到 <span class=\"highlight-text\">Cookies</span>，点击域名后在右侧复制对应的值。"
+            "step1Title": "打开平台网站并确认登录",
+            "step1": "在浏览器中打开需要获取凭证的平台网站，并确认账号已经登录。以网易云音乐为例，可通过右上角头像确认登录状态。",
+            "step1LoginAlt": "确认账号已经登录",
+            "step2Title": "打开浏览器开发者工具",
+            "step2": "按 F12 打开开发者工具；若快捷键无效，也可以从浏览器菜单中打开。",
+            "step3Title": "切换到 Application 面板",
+            "step3": "在开发者工具顶部选择 Application（应用程序）。若未显示，请先展开右侧的隐藏面板菜单。",
+            "step4Title": "展开 Cookies 并选择域名",
+            "step4": "在左侧 Storage（存储）区域展开 Cookies，然后选择当前登录平台的域名。",
+            "step5Title": "复制所需字段的 Cookie Value",
+            "step5": "按照凭证管理页列出的字段名称找到对应 Cookie，双击下方 Cookie Value 全选并复制，然后返回填写。",
+            "step5Tip": "只需复制 Cookie Value，无需处理其他列。"
         },
         "fields": {
             "user_heybox_id": {

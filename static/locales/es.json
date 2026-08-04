@@ -3845,11 +3845,18 @@
             "securityTitle": "Recordatorio de seguridad",
             "securityText": "Las credenciales permiten acceder a su cuenta. No las comparta y péguelas únicamente en la página local de N.E.K.O.",
             "back": "Volver al gestor de credenciales",
-            "step1": "Abra el sitio web de la plataforma de destino en el navegador e <span class=\"highlight-text\">inicie sesión</span>.",
-            "step2_prefix": "Prensa",
-            "step2_suffix": "para abrir Herramientas de desarrollador.",
-            "step3": "Busque y haga clic en la pestaña <span class=\"highlight-text\">Application</span> en la parte superior.",
-            "step4": "Busque <span class=\"highlight-text\">Cookies</span> en la barra lateral izquierda, haga clic en el dominio y copie los valores requeridos a la derecha."
+            "step1Title": "Abra el sitio de la plataforma e inicie sesión",
+            "step1": "Abra la plataforma cuyas credenciales necesita y confirme que su cuenta ha iniciado sesión. En el ejemplo de NetEase Cloud Music, el avatar de la esquina superior derecha confirma el estado.",
+            "step1LoginAlt": "Confirmar que la cuenta ha iniciado sesión",
+            "step2Title": "Abra las herramientas de desarrollador",
+            "step2": "Pulse F12 para abrir las herramientas de desarrollador. Si el atajo no funciona, ábralas desde el menú del navegador.",
+            "step3Title": "Cambie al panel Application",
+            "step3": "Seleccione Application en la parte superior. Si no aparece, abra primero el menú de paneles ocultos de la derecha.",
+            "step4Title": "Expanda Cookies y seleccione el dominio",
+            "step4": "En Storage, en la barra lateral izquierda, expanda Cookies y seleccione el dominio de la plataforma donde inició sesión.",
+            "step5Title": "Copie el Cookie Value de cada campo necesario",
+            "step5": "Busque cada Cookie indicado en el gestor de credenciales, haga doble clic en Cookie Value para seleccionarlo, cópielo y vuelva para completar el campo.",
+            "step5Tip": "Copie solo Cookie Value; puede ignorar las demás columnas."
         },
         "fields": {
             "user_heybox_id": {

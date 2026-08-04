@@ -3845,11 +3845,18 @@
             "securityTitle": "Lembrete de segurança",
             "securityText": "As credenciais dão acesso à sua conta. Não as compartilhe e cole-as somente na página local do N.E.K.O.",
             "back": "Voltar ao gerenciador de credenciais",
-            "step1": "Abra o site da plataforma de destino no navegador e <span class=\"highlight-text\">faça login</span>.",
-            "step2_prefix": "Imprensa",
-            "step2_suffix": "para abrir as ferramentas do desenvolvedor.",
-            "step3": "Encontre e clique na guia <span class=\"highlight-text\">Application</span> na parte superior.",
-            "step4": "Encontre <span class=\"highlight-text\">Cookies</span> na barra lateral esquerda, clique no domínio e copie os valores necessários à direita."
+            "step1Title": "Abra o site da plataforma e confirme o login",
+            "step1": "Abra a plataforma cujas credenciais você precisa e confirme que a conta está conectada. No exemplo do NetEase Cloud Music, o avatar no canto superior direito confirma o estado.",
+            "step1LoginAlt": "Confirmar que a conta está conectada",
+            "step2Title": "Abra as ferramentas do desenvolvedor",
+            "step2": "Pressione F12 para abrir as ferramentas do desenvolvedor. Se o atalho não funcionar, abra-as pelo menu do navegador.",
+            "step3Title": "Mude para o painel Application",
+            "step3": "Selecione Application na parte superior. Se a opção estiver oculta, abra primeiro o menu de painéis à direita.",
+            "step4Title": "Expanda Cookies e selecione o domínio",
+            "step4": "Em Storage, na barra lateral esquerda, expanda Cookies e selecione o domínio da plataforma em que você entrou.",
+            "step5Title": "Copie o Cookie Value de cada campo necessário",
+            "step5": "Encontre cada Cookie indicado no gerenciador de credenciais, clique duas vezes em Cookie Value para selecioná-lo, copie-o e volte para preencher o campo.",
+            "step5Tip": "Copie apenas Cookie Value; as outras colunas podem ser ignoradas."
         },
         "fields": {
             "user_heybox_id": {

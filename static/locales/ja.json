@@ -3845,11 +3845,18 @@
             "securityTitle": "セキュリティに関する注意",
             "securityText": "認証情報はログイン権限そのものです。他人と共有せず、ローカルの N.E.K.O. ページにのみ貼り付けてください。",
             "back": "認証情報管理に戻る",
-            "step1": "ブラウザで対象のウェブサイトを開き、<span class=\"highlight-text\">ログイン</span>します。",
-            "step2_prefix": "キーボードの",
-            "step2_suffix": "キーを押して開発者ツールを開きます。",
-            "step3": "上部にある <span class=\"highlight-text\">Application（アプリケーション）</span> タブを探してクリックします。",
-            "step4": "左側の <span class=\"highlight-text\">Cookies</span> を展開し、ドメインをクリックして右側にある必要な値をコピーします。"
+            "step1Title": "プラットフォームを開いてログインを確認",
+            "step1": "認証情報を取得するプラットフォームをブラウザで開き、ログイン済みであることを確認します。NetEase Cloud Music の例では、右上のアバターで確認できます。",
+            "step1LoginAlt": "アカウントがログイン済みであることを確認",
+            "step2Title": "ブラウザの開発者ツールを開く",
+            "step2": "F12 を押して開発者ツールを開きます。ショートカットが使えない場合は、ブラウザのメニューから開いてください。",
+            "step3Title": "Application パネルに切り替える",
+            "step3": "開発者ツール上部の Application（アプリケーション）を選択します。表示されない場合は、右側の非表示パネルメニューを開きます。",
+            "step4Title": "Cookies を展開してドメインを選択",
+            "step4": "左側の Storage（ストレージ）で Cookies を展開し、ログイン中のプラットフォームのドメインを選択します。",
+            "step5Title": "必要な項目の Cookie Value をコピー",
+            "step5": "認証情報管理画面に表示された名前の Cookie を探し、下部の Cookie Value をダブルクリックして全選択し、コピーして入力画面に戻ります。",
+            "step5Tip": "コピーするのは Cookie Value だけです。ほかの列は操作不要です。"
         },
         "fields": {
             "user_heybox_id": {

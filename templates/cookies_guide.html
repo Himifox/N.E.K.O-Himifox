@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title data-i18n="cookiesLogin.guide.title">新手通用获取教程</title>
     <link rel="icon" href="/static/icons/icon_systray.ico" type="image/x-icon">
-    <script src="/static/libs/purify.js"></script>
     <script src="/static/i18n-i18next.js?v={{ static_asset_version | default('0') }}"></script>
     <script src="/static/theme-manager.js"></script>
     <link rel="stylesheet" href="/static/css/window_controls.css?v={{ static_asset_version | default('0') }}">
@@ -25,7 +24,6 @@
             --glow: oklch(0.72 0.17 220 / 0.22);
             --font-ui: "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
             --font-display: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
-            --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
         }
         [data-theme="dark"] {
             --bg: oklch(0.19 0.025 248);
@@ -123,14 +121,13 @@
         }
         .guide-subtitle { max-width: 700px; margin: 0; color: var(--muted); line-height: 1.75; font-size: 15px; }
         .steps {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
         .step {
             position: relative;
-            min-height: 150px;
-            padding: 22px 22px 20px;
+            padding: 24px;
             overflow: hidden;
             background: linear-gradient(145deg, var(--surface), var(--surface-soft));
             border: 1px solid var(--border);
@@ -139,19 +136,27 @@
             backdrop-filter: blur(18px) saturate(135%);
             -webkit-backdrop-filter: blur(18px) saturate(135%);
         }
+        .step-header {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 38px minmax(0, 1fr);
+            column-gap: 13px;
+            align-items: start;
+            margin-bottom: 18px;
+        }
         .step::after {
             content: attr(data-step);
             position: absolute;
-            right: 16px;
-            bottom: -18px;
-            color: color-mix(in oklch, var(--accent) 15%, transparent);
-            font: 800 76px/1 var(--font-display);
+            right: 20px;
+            top: 10px;
+            color: color-mix(in oklch, var(--accent) 11%, transparent);
+            font: 800 72px/1 var(--font-display);
         }
         .step-number {
-            width: 30px;
-            height: 30px;
-            margin-bottom: 15px;
-            border-radius: 10px;
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
             display: grid;
             place-items: center;
             color: white;
@@ -159,17 +164,64 @@
             box-shadow: 0 8px 20px var(--glow);
             font-weight: 750;
         }
-        .step-copy { position: relative; z-index: 1; line-height: 1.7; font-size: 14px; }
-        .highlight-text { color: var(--accent-dim); font-weight: 700; }
-        kbd {
-            display: inline-block;
-            margin: 0 3px;
-            padding: 2px 8px;
+        .step-title {
+            margin: 0 0 4px;
+            color: var(--fg);
+            font: 720 18px/1.35 var(--font-display);
+        }
+        .step-copy {
+            position: relative;
+            z-index: 1;
+            max-width: 700px;
+            color: var(--muted);
+            line-height: 1.72;
+            font-size: 14px;
+        }
+        .step-media,
+        .step-gallery figure {
+            position: relative;
+            z-index: 1;
+            margin: 0;
+            padding: 10px;
+            overflow: hidden;
+            background: color-mix(in oklch, var(--surface) 88%, white);
+            border: 1px solid color-mix(in oklch, var(--border) 84%, transparent);
+            border-radius: 13px;
+            box-shadow: inset 0 1px rgba(255,255,255,0.36);
+        }
+        [data-theme="dark"] .step-media,
+        [data-theme="dark"] .step-gallery figure {
+            background: oklch(0.2 0.02 245 / 0.7);
+            box-shadow: inset 0 1px rgba(255,255,255,0.08);
+        }
+        .step-media img,
+        .step-gallery img {
+            display: block;
+            width: 100%;
+            height: auto;
+            max-height: 560px;
+            object-fit: contain;
+            border-radius: 8px;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+        .step-gallery {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 12px;
+            align-items: stretch;
+        }
+        .step-gallery figure { display: grid; place-items: center; min-height: 230px; }
+        .step-gallery img { max-height: 300px; }
+        .step-tip {
+            display: inline-flex;
+            margin-top: 10px;
+            padding: 5px 9px;
             color: var(--accent-dim);
             background: var(--accent-soft);
-            border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border));
-            border-radius: 6px;
-            font: 700 12px/1.5 var(--font-mono);
+            border-radius: 7px;
+            font-size: 12px;
+            font-weight: 650;
         }
         .security-note {
             margin-top: 18px;
@@ -200,8 +252,9 @@
         .back-button:hover { filter: brightness(1.04); transform: translateY(-1px); }
         @media (max-width: 680px) {
             .guide-shell { padding-top: 34px; }
-            .steps { grid-template-columns: 1fr; }
-            .step { min-height: 132px; }
+            .step { padding: 18px; }
+            .step-gallery { grid-template-columns: 1fr; }
+            .step-gallery figure { min-height: 0; }
         }
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after { transition: none !important; }
@@ -233,20 +286,58 @@
 
         <section class="steps" aria-label="Tutorial steps">
             <article class="step" data-step="01">
-                <div class="step-number">1</div>
-                <div class="step-copy" id="guide-step1">在浏览器打开目标平台网页并完成登录。</div>
+                <div class="step-header">
+                    <div class="step-number">1</div>
+                    <div>
+                        <h2 class="step-title" data-i18n="cookiesLogin.guide.step1Title">打开平台网站并确认登录</h2>
+                        <div class="step-copy" data-i18n="cookiesLogin.guide.step1">在浏览器中打开需要获取凭证的平台网站，并确认账号已经登录。</div>
+                    </div>
+                </div>
+                <div class="step-gallery">
+                    <figure><img src="/static/images/cookies/guide/step-1-site.png" data-i18n-alt="cookiesLogin.guide.step1Title" alt="打开平台网站" draggable="false"></figure>
+                    <figure><img src="/static/images/cookies/guide/step-1-login.png" data-i18n-alt="cookiesLogin.guide.step1LoginAlt" alt="确认账号已经登录" draggable="false"></figure>
+                </div>
             </article>
             <article class="step" data-step="02">
-                <div class="step-number">2</div>
-                <div class="step-copy"><span id="guide-step2-prefix">按下键盘</span> <kbd>F12</kbd> <span id="guide-step2-suffix">打开开发者工具。</span></div>
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <div>
+                        <h2 class="step-title" data-i18n="cookiesLogin.guide.step2Title">打开浏览器开发者工具</h2>
+                        <div class="step-copy" data-i18n="cookiesLogin.guide.step2">按 F12 打开开发者工具；若快捷键无效，也可以从浏览器菜单中打开。</div>
+                    </div>
+                </div>
+                <figure class="step-media"><img src="/static/images/cookies/guide/step-2-devtools.png" data-i18n-alt="cookiesLogin.guide.step2Title" alt="打开浏览器开发者工具" draggable="false"></figure>
             </article>
             <article class="step" data-step="03">
-                <div class="step-number">3</div>
-                <div class="step-copy" id="guide-step3">在顶部找到并点击 Application（应用程序）面板。</div>
+                <div class="step-header">
+                    <div class="step-number">3</div>
+                    <div>
+                        <h2 class="step-title" data-i18n="cookiesLogin.guide.step3Title">切换到 Application 面板</h2>
+                        <div class="step-copy" data-i18n="cookiesLogin.guide.step3">在开发者工具顶部选择 Application（应用程序）。若未显示，请先展开右侧的隐藏面板菜单。</div>
+                    </div>
+                </div>
+                <figure class="step-media"><img src="/static/images/cookies/guide/step-3-application.png" data-i18n-alt="cookiesLogin.guide.step3Title" alt="切换到 Application 面板" draggable="false"></figure>
             </article>
             <article class="step" data-step="04">
-                <div class="step-number">4</div>
-                <div class="step-copy" id="guide-step4">在左侧找到 Cookies，点击域名后在右侧复制对应的值。</div>
+                <div class="step-header">
+                    <div class="step-number">4</div>
+                    <div>
+                        <h2 class="step-title" data-i18n="cookiesLogin.guide.step4Title">展开 Cookies 并选择域名</h2>
+                        <div class="step-copy" data-i18n="cookiesLogin.guide.step4">在左侧 Storage（存储）区域展开 Cookies，然后选择当前登录平台的域名。</div>
+                    </div>
+                </div>
+                <figure class="step-media"><img src="/static/images/cookies/guide/step-4-cookies.png" data-i18n-alt="cookiesLogin.guide.step4Title" alt="展开 Cookies 并选择域名" draggable="false"></figure>
+            </article>
+            <article class="step" data-step="05">
+                <div class="step-header">
+                    <div class="step-number">5</div>
+                    <div>
+                        <h2 class="step-title" data-i18n="cookiesLogin.guide.step5Title">复制所需字段的 Cookie Value</h2>
+                        <div class="step-copy" data-i18n="cookiesLogin.guide.step5">按照凭证管理页列出的字段名称找到对应 Cookie，双击下方 Cookie Value 全选并复制，然后返回填写。</div>
+                        <span class="step-tip" data-i18n="cookiesLogin.guide.step5Tip">只需复制 Cookie Value，无需处理其他列。</span>
+                    </div>
+                </div>
+                <figure class="step-media"><img src="/static/images/cookies/guide/step-5-value.png" data-i18n-alt="cookiesLogin.guide.step5Title" alt="复制所需字段的 Cookie Value" draggable="false"></figure>
             </article>
         </section>
 
@@ -276,26 +367,7 @@
             };
         }
 
-        function translate(key, fallback) {
-            const fn = typeof window.t === 'function'
-                ? window.t
-                : (window.i18next && typeof window.i18next.t === 'function' ? window.i18next.t.bind(window.i18next) : null);
-            if (!fn) return fallback;
-            const value = fn(key);
-            return !value || value === key ? fallback : value;
-        }
-
         function renderGuideCopy() {
-            const htmlSteps = {
-                'guide-step1': ['cookiesLogin.guide.step1', '在浏览器打开目标平台网页并完成登录。'],
-                'guide-step3': ['cookiesLogin.guide.step3', '在顶部找到并点击 <span class="highlight-text">Application（应用程序）</span> 面板。'],
-                'guide-step4': ['cookiesLogin.guide.step4', '在左侧找到 <span class="highlight-text">Cookies</span>，点击域名后在右侧复制对应的值。']
-            };
-            Object.entries(htmlSteps).forEach(([id, copy]) => {
-                document.getElementById(id).innerHTML = DOMPurify.sanitize(translate(copy[0], copy[1]));
-            });
-            document.getElementById('guide-step2-prefix').textContent = translate('cookiesLogin.guide.step2_prefix', '按下键盘');
-            document.getElementById('guide-step2-suffix').textContent = translate('cookiesLogin.guide.step2_suffix', '打开开发者工具。');
             if (window.i18next && window.i18next.language) document.documentElement.lang = window.i18next.language;
         }
 
