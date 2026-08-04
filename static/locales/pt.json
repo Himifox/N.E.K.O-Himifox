@@ -3845,6 +3845,7 @@
             "securityTitle": "Lembrete de segurança",
             "securityText": "As credenciais dão acesso à sua conta. Não as compartilhe e cole-as somente na página local do N.E.K.O.",
             "back": "Voltar ao gerenciador de credenciais",
+            "stepsLabel": "Etapas do tutorial",
             "step1Title": "Abra o site da plataforma e confirme o login",
             "step1": "Abra a plataforma cujas credenciais você precisa e confirme que a conta está conectada. No exemplo do NetEase Cloud Music, o avatar no canto superior direito confirma o estado.",
             "step1LoginAlt": "Confirmar que a conta está conectada",

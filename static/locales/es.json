@@ -3845,6 +3845,7 @@
             "securityTitle": "Recordatorio de seguridad",
             "securityText": "Las credenciales permiten acceder a su cuenta. No las comparta y péguelas únicamente en la página local de N.E.K.O.",
             "back": "Volver al gestor de credenciales",
+            "stepsLabel": "Pasos del tutorial",
             "step1Title": "Abra el sitio de la plataforma e inicie sesión",
             "step1": "Abra la plataforma cuyas credenciales necesita y confirme que su cuenta ha iniciado sesión. En el ejemplo de NetEase Cloud Music, el avatar de la esquina superior derecha confirma el estado.",
             "step1LoginAlt": "Confirmar que la cuenta ha iniciado sesión",
@@ -3970,7 +3971,7 @@
             "validFor": "Código QR válido para: {{seconds}}s",
             "refreshQR": "Actualizar código QR",
             "fetchFailed": "No se pudo obtener el código QR, inténtalo de nuevo",
-            "retry": "Rever",
+            "retry": "Reintentar",
             "networkError": "La solicitud de red falló, verifique la conexión",
             "status": {
                 "success": "{{message}}",

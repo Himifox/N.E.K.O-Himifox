@@ -10,6 +10,17 @@ def read_text(relative_path: str) -> str:
     return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def flatten_keys(value: dict, prefix: str = "") -> set[str]:
+    keys = set()
+    for key, nested_value in value.items():
+        dotted_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(nested_value, dict):
+            keys.update(flatten_keys(nested_value, dotted_key))
+        else:
+            keys.add(dotted_key)
+    return keys
+
+
 def assert_pin_precedes_minimize(
     source: str,
     path: str,
@@ -218,6 +229,7 @@ def test_credentials_guide_uses_the_five_step_screenshot_sequence():
     }
 
     assert guide.count('class="step" data-step=') == 5
+    assert 'data-i18n-aria="cookiesLogin.guide.stepsLabel"' in guide
     assert "contain: layout paint style;" in guide
     assert "backdrop-filter: none;" in guide
     for asset, (width, height) in expected_assets.items():
@@ -228,6 +240,7 @@ def test_credentials_guide_uses_the_five_step_screenshot_sequence():
     for locale_path in (PROJECT_ROOT / "static" / "locales").glob("*.json"):
         guide_copy = json.loads(locale_path.read_text(encoding="utf-8"))["cookiesLogin"]["guide"]
         for key in (
+            "stepsLabel",
             "step1Title",
             "step1LoginAlt",
             "step2Title",
@@ -239,6 +252,27 @@ def test_credentials_guide_uses_the_five_step_screenshot_sequence():
             "step5Tip",
         ):
             assert guide_copy[key], f"{locale_path.name}: {key}"
+
+
+def test_credentials_i18n_keys_and_locale_line_counts_stay_aligned():
+    locale_paths = sorted((PROJECT_ROOT / "static" / "locales").glob("*.json"))
+    locale_data = {
+        path.name: json.loads(path.read_text(encoding="utf-8")) for path in locale_paths
+    }
+
+    cookie_key_sets = {
+        name: flatten_keys(data["cookiesLogin"]) for name, data in locale_data.items()
+    }
+    reference_keys = cookie_key_sets["zh-CN.json"]
+    for name, keys in cookie_key_sets.items():
+        assert keys == reference_keys, name
+
+    line_counts = {
+        path.name: len(path.read_text(encoding="utf-8").splitlines())
+        for path in locale_paths
+    }
+    assert len(set(line_counts.values())) == 1, line_counts
+    assert locale_data["es.json"]["cookiesLogin"]["qrLogin"]["retry"] == "Reintentar"
 
 
 def test_jukebox_has_an_explicit_pin_before_minimize_without_touching_manager():

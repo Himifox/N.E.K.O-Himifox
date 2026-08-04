@@ -3845,6 +3845,7 @@
             "securityTitle": "Security reminder",
             "securityText": "Credentials grant access to your account. Never share them, and only paste them into your local N.E.K.O. page.",
             "back": "Back to Credential Manager",
+            "stepsLabel": "Tutorial steps",
             "step1Title": "Open the platform website and sign in",
             "step1": "Open the platform whose credentials you need and confirm that your account is signed in. In the NetEase Cloud Music example, the avatar in the upper-right confirms the login state.",
             "step1LoginAlt": "Confirm that the account is signed in",
