@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from types import SimpleNamespace
+
 import pytest
 
 import knowledge.api as public_api
+import knowledge.engine.retrieval as retrieval_module
 from knowledge.collection_specs import (
     GENERIC_REFERENCE_RESPONSE_POLICY,
     CollectionSpec,
+    get_reference_details,
 )
 from knowledge.engine.models import KnowledgeEntry
-from knowledge.engine.retrieval import MatchPolicy
+from knowledge.engine.retrieval import KnowledgeRetriever, MatchPolicy
 from knowledge.engine.source_registry import KnowledgeSource
 from knowledge.engine.store import KnowledgeStore
 from knowledge.service import KnowledgeService
@@ -81,6 +86,118 @@ def test_trusted_collection_search_pagination_and_status(tmp_path) -> None:
     assert status["entries"] == 2
     assert status["integrity_ok"] is True
     assert status["sources"] == ({"tag": "source:fixture", "entries": 2},)
+
+
+def test_search_page_clamps_boundaries_and_returns_one_lookahead(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = _service(tmp_path)
+    calls = []
+
+    class Retriever:
+        def search(self, query, **kwargs):
+            calls.append((query, kwargs))
+            return [SimpleNamespace(entry=index) for index in range(kwargs["limit"])]
+
+    monkeypatch.setattr(service, "_retriever", lambda _collection_id: Retriever())
+
+    page = service.search_page("reference", "query", limit=500, offset=50_000)
+    first_page = service.search_page("reference", "query", limit=0, offset=-1)
+
+    assert len(page) == 101
+    assert len(first_page) == 2
+    assert calls == [
+        (
+            "query",
+            {
+                "limit": 1_101,
+                "allowed_source_tags": None,
+                "include_disabled": False,
+            },
+        ),
+        (
+            "query",
+            {
+                "limit": 2,
+                "allowed_source_tags": None,
+                "include_disabled": False,
+            },
+        ),
+    ]
+
+
+def test_list_collections_avoids_full_integrity_check(monkeypatch, tmp_path) -> None:
+    service = _service(tmp_path)
+
+    def unexpected_integrity_check(_self):
+        raise AssertionError("full integrity check must not run")
+
+    monkeypatch.setattr(KnowledgeStore, "integrity_ok", unexpected_integrity_check)
+
+    status = service.list_collections()[0]
+    assert status["status"] == "ready"
+    assert status["integrity_ok"] is None
+
+
+def test_exact_recognition_ranks_above_another_title_substring(tmp_path) -> None:
+    service = KnowledgeService(tmp_path, collections=(_spec(),))
+    KnowledgeStore(service.database_path("reference")).upsert_many(
+        (
+            KnowledgeEntry(
+                title="different heading",
+                terms={"alias": (), "recognition": ("needle",)},
+                tags=("source:fixture", "type:reference"),
+                summary="Exact recognition",
+                content="Details\n- exact recognition",
+            ),
+            KnowledgeEntry(
+                title="needle suffix",
+                terms={"alias": (), "recognition": ()},
+                tags=("source:fixture", "type:reference"),
+                summary="Title substring",
+                content="Details\n- title substring",
+            ),
+        )
+    )
+
+    results = service.search("reference", "needle")
+
+    assert [hit.entry.title for hit in results[:2]] == [
+        "different heading",
+        "needle suffix",
+    ]
+
+
+def test_mention_matcher_cache_is_lru_bounded_across_database_paths(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cache = OrderedDict()
+    monkeypatch.setattr(retrieval_module, "_MENTION_MATCHER_CACHE", cache)
+    paths = []
+
+    for index in range(retrieval_module._MENTION_MATCHER_CACHE_LIMIT + 1):
+        store = KnowledgeStore(tmp_path / f"database-{index}" / "knowledge.db")
+        title = f"phrase {index:02d}"
+        store.upsert(_entry(title))
+        paths.append(store.database_path.resolve())
+        hits = KnowledgeRetriever(store).find_mentions(f"mention {title}")
+        assert hits[0].entry.title == title
+
+    cached_paths = {path for path, _policy in cache}
+    assert len(cache) == retrieval_module._MENTION_MATCHER_CACHE_LIMIT
+    assert str(paths[0]) not in cached_paths
+    assert {str(path) for path in paths[1:]} == cached_paths
+
+
+def test_reference_details_strip_configured_prefix_and_include_separators_in_budget() -> None:
+    entry = SimpleNamespace(content="Heading\nFact: abcdef\nFact: ghijkl")
+
+    details = get_reference_details(entry, ("Fact: ",), max_chars=10)
+
+    assert details == "abcdef | g"
+    assert len(details) == 10
 
 
 def test_disable_and_restore_affects_search_and_routing(tmp_path) -> None:

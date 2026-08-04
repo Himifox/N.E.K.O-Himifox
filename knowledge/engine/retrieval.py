@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Iterable
@@ -254,7 +256,11 @@ class _CachedMentionMatcher:
     matcher: KnowledgeMentionMatcher
 
 
-_MENTION_MATCHER_CACHE: dict[tuple[str, MatchPolicy], _CachedMentionMatcher] = {}
+_MENTION_MATCHER_CACHE_LIMIT = 16
+_MENTION_MATCHER_CACHE: OrderedDict[
+    tuple[str, MatchPolicy], _CachedMentionMatcher
+] = OrderedDict()
+_MENTION_MATCHER_CACHE_LOCK = threading.Lock()
 
 
 def _get_cached_mention_matcher(
@@ -265,8 +271,11 @@ def _get_cached_mention_matcher(
     cache_key = (str(store.database_path.resolve()), policy)
     revision = store.entries_revision()
     disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
-    cached = _MENTION_MATCHER_CACHE.get(cache_key)
-    if cached is None or cached.revision != revision or cached.disabled != disabled:
+    with _MENTION_MATCHER_CACHE_LOCK:
+        cached = _MENTION_MATCHER_CACHE.get(cache_key)
+        if cached is not None and cached.revision == revision and cached.disabled == disabled:
+            _MENTION_MATCHER_CACHE.move_to_end(cache_key)
+            return cached.matcher
         cached = _CachedMentionMatcher(
             revision=revision,
             disabled=disabled,
@@ -285,7 +294,10 @@ def _get_cached_mention_matcher(
             ),
         )
         _MENTION_MATCHER_CACHE[cache_key] = cached
-    return cached.matcher
+        _MENTION_MATCHER_CACHE.move_to_end(cache_key)
+        while len(_MENTION_MATCHER_CACHE) > _MENTION_MATCHER_CACHE_LIMIT:
+            _MENTION_MATCHER_CACHE.popitem(last=False)
+        return cached.matcher
 
 
 def _is_weak_entry(entry: object, policy: MatchPolicy) -> bool:
@@ -315,12 +327,12 @@ def _score(entry, normalized_query: str, fts_rank: float) -> float:
         return 1_000.0
     if normalized_query in aliases:
         return 950.0
+    if normalized_query in recognition_terms:
+        return 900.0
     if normalized_query in title:
         return 850.0
     if any(normalized_query in alias for alias in aliases):
         return 800.0
-    if normalized_query in recognition_terms:
-        return 900.0
     if any(normalized_query in value for value in recognition_terms):
         return 780.0
     if any(normalized_query in tag for tag in tags):
