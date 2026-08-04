@@ -4,6 +4,9 @@ from main_logic.proactive_recommendation.feedback.service import (
     note_user_turn_for_feedback,
     register_pending_feedback,
 )
+from main_logic.proactive_recommendation.feedback.availability import (
+    record_availability_outcome,
+)
 from main_logic.proactive_recommendation.service import (
     clear_proactive_delivery_timing_history,
     proactive_delivery_timing_snapshot,
@@ -48,6 +51,36 @@ def test_delivery_timing_snapshot_prunes_rows_outside_two_hours():
     assert snapshot["elapsed_since_last_delivery_seconds"] == 300.0
     assert snapshot["recent_delivery_count_30m"] == 3
     assert snapshot["recent_delivery_count_2h"] == 3
+    clear_proactive_delivery_timing_history()
+
+
+def test_availability_shadow_does_not_change_delivery_timing(tmp_path):
+    clear_proactive_delivery_timing_history()
+    name = "availability-shadow-neko"
+    record_proactive_delivery_for_timing(name, delivered_at=10_000.0)
+    before = proactive_delivery_timing_snapshot(
+        name,
+        configured_interval_seconds=300,
+        now=10_300.0,
+    )
+
+    shadow = record_availability_outcome(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        delivered_at=10_000.0,
+        replied_at=10_030.0,
+        mode="shadow",
+    )
+    after = proactive_delivery_timing_snapshot(
+        name,
+        configured_interval_seconds=300,
+        now=10_300.0,
+    )
+
+    assert after == before
+    assert shadow["scheduling_consumed"] is False
+    assert shadow["interval_consumed"] is False
     clear_proactive_delivery_timing_history()
 
 

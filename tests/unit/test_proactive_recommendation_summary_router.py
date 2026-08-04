@@ -535,6 +535,10 @@ def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     assert "meme" not in feedback_calibration["feedback_actionable_suggestions"]
     assert payload["reward_score_v3_preview"]["reward_scored_count"] == 1
     assert payload["reward_score_v3_preview"]["feedback_censored_count"] == 1
+    assert payload["availability_shadow"]["mode"] == "off"
+    assert payload["availability_shadow"]["status"] == "insufficient"
+    assert payload["availability_shadow"]["scheduling_consumed"] is False
+    assert payload["retention"]["availability_mode"] == "off"
     assert (
         payload["manual_tuning_preview"]
         == feedback_calibration["manual_tuning_preview"]

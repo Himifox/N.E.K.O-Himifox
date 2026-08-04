@@ -237,7 +237,13 @@ class TurnMixin:
         if dispatcher is not None:
             dispatcher.set_language(language)
 
-    def _note_user_turn(self, *, text: str | None = None, now: float | None = None) -> None:
+    def _note_user_turn(
+        self,
+        *,
+        text: str | None = None,
+        now: float | None = None,
+        input_mode: str = "unknown",
+    ) -> None:
         # Master 情绪画像：异步分析用户这轮说的话（节流 + 开关都在 tracker 内部）。
         # 语音转写 / 文本输入两条路径的对偶 chokepoint。fire-and-forget、best-effort，
         # 绝不阻塞 turn 记录、不让分析异常冒泡。
@@ -260,7 +266,7 @@ class TurnMixin:
 
         dispatcher = getattr(self, '_turn_dispatcher', None)
         if dispatcher is not None:
-            dispatcher.note_user_message(text=text, now=now)
+            dispatcher.note_user_message(text=text, now=now, input_mode=input_mode)
             return
         if now is None:
             self._activity_tracker.on_user_message(text=text)
@@ -1179,7 +1185,7 @@ class TurnMixin:
             # bump _conv_seq（让 open_threads 缓存失效）、把文本进 buffer 给
             # emotion-tier LLM 用——空 transcript 这些副作用都不该触发。
             if record_transcript_text:
-                self._note_user_turn(text=transcript)
+                self._note_user_turn(text=transcript, input_mode="audio")
                 # 真实用户语音消息（已过 echo 抑制 + 非空）才刷「真消息」时间戳，
                 # 给 mini-game 邀请隐式 dismiss 用，避免回声/空噪声误判用户已回应。
                 # 用顶部捕获的到达时刻而非此处 time.time()：takeover dispatcher 的

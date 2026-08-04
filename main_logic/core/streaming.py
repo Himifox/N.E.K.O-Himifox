@@ -390,7 +390,7 @@ class StreamingMixin:
                     # 里挂——后者也被 proactive abort 流程调用做清理（见
                     # main_routers/system_router.py），那不算用户活动。
                     # text 进 buffer 给 emotion-tier 用。
-                    self._note_user_turn(text=record_data)
+                    self._note_user_turn(text=record_data, input_mode="text")
                     # Telemetry：D1 漏斗——本进程首条用户消息（lazy import 防循环）。
                     try:
                         from utils.token_tracker import TokenTracker as _TT

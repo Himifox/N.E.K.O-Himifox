@@ -540,6 +540,7 @@ async def handle_proactive_chat(
                 for entry in _recent_proactive_chat_entries(lanlan_name)
                 if len(entry) > 2 and entry[2]
             ),
+            input_mode=getattr(mgr, "input_mode", "unknown"),
         )
         lifecycle.recommendation_turn = recommendation_turn
         proactive_started = await mgr.state.try_start_proactive(session=probe_session)

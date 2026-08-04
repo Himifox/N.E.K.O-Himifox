@@ -64,6 +64,11 @@ from main_logic.proactive_recommendation.feedback.event_processing import (
     build_feedback_event,
 )
 
+from main_logic.proactive_recommendation.feedback.availability import (
+    AVAILABILITY_REPLY_WINDOW_SECONDS,
+    record_availability_outcome,
+)
+
 from main_logic.proactive_recommendation.feedback.learning import (
     build_bandit_encounter_reward,
     reward_event_score,
@@ -175,6 +180,42 @@ class PendingFeedbackRegistry:
                 current = self._items.get((pending.lanlan_name, pending.turn_id))
                 if current is not None:
                     current.reply_seen = True
+
+    def claim_availability_reply(
+        self,
+        pending: PendingRecommendationFeedback,
+        *,
+        input_mode: Any,
+    ) -> PendingRecommendationFeedback | None:
+        with self._lock:
+            current = self._items.get((pending.lanlan_name, pending.turn_id))
+            if current is None or current.availability_finalized:
+                return None
+            if current.availability_input_mode == "unknown":
+                normalized = str(input_mode or "").strip().lower()
+                if normalized == "voice":
+                    normalized = "audio"
+                current.availability_input_mode = (
+                    normalized if normalized in {"audio", "text"} else "unknown"
+                )
+            current.availability_finalized = True
+            return current
+
+    def claim_censored_availability(
+        self, *, now: float
+    ) -> tuple[PendingRecommendationFeedback, ...]:
+        with self._lock:
+            claimed = []
+            for pending in self._items.values():
+                elapsed = now - pending.delivered_at
+                if (
+                    not pending.reply_seen
+                    and not pending.availability_finalized
+                    and elapsed > AVAILABILITY_REPLY_WINDOW_SECONDS
+                ):
+                    pending.availability_finalized = True
+                    claimed.append(pending)
+            return tuple(claimed)
 
     def consecutive_unanswered(self, lanlan_name: str, *, now: float) -> int:
         with self._lock:
@@ -325,6 +366,42 @@ def clear_pending_recommendation_feedback() -> None:
     _pending_registry.clear()
 
 
+def flush_censored_availability(*, now: float | None = None) -> int:
+    """Finalize in-memory exposures whose ten-minute response window elapsed."""
+    current = time.time() if now is None else float(now)
+    claimed = _pending_registry.claim_censored_availability(now=current)
+    for pending in claimed:
+        record_availability_outcome(
+            config_dir=pending.config_dir,
+            activity_state=pending.availability_activity_state,
+            input_mode=pending.availability_input_mode,
+            delivered_at=pending.delivered_at,
+            censored=True,
+        )
+    return len(claimed)
+
+
+def _record_availability_reply(
+    pending: PendingRecommendationFeedback,
+    *,
+    timestamp: float,
+    input_mode: Any,
+) -> None:
+    claimed = _pending_registry.claim_availability_reply(
+        pending,
+        input_mode=input_mode,
+    )
+    if claimed is None:
+        return
+    record_availability_outcome(
+        config_dir=claimed.config_dir,
+        activity_state=claimed.availability_activity_state,
+        input_mode=claimed.availability_input_mode,
+        delivered_at=claimed.delivered_at,
+        replied_at=timestamp,
+    )
+
+
 def consecutive_unanswered_recommendation_deliveries(
     lanlan_name: Any,
     *,
@@ -340,6 +417,7 @@ def consecutive_unanswered_recommendation_deliveries(
     if not name:
         return 0
     current = time.time() if now is None else float(now)
+    flush_censored_availability(now=current)
     return _pending_registry.consecutive_unanswered(name, now=current)
 
 
@@ -348,6 +426,7 @@ def register_pending_feedback_from_observation(
     *,
     log_mode: str = "off",
     config_dir: str | os.PathLike[str] | None = None,
+    input_mode: Any = "unknown",
 ) -> PendingRecommendationFeedback | None:
     if not isinstance(observation, Mapping) or observation.get("delivered") is not True:
         return None
@@ -397,6 +476,8 @@ def register_pending_feedback_from_observation(
         log_mode=log_mode,
         config_dir=config_dir,
         recommendation_mode=to_stripped_text(observation.get("recommendation_mode")),
+        activity_state=observation.get("activity_state"),
+        input_mode=input_mode,
     )
 
 
@@ -410,20 +491,32 @@ def register_pending_feedback(
     log_mode: str = "off",
     config_dir: str | os.PathLike[str] | None = None,
     recommendation_mode: str = "off",
+    activity_state: Any = "unknown",
+    input_mode: Any = "unknown",
 ) -> PendingRecommendationFeedback | None:
     name = to_stripped_text(lanlan_name)
     tid = to_stripped_text(turn_id)
     if not name or not tid:
         return None
+    delivered = time.time() if delivered_at is None else float(delivered_at)
+    normalized_input_mode = to_stripped_text(input_mode).lower()
+    if normalized_input_mode == "voice":
+        normalized_input_mode = "audio"
+    if normalized_input_mode not in {"audio", "text"}:
+        normalized_input_mode = "unknown"
+    flush_censored_availability(now=delivered)
     pending = PendingRecommendationFeedback(
         lanlan_name=name,
         turn_id=tid,
         source_type=normalize_feedback_source_identifier(source_type),
         candidate_id=to_stripped_text(candidate_id) or None,
-        delivered_at=time.time() if delivered_at is None else float(delivered_at),
+        delivered_at=delivered,
         log_mode=log_mode,
         config_dir=config_dir,
         recommendation_mode=to_stripped_text(recommendation_mode),
+        availability_activity_state=to_stripped_text(activity_state).lower()
+        or "unknown",
+        availability_input_mode=normalized_input_mode,
     )
     return _pending_registry.register(pending)
 
@@ -682,9 +775,11 @@ def note_user_turn_for_feedback(
     had_text: bool,
     text_allowed: bool = False,
     text: str | None = None,
+    input_mode: Any = "unknown",
 ) -> dict[str, Any] | None:
     if not had_text:
         return None
+    flush_censored_availability(now=timestamp)
     latest_pending = _latest_pending_for_lanlan(lanlan_name, now=timestamp)
     if latest_pending is None:
         return None
@@ -725,6 +820,11 @@ def note_user_turn_for_feedback(
         metadata["reply_length_bucket"] = _reply_length_bucket(len(text))
         if source_preference_match is not None:
             source_preference_event, reason = source_preference_match
+            _record_availability_reply(
+                latest_pending,
+                timestamp=timestamp,
+                input_mode=input_mode,
+            )
             _pending_registry.mark_replied((latest_pending, pending))
             metadata["reason"] = reason
             if direct_named_source is not None:
@@ -758,6 +858,11 @@ def note_user_turn_for_feedback(
             ts=timestamp,
         )
     if reply_action == "reply":
+        _record_availability_reply(
+            pending,
+            timestamp=timestamp,
+            input_mode=input_mode,
+        )
         return record_feedback_event(
             lanlan_name=pending.lanlan_name,
             turn_id=pending.turn_id,
@@ -824,6 +929,7 @@ class ProactiveRecommendationFeedbackTurnSink:
                 had_text=bool(getattr(event, "had_text", False)),
                 text_allowed=bool(getattr(event, "text_allowed", False)),
                 text=getattr(event, "text", None),
+                input_mode=getattr(event, "input_mode", "unknown"),
             )
         except Exception:
             logger.debug(

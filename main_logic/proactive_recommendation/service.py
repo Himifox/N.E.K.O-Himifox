@@ -22,6 +22,7 @@ from uuid import uuid4
 from config import (
     MINI_GAME_INVITE_ENABLED,
     PROACTIVE_RECOMMENDATION_ACTIVE_MIN_SCORE_GAP,
+    PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE,
     PROACTIVE_RECOMMENDATION_BANDIT_MODE,
     PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
     PROACTIVE_RECOMMENDATION_OBSERVATION_LOG,
@@ -32,8 +33,13 @@ from config import (
 from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
     consecutive_unanswered_recommendation_deliveries,
+    flush_censored_availability,
     load_recommendation_feedback_jsonl,
     register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation.feedback.availability import (
+    AVAILABILITY_FILENAME,
+    get_availability_shadow,
 )
 from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
@@ -398,6 +404,7 @@ def _record_proactive_recommendation_observation(
     ts: float | None = None,
     activity_state: Any = None,
     activity_propensity: Any = None,
+    input_mode: Any = "unknown",
     review_context_mode: str = "off",
     delivered_text: Any = None,
     decision_context: Mapping[str, Any] | None = None,
@@ -480,6 +487,7 @@ def _record_proactive_recommendation_observation(
         observation,
         log_mode=PROACTIVE_RECOMMENDATION_FEEDBACK_LOG,
         config_dir=config_dir,
+        input_mode=input_mode,
     )
     record_shadow_selection(lanlan_name, decision, now=observation.get("ts"))
     return observation
@@ -494,6 +502,7 @@ class RecommendationTurn:
     config_dir: Any | None = None
     log: logging.Logger | None = None
     recent_sources: Sequence[str] = ()
+    input_mode: Any = "unknown"
     mode: str = field(init=False)
     decision_context: dict[str, Any] = field(init=False)
     personalization_mode: str = field(init=False)
@@ -519,6 +528,7 @@ class RecommendationTurn:
         config_dir: Any | None = None,
         log: logging.Logger | None = None,
         recent_sources: Sequence[str] = (),
+        input_mode: Any = "unknown",
     ) -> "RecommendationTurn":
         """Load file-backed snapshots outside the asyncio event-loop thread."""
         return await asyncio.to_thread(
@@ -528,6 +538,7 @@ class RecommendationTurn:
             config_dir=config_dir,
             log=log,
             recent_sources=tuple(recent_sources),
+            input_mode=input_mode,
         )
 
     def __post_init__(self) -> None:
@@ -711,6 +722,7 @@ class RecommendationTurn:
                 if snapshot is not None
                 else "unknown"
             ),
+            input_mode=self.input_mode,
             review_context_mode=PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
             delivered_text=self.delivered_text,
             decision_context=self.decision_context,
@@ -739,6 +751,7 @@ class RecommendationService:
         config_dir: Any = None,
         log: logging.Logger | None = None,
         recent_sources: Sequence[str] = (),
+        input_mode: Any = "unknown",
     ) -> RecommendationTurn:
         return await RecommendationTurn.create(
             lanlan_name=lanlan_name,
@@ -746,6 +759,7 @@ class RecommendationService:
             config_dir=config_dir,
             log=log,
             recent_sources=recent_sources,
+            input_mode=input_mode,
         )
 
     async def record_feedback(
@@ -893,6 +907,11 @@ class RecommendationService:
             window_seconds=CALIBRATION_WINDOW_SECONDS,
             sample_limit=CALIBRATION_SAMPLE_LIMIT,
         )
+        flush_censored_availability(now=current_time)
+        availability_shadow = get_availability_shadow(
+            config_dir=config_dir,
+            now=current_time,
+        )
         tuning = load_recommendation_tuning(config_dir=config_dir)
         payload: dict[str, Any] = {
             "ok": True,
@@ -905,6 +924,7 @@ class RecommendationService:
             "feedback_calibration": feedback_calibration,
             "reward_score_v2_preview": reward_preview,
             "reward_score_v3_preview": reward_v3_preview,
+            "availability_shadow": availability_shadow,
             "review_context_validation": summarize_recommendation_review_context(
                 calibration_samples
             ),
@@ -922,6 +942,7 @@ class RecommendationService:
             "retention": {
                 "filename": OBSERVATION_LOG_FILENAME,
                 "feedback_filename": FEEDBACK_LOG_FILENAME,
+                "availability_filename": AVAILABILITY_FILENAME,
                 "tuning_filename": TUNING_FILENAME,
                 "sample_window_seconds": CALIBRATION_WINDOW_SECONDS,
                 "sample_limit": CALIBRATION_SAMPLE_LIMIT,
@@ -934,6 +955,7 @@ class RecommendationService:
                 "feedback_log_enabled": PROACTIVE_RECOMMENDATION_FEEDBACK_LOG
                 == "jsonl",
                 "tuning_mode": PROACTIVE_RECOMMENDATION_TUNING_MODE,
+                "availability_mode": PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE,
                 "review_context_mode": PROACTIVE_RECOMMENDATION_REVIEW_CONTEXT_MODE,
             },
         }

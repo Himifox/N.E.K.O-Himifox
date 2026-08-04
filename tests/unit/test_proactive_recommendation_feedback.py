@@ -1,16 +1,24 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 import main_logic.proactive_recommendation.feedback.service as feedback_module
 import main_logic.proactive_recommendation.feedback.learning as learning_module
+import main_logic.proactive_recommendation.feedback.availability as availability_module
 
 from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
+    flush_censored_availability,
     note_user_turn_for_feedback,
     record_feedback_event,
     record_feedback_event_with_status,
     register_pending_feedback,
     register_pending_feedback_from_observation,
+)
+from main_logic.proactive_recommendation.feedback.availability import (
+    AVAILABILITY_FILENAME,
+    get_availability_shadow,
+    record_availability_outcome,
 )
 from main_logic.proactive_recommendation.feedback.event_processing import (
     build_feedback_event,
@@ -90,6 +98,171 @@ def test_feedback_writer_off_does_not_create_file(tmp_path):
 
     assert wrote is False
     assert not path.exists()
+
+
+def test_availability_off_is_read_only_and_does_not_create_state(tmp_path):
+    snapshot = record_availability_outcome(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        delivered_at=100.0,
+        replied_at=130.0,
+        mode="off",
+    )
+
+    assert snapshot["enabled"] is False
+    assert snapshot["status"] == "insufficient"
+    assert snapshot["counterfactual_interval_multiplier"] is None
+    assert snapshot["scheduling_consumed"] is False
+    assert not (tmp_path / AVAILABILITY_FILENAME).exists()
+
+
+def test_availability_shadow_uses_exact_bucket_and_aggregate_only(tmp_path):
+    delivered = datetime(2026, 1, 1, 9, 0).timestamp()
+    outcome_at = delivered + 600
+    for _ in range(15):
+        record_availability_outcome(
+            config_dir=tmp_path,
+            activity_state="focused_work",
+            input_mode="text",
+            delivered_at=outcome_at - 60,
+            replied_at=outcome_at,
+            mode="shadow",
+        )
+    for _ in range(15):
+        record_availability_outcome(
+            config_dir=tmp_path,
+            activity_state="focused_work",
+            input_mode="text",
+            delivered_at=delivered,
+            censored=True,
+            mode="shadow",
+        )
+
+    snapshot = get_availability_shadow(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        now=outcome_at,
+        mode="shadow",
+    )
+    persisted = json.loads(
+        (tmp_path / AVAILABILITY_FILENAME).read_text(encoding="utf-8")
+    )
+
+    assert snapshot["selected_level"] == "exact"
+    assert snapshot["status"] == "available"
+    assert snapshot["counterfactual_interval_multiplier"] == "1x"
+    assert snapshot["selected_bucket"] == {
+        "exposure_count": 30.0,
+        "reply_count": 15.0,
+        "censored_count": 15.0,
+        "response_rate": 0.5,
+        "average_reply_latency_seconds": 60.0,
+    }
+    assert snapshot["interval_consumed"] is False
+    assert set(persisted) == {"schema_version", "updated_at", "buckets"}
+    for bucket in persisted["buckets"].values():
+        assert set(bucket) == {
+            "activity_state",
+            "input_mode",
+            "time_bucket",
+            "exposure_weight",
+            "reply_weight",
+            "censored_weight",
+            "reply_latency_weighted_seconds",
+            "updated_at",
+        }
+
+
+def test_availability_shadow_falls_back_activity_then_input_then_global(tmp_path):
+    morning = datetime(2026, 1, 1, 8, 0).timestamp()
+    evening = datetime(2026, 1, 1, 20, 0).timestamp()
+    for idx in range(16):
+        record_availability_outcome(
+            config_dir=tmp_path,
+            activity_state="focused_work",
+            input_mode="text",
+            delivered_at=morning,
+            replied_at=morning + 60 if idx < 5 else None,
+            censored=idx >= 5,
+            mode="shadow",
+        )
+    for idx in range(16):
+        record_availability_outcome(
+            config_dir=tmp_path,
+            activity_state="focused_work",
+            input_mode="audio",
+            delivered_at=evening,
+            replied_at=evening + 120 if idx < 6 else None,
+            censored=idx >= 6,
+            mode="shadow",
+        )
+
+    snapshot = get_availability_shadow(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="audio",
+        now=evening + 600,
+        mode="shadow",
+    )
+
+    assert snapshot["selected_level"] == "activity_state"
+    assert snapshot["status"] == "uncertain"
+    assert snapshot["counterfactual_interval_multiplier"] == "2x"
+    assert snapshot["fallback_trace"][0]["ready"] is False
+    assert snapshot["fallback_trace"][1]["ready"] is True
+
+
+def test_availability_pending_reply_and_censor_do_not_change_feedback_behavior(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        availability_module,
+        "PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE",
+        "shadow",
+    )
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="reply",
+        source_type="news",
+        delivered_at=100.0,
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+    )
+
+    event = note_user_turn_for_feedback(
+        "neko",
+        timestamp=130.0,
+        had_text=True,
+        input_mode="text",
+    )
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="censored",
+        source_type="meme",
+        delivered_at=200.0,
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="audio",
+    )
+    censored_count = flush_censored_availability(now=801.0)
+    snapshot = get_availability_shadow(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        now=801.0,
+        mode="shadow",
+    )
+
+    assert event["event_type"] == "user_reply"
+    assert event["metadata"]["reply_latency_seconds"] == 30.0
+    assert censored_count == 1
+    assert snapshot["fallback_trace"][-1]["exposure_count"] == 2.0
+    assert snapshot["fallback_trace"][-1]["reply_count"] == 1.0
+    assert snapshot["scheduling_consumed"] is False
 
 
 def test_feedback_event_sanitizes_sensitive_fields_and_scores_later_positive():

@@ -19,7 +19,7 @@
 7. 生产推荐权重、调度曲线和投递行为保持不变；`PROACTIVE_RECOMMENDATION_TUNING_MODE=off`。
 8. 第一轮四臂评估的三个候选均因来源集中度护栏失败，唯一选择为 `baseline`；候选参数不得进入 MVP。
 9. 原基线 `active_source` 只允许开发者通过启动环境显式启用，并可在进程内单向回退到 `shadow`；自动调权、持久个性化、在线探索和普通用户放量仍为 **HOLD**。
-10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；它们不进入排序、PASS、投递或 tuning。
+10. P44-G0-A～D 已补齐 reward、个人相对回复速度及临时/持久聚合状态 preview；另有默认关闭的可打扰性 Shadow 聚合，它们均不进入排序、PASS、投递或 tuning。
 11. `feedback_state_preview_v2` 将全局搭话接受度与实际素材来源偏好分开；该语义拆分已随 G1 第一部分落地（`37c40080`，2026-07-24 补音乐反馈经 preview state 归类的修复 `01514161`/`3c0626bf`），不实现个性化重排。
 12. Recommendation Testbench 已完成 `feedback_state_preview` v2 的只读 safe-view 同步（P54，2026-07-23），并于 2026-07-26 将其生产代码副本追平本分支截点 `3c0626bf`（推荐单测 118/118、烟测 p41–p56 14/14 全绿）。observation v3 的 Testbench adapter 同步已于同日完成：导入与安全导出直接采用生产 sanitizer 的 `decision_context.timing` 输出，原 v2 兼容桥接层退役为漂移拒绝门（`production_timing_sanitizer_drift`）——生产侧 timing 语义漂移会在 Testbench 导入 chokepoint 被显式拒绝，而非静默修补。
 13. Testbench 侧已完成 P44-G1 首份真实接受度报告（260 observation / 161 投递 encounter，`descriptive_only`）、G1-R1 有界个性化模拟（`impact_only`）与 G1-R2 渐进响应曲线（`gradual_12` 仅过机械门禁，`hold_for_negative_evidence`）；`candidate_for_shadow=false`，三者均不构成本文第 7 节意义上的 MVP 变更申请。
@@ -164,6 +164,8 @@ P44-G0-B 作为旧 `reward_score_v2_preview` 的兼容诊断保留，不进入�
 临时/持久状态的生产消费、衰减以及 reward 对排序的影响仍属于后续独立步骤，不在 P44-G0-B 授权内。
 
 ### 5.4 P44-G0-C/D：临时/持久状态与 observation preview
+
+可打扰性实验与质量状态分离：`PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE=off|shadow` 默认 `off`。Shadow 只保存带 30 天半衰期的聚合统计，按投递时活动状态、输入方式和本地六小时时段分桶；10 分钟无回复记右截尾。精确桶少于 30 次曝光或 10 次回复时，依次回退到活动状态、输入方式和全局。它输出 `available/uncertain/unavailable/insufficient` 与反事实 `1x/2x/4x` 间隔倍率，但 scheduling、interval、gate consumed 始终为 false，且不保存 turn ID、来源、回复正文或对话文本。
 
 1. 临时兴趣只在进程内保存，TTL 为 2 小时；不同显式反馈可累积，但过期后自动删除。
 2. 历史 v1 文件 `proactive_recommendation_feedback_state_preview.json` 保持只读；v2 使用独立文件 `proactive_recommendation_feedback_state_preview_v2.json` 保存聚合证据，两者均不保存 turn ID、回复正文、标题、URL 或逐条 latency。

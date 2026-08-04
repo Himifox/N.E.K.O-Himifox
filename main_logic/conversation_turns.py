@@ -41,6 +41,7 @@ class ConversationTurnEvent:
     timestamp: float
     text_allowed: bool
     had_text: bool = False
+    input_mode: str = "unknown"
 
 
 class ConversationTurnSink(Protocol):
@@ -78,13 +79,26 @@ class ConversationTurnDispatcher:
     def add_sink(self, sink: ConversationTurnSink) -> None:
         self._sinks.append(sink)
 
-    def note_user_message(self, *, text: str | None = None, now: float | None = None) -> None:
-        self._emit("user", text=text, now=now)
+    def note_user_message(
+        self,
+        *,
+        text: str | None = None,
+        now: float | None = None,
+        input_mode: str = "unknown",
+    ) -> None:
+        self._emit("user", text=text, now=now, input_mode=input_mode)
 
     def note_ai_message(self, *, text: str | None = None, now: float | None = None) -> None:
-        self._emit("ai", text=text, now=now)
+        self._emit("ai", text=text, now=now, input_mode="unknown")
 
-    def _emit(self, actor: TurnActor, *, text: str | None, now: float | None) -> None:
+    def _emit(
+        self,
+        actor: TurnActor,
+        *,
+        text: str | None,
+        now: float | None,
+        input_mode: str,
+    ) -> None:
         ts = now if now is not None else time.time()
         privacy_on = True
         if text:
@@ -106,6 +120,7 @@ class ConversationTurnDispatcher:
             timestamp=ts,
             text_allowed=text_allowed,
             had_text=bool(text),
+            input_mode=input_mode if actor == "user" else "unknown",
         )
         for sink in list(self._sinks):
             try:

@@ -150,6 +150,13 @@ PROACTIVE_RECOMMENDATION_FEEDBACK_LOG = _read_str_env(
 )
 """Optional local feedback sink for proactive recommendation reactions."""
 
+PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE = _read_str_env(
+    "PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE",
+    "off",
+    allowed=("off", "shadow"),
+)
+"""Shadow-only personal availability baseline; never changes delivery timing."""
+
 PROACTIVE_RECOMMENDATION_TUNING_MODE = _read_str_env(
     "PROACTIVE_RECOMMENDATION_TUNING_MODE",
     "off",

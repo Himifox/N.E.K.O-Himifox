@@ -783,6 +783,28 @@ def test_conversation_turn_dispatcher_sends_messages_to_background_topic_pool():
     ]
 
 
+def test_conversation_turn_dispatcher_preserves_user_input_mode():
+    from main_logic.conversation_turns import ConversationTurnDispatcher
+
+    events = []
+
+    class CaptureSink:
+        def note_turn(self, event):
+            events.append(event)
+
+    dispatcher = ConversationTurnDispatcher(
+        'test_lanlan',
+        privacy_check=lambda: False,
+    )
+    dispatcher.add_sink(CaptureSink())
+
+    dispatcher.note_user_message(text='voice transcript', now=1.0, input_mode='audio')
+    dispatcher.note_ai_message(text='reply', now=2.0)
+
+    assert events[0].input_mode == 'audio'
+    assert events[1].input_mode == 'unknown'
+
+
 def test_conversation_turn_dispatcher_uses_global_language_for_background_topic_pool(monkeypatch):
     from main_logic.conversation_turns import ConversationTurnDispatcher, TopicHookTurnSink
     from utils import language_utils

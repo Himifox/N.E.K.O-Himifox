@@ -166,6 +166,9 @@ class PendingRecommendationFeedback:
     reply_seen: bool = False
     continue_seen: bool = False
     reward_events: dict[str, dict[str, Any]] = field(default_factory=dict)
+    availability_activity_state: str = "unknown"
+    availability_input_mode: str = "unknown"
+    availability_finalized: bool = False
 
 
 @dataclass(frozen=True, slots=True)
