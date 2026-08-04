@@ -173,6 +173,21 @@ def test_credentials_tutorial_link_has_distinct_interaction_states():
     assert ".tutorial-link:is(:hover, :focus-visible) .tutorial-link-arrow" in template
 
 
+def test_credentials_qr_entry_does_not_reflow_twice_on_platform_switch():
+    template = read_text("templates/cookies_login.html")
+    script = read_text("static/js/cookies_login.js")
+
+    qr_styles = re.findall(r"#QRLogin \{(?P<body>[\s\S]*?)\n\s*\}", template)
+    assert qr_styles
+    assert all("transition: all" not in style for style in qr_styles)
+    assert any("transition: max-height" in style for style in qr_styles)
+    assert "let qrSupportedPlatformsRequest = null;" in script
+    assert "if (!qrSupportedPlatformsRequest)" in script
+    assert "supportedPlatforms = await getQrSupportedPlatforms();" in script
+    assert "qrLoginBox.style.display = 'none';" in script
+    assert "qrLoginBox.style.removeProperty('display');" in script
+
+
 def test_credentials_page_and_guide_share_window_control_buttons():
     page = read_text("templates/cookies_login.html")
     guide = read_text("templates/cookies_guide.html")

@@ -467,22 +467,49 @@ function decreaseColorLightness(hexColor, lightnessPercent) {
 }
 
 
+let qrSupportedPlatforms = null;
+let qrSupportedPlatformsRequest = null;
+
+async function getQrSupportedPlatforms() {
+    if (qrSupportedPlatforms) return qrSupportedPlatforms;
+    if (!qrSupportedPlatformsRequest) {
+        qrSupportedPlatformsRequest = fetch('/api/auth/get_CanQRLoginList')
+            .then(resp => {
+                if (!resp.ok) throw new Error(`QR support list request failed: ${resp.status}`);
+                return resp.json();
+            })
+            .then(platforms => {
+                qrSupportedPlatforms = Array.isArray(platforms) ? platforms : [];
+                return qrSupportedPlatforms;
+            })
+            .catch(error => {
+                qrSupportedPlatformsRequest = null;
+                throw error;
+            });
+    }
+    return qrSupportedPlatformsRequest;
+}
+
 async function showQRLogin(config, platformKey) {
-    let qrSupportedPlatforms = [];
     const qrLoginBox = document.getElementById('QRLogin');
     if (!qrLoginBox) return;
 
     // 清理之前的状态
-    qrLoginBox.innerHTML = "";
+    qrLoginBox.replaceChildren();
     qrLoginBox.classList.remove('collapsed');
-    qrLoginBox.style.display = 'block';
-    const resp = await fetch('/api/auth/get_CanQRLoginList');
-    if (currentPlatform !== platformKey) return;
-    qrSupportedPlatforms = await resp.json();
+    qrLoginBox.style.display = 'none';
+
+    let supportedPlatforms;
+    try {
+        supportedPlatforms = await getQrSupportedPlatforms();
+    } catch (error) {
+        console.error('Unable to load QR-supported platforms:', error);
+        return;
+    }
     if (currentPlatform !== platformKey) return;
 
     // 采用多重匹配：优先转换后台返回的列表为全小写比对 platformKey，同时兼容已有的原始比对以防止破坏遗留代码
-    const isSupported = qrSupportedPlatforms.map(k => k.toLowerCase()).includes(platformKey.toLowerCase()) || qrSupportedPlatforms.includes(config["name"]);
+    const isSupported = supportedPlatforms.map(k => k.toLowerCase()).includes(platformKey.toLowerCase()) || supportedPlatforms.includes(config["name"]);
 
     if (isSupported){
         const QRinfo =  document.createElement("div");
@@ -501,6 +528,7 @@ async function showQRLogin(config, platformKey) {
         butt.onclick = function(){requestQR(config, platformKey)};
         qrLoginBox.appendChild(QRinfo);
         qrLoginBox.appendChild(butt);
+        qrLoginBox.style.removeProperty('display');
     }else{
         // let a = 1;希望这里可以空着不会报错 报错了就肘喵老师
         // 当前只做了"Bilibili"扫码登录,其他平台再说吧
