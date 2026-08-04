@@ -162,6 +162,17 @@ def test_credentials_page_opens_the_universal_guide_in_a_named_window():
     assert "window.open(guideUrl.toString(), windowName, features)" in script
 
 
+def test_credentials_tutorial_link_has_distinct_interaction_states():
+    template = read_text("templates/cookies_login.html")
+
+    assert ".tutorial-link:hover {" in template
+    assert ".tutorial-link:focus-visible {" in template
+    assert ".tutorial-link:active {" in template
+    assert "0 0 0 3px var(--accent-glow)" in template
+    assert ".tutorial-link:is(:hover, :focus-visible) .tutorial-link-icon" in template
+    assert ".tutorial-link:is(:hover, :focus-visible) .tutorial-link-arrow" in template
+
+
 def test_credentials_page_and_guide_share_window_control_buttons():
     page = read_text("templates/cookies_login.html")
     guide = read_text("templates/cookies_guide.html")
