@@ -3424,7 +3424,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
 }
 
 /* 工具轮盘的透明圆形命中区会盖住播放器右侧按钮；展开时让可见播放器优先接收点击。 */
-.app-shell[data-compact-tool-layer-open="true"] > #music-player-mount.compact-music-player-mount:not(:empty) {
+.app-shell[data-compact-tool-layer-open="true"] > #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {
   z-index: 100006;
 }
 

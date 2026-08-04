@@ -2633,7 +2633,7 @@ def test_compact_history_hit_contract_keeps_transparent_wrappers_out_of_hit_regi
     )
     assert "z-index: 100006;" in css_block(
         styles,
-        '.app-shell[data-compact-tool-layer-open="true"] > #music-player-mount.compact-music-player-mount:not(:empty) {',
+        '.app-shell[data-compact-tool-layer-open="true"] > #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {',
         "#music-player-mount.compact-music-player-mount:empty",
     )
     assert 'data-compact-hit-region-id="history:preview"' in panel_source
