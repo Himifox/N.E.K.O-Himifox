@@ -5223,7 +5223,7 @@ describe('App', () => {
     expect(onCompactChatStateChange).not.toHaveBeenCalledWith('input');
   });
 
-  it('opens compact input tools from the default capsule hover ring without entering input state', () => {
+  it('keeps compact input tools closed in the default capsule hover ring', () => {
     const onCompactChatStateChange = vi.fn();
     const { container } = render(
       <App
@@ -5252,7 +5252,7 @@ describe('App', () => {
     fireEvent.pointerMove(window, { clientX: 124, clientY: 64, pointerType: 'mouse' });
 
     expect(container.querySelector('.app-shell')).toHaveAttribute('data-compact-chat-state', 'default');
-    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
     expect(onCompactChatStateChange).not.toHaveBeenCalledWith('input');
   });
 
@@ -6126,7 +6126,7 @@ describe('App', () => {
     });
   });
 
-  it('opens compact input tools on hover-capable pointer enter', () => {
+  it('keeps compact input tools closed on hover-capable pointer enter', () => {
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia();
 
@@ -6139,7 +6139,7 @@ describe('App', () => {
 
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
 
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
     } finally {
       window.matchMedia = originalMatchMedia;
     }
@@ -6177,7 +6177,7 @@ describe('App', () => {
     }
   });
 
-  it('opens compact input tools on mouse hover even when fine-hover media query is false', () => {
+  it('keeps compact input tools closed on mouse hover when fine-hover media query is false', () => {
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia(false);
 
@@ -6191,13 +6191,13 @@ describe('App', () => {
 
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
 
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
     } finally {
       window.matchMedia = originalMatchMedia;
     }
   });
 
-  it('opens compact input tools on hover when Electron reports an empty pointer type', () => {
+  it('keeps compact input tools closed on hover when Electron reports an empty pointer type', () => {
     render(<App chatSurfaceMode="compact" compactChatState="input" />);
 
     const actionButton = document.body.querySelector('.compact-input-tool-toggle') as HTMLButtonElement;
@@ -6207,53 +6207,41 @@ describe('App', () => {
 
     fireEvent.pointerEnter(actionButton, { pointerType: '' });
 
-    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
   });
 
-  it('keeps compact input tools interactive when desktop hover open requests repeat', async () => {
-    vi.useFakeTimers();
-    try {
-      const { rerender } = render(
-        <App
-          chatSurfaceMode="compact"
-          compactChatState="input"
-          compactToolFanOpenRequest={{
-            id: 'desktop-hover-open-1',
-            open: true,
-            reason: 'desktop-compact-tool-toggle-cursor-poll',
-          }}
-        />,
-      );
+  it('ignores desktop hover open requests', () => {
+    const { rerender } = render(
+      <App
+        chatSurfaceMode="compact"
+        compactChatState="input"
+        compactToolFanOpenRequest={{
+          id: 'desktop-hover-open-1',
+          open: true,
+          reason: 'desktop-compact-tool-toggle-cursor-poll',
+        }}
+      />,
+    );
 
-      const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-interactive', 'false');
+    const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(230);
-      });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-interactive', 'true');
+    rerender(
+      <App
+        chatSurfaceMode="compact"
+        compactChatState="input"
+        compactToolFanOpenRequest={{
+          id: 'desktop-hover-open-2',
+          open: true,
+          reason: 'desktop-compact-tool-toggle-hover-keepalive',
+        }}
+      />,
+    );
 
-      rerender(
-        <App
-          chatSurfaceMode="compact"
-          compactChatState="input"
-          compactToolFanOpenRequest={{
-            id: 'desktop-hover-open-2',
-            open: true,
-            reason: 'desktop-compact-tool-toggle-hover-keepalive',
-          }}
-        />,
-      );
-
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-interactive', 'true');
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
   });
 
-  it('closes compact input tools when a click follows hover open', () => {
+  it('opens compact input tools when a click follows hover', () => {
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia();
 
@@ -6265,13 +6253,13 @@ describe('App', () => {
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
       fireEvent.click(actionButton);
 
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
     } finally {
       window.matchMedia = originalMatchMedia;
     }
   });
 
-  it('allows hover reopen after a click close once the pointer moves outside the hover region', () => {
+  it('does not reopen compact input tools on hover after a click close', () => {
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia();
 
@@ -6294,18 +6282,20 @@ describe('App', () => {
 
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
       fireEvent.click(actionButton);
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+      fireEvent.click(actionButton);
       expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
 
       fireEvent.pointerMove(document.body, { clientX: 160, clientY: 160, pointerType: 'mouse' });
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
 
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
     } finally {
       window.matchMedia = originalMatchMedia;
     }
   });
 
-  it('closes compact input tools when a tap follows hover open', async () => {
+  it('opens compact input tools when a tap follows hover', async () => {
     vi.useFakeTimers();
     const originalMatchMedia = window.matchMedia;
     mockHoverCapableMatchMedia();
@@ -6316,7 +6306,7 @@ describe('App', () => {
       const actionButton = screen.getByRole('button', { name: '更多工具' });
       const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
       fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
-      // A quick tap (press + release) toggles the hover-opened fan shut.
+      // Hover alone stays closed; the quick tap explicitly opens the fan.
       fireEvent.pointerDown(actionButton, { pointerId: 8, button: 0, buttons: 1, pointerType: 'mouse' });
       fireEvent.pointerUp(actionButton, { pointerId: 8, button: 0, pointerType: 'mouse' });
       fireEvent.click(actionButton);
@@ -6326,7 +6316,7 @@ describe('App', () => {
         await vi.advanceTimersByTimeAsync(220);
       });
 
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
     } finally {
       window.matchMedia = originalMatchMedia;
       vi.useRealTimers();
@@ -6866,7 +6856,7 @@ describe('App', () => {
       );
 
       const actionButton = screen.getByRole('button', { name: '更多工具' });
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
+      fireEvent.click(actionButton);
 
       const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
       expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
@@ -6931,7 +6921,7 @@ describe('App', () => {
     }
   });
 
-  it('opens compact input tools from the larger toggle hover ring', () => {
+  it('keeps compact input tools closed inside the larger toggle hover ring', () => {
     let restoreToggleRect = () => {};
     try {
       render(
@@ -6961,13 +6951,13 @@ describe('App', () => {
         pointerType: 'mouse',
       });
 
-      expect(document.body.querySelector('.compact-input-tool-fan')).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+      expect(document.body.querySelector('.compact-input-tool-fan')).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
     } finally {
       restoreToggleRect();
     }
   });
 
-  it('keeps compact input tools open inside the full circular hover range', async () => {
+  it('keeps click-opened compact input tools open across the hover range', async () => {
     vi.useFakeTimers();
     let restoreFanRect = () => {};
     try {
@@ -6979,7 +6969,7 @@ describe('App', () => {
       );
 
       const actionButton = screen.getByRole('button', { name: '更多工具' });
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
+      fireEvent.click(actionButton);
       const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
       const fanRectSpy = vi.spyOn(fan, 'getBoundingClientRect').mockReturnValue({
         left: 0,
@@ -7016,7 +7006,7 @@ describe('App', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(180);
       });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
     } finally {
       restoreFanRect();
       vi.useRealTimers();
@@ -8889,83 +8879,32 @@ describe('App', () => {
     }
   });
 
-  it('uses hover for enter and leave while click only toggles compact input tools', async () => {
-    vi.useFakeTimers();
-    const originalMatchMedia = window.matchMedia;
-    mockHoverCapableMatchMedia();
+  it('opens compact input tools only by click', () => {
+    render(<App chatSurfaceMode="compact" compactChatState="input" />);
 
-    try {
-      render(<App chatSurfaceMode="compact" compactChatState="input" />);
+    const actionButton = screen.getByRole('button', { name: '更多工具' });
+    const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
 
-      const actionButton = screen.getByRole('button', { name: '更多工具' });
-      const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+    fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
+    fireEvent.pointerMove(actionButton, { clientX: 24, clientY: 24, pointerType: 'mouse' });
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
 
-      fireEvent.focus(actionButton);
-      fireEvent.pointerLeave(actionButton, { clientX: 96, clientY: 96, pointerType: 'mouse' });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(180);
-      });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+    fireEvent.click(actionButton);
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(180);
-      });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
+    fireEvent.pointerLeave(actionButton, { clientX: 96, clientY: 96, pointerType: 'mouse' });
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
 
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
+    fireEvent.pointerDown(document.body, {
+      pointerId: 13,
+      button: 0,
+      buttons: 1,
+      pointerType: 'mouse',
+    });
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
 
-      fireEvent.click(actionButton);
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
-
-      fireEvent.pointerMove(actionButton, { clientX: 24, clientY: 24, pointerType: 'mouse' });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
-
-      vi.spyOn(actionButton, 'getBoundingClientRect').mockReturnValue({
-        left: 0,
-        top: 0,
-        right: 48,
-        bottom: 48,
-        width: 48,
-        height: 48,
-        x: 0,
-        y: 0,
-        toJSON: () => ({}),
-      });
-      fireEvent.pointerLeave(fan, {
-        clientX: 16,
-        clientY: 16,
-        pointerType: 'mouse',
-        relatedTarget: actionButton,
-      });
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
-
-      fireEvent.click(actionButton);
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
-
-      fireEvent.pointerLeave(actionButton, { clientX: 96, clientY: 96, pointerType: 'mouse' });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(180);
-      });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
-
-      fireEvent.pointerDown(document.body, {
-        pointerId: 13,
-        button: 0,
-        buttons: 1,
-        pointerType: 'mouse',
-      });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
-
-      fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
-      expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'true');
-    } finally {
-      window.matchMedia = originalMatchMedia;
-      vi.useRealTimers();
-    }
+    fireEvent.pointerEnter(actionButton, { pointerType: 'mouse' });
+    expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
   });
 
   it('closes compact input tools without firing a tool when the desktop fan layer covers the toggle origin', async () => {
