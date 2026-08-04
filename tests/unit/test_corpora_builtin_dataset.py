@@ -103,6 +103,8 @@ def test_corpora_search_management_routing_and_sampling(tmp_path: Path) -> None:
     moon = service.build_turn_context("I drew The Moon today")
     assert moon.collection_id == "corpora"
     assert "Light meanings:" in moon.text
+    assert "only as entertainment and symbolic reflection" in moon.text
+    assert "Never present it as health, legal, or financial advice" in moon.text
     assert service.build_turn_context("my cat is calm").hit_count == 0
 
     tarot = service.build_conversation_context("给我抽一张塔罗牌")
@@ -116,6 +118,10 @@ def test_corpora_search_management_routing_and_sampling(tmp_path: Path) -> None:
     assert all("dataset:occupations" in entry.tags for entry in sampled)
     with pytest.raises(ValueError, match="sample tag is not enabled"):
         service.sample_entries("corpora", "category:humans")
+
+    indigo = service.search("corpora", "#4B0082", limit=1)[0].entry
+    assert indigo.title == "Indigo"
+    assert "Indigo has hexadecimal" in indigo.summary
 
     assert service.set_entry_disabled(
         "corpora",
