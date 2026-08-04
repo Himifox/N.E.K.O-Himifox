@@ -276,3 +276,39 @@ def test_removing_pack_does_not_remove_another_source(tmp_path):
         "built in entry",
     ) is not None
     assert database_path.is_file()
+
+
+def test_pack_source_tag_cache_is_invalidated_by_pack_mutations(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    calls = 0
+    real_enabled_pack_source_tags = packs.enabled_pack_source_tags
+
+    def counted(database_path):
+        nonlocal calls
+        calls += 1
+        return real_enabled_pack_source_tags(database_path)
+
+    monkeypatch.setattr(packs, "enabled_pack_source_tags", counted)
+    service._invalidate_pack_source_tags("community-demo")
+
+    service._enabled_pack_source_tags("community-demo")
+    service._enabled_pack_source_tags("community-demo")
+    assert calls == 1
+
+    service.set_pack_auto_context("community-demo", "community-fixture", enabled=True)
+    service._enabled_pack_source_tags("community-demo")
+    assert calls == 2
+
+    service.install_pack(validate_pack(_payload(pack_id="second-pack", title="second")))
+    service._enabled_pack_source_tags("community-demo")
+    assert calls == 3
+
+    service.remove_pack("community-demo", "second-pack")
+    service._enabled_pack_source_tags("community-demo")
+    assert calls == 4

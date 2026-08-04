@@ -166,6 +166,18 @@ def test_term_and_tag_item_length_boundary_matches_schema() -> None:
     assert validate_pack(payload).entries[0].aliases == ("x" * 300,)
 
 
+@pytest.mark.parametrize("homepage", ("https://", "https:///missing-host"))
+def test_homepage_requires_a_host_in_schema_and_runtime(homepage: str) -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    payload = _example_payload()
+    payload["source"]["homepage"] = homepage
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(payload, schema, cls=jsonschema.Draft202012Validator)
+    with pytest.raises(ValueError):
+        validate_pack(payload)
+
+
 def test_invalid_pack_reports_field_without_content(tmp_path: Path) -> None:
     payload = _example_payload()
     secret_content = payload["entries"][0]["content"]

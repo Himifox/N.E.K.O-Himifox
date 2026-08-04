@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from .filters import sanitize_external_text
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +43,13 @@ def resolve_source(
 def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
     try:
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return None
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "[public-knowledge] ignored invalid source registry type=%s",
+            type(exc).__name__,
+        )
         return None
     packs = payload.get("packs") if isinstance(payload, dict) else None
     if not isinstance(packs, dict):

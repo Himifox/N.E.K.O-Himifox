@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import unicodedata
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ from .store import KnowledgeStore, register_database_change_listener
 
 
 _CARD_CACHE_LIMIT = 256
+_MAX_REFRESH_ROUNDS = 4
 logger = logging.getLogger(__name__)
 
 
@@ -306,7 +308,7 @@ class KnowledgeRoutingState:
 
     def refresh(self) -> None:
         with self._refresh_lock:
-            while True:
+            for _ in range(_MAX_REFRESH_ROUNDS):
                 with self._lock:
                     dirty = {
                         collection_id: self._dirty_generation[collection_id]
@@ -343,6 +345,8 @@ class KnowledgeRoutingState:
                     for collection_id, generation in dirty.items():
                         if self._dirty_generation[collection_id] == generation:
                             self._dirty.discard(collection_id)
+            # A continuously changing database remains dirty for the next caller
+            # instead of keeping this refresh call alive indefinitely.
 
     def refresh_in_background(self) -> None:
         with self._lock:
@@ -359,6 +363,11 @@ class KnowledgeRoutingState:
     def _background_refresh(self) -> None:
         try:
             self.refresh()
+        except Exception as exc:
+            logger.warning(
+                "[public-knowledge] background route refresh failed type=%s",
+                type(exc).__name__,
+            )
         finally:
             with self._lock:
                 if self._refresh_thread is threading.current_thread():
@@ -441,8 +450,7 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
             phrase = policy.normalizer(value)
             minimum = policy.title_min_length if index == 0 else policy.alias_min_length
             if len(phrase) >= minimum:
-                if policy.latin_word_boundaries and _contains_latin(value):
-                    strong.append(phrase)
+                if policy.latin_word_boundaries and _is_ascii_word_phrase(value):
                     boundary_phrase = _normalize_latin_boundary_text(value)
                     if len(boundary_phrase.replace("\0", "")) >= minimum:
                         boundary.append(boundary_phrase)
@@ -457,8 +465,7 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
         for value in entry.recognition_terms:
             phrase = policy.normalizer(value)
             if len(phrase) >= policy.recognition_min_length:
-                if policy.latin_word_boundaries and _contains_latin(value):
-                    strong.append(phrase)
+                if policy.latin_word_boundaries and _is_ascii_word_phrase(value):
                     boundary_phrase = _normalize_latin_boundary_text(value)
                     if (
                         len(boundary_phrase.replace("\0", ""))
@@ -487,8 +494,9 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
-def _contains_latin(value: str) -> bool:
-    return any("a" <= character <= "z" for character in value.casefold())
+def _is_ascii_word_phrase(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+    return normalized.isascii() and any(character.isalnum() for character in normalized)
 
 
 def _normalize_latin_boundary_text(value: str) -> str:
@@ -511,7 +519,7 @@ def _entry_context_terms(
             normalized = policy.normalizer(value)
             if not normalized:
                 continue
-            if _contains_latin(value):
+            if _is_ascii_word_phrase(value):
                 boundary = _normalize_latin_boundary_text(value)
                 if boundary:
                     bounded.append(boundary)
@@ -548,6 +556,7 @@ _STATE_CACHE_LIMIT = 16
 _STATES: OrderedDict[
     tuple[RouteCollection, ...], KnowledgeRoutingState
 ] = OrderedDict()
+_LIVE_STATES: weakref.WeakSet[KnowledgeRoutingState] = weakref.WeakSet()
 _STATES_LOCK = threading.Lock()
 
 
@@ -559,6 +568,7 @@ def get_routing_state(
         if state is None:
             state = KnowledgeRoutingState(collections)
             _STATES[collections] = state
+            _LIVE_STATES.add(state)
             while len(_STATES) > _STATE_CACHE_LIMIT:
                 _STATES.popitem(last=False)
         else:
@@ -568,7 +578,7 @@ def get_routing_state(
 
 def notify_database_changed(database_path: str | Path) -> None:
     with _STATES_LOCK:
-        states = tuple(_STATES.values())
+        states = tuple(_LIVE_STATES)
     for state in states:
         state.mark_database_dirty(database_path)
 

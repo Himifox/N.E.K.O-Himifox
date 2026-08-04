@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ MAX_TERMS_PER_ROLE = 100
 MAX_TAGS_PER_ENTRY = 100
 MAX_TERM_OR_TAG_CHARS = 300
 _TERM_ROLES = ("alias", "recognition")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,7 +387,7 @@ def _homepage(value: object) -> str:
     if not text:
         return ""
     parsed = urlsplit(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
         _fail("source.homepage", "invalid_url", "must be an HTTP(S) URL")
     return text
 
@@ -407,9 +409,16 @@ def _fail(path: str, code: str, message: str):
 def _load_registry(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return {"schema_version": 1, "packs": {}}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "[public-knowledge] ignored invalid pack registry type=%s",
+            type(exc).__name__,
+        )
         return {"schema_version": 1, "packs": {}}
     if not isinstance(payload, dict) or not isinstance(payload.get("packs"), dict):
+        logger.warning("[public-knowledge] ignored invalid pack registry structure")
         return {"schema_version": 1, "packs": {}}
     return payload
 
