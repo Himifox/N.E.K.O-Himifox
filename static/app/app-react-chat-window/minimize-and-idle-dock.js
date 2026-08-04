@@ -1194,13 +1194,6 @@
     }
 
     I.setCompactToolFanOpen = function setCompactToolFanOpen(open, reason) {
-        var requestReason = typeof reason === 'string' ? reason : '';
-        if (
-            requestReason === 'desktop-compact-tool-toggle-cursor-poll'
-            || requestReason === 'desktop-compact-tool-toggle-hover-keepalive'
-        ) {
-            return false;
-        }
         if (open === true && I.getCurrentChatSurfaceMode() === 'compact') {
             if (isHomeTutorialCompactOverrideActive()) {
                 I.captureHomeTutorialCompactChatState();
@@ -1213,7 +1206,7 @@
             compactToolFanOpenRequest: {
                 id: nextTutorialChatRequestId('compact-tool-fan'),
                 open: open === true,
-                reason: requestReason
+                reason: typeof reason === 'string' ? reason : ''
             }
         });
         return true;

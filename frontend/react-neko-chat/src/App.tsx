@@ -3633,6 +3633,10 @@ function CompactChatApp({
     updateCompactInputToolFanPosition,
   ]);
 
+  const shouldOpenCompactToolFanOnHover = useCallback((pointerType: string) => {
+    return pointerType === 'mouse' || pointerType === '';
+  }, []);
+
   const isCompactInputToolPointerInToggleHoverRegion = useCallback((clientX: number, clientY: number, relatedTarget?: EventTarget | null) => {
     if (relatedTarget instanceof Node && compactInputToolToggleRef.current?.contains(relatedTarget)) return true;
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
@@ -3674,6 +3678,14 @@ function CompactChatApp({
     getCompactInputToolFanCircularHoverRegion,
     isCompactInputToolPointerInToggleHoverRegion,
   ]);
+
+  const handleCompactInputToolHoverEnter = useCallback((event: ReactPointerEvent) => {
+    if (!shouldOpenCompactToolFanOnHover(event.pointerType)) return;
+    if (compactInputToolFanSuppressHoverUntilLeaveRef.current) return;
+    if (compactInputToolFanHoverInsideRef.current && compactInputToolFanOpenRef.current) return;
+    compactInputToolFanHoverInsideRef.current = true;
+    openCompactInputToolFan('hover');
+  }, [openCompactInputToolFan, shouldOpenCompactToolFanOnHover]);
 
   const handleCompactInputToolHoverLeave = useCallback((event: ReactPointerEvent) => {
     if (compactInputToolWheelDragActiveRef.current || compactInputToolWheelPointerRef.current) return;
@@ -4283,7 +4295,7 @@ function CompactChatApp({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      // 工具轮盘原点拖拽进行中时不更新指针离开状态，避免拖拽手势被提前收尾。
+      // 工具轮盘原点拖拽进行中时不跑悬停展开/收起逻辑，避免拖动文本框时悬停又把轮盘弹开。
       if (compactToolOriginDragRef.current) return;
       const pointerInHoverRegion = isCompactInputToolPointerInHoverRegion(event.clientX, event.clientY, event.target);
       if (compactInputToolFanSuppressHoverUntilLeaveRef.current) {
@@ -4295,6 +4307,17 @@ function CompactChatApp({
       if (pointerInHoverRegion) {
         compactInputToolFanHoverInsideRef.current = true;
         clearCompactInputToolFanCloseTimer();
+      }
+      if (
+        !compactInputHasPayload
+        && !composerDisabled
+        && shouldOpenCompactToolFanOnHover(event.pointerType)
+        && isCompactInputToolPointerInToggleHoverRegion(event.clientX, event.clientY, event.target)
+      ) {
+        if (!compactInputToolFanOpenRef.current) {
+          openCompactInputToolFan('hover');
+        }
+        return;
       }
       if (
         compactInputToolFanOpenRef.current
@@ -4313,11 +4336,16 @@ function CompactChatApp({
     };
   }, [
     clearCompactInputToolFanCloseTimer,
+    compactInputHasPayload,
     composerHidden,
+    composerDisabled,
     isCompactInputToolPointerInHoverRegion,
+    isCompactInputToolPointerInToggleHoverRegion,
     isCompactSurface,
+    openCompactInputToolFan,
     resetCompactInputToolFanHoverBlock,
     scheduleCompactInputToolFanTransientClose,
+    shouldOpenCompactToolFanOnHover,
   ]);
 
   const finishCompactToolWheelPointer = useCallback((event?: { pointerId: number }) => {
@@ -4840,13 +4868,11 @@ function CompactChatApp({
     const request = compactToolFanOpenRequest;
     if (!request || !request.id || request.id === lastCompactToolFanOpenRequestIdRef.current) return;
     lastCompactToolFanOpenRequestIdRef.current = request.id;
-    const requestReason = typeof request.reason === 'string' ? request.reason : '';
-    if (
-      requestReason === 'desktop-compact-tool-toggle-cursor-poll'
-      || requestReason === 'desktop-compact-tool-toggle-hover-keepalive'
-    ) return;
     if (request.open) {
-      const opened = openCompactInputToolFan('click', { ignoreDisabled: true });
+      lastCompactToolFanOpenRequestIdRef.current = request.id;
+      const requestReason = typeof request.reason === 'string' ? request.reason : '';
+      const requestIntent = requestReason.startsWith('desktop-compact-tool-toggle') ? 'hover' : 'click';
+      const opened = openCompactInputToolFan(requestIntent, { ignoreDisabled: true });
       if (!opened) return;
       return;
     }
@@ -5150,6 +5176,7 @@ function CompactChatApp({
       aria-haspopup={compactToolToggleActsAsSubmit ? undefined : 'true'}
       aria-expanded={compactToolToggleActsAsSubmit ? undefined : compactInputToolFanOpen}
       disabled={compactToolToggleActsAsSubmit ? !canSubmit : composerDisabled}
+      onPointerEnter={compactToolToggleActsAsSubmit ? undefined : handleCompactInputToolHoverEnter}
       onPointerLeave={compactToolToggleActsAsSubmit ? undefined : handleCompactInputToolHoverLeave}
       onPointerDown={compactToolToggleActsAsSubmit ? undefined : beginCompactToolOriginDrag}
       onPointerMove={compactToolToggleActsAsSubmit ? undefined : updateCompactToolOriginDrag}
@@ -5258,6 +5285,7 @@ function CompactChatApp({
       onPointerEnter={(event) => {
         recordCompactInputToolWheelPointerPosition(event.clientX, event.clientY);
         syncCompactInputToolWheelPointerHover({ clientX: event.clientX, clientY: event.clientY });
+        handleCompactInputToolHoverEnter(event);
       }}
       onPointerLeave={(event) => {
         clearCompactInputToolWheelPointerHover();

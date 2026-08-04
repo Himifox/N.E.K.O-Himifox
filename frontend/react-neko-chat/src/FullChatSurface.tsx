@@ -1677,6 +1677,10 @@ export default function FullChatSurface({
     updateCompactInputToolFanPosition,
   ]);
 
+  const shouldOpenCompactToolFanOnHover = useCallback((event: ReactPointerEvent) => {
+    return event.pointerType === 'mouse';
+  }, []);
+
   const isCompactInputToolPointerInHoverRegion = useCallback((clientX: number, clientY: number, relatedTarget?: EventTarget | null) => {
     if (relatedTarget instanceof Node) {
       if (compactInputToolToggleRef.current?.contains(relatedTarget)) return true;
@@ -1697,6 +1701,14 @@ export default function FullChatSurface({
       && clientY <= rect.bottom
     ));
   }, []);
+
+  const handleCompactInputToolHoverEnter = useCallback((event: ReactPointerEvent) => {
+    if (!shouldOpenCompactToolFanOnHover(event)) return;
+    if (compactInputToolFanSuppressHoverUntilLeaveRef.current) return;
+    if (compactInputToolFanHoverInsideRef.current) return;
+    compactInputToolFanHoverInsideRef.current = true;
+    openCompactInputToolFan('hover');
+  }, [openCompactInputToolFan, shouldOpenCompactToolFanOnHover]);
 
   const handleCompactInputToolHoverLeave = useCallback((event: ReactPointerEvent) => {
     if (isCompactInputToolPointerInHoverRegion(event.clientX, event.clientY, event.relatedTarget)) return;
@@ -2500,6 +2512,7 @@ export default function FullChatSurface({
       data-compact-input-tool-fan-interactive={compactInputToolFanInteractive ? 'true' : 'false'}
       data-compact-tool-wheel-drag-active={compactInputToolWheelDragActive ? 'true' : 'false'}
       aria-hidden={compactInputToolFanOpen ? 'false' : 'true'}
+      onPointerEnter={handleCompactInputToolHoverEnter}
       onPointerLeave={handleCompactInputToolHoverLeave}
       onFocus={() => {
         clearCompactInputToolFanCloseTimer();
@@ -3231,6 +3244,7 @@ export default function FullChatSurface({
                           compactInputToolTogglePointerHandledRef.current = true;
                           toggleCompactInputToolFanByClick();
                         }}
+                        onPointerEnter={compactInputHasPayload ? undefined : handleCompactInputToolHoverEnter}
                         onPointerLeave={compactInputHasPayload ? undefined : handleCompactInputToolHoverLeave}
                         onFocus={compactInputHasPayload ? undefined : clearCompactInputToolFanCloseTimer}
                         onBlur={compactInputHasPayload ? scheduleCompactInputCollapse : () => {
