@@ -50,8 +50,10 @@ export default {
     knowledge: 'Conhecimento'
   },
   knowledge: {
+    marketConnected: 'O mercado de conhecimento está conectado. Os pacotes são verificados antes da instalação local.',
+    openMarket: 'Explorar mercado de conhecimento', marketUnavailable: 'O mercado de plugins está indisponível',
+    loginRequired: 'Entre no mercado pela página de plugins primeiro', marketPairFailed: 'Não foi possível emparelhar com segurança com o cliente N.E.K.O local',
     title: 'Gerenciador de conhecimento', subtitle: 'Gerencie conhecimento público local, pacotes de dados e correspondências de conversa',
-    marketNotice: 'A conexão do protocolo do mercado de conhecimento está reservada. Coleções internas e pacotes locais já podem ser gerenciados.',
     overview: 'Visão geral', ready: 'Pronto', degraded: 'Degradado', entries: 'Entradas', disabled: 'Desativadas', packs: 'Pacotes',
     autoContext: 'Usar na conversa automática', catalog: 'Catálogo', searchPlaceholder: 'Pesquisar títulos, aliases, resumos ou conteúdo',
     term: 'Entrada', summary: 'Resumo', source: 'Fonte', actions: 'Ações', details: 'Detalhes', restore: 'Restaurar', disable: 'Desativar',

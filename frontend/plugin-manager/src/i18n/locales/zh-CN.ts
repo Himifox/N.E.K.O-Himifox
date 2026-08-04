@@ -50,8 +50,10 @@ export default {
     knowledge: '知识库'
   },
   knowledge: {
+    marketConnected: '知识包市场已经接通；订阅后会先校验，再写入本地知识库。',
+    openMarket: '浏览知识库市场', marketUnavailable: '插件市场当前不可用',
+    loginRequired: '请先在插件管理页面登录市场账号', marketPairFailed: '无法与本机 N.E.K.O 安全配对',
     title: '知识库管理', subtitle: '管理本地公共知识、数据包和对话命中情况',
-    marketNotice: '知识包市场协议接口已预留；当前可管理内置知识库和本地数据包。',
     overview: '总览', ready: '正常', degraded: '异常', entries: '词条', disabled: '已禁用', packs: '数据包',
     autoContext: '参与自动搭话', catalog: '词条管理', searchPlaceholder: '搜索标题、别名、摘要或正文',
     term: '词条', summary: '摘要', source: '来源', actions: '操作', details: '详情', restore: '恢复', disable: '禁用',

@@ -50,8 +50,10 @@ export default {
     knowledge: 'ナレッジ'
   },
   knowledge: {
+    marketConnected: 'ナレッジマーケットに接続しました。パッケージは検証後にローカルへ保存されます。',
+    openMarket: 'ナレッジマーケットを見る', marketUnavailable: 'プラグインマーケットを利用できません',
+    loginRequired: '先にプラグイン管理画面でマーケットにログインしてください', marketPairFailed: 'ローカルの N.E.K.O と安全にペアリングできませんでした',
     title: 'ナレッジ管理', subtitle: 'ローカル公開知識、データパック、会話の一致履歴を管理します',
-    marketNotice: 'ナレッジ市場プロトコルの接続口は予約済みです。現在は内蔵コレクションとローカルパックを管理できます。',
     overview: '概要', ready: '正常', degraded: '異常', entries: '項目', disabled: '無効', packs: 'データパック',
     autoContext: '自動会話で使用', catalog: '項目管理', searchPlaceholder: 'タイトル、別名、要約、本文を検索',
     term: '項目', summary: '要約', source: '出典', actions: '操作', details: '詳細', restore: '復元', disable: '無効化',

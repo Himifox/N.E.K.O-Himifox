@@ -266,7 +266,7 @@ def _is_local_bridge_origin(origin: str, expected_port: int) -> bool:
     return (parsed.port or 80) == expected_port
 
 
-def _require_local_bridge_token_access(request: Request) -> None:
+def _require_local_bridge_token_access(request: Request) -> int:
     """Allow bridge-token only to the local plugin-manager origin.
 
     Remote Market origins are intentionally excluded here even when CORS trusts
@@ -275,16 +275,20 @@ def _require_local_bridge_token_access(request: Request) -> None:
 
     host_header = request.headers.get("host", "")
     try:
-        host = urlparse(f"//{host_header}").hostname or ""
+        parsed_host = urlparse(f"//{host_header}")
+        host = parsed_host.hostname or ""
+        request_port = parsed_host.port or 80
     except ValueError:
         host = ""
+        request_port = 0
     client_host = request.client.host if request.client else ""
     if not _is_loopback_host(client_host) or not _is_loopback_host(host):
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
 
     origin = request.headers.get("origin")
-    if origin and not _is_local_bridge_origin(origin, _main_server_port()):
+    if origin and not _is_local_bridge_origin(origin, request_port):
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
+    return request_port
 
 
 def write_bridge_token_file(directory: Path) -> Path:
@@ -499,6 +503,12 @@ class MarketBridgeTokenResponse(BaseModel):
     """供同源前端（plugin-manager UI）直接获取 bridge token。"""
     bridge_token: str
     port: int = 48911
+
+
+class MarketPairCodeResponse(BaseModel):
+    one_time_code: str
+    port: int = 48911
+    expires_in: int = _ONE_TIME_CODE_TTL_SECONDS
 
 
 class MarketOAuthStartResponse(BaseModel):
@@ -930,9 +940,19 @@ async def market_bridge_token(request: Request):
     不需要走 one-time code 配对。只允许 127.0.0.1 / localhost 来源，避免
     被外部网页拿到 token。
     """
-    _require_local_bridge_token_access(request)
+    request_port = _require_local_bridge_token_access(request)
 
-    return MarketBridgeTokenResponse(bridge_token=_BRIDGE_TOKEN, port=_main_server_port())
+    return MarketBridgeTokenResponse(bridge_token=_BRIDGE_TOKEN, port=request_port)
+
+
+@router.post("/pair-code", response_model=MarketPairCodeResponse)
+async def market_pair_code(request: Request):
+    """Issue a short-lived code to the local manager for a remote Market page."""
+    request_port = _require_local_bridge_token_access(request)
+    return MarketPairCodeResponse(
+        one_time_code=_issue_one_time_code(),
+        port=request_port,
+    )
 
 
 @router.post("/oauth/start", response_model=MarketOAuthStartResponse)
