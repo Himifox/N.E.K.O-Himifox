@@ -348,7 +348,7 @@ def test_chat_delivery_binds_behavior_to_applied_active_bias(tmp_path, monkeypat
     )
     bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=110)
     assert result.bandit_state_updated is True
-    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.2)
+    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.15)
 
 
 def test_confirmed_material_overrides_applied_active_bias():
@@ -518,7 +518,7 @@ def test_bandit_reward_replaces_turn_aggregate_and_decays(tmp_path):
     )
 
 
-def test_bandit_reward_reuses_v2_rules_and_excludes_technical_only():
+def test_bandit_reward_uses_v3_rules_and_excludes_technical_only():
     reward = build_bandit_encounter_reward(
         [
             {"event_type": "user_reply"},
@@ -526,18 +526,21 @@ def test_bandit_reward_reuses_v2_rules_and_excludes_technical_only():
         ]
     )
     technical = build_bandit_encounter_reward([{"event_type": "music_error"}])
+    censored = build_bandit_encounter_reward([{"event_type": "ignored"}])
 
     assert reward == {
-        "version": "bandit_encounter_reward_v1",
-        "rule_score_version": "reward_score_v2_preview_v2",
+        "version": "bandit_encounter_reward_v2",
+        "rule_score_version": "reward_score_v3_preview_v1",
         "eligible": True,
-        "reward": 0.55,
+        "reward": 0.5,
         "event_types": ["user_reply", "user_continue"],
         "signal_event_types": ["user_reply", "user_continue"],
         "excluded_reason": None,
     }
     assert technical["eligible"] is False
     assert technical["reward"] is None
+    assert censored["eligible"] is False
+    assert censored["reward"] is None
 
 
 def test_generic_reply_updates_bandit_but_not_source_preference(tmp_path):
@@ -570,7 +573,7 @@ def test_generic_reply_updates_bandit_but_not_source_preference(tmp_path):
     preference = get_recommendation_preference_state(config_dir=tmp_path, now=111)
     assert reply.bandit_state_updated is True
     assert continued.bandit_state_updated is True
-    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.55)
+    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.5)
     assert bandit["finalized_outcome_count"] == 1
     assert preference["sources"] == {}
 

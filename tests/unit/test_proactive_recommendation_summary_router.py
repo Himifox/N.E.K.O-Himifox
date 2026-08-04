@@ -507,38 +507,34 @@ def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     assert response.status_code == 200
     payload = response.json()
     feedback = payload["feedback"]
-    assert feedback["feedback_sample_count"] == 2
-    assert feedback["event_type_distribution"] == {
-        "ignored": 1,
-        "music_played_through": 1,
-    }
+    assert feedback["feedback_sample_count"] == 1
+    assert feedback["quality_feedback_scored_count"] == 1
+    assert feedback["feedback_censored_count"] == 1
+    assert feedback["feedback_score_population"] == "explicit_only"
+    assert feedback["score_version"] == "report_score_v2"
+    assert feedback["event_type_distribution"] == {"music_played_through": 1}
     assert feedback["score_by_source_type"]["music"] == 0.9
-    assert feedback["score_by_source_type"]["meme"] == -0.05
+    assert "meme" not in feedback["score_by_source_type"]
     feedback_calibration = payload["feedback_calibration"]
     assert feedback_calibration["sample_count"] == 2
     assert feedback_calibration["feedback_joined_count"] == 1
-    assert feedback_calibration["feedback_inferred_count"] == 1
-    assert feedback_calibration["feedback_scored_count"] == 2
+    assert feedback_calibration["feedback_inferred_count"] == 0
+    assert feedback_calibration["feedback_scored_count"] == 1
+    assert feedback_calibration["feedback_censored_count"] == 1
     assert (
         feedback_calibration["score_bucket_feedback"]["high"]["average_feedback_score"]
-        == 0.425
+        == 0.9
     )
-    assert feedback_calibration["top1_positive_rate"] == 0.5
-    assert feedback_calibration["top1_negative_rate"] == 0.5
+    assert feedback_calibration["top1_positive_rate"] == 1.0
+    assert feedback_calibration["top1_negative_rate"] == 0.0
     assert (
         feedback_calibration["feedback_signal_summary"]["music"]["played_through_count"]
         == 1
     )
-    assert feedback_calibration["feedback_signal_summary"]["meme"]["ignored_count"] == 1
-    assert (
-        feedback_calibration["source_feedback_pressure"]["meme"]["level"]
-        == "weak_ignored_pressure"
-    )
-    assert feedback_calibration["feedback_actionable_suggestions"]["meme"] == {
-        "adjustment": 0.0,
-        "reasons": ["weak_ignored_pressure"],
-        "confidence": "low",
-    }
+    assert "meme" not in feedback_calibration["feedback_signal_summary"]
+    assert "meme" not in feedback_calibration["feedback_actionable_suggestions"]
+    assert payload["reward_score_v3_preview"]["reward_scored_count"] == 1
+    assert payload["reward_score_v3_preview"]["feedback_censored_count"] == 1
     assert (
         payload["manual_tuning_preview"]
         == feedback_calibration["manual_tuning_preview"]

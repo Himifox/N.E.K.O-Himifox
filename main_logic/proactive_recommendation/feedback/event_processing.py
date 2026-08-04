@@ -25,6 +25,8 @@ from ..normalization import (
 
 FEEDBACK_SCORE_VERSION = "report_score_v1"
 
+QUALITY_FEEDBACK_SCORE_VERSION = "report_score_v2"
+
 _SOURCE_REJECTION_SCORE = -0.35
 
 _SOURCE_FATIGUE_SCORE = -0.20
@@ -60,6 +62,20 @@ _FEEDBACK_EVENT_SCORES: dict[str, tuple[str, float, str]] = {
     "mini_game_decline": ("mini_game", -0.35, "high"),
     "mini_game_ignored": ("mini_game", -0.05, "low"),
 }
+
+# Derived quality semantics.  Raw v1 events remain unchanged for replay and
+# compatibility; unanswered events deliberately have no quality score.
+_QUALITY_FEEDBACK_EVENT_SCORES: dict[str, float] = {
+    event_type: score
+    for event_type, (_, score, _) in _FEEDBACK_EVENT_SCORES.items()
+    if event_type not in {"ignored", "mini_game_ignored"}
+}
+_QUALITY_FEEDBACK_EVENT_SCORES.update(
+    {
+        "user_reply_fast": 0.15,
+        "user_reply": 0.15,
+    }
+)
 
 _TOP_LEVEL_KEYS = {
     "ts",
@@ -141,6 +157,12 @@ def build_feedback_event(
             "score_version": FEEDBACK_SCORE_VERSION,
         }
     )
+
+
+def quality_feedback_score(event_type: Any) -> float | None:
+    """Return the derived v2 quality score, or None for missing/censored data."""
+    score = _QUALITY_FEEDBACK_EVENT_SCORES.get(to_stripped_text(event_type))
+    return None if score is None else float(score)
 
 
 def sanitize_recommendation_feedback_event(event: Mapping[str, Any]) -> dict[str, Any]:

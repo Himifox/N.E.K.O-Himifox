@@ -266,8 +266,6 @@ def _resolve_feedback_path(
 
 logger = logging.getLogger("N.E.K.O.Main.proactive_recommendation_feedback")
 
-REPLY_FAST_SECONDS = 60
-
 REPLY_WINDOW_SECONDS = 10 * 60
 
 _CONVERSATION_ACCEPTANCE_EVENT_TYPES = {
@@ -760,13 +758,10 @@ def note_user_turn_for_feedback(
             ts=timestamp,
         )
     if reply_action == "reply":
-        event_type = (
-            "user_reply_fast" if latency <= REPLY_FAST_SECONDS else "user_reply"
-        )
         return record_feedback_event(
             lanlan_name=pending.lanlan_name,
             turn_id=pending.turn_id,
-            event_type=event_type,
+            event_type="user_reply",
             metadata=metadata,
             ts=timestamp,
         )

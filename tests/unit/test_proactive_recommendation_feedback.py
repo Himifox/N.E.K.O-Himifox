@@ -15,11 +15,13 @@ from main_logic.proactive_recommendation.feedback.service import (
 from main_logic.proactive_recommendation.feedback.event_processing import (
     build_feedback_event,
     music_feedback_event_type,
+    quality_feedback_score,
     sanitize_feedback_metadata,
     sanitize_recommendation_feedback_event,
 )
 from main_logic.proactive_recommendation.feedback.learning import (
     build_reward_score_v2_preview,
+    build_reward_score_v3_preview,
 )
 from main_logic.proactive_recommendation.feedback.analytics import (
     join_observations_with_feedback,
@@ -27,6 +29,7 @@ from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
+    summarize_reward_score_v3_preview,
 )
 from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
@@ -153,6 +156,37 @@ def test_reward_score_v2_preview_keeps_reply_speed_neutral_and_deduplicated():
     assert combined["tuning_consumed"] is False
 
 
+def test_quality_v2_and_reward_v3_replay_fast_reply_without_speed_bonus():
+    fast_reply = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="fast",
+        event_type="user_reply_fast",
+        source_type="music",
+    )
+    reply = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="reply",
+        event_type="user_reply",
+        source_type="music",
+    )
+    ignored = build_feedback_event(
+        lanlan_name="neko",
+        turn_id="ignored",
+        event_type="ignored",
+        source_type="music",
+    )
+
+    assert fast_reply["report_score_v1"] == 0.25
+    assert quality_feedback_score("user_reply_fast") == 0.15
+    assert quality_feedback_score("user_reply") == 0.15
+    assert quality_feedback_score("ignored") is None
+    assert build_reward_score_v3_preview([fast_reply])["reward_score_v3_preview"] == 0.15
+    assert build_reward_score_v3_preview([reply])["reward_score_v3_preview"] == 0.15
+    ignored_preview = build_reward_score_v3_preview([ignored])
+    assert ignored_preview["reward_score_v3_preview"] is None
+    assert ignored_preview["excluded_event_types"] == ["ignored"]
+
+
 def test_reward_score_v2_preview_treats_technical_failures_as_zero():
     for event_type in ("music_error", "autoplay_blocked"):
         event = build_feedback_event(
@@ -259,6 +293,13 @@ def test_reward_score_v2_preview_requires_valid_delivery_attribution():
         window_seconds=3600,
         sample_limit=50,
     )
+    v3_summary = summarize_reward_score_v3_preview(
+        observations,
+        events,
+        now=10_000.0,
+        window_seconds=3600,
+        sample_limit=50,
+    )
 
     by_turn = {row["turn_id"]: row for row in joined}
     assert by_turn["good"]["reward_score_v2_preview"] == 0.55
@@ -276,6 +317,11 @@ def test_reward_score_v2_preview_requires_valid_delivery_attribution():
     assert summary["average_reward_score_v2_preview"] == 0.275
     assert summary["average_all_reward_score_v2_preview"] == 0.167
     assert summary["average_inferred_reward_score_v2_preview"] == -0.05
+    assert v3_summary["version"] == "reward_score_v3_preview_v1"
+    assert v3_summary["reward_scored_count"] == 2
+    assert v3_summary["feedback_censored_count"] == 1
+    assert v3_summary["average_reward_score_v3_preview"] == 0.25
+    assert v3_summary["feedback_score_population"] == "explicit_only"
     assert summary["inferred_ignored_reported_separately"] is True
     assert summary["relative_speed_neutral_count"] == 1
     assert summary["technical_zero_event_count"] == 1
@@ -851,11 +897,11 @@ def test_user_turn_feedback_respects_privacy_and_records_continue(tmp_path):
 
     rows = load_recommendation_feedback_jsonl(tmp_path / FEEDBACK_LOG_FILENAME)
     dumped = json.dumps(rows, ensure_ascii=False)
-    assert first["event_type"] == "user_reply_fast"
+    assert first["event_type"] == "user_reply"
     assert "reply_length" not in first["metadata"]
     assert second["event_type"] == "user_continue"
     assert second["metadata"]["reply_length"] == 5
-    assert [row["event_type"] for row in rows] == ["user_reply_fast", "user_continue"]
+    assert [row["event_type"] for row in rows] == ["user_reply", "user_continue"]
     assert "private text" not in dumped
 
 
@@ -961,8 +1007,8 @@ def test_explicit_text_source_feedback_excludes_music_and_ambiguous_text(tmp_pat
         text="我不喜欢你这种说法",
     )
 
-    assert music["event_type"] == "user_reply_fast"
-    assert ambiguous["event_type"] == "user_reply_fast"
+    assert music["event_type"] == "user_reply"
+    assert ambiguous["event_type"] == "user_reply"
 
 
 def test_non_music_text_feedback_uses_shared_negative_gradient(tmp_path):
@@ -1068,7 +1114,7 @@ def test_text_feedback_ignores_negation_reversal(tmp_path):
         text="这个新闻并不无聊",
     )
 
-    assert event["event_type"] == "user_reply_fast"
+    assert event["event_type"] == "user_reply"
 
 
 def test_named_source_feedback_rebinds_recent_verified_pending(tmp_path):
@@ -1155,7 +1201,7 @@ def test_deictic_feedback_does_not_rebind_past_newer_chat(tmp_path):
         now=120.0,
     )
     assert event["turn_id"] == "newer-chat"
-    assert event["event_type"] == "user_reply_fast"
+    assert event["event_type"] == "user_reply"
     assert preference["sources"] == {}
 
 
@@ -1378,7 +1424,7 @@ def test_direct_named_source_feedback_rejects_ambiguous_or_candidate_only_text(t
         config_dir=tmp_path,
         now=121.0,
     )
-    assert ambiguous["event_type"] == "user_reply_fast"
+    assert ambiguous["event_type"] == "user_reply"
     assert candidate_only["event_type"] == "user_continue"
     assert preference["sources"] == {}
 
@@ -1428,7 +1474,7 @@ def test_untrusted_attribution_metadata_cannot_bypass_candidate_gate(tmp_path):
     assert preference["sources"] == {}
 
 
-def test_feedback_summary_aggregates_scores_and_infers_ignored():
+def test_feedback_summary_scores_explicit_events_and_censors_unanswered():
     observations = [
         _observation(turn_id="positive", ts=10_000.0, actual_primary_channel="music"),
         _observation(turn_id="negative", ts=9_990.0, actual_primary_channel="mini_game"),
@@ -1459,12 +1505,15 @@ def test_feedback_summary_aggregates_scores_and_infers_ignored():
         sample_limit=50,
     )
 
-    assert summary["feedback_sample_count"] == 3
-    assert summary["positive_rate"] == 0.333
-    assert summary["negative_rate"] == 0.667
-    assert summary["feedback_missing_count"] == 0
+    assert summary["feedback_sample_count"] == 2
+    assert summary["quality_feedback_scored_count"] == 2
+    assert summary["positive_rate"] == 0.5
+    assert summary["negative_rate"] == 0.5
+    assert summary["feedback_missing_count"] == 1
+    assert summary["feedback_censored_count"] == 1
+    assert summary["feedback_score_population"] == "explicit_only"
+    assert summary["score_version"] == "report_score_v2"
     assert summary["event_type_distribution"] == {
-        "ignored": 1,
         "mini_game_decline": 1,
         "music_played_through": 1,
     }
@@ -1582,7 +1631,7 @@ def test_feedback_calibration_joins_turns_and_suggests_adjustments():
     assert "feedback_sample_count_below_threshold" in calibration["active_ready_reasons"]
 
 
-def test_feedback_calibration_separates_explicit_inferred_and_invalid_turn_ids():
+def test_feedback_calibration_separates_explicit_censored_and_invalid_turn_ids():
     observations = [
         _observation(turn_id="explicit", ts=10_000.0),
         _observation(turn_id="inferred", ts=9_000.0),
@@ -1614,19 +1663,23 @@ def test_feedback_calibration_separates_explicit_inferred_and_invalid_turn_ids()
     )
 
     assert joined[0]["feedback_inferred"] is False
-    assert joined[1]["feedback_inferred"] is True
-    assert joined[1]["feedback_event_types"] == ["ignored"]
+    assert joined[1]["feedback_inferred"] is False
+    assert joined[1]["feedback_censored"] is True
+    assert joined[1]["feedback_event_types"] == []
     assert joined[2]["feedback_inferred"] is False
     assert joined[2]["feedback_missing"] is True
     assert calibration["feedback_joined_count"] == 1
-    assert calibration["feedback_inferred_count"] == 1
-    assert calibration["feedback_scored_count"] == 2
-    assert calibration["feedback_missing_count"] == 1
-    assert calibration["feedback_rate_denominator"] == "feedback_scored_count"
+    assert calibration["feedback_inferred_count"] == 0
+    assert calibration["feedback_scored_count"] == 1
+    assert calibration["quality_feedback_scored_count"] == 1
+    assert calibration["feedback_censored_count"] == 2
+    assert calibration["feedback_missing_count"] == 2
+    assert calibration["feedback_score_population"] == "explicit_only"
+    assert calibration["feedback_rate_denominator"] == "quality_feedback_scored_count"
     assert "feedback_sample_count_below_threshold" in calibration["active_ready_reasons"]
 
 
-def test_feedback_calibration_distinguishes_strong_music_from_weak_ignored():
+def test_feedback_calibration_excludes_ignored_from_quality_and_tuning():
     observations = []
     events = []
     for idx in range(3):
@@ -1702,16 +1755,15 @@ def test_feedback_calibration_distinguishes_strong_music_from_weak_ignored():
     assert calibration["feedback_signal_summary"]["music"]["played_through_count"] == 3
     assert calibration["feedback_signal_summary"]["music"]["strong_positive_count"] == 3
     assert calibration["feedback_signal_summary"]["music"]["confidence_positive_rate"] == 1.0
-    assert calibration["feedback_signal_summary"]["meme"]["ignored_count"] == 4
-    assert calibration["source_feedback_pressure"]["meme"]["level"] == "weak_ignored_pressure"
+    assert calibration["feedback_censored_count"] == 4
+    assert calibration["quality_feedback_scored_count"] == 3
+    assert "meme" not in calibration["feedback_signal_summary"]
+    assert "meme" not in calibration["source_feedback_pressure"]
     assert calibration["feedback_actionable_suggestions"]["music"]["adjustment"] == 0.03
     assert calibration["feedback_actionable_suggestions"]["music"]["reasons"] == [
         "strong_music_positive_feedback"
     ]
-    assert calibration["feedback_actionable_suggestions"]["meme"]["adjustment"] == 0.0
-    assert calibration["feedback_actionable_suggestions"]["meme"]["reasons"] == [
-        "weak_ignored_pressure"
-    ]
+    assert "meme" not in calibration["feedback_actionable_suggestions"]
     assert "meme" not in calibration["suggested_weight_adjustments"]
     assert calibration["manual_tuning_preview"]["music"]["preview_adjustment"] == 0.03
     assert calibration["active_ready_by_feedback"] is False
@@ -1728,10 +1780,10 @@ def test_feedback_calibration_active_ready_when_score_buckets_predict_feedback()
             event_type = "user_continue"
         elif idx < 20:
             score = 0.62
-            event_type = "user_reply_fast"
+            event_type = "music_mid_completion"
         else:
             score = 0.42
-            event_type = "user_reply"
+            event_type = "music_normal_close"
         turn_id = f"turn-{idx}"
         observations.append(
             _observation(
@@ -1769,11 +1821,11 @@ def test_feedback_calibration_active_ready_when_score_buckets_predict_feedback()
     )
 
     assert calibration["feedback_joined_count"] == 30
-    assert calibration["average_feedback_score"] == 0.25
+    assert calibration["average_feedback_score"] == 0.217
     assert calibration["top1_positive_rate"] == 1.0
     assert calibration["top1_negative_rate"] == 0.0
     assert calibration["score_bucket_feedback"]["high"]["average_feedback_score"] == 0.35
     assert calibration["score_bucket_feedback"]["mid"]["average_feedback_score"] == 0.25
-    assert calibration["score_bucket_feedback"]["low"]["average_feedback_score"] == 0.15
+    assert calibration["score_bucket_feedback"]["low"]["average_feedback_score"] == 0.05
     assert calibration["active_ready_by_feedback"] is True
     assert calibration["active_ready_reasons"] == []

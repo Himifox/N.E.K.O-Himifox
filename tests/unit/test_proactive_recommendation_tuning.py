@@ -467,10 +467,9 @@ def test_auto_safe_does_not_downweight_ignored_only_pressure(tmp_path):
     )
     tuning = load_recommendation_tuning(config_dir=tmp_path)
 
-    assert result["applied"] is True
-    assert "meme" not in result["adjustments"]
+    assert result["applied"] is False
+    assert result["reason"] == "feedback_sample_count_below_threshold"
     assert "meme" not in tuning["source_type_adjustment"]
-    assert "weak_ignored_pressure" not in tuning["last_auto_apply"]["reasons"]
 
 
 def test_auto_safe_requires_two_high_confidence_negative_events(tmp_path):

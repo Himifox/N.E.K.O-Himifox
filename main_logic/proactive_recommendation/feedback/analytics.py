@@ -17,11 +17,17 @@ from ..normalization import (
     to_stripped_text,
 )
 from .event_processing import (
+    QUALITY_FEEDBACK_SCORE_VERSION,
     build_feedback_event,
     normalize_feedback_source_identifier,
+    quality_feedback_score,
     sanitize_recommendation_feedback_event,
 )
-from .learning import build_reward_score_v2_preview
+from .learning import (
+    REWARD_SCORE_V3_PREVIEW_VERSION,
+    build_reward_score_v2_preview,
+    build_reward_score_v3_preview,
+)
 
 FEEDBACK_SCORE_VERSION = "report_score_v1"
 
@@ -83,6 +89,14 @@ _REWARD_V2_PREVIEW_COMPONENT_ORDER = (
 
 _REWARD_V2_PREVIEW_REPLY_EVENTS = {"user_reply_fast", "user_reply"}
 
+_REWARD_V3_PREVIEW_COMPONENT_ORDER = (
+    "reply",
+    "continue",
+    "consumption",
+    "settings",
+    "interaction",
+)
+
 _WEAK_NEGATIVE_EVENT_TYPES = {"ignored", "mini_game_ignored"}
 
 _MUSIC_PLAYED_THROUGH_EVENT_TYPE = "music_played_through"
@@ -130,6 +144,7 @@ def summarize_recommendation_feedback(
     neutral = 0
     explicit_count = 0
     inferred_count = 0
+    censored_count = 0
 
     for row in samples:
         key = (
@@ -137,32 +152,20 @@ def summarize_recommendation_feedback(
             to_stripped_text(row.get("turn_id")),
         )
         events = list(events_by_turn.get(key, ()))
-        feedback_inferred = False
-        if key[0] and key[1] and not events and row.get("delivered") is True:
-            ts = coerce_float_or_default(row.get("ts"), default=-1.0)
-            if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
-                events = [
-                    build_feedback_event(
-                        lanlan_name=key[0],
-                        turn_id=key[1],
-                        event_type="ignored",
-                        source_type=row.get("actual_primary_channel")
-                        or row.get("shadow_selected_source_type"),
-                        ts=current,
-                    )
-                ]
-                feedback_inferred = True
-        if not events:
+        selected = _select_quality_feedback_events_for_turn(events)
+        weak_only = bool(events) and not selected and _has_weak_negative_event(events)
+        censored = not selected and (
+            weak_only or _reply_window_elapsed(row, now=current)
+        )
+        if not selected:
             missing += 1
+            censored_count += int(censored)
+            inferred_count += int(weak_only)
             continue
-        if feedback_inferred:
-            inferred_count += 1
-        else:
-            explicit_count += 1
-        selected = _select_feedback_events_for_turn(events)
+        explicit_count += 1
         score = clamp_to_range(
             sum(
-                coerce_float_or_default(event.get("report_score_v1"), default=0.0)
+                float(quality_feedback_score(event.get("event_type")) or 0.0)
                 for event in selected
             ),
             -1.0,
@@ -182,8 +185,8 @@ def summarize_recommendation_feedback(
         for event in selected:
             event_counts[str(event.get("event_type") or "unknown")] += 1
             confidence = str(event.get("confidence") or "")
-            event_score = coerce_float_or_default(
-                event.get("report_score_v1"), default=0.0
+            event_score = float(
+                quality_feedback_score(event.get("event_type")) or 0.0
             )
             if confidence == "high" and event_score > 0:
                 high_positive += 1
@@ -196,6 +199,8 @@ def summarize_recommendation_feedback(
         "feedback_joined_count": explicit_count,
         "feedback_inferred_count": inferred_count,
         "feedback_scored_count": count,
+        "quality_feedback_scored_count": count,
+        "feedback_censored_count": censored_count,
         "average_turn_feedback_score": round(sum(feedback_scores) / count, 3)
         if count
         else None,
@@ -211,10 +216,11 @@ def summarize_recommendation_feedback(
         "high_confidence_positive_count": high_positive,
         "high_confidence_negative_count": high_negative,
         "feedback_missing_count": missing,
+        "feedback_score_population": "explicit_only",
         "sample_count": len(samples),
         "sample_window_seconds": int(window_seconds),
         "sample_limit": int(sample_limit),
-        "score_version": FEEDBACK_SCORE_VERSION,
+        "score_version": QUALITY_FEEDBACK_SCORE_VERSION,
     }
 
 
@@ -242,30 +248,21 @@ def join_observations_with_feedback(
             to_stripped_text(row.get("turn_id")),
         )
         events = list(events_by_turn.get(key, ()))
-        feedback_inferred = False
-        if key[0] and key[1] and not events and row.get("delivered") is True:
-            ts = coerce_float_or_default(row.get("ts"), default=-1.0)
-            if ts >= 0 and current - ts >= REPLY_WINDOW_SECONDS:
-                events = [
-                    build_feedback_event(
-                        lanlan_name=key[0],
-                        turn_id=key[1],
-                        event_type="ignored",
-                        source_type=row.get("actual_primary_channel")
-                        or row.get("shadow_selected_source_type"),
-                        ts=current,
-                    )
-                ]
-                feedback_inferred = True
-        selected = _select_feedback_events_for_turn(events) if events else []
+        selected = _select_quality_feedback_events_for_turn(events)
+        feedback_inferred = (
+            bool(events) and not selected and _has_weak_negative_event(events)
+        )
+        feedback_censored = not selected and (
+            feedback_inferred or _reply_window_elapsed(row, now=current)
+        )
         feedback_missing = not selected
         turn_feedback_score = None
         if selected:
             turn_feedback_score = round(
                 clamp_to_range(
                     sum(
-                        coerce_float_or_default(
-                            event.get("report_score_v1"), default=0.0
+                        float(
+                            quality_feedback_score(event.get("event_type")) or 0.0
                         )
                         for event in selected
                     ),
@@ -294,6 +291,7 @@ def join_observations_with_feedback(
                 ],
                 "feedback_missing": feedback_missing,
                 "feedback_inferred": feedback_inferred,
+                "feedback_censored": feedback_censored,
                 "score_bucket": _score_bucket(shadow_score),
             }
         )
@@ -519,6 +517,128 @@ def summarize_reward_score_v2_preview(
     }
 
 
+def join_observations_with_reward_score_v3_preview(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Derive the explicit-only v3 reward from the existing attributed join."""
+    joined_v2 = join_observations_with_reward_score_v2_preview(
+        observations,
+        feedback_events,
+        now=now,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    joined: list[dict[str, Any]] = []
+    for row in joined_v2:
+        events = [
+            build_feedback_event(
+                lanlan_name=row.get("lanlan_name"),
+                turn_id=row.get("turn_id"),
+                event_type=event_type,
+                source_type=row.get("source_type"),
+                candidate_id=row.get("candidate_id"),
+            )
+            for event_type in row.get("feedback_event_types") or ()
+        ]
+        preview = build_reward_score_v3_preview(events)
+        reward = preview.get("reward_score_v3_preview")
+        if row.get("attribution_valid") is not True:
+            reward = None
+        excluded = list(preview.get("excluded_event_types") or ())
+        joined.append(
+            {
+                **row,
+                "reward_score_v3_preview": reward,
+                "reward_components_v3_preview": dict(preview["components"]),
+                "feedback_missing": reward is None,
+                "feedback_censored": bool(excluded) and reward is None,
+                "excluded_event_types_v3_preview": excluded,
+            }
+        )
+    return joined
+
+
+def summarize_reward_score_v3_preview(
+    observations: Iterable[Mapping[str, Any]],
+    feedback_events: Iterable[Mapping[str, Any]],
+    *,
+    now: float | None = None,
+    window_seconds: int = 3600,
+    sample_limit: int = 50,
+) -> dict[str, Any]:
+    """Summarize the latency-free reward contract consumed by Bandit learning."""
+    joined = join_observations_with_reward_score_v3_preview(
+        observations,
+        feedback_events,
+        now=now,
+        window_seconds=window_seconds,
+        sample_limit=sample_limit,
+    )
+    scored = [
+        row
+        for row in joined
+        if row.get("attribution_valid") is True
+        and isinstance(row.get("reward_score_v3_preview"), (int, float))
+        and row.get("feedback_inferred") is not True
+    ]
+    rewards = [float(row["reward_score_v3_preview"]) for row in scored]
+    source_rewards: dict[str, list[float]] = defaultdict(list)
+    component_values: dict[str, list[float]] = defaultdict(list)
+    for row in scored:
+        source_rewards[
+            normalize_feedback_source_identifier(row.get("source_type"))
+        ].append(float(row["reward_score_v3_preview"]))
+        components = row.get("reward_components_v3_preview")
+        if isinstance(components, Mapping):
+            for component in _REWARD_V3_PREVIEW_COMPONENT_ORDER:
+                component_values[component].append(
+                    coerce_float_or_default(components.get(component), default=0.0)
+                )
+    positive_count = sum(1 for reward in rewards if reward > 0)
+    negative_count = sum(1 for reward in rewards if reward < 0)
+    neutral_count = sum(1 for reward in rewards if reward == 0)
+    return {
+        "version": REWARD_SCORE_V3_PREVIEW_VERSION,
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "bandit_consumed": True,
+        "sample_count": len(joined),
+        "reward_scored_count": len(scored),
+        "quality_feedback_scored_count": len(scored),
+        "feedback_censored_count": sum(
+            1 for row in joined if row.get("feedback_censored") is True
+        ),
+        "feedback_missing_count": sum(
+            1 for row in joined if row.get("feedback_missing") is True
+        ),
+        "feedback_score_population": "explicit_only",
+        "average_reward_score_v3_preview": rounded_mean_or_none(rewards),
+        "positive_rate": rounded_ratio_or_none(positive_count, len(rewards)),
+        "negative_rate": rounded_ratio_or_none(negative_count, len(rewards)),
+        "neutral_rate": rounded_ratio_or_none(neutral_count, len(rewards)),
+        "score_by_source_type": {
+            source: rounded_mean_or_none(values)
+            for source, values in sorted(source_rewards.items())
+            if values
+        },
+        "average_components": {
+            component: rounded_mean_or_none(component_values.get(component, []))
+            for component in _REWARD_V3_PREVIEW_COMPONENT_ORDER
+        },
+        "excluded_event_count": sum(
+            len(row.get("excluded_event_types_v3_preview") or ()) for row in joined
+        ),
+        "window_seconds": int(window_seconds),
+        "sample_limit": int(sample_limit),
+    }
+
+
 def summarize_feedback_calibration(
     observations: Iterable[Mapping[str, Any]],
     feedback_events: Iterable[Mapping[str, Any]],
@@ -541,13 +661,14 @@ def summarize_feedback_calibration(
         if row.get("feedback_missing") is not True
         and isinstance(row.get("turn_feedback_score"), (int, float))
     ]
-    feedback_joined_count = sum(
-        1 for row in scored if row.get("feedback_inferred") is not True
-    )
+    feedback_joined_count = len(scored)
     feedback_inferred_count = sum(
-        1 for row in scored if row.get("feedback_inferred") is True
+        1 for row in joined if row.get("feedback_inferred") is True
     )
     feedback_scored_count = len(scored)
+    feedback_censored_count = sum(
+        1 for row in joined if row.get("feedback_censored") is True
+    )
     feedback_scores = [float(row["turn_feedback_score"]) for row in scored]
     positive_count = sum(1 for score in feedback_scores if score > 0)
     negative_count = sum(1 for score in feedback_scores if score < 0)
@@ -621,6 +742,8 @@ def summarize_feedback_calibration(
         "feedback_joined_count": feedback_joined_count,
         "feedback_inferred_count": feedback_inferred_count,
         "feedback_scored_count": feedback_scored_count,
+        "quality_feedback_scored_count": feedback_scored_count,
+        "feedback_censored_count": feedback_censored_count,
         "feedback_missing_count": len(joined) - feedback_scored_count,
         "average_feedback_score": rounded_mean_or_none(feedback_scores),
         "top1_positive_rate": rounded_ratio_or_none(
@@ -629,8 +752,8 @@ def summarize_feedback_calibration(
         "top1_negative_rate": rounded_ratio_or_none(
             negative_count, feedback_scored_count
         ),
-        "feedback_score_population": "explicit_and_inferred",
-        "feedback_rate_denominator": "feedback_scored_count",
+        "feedback_score_population": "explicit_only",
+        "feedback_rate_denominator": "quality_feedback_scored_count",
         "score_by_source_type": score_by_source_type,
         "score_bucket_feedback": bucket_feedback,
         "over_scored_sources": over_scored_sources,
@@ -646,7 +769,7 @@ def summarize_feedback_calibration(
         "active_ready_reasons": active_ready_reasons,
         "sample_window_seconds": int(window_seconds),
         "sample_limit": int(sample_limit),
-        "score_version": FEEDBACK_SCORE_VERSION,
+        "score_version": QUALITY_FEEDBACK_SCORE_VERSION,
     }
 
 
@@ -1099,6 +1222,43 @@ def _feedback_active_ready_reasons(
     if dominant_low_feedback_sources:
         reasons.append("dominant_low_feedback_source")
     return reasons
+
+
+def _select_quality_feedback_events_for_turn(
+    events: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select derived v2 quality events while excluding missing/censored signals."""
+    by_group: dict[str, dict[str, Any]] = {}
+    for raw in events:
+        event = sanitize_recommendation_feedback_event(raw)
+        score = quality_feedback_score(event.get("event_type"))
+        if score is None:
+            continue
+        group = str(event.get("event_group") or "unknown")
+        previous = by_group.get(group)
+        previous_score = (
+            quality_feedback_score(previous.get("event_type"))
+            if previous is not None
+            else None
+        )
+        if previous_score is None or abs(score) > abs(previous_score):
+            by_group[group] = event
+    return list(by_group.values())
+
+
+def _has_weak_negative_event(events: Sequence[Mapping[str, Any]]) -> bool:
+    return any(
+        to_stripped_text(event.get("event_type")) in _WEAK_NEGATIVE_EVENT_TYPES
+        for event in events
+        if isinstance(event, Mapping)
+    )
+
+
+def _reply_window_elapsed(row: Mapping[str, Any], *, now: float) -> bool:
+    if row.get("delivered") is not True:
+        return False
+    ts = coerce_float_or_default(row.get("ts"), default=-1.0)
+    return ts >= 0 and now - ts >= REPLY_WINDOW_SECONDS
 
 
 def _select_feedback_events_for_turn(

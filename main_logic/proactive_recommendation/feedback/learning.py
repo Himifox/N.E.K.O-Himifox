@@ -26,7 +26,9 @@ from .event_processing import (
 
 REWARD_SCORE_V2_PREVIEW_VERSION = "reward_score_v2_preview_v2"
 
-BANDIT_ENCOUNTER_REWARD_VERSION = "bandit_encounter_reward_v1"
+REWARD_SCORE_V3_PREVIEW_VERSION = "reward_score_v3_preview_v1"
+
+BANDIT_ENCOUNTER_REWARD_VERSION = "bandit_encounter_reward_v2"
 
 REPLY_SPEED_BONUS_MAX = 0.05
 
@@ -78,6 +80,28 @@ _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS = {
 }
 
 _REWARD_V2_PREVIEW_REPLY_EVENTS = {"user_reply_fast", "user_reply"}
+
+_REWARD_V3_PREVIEW_EVENT_COMPONENTS = {
+    event_type: component_score
+    for event_type, component_score in _REWARD_V2_PREVIEW_EVENT_COMPONENTS.items()
+    if event_type not in {"ignored", "mini_game_ignored"}
+}
+_REWARD_V3_PREVIEW_EVENT_COMPONENTS.update(
+    {
+        "user_reply_fast": ("reply", 0.15),
+        "user_reply": ("reply", 0.15),
+    }
+)
+
+_REWARD_V3_PREVIEW_COMPONENT_ORDER = (
+    "reply",
+    "continue",
+    "consumption",
+    "settings",
+    "interaction",
+)
+
+_REWARD_V3_EXCLUDED_EVENT_TYPES = {"ignored", "mini_game_ignored"}
 
 
 def reward_event_score(event_type: str) -> float:
@@ -181,23 +205,81 @@ def build_reward_score_v2_preview(
     }
 
 
+def build_reward_score_v3_preview(
+    feedback_events: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build the latency-free, explicit-only reward used by Bandit learning."""
+    event_types: list[str] = []
+    seen_event_types: set[str] = set()
+    components = {component: 0.0 for component in _REWARD_V3_PREVIEW_COMPONENT_ORDER}
+    recognized_event_types: list[str] = []
+    excluded_event_types: list[str] = []
+    technical_zero_events: list[str] = []
+    unknown_events: list[str] = []
+
+    for raw_event in feedback_events:
+        if not isinstance(raw_event, Mapping):
+            continue
+        event = sanitize_recommendation_feedback_event(raw_event)
+        event_type = to_stripped_text(event.get("event_type")) or "unknown"
+        if event_type in seen_event_types:
+            continue
+        seen_event_types.add(event_type)
+        event_types.append(event_type)
+        if event_type in _REWARD_V3_EXCLUDED_EVENT_TYPES:
+            excluded_event_types.append(event_type)
+            continue
+        component_score = _REWARD_V3_PREVIEW_EVENT_COMPONENTS.get(event_type)
+        if component_score is None:
+            unknown_events.append(event_type)
+            continue
+        recognized_event_types.append(event_type)
+        component, score = component_score
+        previous = float(components.get(component, 0.0))
+        if abs(float(score)) > abs(previous):
+            components[component] = float(score)
+        if event_type in _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS:
+            technical_zero_events.append(event_type)
+
+    reward = clamp_to_range(sum(components.values()), -1.0, 1.0)
+    return {
+        "version": REWARD_SCORE_V3_PREVIEW_VERSION,
+        "preview_only": True,
+        "ranking_consumed": False,
+        "tuning_consumed": False,
+        "bandit_consumed": True,
+        "reward_score_v3_preview": (
+            round(reward, 3) if recognized_event_types else None
+        ),
+        "components": {
+            component: round(float(components[component]), 3)
+            for component in _REWARD_V3_PREVIEW_COMPONENT_ORDER
+        },
+        "event_types": event_types,
+        "recognized_event_types": recognized_event_types,
+        "excluded_event_types": excluded_event_types,
+        "technical_zero_event_types": technical_zero_events,
+        "unknown_event_types": unknown_events,
+    }
+
+
 def build_bandit_encounter_reward(
     feedback_events: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Promote the existing v2 rule score through a versioned Bandit contract."""
-    preview = build_reward_score_v2_preview(feedback_events)
+    """Apply the explicit-only v3 reward through a versioned Bandit contract."""
+    preview = build_reward_score_v3_preview(feedback_events)
     recognized = tuple(preview.get("recognized_event_types") or ())
     signal_events = tuple(
         event_type
         for event_type in recognized
         if event_type not in _REWARD_V2_PREVIEW_TECHNICAL_ZERO_EVENTS
-        and abs(float(_REWARD_V2_PREVIEW_EVENT_COMPONENTS[event_type][1])) > 0.0
+        and abs(float(_REWARD_V3_PREVIEW_EVENT_COMPONENTS[event_type][1])) > 0.0
     )
-    reward = preview.get("reward_score_v2_preview")
+    reward = preview.get("reward_score_v3_preview")
     eligible = bool(signal_events and isinstance(reward, (int, float)))
     return {
         "version": BANDIT_ENCOUNTER_REWARD_VERSION,
-        "rule_score_version": REWARD_SCORE_V2_PREVIEW_VERSION,
+        "rule_score_version": REWARD_SCORE_V3_PREVIEW_VERSION,
         "eligible": eligible,
         "reward": float(reward) if eligible else None,
         "event_types": list(recognized),

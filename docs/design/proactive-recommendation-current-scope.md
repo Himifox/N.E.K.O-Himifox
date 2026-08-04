@@ -60,7 +60,7 @@
 - 对 music、news、video、meme、vision 等当前安全候选进行确定性排序。
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
-- 通过有效 `turn_id` 对显式/推断反馈计算可重放的 `reward_score_v2_preview`，并在 summary 中只读展示个人相对回复速度 bonus。
+- 通过有效 `turn_id` 对显式反馈计算 `report_score_v2` 与可重放的 `reward_score_v3_preview`；旧 `reward_score_v2_preview` 仅保留兼容诊断。
 - 在 Shadow 中分别保存全局搭话接受度与已验证素材来源 affinity，并把决策前快照写入后续 observation。
 
 ### 3.2 暂不允许
@@ -144,16 +144,16 @@ P44-F2 的两侧工作均已结束：
 
 P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的第一步，仅冻结奖励语义和可审计输出：
 
-1. 原始 feedback event 与 `report_score_v1` 保持不变，v2 preview 始终可从原始事件重算。
-2. `user_reply_fast` 与 `user_reply` 获得相同基础回复分；固定 60 秒标签不直接代表兴趣。
-3. `user_continue`、音乐完成/播完、明确关闭等事件按独立 component 计算；`ignored` 仅为低置信弱负向，推断 ignored 与显式 reward 主指标分开报告。
+1. 原始 feedback event 与 `report_score_v1` 保持不变；报表、校准和调权统一从原始事件派生 `report_score_v2`。
+2. 新回复只写 `user_reply`；历史 `user_reply_fast` 与 `user_reply` 在 v2/v3 中均计 `+0.15`，回复时延不再作为质量奖励。
+3. `user_continue`、音乐完成/播完、明确关闭等事件按独立 component 计算；`ignored` 与 `mini_game_ignored` 视为缺失/右截尾，不进入均分、正负率、校准、active-ready、Bandit 或调权。
 4. `music_error` 与 `autoplay_blocked` 明确计 0，不得污染偏好。
 5. feedback 必须通过 `lanlan_name + turn_id` 与已投递 observation 关联，并校验来源及可验证的 candidate ID；归因失败的事件不计 reward。
-6. 输出仅进入 `/api/proactive/recommendation/summary` 的独立 preview 字段；推荐排序、生产权重、PASS、投递和 tuning 均不读取它。
+6. `/api/proactive/recommendation/summary` 同时保留旧 v2 诊断并输出无速度组件的 `reward_score_v3_preview`；Bandit 只消费 v3，排序、PASS、投递和 tuning 不读取旧 v2。
 
 ### 5.3 P44-G0-B：个人相对回复速度预览
 
-P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事件、排序或投递：
+P44-G0-B 作为旧 `reward_score_v2_preview` 的兼容诊断保留，不进入质量、校准、调权、来源偏好或 Bandit：
 
 1. 基线从当前日志窗口内、归因有效且早于本次回复的历史延迟重放，不新增画像文件或逐条延迟副本。
 2. 少于 5 次有效历史回复时，relative-speed component 保持 0。
@@ -178,7 +178,7 @@ P44-G0-B 只在 reward preview 内补齐个人速度基线，不改变反馈事�
 
 1. `conversation_acceptance` 只描述用户是否接受本次主动搭话。通用回复、继续对话与关闭主动搭话只更新该状态，不更新任何素材来源 affinity。
 2. `source_affinity` 只接受实际投递素材的可验证来源行为；当前实现支持具有 candidate ID 的 Music 行为及明确来源关闭事件。
-3. `ignored` 继续作为低置信报告信号，不写入 v2 临时或持久状态；`music_error`、`autoplay_blocked` 和其他技术零分也不更新状态。
+3. `ignored` 仅保留为可打扰性观测，不写入质量或 v2 临时/持久状态；`music_error`、`autoplay_blocked` 和其他技术零分也不更新状态。
 4. 来源 affinity 必须同时匹配 pending `turn_id`、实际来源与 candidate ID；Shadow 中未实际投递的候选不得获得偏好证据。
 5. 临时 TTL 继续为 2 小时，持久 preview 继续要求至少 3 条合格证据；同一 turn 的同组事件不重复累计持久证据。
 6. v1 不迁移为 v2 来源偏好，避免继承“愿意聊天等于喜欢素材”的旧语义；v1 状态文件和历史 observation 保持只读，原始 JSONL 不删除、不重写，v2 从独立文件的冷状态开始。

@@ -39,6 +39,7 @@ from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
+    summarize_reward_score_v3_preview,
 )
 from main_logic.proactive_recommendation.state.feedback_preview import (
     get_feedback_state_preview,
@@ -885,6 +886,13 @@ class RecommendationService:
             window_seconds=CALIBRATION_WINDOW_SECONDS,
             sample_limit=CALIBRATION_SAMPLE_LIMIT,
         )
+        reward_v3_preview = summarize_reward_score_v3_preview(
+            calibration_samples,
+            feedback_events,
+            now=current_time,
+            window_seconds=CALIBRATION_WINDOW_SECONDS,
+            sample_limit=CALIBRATION_SAMPLE_LIMIT,
+        )
         tuning = load_recommendation_tuning(config_dir=config_dir)
         payload: dict[str, Any] = {
             "ok": True,
@@ -896,6 +904,7 @@ class RecommendationService:
             "feedback": feedback,
             "feedback_calibration": feedback_calibration,
             "reward_score_v2_preview": reward_preview,
+            "reward_score_v3_preview": reward_v3_preview,
             "review_context_validation": summarize_recommendation_review_context(
                 calibration_samples
             ),
