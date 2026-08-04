@@ -150,6 +150,43 @@ const safeT = (key, fallback = '') => {
     return (result === key || !result) ? fallback : result;
 };
 
+function openCredentialGuide(event) {
+    if (event) event.preventDefault();
+
+    const width = Math.min(1120, Math.round(screen.availWidth * 0.8));
+    const height = Math.min(860, Math.round(screen.availHeight * 0.82));
+    const left = Math.max(0, Math.floor((screen.availWidth - width) / 2));
+    const top = Math.max(0, Math.floor((screen.availHeight - height) / 2));
+    const features = `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`;
+    const guideUrl = new URL('/api/auth/guide', document.baseURI || window.location.href);
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    guideUrl.searchParams.set('theme', theme);
+    guideUrl.searchParams.set('v', Date.now().toString());
+
+    const windowName = 'neko_credential_guide';
+    const existingWindow = window._openedWindows && window._openedWindows[windowName];
+    let openedWindow = null;
+    if (existingWindow && !existingWindow.closed) {
+        try {
+            existingWindow.location.replace(guideUrl.toString());
+        } catch (_) {
+            existingWindow.location.href = guideUrl.toString();
+        }
+        openedWindow = existingWindow;
+    } else if (typeof window.openOrFocusWindow === 'function') {
+        openedWindow = window.openOrFocusWindow(guideUrl.toString(), windowName, features, { navigateOnReuse: true });
+    } else {
+        openedWindow = window.open(guideUrl.toString(), windowName, features);
+    }
+
+    if (openedWindow) {
+        window._openedWindows = window._openedWindows || {};
+        window._openedWindows[windowName] = openedWindow;
+        try { openedWindow.focus(); } catch (_) {}
+    }
+    return false;
+}
+
 const CJK_CHAR_RE = /[\u3400-\u9fff]/u;
 
 const createLocalizedError = (message) => {
@@ -207,6 +244,7 @@ let twitchDevicePollTimeout = null;
 let twitchDevicePollInFlight = false;
 let twitchDevicePollActive = false;
 let twitchDevicePollIntervalMs = 5000;
+let statusDisclosureInitialized = false;
 
 // 当语言切换时，重新初始化平台配置
 function initPlatformConfig() {
@@ -243,24 +281,16 @@ function initPlatformConfig() {
     }
 }
 
-// 安全渲染带标签的教程步骤，并提供完善的中文回退
+// 安全渲染带标签的静态文案，并提供完善的中文回退
 function renderStaticHtmlI18n() {
     const htmlSteps = {
-        'credential-hero-description': { key: 'cookiesLogin.heroDescription', fallback: '在各平台粘贴 <span class="highlight">Cookie</span> 并加密存储，供后续调用。' },
-        'guide-step1': { key: 'cookiesLogin.guide.step1', fallback: '在浏览器打开对应平台网页并<span class="highlight-text">完成登录</span>。' },
-        'guide-step3': { key: 'cookiesLogin.guide.step3', fallback: '在顶部找到并点击 <span class="highlight-text">Application (应用程序)</span>。' },
-        'guide-step4': { key: 'cookiesLogin.guide.step4', fallback: '左侧找到 <span class="highlight-text">Cookies</span>，点击域名后在右侧复制对应的值。' }
+        'credential-hero-description': { key: 'cookiesLogin.heroDescription', fallback: '在各平台粘贴 <span class="highlight">Cookie</span> 并加密存储，供后续调用。' }
     };
     // 遍历所有需要翻译的元素 ID
     for (const [id, data] of Object.entries(htmlSteps)) {
         const el = document.getElementById(id);
         if (el) el.innerHTML = DOMPurify.sanitize(safeT(data.key, data.fallback));
     }
-    // 更新步骤2的前缀和后缀文本
-    const step2Prefix = document.getElementById('guide-step2-prefix');
-    const step2Suffix = document.getElementById('guide-step2-suffix');
-    if (step2Prefix) step2Prefix.textContent = safeT('cookiesLogin.guide.step2_prefix', '按下键盘');
-    if (step2Suffix) step2Suffix.textContent = safeT('cookiesLogin.guide.step2_suffix', '打开开发者工具。');
     const platformList = document.getElementById('platform-list-content');
     if (platformList) {
         platformList.dataset.emptyText = safeT(
@@ -757,7 +787,7 @@ function switchTab(platformKey, btnElement, isReRender = false) {
     }
     currentPlatform = platformKey;
     const config = PLATFORM_CONFIG[platformKey];
-    const tutorialBanner = document.querySelector('#main-panel > .tutorial-banner');
+    const tutorialBanner = document.querySelector('#main-panel > .tutorial-link');
     if (tutorialBanner) tutorialBanner.style.display = config.authMode ? 'none' : '';
     const encryptRow = document.getElementById('encrypt-toggle')?.parentElement;
     if (encryptRow) encryptRow.style.display = config.authMode ? 'none' : '';
@@ -916,7 +946,7 @@ function renderTwitchDeviceCode(result) {
     if (!container) return;
     container.textContent = '';
     const card = document.createElement('div');
-    card.className = 'tutorial-banner';
+    card.className = 'twitch-auth-card';
     card.style.marginTop = '18px';
     const instruction = document.createElement('div');
     instruction.textContent = safeT('cookiesLogin.twitchAuth.authorizeHint', 'Open the Twitch activation page and enter this code:');
@@ -984,7 +1014,7 @@ async function checkTwitchDeviceCode(button, automatic = false) {
             stopTwitchDevicePoll();
             showAlert(true, safeT('cookiesLogin.twitchAuth.authorized', 'Twitch 凭证已加密保存'));
             document.getElementById('twitch-device-result')?.replaceChildren();
-            refreshStatusList();
+            refreshStatusList({ reveal: true });
             return 'authorized';
         } else if (response.ok && result.pending) {
             if (!automatic) {
@@ -1100,7 +1130,7 @@ async function submitCurrentCookie() {
             showAlert(true, message);
             window.triggerMascotReaction?.('success', 1100);
             document.querySelectorAll('.credential-input').forEach(i => i.value = '');
-            refreshStatusList();
+            refreshStatusList({ reveal: true });
         } else {
             const rawMessage = Array.isArray(result?.detail)
                 ? result.detail.map(e => e.msg || JSON.stringify(e)).join('; ')
@@ -1122,7 +1152,7 @@ async function submitCurrentCookie() {
 
 // 刷新当前平台的状态列表
 // 重新设计的状态监控列表渲染引擎 (修复缓存与状态判定问题)
-async function refreshStatusList() {
+async function refreshStatusList({ reveal = false } = {}) {
     const container = document.getElementById('platform-list-content');
     if (!container) return;
     const platforms = Object.keys(PLATFORM_CONFIG);
@@ -1134,6 +1164,21 @@ async function refreshStatusList() {
                 .catch(() => ({ success: false })))
         );
         container.textContent = '';
+        const isActiveResponse = res => res.success === true && (
+            res.has_cookies === true ||
+            res.data?.has_cookies === true ||
+            res.data === true
+        );
+        const hasActiveCredentials = results.some(isActiveResponse);
+        const statusArea = document.getElementById('status-area');
+        if (statusArea) {
+            if (reveal) {
+                statusArea.open = true;
+            } else if (!statusDisclosureInitialized || !hasActiveCredentials) {
+                statusArea.open = hasActiveCredentials;
+            }
+            statusDisclosureInitialized = true;
+        }
         results.forEach((res, idx) => {
             const key = platforms[idx];
             const cfg = PLATFORM_CONFIG[key];
@@ -1142,11 +1187,7 @@ async function refreshStatusList() {
             // 无论后端是 { success: true, data: { has_cookies: true } } 
             // 还是 { success: true, has_cookies: true } 
             // 都能被正确识别为 true
-            const active = res.success === true && (
-                res.has_cookies === true || 
-                res.data?.has_cookies === true || 
-                res.data === true
-            );
+            const active = isActiveResponse(res);
             if (!active) return;
 
             // 1. 卡片主容器
@@ -1202,11 +1243,57 @@ async function refreshStatusList() {
 }
 
 // 删除指定平台的 Cookies 配置
+function showCredentialDeleteConfirm(message) {
+    const dialog = document.getElementById('credential-confirm-dialog');
+    const title = dialog?.querySelector('[data-confirm-title]');
+    const messageElement = document.getElementById('credential-confirm-message');
+    const cancelButton = dialog?.querySelector('[data-confirm-cancel]');
+    const acceptButton = dialog?.querySelector('[data-confirm-accept]');
+    if (!dialog || !title || !messageElement || !cancelButton || !acceptButton) {
+        return Promise.resolve(false);
+    }
+
+    title.textContent = safeT('cookiesLogin.removeCredentials', '清除凭证');
+    messageElement.textContent = message;
+    cancelButton.textContent = safeT('common.cancel', '取消');
+    acceptButton.textContent = safeT('cookiesLogin.removeCredentials', '清除凭证');
+
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = confirmed => {
+            if (settled) return;
+            settled = true;
+            dialog.close();
+            cancelButton.removeEventListener('click', onCancel);
+            acceptButton.removeEventListener('click', onAccept);
+            dialog.removeEventListener('cancel', onCancel);
+            dialog.removeEventListener('click', onBackdropClick);
+            resolve(confirmed);
+        };
+        const onCancel = event => {
+            event?.preventDefault();
+            finish(false);
+        };
+        const onAccept = () => finish(true);
+        const onBackdropClick = event => {
+            if (event.target === dialog) finish(false);
+        };
+
+        cancelButton.addEventListener('click', onCancel);
+        acceptButton.addEventListener('click', onAccept);
+        dialog.addEventListener('cancel', onCancel);
+        dialog.addEventListener('click', onBackdropClick);
+        dialog.showModal();
+        cancelButton.focus();
+    });
+}
+
 async function deleteCookie(platformKey) {
     const fallbackPlatformName = safeT('cookiesLogin.thisPlatform', '该平台');
     const platformName = PLATFORM_CONFIG[platformKey]?.name || fallbackPlatformName;
     const message = safeT('cookiesLogin.confirmRemove', '确定要清除 {{platformName}} 的凭证吗？').replace('{{platformName}}', platformName);
-    if (!confirm(message)) return;
+    const confirmed = await showCredentialDeleteConfirm(message);
+    if (!confirmed) return;
     try {
         const res = await fetch(`/api/auth/cookies/${platformKey}`, { method: 'DELETE' });
         const data = await res.json();
@@ -1253,6 +1340,7 @@ function showAlert(success, message) {
     clearAlertTimer();
     
     // 2. 设置样式与内容
+    alertEl.style.removeProperty('display');
     alertEl.classList.toggle('success', success);
     alertEl.classList.toggle('error', !success);
     alertEl.textContent = message; 

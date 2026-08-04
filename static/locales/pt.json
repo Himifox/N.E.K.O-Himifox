@@ -3840,6 +3840,11 @@
         },
         "guide": {
             "title": "Guia universal para iniciantes",
+            "open": "Abrir o tutorial completo",
+            "subtitle": "Siga as etapas gerais para obter os cookies do navegador e volte ao gerenciador de credenciais para preencher os campos necessários.",
+            "securityTitle": "Lembrete de segurança",
+            "securityText": "As credenciais dão acesso à sua conta. Não as compartilhe e cole-as somente na página local do N.E.K.O.",
+            "back": "Voltar ao gerenciador de credenciais",
             "step1": "Abra o site da plataforma de destino no navegador e <span class=\"highlight-text\">faça login</span>.",
             "step2_prefix": "Imprensa",
             "step2_suffix": "para abrir as ferramentas do desenvolvedor.",

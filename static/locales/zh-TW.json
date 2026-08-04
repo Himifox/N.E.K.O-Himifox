@@ -3840,6 +3840,11 @@
         },
         "guide": {
             "title": "新手通用獲取教學",
+            "open": "開啟獨立教學頁面",
+            "subtitle": "依照通用流程取得瀏覽器 Cookie，再返回憑證管理中心填寫對應欄位。",
+            "securityTitle": "安全提醒",
+            "securityText": "憑證等同於登入身分，請勿分享給他人；僅在本機的 N.E.K.O. 頁面中貼上。",
+            "back": "返回憑證管理",
             "step1": "在瀏覽器開啟目標平台網頁並<span class=\"highlight-text\">完成登入</span>。",
             "step2_prefix": "按下鍵盤",
             "step2_suffix": "開啟開發者工具。",

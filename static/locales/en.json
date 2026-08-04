@@ -3840,6 +3840,11 @@
         },
         "guide": {
             "title": "Universal Guide for Beginners",
+            "open": "Open the full tutorial",
+            "subtitle": "Follow the universal steps to obtain browser cookies, then return to Credential Manager and fill in the required fields.",
+            "securityTitle": "Security reminder",
+            "securityText": "Credentials grant access to your account. Never share them, and only paste them into your local N.E.K.O. page.",
+            "back": "Back to Credential Manager",
             "step1": "Open the target platform website in browser and <span class=\"highlight-text\">log in</span>.",
             "step2_prefix": "Press",
             "step2_suffix": "to open Developer Tools.",

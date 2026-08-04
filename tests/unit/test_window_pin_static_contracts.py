@@ -66,6 +66,7 @@ def test_only_requested_top_level_templates_define_pin_controls():
         "templates/api_key_settings.html",
         "templates/memory_browser.html",
         "templates/cookies_login.html",
+        "templates/cookies_guide.html",
         "templates/cloudsave_manager.html",
     )
     for path in pin_templates:
@@ -112,6 +113,7 @@ def test_pin_templates_version_shared_window_control_and_locale_assets():
         "templates/character_card_manager.html",
         "templates/memory_browser.html",
         "templates/cookies_login.html",
+        "templates/cookies_guide.html",
         "templates/cloudsave_manager.html",
         "templates/jukebox.html",
         "templates/openclaw_guide.html",
@@ -138,6 +140,26 @@ def test_pin_templates_version_shared_window_control_and_locale_assets():
     )
     assert openclaw_route
     assert "**_static_assets_ctx()" in openclaw_route.group("body")
+
+    auth_routes = read_text("main_routers/cookies_login_router.py")
+    credential_guide_route = re.search(
+        r"async def render_auth_guide\(request: Request\):(?P<body>[\s\S]*?)"
+        r"(?=\n# ============)",
+        auth_routes,
+    )
+    assert credential_guide_route
+    assert 'templates.TemplateResponse("cookies_guide.html"' in credential_guide_route.group("body")
+
+
+def test_credentials_page_opens_the_universal_guide_in_a_named_window():
+    template = read_text("templates/cookies_login.html")
+    script = read_text("static/js/cookies_login.js")
+
+    assert 'href="/api/auth/guide"' in template
+    assert 'target="neko_credential_guide"' in template
+    assert '<details class="tutorial-banner tutorial-disclosure">' not in template
+    assert "function openCredentialGuide(event)" in script
+    assert "window.open(guideUrl.toString(), windowName, features)" in script
 
 
 def test_jukebox_has_an_explicit_pin_before_minimize_without_touching_manager():

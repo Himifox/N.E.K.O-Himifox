@@ -37,6 +37,8 @@
             font-family: var(--font-ui);
             font-kerning: normal;
             text-rendering: optimizeLegibility;
+            -webkit-user-select: none;
+            user-select: none;
             background-color: var(--bg);
             background-image:
                 radial-gradient(ellipse at 82% 12%, oklch(0.84 0.11 215 / 0.28), transparent 40%),
@@ -48,6 +50,16 @@
             width: 100vw;
             overflow: hidden;
             display: flex; flex-direction: column;
+        }
+        input,
+        textarea {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        img {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
         }
         body::before {
             content: '';
@@ -639,16 +651,22 @@
         /* ==============================
            TUTORIAL BANNER
            ============================== */
-        .tutorial-banner {
+        .tutorial-link {
             background: linear-gradient(135deg, var(--accent-soft), color-mix(in oklch, var(--surface) 86%, transparent));
             border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--border));
             border-radius: 14px;
-            padding: 16px 18px;
+            padding: 14px 18px;
             margin-bottom: 20px;
             position: relative;
             overflow: hidden;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--accent-dim);
+            text-decoration: none;
+            transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
         }
-        .tutorial-banner::before {
+        .tutorial-link::before {
             content: '';
             position: absolute;
             inset: 0 28% auto 0;
@@ -656,82 +674,59 @@
             background: linear-gradient(90deg, var(--accent), transparent);
             box-shadow: 0 0 12px var(--accent-glow);
         }
+        .tutorial-link:hover {
+            border-color: color-mix(in oklch, var(--accent) 58%, var(--border));
+            background: linear-gradient(135deg, color-mix(in oklch, var(--accent-soft) 88%, var(--accent)), color-mix(in oklch, var(--surface) 82%, transparent));
+            transform: translateY(-1px);
+        }
+        .tutorial-link:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+        }
+        .tutorial-link-icon {
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            border-radius: 11px;
+            display: grid;
+            place-items: center;
+            color: white;
+            background: linear-gradient(145deg, var(--accent), var(--accent-dim));
+            box-shadow: 0 7px 18px var(--accent-glow);
+        }
+        .tutorial-link-copy {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
         .tutorial-title {
             font-size: 13px;
             font-weight: 600;
-            color: var(--accent-dim);
-            display: flex;
-            align-items: center;
-            gap: 6px;
+            color: currentColor;
         }
-        .tutorial-disclosure > .tutorial-title {
-            justify-content: space-between;
-            cursor: pointer;
-            list-style: none;
-            user-select: none;
-        }
-        .tutorial-disclosure > .tutorial-title::-webkit-details-marker { display: none; }
-        .tutorial-disclosure > .tutorial-title::after {
-            content: '';
-            width: 8px;
-            height: 8px;
-            margin-right: 3px;
-            border-right: 2px solid currentColor;
-            border-bottom: 2px solid currentColor;
-            transform: rotate(45deg);
-            transition: transform 0.2s ease;
-        }
-        .tutorial-disclosure[open] > .tutorial-title {
-            margin-bottom: 12px;
-        }
-        .tutorial-disclosure[open] > .tutorial-title::after {
-            transform: translateY(3px) rotate(225deg);
-        }
-        .tutorial-disclosure > .tutorial-title:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 5px;
-            border-radius: 4px;
-        }
-        .tutorial-steps {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-        }
-        .step-item {
-            background: color-mix(in oklch, var(--surface) 86%, transparent);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px 12px;
-            font-size: 13px;
-            color: var(--fg);
-            display: flex;
-            gap: 10px;
-            line-height: 1.5;
-            box-shadow: inset 0 1px rgba(255,255,255,0.28);
-        }
-        .step-num {
-            flex-shrink: 0;
-            width: 22px;
-            height: 22px;
-            background: var(--accent);
-            color: #fff;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .tutorial-link-subtitle {
+            color: var(--muted);
             font-size: 12px;
-            font-weight: 700;
-            margin-top: 2px;
+            line-height: 1.45;
         }
-        kbd {
-            background: var(--accent-soft);
-            border: 1px solid oklch(0.85 0.06 230);
-            border-radius: 4px;
-            padding: 1px 6px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--accent-dim);
+        .tutorial-link-arrow {
+            margin-left: auto;
+            flex: 0 0 auto;
+            font-size: 20px;
+            line-height: 1;
+            opacity: 0.72;
+            transition: transform 0.18s ease;
+        }
+        .tutorial-link:hover .tutorial-link-arrow {
+            transform: translate(2px, -2px);
+        }
+        .twitch-auth-card {
+            padding: 16px 18px;
+            background: linear-gradient(135deg, var(--accent-soft), color-mix(in oklch, var(--surface) 86%, transparent));
+            border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--border));
+            border-radius: 14px;
+            color: var(--fg);
         }
         .highlight-text { color: var(--accent); font-weight: 600; }
 
@@ -896,25 +891,127 @@
         .submit-btn.loading svg { animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        .submit-row {
+            display: flex;
+            align-items: stretch;
+            gap: 12px;
+            width: 100%;
+        }
         .alert {
-            margin-top: 12px;
+            flex: 1 1 auto;
+            min-width: 0;
+            min-height: 48px;
             padding: 10px 14px;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 14px;
             line-height: 1.5;
             display: none;
+            align-items: center;
         }
         .alert.error {
-            display: block;
+            display: flex;
             background: oklch(0.94 0.04 30);
             border: 1px solid oklch(0.82 0.1 30);
             color: oklch(0.35 0.12 30);
         }
         .alert.success {
-            display: block;
-            background: oklch(0.94 0.05 150);
-            border: 1px solid oklch(0.82 0.12 150);
-            color: oklch(0.32 0.1 150);
+            display: flex;
+            background: color-mix(in oklch, var(--accent-soft) 82%, var(--surface));
+            border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--border));
+            color: var(--accent-dim);
+            box-shadow: 0 6px 18px color-mix(in oklch, var(--accent-glow) 62%, transparent);
+        }
+
+        .credential-confirm-dialog {
+            width: min(350px, calc(100vw - 32px));
+            padding: 0;
+            border: 1px solid color-mix(in oklch, var(--accent) 48%, var(--border));
+            border-radius: 18px;
+            background: linear-gradient(145deg,
+                oklch(0.97 0.025 225 / 0.97),
+                oklch(0.92 0.055 220 / 0.95));
+            box-shadow:
+                0 24px 60px oklch(0.2 0.04 255 / 0.28),
+                inset 0 1px rgba(255, 255, 255, 0.72),
+                0 0 28px color-mix(in oklch, var(--accent-glow) 70%, transparent);
+            color: var(--fg);
+            overflow: hidden;
+            backdrop-filter: blur(26px) saturate(145%);
+            -webkit-backdrop-filter: blur(26px) saturate(145%);
+        }
+        .credential-confirm-dialog::backdrop {
+            background: oklch(0.16 0.025 255 / 0.42);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+        .credential-confirm-body {
+            padding: 20px 20px 16px;
+        }
+        .credential-confirm-heading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0 0 9px;
+            font-family: var(--font-display);
+            font-size: 17px;
+            font-weight: 750;
+        }
+        .credential-confirm-icon {
+            display: grid;
+            width: 30px;
+            height: 30px;
+            flex: 0 0 auto;
+            place-items: center;
+            border-radius: 10px;
+            background: oklch(0.93 0.055 28 / 0.82);
+            color: oklch(0.56 0.2 28);
+        }
+        .credential-confirm-message {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.65;
+        }
+        .credential-confirm-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 12px 16px 16px;
+            border-top: 1px solid var(--border);
+        }
+        .credential-confirm-btn {
+            min-width: 76px;
+            min-height: 38px;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: color-mix(in oklch, var(--surface) 88%, transparent);
+            color: var(--fg);
+            font: 650 14px/1 var(--font-ui);
+            cursor: pointer;
+        }
+        .credential-confirm-btn:hover { background: var(--accent-soft); }
+        .credential-confirm-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .credential-confirm-btn.danger {
+            border-color: transparent;
+            background: oklch(0.59 0.2 28);
+            color: white;
+            box-shadow: 0 6px 16px oklch(0.52 0.2 28 / 0.22);
+        }
+        .credential-confirm-btn.danger:hover { background: oklch(0.54 0.21 28); }
+        [data-theme="dark"] .credential-confirm-icon {
+            background: oklch(0.34 0.1 28 / 0.72);
+            color: oklch(0.78 0.14 28);
+        }
+        [data-theme="dark"] .credential-confirm-dialog {
+            border-color: color-mix(in oklch, var(--accent) 52%, var(--border));
+            background: linear-gradient(145deg,
+                oklch(0.24 0.055 245 / 0.97),
+                oklch(0.18 0.05 250 / 0.96));
+            box-shadow:
+                0 24px 64px oklch(0.05 0.02 255 / 0.56),
+                inset 0 1px color-mix(in oklch, var(--accent) 22%, transparent),
+                0 0 32px color-mix(in oklch, var(--accent-glow) 82%, transparent);
         }
 
         /* ==============================
@@ -1070,7 +1167,7 @@
         .qr-collapse-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         .qr-collapse-btn:hover { background: oklch(0.88 0.06 230 / 0.68); transform: translateY(-1px); }
 
-        .tutorial-banner,
+        .tutorial-link,
         .step-item,
         #panel-desc,
         #panel-desc code,
@@ -1103,14 +1200,16 @@
 
             .content-card { border-radius: 16px; }
             .tab-content { height: 760px; padding: 18px 18px; }
-            .tutorial-steps { grid-template-columns: 1fr; }
+            .tutorial-link { align-items: flex-start; }
 
             #platform-list-content { grid-template-columns: 1fr !important; }
 
             .field-group input,
             .field-group textarea { font-size: 16px; padding: 14px; }
 
+            .submit-row { flex-direction: column; }
             .submit-btn { width: 100%; min-height: 52px; margin-left: 0; padding: 10px 16px 10px 12px; }
+            .alert { min-height: 44px; }
 
             #status-area { padding: 0 18px 20px; }
             #status-area > summary { font-size: 13px; }
@@ -1163,11 +1262,9 @@
         [data-theme="dark"] .status-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
         [data-theme="dark"] #platform-list-content:empty::before { opacity: 0.8; }
         [data-theme="dark"] .encrypt-row { background: var(--surface); }
-        [data-theme="dark"] .tutorial-banner { border-color: oklch(0.3 0.04 230); }
+        [data-theme="dark"] .tutorial-link { border-color: oklch(0.3 0.04 230); }
         [data-theme="dark"] .tab-btn { border-color: var(--border); background: var(--surface); }
         [data-theme="dark"] .tab-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-        [data-theme="dark"] .step-item { border-color: var(--border); }
-        [data-theme="dark"] kbd { border-color: oklch(0.3 0.04 230); }
         [data-theme="dark"] .qr-collapse-btn { background: var(--accent-soft); color: var(--accent); }
         [data-theme="dark"] .qr-collapse-btn:hover { background: oklch(0.3 0.04 230); }
         [data-theme="dark"] .status-tag.active { background: oklch(0.28 0.08 150); color: var(--success); }
@@ -1283,30 +1380,19 @@
 
             <div class="tab-content" id="main-panel">
 
-                <!-- Tutorial banner -->
-                <details class="tutorial-banner tutorial-disclosure">
-                    <summary class="tutorial-title">
-                        <span data-i18n="cookiesLogin.guide.title">获取教程</span>
-                    </summary>
-                    <div class="tutorial-steps">
-                        <div class="step-item">
-                            <div class="step-num">1</div>
-                            <div id="guide-step1">在浏览器打开对应平台网页并<span class="highlight-text">完成登录</span>。</div>
-                        </div>
-                        <div class="step-item">
-                            <div class="step-num">2</div>
-                            <div><span id="guide-step2-prefix">按下键盘</span> <kbd>F12</kbd> <span id="guide-step2-suffix">打开开发者工具。</span></div>
-                        </div>
-                        <div class="step-item">
-                            <div class="step-num">3</div>
-                            <div id="guide-step3">在顶部找到并点击 <span class="highlight-text">Application (应用程序)</span>。</div>
-                        </div>
-                        <div class="step-item">
-                            <div class="step-num">4</div>
-                            <div id="guide-step4">左侧找到 <span class="highlight-text">Cookies</span>，点击域名后在右侧复制对应的值。</div>
-                        </div>
-                    </div>
-                </details>
+                <!-- Tutorial entry -->
+                <a class="tutorial-link" href="/api/auth/guide" target="neko_credential_guide" onclick="return openCredentialGuide(event)">
+                    <span class="tutorial-link-icon" aria-hidden="true">
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"></path>
+                        </svg>
+                    </span>
+                    <span class="tutorial-link-copy">
+                        <span class="tutorial-title" data-i18n="cookiesLogin.guide.title">新手通用获取教程</span>
+                        <span class="tutorial-link-subtitle" data-i18n="cookiesLogin.guide.open">打开独立教程页面</span>
+                    </span>
+                    <span class="tutorial-link-arrow" aria-hidden="true">↗</span>
+                </a>
 
                 <div id="panel-desc"></div>
                 <div id="QRLogin"></div>
@@ -1318,24 +1404,43 @@
                     <label for="encrypt-toggle" data-i18n="cookiesLogin.encryptStorage">安全加密存储至本地文件</label>
                 </div>
 
-                <!-- Submit button -->
-                <button class="submit-btn" id="submit-btn" onclick="submitCurrentCookie()">
-                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path>
-                    </svg>
-                    <span id="submit-text" data-i18n="cookiesLogin.saveConfig">保存配置</span>
-                </button>
-                <div id="main-alert" class="alert"></div>
+                <div class="submit-row">
+                    <div id="main-alert" class="alert"></div>
+                    <button class="submit-btn" id="submit-btn" onclick="submitCurrentCookie()">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path>
+                        </svg>
+                        <span id="submit-text" data-i18n="cookiesLogin.saveConfig">保存配置</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Status monitoring -->
-            <details id="status-area" open>
+            <details id="status-area">
                 <summary><span data-i18n="cookiesLogin.localMonitoring">本地状态监控</span></summary>
                 <div id="platform-list-content" data-empty-text="还没有保存的凭证呢，选个平台开始添加吧"></div>
             </details>
 
         </div>
     </main>
+
+    <dialog id="credential-confirm-dialog" class="credential-confirm-dialog" aria-labelledby="credential-confirm-title" aria-describedby="credential-confirm-message">
+        <div class="credential-confirm-body">
+            <h2 id="credential-confirm-title" class="credential-confirm-heading">
+                <span class="credential-confirm-icon" aria-hidden="true">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5M14 11v5"></path>
+                    </svg>
+                </span>
+                <span data-confirm-title></span>
+            </h2>
+            <p id="credential-confirm-message" class="credential-confirm-message"></p>
+        </div>
+        <div class="credential-confirm-actions">
+            <button type="button" class="credential-confirm-btn" data-confirm-cancel></button>
+            <button type="button" class="credential-confirm-btn danger" data-confirm-accept></button>
+        </div>
+    </dialog>
 
     <script src="/static/js/cookies_login.js?v={{ static_asset_version | default('0') }}"></script>
 
