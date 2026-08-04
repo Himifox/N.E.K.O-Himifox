@@ -162,6 +162,24 @@ def test_credentials_page_opens_the_universal_guide_in_a_named_window():
     assert "window.open(guideUrl.toString(), windowName, features)" in script
 
 
+def test_credentials_page_and_guide_share_window_control_buttons():
+    page = read_text("templates/cookies_login.html")
+    guide = read_text("templates/cookies_guide.html")
+    controls_pattern = re.compile(
+        r'<div class="header-right neko-window-controls">(?P<body>[\s\S]*?)</div>'
+    )
+    page_controls = controls_pattern.search(page)
+    guide_controls = controls_pattern.search(guide)
+
+    assert page_controls
+    assert guide_controls
+    assert page_controls.group("body") == guide_controls.group("body")
+    controls = page_controls.group("body")
+    assert controls.index('data-neko-window-control="minimize"') < controls.index(
+        'data-neko-window-control="maximize"'
+    ) < controls.index('data-neko-window-control="close"')
+
+
 def test_credentials_guide_uses_the_five_step_screenshot_sequence():
     guide = read_text("templates/cookies_guide.html")
     expected_assets = (
