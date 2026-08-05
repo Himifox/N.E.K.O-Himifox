@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosResponse } from 'axios'
 
 let bridgeToken = ''
 
@@ -36,13 +36,22 @@ async function token(): Promise<string> {
 
 async function request<T extends KnowledgeEnvelope>(path: string, options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {}): Promise<T> {
   const value = await token()
-  const response = await axios.request<T>({
-    url: `/market/knowledge/${path}`,
-    method: options.method || 'GET',
-    params: { ...(options.params || {}), token: value },
-    data: options.data,
-    timeout: 15000,
-  })
+  let response: AxiosResponse<T>
+  try {
+    response = await axios.request<T>({
+      url: `/market/knowledge/${path}`,
+      method: options.method || 'GET',
+      params: options.params,
+      data: options.data,
+      headers: { Authorization: `Bearer ${value}` },
+      timeout: 15000,
+    })
+  } catch (error) {
+    if (!axios.isAxiosError(error)) throw error
+    const payload = error.response?.data as KnowledgeEnvelope | undefined
+    const issues = Array.isArray(payload?.issues) ? payload.issues : []
+    throw new KnowledgeApiError(issues)
+  }
   const data = response.data
   if (data?.ok === false) throw new KnowledgeApiError(data.issues || [])
   return data
@@ -52,7 +61,7 @@ export interface KnowledgeCollection {
   collection_id: string
   name: string
   entries?: number
-  integrity_ok: boolean
+  integrity_ok: boolean | null
   status: 'ready' | 'degraded'
   auto_context: boolean
   disabled_entries?: number

@@ -28,7 +28,7 @@ The JSONL file is integrity-checked before import. Import replaces only the
 The meme domain bundles no CHIME dataset and performs no network access. It
 provides only trusted matching, response, source-display, and conflict-routing
 policy. Existing local meme entries or separately distributed data packs can
-use that policy without moving their data into this PR.
+use that policy without moving their data into the built-in artifact.
 
 No Moegirlpedia, Geng8, or other remote acquisition adapter is included. Those
 sources remain isolated from the local query and card-delivery path.

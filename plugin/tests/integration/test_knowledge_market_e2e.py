@@ -63,7 +63,7 @@ async def test_subscribe_poll_and_local_handoff(monkeypatch):
     ) as client:
         response = await client.post(
             "/market/knowledge/subscribe",
-            params={"token": "e2e-token"},
+            headers={"Authorization": "Bearer e2e-token"},
             json={
                 "package_id": 9,
                 "remote_id": "knowledge/e2e-pack",
@@ -84,7 +84,7 @@ async def test_subscribe_poll_and_local_handoff(monkeypatch):
         for _ in range(200):
             polled = await client.get(
                 f"/market/knowledge/tasks/{task_id}",
-                params={"token": "e2e-token"},
+                headers={"Authorization": "Bearer e2e-token"},
             )
             task = polled.json()
             if task.get("status") in {"completed", "failed"}:
@@ -112,7 +112,25 @@ async def test_process_restart_state_returns_task_not_found(monkeypatch):
     ) as client:
         response = await client.get(
             "/market/knowledge/tasks/from-a-previous-process",
-            params={"token": "e2e-token"},
+            headers={"Authorization": "Bearer e2e-token"},
         )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_knowledge_endpoints_reject_legacy_query_token(monkeypatch):
+    monkeypatch.setattr(module, "get_bridge_token", lambda: "e2e-token")
+    app = FastAPI()
+    app.include_router(module.router)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://127.0.0.1:48916",
+    ) as client:
+        response = await client.get(
+            "/market/knowledge/tasks/fixture",
+            params={"token": "e2e-token"},
+        )
+
+    assert response.status_code == 403

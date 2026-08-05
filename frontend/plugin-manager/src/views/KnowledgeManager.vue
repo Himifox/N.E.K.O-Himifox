@@ -181,6 +181,7 @@ const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const marketOpening = ref(false)
 let latestEntriesRequest = 0
+let latestEntryRequest = 0
 let latestPacksRequest = 0
 const packsCollection = ref('')
 
@@ -265,11 +266,15 @@ async function loadEntries(reset = false) {
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {
+  const requestId = ++latestEntryRequest
+  const collection = row.collection_id
   try {
-    const response = await knowledgeApi.entry({ collection: row.collection_id, source: row.source.tag, title: row.title })
+    const response = await knowledgeApi.entry({ collection, source: row.source.tag, title: row.title })
+    if (requestId !== latestEntryRequest || collection !== selectedCollection.value) return
     selectedEntry.value = response.entry || null
     drawerOpen.value = Boolean(selectedEntry.value)
   } catch {
+    if (requestId !== latestEntryRequest || collection !== selectedCollection.value) return
     selectedEntry.value = null
     drawerOpen.value = false
     ElMessage.error(t('knowledge.loadFailed'))

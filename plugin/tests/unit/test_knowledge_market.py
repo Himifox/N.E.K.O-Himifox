@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 
@@ -222,10 +223,46 @@ async def test_unsubscribe_report_failure_does_not_undo_local_result(monkeypatch
             collection="meme",
             pack_id="fixture-pack",
         ),
-        token="fixture-token",
+        authorization="Bearer fixture-token",
     )
 
     assert result == {"ok": True, "removed_entries": 1}
+
+
+def test_bridge_token_requires_bearer_header_and_handles_unicode(monkeypatch):
+    monkeypatch.setattr(module, "get_bridge_token", lambda: "fixture-token")
+
+    module._verify_bridge_token("Bearer fixture-token")
+    for authorization in (None, "fixture-token", "Bearer 鐚猫"):
+        with pytest.raises(HTTPException) as exc_info:
+            module._verify_bridge_token(authorization)
+        assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_subscribe_retains_background_task_until_completion(monkeypatch):
+    release = asyncio.Event()
+
+    async def wait_for_release(_task_id, _payload):
+        await release.wait()
+
+    monkeypatch.setattr(module, "get_bridge_token", lambda: "fixture-token")
+    monkeypatch.setattr(module, "_execute_subscription", wait_for_release)
+    module._tasks.clear()
+    module._background_tasks.clear()
+
+    result = await module.subscribe_knowledge_package(
+        _request(canonical_pack_bytes(_pack())),
+        authorization="Bearer fixture-token",
+    )
+    task = next(iter(module._background_tasks))
+    assert result["task_id"] in module._tasks
+    assert not task.done()
+
+    release.set()
+    await task
+    await asyncio.sleep(0)
+    assert module._background_tasks == set()
 
 
 def test_completed_tasks_expire_after_one_hour(monkeypatch):

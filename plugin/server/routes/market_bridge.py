@@ -140,10 +140,10 @@ def get_bridge_token() -> str:
 async def public_knowledge_bridge(
     path: str,
     request: Request,
-    token: str = Query(..., description="Bridge token"),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
     """Bounded same-origin bridge from the manager UI to Main Server."""
-    _verify_token(token)
+    _verify_token(authorization=authorization)
     _require_local_knowledge_bridge_origin(request)
     normalized_path = path.strip("/")
     if normalized_path not in _KNOWLEDGE_BRIDGE_PATHS:
@@ -1530,7 +1530,10 @@ def _verify_token(
         # were ever empty, but we'd rather 403 explicitly.
         candidate = (token or "").strip() or None
 
-    if not candidate or not secrets.compare_digest(candidate, _BRIDGE_TOKEN):
+    if not candidate or not secrets.compare_digest(
+        candidate.encode("utf-8", "surrogatepass"),
+        _BRIDGE_TOKEN.encode("utf-8", "surrogatepass"),
+    ):
         raise HTTPException(status_code=403, detail="无效的 bridge token")
 
 

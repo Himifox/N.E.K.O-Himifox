@@ -10,7 +10,7 @@ from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from knowledge.api import (
@@ -119,9 +119,9 @@ class KnowledgeTaskResponse(BaseModel):
 @router.post("/subscribe")
 async def subscribe_knowledge_package(
     payload: KnowledgeSubscribeRequest,
-    token: str = Query(...),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
-    _verify_bridge_token(token)
+    _verify_bridge_token(authorization)
     _validate_artifact_url(payload.artifact_url, require_suffix=True)
     _cleanup_tasks()
     if len(_tasks) >= _TASK_MAX_ENTRIES:
@@ -149,8 +149,11 @@ async def subscribe_knowledge_package(
 
 
 @router.get("/tasks/{task_id}", response_model=KnowledgeTaskResponse)
-async def get_knowledge_task(task_id: str, token: str = Query(...)):
-    _verify_bridge_token(token)
+async def get_knowledge_task(
+    task_id: str,
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    _verify_bridge_token(authorization)
     _cleanup_tasks()
     task = _tasks.get(task_id)
     if task is None:
@@ -159,8 +162,10 @@ async def get_knowledge_task(task_id: str, token: str = Query(...)):
 
 
 @router.get("/subscriptions")
-async def list_local_knowledge_subscriptions(token: str = Query(...)):
-    _verify_bridge_token(token)
+async def list_local_knowledge_subscriptions(
+    authorization: str | None = Header(None, alias="Authorization"),
+):
+    _verify_bridge_token(authorization)
     collections = await _main_request("GET", "collections")
     if collections.get("ok") is not True:
         raise HTTPException(status_code=503, detail="local knowledge unavailable")
@@ -183,9 +188,9 @@ async def list_local_knowledge_subscriptions(token: str = Query(...)):
 @router.post("/unsubscribe")
 async def unsubscribe_knowledge_package(
     payload: KnowledgeUnsubscribeRequest,
-    token: str = Query(...),
+    authorization: str | None = Header(None, alias="Authorization"),
 ):
-    _verify_bridge_token(token)
+    _verify_bridge_token(authorization)
     result = await _main_request(
         "POST",
         "packs/remove",
@@ -422,9 +427,11 @@ async def _report_unsubscribe_best_effort(package_id: int) -> None:
         logger.warning("knowledge unsubscribe report failed: {}", type(exc).__name__)
 
 
-def _verify_bridge_token(token: str) -> None:
-    if not secrets.compare_digest(
-        token.encode("utf-8", "surrogatepass"),
+def _verify_bridge_token(authorization: str | None) -> None:
+    parts = (authorization or "").split(None, 1)
+    candidate = parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    if not candidate or not secrets.compare_digest(
+        candidate.encode("utf-8", "surrogatepass"),
         get_bridge_token().encode("utf-8", "surrogatepass"),
     ):
         raise HTTPException(status_code=403, detail="invalid bridge token")
