@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -18,6 +19,7 @@ from .identifiers import validate_knowledge_identifier
 
 
 COMMUNITY_REGISTRY_VERSION = 1
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +56,13 @@ def load_community_collections(
     path = get_community_registry_path(knowledge_root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return {}
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "[public-knowledge] ignored invalid collection registry type=%s",
+            type(exc).__name__,
+        )
         return {}
     if not isinstance(payload, dict):
         return {}

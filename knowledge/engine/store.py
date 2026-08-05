@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 
+from .filters import normalize_search_text
 from .models import KnowledgeEntry, UpsertResult
 
 
@@ -103,6 +104,12 @@ class KnowledgeStore:
     def _open_connection(self, *, writable: bool) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
+        connection.create_function(
+            "normalize_search_text",
+            1,
+            normalize_search_text,
+            deterministic=True,
+        )
         connection.execute("PRAGMA busy_timeout=5000")
         if writable:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -155,11 +162,15 @@ class KnowledgeStore:
         """
         backup = self.database_path.with_suffix(self.database_path.suffix + ".legacy.bak")
         if self.database_path.exists() and not backup.exists():
-            connection.commit()
             backup_connection = sqlite3.connect(backup)
             try:
                 connection.backup(backup_connection)
-            finally:
+                backup_connection.commit()
+            except Exception:
+                backup_connection.close()
+                backup.unlink(missing_ok=True)
+                raise
+            else:
                 backup_connection.close()
         rows = connection.execute("SELECT * FROM entries").fetchall()
         connection.execute("DROP TABLE IF EXISTS entries_fts")
@@ -180,6 +191,15 @@ class KnowledgeStore:
                     row["content"],
                 ),
             )
+        connection.execute(
+            "CREATE VIRTUAL TABLE entries_fts USING fts5("
+            "entry_rowid UNINDEXED, title, terms, tags, summary, content, "
+            "tokenize='unicode61')"
+        )
+        for row in connection.execute(
+            "SELECT rowid, * FROM entries ORDER BY rowid"
+        ).fetchall():
+            self._replace_fts(connection, int(row["rowid"]), entry_from_row(row))
         connection.execute("DROP TABLE entries_legacy")
 
     def upsert(self, entry: KnowledgeEntry) -> UpsertResult:
@@ -349,8 +369,8 @@ class KnowledgeStore:
         try:
             with self._connection() as connection:
                 rows = connection.execute("SELECT rowid, * FROM entries ORDER BY rowid").fetchall()
-                return tuple(entry_from_row(row) for row in rows)
-        except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
+                return _valid_entries(rows, operation="list_active_entries")
+        except KnowledgeStoreError:
             return ()
 
     def get_entry(self, source_tag: str, title: str) -> KnowledgeEntry | None:
@@ -378,8 +398,9 @@ class KnowledgeStore:
             with self._connection() as connection:
                 if source_tag:
                     rows = connection.execute(
-                        "SELECT rowid, * FROM entries WHERE EXISTS "
-                        "(SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?) "
+                        "SELECT rowid, * FROM entries WHERE CASE WHEN json_valid(tags) "
+                        "THEN EXISTS (SELECT 1 FROM json_each(entries.tags) tag "
+                        "WHERE tag.value = ?) ELSE 0 END "
                         "ORDER BY title LIMIT ? OFFSET ?",
                         (source_tag, limit, offset),
                     ).fetchall()
@@ -388,8 +409,8 @@ class KnowledgeStore:
                         "SELECT rowid, * FROM entries ORDER BY title LIMIT ? OFFSET ?",
                         (limit, offset),
                     ).fetchall()
-                return tuple(entry_from_row(row) for row in rows)
-        except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
+                return _valid_entries(rows, operation="list_entries")
+        except KnowledgeStoreError:
             return ()
 
     def query_fts(
@@ -430,6 +451,7 @@ class KnowledgeStore:
         limit: int,
         allowed_source_tags: tuple[str, ...] | None = None,
     ):
+        normalized_query = normalize_search_text(normalized_query)
         if not normalized_query:
             return ()
         if allowed_source_tags is not None and not allowed_source_tags:
@@ -453,11 +475,11 @@ class KnowledgeStore:
             with self._connection() as connection:
                 return connection.execute(
                     "SELECT rowid, * FROM entries WHERE ("
-                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
-                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
-                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
-                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
-                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ? ESCAPE '\\')"
+                    "normalize_search_text(title) LIKE ? ESCAPE '\\' "
+                    "OR normalize_search_text(terms) LIKE ? ESCAPE '\\' "
+                    "OR normalize_search_text(tags) LIKE ? ESCAPE '\\' "
+                    "OR normalize_search_text(content) LIKE ? ESCAPE '\\' "
+                    "OR normalize_search_text(summary) LIKE ? ESCAPE '\\')"
                     f"{source_clause} LIMIT ?",
                     (
                         pattern,
@@ -496,6 +518,25 @@ def entry_from_row(row: sqlite3.Row) -> KnowledgeEntry:
         title=row["title"], terms=raw_terms if isinstance(raw_terms, dict) else {},
         tags=_json_values(row["tags"]), summary=row["summary"], content=row["content"],
     )
+
+
+def _valid_entries(
+    rows: Sequence[sqlite3.Row],
+    *,
+    operation: str,
+) -> tuple[KnowledgeEntry, ...]:
+    entries: list[KnowledgeEntry] = []
+    for row in rows:
+        try:
+            entries.append(entry_from_row(row))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "[public-knowledge] skipped invalid entry operation=%s rowid=%s type=%s",
+                operation,
+                row["rowid"],
+                type(exc).__name__,
+            )
+    return tuple(entries)
 
 
 def _database_identity(path: Path) -> tuple[int, int] | None:

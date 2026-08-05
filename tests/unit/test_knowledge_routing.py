@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+import knowledge.engine.routing as routing_module
 from knowledge.collection_specs import (
     GENERIC_REFERENCE_RESPONSE_POLICY,
     CollectionSpec,
@@ -237,6 +238,41 @@ def test_mixed_language_latin_route_preserves_complete_phrase(tmp_path):
 
     assert service.build_turn_context("猫娘 ab 是什么").hit_count == 1
     assert service.build_turn_context("only ab appears").hit_count == 0
+
+
+def test_latin_boundaries_do_not_split_mixed_or_non_ascii_phrases(tmp_path):
+    spec = CollectionSpec(
+        collection_id="mixed-boundaries",
+        storage_directory="mixed-boundaries",
+        auto_context_enabled=True,
+        match_policy=MatchPolicy(
+            title_min_length=3,
+            alias_min_length=3,
+            latin_word_boundaries=True,
+        ),
+        response_policy=GENERIC_REFERENCE_RESPONSE_POLICY,
+    )
+    service = _service_with_entries(
+        tmp_path,
+        (spec,),
+        {
+            "mixed-boundaries": (
+                _entry("猫 cafe", source="mixed-boundaries"),
+                _entry("café", source="mixed-boundaries"),
+                _entry("asciiword", source="mixed-boundaries"),
+                _entry("123", source="mixed-boundaries"),
+            ),
+        },
+    )
+
+    assert service.build_turn_context("我想了解猫 cafe").hit_count == 1
+    assert service.build_turn_context("only cafe appears").hit_count == 0
+    assert service.build_turn_context("tell me about café").hit_count == 1
+    assert service.build_turn_context("plain cafe").hit_count == 0
+    assert service.build_turn_context("asciiword").hit_count == 1
+    assert service.build_turn_context("asciiwording").hit_count == 0
+    assert service.build_turn_context("number 123").hit_count == 1
+    assert service.build_turn_context("number 1234").hit_count == 0
 
 
 def test_equal_context_hints_fall_back_to_collection_priority(tmp_path):
@@ -471,8 +507,98 @@ def test_background_refresh_keeps_the_previous_snapshot_available(monkeypatch, t
     release_refresh.set()
     reader.join(timeout=1)
     refresh_thread.join(timeout=3)
+    assert not reader.is_alive()
+    assert not refresh_thread.is_alive()
     assert state._refresh_thread is None
     assert service.build_turn_context("new phrase").hit_count == 1
+
+
+def test_evicted_routing_state_still_receives_database_notifications(tmp_path):
+    services = []
+    for index in range(routing_module._STATE_CACHE_LIMIT + 1):
+        collection_id = f"live-{index}"
+        service = _service_with_entries(
+            tmp_path,
+            (_spec(collection_id),),
+            {collection_id: (_entry("old phrase", source=collection_id),)},
+        )
+        service.refresh_routing_index()
+        services.append(service)
+
+    first = services[0]
+    first_state = first._get_routing_state()
+    assert first_state not in routing_module._STATES.values()
+
+    KnowledgeStore(first.database_path("live-0")).upsert(
+        _entry("new phrase", source="live-0")
+    )
+
+    assert first.build_turn_context("new phrase").hit_count == 1
+
+
+def test_refresh_is_bounded_and_leaves_concurrent_changes_dirty(monkeypatch, tmp_path):
+    service = _service_with_entries(
+        tmp_path,
+        (_spec("bounded"),),
+        {"bounded": (_entry("old phrase", source="bounded"),)},
+    )
+    service.refresh_routing_index()
+    state = service._get_routing_state()
+    database_path = service.database_path("bounded")
+    calls = 0
+    keep_changing = True
+
+    def changing_segment(collection):
+        nonlocal calls
+        calls += 1
+        if keep_changing:
+            state.mark_database_dirty(collection.database_path)
+        return ()
+
+    monkeypatch.setattr(routing_module, "_safe_load_segment", changing_segment)
+    state.mark_database_dirty(database_path)
+    state.refresh()
+
+    assert calls == routing_module._MAX_REFRESH_ROUNDS
+    assert state._dirty == {"bounded"}
+
+    keep_changing = False
+    state.refresh()
+    assert state._dirty == set()
+
+
+def test_background_refresh_logs_only_safe_exception_metadata(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    service = _service_with_entries(
+        tmp_path,
+        (_spec("background-error"),),
+        {"background-error": (_entry("old phrase", source="background-error"),)},
+    )
+    state = service._get_routing_state()
+    started = threading.Event()
+    release = threading.Event()
+
+    def failing_refresh():
+        started.set()
+        assert release.wait(timeout=3)
+        raise RuntimeError("private entry content")
+
+    monkeypatch.setattr(state, "refresh", failing_refresh)
+    caplog.set_level(logging.WARNING, logger="knowledge.engine.routing")
+    state.refresh_in_background()
+    assert started.wait(timeout=1)
+    refresh_thread = state._refresh_thread
+    assert refresh_thread is not None
+    release.set()
+    refresh_thread.join(timeout=3)
+
+    assert not refresh_thread.is_alive()
+    assert state._refresh_thread is None
+    assert "type=RuntimeError" in caplog.text
+    assert "private entry content" not in caplog.text
 
 
 def test_database_schema_initialization_runs_once_per_file(monkeypatch, tmp_path):

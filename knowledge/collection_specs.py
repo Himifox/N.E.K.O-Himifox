@@ -105,18 +105,26 @@ def get_reference_details(
 ) -> str:
     """Return bounded source lines selected by a trusted response policy."""
     selected: list[str] = []
-    remaining = max_chars
+    used = 0
     for line in entry.content.splitlines():
         candidate = line.strip()
-        if not candidate or not any(candidate.startswith(prefix) for prefix in prefixes):
+        prefix = next(
+            (prefix for prefix in prefixes if candidate.startswith(prefix)),
+            None,
+        )
+        if not candidate or prefix is None:
             continue
-        if candidate.startswith("- "):
-            candidate = candidate[2:].strip()
+        if prefix == "- ":
+            candidate = candidate.removeprefix(prefix).strip()
         if not candidate:
             continue
+        separator = " | " if selected else ""
+        remaining = max_chars - used - len(separator)
+        if remaining <= 0:
+            break
         clipped = candidate[:remaining]
         selected.append(clipped)
-        remaining -= len(clipped)
-        if remaining <= 0:
+        used += len(separator) + len(clipped)
+        if used >= max_chars:
             break
     return " | ".join(selected)

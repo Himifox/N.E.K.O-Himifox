@@ -328,3 +328,23 @@ def test_removing_last_pack_unregisters_collection_but_preserves_database(
     assert database_path.is_file()
     restarted = open_knowledge(tmp_path)
     assert _collection(restarted, "community-demo") is None
+
+
+def test_removed_collection_does_not_reuse_persisted_auto_context_authorization(
+    tmp_path: Path,
+) -> None:
+    service = _install(tmp_path)
+    service.set_collection_auto_context("community-demo", enabled=True)
+
+    service.remove_pack("community-demo", "community-pack")
+
+    overrides = json.loads(
+        (tmp_path / "collection.overrides.json").read_text(encoding="utf-8")
+    )
+    assert "community-demo" not in overrides["auto_context"]
+
+    restarted = open_knowledge(tmp_path)
+    restarted.install_pack(validate_pack(_pack_payload()))
+    record = _collection(restarted, "community-demo")
+    assert record is not None
+    assert record["auto_context"] is False

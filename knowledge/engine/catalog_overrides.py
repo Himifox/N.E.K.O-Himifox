@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from utils.file_utils import atomic_write_json
@@ -11,6 +12,7 @@ from .mutation_lock import mutation_lock
 
 
 EntryKey = tuple[str, str]
+logger = logging.getLogger(__name__)
 
 
 def get_catalog_override_path(database_path: str | Path) -> Path:
@@ -20,7 +22,13 @@ def get_catalog_override_path(database_path: str | Path) -> Path:
 def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return frozenset()
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "[public-knowledge] ignored invalid catalog overrides type=%s",
+            type(exc).__name__,
+        )
         return frozenset()
     rows = payload.get("disabled", ()) if isinstance(payload, dict) else ()
     result: set[EntryKey] = set()

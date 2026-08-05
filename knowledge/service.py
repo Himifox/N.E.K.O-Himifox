@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -44,6 +45,9 @@ from .engine.routing import (
 )
 from .engine.source_registry import resolve_source
 from .engine.store import KnowledgeStore
+
+
+_PACK_SOURCE_TAG_CACHE_LIMIT = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,7 @@ class KnowledgeService:
             get_collection_override_path(self.knowledge_root)
         )
         self._routing_state: KnowledgeRoutingState | None = None
+        self._pack_source_tag_cache: OrderedDict[str, tuple[str, ...]] = OrderedDict()
 
     @classmethod
     def from_root(
@@ -139,8 +144,9 @@ class KnowledgeService:
         source_tag: str = "",
         include_disabled: bool = False,
     ) -> tuple[KnowledgeHit, ...]:
+        """Return one page plus at most one lookahead hit for pagination."""
         limit = min(max(int(limit), 1), 100)
-        offset = min(max(int(offset), 0), 10_000)
+        offset = min(max(int(offset), 0), 1_000)
         hits = self._retriever(collection_id).search(
             query,
             limit=offset + limit + 1,
@@ -361,6 +367,15 @@ class KnowledgeService:
         return count
 
     def get_status(self, collection_id: str) -> dict:
+        """Return detailed collection diagnostics, including SQLite integrity."""
+        return self._collection_status(collection_id, check_integrity=True)
+
+    def _collection_status(
+        self,
+        collection_id: str,
+        *,
+        check_integrity: bool,
+    ) -> dict:
         spec = self._spec(collection_id)
         database_path = self.database_path(collection_id)
         store = self._store(collection_id) if database_path.is_file() else None
@@ -371,7 +386,9 @@ class KnowledgeService:
             "storage_directory": spec.storage_directory,
             "priority": spec.priority,
             "entries": store.count() if store is not None else 0,
-            "integrity_ok": store.integrity_ok() if store is not None else False,
+            "integrity_ok": (
+                store.integrity_ok() if store is not None and check_integrity else None
+            ),
             "auto_context": self._auto_context_enabled(spec),
             "disabled_entries": len(disabled),
             "sources": store.count_by_source_tags() if store is not None else (),
@@ -382,8 +399,10 @@ class KnowledgeService:
         results: list[dict] = []
         for collection_id in sorted(self._collections):
             try:
-                payload = self.get_status(collection_id)
-                status = "ready" if payload["integrity_ok"] is True else "degraded"
+                payload = self._collection_status(collection_id, check_integrity=False)
+                status = (
+                    "ready" if self.database_path(collection_id).is_file() else "degraded"
+                )
                 results.append({"status": status, **payload})
             except Exception as exc:
                 spec = self._spec(collection_id)
@@ -413,6 +432,7 @@ class KnowledgeService:
             enabled=enabled,
         )
         self._auto_context_overrides[collection_id] = bool(enabled)
+        self._invalidate_pack_source_tags(collection_id)
         self._routing_state = None
 
     def install_pack(self, pack, *, subscription=None):
@@ -465,6 +485,7 @@ class KnowledgeService:
                     raise
                 self._community_records = records
                 self._collections[pack.collection_id] = community_collection_spec(new_record)
+            self._invalidate_pack_source_tags(pack.collection_id)
             self._routing_state = None
         self.refresh_routing_index(background=True)
         return result
@@ -488,18 +509,26 @@ class KnowledgeService:
             if last_community_pack:
                 records = dict(self._community_records)
                 records.pop(collection_id, None)
+                registry_written = False
                 try:
                     write_community_collections(self.knowledge_root, records)
+                    registry_written = True
+                    clear_collection_auto_context(
+                        get_collection_override_path(self.knowledge_root),
+                        collection_id=collection_id,
+                    )
                 except Exception:
                     restore_pack_storage(database_path, pack_id, snapshot)
+                    if registry_written:
+                        write_community_collections(
+                            self.knowledge_root,
+                            self._community_records,
+                        )
                     raise
                 self._community_records = records
                 self._collections.pop(collection_id, None)
                 self._auto_context_overrides.pop(collection_id, None)
-                clear_collection_auto_context(
-                    get_collection_override_path(self.knowledge_root),
-                    collection_id=collection_id,
-                )
+            self._invalidate_pack_source_tags(collection_id)
             self._routing_state = None
         if collection_id in self._collections:
             self.refresh_routing_index(background=True)
@@ -520,6 +549,7 @@ class KnowledgeService:
         from .packs import set_pack_auto_context
 
         set_pack_auto_context(self.database_path(collection_id), pack_id, enabled=enabled)
+        self._invalidate_pack_source_tags(collection_id)
         self._routing_state = None
         self.refresh_routing_index(background=True)
 
@@ -592,18 +622,33 @@ class KnowledgeService:
     def _effective_match_policy(self, spec: CollectionSpec) -> MatchPolicy:
         if not spec.restrict_auto_context_to_registered_sources:
             return spec.match_policy
-        from .packs import enabled_pack_source_tags
-
         allowed_sources = tuple(
             sorted(
                 {
                     *spec.auto_context_source_tags,
                     *(source.tag for source in spec.sources),
-                    *enabled_pack_source_tags(self.database_path(spec.collection_id)),
+                    *self._enabled_pack_source_tags(spec.collection_id),
                 }
             )
         )
         return replace(spec.match_policy, allowed_source_tags=allowed_sources)
+
+    def _enabled_pack_source_tags(self, collection_id: str) -> tuple[str, ...]:
+        cached = self._pack_source_tag_cache.get(collection_id)
+        if cached is not None:
+            self._pack_source_tag_cache.move_to_end(collection_id)
+            return cached
+        from .packs import enabled_pack_source_tags
+
+        source_tags = enabled_pack_source_tags(self.database_path(collection_id))
+        self._pack_source_tag_cache[collection_id] = source_tags
+        self._pack_source_tag_cache.move_to_end(collection_id)
+        while len(self._pack_source_tag_cache) > _PACK_SOURCE_TAG_CACHE_LIMIT:
+            self._pack_source_tag_cache.popitem(last=False)
+        return source_tags
+
+    def _invalidate_pack_source_tags(self, collection_id: str) -> None:
+        self._pack_source_tag_cache.pop(collection_id, None)
 
     def _render_turn_context(self, match: KnowledgeTurnMatch, policy: ResponsePolicy) -> str:
         entry = match.hit.entry
