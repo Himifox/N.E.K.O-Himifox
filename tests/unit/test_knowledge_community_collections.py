@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import knowledge.service as service_module
 from knowledge.api import (
     KnowledgePackValidationError,
     open_knowledge,
@@ -348,3 +349,33 @@ def test_removed_collection_does_not_reuse_persisted_auto_context_authorization(
     record = _collection(restarted, "community-demo")
     assert record is not None
     assert record["auto_context"] is False
+
+
+def test_remove_last_pack_rolls_back_when_override_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _install(tmp_path)
+    service.set_collection_auto_context("community-demo", enabled=True)
+
+    def fail_override_cleanup(*_args, **_kwargs) -> None:
+        raise OSError("injected override write failure")
+
+    monkeypatch.setattr(
+        service_module,
+        "clear_collection_auto_context",
+        fail_override_cleanup,
+    )
+
+    with pytest.raises(OSError, match="injected override write failure"):
+        service.remove_pack("community-demo", "community-pack")
+
+    record = _collection(service, "community-demo")
+    assert record is not None
+    assert record["auto_context"] is True
+    assert service.list_packs("community-demo")[0]["pack_id"] == "community-pack"
+    assert _registry_record(tmp_path, "community-demo") is not None
+    overrides = json.loads(
+        (tmp_path / "collection.overrides.json").read_text(encoding="utf-8")
+    )
+    assert overrides["auto_context"]["community-demo"] is True
