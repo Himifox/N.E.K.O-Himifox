@@ -245,6 +245,8 @@ let twitchDevicePollInFlight = false;
 let twitchDevicePollActive = false;
 let twitchDevicePollIntervalMs = 5000;
 let statusDisclosureInitialized = false;
+let statusRefreshGeneration = 0;
+const deletingPlatforms = new Set();
 
 // 当语言切换时，重新初始化平台配置
 function initPlatformConfig() {
@@ -319,6 +321,7 @@ function handleLocaleChange() {
     initPlatformConfig();
     renderStaticHtmlI18n(); 
     switchTab(currentPlatform, document.querySelector('.tab-btn.active') || document.querySelector('.tab-btn'), true);
+    refreshQrSessionCopy(currentPlatform);
     refreshStatusList();
 }
 // DOM 加载完成后，初始化平台配置、渲染静态 HTML 翻译并监听语言变化事件
@@ -469,6 +472,7 @@ function decreaseColorLightness(hexColor, lightnessPercent) {
 
 let qrSupportedPlatforms = null;
 let qrSupportedPlatformsRequest = null;
+let qrEntryGeneration = 0;
 
 async function getQrSupportedPlatforms() {
     if (qrSupportedPlatforms) return qrSupportedPlatforms;
@@ -491,6 +495,7 @@ async function getQrSupportedPlatforms() {
 }
 
 async function showQRLogin(config, platformKey) {
+    const entryGeneration = ++qrEntryGeneration;
     const qrLoginBox = document.getElementById('QRLogin');
     if (!qrLoginBox) return;
 
@@ -503,10 +508,11 @@ async function showQRLogin(config, platformKey) {
     try {
         supportedPlatforms = await getQrSupportedPlatforms();
     } catch (error) {
+        if (entryGeneration !== qrEntryGeneration) return;
         console.error('Unable to load QR-supported platforms:', error);
         return;
     }
-    if (currentPlatform !== platformKey) return;
+    if (entryGeneration !== qrEntryGeneration || currentPlatform !== platformKey) return;
 
     // 采用多重匹配：优先转换后台返回的列表为全小写比对 platformKey，同时兼容已有的原始比对以防止破坏遗留代码
     const isSupported = supportedPlatforms.map(k => k.toLowerCase()).includes(platformKey.toLowerCase()) || supportedPlatforms.includes(config["name"]);
@@ -519,9 +525,11 @@ async function showQRLogin(config, platformKey) {
         const pageButtonBg = rootStyle.getPropertyValue('--button-bg').trim() || pagePrimary;
         const buttonTheme = platformKey === 'bilibili' && pageButtonBg ? pageButtonBg : config["theme"];
         const buttonBorder = platformKey === 'bilibili' && pagePrimary ? pagePrimary : buttonTheme;
-        QRinfo.innerHTML = safeT('cookiesLogin.qrLogin.tryQR', '或者...试试扫码登陆?');
+        QRinfo.dataset.i18n = 'cookiesLogin.qrLogin.tryQR';
+        QRinfo.textContent = safeT('cookiesLogin.qrLogin.tryQR', '或者...试试扫码登录?');
         QRinfo.style = 'margin-bottom: 10px;color: #64748b;font-size: 14px';
-        butt.innerHTML = safeT('cookiesLogin.qrLogin.openQR', '打开扫码登陆');
+        butt.dataset.i18n = 'cookiesLogin.qrLogin.openQR';
+        butt.textContent = safeT('cookiesLogin.qrLogin.openQR', '打开扫码登录');
         butt.style.cssText = `width: 100%; padding: 12px; margin-top: 10px; font-size: 14px; font-weight: 600; border-radius: 10px; border: 2px dashed ${buttonBorder}; background: ${buttonTheme} ; color: #f8fafc; cursor: pointer; transition: all 0.2s;`;
         butt.onmouseover = function() { butt.style.background = decreaseColorLightness(buttonTheme,20); };
         butt.onmouseout = function() { butt.style.background = buttonTheme; };
@@ -539,16 +547,51 @@ let qrPollTimeout = null;
 let qrPollInFlight = false;
 let qrRefreshTimeout = null;
 let currentQrKey = null;
+let qrRequestGeneration = 0;
+let qrRequestAbortController = null;
+
+function cancelQrRequest() {
+    qrRequestGeneration++;
+    qrRequestAbortController?.abort();
+    qrRequestAbortController = null;
+}
+
+function refreshQrSessionCopy(platformKey) {
+    document.querySelectorAll('#QRLogin [data-i18n]').forEach(element => {
+        const key = element.dataset.i18n;
+        element.textContent = safeT(key, element.textContent);
+    });
+    const config = PLATFORM_CONFIG[platformKey];
+    const title = document.getElementById('qr-scan-title');
+    if (title && config) {
+        title.textContent = safeT('cookiesLogin.qrLogin.scanTitle', '扫码登录 {{platform}}')
+            .replace('{{platform}}', config.name);
+    }
+    const validity = document.getElementById('qr-valid-for');
+    if (validity?.dataset.seconds) {
+        validity.textContent = safeT('cookiesLogin.qrLogin.validFor', '二维码有效期: {{seconds}}秒')
+            .replace('{{seconds}}', validity.dataset.seconds);
+    }
+    const image = document.querySelector('#QRLogin img');
+    if (image) image.alt = safeT('cookiesLogin.qrLogin.qrCodeAlt', 'QR code');
+}
 
 async function requestQR(config, platformKey) {
     if (qrRefreshTimeout) {
         clearTimeout(qrRefreshTimeout);
         qrRefreshTimeout = null;
     }
+    cancelQrRequest();
+    qrEntryGeneration++;
+    stopQrPoll();
+    currentQrKey = null;
+    const requestGeneration = qrRequestGeneration;
+    const abortController = new AbortController();
+    qrRequestAbortController = abortController;
     const qrLoginBox = document.getElementById('QRLogin');
     qrLoginBox.innerHTML = `
         <div style="text-align: center; padding: 20px;">
-            <div style="color: #64748b; margin-bottom: 10px;">${safeT('cookiesLogin.qrLogin.loading', '正在获取二维码...')}</div>
+            <div data-i18n="cookiesLogin.qrLogin.loading" style="color: #64748b; margin-bottom: 10px;">${safeT('cookiesLogin.qrLogin.loading', '正在获取二维码...')}</div>
         </div>
     `;
     
@@ -556,14 +599,13 @@ async function requestQR(config, platformKey) {
         const response = await fetch('/api/auth/get_QR', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ platform: platformKey })
+            body: JSON.stringify({ platform: platformKey }),
+            signal: abortController.signal
         });
-        
 
-        
-        if (currentPlatform !== platformKey) return;
+        if (requestGeneration !== qrRequestGeneration || currentPlatform !== platformKey) return;
         const result = await response.json();
-        if (currentPlatform !== platformKey) return;
+        if (requestGeneration !== qrRequestGeneration || currentPlatform !== platformKey) return;
         if (!response.ok) {
             throw createLocalizedError(
                 getLocalizedApiMessage(
@@ -581,18 +623,19 @@ async function requestQR(config, platformKey) {
                 <div style="text-align: center; padding: 15px; background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; position: relative;">
                     <button id="qr-collapse-action" class="qr-collapse-btn">
                         <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        ${safeT('common.collapse', '收起')}
+                        <span data-i18n="common.collapse">${safeT('common.collapse', '收起')}</span>
                     </button>
-                    <div style="font-weight: 600; color: #334155; margin-bottom: 12px; margin-top: 5px;">${safeT('cookiesLogin.qrLogin.scanTitle', '扫码登录 {{platform}}').replace('{{platform}}', PLATFORM_CONFIG[platformKey]?.name || config["name"])}</div>
+                    <div id="qr-scan-title" style="font-weight: 600; color: #334155; margin-bottom: 12px; margin-top: 5px;">${safeT('cookiesLogin.qrLogin.scanTitle', '扫码登录 {{platform}}').replace('{{platform}}', PLATFORM_CONFIG[platformKey]?.name || config["name"])}</div>
                     <img src="${result.data.qrcode_image}" alt="${safeT('cookiesLogin.qrLogin.qrCodeAlt', 'QR code')}" style="width: 200px; height: 200px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
                     <div id="qr-status" style="margin-top: 12px; font-size: 13px; color: #64748b;">${safeT('cookiesLogin.qrLogin.waiting', '等待扫码...')}</div>
-                    <div style="margin-top: 10px; font-size: 12px; color: #94a3b8;">${safeT('cookiesLogin.qrLogin.validFor', '二维码有效期: {{seconds}}秒').replace('{{seconds}}', timeout)}</div>
-                    <button id="qr-refresh-btn" style="margin-top: 12px; padding: 8px 16px; font-size: 13px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; color: #475569; cursor: pointer;">${safeT('cookiesLogin.qrLogin.refreshQR', '刷新二维码')}</button>
+                    <div id="qr-valid-for" data-seconds="${timeout}" style="margin-top: 10px; font-size: 12px; color: #94a3b8;">${safeT('cookiesLogin.qrLogin.validFor', '二维码有效期: {{seconds}}秒').replace('{{seconds}}', timeout)}</div>
+                    <button id="qr-refresh-btn" data-i18n="cookiesLogin.qrLogin.refreshQR" style="margin-top: 12px; padding: 8px 16px; font-size: 13px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; color: #475569; cursor: pointer;">${safeT('cookiesLogin.qrLogin.refreshQR', '刷新二维码')}</button>
                 </div>
             `;
             
             document.getElementById('qr-collapse-action').onclick = function() {
                 stopQrPoll();
+                currentQrKey = null;
                 showQRLogin(config, platformKey);
             };
             
@@ -615,6 +658,7 @@ async function requestQR(config, platformKey) {
             };
         }
     } catch (err) {
+        if (err?.name === 'AbortError' || requestGeneration !== qrRequestGeneration) return;
         console.error("Request QR error:", err);
         if (currentPlatform !== platformKey) return;
         const errorMessage = err?.localized === true
@@ -629,6 +673,10 @@ async function requestQR(config, platformKey) {
         document.getElementById('qr-retry-btn-err').onclick = function() {
             requestQR(config, platformKey);
         };
+    } finally {
+        if (requestGeneration === qrRequestGeneration) {
+            qrRequestAbortController = null;
+        }
     }
 }
 
@@ -800,6 +848,10 @@ function switchTab(platformKey, btnElement, isReRender = false) {
     }
 
     const previousPlatform = currentPlatform;
+    const existingQrBox = document.getElementById('QRLogin');
+    const preserveQrState = isReRender && previousPlatform === platformKey && Boolean(
+        existingQrBox?.childElementCount || currentQrKey || qrRequestAbortController
+    );
     const existingTwitchResult = isReRender && previousPlatform === 'twitch'
         ? document.getElementById('twitch-device-result')
         : null;
@@ -807,11 +859,15 @@ function switchTab(platformKey, btnElement, isReRender = false) {
         stopTwitchDevicePoll();
     }
 
-    stopQrPoll();
-    currentQrKey = null;
-    if (qrRefreshTimeout) {
-        clearTimeout(qrRefreshTimeout);
-        qrRefreshTimeout = null;
+    if (!preserveQrState) {
+        qrEntryGeneration++;
+        cancelQrRequest();
+        stopQrPoll();
+        currentQrKey = null;
+        if (qrRefreshTimeout) {
+            clearTimeout(qrRefreshTimeout);
+            qrRefreshTimeout = null;
+        }
     }
     currentPlatform = platformKey;
     const config = PLATFORM_CONFIG[platformKey];
@@ -844,7 +900,7 @@ function switchTab(platformKey, btnElement, isReRender = false) {
             qrLoginBox.replaceChildren();
             qrLoginBox.style.display = 'none';
         }
-    } else {
+    } else if (!preserveQrState) {
         showQRLogin(PLATFORM_CONFIG_DATA[platformKey], platformKey);
     }
     // 更新动态 Cookies 配置字段
@@ -1001,6 +1057,7 @@ function renderTwitchDeviceCode(result) {
 
 async function startTwitchDeviceCode() {
     const clientId = twitchClientId();
+    const platformAtStart = currentPlatform;
     if (!/^[A-Za-z0-9]{8,80}$/.test(clientId)) {
         showAlert(false, safeT('cookiesLogin.twitchAuth.invalidClientId', '请输入有效的 Twitch Client ID'));
         document.getElementById('input-twitch-client-id')?.focus();
@@ -1014,6 +1071,7 @@ async function startTwitchDeviceCode() {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: clientId })
         });
         const result = await response.json();
+        if (currentPlatform !== platformAtStart || twitchClientId() !== clientId) return;
         if (response.ok && result.success) {
             renderTwitchDeviceCode(result);
             startTwitchDevicePoll(result.interval);
@@ -1022,7 +1080,9 @@ async function startTwitchDeviceCode() {
             showAlert(false, safeT('cookiesLogin.twitchAuth.startFailed', '无法启动 Twitch 授权，请检查 Client ID 和网络'));
         }
     } catch (_) {
-        showAlert(false, safeT('cookiesLogin.networkError', '网络请求失败，请检查连接'));
+        if (currentPlatform === platformAtStart) {
+            showAlert(false, safeT('cookiesLogin.networkError', '网络请求失败，请检查连接'));
+        }
     } finally {
         if (submitBtn) submitBtn.disabled = false;
     }
@@ -1032,12 +1092,14 @@ async function checkTwitchDeviceCode(button, automatic = false) {
     if (twitchDevicePollInFlight) return 'in_flight';
     twitchDevicePollInFlight = true;
     const clientId = twitchClientId();
+    const platformAtStart = currentPlatform;
     if (button) button.disabled = true;
     try {
         const response = await fetch('/api/auth/twitch/device/check', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: clientId })
         });
         const result = await response.json();
+        if (currentPlatform !== platformAtStart || twitchClientId() !== clientId) return 'cancelled';
         if (response.ok && result.success && result.logged_in) {
             stopTwitchDevicePoll();
             showAlert(true, safeT('cookiesLogin.twitchAuth.authorized', 'Twitch 凭证已加密保存'));
@@ -1055,6 +1117,7 @@ async function checkTwitchDeviceCode(button, automatic = false) {
             return 'failed';
         }
     } catch (_) {
+        if (currentPlatform !== platformAtStart || twitchClientId() !== clientId) return 'cancelled';
         stopTwitchDevicePoll();
         showAlert(false, safeT('cookiesLogin.networkError', '网络请求失败，请检查连接'));
         return 'failed';
@@ -1066,7 +1129,8 @@ async function checkTwitchDeviceCode(button, automatic = false) {
 
 // 提交当前平台的 Cookies 配置
 async function submitCurrentCookie() {
-    const config = PLATFORM_CONFIG[currentPlatform];
+    const submittedPlatform = currentPlatform;
+    const config = PLATFORM_CONFIG[submittedPlatform];
     if (config.authMode === 'deviceCode') {
         await startTwitchDeviceCode();
         return;
@@ -1136,7 +1200,6 @@ async function submitCurrentCookie() {
     const submitBtn = document.getElementById('submit-btn');
     const submitText = document.getElementById('submit-text');
     const encryptToggle = document.getElementById('encrypt-toggle');
-    const originalBtnText = submitText?.textContent;
     // 禁用提交按钮，防止重复点击
     if (submitBtn) submitBtn.disabled = true;
     if (submitText) submitText.textContent = safeT('cookiesLogin.submitting', '安全加密传输中...');
@@ -1146,7 +1209,7 @@ async function submitCurrentCookie() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                platform: currentPlatform,
+                platform: submittedPlatform,
                 cookie_string: cookieString,
                 encrypt: encryptToggle ? encryptToggle.checked : false
             })
@@ -1157,7 +1220,9 @@ async function submitCurrentCookie() {
             const message = safeT('cookiesLogin.credentialsSaved', '{{platformName}} 凭证已保存').replace('{{platformName}}', config.name);
             showAlert(true, message);
             window.triggerMascotReaction?.('success', 1100);
-            document.querySelectorAll('.credential-input').forEach(i => i.value = '');
+            if (currentPlatform === submittedPlatform) {
+                document.querySelectorAll('.credential-input').forEach(i => i.value = '');
+            }
             refreshStatusList({ reveal: true });
         } else {
             const rawMessage = Array.isArray(result?.detail)
@@ -1174,7 +1239,13 @@ async function submitCurrentCookie() {
         console.error("Submit error:", err);
     } finally {
         if (submitBtn) submitBtn.disabled = false;
-        if (submitText) submitText.textContent = originalBtnText;
+        if (submitText && currentPlatform === submittedPlatform) {
+            const activeConfig = PLATFORM_CONFIG[submittedPlatform];
+            const translatedText = activeConfig.authMode === 'deviceCode'
+                ? safeT('cookiesLogin.twitchAuth.start', '开始 Twitch 授权')
+                : safeT('cookiesLogin.saveConfig', '保存配置');
+            submitText.textContent = `${activeConfig.name} ${translatedText}`;
+        }
     }
 }
 
@@ -1183,14 +1254,25 @@ async function submitCurrentCookie() {
 async function refreshStatusList({ reveal = false } = {}) {
     const container = document.getElementById('platform-list-content');
     if (!container) return;
+    const refreshGeneration = ++statusRefreshGeneration;
     const platforms = Object.keys(PLATFORM_CONFIG);
     try {
-        const results = await Promise.all(
+        const entries = await Promise.all(
             // 强制禁用 GET 缓存，保证每次拉取的都是最新状态！
-            platforms.map(p => fetch(`/api/auth/cookies/${p}`, { cache: 'no-store' })
-                .then(r => r.json())
-                .catch(() => ({ success: false })))
+            platforms.map(async platform => {
+                try {
+                    const response = await fetch(`/api/auth/cookies/${platform}`, { cache: 'no-store' });
+                    if (!response.ok) throw new Error(`Status request failed: ${response.status}`);
+                    return { loaded: true, data: await response.json() };
+                } catch (_) {
+                    return { loaded: false, data: null };
+                }
+            })
         );
+        if (refreshGeneration !== statusRefreshGeneration) return;
+
+        const results = entries.map(entry => entry.data || { success: false });
+        const hasLoadFailure = entries.some(entry => !entry.loaded);
         container.textContent = '';
         const isActiveResponse = res => res.success === true && (
             res.has_cookies === true ||
@@ -1198,12 +1280,13 @@ async function refreshStatusList({ reveal = false } = {}) {
             res.data === true
         );
         const hasActiveCredentials = results.some(isActiveResponse);
+        const hasVisibleStatus = hasActiveCredentials || hasLoadFailure;
         const statusArea = document.getElementById('status-area');
         if (statusArea) {
-            if (reveal) {
+            if (reveal || hasLoadFailure) {
                 statusArea.open = true;
-            } else if (!statusDisclosureInitialized || !hasActiveCredentials) {
-                statusArea.open = hasActiveCredentials;
+            } else if (!statusDisclosureInitialized || !hasVisibleStatus) {
+                statusArea.open = hasVisibleStatus;
             }
             statusDisclosureInitialized = true;
         }
@@ -1259,12 +1342,23 @@ async function refreshStatusList({ reveal = false } = {}) {
             statusCard.appendChild(actionsWrapper);
             container.appendChild(statusCard);
         });
+        if (hasLoadFailure) {
+            const errorText = document.createElement('div');
+            errorText.className = 'error-text';
+            errorText.style.textAlign = 'center';
+            errorText.style.color = '#ef4444';
+            errorText.style.gridColumn = '1 / -1';
+            errorText.textContent = safeT('cookiesLogin.statusLoadFailed', '状态加载失败');
+            container.appendChild(errorText);
+        }
     } catch (e) {
+        if (refreshGeneration !== statusRefreshGeneration) return;
         container.textContent = ''; 
         const errorText = document.createElement('div');
         errorText.className = 'error-text';
         errorText.style.textAlign = 'center';
         errorText.style.color = '#ef4444';
+        errorText.style.gridColumn = '1 / -1';
         errorText.textContent = safeT('cookiesLogin.statusLoadFailed', '状态加载失败');
         container.appendChild(errorText);
     }
@@ -1280,6 +1374,7 @@ function showCredentialDeleteConfirm(message) {
     if (!dialog || !title || !messageElement || !cancelButton || !acceptButton) {
         return Promise.resolve(false);
     }
+    if (dialog.open) return Promise.resolve(false);
 
     title.textContent = safeT('cookiesLogin.removeCredentials', '清除凭证');
     messageElement.textContent = message;
@@ -1317,11 +1412,13 @@ function showCredentialDeleteConfirm(message) {
 }
 
 async function deleteCookie(platformKey) {
+    if (deletingPlatforms.has(platformKey)) return;
     const fallbackPlatformName = safeT('cookiesLogin.thisPlatform', '该平台');
     const platformName = PLATFORM_CONFIG[platformKey]?.name || fallbackPlatformName;
     const message = safeT('cookiesLogin.confirmRemove', '确定要清除 {{platformName}} 的凭证吗？').replace('{{platformName}}', platformName);
     const confirmed = await showCredentialDeleteConfirm(message);
     if (!confirmed) return;
+    deletingPlatforms.add(platformKey);
     try {
         const res = await fetch(`/api/auth/cookies/${platformKey}`, { method: 'DELETE' });
         const data = await res.json();
@@ -1338,6 +1435,8 @@ async function deleteCookie(platformKey) {
         }
     } catch (e) {
         showAlert(false, safeT('cookiesLogin.removeFailed', '操作异常失败'));
+    } finally {
+        deletingPlatforms.delete(platformKey);
     }
 }
 
@@ -1387,5 +1486,7 @@ function showAlert(success, message) {
 // 内存泄漏防护：当窗口关闭或页面卸载前，强制清理所有挂起的定时器
 window.addEventListener('beforeunload', () => {
     clearAlertTimer();
+    cancelQrRequest();
+    stopQrPoll();
     stopTwitchDevicePoll();
 });

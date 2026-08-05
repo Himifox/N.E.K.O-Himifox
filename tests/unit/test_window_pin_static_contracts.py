@@ -199,6 +199,24 @@ def test_credentials_qr_entry_does_not_reflow_twice_on_platform_switch():
     assert "qrLoginBox.style.removeProperty('display');" in script
 
 
+def test_credentials_async_dom_updates_are_scoped_to_the_latest_state():
+    script = read_text("static/js/cookies_login.js")
+
+    assert "const submittedPlatform = currentPlatform;" in script
+    assert "platform: submittedPlatform" in script
+    assert "if (currentPlatform === submittedPlatform)" in script
+    assert "const refreshGeneration = ++statusRefreshGeneration;" in script
+    assert "if (refreshGeneration !== statusRefreshGeneration) return;" in script
+    assert "const hasLoadFailure = entries.some(entry => !entry.loaded);" in script
+    assert "signal: abortController.signal" in script
+    assert "requestGeneration !== qrRequestGeneration" in script
+    assert "entryGeneration !== qrEntryGeneration" in script
+    assert "const preserveQrState = isReRender" in script
+    assert "currentPlatform !== platformAtStart || twitchClientId() !== clientId" in script
+    assert "if (dialog.open) return Promise.resolve(false);" in script
+    assert "if (deletingPlatforms.has(platformKey)) return;" in script
+
+
 def test_credentials_page_and_guide_share_window_control_buttons():
     page = read_text("templates/cookies_login.html")
     guide = read_text("templates/cookies_guide.html")
