@@ -66,7 +66,9 @@ from main_logic.proactive_recommendation.feedback.event_processing import (
 
 from main_logic.proactive_recommendation.feedback.availability import (
     AVAILABILITY_REPLY_WINDOW_SECONDS,
+    availability_exposure_id,
     record_availability_outcome,
+    register_availability_exposure,
 )
 
 from main_logic.proactive_recommendation.feedback.learning import (
@@ -377,6 +379,9 @@ def flush_censored_availability(*, now: float | None = None) -> int:
             input_mode=pending.availability_input_mode,
             delivered_at=pending.delivered_at,
             censored=True,
+            exposure_id=availability_exposure_id(
+                pending.lanlan_name, pending.turn_id
+            ),
         )
     return len(claimed)
 
@@ -399,6 +404,9 @@ def _record_availability_reply(
         input_mode=claimed.availability_input_mode,
         delivered_at=claimed.delivered_at,
         replied_at=timestamp,
+        exposure_id=availability_exposure_id(
+            claimed.lanlan_name, claimed.turn_id
+        ),
     )
 
 
@@ -518,7 +526,15 @@ def register_pending_feedback(
         or "unknown",
         availability_input_mode=normalized_input_mode,
     )
-    return _pending_registry.register(pending)
+    registered = _pending_registry.register(pending)
+    register_availability_exposure(
+        config_dir=config_dir,
+        exposure_id=availability_exposure_id(name, tid),
+        activity_state=registered.availability_activity_state,
+        input_mode=registered.availability_input_mode,
+        delivered_at=registered.delivered_at,
+    )
+    return registered
 
 
 def record_feedback_event(

@@ -18,6 +18,7 @@ from main_logic.proactive_recommendation.feedback.service import (
 from main_logic.proactive_recommendation.feedback.availability import (
     AVAILABILITY_FILENAME,
     get_availability_shadow,
+    flush_persisted_censored_availability,
     record_availability_outcome,
 )
 from main_logic.proactive_recommendation.feedback.event_processing import (
@@ -117,7 +118,7 @@ def test_availability_off_is_read_only_and_does_not_create_state(tmp_path):
     assert not (tmp_path / AVAILABILITY_FILENAME).exists()
 
 
-def test_availability_shadow_uses_exact_bucket_and_aggregate_only(tmp_path):
+def test_availability_shadow_uses_exact_bucket_and_no_conversation_text(tmp_path):
     delivered = datetime(2026, 1, 1, 9, 0).timestamp()
     outcome_at = delivered + 600
     for _ in range(15):
@@ -161,18 +162,52 @@ def test_availability_shadow_uses_exact_bucket_and_aggregate_only(tmp_path):
         "average_reply_latency_seconds": 60.0,
     }
     assert snapshot["interval_consumed"] is False
-    assert set(persisted) == {"schema_version", "updated_at", "buckets"}
+    assert set(persisted) == {
+        "schema_version",
+        "updated_at",
+        "buckets",
+        "pending_exposures",
+    }
     for bucket in persisted["buckets"].values():
         assert set(bucket) == {
             "activity_state",
             "input_mode",
             "time_bucket",
+            "exposure_count",
+            "reply_count",
+            "censored_count",
             "exposure_weight",
             "reply_weight",
             "censored_weight",
             "reply_latency_weighted_seconds",
             "updated_at",
         }
+
+
+def test_availability_sample_gate_uses_raw_counts_after_decay(tmp_path):
+    delivered = datetime(2026, 1, 1, 9, 0).timestamp()
+    for index in range(30):
+        record_availability_outcome(
+            config_dir=tmp_path,
+            activity_state="focused_work",
+            input_mode="text",
+            delivered_at=delivered,
+            replied_at=delivered + 60 if index < 10 else None,
+            censored=index >= 10,
+            mode="shadow",
+        )
+
+    snapshot = get_availability_shadow(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        now=delivered + 15 * 24 * 60 * 60,
+        mode="shadow",
+    )
+
+    assert snapshot["selected_level"] == "exact"
+    assert snapshot["selected_bucket"]["exposure_count"] == 30
+    assert snapshot["selected_bucket"]["reply_count"] == 10
 
 
 def test_availability_shadow_falls_back_activity_then_input_then_global(tmp_path):
@@ -263,6 +298,53 @@ def test_availability_pending_reply_and_censor_do_not_change_feedback_behavior(
     assert snapshot["fallback_trace"][-1]["exposure_count"] == 2.0
     assert snapshot["fallback_trace"][-1]["reply_count"] == 1.0
     assert snapshot["scheduling_consumed"] is False
+
+
+def test_availability_pending_exposure_survives_restart_for_censoring(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        availability_module,
+        "PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE",
+        "shadow",
+    )
+    clear_pending_recommendation_feedback()
+    register_pending_feedback(
+        lanlan_name="neko",
+        turn_id="restart-censored",
+        source_type="meme",
+        delivered_at=100.0,
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+    )
+    persisted_before = (tmp_path / AVAILABILITY_FILENAME).read_text(encoding="utf-8")
+
+    clear_pending_recommendation_feedback()
+    finalized = flush_persisted_censored_availability(
+        config_dir=tmp_path,
+        now=701.0,
+        mode="shadow",
+    )
+    duplicate = flush_persisted_censored_availability(
+        config_dir=tmp_path,
+        now=800.0,
+        mode="shadow",
+    )
+    snapshot = get_availability_shadow(
+        config_dir=tmp_path,
+        activity_state="focused_work",
+        input_mode="text",
+        now=800.0,
+        mode="shadow",
+    )
+
+    assert "neko" not in persisted_before
+    assert "restart-censored" not in persisted_before
+    assert finalized == 1
+    assert duplicate == 0
+    assert snapshot["fallback_trace"][-1]["exposure_count"] == 1
+    assert snapshot["fallback_trace"][-1]["censored_count"] == 1
 
 
 def test_feedback_event_sanitizes_sensitive_fields_and_scores_later_positive():

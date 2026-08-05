@@ -1,6 +1,7 @@
 import json
 
 import main_logic.proactive_recommendation.service as recommendation_turn
+import main_logic.proactive_recommendation.feedback.availability as availability_module
 
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,
@@ -225,6 +226,47 @@ def test_shadow_observation_records_feedback_state_preview_without_reranking(tmp
     assert preview["conversation_acceptance"]["temporary"]["interest_preview"] == 0.0
     assert decision.selected_candidate.score == 0.91
     assert decision.score_breakdown == {}
+
+
+def test_observation_records_delivery_time_availability_counterfactual(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        availability_module,
+        "PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE",
+        "shadow",
+    )
+    decision = _decision(_material_candidate("music", score=0.91))
+
+    observation = _record_proactive_recommendation_observation(
+        decision,
+        lanlan_name="neko",
+        response_body={
+            "action": "chat",
+            "reason_code": "CHAT_DELIVERED",
+            "source_mode": "music",
+            "source_tag": "MUSIC",
+            "turn_id": "availability-at-delivery",
+        },
+        recommendation_mode="active_source",
+        observation_log_mode="jsonl",
+        config_dir=tmp_path,
+        ts=200.0,
+        activity_state="focused_work",
+        input_mode="text",
+    )
+
+    counterfactual = observation["availability_shadow"]
+    assert counterfactual["status"] == "insufficient"
+    assert counterfactual["counterfactual_interval_multiplier"] == "2x"
+    assert counterfactual["context"] == {
+        "activity_state": "focused_work",
+        "input_mode": "text",
+        "local_time_bucket": availability_module.availability_time_bucket(200.0),
+    }
+    assert counterfactual["scheduling_consumed"] is False
+    assert counterfactual["interval_consumed"] is False
+    assert counterfactual["gate_consumed"] is False
 
 
 def test_system_router_observation_flow_does_not_write_when_jsonl_disabled(tmp_path):

@@ -39,6 +39,7 @@ from main_logic.proactive_recommendation.feedback.service import (
 )
 from main_logic.proactive_recommendation.feedback.availability import (
     AVAILABILITY_FILENAME,
+    flush_persisted_censored_availability,
     get_availability_shadow,
 )
 from main_logic.proactive_recommendation.feedback.analytics import (
@@ -455,6 +456,18 @@ def _record_proactive_recommendation_observation(
         decision_context=decision_context,
         policy_decision=policy_decision,
     )
+    flush_persisted_censored_availability(
+        config_dir=config_dir,
+        now=observation_ts,
+    )
+    availability_shadow = get_availability_shadow(
+        config_dir=config_dir,
+        activity_state=activity_state,
+        input_mode=input_mode,
+        now=observation_ts,
+    )
+    if availability_shadow.get("mode") == "shadow":
+        raw_observation["availability_shadow"] = availability_shadow
     if feedback_state_snapshot:
         state_snapshot = dict(feedback_state_snapshot)
         ranking_consumed = bool(
@@ -906,6 +919,10 @@ class RecommendationService:
             now=current_time,
             window_seconds=CALIBRATION_WINDOW_SECONDS,
             sample_limit=CALIBRATION_SAMPLE_LIMIT,
+        )
+        flush_persisted_censored_availability(
+            config_dir=config_dir,
+            now=current_time,
         )
         flush_censored_availability(now=current_time)
         availability_shadow = get_availability_shadow(

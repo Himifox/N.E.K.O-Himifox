@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+import hashlib
 import logging
 import math
 import os
@@ -43,6 +44,72 @@ def availability_time_bucket(timestamp: float) -> str:
     return f"{start:02d}-{(start + 6):02d}"
 
 
+def availability_exposure_id(lanlan_name: Any, turn_id: Any) -> str:
+    """Return a non-reversible key for one short-lived pending exposure."""
+    raw = f"{str(lanlan_name or '').strip()}\0{str(turn_id or '').strip()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def register_availability_exposure(
+    *,
+    config_dir: str | os.PathLike[str] | None,
+    exposure_id: str,
+    activity_state: Any,
+    input_mode: Any,
+    delivered_at: float,
+    mode: str | None = None,
+) -> None:
+    """Persist only the bounded metadata needed to survive a service restart."""
+    effective_mode = (
+        PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE if mode is None else mode
+    )
+    if effective_mode != "shadow" or config_dir is None or not exposure_id:
+        return
+    delivered = float(delivered_at)
+
+    def update(state: dict[str, Any]) -> dict[str, Any]:
+        _flush_due_pending_in_state(state, now=delivered)
+        state["pending_exposures"][exposure_id] = {
+            "activity_state": _normalize_activity_state(activity_state),
+            "input_mode": _normalize_input_mode(input_mode),
+            "delivered_at": delivered,
+        }
+        return state
+
+    try:
+        _availability_store(Path(config_dir)).update(update)
+    except Exception:
+        logger.debug("availability pending exposure update failed", exc_info=True)
+
+
+def flush_persisted_censored_availability(
+    *,
+    config_dir: str | os.PathLike[str] | None,
+    now: float | None = None,
+    mode: str | None = None,
+) -> int:
+    """Finalize expired pending exposures, including after a process restart."""
+    effective_mode = (
+        PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE if mode is None else mode
+    )
+    if effective_mode != "shadow" or config_dir is None:
+        return 0
+    current = time.time() if now is None else float(now)
+    finalized = 0
+
+    def update(state: dict[str, Any]) -> dict[str, Any]:
+        nonlocal finalized
+        finalized = _flush_due_pending_in_state(state, now=current)
+        return state
+
+    try:
+        _availability_store(Path(config_dir)).update(update)
+    except Exception:
+        logger.debug("availability pending exposure flush failed", exc_info=True)
+        return 0
+    return finalized
+
+
 def record_availability_outcome(
     *,
     config_dir: str | os.PathLike[str] | None,
@@ -51,6 +118,7 @@ def record_availability_outcome(
     delivered_at: float,
     replied_at: float | None = None,
     censored: bool = False,
+    exposure_id: str | None = None,
     mode: str | None = None,
 ) -> dict[str, Any]:
     """Add one finalized exposure; no turn ID, source, or text is persisted."""
@@ -77,30 +145,33 @@ def record_availability_outcome(
     activity = _normalize_activity_state(activity_state)
     normalized_input = _normalize_input_mode(input_mode)
     time_bucket = availability_time_bucket(delivered_at)
-    bucket_key = _bucket_key(activity, normalized_input, time_bucket)
-
     def update(state: dict[str, Any]) -> dict[str, Any]:
-        bucket = _decayed_bucket(
-            state["buckets"].get(bucket_key),
-            activity_state=activity,
-            input_mode=normalized_input,
-            time_bucket=time_bucket,
-            now=outcome_at,
+        pending = None
+        if exposure_id:
+            pending = state["pending_exposures"].pop(exposure_id, None)
+            if pending is None:
+                return state
+        effective_activity = (
+            pending.get("activity_state") if pending is not None else activity
         )
-        bucket["exposure_weight"] += 1.0
-        if replied:
-            latency = min(
-                AVAILABILITY_REPLY_WINDOW_SECONDS,
-                max(0.0, float(replied_at) - float(delivered_at)),
-            )
-            bucket["reply_weight"] += 1.0
-            bucket["reply_latency_weighted_seconds"] += latency
-        else:
-            bucket["censored_weight"] += 1.0
-        bucket["updated_at"] = outcome_at
-        state["buckets"][bucket_key] = bucket
-        state["updated_at"] = outcome_at
-        return state
+        effective_input = (
+            pending.get("input_mode") if pending is not None else normalized_input
+        )
+        if effective_input == "unknown" and normalized_input != "unknown":
+            effective_input = normalized_input
+        effective_delivered = (
+            float(pending.get("delivered_at"))
+            if pending is not None
+            else float(delivered_at)
+        )
+        return _apply_outcome_to_state(
+            state,
+            activity_state=effective_activity,
+            input_mode=effective_input,
+            delivered_at=effective_delivered,
+            outcome_at=outcome_at,
+            replied_at=float(replied_at) if replied_at is not None else None,
+        )
 
     try:
         _availability_store(Path(config_dir)).update(update)
@@ -123,6 +194,65 @@ def record_availability_outcome(
         now=outcome_at,
         mode=effective_mode,
     )
+
+
+def _apply_outcome_to_state(
+    state: dict[str, Any],
+    *,
+    activity_state: Any,
+    input_mode: Any,
+    delivered_at: float,
+    outcome_at: float,
+    replied_at: float | None,
+) -> dict[str, Any]:
+    activity = _normalize_activity_state(activity_state)
+    normalized_input = _normalize_input_mode(input_mode)
+    time_bucket = availability_time_bucket(delivered_at)
+    bucket_key = _bucket_key(activity, normalized_input, time_bucket)
+    bucket = _decayed_bucket(
+        state["buckets"].get(bucket_key),
+        activity_state=activity,
+        input_mode=normalized_input,
+        time_bucket=time_bucket,
+        now=outcome_at,
+    )
+    bucket["exposure_count"] += 1
+    bucket["exposure_weight"] += 1.0
+    if replied_at is not None:
+        latency = min(
+            AVAILABILITY_REPLY_WINDOW_SECONDS,
+            max(0.0, replied_at - delivered_at),
+        )
+        bucket["reply_count"] += 1
+        bucket["reply_weight"] += 1.0
+        bucket["reply_latency_weighted_seconds"] += latency
+    else:
+        bucket["censored_count"] += 1
+        bucket["censored_weight"] += 1.0
+    bucket["updated_at"] = outcome_at
+    state["buckets"][bucket_key] = bucket
+    state["updated_at"] = max(float(state.get("updated_at") or 0.0), outcome_at)
+    return state
+
+
+def _flush_due_pending_in_state(state: dict[str, Any], *, now: float) -> int:
+    finalized = 0
+    pending_exposures = state["pending_exposures"]
+    for exposure_id, pending in list(pending_exposures.items()):
+        delivered_at = float(pending.get("delivered_at") or 0.0)
+        if now - delivered_at <= AVAILABILITY_REPLY_WINDOW_SECONDS:
+            continue
+        pending_exposures.pop(exposure_id, None)
+        _apply_outcome_to_state(
+            state,
+            activity_state=pending.get("activity_state"),
+            input_mode=pending.get("input_mode"),
+            delivered_at=delivered_at,
+            outcome_at=delivered_at + AVAILABILITY_REPLY_WINDOW_SECONDS,
+            replied_at=None,
+        )
+        finalized += 1
+    return finalized
 
 
 def get_availability_shadow(
@@ -204,7 +334,22 @@ def get_availability_shadow(
     fallback_trace = []
     for level, bucket in candidates:
         ready = _bucket_ready(bucket)
-        fallback_trace.append({"level": level, **_public_bucket(bucket), "ready": ready})
+        fallback_trace.append(
+            {
+                "level": level,
+                **(
+                    _public_bucket(bucket)
+                    or {
+                        "exposure_count": 0,
+                        "reply_count": 0,
+                        "censored_count": 0,
+                        "response_rate": None,
+                        "average_reply_latency_seconds": None,
+                    }
+                ),
+                "ready": ready,
+            }
+        )
         if ready:
             selected_level = level
             selected = bucket
@@ -268,7 +413,7 @@ def _availability_snapshot(
         "reply_window_seconds": AVAILABILITY_REPLY_WINDOW_SECONDS,
         "half_life_seconds": AVAILABILITY_HALF_LIFE_SECONDS,
         "fallback_trace": fallback_trace,
-        "stored_fields": "aggregate_only_no_conversation_text",
+        "stored_fields": "aggregate_plus_ephemeral_pending_no_conversation_text",
         "storage_error": storage_error,
     }
 
@@ -279,9 +424,9 @@ def _public_bucket(bucket: Mapping[str, Any] | None) -> dict[str, Any] | None:
     exposures = float(bucket.get("exposure_weight") or 0.0)
     replies = float(bucket.get("reply_weight") or 0.0)
     return {
-        "exposure_count": round(exposures, 3),
-        "reply_count": round(replies, 3),
-        "censored_count": round(float(bucket.get("censored_weight") or 0.0), 3),
+        "exposure_count": int(bucket.get("exposure_count") or 0),
+        "reply_count": int(bucket.get("reply_count") or 0),
+        "censored_count": int(bucket.get("censored_count") or 0),
         "response_rate": rounded_ratio_or_none(replies, exposures),
         "average_reply_latency_seconds": (
             round(float(bucket.get("reply_latency_weighted_seconds") or 0.0) / replies, 3)
@@ -294,13 +439,16 @@ def _public_bucket(bucket: Mapping[str, Any] | None) -> dict[str, Any] | None:
 def _bucket_ready(bucket: Mapping[str, Any] | None) -> bool:
     return bool(
         bucket
-        and float(bucket.get("exposure_weight") or 0.0) >= AVAILABILITY_MIN_EXPOSURES
-        and float(bucket.get("reply_weight") or 0.0) >= AVAILABILITY_MIN_REPLIES
+        and int(bucket.get("exposure_count") or 0) >= AVAILABILITY_MIN_EXPOSURES
+        and int(bucket.get("reply_count") or 0) >= AVAILABILITY_MIN_REPLIES
     )
 
 
 def _combine_buckets(buckets: Any) -> dict[str, float] | None:
     combined = {
+        "exposure_count": 0,
+        "reply_count": 0,
+        "censored_count": 0,
         "exposure_weight": 0.0,
         "reply_weight": 0.0,
         "censored_weight": 0.0,
@@ -330,9 +478,30 @@ def _decayed_bucket(
         "activity_state": _normalize_activity_state(activity_state),
         "input_mode": _normalize_input_mode(input_mode),
         "time_bucket": _normalize_time_bucket(time_bucket),
-        "exposure_weight": max(0.0, coerce_float_or_default(bucket.get("exposure_weight"), default=0.0)) * factor,
-        "reply_weight": max(0.0, coerce_float_or_default(bucket.get("reply_weight"), default=0.0)) * factor,
-        "censored_weight": max(0.0, coerce_float_or_default(bucket.get("censored_weight"), default=0.0)) * factor,
+        "exposure_count": _raw_count(
+            bucket, "exposure_count", fallback_weight="exposure_weight"
+        ),
+        "reply_count": _raw_count(
+            bucket, "reply_count", fallback_weight="reply_weight"
+        ),
+        "censored_count": _raw_count(
+            bucket, "censored_count", fallback_weight="censored_weight"
+        ),
+        "exposure_weight": max(
+            0.0,
+            coerce_float_or_default(bucket.get("exposure_weight"), default=0.0),
+        )
+        * factor,
+        "reply_weight": max(
+            0.0,
+            coerce_float_or_default(bucket.get("reply_weight"), default=0.0),
+        )
+        * factor,
+        "censored_weight": max(
+            0.0,
+            coerce_float_or_default(bucket.get("censored_weight"), default=0.0),
+        )
+        * factor,
         "reply_latency_weighted_seconds": max(
             0.0,
             coerce_float_or_default(
@@ -344,8 +513,23 @@ def _decayed_bucket(
     }
 
 
+def _raw_count(
+    bucket: Mapping[str, Any], key: str, *, fallback_weight: str
+) -> int:
+    if key in bucket:
+        return max(0, int(coerce_float_or_default(bucket.get(key), default=0.0)))
+    return max(
+        0,
+        int(math.ceil(coerce_float_or_default(bucket.get(fallback_weight), default=0.0))),
+    )
+
+
 def _sanitize_state(raw: Any) -> dict[str, Any]:
-    source = raw if isinstance(raw, Mapping) and raw.get("schema_version") == 1 else {}
+    source = (
+        raw
+        if isinstance(raw, Mapping) and raw.get("schema_version") in {1, 2}
+        else {}
+    )
     buckets: dict[str, dict[str, Any]] = {}
     raw_buckets = source.get("buckets")
     if isinstance(raw_buckets, Mapping):
@@ -362,17 +546,45 @@ def _sanitize_state(raw: Any) -> dict[str, Any]:
                 time_bucket=time_bucket,
                 now=coerce_float_or_default(raw_bucket.get("updated_at"), default=0.0),
             )
+    pending_exposures: dict[str, dict[str, Any]] = {}
+    raw_pending = source.get("pending_exposures")
+    if isinstance(raw_pending, Mapping):
+        for exposure_id, pending in list(raw_pending.items())[:256]:
+            if (
+                isinstance(exposure_id, str)
+                and len(exposure_id) == 32
+                and all(character in "0123456789abcdef" for character in exposure_id)
+                and isinstance(pending, Mapping)
+            ):
+                pending_exposures[exposure_id] = {
+                    "activity_state": _normalize_activity_state(
+                        pending.get("activity_state")
+                    ),
+                    "input_mode": _normalize_input_mode(pending.get("input_mode")),
+                    "delivered_at": max(
+                        0.0,
+                        coerce_float_or_default(
+                            pending.get("delivered_at"), default=0.0
+                        ),
+                    ),
+                }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "updated_at": max(0.0, coerce_float_or_default(source.get("updated_at"), default=0.0)),
         "buckets": buckets,
+        "pending_exposures": pending_exposures,
     }
 
 
 def _availability_store(config_dir: Path) -> AtomicJsonStore:
     return AtomicJsonStore(
         config_dir / AVAILABILITY_FILENAME,
-        default_factory=lambda: {"schema_version": 1, "updated_at": 0.0, "buckets": {}},
+        default_factory=lambda: {
+            "schema_version": 2,
+            "updated_at": 0.0,
+            "buckets": {},
+            "pending_exposures": {},
+        },
         sanitizer=_sanitize_state,
     )
 

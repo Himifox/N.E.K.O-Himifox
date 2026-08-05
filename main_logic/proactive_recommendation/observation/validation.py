@@ -30,6 +30,7 @@ _TOP_LEVEL_KEYS = {
     "git_revision",
     "review_context",
     "decision_context",
+    "availability_shadow",
     "feedback_state_preview",
     "preference_state",
     "personalization",
@@ -118,6 +119,12 @@ def sanitize_recommendation_observation(
             )
             if decision_context:
                 safe[key] = decision_context
+        elif key == "availability_shadow":
+            availability = sanitize_recommendation_availability_shadow(
+                observation.get(key)
+            )
+            if availability:
+                safe[key] = availability
         elif key == "feedback_state_preview":
             state_preview = sanitize_recommendation_feedback_state_preview(
                 observation.get(key)
@@ -145,6 +152,41 @@ def sanitize_recommendation_observation(
         else:
             safe[key] = sanitize_json_value(observation.get(key))
     return safe
+
+
+def sanitize_recommendation_availability_shadow(value: Any) -> dict[str, Any]:
+    """Keep the compact, delivery-time availability counterfactual."""
+    if not isinstance(value, Mapping) or value.get("mode") != "shadow":
+        return {}
+    status = str(value.get("status") or "").strip().lower()
+    multiplier = str(value.get("counterfactual_interval_multiplier") or "").strip()
+    selected_level = str(value.get("selected_level") or "").strip().lower()
+    context = value.get("context")
+    if status not in {"available", "uncertain", "unavailable", "insufficient"}:
+        return {}
+    if multiplier not in {"1x", "2x", "4x"}:
+        return {}
+    if selected_level not in {"exact", "activity_state", "input_mode", "global"}:
+        selected_level = None
+    context = context if isinstance(context, Mapping) else {}
+    return {
+        "version": "availability_shadow_v1",
+        "mode": "shadow",
+        "shadow_only": True,
+        "scheduling_consumed": False,
+        "interval_consumed": False,
+        "gate_consumed": False,
+        "status": status,
+        "counterfactual_interval_multiplier": multiplier,
+        "selected_level": selected_level,
+        "context": {
+            "activity_state": str(context.get("activity_state") or "unknown")[:48],
+            "input_mode": str(context.get("input_mode") or "unknown")[:16],
+            "local_time_bucket": str(
+                context.get("local_time_bucket") or "00-06"
+            )[:5],
+        },
+    }
 
 
 def sanitize_recommendation_decision_context(value: Any) -> dict[str, Any]:

@@ -165,7 +165,7 @@ P44-G0-B 作为旧 `reward_score_v2_preview` 的兼容诊断保留，不进入�
 
 ### 5.4 P44-G0-C/D：临时/持久状态与 observation preview
 
-可打扰性实验与质量状态分离：`PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE=off|shadow` 默认 `off`。Shadow 只保存带 30 天半衰期的聚合统计，按投递时活动状态、输入方式和本地六小时时段分桶；10 分钟无回复记右截尾。精确桶少于 30 次曝光或 10 次回复时，依次回退到活动状态、输入方式和全局。它输出 `available/uncertain/unavailable/insufficient` 与反事实 `1x/2x/4x` 间隔倍率，但 scheduling、interval、gate consumed 始终为 false，且不保存 turn ID、来源、回复正文或对话文本。
+可打扰性实验与质量状态分离：`PROACTIVE_RECOMMENDATION_AVAILABILITY_MODE=off|shadow` 默认 `off`。Shadow 的长期状态只保存带 30 天半衰期的聚合统计，按投递时活动状态、输入方式和本地六小时时段分桶；10 分钟无回复记右截尾。为避免服务重启丢失截尾曝光，同一状态文件还短暂保存最长 10 分钟的哈希曝光键、投递时间和分桶上下文，完成回复或截尾后立即删除；不保存原始 turn ID、来源、回复正文或对话文本。精确桶少于 30 次原始曝光或 10 次原始回复时，依次回退到活动状态、输入方式和全局；30 天衰减权重只用于响应率和延迟估计，不用于样本门槛。每次投递的 observation 会记录当时的 `available/uncertain/unavailable/insufficient` 与反事实 `1x/2x/4x` 间隔倍率，但 scheduling、interval、gate consumed 始终为 false。
 
 1. 临时兴趣只在进程内保存，TTL 为 2 小时；不同显式反馈可累积，但过期后自动删除。
 2. 历史 v1 文件 `proactive_recommendation_feedback_state_preview.json` 保持只读；v2 使用独立文件 `proactive_recommendation_feedback_state_preview_v2.json` 保存聚合证据，两者均不保存 turn ID、回复正文、标题、URL 或逐条 latency。
