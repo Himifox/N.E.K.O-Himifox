@@ -199,7 +199,17 @@ class KnowledgeStore:
         for row in connection.execute(
             "SELECT rowid, * FROM entries ORDER BY rowid"
         ).fetchall():
-            self._replace_fts(connection, int(row["rowid"]), entry_from_row(row))
+            try:
+                entry = entry_from_row(row)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "[public-knowledge] skipped invalid entry operation=%s rowid=%s type=%s",
+                    "migrate_legacy_entries",
+                    row["rowid"],
+                    type(exc).__name__,
+                )
+                continue
+            self._replace_fts(connection, int(row["rowid"]), entry)
         connection.execute("DROP TABLE entries_legacy")
 
     def upsert(self, entry: KnowledgeEntry) -> UpsertResult:
@@ -265,8 +275,14 @@ class KnowledgeStore:
             rowid = rows[0]["rowid"]
             for stale in rows[1:]:
                 stale_rowid = stale["rowid"]
-                connection.execute("DELETE FROM entries_fts WHERE entry_rowid = ?", (stale_rowid,))
-                connection.execute("DELETE FROM entries WHERE rowid = ?", (stale_rowid,))
+                connection.execute(
+                    "DELETE FROM entries_fts WHERE entry_rowid = ?",
+                    (stale_rowid,),
+                )
+                connection.execute(
+                    "DELETE FROM entries WHERE rowid = ?",
+                    (stale_rowid,),
+                )
             connection.execute(
                 "UPDATE entries SET terms=?, tags=?, summary=?, content=? WHERE rowid=?",
                 (_terms_json(entry), _values_json(entry.tags), entry.summary, entry.content, rowid),
