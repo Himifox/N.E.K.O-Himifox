@@ -60,6 +60,65 @@ def test_legacy_migration_backs_up_wal_and_backfills_fts(tmp_path) -> None:
     writer.close()
 
 
+def test_legacy_migration_skips_bad_fts_rows_and_keeps_valid_rows(
+    tmp_path,
+    caplog,
+) -> None:
+    database_path = tmp_path / "knowledge.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE entries (title TEXT, aliases TEXT, tags TEXT, "
+            "summary TEXT, content TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO entries VALUES (?, ?, ?, ?, ?)",
+            (
+                ("invalid legacy", "[]", "[]", "private summary", "private content"),
+                (
+                    "valid legacy",
+                    "[]",
+                    '["source:fixture"]',
+                    "valid summary",
+                    "valid content",
+                ),
+            ),
+        )
+
+    caplog.set_level(logging.WARNING, logger="knowledge.engine.store")
+    store = KnowledgeStore(database_path)
+
+    assert [
+        hit.entry.title for hit in KnowledgeRetriever(store).search("valid legacy")
+    ] == ["valid legacy"]
+    assert [entry.title for entry in store.list_active_entries()] == ["valid legacy"]
+    assert "operation=migrate_legacy_entries" in caplog.text
+    assert "private content" not in caplog.text
+
+
+def test_upsert_converges_historical_duplicate_rows(tmp_path) -> None:
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("duplicate"))
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "INSERT INTO entries(title, terms, tags, summary, content) "
+            "SELECT title, terms, tags, summary, content FROM entries WHERE title = ?",
+            ("duplicate",),
+        )
+
+    updated = KnowledgeEntry(
+        title="duplicate",
+        terms={"alias": (), "recognition": ()},
+        tags=("source:fixture",),
+        summary="Updated summary",
+        content="Updated content",
+    )
+    result = store.upsert(updated)
+
+    assert result.updated is True
+    assert store.count() == 1
+    assert store.get_entry("source:fixture", "duplicate") == updated
+
+
 def test_entry_lists_skip_only_bad_rows_and_log_no_content(tmp_path, caplog) -> None:
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert_many((_entry("alpha"), _entry("private row"), _entry("omega")))
