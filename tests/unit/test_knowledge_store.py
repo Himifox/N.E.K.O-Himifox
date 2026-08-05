@@ -53,10 +53,13 @@ def test_legacy_migration_backs_up_wal_and_backfills_fts(tmp_path) -> None:
     ] == ["legacy phrase"]
 
     backup = database_path.with_suffix(".db.legacy.bak")
-    with sqlite3.connect(backup) as connection:
+    connection = sqlite3.connect(backup)
+    try:
         assert connection.execute("SELECT title FROM entries").fetchone()[0] == (
             "legacy phrase"
         )
+    finally:
+        connection.close()
     writer.close()
 
 
@@ -65,7 +68,8 @@ def test_legacy_migration_skips_bad_fts_rows_and_keeps_valid_rows(
     caplog,
 ) -> None:
     database_path = tmp_path / "knowledge.db"
-    with sqlite3.connect(database_path) as connection:
+    connection = sqlite3.connect(database_path)
+    try:
         connection.execute(
             "CREATE TABLE entries (title TEXT, aliases TEXT, tags TEXT, "
             "summary TEXT, content TEXT)"
@@ -83,6 +87,9 @@ def test_legacy_migration_skips_bad_fts_rows_and_keeps_valid_rows(
                 ),
             ),
         )
+        connection.commit()
+    finally:
+        connection.close()
 
     caplog.set_level(logging.WARNING, logger="knowledge.engine.store")
     store = KnowledgeStore(database_path)
