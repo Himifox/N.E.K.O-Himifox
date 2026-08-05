@@ -191,6 +191,27 @@ def test_mention_matcher_cache_is_lru_bounded_across_database_paths(
     assert {str(path) for path in paths[1:]} == cached_paths
 
 
+def test_mention_matcher_build_does_not_hold_global_cache_lock(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(retrieval_module, "_MENTION_MATCHER_CACHE", OrderedDict())
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("known phrase"))
+    list_active_entries = store.list_active_entries
+
+    def probe_cache_lock():
+        assert retrieval_module._MENTION_MATCHER_CACHE_LOCK.acquire(blocking=False)
+        retrieval_module._MENTION_MATCHER_CACHE_LOCK.release()
+        return list_active_entries()
+
+    monkeypatch.setattr(store, "list_active_entries", probe_cache_lock)
+
+    hits = KnowledgeRetriever(store).find_mentions("mention known phrase")
+
+    assert hits[0].entry.title == "known phrase"
+
+
 def test_reference_details_preserve_named_prefix_and_apply_total_budget() -> None:
     entry = SimpleNamespace(content="Heading\nFact: abcdef\nFact: ghijkl")
 
