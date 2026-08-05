@@ -269,14 +269,21 @@ def _get_cached_mention_matcher(
 ) -> KnowledgeMentionMatcher:
     """Refresh the per-database matcher only after a committed upsert batch."""
     cache_key = (str(store.database_path.resolve()), policy)
-    revision = store.entries_revision()
-    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
-    with _MENTION_MATCHER_CACHE_LOCK:
-        cached = _MENTION_MATCHER_CACHE.get(cache_key)
-        if cached is not None and cached.revision == revision and cached.disabled == disabled:
-            _MENTION_MATCHER_CACHE.move_to_end(cache_key)
-            return cached.matcher
-        cached = _CachedMentionMatcher(
+    override_path = get_catalog_override_path(store.database_path)
+    while True:
+        revision = store.entries_revision()
+        disabled = load_disabled_entries(override_path)
+        with _MENTION_MATCHER_CACHE_LOCK:
+            observed = _MENTION_MATCHER_CACHE.get(cache_key)
+            if (
+                observed is not None
+                and observed.revision == revision
+                and observed.disabled == disabled
+            ):
+                _MENTION_MATCHER_CACHE.move_to_end(cache_key)
+                return observed.matcher
+
+        candidate = _CachedMentionMatcher(
             revision=revision,
             disabled=disabled,
             matcher=KnowledgeMentionMatcher(
@@ -293,11 +300,28 @@ def _get_cached_mention_matcher(
                 policy=policy,
             ),
         )
-        _MENTION_MATCHER_CACHE[cache_key] = cached
-        _MENTION_MATCHER_CACHE.move_to_end(cache_key)
-        while len(_MENTION_MATCHER_CACHE) > _MENTION_MATCHER_CACHE_LIMIT:
-            _MENTION_MATCHER_CACHE.popitem(last=False)
-        return cached.matcher
+        if (
+            store.entries_revision() != revision
+            or load_disabled_entries(override_path) != disabled
+        ):
+            continue
+
+        with _MENTION_MATCHER_CACHE_LOCK:
+            current = _MENTION_MATCHER_CACHE.get(cache_key)
+            if current is not observed:
+                if (
+                    current is not None
+                    and current.revision == revision
+                    and current.disabled == disabled
+                ):
+                    _MENTION_MATCHER_CACHE.move_to_end(cache_key)
+                    return current.matcher
+                continue
+            _MENTION_MATCHER_CACHE[cache_key] = candidate
+            _MENTION_MATCHER_CACHE.move_to_end(cache_key)
+            while len(_MENTION_MATCHER_CACHE) > _MENTION_MATCHER_CACHE_LIMIT:
+                _MENTION_MATCHER_CACHE.popitem(last=False)
+            return candidate.matcher
 
 
 def _is_weak_entry(entry: object, policy: MatchPolicy) -> bool:
