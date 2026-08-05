@@ -61,7 +61,10 @@ def load_community_collections(
     rows = payload.get("collections")
     version = payload.get("schema_version")
     if isinstance(version, int) and version > COMMUNITY_REGISTRY_VERSION:
-        raise ValueError("community collection registry version is newer than supported")
+        # Never open a newer registry, but a downgrade must not brick the whole
+        # service: return no records and let write_community_collections refuse
+        # to overwrite a newer registry on a later write.
+        return {}
     if version != COMMUNITY_REGISTRY_VERSION or not isinstance(rows, dict):
         return {}
     records: dict[str, CommunityCollectionRecord] = {}
@@ -95,6 +98,24 @@ def write_community_collections(
     records: Mapping[str, CommunityCollectionRecord],
 ) -> None:
     """Atomically replace the lightweight community collection registry."""
+    path = get_community_registry_path(knowledge_root)
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        existing_version = (
+            existing.get("schema_version")
+            if isinstance(existing, dict)
+            else None
+        )
+        if (
+            isinstance(existing_version, int)
+            and existing_version > COMMUNITY_REGISTRY_VERSION
+        ):
+            raise ValueError(
+                "community collection registry version is newer than supported"
+            )
     payload = {
         "schema_version": COMMUNITY_REGISTRY_VERSION,
         "collections": {
@@ -106,10 +127,8 @@ def write_community_collections(
             for collection_id in sorted(records)
         },
     }
-    path = get_community_registry_path(knowledge_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, payload, ensure_ascii=False, indent=2)
-
 
 def new_community_collection(
     collection_id: str,

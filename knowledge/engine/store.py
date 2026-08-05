@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -12,6 +12,8 @@ from typing import Callable, Iterator, Sequence
 
 from .models import KnowledgeEntry, UpsertResult
 
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 5
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
@@ -42,7 +44,12 @@ def publish_database_changed(database_path: str | Path) -> None:
         listeners = tuple(_DATABASE_CHANGE_LISTENERS)
     resolved_path = Path(database_path)
     for listener in listeners:
-        listener(resolved_path)
+        try:
+            listener(resolved_path)
+        except Exception:
+            # A listener failure must not stop later listeners or turn a
+            # committed write into a reported failure.
+            logger.exception("[knowledge] database change listener failed: %s", resolved_path)
 
 
 class KnowledgeStoreError(RuntimeError):
@@ -149,7 +156,11 @@ class KnowledgeStore:
         backup = self.database_path.with_suffix(self.database_path.suffix + ".legacy.bak")
         if self.database_path.exists() and not backup.exists():
             connection.commit()
-            shutil.copy2(self.database_path, backup)
+            backup_connection = sqlite3.connect(backup)
+            try:
+                connection.backup(backup_connection)
+            finally:
+                backup_connection.close()
         rows = connection.execute("SELECT * FROM entries").fetchall()
         connection.execute("DROP TABLE IF EXISTS entries_fts")
         connection.execute("ALTER TABLE entries RENAME TO entries_legacy")
@@ -199,10 +210,7 @@ class KnowledgeStore:
             )]
             if rowids:
                 connection.executemany("DELETE FROM entries_fts WHERE entry_rowid = ?", ((value,) for value in rowids))
-            connection.execute(
-                "DELETE FROM entries WHERE rowid IN (SELECT entries.rowid FROM entries JOIN json_each(entries.tags) tag WHERE tag.value = ?)",
-                (source_tag,),
-            )
+                connection.executemany("DELETE FROM entries WHERE rowid = ?", ((value,) for value in rowids))
             results = tuple(self._insert_with_connection(connection, entry) for entry in entries)
             self._increment_entries_revision(connection)
         self._notify_routing_changed()
@@ -221,10 +229,24 @@ class KnowledgeStore:
             (entry.title, entry.source_tag),
         ).fetchall()
         if len(rows) == 1:
-            existing = _entry_from_row(rows[0])
+            existing = entry_from_row(rows[0])
             if existing.content_hash == entry.content_hash:
                 return UpsertResult(self._entry_key(entry), unchanged=True)
             rowid = rows[0]["rowid"]
+            connection.execute(
+                "UPDATE entries SET terms=?, tags=?, summary=?, content=? WHERE rowid=?",
+                (_terms_json(entry), _values_json(entry.tags), entry.summary, entry.content, rowid),
+            )
+            self._replace_fts(connection, rowid, entry)
+            return UpsertResult(self._entry_key(entry), updated=True)
+        if len(rows) > 1:
+            # Converge damaged duplicate rows: keep and update the first, drop
+            # the rest so repeated upserts heal instead of growing.
+            rowid = rows[0]["rowid"]
+            for stale in rows[1:]:
+                stale_rowid = stale["rowid"]
+                connection.execute("DELETE FROM entries_fts WHERE entry_rowid = ?", (stale_rowid,))
+                connection.execute("DELETE FROM entries WHERE rowid = ?", (stale_rowid,))
             connection.execute(
                 "UPDATE entries SET terms=?, tags=?, summary=?, content=? WHERE rowid=?",
                 (_terms_json(entry), _values_json(entry.tags), entry.summary, entry.content, rowid),
@@ -309,7 +331,7 @@ class KnowledgeStore:
                     "SELECT rowid, * FROM entries ORDER BY rowid"
                 ).fetchall():
                     try:
-                        entries.append(_entry_from_row(row))
+                        entries.append(entry_from_row(row))
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
                 return revision, tuple(entries)
@@ -327,7 +349,7 @@ class KnowledgeStore:
         try:
             with self._connection() as connection:
                 rows = connection.execute("SELECT rowid, * FROM entries ORDER BY rowid").fetchall()
-                return tuple(_entry_from_row(row) for row in rows)
+                return tuple(entry_from_row(row) for row in rows)
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
@@ -339,7 +361,7 @@ class KnowledgeStore:
                     "(SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?) LIMIT 1",
                     (title, source_tag),
                 ).fetchone()
-                return _entry_from_row(row) if row is not None else None
+                return entry_from_row(row) if row is not None else None
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
@@ -366,7 +388,7 @@ class KnowledgeStore:
                         "SELECT rowid, * FROM entries ORDER BY title LIMIT ? OFFSET ?",
                         (limit, offset),
                     ).fetchall()
-                return tuple(_entry_from_row(row) for row in rows)
+                return tuple(entry_from_row(row) for row in rows)
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
@@ -468,7 +490,7 @@ def _json_values(value: str) -> tuple[str, ...]:
     return tuple(item for item in raw if isinstance(item, str)) if isinstance(raw, list) else ()
 
 
-def _entry_from_row(row: sqlite3.Row) -> KnowledgeEntry:
+def entry_from_row(row: sqlite3.Row) -> KnowledgeEntry:
     raw_terms = json.loads(row["terms"])
     return KnowledgeEntry(
         title=row["title"], terms=raw_terms if isinstance(raw_terms, dict) else {},

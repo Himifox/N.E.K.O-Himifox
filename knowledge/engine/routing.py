@@ -17,11 +17,14 @@ from .catalog_overrides import (
     load_disabled_entries,
 )
 from .models import KnowledgeEntry
-from .retrieval import MatchPolicy
+from .retrieval import AUTO_SCAN_MAX_CHARS, MatchPolicy
 from .store import KnowledgeStore, register_database_change_listener
 
 
 _CARD_CACHE_LIMIT = 256
+# refresh() converges one dirty generation per round; bound the rounds so a
+# fast writer cannot starve the request thread inside match().
+_MAX_REFRESH_ROUNDS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -112,14 +115,14 @@ class RoutingSnapshot:
             self._policy.normalizer(user_text)
             if normalized is None
             else normalized
-        )
+        )[:AUTO_SCAN_MAX_CHARS]
         if len(normalized) < 2:
             return None
         boundary_text = (
             _normalize_latin_boundary_text(user_text)
             if boundary_text is None
             else boundary_text
-        )
+        )[:AUTO_SCAN_MAX_CHARS]
         candidates = self._scan(normalized)
         if boundary_text:
             candidates.extend(self._scan(boundary_text))
@@ -214,7 +217,7 @@ class SegmentedRoutingSnapshot:
             if len(quality_peers) == 1
             else "context_hint" if resolved_by_hint else "collection_priority"
         )
-        logger.info(
+        logger.debug(
             "[public-knowledge] route conflict candidates=%d resolution=%s collection=%s",
             len(candidates),
             resolution,
@@ -288,12 +291,12 @@ class KnowledgeRoutingState:
 
     def mark_database_dirty(self, database_path: str | Path) -> None:
         resolved = Path(database_path).resolve()
+        changed = {
+            collection.collection_id
+            for collection in self.collections
+            if collection.database_path.resolve() == resolved
+        }
         with self._lock:
-            changed = {
-                collection.collection_id
-                for collection in self.collections
-                if collection.database_path.resolve() == resolved
-            }
             self._dirty.update(changed)
             for collection_id in changed:
                 self._dirty_generation[collection_id] += 1
@@ -306,7 +309,7 @@ class KnowledgeRoutingState:
 
     def refresh(self) -> None:
         with self._refresh_lock:
-            while True:
+            for _ in range(_MAX_REFRESH_ROUNDS):
                 with self._lock:
                     dirty = {
                         collection_id: self._dirty_generation[collection_id]

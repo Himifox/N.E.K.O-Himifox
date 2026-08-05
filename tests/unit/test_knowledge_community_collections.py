@@ -132,16 +132,18 @@ def test_damaged_collection_registry_degrades_to_no_community_collections(
     assert service.list_collections() == ()
 
 
-def test_newer_collection_registry_is_not_silently_overwritten(
+def test_newer_collection_registry_opens_without_community_collections(
     tmp_path: Path,
 ) -> None:
     registry = tmp_path / "collections.json"
     original = '{"schema_version":2,"collections":{"future":{}}}'
     registry.write_text(original, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="newer than supported"):
-        open_knowledge(tmp_path)
+    service = open_knowledge(tmp_path)
 
+    # The newer registry is never silently overwritten, and the service still
+    # opens with no community collections instead of failing entirely.
+    assert service.list_collections() == ()
     assert registry.read_text(encoding="utf-8") == original
 
 

@@ -10,11 +10,15 @@ from typing import Iterable
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
 from .filters import make_fts_query, normalize_search_text
 from .models import KnowledgeHit
-from .store import KnowledgeStore, _entry_from_row
+from .store import KnowledgeStore, entry_from_row
 
 
 _AUTO_MENTION_MIN_LENGTH = 3
 _AUTO_RECOGNITION_MIN_LENGTH = 2
+# Bound the character-level trie scan so a very long user message cannot blow
+# past the automatic-context wall-clock budget; search() already truncates via
+# sanitize_external_text, this is the same guard for the mention paths.
+AUTO_SCAN_MAX_CHARS = 400
 @dataclass(frozen=True, slots=True)
 class MatchPolicy:
     """Trusted matching rules shared by all conversational collections."""
@@ -106,10 +110,10 @@ class KnowledgeMentionMatcher:
                     break
                 node_index = next_index
                 for entry, length in self._nodes[node_index].entries:
-                    entry_key = entry.content_hash
-                    previous = best_by_id.get(entry_key)
+                    content_hash = entry.content_hash
+                    previous = best_by_id.get(content_hash)
                     if previous is None or length > previous[1]:
-                        best_by_id[entry_key] = (entry, length)
+                        best_by_id[content_hash] = (entry, length)
         hits = [
             KnowledgeHit(entry=entry, score=float(length))
             for entry, length in best_by_id.values()
@@ -182,7 +186,7 @@ class KnowledgeRetriever:
         hits: list[KnowledgeHit] = []
         for row in rows_by_id.values():
             try:
-                entry = _entry_from_row(row)
+                entry = entry_from_row(row)
             except (TypeError, ValueError, json.JSONDecodeError):
                 # A damaged row must not make public-knowledge lookup block a
                 # conversation.  Later management tooling can report it.
@@ -202,17 +206,17 @@ class KnowledgeRetriever:
         policy: MatchPolicy = DEFAULT_MATCH_POLICY,
     ) -> list[KnowledgeHit]:
         """Find known phrases anywhere in a normal conversational sentence."""
-        normalized_text = policy.normalizer(user_text)
+        normalized_text = policy.normalizer(user_text)[:AUTO_SCAN_MAX_CHARS]
         if len(normalized_text) < 2 or limit <= 0:
             return []
         matcher = _get_cached_mention_matcher(self.store, policy)
         results = matcher.find(normalized_text, limit=max(limit * 2, limit))
         best_by_id: dict[str, KnowledgeHit] = {}
         for hit in results:
-            entry_key = hit.entry.content_hash
-            previous = best_by_id.get(entry_key)
+            content_hash = hit.entry.content_hash
+            previous = best_by_id.get(content_hash)
             if previous is None or hit.score > previous.score:
-                best_by_id[entry_key] = hit
+                best_by_id[content_hash] = hit
         return sorted(best_by_id.values(), key=lambda hit: (-hit.score, hit.entry.title))[:limit]
 
     def find_weak_short_mentions(
@@ -223,7 +227,7 @@ class KnowledgeRetriever:
         policy: MatchPolicy = DEFAULT_MATCH_POLICY,
     ) -> list[KnowledgeHit]:
         """Find cautious two-character candidates after strong matching misses."""
-        normalized_text = policy.normalizer(user_text)
+        normalized_text = policy.normalizer(user_text)[:AUTO_SCAN_MAX_CHARS]
         if policy.weak_term_length <= 0 or len(normalized_text) < policy.weak_term_length or limit <= 0:
             return []
         return _get_cached_mention_matcher(self.store, policy).find_weak_short(
@@ -315,12 +319,12 @@ def _score(entry, normalized_query: str, fts_rank: float) -> float:
         return 1_000.0
     if normalized_query in aliases:
         return 950.0
+    if normalized_query in recognition_terms:
+        return 900.0
     if normalized_query in title:
         return 850.0
     if any(normalized_query in alias for alias in aliases):
         return 800.0
-    if normalized_query in recognition_terms:
-        return 900.0
     if any(normalized_query in value for value in recognition_terms):
         return 780.0
     if any(normalized_query in tag for tag in tags):

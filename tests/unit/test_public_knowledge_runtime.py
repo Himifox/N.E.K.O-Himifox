@@ -30,16 +30,8 @@ def test_public_knowledge_tool_schema_and_all_prompt_locales() -> None:
             "meme",
             "corpora",
         ]
-        assert knowledge_prompt_language(locale) in {
-            "zh",
-            "zh-TW",
-            "en",
-            "ja",
-            "ko",
-            "ru",
-            "es",
-            "pt",
-        }
+        expected = "zh-TW" if locale == "zh-TW" else "zh" if locale == "zh-CN" else locale
+        assert knowledge_prompt_language(locale) == expected
 
 
 @pytest.mark.asyncio

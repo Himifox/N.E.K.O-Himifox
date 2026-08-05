@@ -21,7 +21,7 @@ CORPORA_COMMIT = "cf30ca27ab176b63623af1ddcfa2447ac07305ba"
 CORPORA_HOMEPAGE = "https://github.com/dariusk/corpora"
 CORPORA_LICENSE = "CC0 1.0"
 CORPORA_ENTRY_COUNT = 229
-CORPORA_SHA256 = "a0edfbec31136c80480095affba34d84a9638cc46315f31dc15abc4c603befda"
+CORPORA_SHA256 = "a11c9dc3cf3fa80c1207855448e0111a8412cab5098221f8eb8406c25524b2d2"
 _FIELDS = frozenset(("title", "terms", "tags", "summary", "content"))
 
 

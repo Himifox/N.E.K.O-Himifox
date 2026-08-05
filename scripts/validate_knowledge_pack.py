@@ -30,16 +30,17 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _issues(error: Exception) -> Iterable[tuple[str, str, str]]:
+def _issues(error: Exception) -> Iterable[tuple[str, str, str, str]]:
     structured = getattr(error, "issues", ())
     if structured:
         for issue in structured:
             severity = str(getattr(issue, "severity", "error")).upper()
             path = str(getattr(issue, "path", "knowledge pack"))
             message = str(getattr(issue, "message", "validation failed"))
-            yield severity, path, message
+            code = str(getattr(issue, "code", "validation_failed"))
+            yield severity, path, message, code
         return
-    yield "ERROR", "knowledge pack", str(error) or "validation failed"
+    yield "ERROR", "knowledge pack", str(error) or "validation failed", "validation_failed"
 
 
 def _read_payload(path: Path) -> tuple[bytes, object]:
@@ -62,9 +63,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[FAIL] file: {type(exc).__name__}", file=sys.stderr)
         return 1
     except ValueError as exc:
-        for severity, path, message in _issues(exc):
+        issues = tuple(_issues(exc))
+        for severity, path, message, code in issues:
             label = "WARN" if severity == "WARNING" else "FAIL"
             print(f"[{label}] {path}: {message}", file=sys.stderr)
+        # A pack file that cannot be read is an operational error (exit 1),
+        # distinct from a validation failure (exit 2).
+        if any(code == "unreadable" for _, _, _, code in issues):
+            print("[FAIL] file: cannot read the pack file", file=sys.stderr)
+            return 1
         return 2
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
         print(f"[FAIL] internal: {type(exc).__name__}", file=sys.stderr)

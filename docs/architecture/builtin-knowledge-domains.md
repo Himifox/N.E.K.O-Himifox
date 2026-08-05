@@ -20,7 +20,7 @@ into built-in behavior explicitly.
 
 ## Data boundary
 
-PR2 bundles 229 selected records from `dariusk/corpora`, pinned to commit
+The `corpora` domain bundles 229 selected records from `dariusk/corpora`, pinned to commit
 `cf30ca27ab176b63623af1ddcfa2447ac07305ba` and distributed under CC0 1.0.
 The JSONL file is integrity-checked before import. Import replaces only the
 `source:corpora` slice and is idempotent when the installed content matches.
@@ -51,5 +51,6 @@ should call it through their existing thread-offload lifecycle rather than from
 an async request handler.
 
 Built-in knowledge remains separate from `memory/` and does not modify user or
-character memory files. This PR also does not connect `app/`, `main_logic/`,
-management routes, or plugin-market transport.
+character memory files. The built-in domain package itself declares only
+composition policy; runtime wiring lives in `main_logic/`, the management
+routes, and the plugin-market transport.

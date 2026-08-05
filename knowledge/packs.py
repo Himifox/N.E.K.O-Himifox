@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 from utils.file_utils import atomic_write_json
@@ -110,7 +110,14 @@ def get_pack_registry_path(database_path: str | Path) -> Path:
 
 def load_pack(path: str | Path) -> KnowledgePack:
     input_path = Path(path)
-    size = input_path.stat().st_size
+    try:
+        size = input_path.stat().st_size
+    except OSError as exc:
+        raise KnowledgePackValidationError(
+            KnowledgeValidationIssue(
+                "error", "$", "unreadable", "cannot read the pack file"
+            )
+        ) from exc
     if size > MAX_PACK_BYTES:
         _fail("$", "size_limit", "knowledge pack exceeds the size limit")
     try:
@@ -398,7 +405,7 @@ def _reject_unknown_keys(payload: dict, allowed: set[str], path: str) -> None:
         _fail(issue_path, "unknown_field", "is not supported")
 
 
-def _fail(path: str, code: str, message: str):
+def _fail(path: str, code: str, message: str) -> NoReturn:
     raise KnowledgePackValidationError(
         KnowledgeValidationIssue("error", path, code, message)
     )

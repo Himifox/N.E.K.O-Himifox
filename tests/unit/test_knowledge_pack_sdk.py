@@ -136,10 +136,12 @@ def test_market_golden_artifact_matches_sdk_contract() -> None:
 
 
 def test_non_standard_json_constants_are_rejected(tmp_path: Path) -> None:
-    raw = canonical_pack_bytes(_example_payload()).replace(
+    original = canonical_pack_bytes(_example_payload())
+    raw = original.replace(
         b'"schema_version":1',
         b'"schema_version":NaN',
     )
+    assert raw != original
     path = tmp_path / "nan.neko-knowledge.json"
     path.write_bytes(raw)
 

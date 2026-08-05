@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .collection_overrides import (
+    clear_collection_auto_context,
     get_collection_override_path,
     load_auto_context_overrides,
     set_collection_auto_context,
@@ -78,7 +79,14 @@ class KnowledgeService:
         self._trusted_ids = frozenset(spec.collection_id for spec in trusted)
         if len(self._trusted_ids) != len(trusted):
             raise ValueError("duplicate trusted knowledge collection")
-        self._community_records = load_community_collections(self.knowledge_root)
+        try:
+            community_records = load_community_collections(self.knowledge_root)
+        except ValueError as exc:
+            # A newer registry must never be overwritten, but it also must not
+            # brick the whole service: open the built-in collections and treat
+            # the community registry as empty until it is replaced.
+            community_records = {}
+        self._community_records = community_records
         self._mark_trusted_collisions()
         community_specs = tuple(
             community_collection_spec(record)
@@ -488,6 +496,10 @@ class KnowledgeService:
                 self._community_records = records
                 self._collections.pop(collection_id, None)
                 self._auto_context_overrides.pop(collection_id, None)
+                clear_collection_auto_context(
+                    get_collection_override_path(self.knowledge_root),
+                    collection_id=collection_id,
+                )
             self._routing_state = None
         if collection_id in self._collections:
             self.refresh_routing_index(background=True)

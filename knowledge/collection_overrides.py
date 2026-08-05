@@ -49,3 +49,21 @@ def set_collection_auto_context(
             ensure_ascii=False,
             indent=2,
         )
+
+
+def clear_collection_auto_context(path: str | Path, *, collection_id: str) -> None:
+    """Drop one persisted override so a reinstall starts from the spec default."""
+    collection_id = str(collection_id or "").strip()
+    if not collection_id:
+        return
+    output_path = Path(path)
+    with mutation_lock(output_path):
+        values = load_auto_context_overrides(output_path)
+        if values.pop(collection_id, None) is None:
+            return
+        atomic_write_json(
+            output_path,
+            {"auto_context": dict(sorted(values.items()))},
+            ensure_ascii=False,
+            indent=2,
+        )

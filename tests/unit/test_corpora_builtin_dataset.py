@@ -34,7 +34,7 @@ def test_bundled_corpora_asset_is_small_valid_pinned_jsonl() -> None:
     assert CORPORA_LICENSE == "CC0 1.0"
     assert all(line and isinstance(json.loads(line), dict) for line in lines)
     assert {entry.source_tag for entry in dataset.entries} == {"source:corpora"}
-    assert len({entry.title.casefold() for entry in dataset.entries}) == 229
+    assert len({entry.title.casefold() for entry in dataset.entries}) == CORPORA_ENTRY_COUNT
     assert {
         tag
         for entry in dataset.entries
@@ -81,9 +81,9 @@ def test_import_is_idempotent_and_preserves_other_sources(tmp_path: Path) -> Non
     assert first.changed is True
     assert repaired.changed is True
     assert second.changed is False
-    assert first.entries == second.entries == 229
+    assert first.entries == second.entries == CORPORA_ENTRY_COUNT
     assert store.entries_revision() == repaired_revision
-    assert service.count_entries("corpora", source_tag="source:corpora") == 229
+    assert service.count_entries("corpora", source_tag="source:corpora") == CORPORA_ENTRY_COUNT
     assert store.get_entry("source:community.local", "Local Reference") is not None
     assert store.get_entry("source:corpora", "Aphrodite").summary != "Damaged summary"  # type: ignore[union-attr]
 

@@ -26,7 +26,6 @@ def test_knowledge_directory_is_owned_by_the_runtime_root(
         ),
     ):
         config_manager = ConfigManager("N.E.K.O")
-
-    assert config_manager.knowledge_dir == config_manager.app_docs_dir / "knowledge"
-    assert config_manager.ensure_knowledge_directory() is True
-    assert config_manager.knowledge_dir.is_dir()
+        assert config_manager.knowledge_dir == config_manager.app_docs_dir / "knowledge"
+        assert config_manager.ensure_knowledge_directory() is True
+        assert config_manager.knowledge_dir.is_dir()

@@ -47,14 +47,14 @@ def load_canonical_pack_artifact(raw: bytes) -> dict:
         payload = decode_json_document(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("knowledge artifact is not valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("knowledge artifact root must be an object")
     try:
         canonical = canonical_pack_bytes(payload)
     except (TypeError, ValueError) as exc:
         raise ValueError("knowledge artifact is not valid JSON") from exc
     if raw != canonical:
         raise ValueError("knowledge artifact is not canonical JSON")
-    if not isinstance(payload, dict):
-        raise ValueError("knowledge artifact root must be an object")
     validate_pack(payload)
     return payload
 

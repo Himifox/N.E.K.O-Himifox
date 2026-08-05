@@ -107,7 +107,7 @@ def test_global_route_selects_one_high_priority_card_across_five_collections(tmp
 
 
 def test_context_hint_disambiguates_equal_cross_collection_matches(tmp_path, caplog):
-    caplog.set_level(logging.INFO, logger="knowledge.engine.routing")
+    caplog.set_level(logging.DEBUG, logger="knowledge.engine.routing")
     reference = _spec(
         "reference",
         priority=100,

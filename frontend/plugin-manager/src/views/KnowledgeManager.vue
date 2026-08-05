@@ -180,6 +180,9 @@ const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const marketOpening = ref(false)
+let latestEntriesRequest = 0
+let latestPacksRequest = 0
+const packsCollection = ref('')
 
 function knowledgeEntryRowKey(row: KnowledgeEntrySummary): string {
   return JSON.stringify([row.collection_id, row.source?.tag || '', row.title])
@@ -239,21 +242,38 @@ async function setCollectionAuto(item: KnowledgeCollection, enabled: boolean) {
 }
 
 async function loadEntries(reset = false) {
-  if (!selectedCollection.value) return
+  const collection = selectedCollection.value
+  const requestId = ++latestEntriesRequest
+  if (!collection) {
+    entries.value = []
+    hasMore.value = false
+    entriesLoading.value = false
+    return
+  }
   if (reset) offset.value = 0
   entriesLoading.value = true
   try {
-    const response = await knowledgeApi.entries({ collection: selectedCollection.value, query: query.value, limit: pageSize, offset: offset.value })
+    const response = await knowledgeApi.entries({ collection, query: query.value, limit: pageSize, offset: offset.value })
+    if (requestId !== latestEntriesRequest || collection !== selectedCollection.value) return
     entries.value = response.items || []
     hasMore.value = Boolean(response.has_more)
-  } catch { ElMessage.error(t('knowledge.loadFailed')) }
-  finally { entriesLoading.value = false }
+  } catch {
+    if (requestId === latestEntriesRequest) ElMessage.error(t('knowledge.loadFailed'))
+  } finally {
+    if (requestId === latestEntriesRequest) entriesLoading.value = false
+  }
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {
-  const response = await knowledgeApi.entry({ collection: row.collection_id, source: row.source.tag, title: row.title })
-  selectedEntry.value = response.entry || null
-  drawerOpen.value = Boolean(selectedEntry.value)
+  try {
+    const response = await knowledgeApi.entry({ collection: row.collection_id, source: row.source.tag, title: row.title })
+    selectedEntry.value = response.entry || null
+    drawerOpen.value = Boolean(selectedEntry.value)
+  } catch {
+    selectedEntry.value = null
+    drawerOpen.value = false
+    ElMessage.error(t('knowledge.loadFailed'))
+  }
 }
 
 async function toggleEntry(row: KnowledgeEntrySummary) {
@@ -267,11 +287,25 @@ function previousPage() { offset.value = Math.max(0, offset.value - pageSize); l
 function nextPage() { offset.value += pageSize; loadEntries() }
 
 async function loadPacks() {
-  if (!selectedCollection.value) return
+  const collection = selectedCollection.value
+  const requestId = ++latestPacksRequest
+  if (!collection) {
+    packs.value = []
+    packsLoading.value = false
+    return
+  }
+  packs.value = []
   packsLoading.value = true
-  try { packs.value = (await knowledgeApi.packs(selectedCollection.value)).packs || [] }
-  catch { ElMessage.error(t('knowledge.loadFailed')) }
-  finally { packsLoading.value = false }
+  try {
+    const response = await knowledgeApi.packs(collection)
+    if (requestId !== latestPacksRequest || collection !== selectedCollection.value) return
+    packs.value = response.packs || []
+    packsCollection.value = collection
+  } catch {
+    if (requestId === latestPacksRequest) ElMessage.error(t('knowledge.loadFailed'))
+  } finally {
+    if (requestId === latestPacksRequest) packsLoading.value = false
+  }
 }
 
 async function importSelectedPack(event: Event) {
@@ -288,16 +322,18 @@ async function importSelectedPack(event: Event) {
 }
 
 async function setPackAuto(row: any, enabled: boolean) {
+  const collection = packsCollection.value || selectedCollection.value
   try {
-    await knowledgeApi.setPackAutoContext({ collection: selectedCollection.value, pack_id: row.pack_id, enabled })
+    await knowledgeApi.setPackAutoContext({ collection, pack_id: row.pack_id, enabled })
     row.auto_context = enabled
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
 async function removePack(row: any) {
+  const collection = packsCollection.value || selectedCollection.value
   try {
     await ElMessageBox.confirm(t('knowledge.removeConfirm', { name: row.pack_id }), t('common.warning'), { type: 'warning' })
-    await knowledgeApi.removePack({ collection: selectedCollection.value, pack_id: row.pack_id })
+    await knowledgeApi.removePack({ collection, pack_id: row.pack_id })
     await Promise.all([refreshAll(), loadPacks()])
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(t('knowledge.operationFailed'))
@@ -315,6 +351,11 @@ watch(activeTab, (tab) => {
   if (tab === 'catalog') loadEntries(true)
   if (tab === 'packs') loadPacks()
   if (tab === 'diagnostics') loadDiagnostics()
+})
+
+watch(selectedCollection, () => {
+  if (activeTab.value === 'catalog') void loadEntries(true)
+  if (activeTab.value === 'packs') void loadPacks()
 })
 
 onMounted(() => {

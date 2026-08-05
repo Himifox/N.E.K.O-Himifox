@@ -31,6 +31,10 @@ from plugin.settings import MARKET_API_URL, NEKO_AUTH_CLIENT_ID
 router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
+# Keep a strong reference to every in-flight background subscription; the
+# event loop only holds weak references and would otherwise collect the task
+# mid-run, leaving the task permanently "pending".
+_background_tasks: set[asyncio.Task[None]] = set()
 _TASK_TTL_SECONDS = 60 * 60
 _TASK_MAX_ENTRIES = 200
 _MAX_REDIRECTS = 5
@@ -135,10 +139,12 @@ async def subscribe_knowledge_package(
         "created_at": time.time(),
         "completed_at": None,
     }
-    asyncio.create_task(
+    background = asyncio.create_task(
         _execute_subscription(task_id, payload),
         name=f"market-knowledge-{task_id}",
     )
+    _background_tasks.add(background)
+    background.add_done_callback(_background_tasks.discard)
     return {"task_id": task_id, "status": "pending"}
 
 
@@ -417,7 +423,10 @@ async def _report_unsubscribe_best_effort(package_id: int) -> None:
 
 
 def _verify_bridge_token(token: str) -> None:
-    if not secrets.compare_digest(token, get_bridge_token()):
+    if not secrets.compare_digest(
+        token.encode("utf-8", "surrogatepass"),
+        get_bridge_token().encode("utf-8", "surrogatepass"),
+    ):
         raise HTTPException(status_code=403, detail="invalid bridge token")
 
 

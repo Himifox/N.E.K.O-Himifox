@@ -81,7 +81,7 @@ async def test_subscribe_poll_and_local_handoff(monkeypatch):
         task_id = response.json()["task_id"]
 
         task = {}
-        for _ in range(20):
+        for _ in range(200):
             polled = await client.get(
                 f"/market/knowledge/tasks/{task_id}",
                 params={"token": "e2e-token"},
@@ -89,7 +89,9 @@ async def test_subscribe_poll_and_local_handoff(monkeypatch):
             task = polled.json()
             if task.get("status") in {"completed", "failed"}:
                 break
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail(f"subscription task did not settle: {task}")
 
     assert task["status"] == "completed"
     assert task["progress"] == 1.0
