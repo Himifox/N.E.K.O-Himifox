@@ -2623,7 +2623,7 @@ def test_compact_history_hit_contract_keeps_transparent_wrappers_out_of_hit_regi
     assert "--compact-music-player-history-gap: 14px;" in styles
     assert "+ var(--compact-music-player-reserved-block-size, 88px)" in styles
     assert "+ var(--compact-music-player-history-gap, 14px)" in styles
-    assert ".app-shell:has(> .compact-music-player-mount:not(:empty)) .compact-export-history-anchor" in styles
+    assert ".app-shell:has(.composer-panel > .compact-music-player-mount:not(:empty)) .compact-export-history-anchor" in styles
     # 音量弹层展开时滑块向上伸进 history 区域，播放器整体提到 history(100001) 之上，
     # 但仍低于工具轮盘态 surface-shell(100003)，避免抢点击又不破坏工具轮盘对表情按钮的让位。
     assert "z-index: 100002;" in css_block(
@@ -2631,10 +2631,20 @@ def test_compact_history_hit_contract_keeps_transparent_wrappers_out_of_hit_regi
         "#music-player-mount.compact-music-player-mount:has(.music-bar-volume-container.expanded) {",
         "#music-player-mount.compact-music-player-mount:empty",
     )
-    assert "z-index: 100006;" in css_block(
+    assert "z-index: 100004;" in css_block(
         styles,
-        '.app-shell[data-compact-tool-layer-open="true"]:not([data-compact-tool-wheel-layout="viewport-fit"]) > #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {',
+        '.app-shell[data-compact-tool-layer-open="true"] #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {',
         "#music-player-mount.compact-music-player-mount:empty",
+    )
+    assert "z-index: 100003;" in css_block(
+        styles,
+        ".compact-input-tool-fan-hit-region {",
+        ".compact-input-tool-wheel-charge",
+    )
+    assert "z-index: 100005;" in css_block(
+        styles,
+        '.compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="-2"],',
+        '.compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="-1"],',
     )
     assert 'data-compact-hit-region-id="history:preview"' in panel_source
 

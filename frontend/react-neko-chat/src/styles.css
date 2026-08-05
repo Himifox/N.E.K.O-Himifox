@@ -2562,7 +2562,7 @@ body.electron-chat-window.subtitle-web-host > .compact-chat-choice-anchor[data-c
 }
 
 .compact-chat-surface-shell[data-compact-tool-layer-open="true"] {
-  z-index: 100003;
+  z-index: auto;
 }
 
 body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
@@ -3423,11 +3423,9 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   z-index: 100002;
 }
 
-/* 工具轮盘的透明圆形命中区会盖住播放器右侧按钮；展开时让可见播放器优先接收点击。
-   viewport-fit 布局把轮盘按钮翻到胶囊上方、与播放器重叠，此时保持按钮在播放器之上，
-   只抬升 default 布局下的播放器。 */
-.app-shell[data-compact-tool-layer-open="true"]:not([data-compact-tool-wheel-layout="viewport-fit"]) > #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {
-  z-index: 100006;
+/* 轮盘展开时按交互优先级分层：可见工具按钮 > 播放器 > 透明圆形命中区。 */
+.app-shell[data-compact-tool-layer-open="true"] #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {
+  z-index: 100004;
 }
 
 #music-player-mount.compact-music-player-mount:empty {
@@ -3541,7 +3539,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   pointer-events: none;
 }
 
-.app-shell:has(> .compact-music-player-mount:not(:empty)) .compact-export-history-anchor {
+.app-shell:has(.composer-panel > .compact-music-player-mount:not(:empty)) .compact-export-history-anchor {
   bottom: calc(
     100vh
     - var(--desktop-compact-surface-top, var(--compact-surface-top, 68vh))
@@ -4410,7 +4408,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   width: calc(var(--compact-tool-wheel-hover-radius) * 2);
   height: calc(var(--compact-tool-wheel-hover-radius) * 2);
   pointer-events: none;
-  z-index: 100003;
+  z-index: auto;
   overflow: visible;
   touch-action: none;
   cursor: grab;
@@ -4440,7 +4438,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   border-radius: 999px;
   background: transparent;
   pointer-events: none;
-  z-index: 0;
+  z-index: 100003;
 }
 
 .compact-input-tool-wheel-charge {
@@ -4751,7 +4749,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] {
   visibility: visible;
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-fan-hit-region {
@@ -4760,11 +4758,13 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-wheel-selection-pointer {
   opacity: 1;
+  z-index: 100005;
 }
 
 .compact-input-tool-fan[data-compact-tool-wheel-charge-active="true"] .compact-input-tool-wheel-charge {
   opacity: 1;
   transform: scale(1);
+  z-index: 100005;
 }
 
 .compact-input-tool-fan[data-compact-tool-wheel-charge-rattle="weak"] {
@@ -4867,16 +4867,16 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="-2"],
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="2"] {
-  z-index: 1;
+  z-index: 100005;
 }
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="-1"],
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="1"] {
-  z-index: 2;
+  z-index: 100006;
 }
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="0"] {
-  z-index: 3;
+  z-index: 100007;
 }
 
 .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="-2"] {

@@ -5986,7 +5986,6 @@ function CompactChatApp({
       data-compact-export-selected-count={isCompactSurface ? compactExportSelectedCount : 0}
       data-compact-export-auto-scroll={isCompactSurface && compactExportAutoScrollToBottom ? 'true' : 'false'}
       data-compact-tool-layer-open={isCompactSurface && compactInputToolFanOpen ? 'true' : 'false'}
-      data-compact-tool-wheel-layout={isCompactSurface && compactInputToolFanOpen ? compactInputToolWheelLayout : undefined}
       data-focus-active={focusActive ? 'true' : 'false'}
     >
       {focusActive ? (
@@ -6004,7 +6003,6 @@ function CompactChatApp({
       <div className="chat-focus-overlay" aria-hidden="true" />
       {compactExportHistoryNode}
       {compactHistoryVisibilityHandleNode}
-      {compactMusicPlayerMountNode}
       {compactMemeOverlayNode}
       {compactChoiceLayerNode}
       <AvatarToolItemManager
@@ -6040,6 +6038,7 @@ function CompactChatApp({
             data-chat-surface-mode={chatSurfaceMode}
             data-compact-chat-state={effectiveCompactChatState}
           >
+            {compactMusicPlayerMountNode}
             {!isCompactSurface ? <div id="music-player-mount" className="composer-music-player-mount" /> : null}
             <form className="composer" onSubmit={(event) => {
               event.preventDefault();

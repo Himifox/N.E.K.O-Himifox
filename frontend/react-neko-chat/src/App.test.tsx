@@ -1290,7 +1290,7 @@ describe('App', () => {
     expect(container.querySelector('.compact-music-player-mount')).not.toHaveAttribute('aria-hidden');
     expect(container.querySelector('.compact-music-player-mount')).toHaveAttribute('data-compact-geometry-item', 'musicPlayer');
     expect(container.querySelector('.compact-music-player-mount')).toHaveAttribute('data-compact-geometry-hit-scope', 'children');
-    expect(container.querySelector('.composer-panel #music-player-mount')).toBeNull();
+    expect(container.querySelector('.composer-panel > #music-player-mount')).not.toBeNull();
     expect(container.querySelector('.compact-export-history-panel #music-player-mount')).toBeNull();
     expect(container.querySelector('.compact-export-history-music-mount')).toBeNull();
     expect(container.querySelector('.compact-export-history-controls')).toBeNull();
@@ -1354,7 +1354,7 @@ describe('App', () => {
       expect(container.querySelector('.compact-music-player-mount#music-player-mount')).not.toBeNull();
       expect(container.querySelector('.compact-music-player-mount')).toHaveAttribute('data-compact-music-player-visibility', 'open');
       expect(container.querySelector('.compact-music-player-mount')).not.toHaveAttribute('aria-hidden');
-      expect(container.querySelector('.composer-panel #music-player-mount')).toBeNull();
+      expect(container.querySelector('.composer-panel > #music-player-mount')).not.toBeNull();
       expect(container.querySelector('.compact-export-history-panel #music-player-mount')).toBeNull();
       expect(container.querySelector('[data-compact-hit-region-id^="history:"]')).toBeNull();
 
@@ -1576,7 +1576,7 @@ describe('App', () => {
       expect(container.querySelector('.compact-music-player-mount#music-player-mount')).not.toBeNull();
       expect(container.querySelector('.compact-music-player-mount')).toHaveAttribute('data-compact-music-player-visibility', 'open');
       expect(container.querySelector('.compact-music-player-mount')).not.toHaveAttribute('aria-hidden');
-      expect(container.querySelector('.composer-panel #music-player-mount')).toBeNull();
+      expect(container.querySelector('.composer-panel > #music-player-mount')).not.toBeNull();
 
       fireEvent.pointerDown(handle!, { pointerType: 'mouse', button: 0 });
       expect(handle).toHaveAttribute('aria-expanded', 'true');
@@ -7222,15 +7222,15 @@ describe('App', () => {
     );
   });
 
-  it('uses the same visual slot stacking hierarchy for both compact tool wheel layouts', () => {
+  it('keeps the visual slot hierarchy above the compact music player in both wheel layouts', () => {
     expect(compactChatStyles).toMatch(
-      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="-2"\],[\s\S]*?data-compact-tool-wheel-slot="2"\]\s*\{\s*z-index:\s*1;/s,
+      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="-2"\],[\s\S]*?data-compact-tool-wheel-slot="2"\]\s*\{\s*z-index:\s*100005;/s,
     );
     expect(compactChatStyles).toMatch(
-      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="-1"\],[\s\S]*?data-compact-tool-wheel-slot="1"\]\s*\{\s*z-index:\s*2;/s,
+      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="-1"\],[\s\S]*?data-compact-tool-wheel-slot="1"\]\s*\{\s*z-index:\s*100006;/s,
     );
     expect(compactChatStyles).toMatch(
-      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="0"\]\s*\{\s*z-index:\s*3;/s,
+      /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="0"\]\s*\{\s*z-index:\s*100007;/s,
     );
   });
 
