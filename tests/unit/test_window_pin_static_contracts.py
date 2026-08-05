@@ -199,6 +199,17 @@ def test_credentials_qr_entry_does_not_reflow_twice_on_platform_switch():
     assert "qrLoginBox.style.removeProperty('display');" in script
 
 
+def test_credentials_mobile_layout_uses_one_vertical_scroll_container():
+    template = read_text("templates/cookies_login.html")
+
+    assert "(max-width: 900px) and (max-height: 540px)" in template
+    assert re.search(
+        r"@media \(max-width: 640px\),[\s\S]*?\.tab-content \{"
+        r"[\s\S]*?height: auto;[\s\S]*?max-height: none;[\s\S]*?overflow: visible;",
+        template,
+    )
+
+
 def test_credentials_async_dom_updates_are_scoped_to_the_latest_state():
     script = read_text("static/js/cookies_login.js")
 
