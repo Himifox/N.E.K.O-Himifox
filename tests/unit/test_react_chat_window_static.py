@@ -2758,6 +2758,42 @@ def test_compact_inline_export_uses_windowless_app_chat_export_api():
     assert "window.open" not in compact_api_block
 
 
+def test_chat_export_keeps_meme_and_music_as_media():
+    script = APP_CHAT_EXPORT_PATH.read_text(encoding="utf-8")
+
+    plain_text_block = script.split("function extractBlocksPlainText(message)", 1)[1].split(
+        "function blocksToMarkdown(message)",
+        1,
+    )[0]
+    assert "if (memeOnly && block.type !== 'image') return;" in plain_text_block
+    assert "if (musicOnly && !isMusicExportBlock(message, block)) return;" in plain_text_block
+    assert "if (block.title) parts.push(String(block.title));" in plain_text_block
+    assert "if (block.description) parts.push(String(block.description));" in plain_text_block
+
+    markdown_block = script.split("function blocksToMarkdown(message)", 1)[1].split(
+        "function collectImageDescriptors(message)",
+        1,
+    )[0]
+    assert "getMusicExportCover(block)" in markdown_block
+    assert "String(block.url || '')" not in markdown_block.split("if (isMusicExportBlock(message, block))", 1)[1].split(
+        "return;",
+        1,
+    )[0]
+
+    media_block = script.split("function collectImageDescriptors(message)", 1)[1].split(
+        "function buildExportEntry(message)",
+        1,
+    )[0]
+    assert "fallbackSource: MUSIC_EXPORT_PLACEHOLDER_COVER" in media_block
+
+    lyrics_block = script.split("async function renderLyricsStyleCanvas(resolvedEntries, now)", 1)[1].split(
+        "async function renderImageCanvas(resolvedEntries, styleId, now)",
+        1,
+    )[0]
+    assert "ctx.drawImage(image.image, textX, y, image.width, image.height);" in lyrics_block
+    assert "translateLabel('chat.exportImageLabel'" not in lyrics_block
+
+
 def test_compact_history_drop_payload_suppresses_real_send_in_voice_mode_only_at_host_send_boundary():
     script = APP_BUTTONS_PATH.read_text(encoding="utf-8")
     host_script = APP_REACT_CHAT_WINDOW_PATH.read_text(encoding="utf-8")
