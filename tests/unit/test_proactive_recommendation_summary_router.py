@@ -192,7 +192,8 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(
     assert payload["reward_score_v2_preview"]["tuning_consumed"] is False
     assert payload["reward_score_v2_preview"]["reward_scored_count"] == 0
     assert payload["bandit_learning"] == {
-        "version": "recommendation_bandit_state_v1",
+        "version": "recommendation_bandit_state_v2",
+        "reward_contract_version": "bandit_encounter_reward_v3",
         "half_life_seconds": 2592000,
         "beta_prior": {"alpha": 2.0, "beta": 2.0},
         "arms": {},
@@ -533,8 +534,8 @@ def test_recommendation_summary_returns_feedback_metrics(monkeypatch, tmp_path):
     )
     assert "meme" not in feedback_calibration["feedback_signal_summary"]
     assert "meme" not in feedback_calibration["feedback_actionable_suggestions"]
-    assert payload["reward_score_v3_preview"]["reward_scored_count"] == 1
-    assert payload["reward_score_v3_preview"]["feedback_censored_count"] == 1
+    assert payload["reward_score_v4_preview"]["reward_scored_count"] == 1
+    assert payload["reward_score_v4_preview"]["feedback_excluded_count"] == 1
     assert payload["availability_shadow"]["mode"] == "off"
     assert payload["availability_shadow"]["status"] == "insufficient"
     assert payload["availability_shadow"]["scheduling_consumed"] is False

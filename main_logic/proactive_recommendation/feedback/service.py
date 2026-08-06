@@ -64,7 +64,7 @@ from main_logic.proactive_recommendation.feedback.event_processing import (
     build_feedback_event,
 )
 
-from main_logic.proactive_recommendation.feedback.availability import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     AVAILABILITY_REPLY_WINDOW_SECONDS,
     availability_exposure_id,
     record_availability_outcome,
@@ -661,8 +661,13 @@ def record_feedback_event_with_status(
                 )
                 bandit_reward = build_bandit_encounter_reward(reward_events)
                 reward = bandit_reward.get("reward")
-                if bandit_reward.get("eligible") is True and isinstance(
-                    reward, (int, float)
+                signal_event_types = set(
+                    bandit_reward.get("signal_event_types") or ()
+                )
+                if (
+                    bandit_reward.get("eligible") is True
+                    and event_type in signal_event_types
+                    and isinstance(reward, (int, float))
                 ):
                     try:
                         update_recommendation_bandit_reward(
@@ -671,6 +676,7 @@ def record_feedback_event_with_status(
                             arm=pending.source_type,
                             reward=reward,
                             event_types=bandit_reward.get("event_types") or (),
+                            reward_contract_version=bandit_reward.get("version"),
                             now=coerce_float_or_default(
                                 event.get("ts"), default=time.time()
                             ),

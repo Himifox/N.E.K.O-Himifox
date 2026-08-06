@@ -37,7 +37,7 @@ from main_logic.proactive_recommendation.feedback.service import (
     load_recommendation_feedback_jsonl,
     register_pending_feedback_from_observation,
 )
-from main_logic.proactive_recommendation.feedback.availability import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     AVAILABILITY_FILENAME,
     flush_persisted_censored_availability,
     get_availability_shadow,
@@ -46,7 +46,7 @@ from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
-    summarize_reward_score_v3_preview,
+    summarize_reward_score_v4_preview,
 )
 from main_logic.proactive_recommendation.state.feedback_preview import (
     get_feedback_state_preview,
@@ -913,7 +913,7 @@ class RecommendationService:
             window_seconds=CALIBRATION_WINDOW_SECONDS,
             sample_limit=CALIBRATION_SAMPLE_LIMIT,
         )
-        reward_v3_preview = summarize_reward_score_v3_preview(
+        reward_v4_preview = summarize_reward_score_v4_preview(
             calibration_samples,
             feedback_events,
             now=current_time,
@@ -940,7 +940,7 @@ class RecommendationService:
             "feedback": feedback,
             "feedback_calibration": feedback_calibration,
             "reward_score_v2_preview": reward_preview,
-            "reward_score_v3_preview": reward_v3_preview,
+            "reward_score_v4_preview": reward_v4_preview,
             "availability_shadow": availability_shadow,
             "review_context_validation": summarize_recommendation_review_context(
                 calibration_samples

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -28,6 +29,9 @@ from main_logic.proactive_recommendation.feedback.learning import (
     source_preference_outcome,
 )
 from main_logic.proactive_recommendation.state.bandit_posteriors import (
+    BANDIT_REWARD_CONTRACT_VERSION,
+    BANDIT_STATE_FILENAME,
+    LEGACY_BANDIT_STATE_FILENAME,
     get_recommendation_bandit_state,
     update_recommendation_bandit_reward,
 )
@@ -85,7 +89,8 @@ def test_shadow_logs_exact_probabilities_without_creating_arms():
 
 def test_shadow_exploits_learned_reward_only_inside_near_tie():
     bandit_state = {
-        "version": "recommendation_bandit_state_v1",
+        "version": "recommendation_bandit_state_v2",
+        "reward_contract_version": "bandit_encounter_reward_v3",
         "arms": {
             "news": {
                 "posterior_alpha": 2.0,
@@ -256,7 +261,9 @@ def test_shadow_observation_binds_behavior_to_actual_material():
     assert finalized["actual_action_probability"] == 1.0
 
 
-def test_chat_delivery_binds_behavior_to_applied_active_bias(tmp_path, monkeypatch):
+def test_chat_delivery_binds_explicit_source_feedback_to_active_bias(
+    tmp_path, monkeypatch
+):
     clear_pending_recommendation_feedback()
     monkeypatch.setattr(
         learning_module,
@@ -346,9 +353,30 @@ def test_chat_delivery_binds_behavior_to_applied_active_bias(tmp_path, monkeypat
         event_type="user_reply",
         ts=110,
     )
-    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=110)
-    assert result.bandit_state_updated is True
-    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.15)
+    assert result.bandit_state_updated is False
+    assert get_recommendation_bandit_state(
+        config_dir=tmp_path, now=110
+    )["arms"] == {}
+
+    explicit = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="chat-news",
+        event_type="source_interested",
+        ts=111,
+    )
+    bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=111)
+    assert explicit.bandit_state_updated is True
+    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.35)
+
+    later_reply = record_feedback_event_with_status(
+        lanlan_name="neko",
+        turn_id="chat-news",
+        event_type="user_continue",
+        ts=112,
+    )
+    unchanged = get_recommendation_bandit_state(config_dir=tmp_path, now=112)
+    assert later_reply.bandit_state_updated is False
+    assert unchanged["arms"]["news"]["effective_success"] == pytest.approx(0.35)
 
 
 def test_confirmed_material_overrides_applied_active_bias():
@@ -491,7 +519,8 @@ def test_bandit_reward_replaces_turn_aggregate_and_decays(tmp_path):
         turn_id="turn-1",
         arm="news",
         reward=0.2,
-        event_types=["user_reply"],
+        event_types=["source_interested"],
+        reward_contract_version=BANDIT_REWARD_CONTRACT_VERSION,
         now=100,
     )
     assert first["arms"]["news"]["effective_success"] == pytest.approx(0.2)
@@ -501,7 +530,8 @@ def test_bandit_reward_replaces_turn_aggregate_and_decays(tmp_path):
         turn_id="turn-1",
         arm="news",
         reward=0.55,
-        event_types=["user_reply", "user_continue"],
+        event_types=["source_interested", "music_mid_completion"],
+        reward_contract_version=BANDIT_REWARD_CONTRACT_VERSION,
         now=101,
     )
     assert combined["finalized_outcome_count"] == 1
@@ -518,32 +548,87 @@ def test_bandit_reward_replaces_turn_aggregate_and_decays(tmp_path):
     )
 
 
-def test_bandit_reward_uses_v3_rules_and_excludes_technical_only():
-    reward = build_bandit_encounter_reward(
+def test_bandit_v2_cold_starts_without_rewriting_legacy_state(tmp_path):
+    legacy_path = tmp_path / LEGACY_BANDIT_STATE_FILENAME
+    legacy_bytes = json.dumps(
+        {
+            "version": "recommendation_bandit_state_v1",
+            "arms": {
+                "news": {
+                    "effective_success": 9.0,
+                    "effective_failure": 1.0,
+                    "updated_at": 100.0,
+                }
+            },
+            "recent_arm_outcomes": {},
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    legacy_path.write_bytes(legacy_bytes)
+
+    cold = get_recommendation_bandit_state(config_dir=tmp_path, now=100.0)
+    rejected = update_recommendation_bandit_reward(
+        config_dir=tmp_path,
+        turn_id="old-contract",
+        arm="news",
+        reward=1.0,
+        event_types=["source_interested"],
+        reward_contract_version="bandit_encounter_reward_v2",
+        now=101.0,
+    )
+
+    assert cold["version"] == "recommendation_bandit_state_v2"
+    assert cold["reward_contract_version"] == BANDIT_REWARD_CONTRACT_VERSION
+    assert cold["arms"] == {}
+    assert rejected["arms"] == {}
+    assert not (tmp_path / BANDIT_STATE_FILENAME).exists()
+    assert legacy_path.read_bytes() == legacy_bytes
+
+    updated = update_recommendation_bandit_reward(
+        config_dir=tmp_path,
+        turn_id="new-contract",
+        arm="news",
+        reward=0.35,
+        event_types=["source_interested"],
+        reward_contract_version=BANDIT_REWARD_CONTRACT_VERSION,
+        now=102.0,
+    )
+    assert updated["arms"]["news"]["effective_success"] == 0.35
+    assert (tmp_path / BANDIT_STATE_FILENAME).exists()
+    assert legacy_path.read_bytes() == legacy_bytes
+
+
+def test_bandit_reward_v3_excludes_generic_conversation_engagement():
+    generic = build_bandit_encounter_reward(
         [
             {"event_type": "user_reply"},
             {"event_type": "user_continue"},
         ]
     )
+    source = build_bandit_encounter_reward(
+        [{"event_type": "source_interested"}]
+    )
     technical = build_bandit_encounter_reward([{"event_type": "music_error"}])
     censored = build_bandit_encounter_reward([{"event_type": "ignored"}])
 
-    assert reward == {
-        "version": "bandit_encounter_reward_v2",
-        "rule_score_version": "reward_score_v3_preview_v1",
-        "eligible": True,
-        "reward": 0.5,
-        "event_types": ["user_reply", "user_continue"],
-        "signal_event_types": ["user_reply", "user_continue"],
-        "excluded_reason": None,
-    }
+    assert generic["version"] == "bandit_encounter_reward_v3"
+    assert generic["rule_score_version"] == "reward_score_v4_preview_v1"
+    assert generic["eligible"] is False
+    assert generic["reward"] is None
+    assert generic["event_types"] == []
+    assert generic["signal_event_types"] == []
+    assert generic["excluded_event_types"] == ["user_reply", "user_continue"]
+    assert generic["excluded_reason"] == "no_source_reward_signal"
+    assert source["eligible"] is True
+    assert source["reward"] == 0.35
+    assert source["signal_event_types"] == ["source_interested"]
     assert technical["eligible"] is False
     assert technical["reward"] is None
     assert censored["eligible"] is False
     assert censored["reward"] is None
 
 
-def test_generic_reply_updates_bandit_but_not_source_preference(tmp_path):
+def test_generic_reply_updates_global_acceptance_but_not_bandit_or_preference(tmp_path):
     clear_pending_recommendation_feedback()
     register_pending_feedback(
         lanlan_name="neko",
@@ -571,14 +656,18 @@ def test_generic_reply_updates_bandit_but_not_source_preference(tmp_path):
 
     bandit = get_recommendation_bandit_state(config_dir=tmp_path, now=111)
     preference = get_recommendation_preference_state(config_dir=tmp_path, now=111)
-    assert reply.bandit_state_updated is True
-    assert continued.bandit_state_updated is True
-    assert bandit["arms"]["news"]["effective_success"] == pytest.approx(0.5)
-    assert bandit["finalized_outcome_count"] == 1
+    assert reply.state_updated is True
+    assert continued.state_updated is True
+    assert reply.feedback_scope == "conversation_acceptance"
+    assert continued.feedback_scope == "conversation_acceptance"
+    assert reply.bandit_state_updated is False
+    assert continued.bandit_state_updated is False
+    assert bandit["arms"] == {}
+    assert bandit["finalized_outcome_count"] == 0
     assert preference["sources"] == {}
 
 
-def test_v3_shadow_reward_binds_actual_arm_and_excludes_technical_zero(tmp_path):
+def test_v4_shadow_reward_binds_actual_arm_and_excludes_technical_zero(tmp_path):
     clear_pending_recommendation_feedback()
     observation = {
         "delivered": True,

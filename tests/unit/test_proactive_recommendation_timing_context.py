@@ -4,7 +4,7 @@ from main_logic.proactive_recommendation.feedback.service import (
     note_user_turn_for_feedback,
     register_pending_feedback,
 )
-from main_logic.proactive_recommendation.feedback.availability import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     record_availability_outcome,
 )
 from main_logic.proactive_recommendation.service import (

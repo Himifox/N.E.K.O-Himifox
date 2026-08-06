@@ -1,7 +1,7 @@
 import json
 
 import main_logic.proactive_recommendation.service as recommendation_turn
-import main_logic.proactive_recommendation.feedback.availability as availability_module
+import main_logic.proactive_recommendation.feedback.analytics as availability_module
 
 from main_logic.proactive_recommendation import (
     PROACTIVE_RECOMMENDATION_ALGORITHM_VERSION,

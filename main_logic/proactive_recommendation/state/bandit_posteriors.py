@@ -29,8 +29,10 @@ from main_logic.proactive_recommendation.state.decay import (
 )
 
 
-BANDIT_STATE_VERSION = "recommendation_bandit_state_v1"
-BANDIT_STATE_FILENAME = "proactive_recommendation_bandit_state_v1.json"
+BANDIT_STATE_VERSION = "recommendation_bandit_state_v2"
+BANDIT_STATE_FILENAME = "proactive_recommendation_bandit_state_v2.json"
+LEGACY_BANDIT_STATE_FILENAME = "proactive_recommendation_bandit_state_v1.json"
+BANDIT_REWARD_CONTRACT_VERSION = "bandit_encounter_reward_v3"
 BANDIT_RECENT_OUTCOME_LIMIT = 2000
 
 def get_recommendation_bandit_state(
@@ -54,6 +56,7 @@ def update_recommendation_bandit_reward(
     arm: Any,
     reward: Any,
     event_types: Iterable[Any],
+    reward_contract_version: Any,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Replace one turn/arm aggregate when its unique event set changes."""
@@ -62,8 +65,15 @@ def update_recommendation_bandit_reward(
     source = normalize_source_identifier(arm)
     current = time.time() if now is None else float(now)
     score = clamp_to_range(coerce_finite_float(reward), -1.0, 1.0)
+    contract_version = to_stripped_text(reward_contract_version)
     signature = tuple(sorted({to_stripped_text(value) for value in event_types if to_stripped_text(value)}))
-    if root is None or not turn or not source or not signature:
+    if (
+        root is None
+        or not turn
+        or not source
+        or not signature
+        or contract_version != BANDIT_REWARD_CONTRACT_VERSION
+    ):
         return get_recommendation_bandit_state(config_dir=config_dir, now=current)
 
     def apply_reward(state: dict[str, Any]) -> dict[str, Any]:
@@ -117,6 +127,7 @@ def update_recommendation_bandit_reward(
             "success": success,
             "failure": failure,
             "event_types": list(signature),
+            "reward_contract_version": contract_version,
             "recorded_at": state_now,
         }
         trim_oldest_outcomes(
@@ -183,6 +194,7 @@ def _build_bandit_posterior_snapshot(state: Mapping[str, Any], now: float) -> di
     outcomes = state.get("recent_arm_outcomes")
     return {
         "version": BANDIT_STATE_VERSION,
+        "reward_contract_version": BANDIT_REWARD_CONTRACT_VERSION,
         "half_life_seconds": PREFERENCE_HALF_LIFE_SECONDS,
         "beta_prior": {
             "alpha": PREFERENCE_BETA_PRIOR_ALPHA,
@@ -196,7 +208,11 @@ def _build_bandit_posterior_snapshot(state: Mapping[str, Any], now: float) -> di
 
 
 def _sanitize_bandit_posterior_state(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, Mapping) or raw.get("version") != BANDIT_STATE_VERSION:
+    if (
+        not isinstance(raw, Mapping)
+        or raw.get("version") != BANDIT_STATE_VERSION
+        or raw.get("reward_contract_version") != BANDIT_REWARD_CONTRACT_VERSION
+    ):
         return _new_bandit_posterior_state()
     arms: dict[str, dict[str, float]] = {}
     if isinstance(raw.get("arms"), Mapping):
@@ -218,10 +234,15 @@ def _sanitize_bandit_posterior_state(raw: Any) -> dict[str, Any]:
     outcomes: dict[str, dict[str, Any]] = {}
     if isinstance(raw.get("recent_arm_outcomes"), Mapping):
         for key, value in raw["recent_arm_outcomes"].items():
-            if isinstance(value, Mapping):
+            if (
+                isinstance(value, Mapping)
+                and value.get("reward_contract_version")
+                == BANDIT_REWARD_CONTRACT_VERSION
+            ):
                 outcomes[str(key)[:256]] = dict(value)
     return {
         "version": BANDIT_STATE_VERSION,
+        "reward_contract_version": BANDIT_REWARD_CONTRACT_VERSION,
         "arms": arms,
         "recent_arm_outcomes": outcomes,
     }
@@ -238,6 +259,7 @@ def _bandit_posterior_store(root: Path) -> AtomicJsonStore[dict[str, Any]]:
 def _new_bandit_posterior_state() -> dict[str, Any]:
     return {
         "version": BANDIT_STATE_VERSION,
+        "reward_contract_version": BANDIT_REWARD_CONTRACT_VERSION,
         "arms": {},
         "recent_arm_outcomes": {},
     }
@@ -252,6 +274,8 @@ def _resolve_config_directory(value: str | os.PathLike[str] | None) -> Path | No
 __all__ = [
     "BANDIT_STATE_FILENAME",
     "BANDIT_STATE_VERSION",
+    "BANDIT_REWARD_CONTRACT_VERSION",
+    "LEGACY_BANDIT_STATE_FILENAME",
     "get_recommendation_bandit_state",
     "reset_recommendation_bandit_state",
     "update_recommendation_bandit_reward",

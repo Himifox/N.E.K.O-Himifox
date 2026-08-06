@@ -4,7 +4,7 @@ from pathlib import Path
 
 import main_logic.proactive_recommendation.feedback.service as feedback_module
 import main_logic.proactive_recommendation.feedback.learning as learning_module
-import main_logic.proactive_recommendation.feedback.availability as availability_module
+import main_logic.proactive_recommendation.feedback.analytics as availability_module
 
 from main_logic.proactive_recommendation.feedback.service import (
     clear_pending_recommendation_feedback,
@@ -15,7 +15,7 @@ from main_logic.proactive_recommendation.feedback.service import (
     register_pending_feedback,
     register_pending_feedback_from_observation,
 )
-from main_logic.proactive_recommendation.feedback.availability import (
+from main_logic.proactive_recommendation.feedback.analytics import (
     AVAILABILITY_FILENAME,
     get_availability_shadow,
     flush_persisted_censored_availability,
@@ -30,7 +30,7 @@ from main_logic.proactive_recommendation.feedback.event_processing import (
 )
 from main_logic.proactive_recommendation.feedback.learning import (
     build_reward_score_v2_preview,
-    build_reward_score_v3_preview,
+    build_reward_score_v4_preview,
 )
 from main_logic.proactive_recommendation.feedback.analytics import (
     join_observations_with_feedback,
@@ -38,7 +38,7 @@ from main_logic.proactive_recommendation.feedback.analytics import (
     summarize_feedback_calibration,
     summarize_recommendation_feedback,
     summarize_reward_score_v2_preview,
-    summarize_reward_score_v3_preview,
+    summarize_reward_score_v4_preview,
 )
 from main_logic.proactive_recommendation.feedback.service import (
     FEEDBACK_LOG_FILENAME,
@@ -411,7 +411,7 @@ def test_reward_score_v2_preview_keeps_reply_speed_neutral_and_deduplicated():
     assert combined["tuning_consumed"] is False
 
 
-def test_quality_v2_and_reward_v3_replay_fast_reply_without_speed_bonus():
+def test_quality_v2_keeps_reply_scores_but_reward_v4_excludes_them():
     fast_reply = build_feedback_event(
         lanlan_name="neko",
         turn_id="fast",
@@ -435,10 +435,14 @@ def test_quality_v2_and_reward_v3_replay_fast_reply_without_speed_bonus():
     assert quality_feedback_score("user_reply_fast") == 0.15
     assert quality_feedback_score("user_reply") == 0.15
     assert quality_feedback_score("ignored") is None
-    assert build_reward_score_v3_preview([fast_reply])["reward_score_v3_preview"] == 0.15
-    assert build_reward_score_v3_preview([reply])["reward_score_v3_preview"] == 0.15
-    ignored_preview = build_reward_score_v3_preview([ignored])
-    assert ignored_preview["reward_score_v3_preview"] is None
+    fast_preview = build_reward_score_v4_preview([fast_reply])
+    reply_preview = build_reward_score_v4_preview([reply])
+    ignored_preview = build_reward_score_v4_preview([ignored])
+    assert fast_preview["reward_score_v4_preview"] is None
+    assert reply_preview["reward_score_v4_preview"] is None
+    assert fast_preview["excluded_event_types"] == ["user_reply_fast"]
+    assert reply_preview["excluded_event_types"] == ["user_reply"]
+    assert ignored_preview["reward_score_v4_preview"] is None
     assert ignored_preview["excluded_event_types"] == ["ignored"]
 
 
@@ -548,7 +552,7 @@ def test_reward_score_v2_preview_requires_valid_delivery_attribution():
         window_seconds=3600,
         sample_limit=50,
     )
-    v3_summary = summarize_reward_score_v3_preview(
+    v4_summary = summarize_reward_score_v4_preview(
         observations,
         events,
         now=10_000.0,
@@ -572,11 +576,12 @@ def test_reward_score_v2_preview_requires_valid_delivery_attribution():
     assert summary["average_reward_score_v2_preview"] == 0.275
     assert summary["average_all_reward_score_v2_preview"] == 0.167
     assert summary["average_inferred_reward_score_v2_preview"] == -0.05
-    assert v3_summary["version"] == "reward_score_v3_preview_v1"
-    assert v3_summary["reward_scored_count"] == 2
-    assert v3_summary["feedback_censored_count"] == 1
-    assert v3_summary["average_reward_score_v3_preview"] == 0.25
-    assert v3_summary["feedback_score_population"] == "explicit_only"
+    assert v4_summary["version"] == "reward_score_v4_preview_v1"
+    assert v4_summary["reward_scored_count"] == 1
+    assert v4_summary["source_reward_scored_count"] == 1
+    assert v4_summary["feedback_excluded_count"] == 3
+    assert v4_summary["average_reward_score_v4_preview"] == 0.0
+    assert v4_summary["feedback_score_population"] == "source_attributed_only"
     assert summary["inferred_ignored_reported_separately"] is True
     assert summary["relative_speed_neutral_count"] == 1
     assert summary["technical_zero_event_count"] == 1

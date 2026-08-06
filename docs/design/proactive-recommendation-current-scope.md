@@ -60,7 +60,7 @@
 - 对 music、news、video、meme、vision 等当前安全候选进行确定性排序。
 - 继续使用现有来源、候选 ID、source streak 和投递层去重规则。
 - 使用现有人工裁决 Golden 做 Gate 与 Rank 分离评估。
-- 通过有效 `turn_id` 对显式反馈计算 `report_score_v2` 与可重放的 `reward_score_v3_preview`；旧 `reward_score_v2_preview` 仅保留兼容诊断。
+- 通过有效 `turn_id` 对显式反馈计算 `report_score_v2`；来源级 Bandit 使用可重放的 `reward_score_v4_preview`，旧 `reward_score_v2_preview` 仅保留兼容诊断。
 - 在 Shadow 中分别保存全局搭话接受度与已验证素材来源 affinity，并把决策前快照写入后续 observation。
 
 ### 3.2 暂不允许
@@ -149,7 +149,8 @@ P44-G0-A 是学术路线中“显式反馈归因 → 个性化状态”之间的
 3. `user_continue`、音乐完成/播完、明确关闭等事件按独立 component 计算；`ignored` 与 `mini_game_ignored` 视为缺失/右截尾，不进入均分、正负率、校准、active-ready、Bandit 或调权。
 4. `music_error` 与 `autoplay_blocked` 明确计 0，不得污染偏好。
 5. feedback 必须通过 `lanlan_name + turn_id` 与已投递 observation 关联，并校验来源及可验证的 candidate ID；归因失败的事件不计 reward。
-6. `/api/proactive/recommendation/summary` 同时保留旧 v2 诊断并输出无速度组件的 `reward_score_v3_preview`；Bandit 只消费 v3，排序、PASS、投递和 tuning 不读取旧 v2。
+6. `/api/proactive/recommendation/summary` 同时保留旧 v2 诊断并输出来源专用的 `reward_score_v4_preview`；`user_reply` 与 `user_continue` 只更新全局搭话接受度，不进入来源 reward。Bandit 只消费 v4，排序、PASS、投递和 tuning 不读取旧 v2。
+7. Bandit 状态使用 `recommendation_bandit_state_v2` 与独立 v2 文件冷启动；旧 v1 文件保持只读，不迁移、不改写，也不与新 reward 合同混用。
 
 ### 5.3 P44-G0-B：个人相对回复速度预览
 
