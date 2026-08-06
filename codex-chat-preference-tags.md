@@ -1,6 +1,6 @@
 # 偏好标签与资源池推荐：最终方案
 
-> 状态：Codex 与 Claude 已完成反驳式审计，契约闭合，等待实现授权。
+> 状态：已定稿（参考技术文档；实现与否待用户 review 后另行决定）。
 > 分支：`codex/preference-recommendation-demo`
 
 ## 一句话说明
