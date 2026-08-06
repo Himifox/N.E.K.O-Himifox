@@ -6,10 +6,15 @@
 
 from __future__ import annotations
 
+import random
+from dataclasses import dataclass
 from typing import Any
 
 from .decisions import _should_skip_source
-from .preference_recommendation import select_preference_candidates
+from .preference_recommendation import (
+    calculate_pool_probabilities,
+    select_preference_candidate_batch,
+)
 from .state import _source_hash
 
 
@@ -92,22 +97,38 @@ def _round_robin_phase1_links(
     return selected
 
 
-def _preference_weighted_phase1_links(
+@dataclass(frozen=True, slots=True)
+class PreferencePhase1PoolSelection:
+    """The concrete cross-media candidate batch handed to Phase 1."""
+
+    links_by_mode: dict[str, list[dict[str, Any]]]
+    music_allocated: bool
+    meme_allocated: bool
+    pool_probabilities: dict[str, float]
+    selected_counts: dict[str, int]
+    exploration_slots: int
+    available_candidates: int
+
+
+def _preference_weighted_phase1_pool(
     modes: list[str],
     sources: dict[str, Any],
     *,
     total: int,
     preference_scores: dict[str, float],
-) -> dict[str, list[dict[str, Any]]]:
-    """Collect fair source lanes, then preference-sample the shared budget."""
+    source_weights: dict[str, float],
+    include_music: bool,
+    include_meme: bool,
+    rng: random.Random | None = None,
+) -> PreferencePhase1PoolSelection:
+    """Build one shared web/music/meme pool and reserve uniform exploration."""
 
-    selected = {mode: [] for mode in modes}
+    web_candidates: list[dict[str, Any]] = []
     positions = {mode: 0 for mode in modes}
     links_by_mode = {
         mode: list((sources.get(mode) or {}).get("links", []) or [])
         for mode in modes
     }
-    ordered: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     while True:
         made_progress = False
@@ -122,18 +143,64 @@ def _preference_weighted_phase1_links(
                 if key:
                     seen_keys.add(key)
                 link.setdefault("mode", mode)
-                ordered.append(link)
+                web_candidates.append(link)
                 made_progress = True
                 break
         if not made_progress:
             break
 
-    for link in select_preference_candidates(
-        ordered,
+    task_candidates: list[dict[str, Any]] = []
+    if include_music:
+        task_candidates.append(
+            {
+                "title": "music recommendation task",
+                "mode": "music",
+                "_phase1_task": "music",
+                "_preference_pool": "media/music",
+            }
+        )
+    if include_meme:
+        task_candidates.append(
+            {
+                "title": "meme recommendation task",
+                "mode": "meme",
+                "_phase1_task": "meme",
+                "_preference_pool": "media/meme",
+            }
+        )
+
+    candidates = task_candidates + web_candidates
+    selection = select_preference_candidate_batch(
+        candidates,
         preference_scores,
         total=max(0, total),
-    ):
-        mode = str(link.get("mode", ""))
-        if mode in selected:
-            selected[mode].append(link)
-    return selected
+        rng=rng,
+        source_weights=source_weights,
+    )
+    selected = selection.items
+    selected_by_mode = {mode: [] for mode in modes}
+    selected_tasks: set[str] = set()
+    selected_counts: dict[str, int] = {}
+    for item in selected:
+        task = str(item.get("_phase1_task", ""))
+        mode = str(item.get("mode", ""))
+        if task:
+            selected_tasks.add(task)
+        elif mode in selected_by_mode:
+            selected_by_mode[mode].append(item)
+        selected_counts[mode] = selected_counts.get(mode, 0) + 1
+
+    probabilities = calculate_pool_probabilities(
+        candidates,
+        preference_scores,
+        source_weights=source_weights,
+    )
+    return PreferencePhase1PoolSelection(
+        links_by_mode=selected_by_mode,
+        music_allocated="music" in selected_tasks,
+        meme_allocated="meme" in selected_tasks,
+        pool_probabilities=probabilities,
+        selected_counts=selected_counts,
+        exploration_slots=selection.exploration_slots,
+        available_candidates=len(candidates),
+    )

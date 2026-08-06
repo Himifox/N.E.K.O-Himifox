@@ -87,7 +87,7 @@ from main_logic.proactive_chat.delivery import (
 from main_logic.proactive_chat.candidate_selection import (
     _format_phase1_link_candidate,
     _phase1_linkless_modes,
-    _preference_weighted_phase1_links,
+    _preference_weighted_phase1_pool,
     _round_robin_phase1_links,
 )
 from main_logic.proactive_chat.generation import (
@@ -1529,14 +1529,14 @@ async def handle_proactive_chat(
             enabled_modes,
             sources,
             has_reminiscence=bool(_surfaced_reflection_ids),
-            preference_scores=preference_scores,
         )
+        source_weights: dict[str, float] = {}
         if source_weight_selection.weights:
             source_weights = source_weight_selection.weights
             suppressed = source_weight_selection.suppressed
             weight_str = " ".join(f"{ch}={w:.3f}" for ch, w in source_weights.items())
             logger.debug(
-                f"[{lanlan_name}] 来源权重: {weight_str} | 剔除: {suppressed or '无'}"
+                f"[{lanlan_name}] 来源新鲜度权重: {weight_str} | 剔除: {suppressed or '无'}"
             )
 
             for ch in suppressed:
@@ -1559,33 +1559,67 @@ async def handle_proactive_chat(
 
         # Build once after source suppression so candidates are decayed only once.
         web_modes = [mode for mode in web_modes if mode in sources]
+        fallback_modes = _phase1_linkless_modes(web_modes, sources)
+        topic_target = (
+            min(10, _PHASE1_TOTAL_TOPIC_TARGET)
+            if PROACTIVE_PREFERENCE_DEMO_ENABLED
+            else _PHASE1_TOTAL_TOPIC_TARGET
+        )
+        selection_total = max(0, topic_target - len(fallback_modes))
+        selected_by_mode: dict[str, list[dict[str, Any]]]
+        selected_media_tasks = 0
+        if PROACTIVE_PREFERENCE_DEMO_ENABLED:
+            pool_selection = _preference_weighted_phase1_pool(
+                web_modes,
+                sources,
+                total=selection_total,
+                preference_scores=preference_scores,
+                source_weights=source_weights,
+                include_music=bool(
+                    music_content and music_content.get("placeholder")
+                ),
+                include_meme=bool(meme_content and meme_content.get("placeholder")),
+            )
+            selected_by_mode = pool_selection.links_by_mode
+            if not pool_selection.music_allocated:
+                music_content = None
+            if not pool_selection.meme_allocated:
+                meme_content = None
+            selected_media_tasks = int(pool_selection.music_allocated) + int(
+                pool_selection.meme_allocated
+            )
+            probability_text = " ".join(
+                f"{pool}={probability:.3f}"
+                for pool, probability in pool_selection.pool_probabilities.items()
+            )
+            count_text = " ".join(
+                f"{mode}={count}"
+                for mode, count in pool_selection.selected_counts.items()
+            )
+            logger.debug(
+                "[%s] preference demo resource pool: probabilities={%s} "
+                "selected={%s} exploration_slots=%d available=%d target=%d",
+                lanlan_name,
+                probability_text or "empty",
+                count_text or "empty",
+                pool_selection.exploration_slots,
+                pool_selection.available_candidates,
+                selection_total,
+            )
+        else:
+            selected_by_mode = _round_robin_phase1_links(
+                web_modes,
+                sources,
+                total=selection_total,
+            )
+
         if web_modes:
             from utils.tokenize import truncate_to_tokens as _ttt
 
             parts = []
-            fallback_modes = _phase1_linkless_modes(web_modes, sources)
-            topic_target = (
-                min(10, _PHASE1_TOTAL_TOPIC_TARGET)
-                if PROACTIVE_PREFERENCE_DEMO_ENABLED
-                else _PHASE1_TOTAL_TOPIC_TARGET
-            )
-            selection_total = max(0, topic_target - len(fallback_modes))
-            if PROACTIVE_PREFERENCE_DEMO_ENABLED:
-                selected_by_mode = _preference_weighted_phase1_links(
-                    web_modes,
-                    sources,
-                    total=selection_total,
-                    preference_scores=preference_scores,
-                )
-            else:
-                selected_by_mode = _round_robin_phase1_links(
-                    web_modes,
-                    sources,
-                    total=selection_total,
-                )
             remaining_total = topic_target - sum(
                 len(items) for items in selected_by_mode.values()
-            )
+            ) - selected_media_tasks
             remaining_fallback_modes = len(fallback_modes)
             for mode in web_modes:
                 src = sources[mode]
@@ -1609,7 +1643,12 @@ async def handle_proactive_chat(
                         parts.append(f"--- {label} ---\n" + "\n".join(lines))
                         continue
 
-                content_text = src.get("formatted_content", "")
+                content_text = (
+                    src.get("formatted_content", "")
+                    if not PROACTIVE_PREFERENCE_DEMO_ENABLED
+                    or mode in fallback_modes
+                    else ""
+                )
                 if content_text and remaining_total > 0:
                     compact_lines = [
                         line.strip()
@@ -1687,13 +1726,14 @@ async def handle_proactive_chat(
             added_events = update_preference_profile(
                 lanlan_name, preference_events
             )
+            profile_tag_count = len(get_preference_scores(lanlan_name))
             logger.debug(
                 "[%s] preference demo: parsed=%d accepted=%d added=%d profile_tags=%d",
                 lanlan_name,
                 len(unified_parsed.get("preference_events", [])),
                 len(preference_events),
                 added_events,
-                len(preference_scores),
+                profile_tag_count,
             )
 
         # ============================================================

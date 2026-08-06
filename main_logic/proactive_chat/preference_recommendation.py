@@ -372,27 +372,62 @@ def _candidate_affinity(tags: CandidateTags, scores: Mapping[str, float]) -> flo
     return 0.6 * domain_score + 0.3 * media_score + 0.1 * context_score
 
 
+def _candidate_pool(item: Mapping[str, Any], tags: CandidateTags) -> str:
+    """Return the semantic pool, allowing synthetic media-task candidates."""
+
+    explicit_pool = _normalized(item.get("_preference_pool"))
+    return explicit_pool or tags.pool
+
+
+def _pool_source_priors(
+    candidates: Sequence[Mapping[str, Any]],
+    source_weights: Mapping[str, float] | None,
+) -> dict[str, float]:
+    """Average channel freshness per pool without rewarding larger pools."""
+
+    if not source_weights:
+        return {}
+    weights_by_pool: dict[str, list[float]] = {}
+    fallback = 1.0 / max(1, len(source_weights))
+    for item in candidates:
+        tags = classify_candidate(item)
+        pool = _candidate_pool(item, tags)
+        mode = str(item.get("mode", ""))
+        weights_by_pool.setdefault(pool, []).append(
+            max(0.0, float(source_weights.get(mode, fallback)))
+        )
+    return {
+        pool: sum(values) / len(values)
+        for pool, values in weights_by_pool.items()
+        if values
+    }
+
+
 def calculate_pool_probabilities(
     candidates: Sequence[Mapping[str, Any]],
     scores: Mapping[str, float],
     *,
     exploration: float = 0.15,
+    source_weights: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     pools: dict[str, CandidateTags] = {}
     for item in candidates:
         tags = classify_candidate(item)
-        pools.setdefault(tags.pool, tags)
+        pools.setdefault(_candidate_pool(item, tags), tags)
     if not pools:
         return {}
-    if not any(abs(value) > 1e-9 for value in scores.values()):
+    has_preferences = any(abs(value) > 1e-9 for value in scores.values())
+    if not has_preferences and not source_weights:
         uniform = 1.0 / len(pools)
         return {pool: uniform for pool in pools}
 
     known = {pool: tags for pool, tags in pools.items() if pool != "unknown"}
     if not known:
         return {"unknown": 1.0}
+    source_priors = _pool_source_priors(candidates, source_weights)
     raw = {
-        pool: math.exp(max(-4.0, min(4.0, 0.3 * _candidate_affinity(tags, scores))))
+        pool: max(source_priors.get(pool, 1.0), 1e-9)
+        * math.exp(max(-4.0, min(4.0, _candidate_affinity(tags, scores))))
         for pool, tags in known.items()
     }
     total = sum(raw.values())
@@ -403,45 +438,59 @@ def calculate_pool_probabilities(
     }
 
 
-def select_preference_candidates(
+@dataclass(frozen=True, slots=True)
+class PreferenceCandidateSelection:
+    """Selected candidates plus the slots actually used by each strategy."""
+
+    items: list[dict[str, Any]]
+    personalized_slots: int
+    exploration_slots: int
+
+
+def select_preference_candidate_batch(
     candidates: Sequence[dict[str, Any]],
     scores: Mapping[str, float],
     *,
     total: int,
     rng: random.Random | None = None,
-) -> list[dict[str, Any]]:
+    source_weights: Mapping[str, float] | None = None,
+) -> PreferenceCandidateSelection:
     """Select personalized candidates while reserving a 15% exploration slice."""
 
     ordered = list(candidates)
     if total <= 0 or not ordered:
-        return []
-    if not any(abs(value) > 1e-9 for value in scores.values()):
-        return ordered[:total]
+        return PreferenceCandidateSelection([], 0, 0)
+    effective_total = min(total, len(ordered))
+    if not any(abs(value) > 1e-9 for value in scores.values()) and not source_weights:
+        return PreferenceCandidateSelection(ordered[:effective_total], 0, 0)
 
     randomizer = rng or random.Random()
     grouped: dict[str, list[dict[str, Any]]] = {}
-    tags_by_pool: dict[str, CandidateTags] = {}
     for item in ordered:
         tags = classify_candidate(item)
-        grouped.setdefault(tags.pool, []).append(item)
-        tags_by_pool.setdefault(tags.pool, tags)
+        pool = _candidate_pool(item, tags)
+        grouped.setdefault(pool, []).append(item)
 
     known_pools = [pool for pool in grouped if pool != "unknown"]
     if not known_pools:
-        return ordered[:total]
-    exploration_slots = min(len(ordered), max(1, round(total * 0.15)))
-    personalized_slots = min(total - exploration_slots, len(ordered))
+        return PreferenceCandidateSelection(
+            ordered[:effective_total], 0, effective_total
+        )
+    personalized_probabilities = calculate_pool_probabilities(
+        ordered,
+        scores,
+        exploration=0.0,
+        source_weights=source_weights,
+    )
+    exploration_slots = min(
+        effective_total, max(1, math.ceil(effective_total * 0.15))
+    )
+    personalized_slots = effective_total - exploration_slots
     selected: list[dict[str, Any]] = []
     while len(selected) < personalized_slots and known_pools:
-        weights = [
-            math.exp(
-                max(
-                    -4.0,
-                    min(4.0, 0.3 * _candidate_affinity(tags_by_pool[pool], scores)),
-                )
-            )
-            for pool in known_pools
-        ]
+        weights = [personalized_probabilities.get(pool, 0.0) for pool in known_pools]
+        if not any(weights):
+            break
         pool = randomizer.choices(known_pools, weights=weights, k=1)[0]
         selected.append(grouped[pool].pop(0))
         if not grouped[pool]:
@@ -449,11 +498,40 @@ def select_preference_candidates(
 
     selected_ids = {id(item) for item in selected}
     remaining = [item for item in ordered if id(item) not in selected_ids]
-    while len(selected) < total and remaining:
-        item = randomizer.choice(remaining)
+    actual_personalized_slots = len(selected)
+    while len(selected) < effective_total and remaining:
+        remaining_by_pool: dict[str, list[dict[str, Any]]] = {}
+        for item in remaining:
+            tags = classify_candidate(item)
+            remaining_by_pool.setdefault(_candidate_pool(item, tags), []).append(item)
+        exploration_pool = randomizer.choice(list(remaining_by_pool))
+        item = randomizer.choice(remaining_by_pool[exploration_pool])
         remaining.remove(item)
         selected.append(item)
-    return selected
+    return PreferenceCandidateSelection(
+        items=selected,
+        personalized_slots=actual_personalized_slots,
+        exploration_slots=len(selected) - actual_personalized_slots,
+    )
+
+
+def select_preference_candidates(
+    candidates: Sequence[dict[str, Any]],
+    scores: Mapping[str, float],
+    *,
+    total: int,
+    rng: random.Random | None = None,
+    source_weights: Mapping[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning only the selected candidates."""
+
+    return select_preference_candidate_batch(
+        candidates,
+        scores,
+        total=total,
+        rng=rng,
+        source_weights=source_weights,
+    ).items
 
 
 def blend_source_weights(
