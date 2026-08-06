@@ -205,12 +205,15 @@
             }, SOCIAL_OPEN_RELEASE_DELAY_MS);
         }
 
-        // 猫娘网络（社交平台）按钮：占用原 screen 槽位。
+        // 喵宇宙（社交平台）按钮：占用原 screen 槽位。
         // 从 /api/system/social/config 拿云端 base URL，从 /api/system/client-id 拿 device 身份。
         // Electron：window.open → setWindowOpenHandler 识别 social feed，以带 OS chrome 的内置
         // framed 子窗口打开（见 NEKO-PC pet-window-lifecycle）。浏览器：预开 about:blank 保手势。
         // Desktop OAuth 仍走系统浏览器（loopback 回调 + 文案提示在浏览器完成登录）。
         window.addEventListener('live2d-social-click', async () => {
+            if (window.nekoSocialUnlock && window.nekoSocialUnlock.isLocked()) {
+                return;
+            }
             if (shouldIgnoreSocialOpenRequest()) {
                 return;
             }
@@ -289,7 +292,14 @@
                 return false;
             };
             const openElectronSocialWindow = (targetUrl) => {
-                const socialWin = window.open(String(targetUrl), 'neko-social');
+                // frameName=neko-social：NEKO-PC setWindowOpenHandler 靠名字识别社区窗，
+                // 强制 frame/thickFrame + 原生最小/最大/关（尤其 Windows 右上角）。
+                // features 为兜底提示；最终以主进程 overrideBrowserWindowOptions 为准。
+                const socialWin = window.open(
+                    String(targetUrl),
+                    'neko-social',
+                    'popup=yes,width=1200,height=800,resizable=yes'
+                );
                 if (!socialWin) {
                     return false;
                 }
@@ -623,7 +633,7 @@
                 try {
                     const r = btn.getBoundingClientRect();
                     if (r.width > 0 && r.height > 0) {
-                        savedGoodbyeRect = r;
+                        savedGoodbyeRect = I.toNekoVirtualTransitionRect(r);
                         break;
                     }
                 } catch (_) { /* ignore */ }
@@ -1035,7 +1045,8 @@
                             revealActiveReturnBall('return-ball-legacy-ball');
                             return;
                         }
-                        const transitionAnchorRect = savedGoodbyeRect || activeReturnButtonContainer.getBoundingClientRect();
+                        const transitionAnchorRect = savedGoodbyeRect
+                            || I.toNekoVirtualTransitionRect(activeReturnButtonContainer.getBoundingClientRect());
                         I.playNekoModelCatTransition({
                             direction: 'model-to-cat',
                             anchorRect: transitionAnchorRect,
@@ -1648,7 +1659,18 @@
             I.S.isTextSessionActive = false;
 
             // 显示欢迎消息
-            I.showStatusToast(window.t ? window.t('app.welcomeBack', { name: lanlan_config.lanlan_name }) : `\u{1FAF4} ${lanlan_config.lanlan_name}回来了！`, 3000);
+            // Desktop preload owns window.showStatusToast and routes it to the
+            // independent top-right Toast window. Calling the private in-page
+            // helper here would pin this bubble to the physically cropped Pet
+            // carrier, so it would move and clip together with the avatar.
+            const welcomeBackText = window.t
+                ? window.t('app.welcomeBack', { name: lanlan_config.lanlan_name })
+                : `\u{1FAF4} ${lanlan_config.lanlan_name}回来了！`;
+            if (typeof window.showStatusToast === 'function') {
+                window.showStatusToast(welcomeBackText, 3000);
+            } else if (typeof I.showStatusToast === 'function') {
+                I.showStatusToast(welcomeBackText, 3000);
+            }
 
             // 恢复主动搭话与主动视觉调度
             try {

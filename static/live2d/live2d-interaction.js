@@ -54,6 +54,28 @@ function getLive2DNiriPetPhysicalCropApi() {
     return api;
 }
 
+function isLive2DHostModelDragActive() {
+    // Ownership starts with the primed pointerdown session and remains
+    // authoritative while the crop carrier is transitioning. api.isActive()
+    // can briefly change during prepare/commit without ending that session.
+    const api = typeof window !== 'undefined' ? window.__nekoNiriPetPhysicalCrop : null;
+    // No bridge object, or a bridge predating the explicit ownership
+    // capability, means the ordinary web/legacy path owns coordinates. Once a
+    // bridge declares that capability, however, an incompatible or failing
+    // ownership method must not re-enable the legacy writer: that would let
+    // renderer-local and host screen-coordinate paths move the same model
+    // concurrently.
+    if (!api) return false;
+    const ownershipVersion = Number(api.hostModelDragOwnershipVersion);
+    if (!Number.isFinite(ownershipVersion) || ownershipVersion < 1) return false;
+    if (typeof api.isHostModelDragActive !== 'function') return true;
+    try {
+        return api.isHostModelDragActive() !== false;
+    } catch (_) {
+        return true;
+    }
+}
+
 function normalizeLive2DPoint(point) {
     if (!point || typeof point !== 'object') return null;
     const x = Number(point.x);
@@ -160,6 +182,22 @@ let live2DPeekDisplayReconcileId = 0;
 let live2DPeekPendingDisplayRestoreAnchor = null;
 let live2DPeekDisplayRefresh = null;
 
+function getLive2DNiriPetVirtualViewport() {
+    try {
+        const api = window.__nekoNiriPetPhysicalCrop;
+        if (!api || typeof api.getState !== 'function') return null;
+        const state = api.getState();
+        const virtualBounds = state && state.enabled === true ? state.virtualBounds : null;
+        const width = Number(virtualBounds && virtualBounds.width);
+        const height = Number(virtualBounds && virtualBounds.height);
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+            return null;
+        }
+        return { width, height };
+    } catch (_) {
+        return null;
+    }
+}
 function isLive2DPeekDesktopRuntime() {
     try {
         return !!window.__NEKO_DESKTOP_RUNTIME__ || !!(
@@ -316,6 +354,7 @@ function clampLive2DPeekCoordinate(value, min, max) {
 function getLive2DPeekViewport(bounds = null, manager = null) {
     const fallbackW = bounds && Number.isFinite(bounds.width) ? bounds.width : 1;
     const fallbackH = bounds && Number.isFinite(bounds.height) ? bounds.height : 1;
+    const niriVirtualViewport = getLive2DNiriPetVirtualViewport();
     const renderer = manager && manager.pixi_app && manager.pixi_app.renderer;
     const screen = renderer && renderer.screen;
     const canvasW = Number(screen && screen.width);
@@ -324,12 +363,16 @@ function getLive2DPeekViewport(bounds = null, manager = null) {
     const vh = Number(window.innerHeight);
     const validVw = Number.isFinite(vw) && vw > 0;
     const validVh = Number.isFinite(vh) && vh > 0;
-    const viewportW = Number.isFinite(canvasW) && canvasW > 0
-        ? (validVw ? Math.min(canvasW, vw) : canvasW)
-        : (validVw ? vw : fallbackW);
-    const viewportH = Number.isFinite(canvasH) && canvasH > 0
-        ? (validVh ? Math.min(canvasH, vh) : canvasH)
-        : (validVh ? vh : fallbackH);
+    const viewportW = niriVirtualViewport
+        ? niriVirtualViewport.width
+        : (Number.isFinite(canvasW) && canvasW > 0
+            ? (validVw ? Math.min(canvasW, vw) : canvasW)
+            : (validVw ? vw : fallbackW));
+    const viewportH = niriVirtualViewport
+        ? niriVirtualViewport.height
+        : (Number.isFinite(canvasH) && canvasH > 0
+            ? (validVh ? Math.min(canvasH, vh) : canvasH)
+            : (validVh ? vh : fallbackH));
     return { left: 0, top: 0, right: viewportW, bottom: viewportH, width: viewportW, height: viewportH };
 }
 
@@ -731,6 +774,55 @@ Live2DManager.prototype.isLive2DPeekActive = function () {
     return !!(state && state.active && state.model && !state.model.destroyed);
 };
 
+Live2DManager.prototype._setLive2DPeekControlsSuppressed = function (active) {
+    const ids = ['live2d-floating-buttons', 'live2d-lock-icon'];
+    ids.forEach((id) => {
+        const element = document.getElementById(id);
+        if (!element || !element.style) return;
+        const snapshotKey = '__nekoLive2DPeekControlStyleSnapshot';
+        if (active) {
+            if (!element[snapshotKey]) {
+                element[snapshotKey] = {
+                    display: element.style.getPropertyValue('display'),
+                    displayPriority: element.style.getPropertyPriority('display'),
+                    pointerEvents: element.style.getPropertyValue('pointer-events'),
+                    pointerEventsPriority: element.style.getPropertyPriority('pointer-events')
+                };
+            }
+            element.style.setProperty('display', 'none', 'important');
+            element.style.setProperty('pointer-events', 'none', 'important');
+            return;
+        }
+        const snapshot = element[snapshotKey];
+        if (!snapshot) return;
+        if (
+            element.style.getPropertyValue('display') === 'none' &&
+            element.style.getPropertyPriority('display') === 'important'
+        ) {
+            if (snapshot.display) {
+                element.style.setProperty('display', snapshot.display, snapshot.displayPriority || '');
+            } else {
+                element.style.removeProperty('display');
+            }
+        }
+        if (
+            element.style.getPropertyValue('pointer-events') === 'none' &&
+            element.style.getPropertyPriority('pointer-events') === 'important'
+        ) {
+            if (snapshot.pointerEvents) {
+                element.style.setProperty(
+                    'pointer-events',
+                    snapshot.pointerEvents,
+                    snapshot.pointerEventsPriority || ''
+                );
+            } else {
+                element.style.removeProperty('pointer-events');
+            }
+        }
+        try { delete element[snapshotKey]; } catch (_) { element[snapshotKey] = null; }
+    });
+};
+
 function isLive2DWidgetInteractionActive() {
     try {
         return !!(window.NekoWidgetInteraction &&
@@ -765,6 +857,7 @@ Live2DManager.prototype.clearLive2DPeek = function (reason = 'manual', options =
     if (document.body) {
         document.body.classList.remove('neko-live2d-peek');
     }
+    this._setLive2DPeekControlsSuppressed(false);
     try {
         window.dispatchEvent(new CustomEvent('neko:live2d-peek-changed', {
             detail: { active: false, phase: 'unanchored', reason }
@@ -919,6 +1012,7 @@ Live2DManager.prototype._tryApplyLive2DPeek = async function (model) {
     if (document.body) {
         document.body.classList.add('neko-live2d-peek');
     }
+    this._setLive2DPeekControlsSuppressed(true);
     return await this._setLive2DPeekVisibility(
         shouldRevealLive2DPeek(),
         'anchor-created'
@@ -1476,11 +1570,16 @@ Live2DManager.prototype.setupDragAndDrop = function (model) {
     });
 
     const onDragEnd = async (event) => {
+        // A physical-crop host owns its drag from the primed pointerdown through
+        // final snap/save settlement. The legacy client-coordinate writer must
+        // not settle coordinates, but local pointer/UI state still needs its
+        // ordinary pointerup cleanup.
         if (this._isDraggingModel) {
             this._isDraggingModel = false;
             document.getElementById('live2d-canvas').style.cursor = '';
             restoreButtonPointerEvents();
             dragHintLastPointer = captureDragHintPointer(event) || dragHintLastPointer;
+            if (isLive2DHostModelDragActive()) return;
 
             if (!this._isModelReadyForInteraction) return;
 
@@ -1535,6 +1634,7 @@ Live2DManager.prototype.setupDragAndDrop = function (model) {
 
     const onDragMove = (event) => {
         if (!this._isModelReadyForInteraction) return;
+        if (isLive2DHostModelDragActive()) return;
         if (this._isDraggingModel) {
             if (typeof this.boostLinuxX11InteractiveFPS === 'function') {
                 this.boostLinuxX11InteractiveFPS(1400);
@@ -1810,6 +1910,15 @@ Live2DManager.prototype.enableMouseTracking = function (model, options = {}) {
     const showButtons = () => {
         const lockIcon = document.getElementById('live2d-lock-icon');
         const floatingButtons = document.getElementById('live2d-floating-buttons');
+
+        if (this.isLive2DPeekActive()) {
+            if (this._hideButtonsTimer) {
+                clearTimeout(this._hideButtonsTimer);
+                this._hideButtonsTimer = null;
+            }
+            this._setLive2DPeekControlsSuppressed(true);
+            return;
+        }
 
         // 如果已经点击了"请她离开"，不显示锁按钮，但保持显示"请她回来"按钮
         if (this._goodbyeClicked) {
@@ -2345,7 +2454,7 @@ Live2DManager.prototype._restoreClickEffectState = async function(options = {}) 
             return false;
         }
         this._currentClickEffectId = null;
-        this._clickEffectMotion = null;
+        this._clickEffectAction = null;
         return true;
     };
 
@@ -2353,10 +2462,9 @@ Live2DManager.prototype._restoreClickEffectState = async function(options = {}) 
         return false;
     }
 
-    if (this._clickEffectMotion && typeof this._clickEffectMotion.stop === 'function') {
-        try { this._clickEffectMotion.stop(); } catch (_) {}
+    if (this._clickEffectAction) {
+        this._stopClickEffectAction(this._clickEffectAction);
     }
-    this._clickEffectMotion = null;
 
     const restoreIdleMotion = async () => {
         if (!restoreIdle || typeof window.restoreLive2DIdleAnimationOnMainPage !== 'function') {
@@ -2393,7 +2501,7 @@ Live2DManager.prototype._restoreClickEffectState = async function(options = {}) 
 
     try {
         if (typeof this.clearExpression === 'function') {
-            this.clearExpression();
+            await this.clearExpression();
         }
     } catch (e) {
         console.warn('[ClickEffect] 清除表情失败:', e);
@@ -2402,16 +2510,49 @@ Live2DManager.prototype._restoreClickEffectState = async function(options = {}) 
     return finishClickEffectRestore();
 };
 
+Live2DManager.prototype._stopClickEffectAction = function(action = this._clickEffectAction) {
+    if (!action) return false;
+    if (this._clickEffectAction === action) {
+        this._clickEffectAction = null;
+        if (this._clickEffectActionTimer) {
+            clearTimeout(this._clickEffectActionTimer);
+            this._clickEffectActionTimer = null;
+        }
+    }
+
+    const motionManager = action.model?.internalModel?.motionManager;
+    const state = motionManager?.state;
+    if (action.model !== this.currentModel || action.generation !== this._actionMotionGeneration) {
+        return false;
+    }
+
+    let stopped = false;
+    if (
+        state?.currentGroup === action.group
+        && state?.currentIndex === action.index
+        && Number(state?.currentPriority || 0) > 1
+        && typeof motionManager?.stopAllMotions === 'function'
+    ) {
+        motionManager.stopAllMotions();
+        stopped = true;
+        if (typeof this._resetActiveMotionParameters === 'function') {
+            this._resetActiveMotionParameters({ preserveExpression: true });
+        }
+        if (typeof this._clearActiveMotionParamIds === 'function') {
+            this._clearActiveMotionParamIds();
+        }
+    }
+    return stopped;
+};
+
 /**
- * 播放临时点击效果（低优先级，会自动恢复）
+ * 播放临时点击效果（动作槽空闲时播放，并自动恢复）
  * @param {string} emotion - 情感名称
- * @param {number} priority - 动作优先级 (1=IDLE, 2=NORMAL, 3=FORCE)
  * @param {number} duration - 效果持续时间（毫秒）
  */
-Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, priority = 1, duration = 3000) {
+Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, duration = 3000) {
     const triggerLog = {
         emotion,
-        priority,
         durationMs: duration,
         motionCandidates: 0,
         expressionCandidates: 0,
@@ -2432,7 +2573,7 @@ Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, prio
     const hadClickEffectState = Boolean(
         previousClickEffectId ||
         this._clickEffectRestoreTimer ||
-        this._clickEffectMotion
+        this._clickEffectAction
     );
     this._clickEffectRestoreToken = (this._clickEffectRestoreToken || 0) + 1;
     const restoreToken = this._clickEffectRestoreToken;
@@ -2449,11 +2590,6 @@ Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, prio
         this._cancelSmoothReset();
     }
     
-    if (this._clickEffectMotion && typeof this._clickEffectMotion.stop === 'function') {
-        try { this._clickEffectMotion.stop(); } catch (e) {}
-    }
-    this._clickEffectMotion = null;
-
     try {
         // 准备表情兜底：动作不可用或播放失败时才播放
         let expressionFiles = [];
@@ -2478,9 +2614,9 @@ Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, prio
         }
         triggerLog.expressionCandidates = expressionFiles.length;
 
-        // 1. 优先播放低优先级动作
+        // 1. 动作槽空闲时优先播放动作
         let motions = null;
-        let motionGroup = emotion; // 用于 this.currentModel.motion(group, index, priority)
+        let motionGroup = emotion;
         if (this.fileReferences && this.fileReferences.Motions && this.fileReferences.Motions[emotion]) {
             motions = this.fileReferences.Motions[emotion];
         } else if (this.emotionMapping && this.emotionMapping.motions && this.emotionMapping.motions[emotion]) {
@@ -2511,33 +2647,55 @@ Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, prio
         triggerLog.motionCandidates = Array.isArray(motions) ? motions.length : 0;
 
         if (motions && motions.length > 0) {
-            // 使用低优先级播放动作
-            // pixi-live2d-display 的 motion(group, index, priority) 支持优先级参数
             try {
-                const motion = await this.currentModel.motion(motionGroup, undefined, priority);
+                const motionIndex = Math.floor(Math.random() * motions.length);
+                const selectedMotion = motions[motionIndex];
+                const motionModel = this.currentModel;
+                const motion = await this.playActionMotion(motionGroup, motionIndex);
                 if (!isCurrentPlayAttempt()) {
                     // 已被新的点击接管：停掉本次刚启动的动作，避免后台占用，并放弃写共享状态
-                    if (motion && typeof motion.stop === 'function') {
-                        try { motion.stop(); } catch (_) {}
+                    if (motion) {
+                        this._stopClickEffectAction({
+                            model: motionModel,
+                            group: motionGroup,
+                            index: motionIndex,
+                            generation: this._actionMotionGeneration
+                        });
                     }
                     triggerLog.reason = 'superseded_after_motion';
                     return false;
                 }
                 if (motion) {
-                    console.log(`[ClickEffect] 播放临时动作: ${motionGroup}（优先级: ${priority}）`);
-                    this._clickEffectMotion = motion;
+                    console.log(`[ClickEffect] 播放临时动作: ${motionGroup}`);
+                    const action = {
+                        model: motionModel,
+                        group: motionGroup,
+                        index: motionIndex,
+                        generation: this._actionMotionGeneration
+                    };
+                    this._clickEffectAction = action;
+                    if (this._clickEffectActionTimer) clearTimeout(this._clickEffectActionTimer);
+                    this._clickEffectActionTimer = setTimeout(() => {
+                        if (this._clickEffectAction === action) this._stopClickEffectAction(action);
+                    }, duration);
+                    const motionFile = typeof selectedMotion === 'string'
+                        ? selectedMotion
+                        : (selectedMotion?.File || selectedMotion?.file);
+                    if (motionFile && typeof this._trackActiveMotionParametersFromFile === 'function') {
+                        this._trackActiveMotionParametersFromFile(motionFile).catch(() => {});
+                    }
                     triggerLog.motions.push({
                         group: motionGroup,
-                        selection: 'random',
-                        priority,
+                        index: motionIndex,
+                        priority: 2,
                         candidateCount: motions.length
                     });
                     didPlayEffect = true;
                 } else {
                     triggerLog.failedMotions.push({
                         group: motionGroup,
-                        selection: 'random',
-                        priority,
+                        index: motionIndex,
+                        priority: 2,
                         reason: 'motion_returned_falsy'
                     });
                 }
@@ -2545,7 +2703,7 @@ Live2DManager.prototype._playTemporaryClickEffect = async function(emotion, prio
                 triggerLog.failedMotions.push({
                     group: motionGroup,
                     selection: 'random',
-                    priority,
+                    priority: 2,
                     reason: motionError?.message || String(motionError)
                 });
                 console.warn('[ClickEffect] 动作播放失败:', motionError);
@@ -3033,6 +3191,11 @@ Live2DManager.prototype.cleanupEventListeners = function () {
         clearTimeout(this._clickEffectRestoreTimer);
         this._clickEffectRestoreTimer = null;
     }
+    if (this._clickEffectActionTimer) {
+        clearTimeout(this._clickEffectActionTimer);
+        this._clickEffectActionTimer = null;
+    }
+    this._clickEffectAction = null;
     this._currentClickEffectId = null;
 
     // 清理页面卸载监听器（如果存在）
@@ -3141,11 +3304,9 @@ Live2DManager.prototype.playTutorialMotion = async function() {
     const index = Math.floor(Math.random() * groupList.length);
 
     try {
-        const motion = await this.currentModel.motion(group, index, window.live2dManager.CLICK_MOTION_PRIORITY);
-        // const motion = await this.currentModel.motion(group, index, 2);
+        const motion = await this.playActionMotion(group, index);
         if (motion) {
-            console.log(`[Interaction] 教程模式 - 播放动作: ${group}[${index}]（优先级: ${window.live2dManager.CLICK_MOTION_PRIORITY}）`);
-            // console.log(`[Interaction] 教程模式 - 播放动作: ${group}[${index}]（优先级: ${2}）`);
+            console.log(`[Interaction] 教程模式 - 播放动作: ${group}[${index}]`);
             return true;
         }
     } catch (error) {
@@ -3172,65 +3333,25 @@ Live2DManager.prototype.triggerRandomEmotion = async function() {
 
     // 教程模式：直接随机播放表情
     if (window.isInTutorial) {
-        console.log('[Interaction] 教程模式 - 随机播放表情（低优先级，将自动恢复）');
+        console.log('[Interaction] 教程模式 - 随机播放表情（将在点击效果结束后恢复）');
         try {
             // 获取表情列表
-            let expressionNames = [];
+            let expressions = [];
             if (this.fileReferences && Array.isArray(this.fileReferences.Expressions)) {
-                expressionNames = this.fileReferences.Expressions.map(e => e.Name).filter(Boolean);
+                expressions = this.fileReferences.Expressions.filter(e => e && e.Name && e.File);
             }
 
             // 随机播放表情
-            if (expressionNames.length > 0) {
-                const randomExpression = expressionNames[Math.floor(Math.random() * expressionNames.length)];
-                console.log(`[Interaction] 教程模式 - 播放表情: ${randomExpression}（将在 ${window.live2dManager.CLICK_EFFECT_DURATION}ms 后恢复）`);
-                await this.currentModel.expression(randomExpression);
+            if (expressions.length > 0) {
+                const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+                console.log(`[Interaction] 教程模式 - 播放表情: ${randomExpression.Name}（将在 ${window.live2dManager.CLICK_EFFECT_DURATION}ms 后恢复）`);
+                await this.playExpression(randomExpression.Name, randomExpression.File);
 
                 const playedMotion = await this.playTutorialMotion();
 
-                if (!playedMotion) {
-                    // 动作不可用时，回退到参数动画模拟效果
-                    const model = this.currentModel.internalModel;
-                    if (model && model.coreModel) {
-                        // 随机晃动头部
-                        const angleXIndex = model.coreModel.getParameterIndex('ParamAngleX');
-                        const angleYIndex = model.coreModel.getParameterIndex('ParamAngleY');
-                        const bodyAngleXIndex = model.coreModel.getParameterIndex('ParamBodyAngleX');
-
-                        const duration = 1000 + Math.random() * 1000; // 1-2秒
-                        const startTime = Date.now();
-
-                        const setParamByIndex = (index, value) => {
-                            if (index < 0) return;
-                            if (typeof model.coreModel.setParameterValueByIndex === 'function') {
-                                model.coreModel.setParameterValueByIndex(index, value);
-                            } else {
-                                model.coreModel.setParameterValueById(index, value);
-                            }
-                        };
-
-                        const animate = () => {
-                            const elapsed = Date.now() - startTime;
-                            const progress = Math.min(elapsed / duration, 1);
-                            const t = progress * Math.PI * 2; // 一个完整周期
-
-                            setParamByIndex(angleXIndex, Math.sin(t) * 15); // -15 到 15 度
-                            setParamByIndex(angleYIndex, Math.cos(t) * 10); // -10 到 10 度
-                            setParamByIndex(bodyAngleXIndex, Math.sin(t * 0.5) * 5); // 更慢的身体晃动
-
-                            if (progress < 1) {
-                                requestAnimationFrame(animate);
-                            } else {
-                                // 动画结束，恢复默认值
-                                setParamByIndex(angleXIndex, 0);
-                                setParamByIndex(angleYIndex, 0);
-                                setParamByIndex(bodyAngleXIndex, 0);
-                            }
-                        };
-
-                        animate();
-                        console.log('[Interaction] 教程模式 - 播放参数动画');
-                    }
+                if (!playedMotion && !this.hasActiveActionMotion(this.currentModel)) {
+                    const fallbackEmotion = this.getRandomElement(['happy', 'sad', 'angry', 'surprised']);
+                    this.playSimpleMotion(fallbackEmotion);
                 }
             }
         } catch (error) {
@@ -3259,8 +3380,8 @@ Live2DManager.prototype.triggerRandomEmotion = async function() {
         // 触发临时情感效果
         let didPlayEffect = false;
         try {
-            // 播放低优先级的表情和动作
-            didPlayEffect = await this._playTemporaryClickEffect(randomEmotion, 2, window.live2dManager.CLICK_EFFECT_DURATION);
+            // 播放临时表情，并在动作槽空闲时播放动作
+            didPlayEffect = await this._playTemporaryClickEffect(randomEmotion, window.live2dManager.CLICK_EFFECT_DURATION);
         } catch (error) {
             console.warn('[Interaction] 触发情感失败:', error);
         }
@@ -3775,8 +3896,7 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId, optio
                             return false;
                         }
 
-                        motionManager.stopAllMotions();
-                        const result = await live2dModel.motion(groupName, 0, 3);
+                        const result = await this.playActionMotion(groupName, 0);
 
                         if (result) {
                             triggerLog.motions.push({
@@ -3785,7 +3905,7 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId, optio
                                 index: 0,
                                 file: motion.File,
                                 durationMs: AnimHoldingTime,
-                                priority: 3
+                                priority: 2
                             });
                             console.log(`[TouchSet] ✅ 成功下发播放指令: ${groupName}[0]`);
                         } else {
@@ -3860,15 +3980,12 @@ Live2DManager.prototype._playTouchSetAnimation = async function(hitAreaId, optio
 
                     clearTimeout(this.expressionTimer);
                     const holdingTime = Number.isFinite(faceHoldingTime) && faceHoldingTime > 0 ? faceHoldingTime : 3000;
-                    this.expressionTimer = setTimeout(() => {
+                    this.expressionTimer = setTimeout(async () => {
                         if (typeof this.clearExpression === 'function') {
-                            this.clearExpression();
-                            console.log(`[TouchSet] 临时表情清除，准备恢复常驻状态`);
-                            if (typeof this.applyPersistentExpressionsNative === 'function') {
-                                try {
-                                    this.applyPersistentExpressionsNative(true);
-                                } catch (_) {}
-                            }
+                            try {
+                                await this.clearExpression();
+                                console.log(`[TouchSet] 临时表情清除，准备恢复常驻状态`);
+                            } catch (_) {}
                         }
                     }, holdingTime);
                 } catch (e) {
