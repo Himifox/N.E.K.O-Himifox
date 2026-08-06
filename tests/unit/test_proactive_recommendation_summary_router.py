@@ -199,6 +199,14 @@ def test_recommendation_summary_returns_missing_when_jsonl_absent(
         "arms": {},
         "finalized_outcome_count": 0,
     }
+    assert payload["source_preference"]["preference_score_contract"] == (
+        "source_preference_score_v2"
+    )
+    assert payload["source_preference"]["half_life_seconds"] == 604800
+    assert payload["source_preference"]["delta_per_evidence"] == 0.005
+    assert payload["source_preference"]["max_abs_delta"] == 0.03
+    assert payload["source_preference"]["resource_behavior_max_abs_delta"] == 0.01
+    assert payload["source_preference"]["sources"] == {}
     assert payload["runtime"]["effective_mode"] == "shadow"
     assert payload["runtime"]["runtime_activation_allowed"] is False
     assert payload["sample_count"] == 0

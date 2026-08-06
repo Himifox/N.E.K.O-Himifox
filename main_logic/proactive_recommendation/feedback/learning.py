@@ -350,17 +350,17 @@ def feedback_learning_enabled(pending: PendingRecommendationFeedback) -> bool:
 def source_preference_outcome(
     event_type: str,
 ) -> tuple[float, float, bool] | None:
-    """Map verified material feedback to one source-level learning outcome."""
+    """Map explicit source feedback and Music behavior to bounded evidence."""
     outcomes = {
         "source_interested": (1.0, 0.0, True),
         "source_not_interested": (0.0, 1.0, True),
-        "source_fatigue": (0.0, 0.5, False),
-        "candidate_not_interested": (0.0, 0.25, False),
+        "source_fatigue": (0.0, 0.5, True),
+        "candidate_not_interested": (0.0, 0.25, True),
         "source_disabled_after": (0.0, 1.0, True),
-        "music_played_through": (1.0, 0.0, False),
-        "music_high_completion": (1.0, 0.0, False),
-        "music_mid_completion": (0.5, 0.0, False),
-        "music_early_close": (0.0, 1.0, False),
+        "music_played_through": (0.2, 0.0, False),
+        "music_high_completion": (0.2, 0.0, False),
+        "music_mid_completion": (0.1, 0.0, False),
+        "music_early_close": (0.0, 0.5, False),
         "music_hard_skip": (0.0, 1.0, False),
     }
     return outcomes.get(event_type)

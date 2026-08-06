@@ -11,7 +11,6 @@ from typing import Any
 from main_logic.proactive_recommendation.state.source_preferences import (
     PREFERENCE_BETA_PRIOR_ALPHA,
     PREFERENCE_BETA_PRIOR_BETA,
-    PREFERENCE_HALF_LIFE_SECONDS,
 )
 from main_logic.proactive_recommendation.normalization import (
     clamp_to_range,
@@ -33,6 +32,7 @@ BANDIT_STATE_VERSION = "recommendation_bandit_state_v2"
 BANDIT_STATE_FILENAME = "proactive_recommendation_bandit_state_v2.json"
 LEGACY_BANDIT_STATE_FILENAME = "proactive_recommendation_bandit_state_v1.json"
 BANDIT_REWARD_CONTRACT_VERSION = "bandit_encounter_reward_v3"
+BANDIT_HALF_LIFE_SECONDS = 30 * 24 * 60 * 60
 BANDIT_RECENT_OUTCOME_LIMIT = 2000
 
 def get_recommendation_bandit_state(
@@ -91,7 +91,7 @@ def update_recommendation_bandit_reward(
         apply_decay_to_evidence_bucket(
             bucket,
             state_now,
-            half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+            half_life_seconds=BANDIT_HALF_LIFE_SECONDS,
         )
         if isinstance(previous, Mapping):
             recorded_at = max(0.0, coerce_finite_float(previous.get("recorded_at")))
@@ -99,7 +99,7 @@ def update_recommendation_bandit_reward(
                 calculate_half_life_decay_factor(
                     recorded_at,
                     state_now,
-                    half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+                    half_life_seconds=BANDIT_HALF_LIFE_SECONDS,
                 )
                 if recorded_at
                 else 1.0
@@ -176,7 +176,7 @@ def _build_bandit_posterior_snapshot(state: Mapping[str, Any], now: float) -> di
             apply_decay_to_evidence_bucket(
                 bucket,
                 now,
-                half_life_seconds=PREFERENCE_HALF_LIFE_SECONDS,
+                half_life_seconds=BANDIT_HALF_LIFE_SECONDS,
             )
             success = coerce_bounded_evidence_weight(bucket.get("effective_success"))
             failure = coerce_bounded_evidence_weight(bucket.get("effective_failure"))
@@ -195,7 +195,7 @@ def _build_bandit_posterior_snapshot(state: Mapping[str, Any], now: float) -> di
     return {
         "version": BANDIT_STATE_VERSION,
         "reward_contract_version": BANDIT_REWARD_CONTRACT_VERSION,
-        "half_life_seconds": PREFERENCE_HALF_LIFE_SECONDS,
+        "half_life_seconds": BANDIT_HALF_LIFE_SECONDS,
         "beta_prior": {
             "alpha": PREFERENCE_BETA_PRIOR_ALPHA,
             "beta": PREFERENCE_BETA_PRIOR_BETA,

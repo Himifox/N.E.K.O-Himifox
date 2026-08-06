@@ -379,6 +379,17 @@ def sanitize_recommendation_preference_state(value: Any) -> dict[str, Any]:
         if not source or not isinstance(raw_bucket, Mapping):
             continue
         sources[source] = {
+            "explicit_evidence": _sanitize_preference_evidence(
+                raw_bucket.get("explicit_evidence")
+            ),
+            "resource_behavior_evidence": _sanitize_preference_evidence(
+                raw_bucket.get("resource_behavior_evidence")
+            ),
+            "selected_signal_basis": (
+                str(raw_bucket.get("selected_signal_basis") or "none")
+                .strip()
+                .lower()[:32]
+            ),
             "effective_success": _bounded_optional_number(
                 raw_bucket.get("effective_success"), lower=0.0, upper=1_000_000.0
             ),
@@ -415,6 +426,10 @@ def sanitize_recommendation_preference_state(value: Any) -> dict[str, Any]:
     )
     return {
         "version": "recommendation_preference_state_v1",
+        "preference_score_contract": str(
+            value.get("preference_score_contract") or ""
+        ).strip()[:64]
+        or None,
         "half_life_seconds": _bounded_nonnegative_int(value.get("half_life_seconds")),
         "beta_prior": {
             "alpha": _bounded_optional_number(
@@ -428,13 +443,41 @@ def sanitize_recommendation_preference_state(value: Any) -> dict[str, Any]:
         "saturation_evidence": _bounded_optional_number(
             value.get("saturation_evidence"), lower=0.0, upper=1000.0
         ),
+        "resource_behavior_saturation_evidence": _bounded_optional_number(
+            value.get("resource_behavior_saturation_evidence"),
+            lower=0.0,
+            upper=1000.0,
+        ),
+        "delta_per_evidence": _bounded_optional_number(
+            value.get("delta_per_evidence"), lower=0.0, upper=0.03
+        ),
         "max_abs_delta": _bounded_optional_number(
             value.get("max_abs_delta"), lower=0.0, upper=0.03
+        ),
+        "resource_behavior_max_abs_delta": _bounded_optional_number(
+            value.get("resource_behavior_max_abs_delta"),
+            lower=0.0,
+            upper=0.03,
         ),
         "legacy_replacement_approximation_count": _bounded_nonnegative_int(
             value.get("legacy_replacement_approximation_count")
         ),
         "sources": sources,
+    }
+
+
+def _sanitize_preference_evidence(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    return {
+        "effective_success": _bounded_optional_number(
+            source.get("effective_success"), lower=0.0, upper=1_000_000.0
+        ),
+        "effective_failure": _bounded_optional_number(
+            source.get("effective_failure"), lower=0.0, upper=1_000_000.0
+        ),
+        "effective_evidence": _bounded_optional_number(
+            source.get("effective_evidence"), lower=0.0, upper=1_000_000.0
+        ),
     }
 
 

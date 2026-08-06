@@ -754,6 +754,7 @@ def record_feedback_event_with_status(
                         success=outcome[0],
                         failure=outcome[1],
                         explicit=outcome[2] or direct_named_source_feedback,
+                        event_type=event_type,
                         outcome_strength=max(outcome[0], outcome[1]),
                         now=coerce_float_or_default(
                             event.get("ts"), default=time.time()

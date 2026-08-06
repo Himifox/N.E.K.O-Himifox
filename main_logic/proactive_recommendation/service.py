@@ -950,6 +950,10 @@ class RecommendationService:
                 config_dir=config_dir,
                 now=current_time,
             ),
+            "source_preference": get_recommendation_preference_state(
+                config_dir=config_dir,
+                now=current_time,
+            ),
             "manual_tuning_preview": feedback_calibration.get(
                 "manual_tuning_preview", {}
             ),

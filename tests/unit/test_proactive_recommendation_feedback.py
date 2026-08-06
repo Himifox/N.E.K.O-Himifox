@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 import main_logic.proactive_recommendation.feedback.service as feedback_module
 import main_logic.proactive_recommendation.feedback.learning as learning_module
 import main_logic.proactive_recommendation.feedback.analytics as availability_module
@@ -1307,7 +1309,7 @@ def test_non_music_text_feedback_uses_shared_negative_gradient(tmp_path):
 
         assert event["event_type"] == event_type
         assert event["report_score_v1"] == score
-        assert preference["effective_failure"] == failure
+        assert preference["effective_failure"] == pytest.approx(failure, abs=1e-6)
 
 
 def test_text_feedback_fuzzy_matches_source_alias_but_not_polarity(tmp_path):
@@ -1421,7 +1423,7 @@ def test_named_source_feedback_rebinds_recent_verified_pending(tmp_path):
     assert event["turn_id"] == "older-meme"
     assert event["candidate_id"] == "meme:verified"
     assert event["event_type"] == "candidate_not_interested"
-    assert source["effective_failure"] == 0.25
+    assert source["effective_failure"] == pytest.approx(0.25, abs=2e-6)
     assert followup["turn_id"] == "newer-chat"
     assert followup["event_type"] == "user_continue"
 
@@ -1504,7 +1506,9 @@ def test_named_source_feedback_without_candidate_updates_preference_not_bandit(t
         ["negative_evidence_count"]
         == 1
     )
-    assert preference["sources"]["news"]["effective_failure"] == 1.0
+    assert preference["sources"]["news"]["effective_failure"] == pytest.approx(
+        1.0, abs=2e-6
+    )
     assert bandit["arms"] == {}
     assert bandit["finalized_outcome_count"] == 0
     assert "不喜欢这个新闻" not in json.dumps(rows, ensure_ascii=False)
@@ -1613,7 +1617,9 @@ def test_direct_named_source_feedback_deduplicates_same_turn(tmp_path):
         now=121.0,
     )
     assert first["event_type"] == second["event_type"] == "source_not_interested"
-    assert preference["sources"]["news"]["effective_failure"] == 1.0
+    assert preference["sources"]["news"]["effective_failure"] == pytest.approx(
+        1.0, abs=2e-6
+    )
 
 
 def test_stronger_direct_named_source_feedback_replaces_same_turn_outcome(tmp_path):

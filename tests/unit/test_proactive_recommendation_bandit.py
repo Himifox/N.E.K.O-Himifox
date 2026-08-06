@@ -39,6 +39,9 @@ from main_logic.proactive_recommendation.observation.validation import (
     sanitize_recommendation_policy_decision,
 )
 from main_logic.proactive_recommendation.state.source_preferences import (
+    PREFERENCE_HALF_LIFE_SECONDS,
+    PREFERENCE_SCORE_CONTRACT,
+    PREFERENCE_STATE_FILENAME,
     get_recommendation_preference_state,
     preference_adjustments,
     reset_recommendation_preference_state,
@@ -483,7 +486,7 @@ def test_preference_state_deduplicates_and_explicit_feedback_wins(tmp_path):
             explicit=False,
             now=100 + index,
         )
-    assert preference_adjustments(state)["music"] == pytest.approx(0.0075)
+    assert preference_adjustments(state)["music"] == pytest.approx(0.01)
 
     duplicate = update_recommendation_source_preference(
         config_dir=tmp_path,
@@ -494,7 +497,9 @@ def test_preference_state_deduplicates_and_explicit_feedback_wins(tmp_path):
         explicit=False,
         now=104,
     )
-    assert duplicate["sources"]["music"]["effective_evidence"] == pytest.approx(3.0)
+    assert duplicate["sources"]["music"]["effective_evidence"] == pytest.approx(
+        3.0, abs=2e-5
+    )
 
     corrected = update_recommendation_source_preference(
         config_dir=tmp_path,
@@ -505,11 +510,12 @@ def test_preference_state_deduplicates_and_explicit_feedback_wins(tmp_path):
         explicit=True,
         now=105,
     )
-    assert corrected["sources"]["music"]["effective_success"] == pytest.approx(
-        2.0, abs=1e-5
-    )
+    assert corrected["sources"]["music"]["effective_success"] == 0.0
     assert corrected["sources"]["music"]["effective_failure"] == pytest.approx(
         1.0, abs=1e-5
+    )
+    assert corrected["sources"]["music"]["selected_signal_basis"] == (
+        "explicit_source"
     )
 
 
@@ -717,7 +723,7 @@ def test_v4_shadow_reward_binds_actual_arm_and_excludes_technical_zero(tmp_path)
 
 
 def test_explicit_override_removes_decayed_natural_contribution(tmp_path):
-    half_life = 30 * 24 * 60 * 60
+    half_life = PREFERENCE_HALF_LIFE_SECONDS
     update_recommendation_source_preference(
         config_dir=tmp_path,
         turn_id="turn-1",
@@ -781,7 +787,7 @@ def test_preference_state_decays_and_can_be_reset(tmp_path):
     )
     decayed = get_recommendation_preference_state(
         config_dir=tmp_path,
-        now=100 + 30 * 24 * 60 * 60,
+        now=100 + PREFERENCE_HALF_LIFE_SECONDS,
     )
     assert decayed["sources"]["news"]["effective_success"] == pytest.approx(0.5)
     assert reset_recommendation_preference_state(config_dir=tmp_path) is True
@@ -793,10 +799,134 @@ def test_preference_state_decays_and_can_be_reset(tmp_path):
     [
         ("source_interested", (1.0, 0.0, True)),
         ("source_not_interested", (0.0, 1.0, True)),
-        ("music_played_through", (1.0, 0.0, False)),
+        ("source_fatigue", (0.0, 0.5, True)),
+        ("candidate_not_interested", (0.0, 0.25, True)),
+        ("music_played_through", (0.2, 0.0, False)),
+        ("music_mid_completion", (0.1, 0.0, False)),
+        ("music_early_close", (0.0, 0.5, False)),
         ("music_hard_skip", (0.0, 1.0, False)),
         ("music_error", None),
     ],
 )
 def test_source_reward_contract(event_type, expected):
     assert source_preference_outcome(event_type) == expected
+
+
+def test_explicit_source_feedback_is_immediate_and_uses_seven_day_decay(tmp_path):
+    initial = update_recommendation_source_preference(
+        config_dir=tmp_path,
+        turn_id="news-positive",
+        source_type="news",
+        success=1.0,
+        failure=0.0,
+        explicit=True,
+        event_type="source_interested",
+        now=100.0,
+    )
+    seven_days = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=100.0 + PREFERENCE_HALF_LIFE_SECONDS,
+    )
+    fourteen_days = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=100.0 + 2 * PREFERENCE_HALF_LIFE_SECONDS,
+    )
+    twenty_one_days = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=100.0 + 3 * PREFERENCE_HALF_LIFE_SECONDS,
+    )
+
+    assert initial["preference_score_contract"] == PREFERENCE_SCORE_CONTRACT
+    assert initial["half_life_seconds"] == 7 * 24 * 60 * 60
+    assert initial["sources"]["news"]["personalization_delta"] == 0.005
+    assert seven_days["sources"]["news"]["effective_success"] == 0.5
+    assert seven_days["sources"]["news"]["personalization_delta"] == 0.0025
+    assert fourteen_days["sources"]["news"]["effective_success"] == 0.25
+    assert fourteen_days["sources"]["news"]["personalization_delta"] == 0.00125
+    assert twenty_one_days["sources"]["news"]["selected_signal_basis"] == (
+        "explicit_source"
+    )
+    assert twenty_one_days["sources"]["news"]["personalization_delta"] == 0.000625
+
+
+def test_music_behavior_is_capped_and_explicit_feedback_takes_priority(tmp_path):
+    for index in range(60):
+        state = update_recommendation_source_preference(
+            config_dir=tmp_path,
+            turn_id=f"music-played-{index}",
+            source_type="music",
+            success=0.2,
+            failure=0.0,
+            explicit=False,
+            event_type="music_played_through",
+            now=100.0,
+        )
+
+    assert state["sources"]["music"]["selected_signal_basis"] == (
+        "resource_behavior"
+    )
+    assert state["sources"]["music"]["personalization_delta"] == 0.01
+
+    explicit = update_recommendation_source_preference(
+        config_dir=tmp_path,
+        turn_id="less-music",
+        source_type="music",
+        success=0.0,
+        failure=1.0,
+        explicit=True,
+        event_type="source_not_interested",
+        now=101.0,
+    )
+    music = explicit["sources"]["music"]
+    assert music["selected_signal_basis"] == "explicit_source"
+    assert music["personalization_delta"] == pytest.approx(-0.005, abs=1e-6)
+    assert music["resource_behavior_evidence"]["effective_evidence"] == pytest.approx(
+        12.0, abs=1e-4
+    )
+
+
+def test_legacy_outcomes_are_reweighted_without_rewriting_source_file(tmp_path):
+    state_path = tmp_path / PREFERENCE_STATE_FILENAME
+    raw = json.dumps(
+        {
+            "version": "recommendation_preference_state_v1",
+            "sources": {
+                "music": {
+                    "effective_success": 50.0,
+                    "effective_failure": 0.0,
+                    "updated_at": 100.0,
+                }
+            },
+            "recent_source_outcomes": {
+                "music-turn|music": {
+                    "turn_id": "music-turn",
+                    "source_type": "music",
+                    "success": 1.0,
+                    "failure": 0.0,
+                    "priority": 1,
+                    "recorded_at": 100.0,
+                },
+                "meme-turn|meme": {
+                    "turn_id": "meme-turn",
+                    "source_type": "meme",
+                    "success": 0.0,
+                    "failure": 1.0,
+                    "priority": 2,
+                    "recorded_at": 100.0,
+                },
+            },
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    state_path.write_bytes(raw)
+
+    migrated = get_recommendation_preference_state(
+        config_dir=tmp_path,
+        now=100.0,
+    )
+
+    assert migrated["migration"]["legacy_outcome_migration_count"] == 2
+    assert migrated["migration"]["legacy_aggregate_ignored"] is True
+    assert migrated["sources"]["music"]["personalization_delta"] == 0.001
+    assert migrated["sources"]["meme"]["personalization_delta"] == -0.005
+    assert state_path.read_bytes() == raw
