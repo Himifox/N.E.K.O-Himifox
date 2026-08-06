@@ -24,6 +24,7 @@ from config import (
     MEMORY_SERVER_PORT,
     MINI_GAME_INVITE_ENABLED,
     MINI_GAME_INVITE_FORCE_GAME_TYPE,
+    PROACTIVE_PREFERENCE_DEMO_ENABLED,
     PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
     PROACTIVE_EXTERNAL_TOTAL_MAX_TOKENS,
     PROACTIVE_PHASE1_FETCH_PER_SOURCE,
@@ -86,6 +87,7 @@ from main_logic.proactive_chat.delivery import (
 from main_logic.proactive_chat.candidate_selection import (
     _format_phase1_link_candidate,
     _phase1_linkless_modes,
+    _preference_weighted_phase1_links,
     _round_robin_phase1_links,
 )
 from main_logic.proactive_chat.generation import (
@@ -111,6 +113,12 @@ from main_logic.proactive_chat.music_recommendation import (
     _build_music_dynamic_context,
     _build_music_playing_hint,
     _select_music_recommendation,
+)
+from main_logic.proactive_chat.preference_recommendation import (
+    format_preference_summary,
+    get_preference_scores,
+    update_preference_profile,
+    validate_preference_events,
 )
 from main_logic.proactive_chat.state import (
     _enter_proactive_phase2,
@@ -1299,6 +1307,11 @@ async def handle_proactive_chat(
             return history_part, inner_thoughts_part
 
         memory_context, inner_thoughts = _parse_new_dialog(raw_memory_context)
+        preference_scores = (
+            get_preference_scores(lanlan_name)
+            if PROACTIVE_PREFERENCE_DEMO_ENABLED
+            else {}
+        )
 
         # Phase 1 preempt check：memory_server new_dialog 是 phase1 里首次大 await
         # （httpx timeout 5s）。用户在这期间打断只能等超时才有下一次 check，
@@ -1516,6 +1529,7 @@ async def handle_proactive_chat(
             enabled_modes,
             sources,
             has_reminiscence=bool(_surfaced_reflection_ids),
+            preference_scores=preference_scores,
         )
         if source_weight_selection.weights:
             source_weights = source_weight_selection.weights
@@ -1550,14 +1564,26 @@ async def handle_proactive_chat(
 
             parts = []
             fallback_modes = _phase1_linkless_modes(web_modes, sources)
-            selected_by_mode = _round_robin_phase1_links(
-                web_modes,
-                sources,
-                total=max(
-                    0, _PHASE1_TOTAL_TOPIC_TARGET - len(fallback_modes)
-                ),
+            topic_target = (
+                min(10, _PHASE1_TOTAL_TOPIC_TARGET)
+                if PROACTIVE_PREFERENCE_DEMO_ENABLED
+                else _PHASE1_TOTAL_TOPIC_TARGET
             )
-            remaining_total = _PHASE1_TOTAL_TOPIC_TARGET - sum(
+            selection_total = max(0, topic_target - len(fallback_modes))
+            if PROACTIVE_PREFERENCE_DEMO_ENABLED:
+                selected_by_mode = _preference_weighted_phase1_links(
+                    web_modes,
+                    sources,
+                    total=selection_total,
+                    preference_scores=preference_scores,
+                )
+            else:
+                selected_by_mode = _round_robin_phase1_links(
+                    web_modes,
+                    sources,
+                    total=selection_total,
+                )
+            remaining_total = topic_target - sum(
                 len(items) for items in selected_by_mode.values()
             )
             remaining_fallback_modes = len(fallback_modes)
@@ -1648,7 +1674,27 @@ async def handle_proactive_chat(
             has_music_task=has_music_task,
             has_meme_task=has_meme_task,
             log=logger,
+            preference_enabled=PROACTIVE_PREFERENCE_DEMO_ENABLED,
+            preference_summary=format_preference_summary(preference_scores),
         )
+
+        if PROACTIVE_PREFERENCE_DEMO_ENABLED:
+            preference_events = validate_preference_events(
+                unified_parsed.get("preference_events"),
+                memory_context=memory_context,
+                master_name=master_name_current,
+            )
+            added_events = update_preference_profile(
+                lanlan_name, preference_events
+            )
+            logger.debug(
+                "[%s] preference demo: parsed=%d accepted=%d added=%d profile_tags=%d",
+                lanlan_name,
+                len(unified_parsed.get("preference_events", [])),
+                len(preference_events),
+                added_events,
+                len(preference_scores),
+            )
 
         # ============================================================
         # 解析 web 结果 → 链接匹配 → 去重

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .decisions import _should_skip_source
+from .preference_recommendation import select_preference_candidates
 from .state import _source_hash
 
 
@@ -88,4 +89,51 @@ def _round_robin_phase1_links(
                 break
         if not made_progress:
             break
+    return selected
+
+
+def _preference_weighted_phase1_links(
+    modes: list[str],
+    sources: dict[str, Any],
+    *,
+    total: int,
+    preference_scores: dict[str, float],
+) -> dict[str, list[dict[str, Any]]]:
+    """Collect fair source lanes, then preference-sample the shared budget."""
+
+    selected = {mode: [] for mode in modes}
+    positions = {mode: 0 for mode in modes}
+    links_by_mode = {
+        mode: list((sources.get(mode) or {}).get("links", []) or [])
+        for mode in modes
+    }
+    ordered: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    while True:
+        made_progress = False
+        for mode in modes:
+            links = links_by_mode[mode]
+            while positions[mode] < len(links):
+                link = dict(links[positions[mode]])
+                positions[mode] += 1
+                key = _source_hash(link.get("url", ""), link.get("title", ""))
+                if key and (key in seen_keys or _should_skip_source(key)):
+                    continue
+                if key:
+                    seen_keys.add(key)
+                link.setdefault("mode", mode)
+                ordered.append(link)
+                made_progress = True
+                break
+        if not made_progress:
+            break
+
+    for link in select_preference_candidates(
+        ordered,
+        preference_scores,
+        total=max(0, total),
+    ):
+        mode = str(link.get("mode", ""))
+        if mode in selected:
+            selected[mode].append(link)
     return selected

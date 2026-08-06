@@ -37,6 +37,7 @@ from .contracts import (
     _proactive_error_body,
     _proactive_pass_body,
 )
+from .preference_recommendation import blend_source_weights
 from .state import (
     _RECENT_CHAT_MAX_AGE_SECONDS,
     _get_source_history_entry,
@@ -399,6 +400,7 @@ def _select_weighted_sources(
     available_channels: Any,
     *,
     has_reminiscence: bool,
+    preference_scores: dict[str, float] | None = None,
 ) -> SourceWeightSelection:
     """Apply source-history decay without mutating fetched source payloads."""
     candidates = [
@@ -410,10 +412,17 @@ def _select_weighted_sources(
         candidates.append("reminiscence")
     if not candidates:
         return SourceWeightSelection(weights={}, suppressed=set())
-    weights = _compute_source_weights(lanlan_name, candidates)
+    base_weights = _compute_source_weights(lanlan_name, candidates)
+    suppressed = _filter_sources_by_weight(base_weights)
+    weights = base_weights
+    if preference_scores:
+        weights = blend_source_weights(weights, preference_scores)
     return SourceWeightSelection(
         weights=weights,
-        suppressed=_filter_sources_by_weight(weights),
+        # Preference changes probabilities, never the hard suppression set.
+        # Existing recency decay keeps its old authority, while the 15%
+        # exploration share cannot be accidentally collapsed back to zero.
+        suppressed=suppressed,
     )
 
 

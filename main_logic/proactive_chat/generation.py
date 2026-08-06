@@ -16,8 +16,10 @@
 """Parsers and output guards for proactive Phase 1/2 generation."""
 
 import asyncio
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from functools import partial
 from itertools import zip_longest
@@ -81,6 +83,15 @@ logger = get_module_logger(__name__, "Main")
 
 
 _PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
+
+
+def _redact_preference_section_for_log(text: str) -> str:
+    """Keep evidence excerpts out of the existing raw Phase 1 debug logs."""
+
+    marker = re.search(r"(?im)^\s*\[PREFERENCE\]", text or "")
+    if marker is None:
+        return text
+    return text[: marker.start()].rstrip() + "\n[PREFERENCE] <redacted>"
 
 
 def _proactive_silence_since(mgr: Any) -> float | None:
@@ -265,9 +276,12 @@ async def _llm_call_with_retry(
                     llm.ainvoke(messages),
                     timeout=timeout,
                 )
+                debug_content = str(response.content)
+                if label == "unified_phase1":
+                    debug_content = _redact_preference_section_for_log(debug_content)
                 print(
                     f"\n[PROACTIVE-DEBUG] LLM output [{label}]: "
-                    f"{response.content[:500]}...\n"
+                    f"{debug_content[:500]}...\n"
                 )
                 return response.content.strip()
         except _proactive_llm_retry_error_types() as exc:
@@ -337,6 +351,8 @@ async def _run_unified_phase1(
     has_music_task: bool,
     has_meme_task: bool,
     log: logging.Logger | None = None,
+    preference_enabled: bool = False,
+    preference_summary: str = "",
 ) -> dict[str, Any]:
     """Build, call, and parse the unified Phase 1 model request."""
     active_logger = log or logger
@@ -344,6 +360,7 @@ async def _run_unified_phase1(
         "web": None,
         "music_keyword": None,
         "meme_keyword": None,
+        "preference_events": [],
     }
     has_web_task = bool(merged_web_content)
     if not (has_web_task or has_music_task or has_meme_task):
@@ -364,7 +381,10 @@ async def _run_unified_phase1(
             meme_enabled=has_meme_task,
             lanlan_name=lanlan_name,
             master_name=master_name,
+            preference_enabled=preference_enabled,
+            preference_summary=preference_summary,
         )
+        call_started = time.perf_counter()
         result_text = await _llm_call_with_retry(
             model_config=model_config,
             proactive_lang=proactive_lang,
@@ -373,13 +393,25 @@ async def _run_unified_phase1(
             label="unified_phase1",
             log=active_logger,
         )
-        print(f"[{lanlan_name}] Phase 1 合并 LLM 结果: {result_text[:500]}")
+        elapsed_ms = (time.perf_counter() - call_started) * 1000.0
+        active_logger.debug(
+            "[%s] Phase 1 metrics: input_tokens=%d output_tokens=%d "
+            "elapsed_ms=%.1f preference_demo=%s",
+            lanlan_name,
+            count_tokens(prompt),
+            count_tokens(result_text),
+            elapsed_ms,
+            preference_enabled,
+        )
+        log_text = _redact_preference_section_for_log(result_text)
+        print(f"[{lanlan_name}] Phase 1 合并 LLM 结果: {log_text[:500]}")
         parsed = _parse_unified_phase1_result(result_text)
         active_logger.debug(
             f"[{lanlan_name}] Phase 1 解析: "
             f"web={'有' if parsed.get('web') else '无'}, "
             f"music_kw={parsed.get('music_keyword', 'N/A')}, "
-            f"meme_kw={parsed.get('meme_keyword', 'N/A')}"
+            f"meme_kw={parsed.get('meme_keyword', 'N/A')}, "
+            f"preference_events={len(parsed.get('preference_events', []))}"
         )
         return parsed
     except Exception as exc:
@@ -1618,6 +1650,7 @@ def _parse_unified_phase1_result(text: str) -> dict:
             'web_pass': bool,               # True means this channel explicitly passed
             'music_pass': bool,
             'meme_pass': bool,
+            'preference_events': list[dict],
         }
     """
     result: dict = {
@@ -1627,9 +1660,10 @@ def _parse_unified_phase1_result(text: str) -> dict:
         'web_pass': False,
         'music_pass': False,
         'meme_pass': False,
+        'preference_events': [],
     }
 
-    # 按 [WEB] / [MUSIC] / [MEME] 分段
+    # 按 [WEB] / [MUSIC] / [MEME] / [PREFERENCE] 分段
     # 使用正则切分，保留标签
     sections: dict[str, str] = {}
     current_tag = None
@@ -1657,6 +1691,12 @@ def _parse_unified_phase1_result(text: str) -> dict:
                 sections[current_tag] = '\n'.join(current_lines)
             current_tag = 'meme'
             remainder = stripped[6:].strip()
+            current_lines = [remainder] if remainder else []
+        elif upper.startswith('[PREFERENCE]'):
+            if current_tag:
+                sections[current_tag] = '\n'.join(current_lines)
+            current_tag = 'preference'
+            remainder = stripped[12:].strip()
             current_lines = [remainder] if remainder else []
         else:
             current_lines.append(line)
@@ -1716,6 +1756,17 @@ def _parse_unified_phase1_result(text: str) -> dict:
             keyword = keyword.splitlines()[0].strip() if keyword else ''
             if keyword and not re.fullmatch(r'\[?\s*pass\s*\]?', keyword, re.IGNORECASE):
                 result['meme_keyword'] = keyword
+
+    # --- 解析 preference 段 ---
+    preference_text = sections.get('preference', '').strip()
+    if preference_text:
+        cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', preference_text, flags=re.I)
+        try:
+            payload = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+        if isinstance(payload, list):
+            result['preference_events'] = payload
 
     return result
 

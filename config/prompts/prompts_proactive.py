@@ -3059,6 +3059,100 @@ Responda estritamente no formato abaixo. Cada tarefa começa com sua tag. Respon
 }
 
 
+_UNIFIED_P1_PREFERENCE_PROFILE = {
+    "zh": """\n======当前推荐画像======\n{summary}\n以上画像只用于本轮选材，不能作为新的偏好证据。\n""",
+    "zh-TW": """\n======目前推薦畫像======\n{summary}\n以上畫像只用於本輪選材，不能當作新的偏好證據。\n""",
+    "en": """\n======Current Recommendation Profile======\n{summary}\nUse this profile only to choose material. It is not evidence for a new preference event.\n""",
+    "ja": """\n======現在の推薦プロファイル======\n{summary}\nこのプロファイルは素材選択にのみ使用し、新しい嗜好イベントの根拠にしないでください。\n""",
+    "ko": """\n======현재 추천 프로필======\n{summary}\n이 프로필은 소재 선택에만 사용하며 새 선호 이벤트의 근거로 삼지 마세요.\n""",
+    "ru": """\n======Текущий профиль рекомендаций======\n{summary}\nИспользуйте профиль только для выбора материала, но не как доказательство нового предпочтения.\n""",
+    "es": """\n======Perfil de recomendación actual======\n{summary}\nUsa este perfil solo para elegir material; no sirve como evidencia de una preferencia nueva.\n""",
+    "pt": """\n======Perfil de recomendação atual======\n{summary}\nUse este perfil apenas para escolher material; ele não é evidência de uma nova preferência.\n""",
+}
+
+_UNIFIED_P1_PREFERENCE_SECTION = {
+    "zh": """
+======任务: 偏好事件======
+从对话历史中提取可能影响下一轮媒体推荐的用户偏好。只允许使用“{master_name} | ...”用户行中的原话作为证据，绝不能使用角色回复、当前推荐画像或主动搭话记录。
+
+固定值：
+- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
+- media: news, video, music, meme
+- context: focus, relax, energy, sleep
+- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
+
+规则：最多3条；只是提及不能视为喜欢；弱推测和 context 只能是 session；只有明确喜欢/不喜欢可以是 long_term；evidence 必须复制一段4到60字的用户原话。没有可靠证据就返回空数组。
+""",
+    "zh-TW": """
+======任務: 偏好事件======
+從對話紀錄擷取可能影響下一輪媒體推薦的使用者偏好。只能使用「{master_name} | ...」使用者行裡的原話作為證據，不能使用角色回覆、目前推薦畫像或主動搭話紀錄。
+
+固定值：
+- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
+- media: news, video, music, meme
+- context: focus, relax, energy, sleep
+- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
+
+規則：最多3筆；只提到不能當作喜歡；弱推測與 context 只能是 session；只有明確喜歡／不喜歡可用 long_term；evidence 必須複製4到60字的使用者原話。沒有可靠證據就回傳空陣列。
+""",
+    "en": """
+======Task: Preference Events======
+Extract user preferences that may affect the next media recommendation. Evidence must be copied only from a “{master_name} | ...” user line. Never use assistant replies, the current recommendation profile, or proactive-chat records as evidence.
+
+Allowed values:
+- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
+- media: news, video, music, meme
+- context: focus, relax, energy, sleep
+- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
+
+Rules: at most 3 events; a mention is not a like; inference and context must be session-scoped; only explicit likes/dislikes may be long_term; evidence must copy 4-60 characters from the user. Return an empty array without reliable evidence.
+""",
+    "ja": """
+======タスク: 嗜好イベント======
+次回のメディア推薦に影響するユーザーの嗜好を抽出してください。根拠は「{master_name} | ...」のユーザー行の原文だけに限定し、キャラクターの返答、現在の推薦プロファイル、能動会話履歴は根拠にしないでください。
+
+許可値：domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life、media=news/video/music/meme、context=focus/relax/energy/sleep、signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention。
+最大3件。言及だけを好みとみなさず、推測と context は session のみ、long_term は明示的な好悪のみ。evidence はユーザー原文の4〜60文字をコピーし、根拠がなければ空配列を返してください。
+""",
+    "ko": """
+======작업: 선호 이벤트======
+다음 미디어 추천에 영향을 줄 사용자 선호를 추출하세요. 근거는 “{master_name} | ...” 사용자 줄의 원문만 사용하며 캐릭터 답변, 현재 추천 프로필, 선제 대화 기록은 사용하지 마세요.
+
+허용값: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life, media=news/video/music/meme, context=focus/relax/energy/sleep, signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
+최대 3개. 단순 언급은 좋아함이 아니며 추론과 context는 session만, long_term은 명시적 호불호만 허용합니다. evidence는 사용자 원문 4~60자를 복사하고 근거가 없으면 빈 배열을 반환하세요.
+""",
+    "ru": """
+======Задача: События предпочтений======
+Извлеките предпочтения пользователя для следующей рекомендации. Доказательство берите только дословно из строки «{master_name} | ...»; ответы персонажа, текущий профиль и историю проактивных сообщений использовать нельзя.
+
+Допустимо: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
+Не более 3 событий. Упоминание не означает симпатию; выводы и context — только session; long_term — только явная симпатия/антипатия. evidence — дословные 4–60 символов пользователя. Без доказательств верните пустой массив.
+""",
+    "es": """
+======Tarea: Eventos de preferencia======
+Extrae preferencias para la próxima recomendación. La evidencia solo puede copiarse de una línea de usuario “{master_name} | ...”; nunca uses respuestas del personaje, el perfil actual ni chats proactivos.
+
+Valores: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
+Máximo 3 eventos. Una mención no implica gusto; inferencias y context solo pueden ser session; long_term solo para gusto/rechazo explícito. evidence copia 4-60 caracteres del usuario. Sin evidencia, devuelve un array vacío.
+""",
+    "pt": """
+======Tarefa: Eventos de preferência======
+Extraia preferências para a próxima recomendação. A evidência só pode ser copiada de uma linha de usuário “{master_name} | ...”; nunca use respostas da personagem, o perfil atual ou chats proativos.
+
+Valores: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
+No máximo 3 eventos. Menção não significa preferência; inferências e context só podem ser session; long_term apenas para gosto/rejeição explícitos. evidence copia 4-60 caracteres do usuário. Sem evidência, retorne um array vazio.
+""",
+}
+
+_UNIFIED_P1_PREFERENCE_FORMAT = {
+    lang: """[PREFERENCE]
+- Return one compact JSON array. Each item has: dimension, value, signal, polarity (-1 or 1), confidence (0-1), scope (session or long_term), evidence.
+- Example: [PREFERENCE] [{"dimension":"domain","value":"tech","signal":"current_intent","polarity":1,"confidence":0.9,"scope":"session","evidence":"AI Agent updates"}]
+- No evidence: [PREFERENCE] []"""
+    for lang in ("zh", "zh-TW", "en", "ja", "ko", "ru", "es", "pt")
+}
+
+
 def build_unified_phase1_prompt(
     lang: str,
     *,
@@ -3069,6 +3163,8 @@ def build_unified_phase1_prompt(
     meme_enabled: bool = False,
     lanlan_name: str = "",
     master_name: str = "",
+    preference_enabled: bool = False,
+    preference_summary: str = "",
 ) -> str:
     """
     Dynamically assemble the merged Phase 1 prompt.
@@ -3084,6 +3180,8 @@ def build_unified_phase1_prompt(
         meme_enabled: whether meme keyword generation is enabled
         lanlan_name: character name (for the music prompt)
         master_name: master name (for the music prompt)
+        preference_enabled: append the optional preference extraction task
+        preference_summary: bounded prior profile used only for material selection
     """
     lang_key = _normalize_prompt_language(lang)
 
@@ -3097,6 +3195,12 @@ def build_unified_phase1_prompt(
             recent_chats_section=recent_chats_section,
         )
     ]
+    if preference_enabled and preference_summary:
+        parts.append(
+            _get(_UNIFIED_P1_PREFERENCE_PROFILE).format(
+                summary=preference_summary
+            )
+        )
 
     # --- 收集启用的 section 和对应格式 ---
     format_parts = []
@@ -3122,6 +3226,12 @@ def build_unified_phase1_prompt(
     if meme_enabled:
         parts.append(_get(_UNIFIED_P1_MEME_SECTION))
         format_parts.append(fmt["meme"])
+
+    if preference_enabled:
+        parts.append(
+            _get(_UNIFIED_P1_PREFERENCE_SECTION).format(master_name=master_name)
+        )
+        format_parts.append(_get(_UNIFIED_P1_PREFERENCE_FORMAT))
 
     # --- 尾部 ---
     if format_parts:

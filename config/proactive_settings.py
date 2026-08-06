@@ -15,6 +15,18 @@
 
 """Mini-game invitation and proactive-source decay settings."""
 
+from .network import _read_bool_env
+
+
+PROACTIVE_PREFERENCE_DEMO_ENABLED = _read_bool_env(
+    "PROACTIVE_PREFERENCE_DEMO_ENABLED", False
+)
+"""Feature gate for the in-memory preference recommendation demo.
+
+The demo reuses the existing unified Phase 1 request.  It never creates an
+extra model request and remains disabled by default.
+"""
+
 MINI_GAME_INVITE_ENABLED = True
 """Mini-game 邀请短路通道总开关（默认开）。
 - 用途：proactive_chat 在过完 propensity / skip_probability / restricted_screen_only
