@@ -3089,7 +3089,7 @@
 
             var preview = doc.createElement('div');
             preview.className = 'chat-export-selection-preview';
-            var previewText = extractBlocksPlainText(message.blocks);
+            var previewText = extractBlocksPlainText(message);
             preview.textContent = previewText.length > 160
                 ? previewText.slice(0, 160) + '…'
                 : previewText;

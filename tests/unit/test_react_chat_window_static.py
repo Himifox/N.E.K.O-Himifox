@@ -2770,6 +2770,13 @@ def test_chat_export_keeps_meme_and_music_as_media():
     assert "if (block.title) parts.push(String(block.title));" in plain_text_block
     assert "if (block.description) parts.push(String(block.description));" in plain_text_block
 
+    selection_list_block = script.split("function renderSelectionList()", 1)[1].split(
+        "function renderControls()",
+        1,
+    )[0]
+    assert "extractBlocksPlainText(message)" in selection_list_block
+    assert "extractBlocksPlainText(message.blocks)" not in selection_list_block
+
     markdown_block = script.split("function blocksToMarkdown(message)", 1)[1].split(
         "function collectImageDescriptors(message)",
         1,
