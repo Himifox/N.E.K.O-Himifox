@@ -3423,7 +3423,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   z-index: 100002;
 }
 
-/* 轮盘展开时按交互优先级分层：可见工具按钮 > 播放器 > 透明圆形命中区。 */
+/* 轮盘展开时按交互优先级分层：可见工具控件 > 播放器 > 透明圆形命中区。 */
 .app-shell[data-compact-tool-layer-open="true"] #music-player-mount.compact-music-player-mount:has(> .music-player-bar:not([hidden])) {
   z-index: 100004;
 }
@@ -5093,7 +5093,7 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   position: absolute;
   left: 0;
   top: calc(var(--compact-tool-wheel-center-y) - 118px);
-  z-index: 14;
+  z-index: 100008;
   display: inline-flex;
   align-items: center;
   gap: 9px;

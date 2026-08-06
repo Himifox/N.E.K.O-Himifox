@@ -7232,6 +7232,9 @@ describe('App', () => {
     expect(compactChatStyles).toMatch(
       /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="0"\]\s*\{\s*z-index:\s*100007;/s,
     );
+    expect(compactChatStyles).toMatch(
+      /\.compact-input-tool-fan \.avatar-tool-quickbar\s*\{[\s\S]*?z-index:\s*100008;/s,
+    );
   });
 
   it('uses dark theme tokens for active compact tool wheel buttons', () => {
