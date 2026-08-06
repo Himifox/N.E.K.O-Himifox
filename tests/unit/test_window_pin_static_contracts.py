@@ -202,6 +202,7 @@ def test_credentials_qr_entry_does_not_reflow_twice_on_platform_switch():
 def test_credentials_mobile_layout_uses_one_vertical_scroll_container():
     template = read_text("templates/cookies_login.html")
 
+    assert "height: 760px" not in template
     assert "(max-width: 900px) and (max-height: 540px)" in template
     assert re.search(
         r"@media \(max-width: 640px\),[\s\S]*?\.tab-content \{"
