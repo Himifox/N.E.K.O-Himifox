@@ -3,7 +3,7 @@
 > 状态：**当前规范（Normative / Single Source of Truth）**
 > 文档与生产实现归属分支：`feat/recommend-MVP`
 > 当前实现分支：`feat/recommend-MVP`（Testbench 分支生产代码副本已于 2026-07-26 追平截点 `3c0626bf`，observation v3 的 Testbench adapter 同步同日完成）
-> 最近更新：2026-07-26
+> 最近更新：2026-08-06
 > 当前阶段：P44-G1 第一部分已完成；Testbench 侧 G1-R1/R2 只读模拟已完成，正式状态 `hold_for_negative_evidence`，`candidate_for_shadow=false`
 
 本文只回答四个当前问题：系统已经具备什么、各组件负责什么、当前允许在哪里使用、当前停止点是什么。历史执行记录和远期研究路线不得覆盖本文的当前结论。
@@ -201,6 +201,18 @@ R1/R2 在 `feat/recommend-testbench` 上完成，证据文档为
 2. R2 解释 R1 的恒定 +0.006（生产 affinity 达证据门槛后固定 0.2），并比较证据置信度渐进曲线；`gradual_12` 仅通过机械门禁（Music 平均分 0.5614→0.5755，触顶 0%），正式状态 `hold_for_negative_evidence`。
 3. 当前来源证据仅 Music 正向 11 / 负向 0，缺人工 outcome 与反事实标签；`candidate_for_shadow` 固定为 false。
 4. 两轮均不修改生产权重、排序、PASS、投递、scheduler 或 tuning，也不沿用为第 7 节的 MVP 变更授权；下一步属于研究 Backlog 的"定向补充真实负向来源证据"，需单独立项。
+
+### 5.7 P45-R3：稀疏来源反馈校准
+
+P45-R3 修复 Music 可自动获得大量播放证据、News/Meme 主要依赖稀疏明确反馈所造成的跨来源偏移，保持候选构建、基础评分、过滤、PASS、调度、投递和 tuning 不变：
+
+1. `source_preference_score_v2` 以逐条 outcome 为唯一计算依据；旧聚合桶仅保留审计，不再参与个性化积分，原始 feedback/observation 日志不删除、不重写。
+2. 明确的来源喜欢、不喜欢、疲劳、关闭来源，以及可验证候选的明确拒绝，归为 `explicit_source`；每一份净有效证据贡献 `0.005`，来源积分限制在 `±0.03`。
+3. Music 播完、高/中完成度、早关和秒关归为 `resource_behavior` 辅助证据；它们使用更低强度，Music 行为积分限制在 `±0.01`，不能仅凭自动播放行为长期压过其他来源。
+4. 来源偏好统一使用 7 天半衰期，使近期明确反馈更快生效，旧偏好逐周减半；Bandit posterior 继续使用独立的 30 天半衰期，P45-R3 不改变 Bandit 决策合同。
+5. 普通回复、继续聊天、没有反馈、技术失败和 inferred ignored 均不形成来源偏好；缺少反馈保持中性。
+6. 同一物理状态文件和 `recommendation_preference_state_v1` 版本继续兼容读取；`preference_score_contract` 升为 v2，并在 Summary 暴露显式证据、资源行为证据、当前采用的信号基础和迁移诊断。
+7. Bandit 保持 Shadow/default-off 边界；本次只校准来源个性化积分，不启用探索、不修改生产权重，也不声称已证明线上推荐效果提升。
 
 ## 6. Testbench 准入原则
 
