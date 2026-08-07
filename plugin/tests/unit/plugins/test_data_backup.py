@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
 import sqlite3
 import stat
+import threading
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from plugin.plugins.data_backup import DataBackupPlugin
 from plugin.plugins.data_backup.backup import BackupEngine, BackupError
 from plugin.plugins.data_backup.schedule import ScheduleState
 
@@ -51,12 +54,19 @@ def test_schedule_success_and_failure_advance_persisted_plan() -> None:
         enabled=True, interval_days=3, groups=["core", "assets"], now=now
     )
 
-    succeeded = schedule.succeeded(now=now + timedelta(days=3))
+    succeeded = schedule.succeeded(
+        now=now + timedelta(days=3), warning="retention cleanup delayed"
+    )
     failed = schedule.failed("disk unavailable", now=now + timedelta(days=3))
 
     assert succeeded.last_run_at == (now + timedelta(days=3)).isoformat()
     assert succeeded.next_run_at == (now + timedelta(days=6)).isoformat()
     assert succeeded.last_error is None
+    assert succeeded.last_warning == "retention cleanup delayed"
+    assert (
+        ScheduleState.from_config(succeeded.to_dict()).last_warning
+        == "retention cleanup delayed"
+    )
     assert failed.last_run_at is None
     assert failed.next_run_at == (now + timedelta(days=4)).isoformat()
     assert failed.last_error == "disk unavailable"
@@ -414,3 +424,99 @@ def test_restore_reports_incomplete_rollback_location(
         engine.restore_snapshot("core", snapshot["id"])
 
     assert list(engine.data_root.glob(".data-backup-old-*/config/value.txt"))
+
+
+@pytest.mark.asyncio
+async def test_directory_switch_waits_for_running_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("value", encoding="utf-8")
+    started = threading.Event()
+    release = threading.Event()
+    original_create = engine.create_snapshot
+
+    def slow_create(group: str, **kwargs):
+        started.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("test did not release snapshot")
+        return original_create(group, **kwargs)
+
+    class Config:
+        async def set(self, *_args, **_kwargs) -> None:
+            return None
+
+    plugin = object.__new__(DataBackupPlugin)
+    plugin._engine = engine
+    plugin._operation_lock = asyncio.Lock()
+    plugin._schedule_lock = threading.RLock()
+    plugin._schedule = ScheduleState()
+    plugin._schedule_running = False
+    plugin.config = Config()
+    plugin.data_path = lambda *parts: tmp_path.joinpath("plugin-data", *parts)
+    monkeypatch.setattr(engine, "create_snapshot", slow_create)
+
+    create_task = asyncio.create_task(plugin.backup_create("core"))
+    assert await asyncio.to_thread(started.wait, 2)
+    new_root = tmp_path / "new-backups"
+    switch_task = asyncio.create_task(plugin.backup_set_directory(str(new_root)))
+    await asyncio.sleep(0.05)
+    try:
+        assert switch_task.done() is False
+        assert plugin._engine is engine
+    finally:
+        release.set()
+
+    await create_task
+    await switch_task
+    assert plugin._engine is not engine
+    assert plugin._engine.backup_root == new_root.resolve(strict=False)
+
+
+@pytest.mark.asyncio
+async def test_scheduled_backup_persists_snapshot_warnings(tmp_path: Path) -> None:
+    class WarningEngine:
+        def create_snapshot(self, group: str) -> dict:
+            return {
+                "id": f"snapshot-{group}",
+                "warnings": ["retention cleanup delayed"],
+            }
+
+    class Config:
+        saved: dict | None = None
+
+        async def set(self, _key: str, value: dict, **_kwargs) -> None:
+            self.saved = value
+
+    plugin = object.__new__(DataBackupPlugin)
+    plugin._engine = WarningEngine()
+    plugin._operation_lock = asyncio.Lock()
+    plugin._schedule_lock = threading.RLock()
+    plugin._schedule_running = False
+    plugin._schedule_revision = 0
+    plugin._schedule = ScheduleState(
+        enabled=True,
+        interval_days=7,
+        groups=("core",),
+        next_run_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+    )
+    plugin.config = Config()
+
+    await plugin.scheduled_backup()
+
+    assert plugin._schedule.last_warning == "retention cleanup delayed"
+    assert plugin.config.saved is not None
+    assert plugin.config.saved["last_warning"] == "retention cleanup delayed"
+
+
+def test_data_backup_ui_surfaces_snapshot_and_schedule_warnings() -> None:
+    plugin_dir = Path(__file__).parents[3] / "plugins" / "data_backup"
+    script = (plugin_dir / "static" / "main.js").read_text(encoding="utf-8")
+    styles = (plugin_dir / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert "schedule.last_warning" in script
+    assert "warningText(snapshot)" in script
+    assert "warningText(result)" in script
+    assert ".notice.warning" in styles

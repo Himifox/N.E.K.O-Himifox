@@ -86,6 +86,7 @@ h2 { margin-bottom: 7px; font-size: 1.2rem; letter-spacing: -.02em; }
 .schedule-copy strong { margin-bottom: 6px; color: var(--accent-strong); }
 .schedule-copy > span { color: var(--muted); font-size: .74rem; line-height: 1.55; }
 .schedule-copy .schedule-error { color: #b43c50; }
+.schedule-copy .schedule-warning { color: #9a6418; }
 .schedule-form { display: grid; gap: 13px; }
 .schedule-toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-muted); padding: 15px 16px; cursor: pointer; transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
 .schedule-toggle:hover { border-color: #cfc7e8; }
@@ -125,6 +126,7 @@ button:disabled { cursor: wait; opacity: .55; transform: none; }
 .notice:not(:empty) { display: block; }
 .notice.error { border-color: #f0c8ce; background: #fff1f3; color: #a6384a; }
 .notice.success { border-color: #bfe5d6; background: #edfaf5; color: #24765a; }
+.notice.warning { border-color: #ead29b; background: #fff8e8; color: #80550e; }
 .snapshot-section { margin-top: 30px; }
 .section-heading { margin-bottom: 13px; }
 .section-heading h2 { margin: 0; }
@@ -198,6 +200,7 @@ dialog[open] { animation: dialog-in .16s ease-out; }
   .chips span { border-color: #40365f; color: #c3b8e8; }
   .notice.error { border-color: #65313a; background: #341e24; color: #ffb9c4; }
   .notice.success { border-color: #295b4b; background: #173229; color: #a9e8d1; }
+  .notice.warning { border-color: #6b542d; background: #302719; color: #f2d18d; }
   .empty { border-color: #403b49; background: rgba(28,26,35,.45); }
   .empty strong { color: #ddd7e5; }
   .schedule-toggle-copy strong, .schedule-field, .schedule-groups legend { color: #ddd7e5; }

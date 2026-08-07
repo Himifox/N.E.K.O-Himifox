@@ -43,6 +43,7 @@ class ScheduleState:
     last_run_at: str | None = None
     next_run_at: str | None = None
     last_error: str | None = None
+    last_warning: str | None = None
 
     @classmethod
     def from_config(
@@ -75,6 +76,9 @@ class ScheduleState:
         error = raw.get("last_error")
         if not isinstance(error, str) or not error:
             error = None
+        warning = raw.get("last_warning")
+        if not isinstance(warning, str) or not warning:
+            warning = None
         if enabled and next_run is None:
             next_run = _as_utc(now) + timedelta(days=interval)
         return cls(
@@ -84,6 +88,7 @@ class ScheduleState:
             last_run_at=_time_text(last_run) if last_run else None,
             next_run_at=_time_text(next_run) if next_run else None,
             last_error=error,
+            last_warning=warning,
         )
 
     def reconfigured(
@@ -116,7 +121,9 @@ class ScheduleState:
         next_run = _parse_time(self.next_run_at)
         return self.enabled and next_run is not None and _as_utc(now) >= next_run
 
-    def succeeded(self, *, now: datetime | None = None) -> ScheduleState:
+    def succeeded(
+        self, *, now: datetime | None = None, warning: str | None = None
+    ) -> ScheduleState:
         completed = _as_utc(now)
         return ScheduleState(
             enabled=self.enabled,
@@ -124,6 +131,7 @@ class ScheduleState:
             groups=self.groups,
             last_run_at=_time_text(completed),
             next_run_at=_time_text(completed + timedelta(days=self.interval_days)),
+            last_warning=warning[:500] if warning else None,
         )
 
     def failed(self, error: str, *, now: datetime | None = None) -> ScheduleState:
@@ -145,6 +153,7 @@ class ScheduleState:
             "last_run_at": self.last_run_at,
             "next_run_at": self.next_run_at,
             "last_error": self.last_error,
+            "last_warning": self.last_warning,
         }
         if running is not None:
             result["running"] = running

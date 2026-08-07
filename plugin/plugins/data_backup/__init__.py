@@ -31,6 +31,7 @@ class DataBackupPlugin(NekoPluginBase):
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
         self._engine: BackupEngine | None = None
+        self._operation_lock = asyncio.Lock()
         self._schedule = ScheduleState()
         self._schedule_lock = threading.RLock()
         self._schedule_running = False
@@ -79,7 +80,8 @@ class DataBackupPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_):
-        self._engine = None
+        async with self._operation_lock:
+            self._engine = None
         return Ok({"status": "stopped"})
 
     def _backup(self) -> BackupEngine:
@@ -114,7 +116,8 @@ class DataBackupPlugin(NekoPluginBase):
     )
     async def backup_status(self, **_):
         try:
-            return Ok(await asyncio.to_thread(self._status))
+            async with self._operation_lock:
+                return Ok(await asyncio.to_thread(self._status))
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 
@@ -133,17 +136,18 @@ class DataBackupPlugin(NekoPluginBase):
     async def backup_set_directory(self, directory: str, **_):
         default = self.data_path("snapshots").resolve(strict=False)
         try:
-            backup_root = self._resolve_backup_root(directory, default)
-            engine = await asyncio.to_thread(
-                BackupEngine, self._backup().data_root, backup_root
-            )
-            await self.config.set(
-                "backup.directory",
-                "" if not directory.strip() else str(engine.backup_root),
-                timeout=5.0,
-            )
-            self._engine = engine
-            return Ok(self._status())
+            async with self._operation_lock:
+                backup_root = self._resolve_backup_root(directory, default)
+                engine = await asyncio.to_thread(
+                    BackupEngine, self._backup().data_root, backup_root
+                )
+                await self.config.set(
+                    "backup.directory",
+                    "" if not directory.strip() else str(engine.backup_root),
+                    timeout=5.0,
+                )
+                self._engine = engine
+                return Ok(self._status())
         except (BackupError, OSError, ValueError) as exc:
             return Err(SdkError(str(exc)))
 
@@ -161,7 +165,10 @@ class DataBackupPlugin(NekoPluginBase):
     )
     async def backup_create(self, group: str, **_):
         try:
-            return Ok(await asyncio.to_thread(self._backup().create_snapshot, group))
+            async with self._operation_lock:
+                return Ok(
+                    await asyncio.to_thread(self._backup().create_snapshot, group)
+                )
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 
@@ -220,22 +227,31 @@ class DataBackupPlugin(NekoPluginBase):
             revision = self._schedule_revision
 
         created: dict[str, str] = {}
+        warnings: list[str] = []
         error: str | None = None
         try:
-            engine = self._backup()
-            for group in schedule.groups:
-                snapshot = await asyncio.to_thread(engine.create_snapshot, group)
-                created[group] = snapshot["id"]
+            async with self._operation_lock:
+                engine = self._backup()
+                for group in schedule.groups:
+                    snapshot = await asyncio.to_thread(engine.create_snapshot, group)
+                    created[group] = snapshot["id"]
+                    warnings.extend(snapshot.get("warnings", ()))
         except Exception as exc:
             error = str(exc)
             updated = schedule.failed(error)
         else:
-            updated = schedule.succeeded()
+            updated = schedule.succeeded(warning="; ".join(warnings) or None)
 
         with self._schedule_lock:
             self._schedule_running = False
             if revision != self._schedule_revision:
-                return Ok({"created": created, "settings_changed": True})
+                return Ok(
+                    {
+                        "created": created,
+                        "warnings": warnings,
+                        "settings_changed": True,
+                    }
+                )
             self._schedule = updated
         try:
             await self.config.set("backup.schedule", updated.to_dict(), timeout=5.0)
@@ -243,7 +259,9 @@ class DataBackupPlugin(NekoPluginBase):
             return Err(SdkError(f"failed to save schedule state: {exc}"))
         if error:
             return Err(SdkError(error))
-        return Ok({"created": created, "schedule": updated.to_dict()})
+        return Ok(
+            {"created": created, "warnings": warnings, "schedule": updated.to_dict()}
+        )
 
     @plugin_entry(
         id="backup_restore",
@@ -267,10 +285,11 @@ class DataBackupPlugin(NekoPluginBase):
         if confirmation != snapshot_id:
             return Err(SdkError("confirmation must match the snapshot id"))
         try:
-            result = await asyncio.to_thread(
-                self._backup().restore_snapshot, group, snapshot_id
-            )
-            return Ok(result)
+            async with self._operation_lock:
+                result = await asyncio.to_thread(
+                    self._backup().restore_snapshot, group, snapshot_id
+                )
+                return Ok(result)
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 
@@ -294,11 +313,12 @@ class DataBackupPlugin(NekoPluginBase):
         if confirmation != snapshot_id:
             return Err(SdkError("confirmation must match the snapshot id"))
         try:
-            return Ok(
-                await asyncio.to_thread(
-                    self._backup().delete_snapshot, group, snapshot_id
+            async with self._operation_lock:
+                return Ok(
+                    await asyncio.to_thread(
+                        self._backup().delete_snapshot, group, snapshot_id
+                    )
                 )
-            )
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 

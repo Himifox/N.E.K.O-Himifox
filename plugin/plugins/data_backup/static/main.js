@@ -18,6 +18,12 @@ function setNotice(message = '', type = '') {
   notice.className = `notice ${type}`.trim();
 }
 
+function warningText(payload) {
+  return Array.isArray(payload?.warnings)
+    ? payload.warnings.filter(Boolean).join('；')
+    : '';
+}
+
 function setBusy(busy) {
   document.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
 }
@@ -133,9 +139,13 @@ function renderSchedule() {
   $('#schedule-history').textContent = schedule.last_run_at
     ? `上次执行：${formatTime(schedule.last_run_at)}`
     : '尚未执行过定时快照';
-  $('#schedule-error').textContent = schedule.last_error
+  const scheduleIssue = $('#schedule-error');
+  scheduleIssue.className = schedule.last_error ? 'schedule-error' : 'schedule-warning';
+  scheduleIssue.textContent = schedule.last_error
     ? `最近错误：${schedule.last_error}`
-    : '';
+    : schedule.last_warning
+      ? `最近警告：${schedule.last_warning}`
+      : '';
 }
 
 async function callPlugin(entryId, args = {}) {
@@ -244,7 +254,8 @@ async function refresh() {
   try {
     state = await callPlugin('backup_status');
     render();
-    setNotice();
+    const warning = warningText(state);
+    setNotice(warning, warning ? 'warning' : '');
   } catch (error) {
     setNotice(error.message || String(error), 'error');
   } finally {
@@ -257,9 +268,13 @@ async function createSnapshot() {
   setNotice('正在创建快照，请勿关闭页面…');
   try {
     const snapshot = await callPlugin('backup_create', { group: activeGroup });
-    setNotice(`快照 ${snapshot.id} 已创建。`, 'success');
     state = await callPlugin('backup_status');
     render();
+    const warning = warningText(snapshot) || warningText(state);
+    setNotice(
+      warning ? `快照 ${snapshot.id} 已创建，但需要处理：${warning}` : `快照 ${snapshot.id} 已创建。`,
+      warning ? 'warning' : 'success',
+    );
   } catch (error) {
     setNotice(error.message || String(error), 'error');
   } finally {
@@ -278,6 +293,8 @@ async function restoreSnapshot(snapshotId) {
     setNotice(`恢复完成；${safety}。请立即重启 N.E.K.O。`, 'success');
     state = await callPlugin('backup_status');
     render();
+    const warning = warningText(result) || warningText(state);
+    if (warning) setNotice(`恢复完成；${safety}，但需要处理：${warning}。请立即重启 N.E.K.O。`, 'warning');
   } catch (error) {
     setNotice(error.message || String(error), 'error');
   } finally {
@@ -292,7 +309,11 @@ async function deleteSnapshot(snapshotId) {
     await callPlugin('backup_delete', { group: activeGroup, snapshot_id: snapshotId, confirmation: snapshotId });
     state = await callPlugin('backup_status');
     render();
-    setNotice(`快照 ${snapshotId} 已删除。`, 'success');
+    const warning = warningText(state);
+    setNotice(
+      warning ? `快照已删除，但需要处理：${warning}` : `快照 ${snapshotId} 已删除。`,
+      warning ? 'warning' : 'success',
+    );
   } catch (error) {
     setNotice(error.message || String(error), 'error');
   } finally {
