@@ -18,6 +18,20 @@ from plugin.plugins.data_backup.backup import BackupEngine, BackupError
 from plugin.plugins.data_backup.schedule import ScheduleState
 
 
+class _DataBackupContext:
+    plugin_id = "data_backup"
+    logger = None
+
+    def __init__(self, config_path: Path) -> None:
+        self.config_path = config_path
+        self.metadata = {}
+        self.bus = {}
+        self._effective_config = {"plugin": {"store": {"enabled": False}}}
+
+    async def get_own_config(self, timeout: float = 5.0) -> dict:
+        return {"config": {}}
+
+
 def _engine(tmp_path: Path) -> BackupEngine:
     data_root = tmp_path / "data"
     data_root.mkdir()
@@ -70,6 +84,34 @@ def test_schedule_success_and_failure_advance_persisted_plan() -> None:
     assert failed.last_run_at is None
     assert failed.next_run_at == (now + timedelta(days=4)).isoformat()
     assert failed.last_error == "disk unavailable"
+
+
+@pytest.mark.asyncio
+async def test_plugin_startup_registers_ui_and_uses_selected_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_dir = Path(__file__).parents[3] / "plugins" / "data_backup"
+    data_root = tmp_path / "runtime-data"
+    monkeypatch.setenv("NEKO_STORAGE_SELECTED_ROOT", str(data_root))
+    plugin = DataBackupPlugin(_DataBackupContext(plugin_dir / "plugin.toml"))
+
+    await plugin.startup()
+
+    assert plugin._engine is not None
+    assert plugin._engine.data_root == data_root.resolve(strict=False)
+    assert plugin.get_static_ui_config()["plugin_id"] == "data_backup"
+    assert plugin.get_list_actions() == [
+        {
+            "id": "open_ui",
+            "label": "打开备份管理",
+            "kind": "ui",
+            "target": "/plugin/data_backup/ui/",
+            "open_in": "new_tab",
+        }
+    ]
+
+    await plugin.shutdown()
+    assert plugin._engine is None
 
 
 def test_snapshot_and_restore_exact_core_state(tmp_path: Path) -> None:
