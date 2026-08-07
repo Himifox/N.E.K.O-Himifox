@@ -9,3 +9,5 @@
 - 符号链接不会进入快照，所有操作仅接受固定组名和插件生成的快照 ID。
 
 设计参考 [MemoryCat](https://github.com/JohnChiao75/MemoryCat) 的快照与分组备份思路。MemoryCat 以 Apache License 2.0 发布；本实现针对 N.E.K.O SDK v2 重新组织，并保留本说明作为来源致谢。
+
+需要单独安装或跟踪独立版本时，请使用 [n.e.k.o_plugin_data_backup](https://github.com/Himifox/n.e.k.o_plugin_data_backup)。主仓内置版与独立插件共享同一套核心实现。

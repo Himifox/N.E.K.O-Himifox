@@ -14,7 +14,10 @@ from plugin.sdk.plugin import (
     plugin_entry,
 )
 
-from .backup import BACKUP_GROUPS, BackupEngine, BackupError
+if __package__:
+    from .backup import BACKUP_GROUPS, BackupEngine, BackupError
+else:  # Standalone repository tests import this file as top-level ``__init__``.
+    from backup import BACKUP_GROUPS, BackupEngine, BackupError
 
 
 @neko_plugin
@@ -50,6 +53,11 @@ class DataBackupPlugin(NekoPluginBase):
             ]
         )
         return Ok(self._engine.status())
+
+    @lifecycle(id="shutdown")
+    async def shutdown(self, **_):
+        self._engine = None
+        return Ok({"status": "stopped"})
 
     def _backup(self) -> BackupEngine:
         if self._engine is None:
