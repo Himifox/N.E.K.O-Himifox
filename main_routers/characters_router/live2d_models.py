@@ -544,7 +544,7 @@ async def update_catgirl_l2d(name: str, request: Request):
             for key in ('idle_image', 'talking_image', 'drag_image', 'click_image', 'happy_image', 'sad_image', 'angry_image', 'surprised_image'):
                 if key not in pngtuber_payload and key in data:
                     pngtuber_payload[key] = data.get(key)
-            allowed_prefixes = ('/user_pngtuber/', '/static/', '/workshop/')
+            allowed_prefixes = ('/user_pngtuber/', '/static/', '/workshop/', '/api/model/pngtuber/builtin/')
             allowed_exts = ('.png', '.gif', '.jpg', '.jpeg', '.webp')
             idle_image = str(pngtuber_payload.get('idle_image') or '').strip().replace('\\', '/')
             if not idle_image:
