@@ -29,9 +29,9 @@
     const SUPPORTED_LANGUAGES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'ru', 'es', 'pt'];
 
     // locale 资源版本（用于 cache-busting，避免客户端长期缓存旧语言包导致新增 key 不生效）
-    // 修改原因：凭证管理页新增界面文案；递增版本让 Electron、
-    // Docker 等长期缓存重新拉取包含新 key 的语言包。
-    const LOCALE_VERSION = '2026-07-27-youtube-instruction-format-i18n';
+    // 修改原因：凭证管理页新增界面文案与图文 Cookie 教程，并合入声纹录入等既有新增文案；
+    // 递增版本让 Electron、Docker 等长期缓存重新拉取包含完整新 key 的语言包。
+    const LOCALE_VERSION = '2026-08-07-credentials-console-guide';
 
     function initDecorativeImageDragGuard() {
         const markImage = (img) => {

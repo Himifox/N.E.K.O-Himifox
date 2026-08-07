@@ -1,7 +1,9 @@
-import { DATAFORSEO_ENDPOINTS } from './client.mjs'
+import { DATAFORSEO_ENDPOINTS, DataForSeoApiError, payloadCost } from './client.mjs'
 
 const MODES = new Set(['all', 'keywords', 'serp'])
 const DEVICES = new Set(['desktop', 'mobile'])
+const DEFAULT_SERP_RETRY_ATTEMPTS = 3
+const DEFAULT_SERP_RETRY_DELAY_MS = 1_000
 
 function canonicalKeyword(value) {
   return value.trim().toLocaleLowerCase('en-US')
@@ -95,10 +97,12 @@ export function validateConfig(input) {
     seen.add(key)
 
     const intent = source.intent == null ? null : String(source.intent).trim() || null
+    const cta = source.cta == null ? null : String(source.cta).trim() || null
     return {
       keyword,
       landingPage: normalizeLandingPage(source.landingPage),
       intent,
+      cta,
     }
   })
 
@@ -119,7 +123,44 @@ function normalizeMode(mode) {
   return mode
 }
 
-export function buildPlan(config, { mode = 'all', includeAiOverview = false, depth } = {}) {
+function normalizeRetryOptions(options = {}) {
+  const maxAttempts = Number(options.maxAttempts ?? DEFAULT_SERP_RETRY_ATTEMPTS)
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5) {
+    throw new TypeError('retryOptions.maxAttempts must be an integer from 1 to 5')
+  }
+
+  const baseDelayMs = Number(options.baseDelayMs ?? DEFAULT_SERP_RETRY_DELAY_MS)
+  if (!Number.isInteger(baseDelayMs) || baseDelayMs < 0 || baseDelayMs > 60_000) {
+    throw new TypeError('retryOptions.baseDelayMs must be an integer from 0 to 60000')
+  }
+
+  const sleep = options.sleep ?? (delayMs => new Promise(resolve => setTimeout(resolve, delayMs)))
+  const onRetry = options.onRetry ?? (details => {
+    console.warn(
+      `Retrying DataForSEO SERP for "${details.keyword}" after status ${details.statusCode ?? 'unknown'} `
+      + `(attempt ${details.nextAttempt}/${details.maxAttempts}, delay ${details.delayMs}ms).`,
+    )
+  })
+  const onFatal = options.onFatal ?? (details => {
+    console.error(
+      `Aborting DataForSEO SERP collection after fatal status ${details.statusCode ?? 'unknown'} `
+      + `for "${details.keyword}"; ${details.attempts} attempt(s), `
+      + `$${details.costUsd.toFixed(4)} reported for this keyword.`,
+    )
+  })
+  if (typeof sleep !== 'function') throw new TypeError('retryOptions.sleep must be a function')
+  if (typeof onRetry !== 'function') throw new TypeError('retryOptions.onRetry must be a function')
+  if (typeof onFatal !== 'function') throw new TypeError('retryOptions.onFatal must be a function')
+
+  return { maxAttempts, baseDelayMs, sleep, onRetry, onFatal }
+}
+
+export function buildPlan(config, {
+  mode = 'all',
+  includeAiOverview = false,
+  includeKeywordDifficulty = true,
+  depth,
+} = {}) {
   const normalizedMode = normalizeMode(mode)
   const serpDepth = normalizeDepth(
     depth ?? config.serpDepth,
@@ -128,17 +169,19 @@ export function buildPlan(config, { mode = 'all', includeAiOverview = false, dep
   const includesKeywords = normalizedMode === 'all' || normalizedMode === 'keywords'
   const includesSerp = normalizedMode === 'all' || normalizedMode === 'serp'
   const serpRequests = includesSerp ? config.keywords.length : 0
+  const keywordDifficultyRequests = includesKeywords && includeKeywordDifficulty ? 1 : 0
 
   return {
     mode: normalizedMode,
     keywordCount: config.keywords.length,
     serpDepth,
     includeAiOverview: Boolean(includeAiOverview && includesSerp),
+    includeKeywordDifficulty: Boolean(includeKeywordDifficulty && includesKeywords),
     requests: {
       searchVolume: includesKeywords ? 1 : 0,
-      keywordDifficulty: includesKeywords ? 1 : 0,
+      keywordDifficulty: keywordDifficultyRequests,
       organicSerp: serpRequests,
-      total: (includesKeywords ? 2 : 0) + serpRequests,
+      total: (includesKeywords ? 1 : 0) + keywordDifficultyRequests + serpRequests,
     },
     maximumSerpPages: serpRequests * Math.ceil(serpDepth / 10),
     asynchronousAiOverviewRequests: includeAiOverview && includesSerp ? serpRequests : 0,
@@ -147,15 +190,6 @@ export function buildPlan(config, { mode = 'all', includeAiOverview = false, dep
 
 function taskResults(payload) {
   return (payload.tasks ?? []).flatMap(task => Array.isArray(task?.result) ? task.result : [])
-}
-
-function payloadCost(payload) {
-  const topLevelCost = Number(payload?.cost)
-  if (Number.isFinite(topLevelCost)) return topLevelCost
-  return (payload?.tasks ?? []).reduce((sum, task) => {
-    const cost = Number(task?.cost)
-    return sum + (Number.isFinite(cost) ? cost : 0)
-  }, 0)
 }
 
 export function mergeKeywordMetrics(config, searchVolumePayload, difficultyPayload) {
@@ -273,7 +307,7 @@ export function summarizeSerpResult(configEntry, targetDomain, result) {
   }
 }
 
-async function collectKeywordMetrics(client, config) {
+async function collectKeywordMetrics(client, config, { includeKeywordDifficulty = true } = {}) {
   const common = {
     location_code: config.locationCode,
     language_code: config.languageCode,
@@ -283,7 +317,9 @@ async function collectKeywordMetrics(client, config) {
     ...common,
     search_partners: false,
   }])
-  const difficultyPayload = await client.post(DATAFORSEO_ENDPOINTS.keywordDifficulty, [common])
+  const difficultyPayload = includeKeywordDifficulty
+    ? await client.post(DATAFORSEO_ENDPOINTS.keywordDifficulty, [common])
+    : { tasks: [], cost: 0 }
 
   return {
     items: mergeKeywordMetrics(config, searchVolumePayload, difficultyPayload),
@@ -294,8 +330,71 @@ async function collectKeywordMetrics(client, config) {
   }
 }
 
-async function collectSerp(client, config, { depth, includeAiOverview }) {
+function serpErrorDetails(entry, error, attempts, incurredCostUsd) {
+  return {
+    phase: 'serp',
+    keyword: entry.keyword,
+    endpoint: error.endpoint ?? DATAFORSEO_ENDPOINTS.organicSerp,
+    statusCode: error.statusCode ?? null,
+    message: error.message,
+    retryable: error.retryable,
+    attempts,
+    incurredCostUsd,
+    retrySkippedDueToReportedCost: error.retryable && error.costUsd > 0,
+    retrySkippedDueToUncertainBilling: error.billingUncertain === true,
+  }
+}
+
+async function requestSerpWithRetries(client, entry, task, retryOptions) {
+  let attempts = 0
+  let costUsd = 0
+
+  while (attempts < retryOptions.maxAttempts) {
+    attempts += 1
+    try {
+      const payload = await client.post(DATAFORSEO_ENDPOINTS.organicSerp, [task])
+      costUsd += payloadCost(payload)
+      return { payload, error: null, attempts, costUsd }
+    } catch (error) {
+      if (!(error instanceof DataForSeoApiError)) throw error
+      costUsd += Number.isFinite(error.costUsd) ? error.costUsd : 0
+      if (error.fatal) {
+        retryOptions.onFatal({
+          keyword: entry.keyword,
+          statusCode: error.statusCode,
+          attempts,
+          costUsd,
+        })
+        throw error
+      }
+
+      const mayRetryWithoutDuplicateCharge = error.retryable
+        && error.billingUncertain !== true
+        && error.costUsd <= 0
+      if (mayRetryWithoutDuplicateCharge && attempts < retryOptions.maxAttempts) {
+        const delayMs = retryOptions.baseDelayMs * (2 ** (attempts - 1))
+        retryOptions.onRetry({
+          keyword: entry.keyword,
+          statusCode: error.statusCode,
+          attempt: attempts,
+          nextAttempt: attempts + 1,
+          maxAttempts: retryOptions.maxAttempts,
+          delayMs,
+        })
+        await retryOptions.sleep(delayMs)
+        continue
+      }
+
+      return { payload: null, error, attempts, costUsd }
+    }
+  }
+
+  throw new Error('Unreachable DataForSEO retry state')
+}
+
+async function collectSerp(client, config, { depth, includeAiOverview, retryOptions }) {
   const items = []
+  const errors = []
   let costUsd = 0
 
   for (const entry of config.keywords) {
@@ -314,13 +413,28 @@ async function collectSerp(client, config, { depth, includeAiOverview }) {
     }
     if (includeAiOverview) task.load_async_ai_overview = true
 
-    const payload = await client.post(DATAFORSEO_ENDPOINTS.organicSerp, [task])
-    costUsd += payloadCost(payload)
-    const result = taskResults(payload)[0] ?? null
-    items.push(summarizeSerpResult(entry, config.targetDomain, result))
+    const request = await requestSerpWithRetries(client, entry, task, retryOptions)
+    costUsd += request.costUsd
+    if (request.error) {
+      const details = serpErrorDetails(entry, request.error, request.attempts, request.costUsd)
+      errors.push(details)
+      items.push({
+        ...summarizeSerpResult(entry, config.targetDomain, null),
+        requestAttempts: request.attempts,
+        error: details,
+      })
+      continue
+    }
+
+    const result = taskResults(request.payload)[0] ?? null
+    items.push({
+      ...summarizeSerpResult(entry, config.targetDomain, result),
+      requestAttempts: request.attempts,
+      error: null,
+    })
   }
 
-  return { items, costUsd }
+  return { items, costUsd, errors }
 }
 
 export async function createDataForSeoReport({
@@ -328,15 +442,23 @@ export async function createDataForSeoReport({
   config,
   mode = 'all',
   includeAiOverview = false,
+  includeKeywordDifficulty = true,
   depth,
   dryRun = false,
   generatedAt = new Date().toISOString(),
+  retryOptions,
 }) {
-  const plan = buildPlan(config, { mode, includeAiOverview, depth })
+  const plan = buildPlan(config, {
+    mode,
+    includeAiOverview,
+    includeKeywordDifficulty,
+    depth,
+  })
   const report = {
     schemaVersion: 1,
     generatedAt,
     dryRun,
+    status: dryRun ? 'planned' : 'complete',
     target: {
       domain: config.targetDomain,
       locationCode: config.locationCode,
@@ -347,6 +469,7 @@ export async function createDataForSeoReport({
     keywordMetrics: null,
     serp: null,
     costs: null,
+    errors: [],
   }
 
   if (dryRun) return report
@@ -360,18 +483,29 @@ export async function createDataForSeoReport({
   }
 
   if (plan.mode === 'all' || plan.mode === 'keywords') {
-    const keywordMetrics = await collectKeywordMetrics(client, config)
+    const keywordMetrics = await collectKeywordMetrics(client, config, {
+      includeKeywordDifficulty: plan.requests.keywordDifficulty > 0,
+    })
     report.keywordMetrics = keywordMetrics.items
     Object.assign(costs, keywordMetrics.costs)
   }
 
   if (plan.mode === 'all' || plan.mode === 'serp') {
+    const normalizedRetryOptions = normalizeRetryOptions(retryOptions)
     const serp = await collectSerp(client, config, {
       depth: plan.serpDepth,
       includeAiOverview: plan.includeAiOverview,
+      retryOptions: normalizedRetryOptions,
     })
     report.serp = serp.items
+    report.errors.push(...serp.errors)
     costs.organicSerpUsd = serp.costUsd
+    if (serp.errors.length > 0) {
+      const successfulSerpRequests = serp.items.length - serp.errors.length
+      report.status = plan.mode === 'serp' && successfulSerpRequests === 0
+        ? 'failed'
+        : 'partial'
+    }
   }
 
   costs.totalUsd = costs.searchVolumeUsd + costs.keywordDifficultyUsd + costs.organicSerpUsd

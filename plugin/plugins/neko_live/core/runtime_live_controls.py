@@ -8,6 +8,29 @@ from .contracts import LiveConfig
 from .runtime_live_listener import refresh_live_room_context
 
 
+def _flush_runtime_log(runtime: Any, reason: str) -> None:
+    """Emit one session-boundary summary. Never let diagnostics break connect
+    or disconnect — a missing log line is recoverable, a failed disconnect is
+    not."""
+    runtime_log = getattr(runtime, "runtime_log", None)
+    if runtime_log is None:
+        return
+    try:
+        runtime_log.flush(runtime, reason)
+    except Exception:
+        pass
+
+
+def _reset_runtime_log(runtime: Any) -> None:
+    runtime_log = getattr(runtime, "runtime_log", None)
+    if runtime_log is None:
+        return
+    try:
+        runtime_log.reset()
+    except Exception:
+        pass
+
+
 def pause(runtime: Any) -> None:
     runtime.safety_guard.pause("manual pause from control panel")
 
@@ -205,6 +228,10 @@ async def connect_live_room(
     started = await runtime._start_live_listener(target_room_ref)
     if not started:
         runtime.live_connection_auth_mode = "unknown"
+    # Preserve the preceding window in the boundary summary, then start a fresh
+    # counter window for the newly connected listener.
+    _flush_runtime_log(runtime, "connect" if started else "connect_failed")
+    _reset_runtime_log(runtime)
     await runtime.sync_live_instructions()
     runtime.audit.record(
         "live_connected" if started else "live_connect_failed",
@@ -226,6 +253,37 @@ async def _resolve_connection_auth_mode(
     platform: str,
     allow_accountless: bool,
 ) -> str:
+    if platform == "twitch":
+        if allow_accountless:
+            raise ValueError("accountless fallback is only supported for Bilibili")
+        try:
+            candidate = await runtime.twitch_credential_validate()
+            status = candidate if isinstance(candidate, dict) else {}
+        except Exception as exc:
+            status = {
+                "logged_in": False,
+                "message": f"twitch account status could not be verified: {type(exc).__name__}",
+            }
+        if status.get("logged_in") is True:
+            return "authenticated"
+        stop_error = ""
+        if runtime.live_provider.is_listening():
+            try:
+                await runtime._stop_live_listener(mark_disabled=True)
+            except Exception as exc:
+                stop_error = type(exc).__name__
+                runtime._accepting_live_events = False
+        runtime.config.live_enabled = False
+        runtime.live_connection_state = "auth_required"
+        runtime.live_connection_auth_mode = "unknown"
+        runtime.safety_guard.set_connected(False)
+        runtime.audit.record(
+            "live_connection_auth_required",
+            "Twitch authorization required before connecting",
+            level="warning",
+            detail={"platform": "twitch", "listener_stop_error": stop_error},
+        )
+        raise ValueError("Twitch authorization is required; authorize the account and try again")
     if platform != "bilibili":
         if allow_accountless:
             raise ValueError("accountless fallback is only supported for Bilibili")
@@ -282,6 +340,11 @@ async def disconnect_live_room(runtime: Any) -> dict[str, Any]:
         await runtime._stop_live_listener(mark_disabled=True)
     finally:
         runtime.live_connection_auth_mode = "unknown"
+    # Session-boundary summary. A disconnect line reporting zero records is
+    # itself the diagnosis: it separates "the room was quiet" from "events
+    # arrived but were silently dropped", which a log bundle could not
+    # distinguish before.
+    _flush_runtime_log(runtime, "disconnect")
     runtime.audit.record(
         "live_disconnected",
         "live ingest marked disconnected",

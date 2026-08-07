@@ -8,6 +8,62 @@ def _open_character_card_manager(page: Page, running_server: str) -> None:
     page.wait_for_selector("body")
 
 
+@pytest.mark.frontend
+def test_character_card_manager_hides_pngtuber_fields_without_filtering_workshop_payloads(
+    mock_page: Page,
+    running_server: str,
+):
+    _open_character_card_manager(mock_page, running_server)
+
+    state = mock_page.evaluate(
+        """
+        () => {
+            const host = document.createElement('div');
+            document.body.appendChild(host);
+            buildCatgirlDetailForm('PNGTuber角色', {
+                '性格': '开朗',
+                'pngtuber': {
+                    idle_image: '/user_pngtuber/avatar/idle.png',
+                    talking_image: '/user_pngtuber/avatar/talking.png'
+                },
+                'pngtuber_idle_image': '/user_pngtuber/avatar/idle.png',
+                'pngtuber_talking_image': '/user_pngtuber/avatar/talking.png',
+                'pngtuber_happy_image': '/user_pngtuber/avatar/happy.png',
+                'pngtuber_sad_image': '/user_pngtuber/avatar/sad.png',
+                'pngtuber_angry_image': '/user_pngtuber/avatar/angry.png',
+                'pngtuber_surprised_image': '/user_pngtuber/avatar/surprised.png'
+            }, false, host);
+            const pngtuberFields = [
+                'pngtuber',
+                'pngtuber_idle_image',
+                'pngtuber_talking_image',
+                'pngtuber_happy_image',
+                'pngtuber_sad_image',
+                'pngtuber_angry_image',
+                'pngtuber_surprised_image'
+            ];
+            return {
+                renderedFields: [...host.querySelectorAll('textarea[name]')].map(field => field.name),
+                hiddenFields: pngtuberFields.filter(field => getWorkshopHiddenFields().includes(field)),
+                workshopReservedFields: pngtuberFields.filter(field => getWorkshopReservedFields().includes(field))
+            };
+        }
+        """
+    )
+
+    assert state["renderedFields"] == ['性格']
+    assert state["hiddenFields"] == [
+        'pngtuber',
+        'pngtuber_idle_image',
+        'pngtuber_talking_image',
+        'pngtuber_happy_image',
+        'pngtuber_sad_image',
+        'pngtuber_angry_image',
+        'pngtuber_surprised_image',
+    ]
+    assert state["workshopReservedFields"] == []
+
+
 def _mount_steam_preview_dom(page: Page) -> None:
     page.evaluate(
         """
@@ -443,6 +499,85 @@ def test_character_card_manager_voice_dropdown_groups_by_provider_source(
     # native 预制组（Gemini · 预制）
     native = next((g for g in groups if "Gemini" in g["label"]), None)
     assert native and native["source"] == "preset" and "·" in native["label"]
+
+
+@pytest.mark.frontend
+@pytest.mark.parametrize(
+    ("provider", "voice_id"),
+    [
+        ("vllm_omni", "default"),
+        ("custom", "vendor-voice"),
+    ],
+)
+def test_character_card_manager_shows_configured_custom_api_voice(
+    mock_page: Page,
+    running_server: str,
+    provider: str,
+    voice_id: str,
+):
+    """Configured HTTPS/WSS voices replace the unspecified placeholder when selected."""
+    _open_character_card_manager(mock_page, running_server)
+
+    state = mock_page.evaluate(
+        """
+        async ({ provider, voiceId }) => {
+            window.t = (key) => ({
+                'api.customModelProviderCustom': 'Custom API',
+                'voice.sourcePreset': 'Preset',
+                'voice.providerUnknown': 'Other',
+                'character.voiceNotSet': 'Unspecified voice'
+            }[key] || key);
+
+            const originalFetch = window.fetch.bind(window);
+            window.fetch = async (input, init) => {
+                const url = typeof input === 'string' ? input : input.url;
+                const path = new URL(url, window.location.origin).pathname;
+                if (path === '/api/characters/voices') {
+                    return new Response(JSON.stringify({
+                        voices: {},
+                        free_voices: {},
+                        native_voices: {
+                            [voiceId]: {
+                                prefix: voiceId,
+                                provider,
+                                provider_label: 'custom'
+                            }
+                        }
+                    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+                if (path === '/api/characters/custom_tts_voices') {
+                    return new Response(JSON.stringify({ success: true, voices: [] }), {
+                        status: 200, headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                return originalFetch(input, init);
+            };
+
+            const select = document.createElement('select');
+            document.body.appendChild(select);
+            await _loadPanelVoices(select, voiceId);
+
+            const selected = select.options[select.selectedIndex];
+            const group = Array.from(select.querySelectorAll('optgroup'))
+                .find(item => Array.from(item.querySelectorAll('option'))
+                    .some(option => option.value === voiceId));
+            return {
+                value: select.value,
+                selectedText: selected ? selected.textContent : '',
+                groupLabel: group ? group.label : '',
+                unspecifiedSelected: select.options[0] ? select.options[0].selected : true
+            };
+        }
+        """,
+        {"provider": provider, "voiceId": voice_id},
+    )
+
+    assert state == {
+        "value": voice_id,
+        "selectedText": voice_id,
+        "groupLabel": "Custom API · Preset",
+        "unspecifiedSelected": False,
+    }
 
 
 @pytest.mark.frontend

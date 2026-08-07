@@ -18,6 +18,7 @@ Options:
   --output <path>             JSON report path (default: ${DEFAULT_OUTPUT})
   --depth <1-100>             Override SERP depth; every 10 results may add cost
   --include-ai-overview       Load asynchronous AI Overview data (extra charge)
+  --skip-keyword-difficulty   Collect Google Ads Volume without the unsupported Labs KD call
   --dry-run                   Validate config and write a request plan without API calls
   --help                      Show this help
 
@@ -38,6 +39,7 @@ function parseArgs(argv) {
     output: DEFAULT_OUTPUT,
     depth: undefined,
     includeAiOverview: false,
+    includeKeywordDifficulty: true,
     dryRun: false,
     help: false,
   }
@@ -47,6 +49,7 @@ function parseArgs(argv) {
     if (argument === '--help') options.help = true
     else if (argument === '--dry-run') options.dryRun = true
     else if (argument === '--include-ai-overview') options.includeAiOverview = true
+    else if (argument === '--skip-keyword-difficulty') options.includeKeywordDifficulty = false
     else if (argument === '--mode') options.mode = valueAfter(argv, index++, '--mode')
     else if (argument === '--config') options.config = valueAfter(argv, index++, '--config')
     else if (argument === '--output') options.output = valueAfter(argv, index++, '--output')
@@ -91,6 +94,7 @@ function createClient(options) {
 
 function printSummary(report, outputPath) {
   console.log(`DataForSEO report written to ${outputPath}`)
+  console.log(`Report status: ${report.status}`)
   console.log(`Planned API requests: ${report.plan.requests.total}`)
   console.log(`Maximum SERP pages: ${report.plan.maximumSerpPages}`)
   if (report.dryRun) {
@@ -99,10 +103,25 @@ function printSummary(report, outputPath) {
   }
   console.log(`Reported API cost: $${report.costs.totalUsd.toFixed(4)}`)
   if (report.serp) {
-    const topTen = report.serp.filter(item => item.organicRank != null && item.organicRank <= 10).length
-    const aioCitations = report.serp.filter(item => item.aiOverviewCitedTarget).length
-    console.log(`Tracked keywords in Google Top 10: ${topTen}/${report.serp.length}`)
-    console.log(`AI Overview citations of target domain: ${aioCitations}/${report.serp.length}`)
+    const successfulSerp = report.serp.filter(item => item.error == null)
+    const topTen = successfulSerp.filter(
+      item => item.organicRank != null && item.organicRank <= 10,
+    ).length
+    const aioCitations = successfulSerp.filter(item => item.aiOverviewCitedTarget).length
+    console.log(`SERP keyword requests completed: ${successfulSerp.length}/${report.serp.length}`)
+    console.log(
+      `Tracked keywords in Google Top 10: ${topTen}/${report.serp.length} tracked `
+      + `(${successfulSerp.length} observed)`,
+    )
+    console.log(
+      `AI Overview citations of target domain: ${aioCitations}/${report.serp.length} tracked `
+      + `(${successfulSerp.length} observed)`,
+    )
+  }
+  if (report.errors.length > 0) {
+    console.warn(
+      `DataForSEO report retained ${report.errors.length} keyword error(s); see the report artifact for details.`,
+    )
   }
 }
 
@@ -123,6 +142,7 @@ async function main() {
     config,
     mode: options.mode,
     includeAiOverview: options.includeAiOverview,
+    includeKeywordDifficulty: options.includeKeywordDifficulty,
     depth: options.depth,
     dryRun: options.dryRun,
   })
@@ -131,6 +151,7 @@ async function main() {
   await mkdir(dirname(outputPath), { recursive: true })
   await writeFile(outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   printSummary(report, outputPath)
+  if (report.status === 'failed') process.exitCode = 1
 }
 
 main().catch(error => {

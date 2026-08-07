@@ -87,6 +87,56 @@ def test_live2d_niri_physical_crop_mouse_tracking_splits_virtual_and_local_coord
     assert "isPointerNearFloatingButtons()" in source
 
 
+def test_physical_crop_host_has_single_live2d_drag_coordinate_owner():
+    source = _live2d_source()
+    assert "function isLive2DHostModelDragActive()" in source
+    assert "window.__nekoNiriPetPhysicalCrop" in source
+    host_state = _js_block(source, "function isLive2DHostModelDragActive")
+    assert "if (!api) return false;" in host_state
+    assert "const ownershipVersion = Number(api.hostModelDragOwnershipVersion);" in host_state
+    assert "if (!Number.isFinite(ownershipVersion) || ownershipVersion < 1) return false;" in host_state
+    assert "if (typeof api.isHostModelDragActive !== 'function') return true;" in host_state
+    assert "return api.isHostModelDragActive() !== false;" in host_state
+    assert "catch (_) {\n        return true;" in host_state
+
+    drag_source = source.split(
+        "Live2DManager.prototype.setupDragAndDrop = function",
+        1,
+    )[1]
+    drag_end = drag_source.split("const onDragEnd = async (event) => {", 1)[1].split(
+        "const onDragMove = (event) => {",
+        1,
+    )[0]
+    drag_move = drag_source.split("const onDragMove = (event) => {", 1)[1].split(
+        "// 清理旧的监听器",
+        1,
+    )[0]
+
+    host_guard = "if (isLive2DHostModelDragActive()) return;"
+    assert host_guard in drag_end
+    for cleanup in (
+        "this._isDraggingModel = false;",
+        "document.getElementById('live2d-canvas').style.cursor = '';",
+        "restoreButtonPointerEvents();",
+        "dragHintLastPointer = captureDragHintPointer(event) || dragHintLastPointer;",
+    ):
+        assert drag_end.index(cleanup) < drag_end.index(host_guard)
+    for settlement in (
+        "const displaySwitched = await this._checkAndSwitchDisplay(model);",
+        "await this._checkAndPerformSnap(model)",
+        "await this._savePositionAfterInteraction();",
+        "await this._tryApplyLive2DPeek(model);",
+    ):
+        assert drag_end.index(host_guard) < drag_end.index(settlement)
+    assert host_guard in drag_move
+    host_guard_index = drag_move.index(host_guard)
+    for coordinate_assignment in (
+        "model.x = x - dragStartPos.x;",
+        "model.y = y - dragStartPos.y;",
+    ):
+        assert host_guard_index < drag_move.index(coordinate_assignment)
+
+
 def test_live2d_click_touch_set_logs_trigger_summary():
     source = _live2d_source()
     summary_logger = _js_block(source, "function logLive2DClickTriggerSummary")
@@ -112,11 +162,27 @@ def test_live2d_click_touch_set_logs_trigger_summary():
 def test_live2d_random_click_prefers_motion_and_uses_expression_as_fallback():
     source = _live2d_source()
     click_effect = _js_block(source, "Live2DManager.prototype._playTemporaryClickEffect")
+    restore_effect = _js_block(source, "Live2DManager.prototype._restoreClickEffectState")
+    stop_action = _js_block(source, "Live2DManager.prototype._stopClickEffectAction")
 
     motion_branch = click_effect.index("if (motions && motions.length > 0)")
     expression_fallback = click_effect.index("if (!didPlayEffect && expressionFiles.length > 0)")
     assert motion_branch < expression_fallback
-    assert "const motion = await this.currentModel.motion(motionGroup, undefined, priority);" in click_effect
+    assert "const motion = await this.playActionMotion(motionGroup, motionIndex);" in click_effect
+    assert "generation: this._actionMotionGeneration" in click_effect
+    assert "this._clickEffectActionTimer = setTimeout" in click_effect
+    assert "this._trackActiveMotionParametersFromFile(motionFile)" in click_effect
+    assert "this._stopClickEffectAction(this._clickEffectAction);" in restore_effect
+    assert "state?.currentGroup === action.group" in stop_action
+    assert "state?.currentIndex === action.index" in stop_action
+    assert "action.generation !== this._actionMotionGeneration" in stop_action
+    assert "Number(state?.currentPriority || 0) > 1" in stop_action
+    assert (
+        "motionManager.stopAllMotions();\n"
+        "        stopped = true;\n"
+        "        if (typeof this._resetActiveMotionParameters === 'function') {\n"
+        "            this._resetActiveMotionParameters({ preserveExpression: true });"
+    ) in stop_action
     assert "triggerLog.motions.push({" in click_effect
     assert "triggerLog.expressions.push({ emotion, file: choiceFile, fallbackFor: 'motion' });" in click_effect
 

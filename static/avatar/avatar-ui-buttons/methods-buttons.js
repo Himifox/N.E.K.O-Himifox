@@ -1,3 +1,151 @@
+(function setupSocialUnlockState() {
+    const STORAGE_KEY = 'neko.social.unlock.v1';
+    const LOCK_DAYS = 3;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    let midnightTimer = null;
+    let localeListenerBound = false;
+    let fallbackFirstSeenDate = null;
+
+    function getLocalDateKey(date = new Date()) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function parseDateKey(value) {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            return null;
+        }
+        const [year, month, day] = value.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+            return null;
+        }
+        return { year, month, day };
+    }
+
+    function getCalendarDayDelta(firstSeenDate, todayDate) {
+        const first = parseDateKey(firstSeenDate);
+        const today = parseDateKey(todayDate);
+        if (!first || !today) return 0;
+        const firstUtc = Date.UTC(first.year, first.month - 1, first.day);
+        const todayUtc = Date.UTC(today.year, today.month - 1, today.day);
+        return Math.max(0, Math.floor((todayUtc - firstUtc) / DAY_MS));
+    }
+
+    function readFirstSeenDate(todayDate) {
+        const today = getLocalDateKey(todayDate);
+        try {
+            const stored = window.localStorage && window.localStorage.getItem(STORAGE_KEY);
+            if (parseDateKey(stored)) return stored;
+            if (!fallbackFirstSeenDate) fallbackFirstSeenDate = today;
+            if (window.localStorage) window.localStorage.setItem(STORAGE_KEY, fallbackFirstSeenDate);
+        } catch (_) {
+            // localStorage may be unavailable in private or restricted contexts.
+        }
+        if (!fallbackFirstSeenDate) fallbackFirstSeenDate = today;
+        return fallbackFirstSeenDate;
+    }
+
+    function getStatus(todayDate = new Date()) {
+        const firstSeenDate = readFirstSeenDate(todayDate);
+        const today = getLocalDateKey(todayDate);
+        const dayDelta = getCalendarDayDelta(firstSeenDate, today);
+        return {
+            firstSeenDate,
+            dayDelta,
+            remainingDays: Math.max(0, LOCK_DAYS - dayDelta),
+            unlocked: dayDelta >= LOCK_DAYS
+        };
+    }
+
+    function getTitle(status) {
+        if (!status.unlocked) {
+            return window.t
+                ? window.t('buttons.socialCharging', { days: status.remainingDays })
+                : `喵宇宙充能中 ${status.remainingDays}天后再回来看看吧`;
+        }
+        return window.t ? window.t('buttons.social') : '喵宇宙';
+    }
+
+    function applyButtonState(btn, imgOff, imgOn, status = getStatus()) {
+        if (!btn) return status;
+        const locked = !status.unlocked;
+        const title = getTitle(status);
+        btn.dataset.socialButton = 'true';
+        btn.dataset.socialLocked = locked ? 'true' : 'false';
+        btn.title = title;
+        btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+        btn.removeAttribute('data-i18n-title');
+
+        if (imgOff) imgOff.alt = title;
+        if (imgOn) imgOn.alt = title;
+
+        if (locked) {
+            btn.style.cursor = 'default';
+            btn.style.filter = 'grayscale(1)';
+            btn.style.opacity = '0.58';
+            btn.style.background = 'rgba(128, 128, 128, 0.45)';
+            btn.style.border = 'var(--neko-btn-border, 1px solid rgba(255, 255, 255, 0.18))';
+            btn.style.boxShadow = '0 2px 4px rgba(0,0,0,0.04)';
+            btn.style.transform = 'scale(1)';
+            if (imgOff && imgOn) {
+                imgOff.style.opacity = '0.75';
+                imgOn.style.opacity = '0';
+            }
+        } else {
+            btn.style.cursor = 'pointer';
+            btn.style.filter = '';
+            btn.style.opacity = '';
+            btn.style.background = 'var(--neko-btn-bg, rgba(255, 255, 255, 0.65))';
+            btn.style.border = 'var(--neko-btn-border, 1px solid rgba(255, 255, 255, 0.18))';
+            btn.style.boxShadow = 'var(--neko-btn-shadow, 0 2px 4px rgba(0,0,0,0.04), 0 4px 8px rgba(0,0,0,0.08))';
+        }
+        return status;
+    }
+
+    function refreshButtons() {
+        const status = getStatus();
+        document.querySelectorAll('[data-social-button="true"]').forEach((btn) => {
+            const images = btn.querySelectorAll('img');
+            applyButtonState(btn, images[0], images[1], status);
+        });
+        if (status.unlocked && midnightTimer) {
+            clearTimeout(midnightTimer);
+            midnightTimer = null;
+        }
+        return status;
+    }
+
+    function scheduleNextMidnight() {
+        if (midnightTimer) clearTimeout(midnightTimer);
+        const nextMidnight = new Date();
+        nextMidnight.setHours(24, 0, 0, 50);
+        midnightTimer = setTimeout(() => {
+            refreshButtons();
+            if (!getStatus().unlocked) scheduleNextMidnight();
+        }, Math.max(1000, nextMidnight.getTime() - Date.now()));
+    }
+
+    window.nekoSocialUnlock = window.nekoSocialUnlock || {
+        getStatus,
+        isUnlocked: (todayDate) => getStatus(todayDate).unlocked,
+        isLocked: (todayDate) => !getStatus(todayDate).unlocked,
+        applyButtonState,
+        refreshButtons,
+        registerButton: (btn, imgOff, imgOn) => {
+            const status = applyButtonState(btn, imgOff, imgOn);
+            if (!localeListenerBound) {
+                window.addEventListener('localechange', refreshButtons);
+                localeListenerBound = true;
+            }
+            if (!status.unlocked && !midnightTimer) scheduleNextMidnight();
+            return status;
+        }
+    };
+})();
+
 Object.assign(AvatarButtonMixin.methods, {
     buttons(ManagerPrototype, prefix, options) {
         ManagerPrototype.getDefaultButtonConfigs = function() {
@@ -15,13 +163,14 @@ Object.assign(AvatarButtonMixin.methods, {
                     iconOn: `/static/icons/mic_icon_on.png${iconVersion}`
                 },
                 {
+                    // 手机布局不渲染麦克风设置 trigger，因此保留一个可直接触发
+                    // 屏幕分享的入口；桌面仍通过语音设置里的开关控制。
                     id: 'screen',
-                    emoji: '🖥️',
                     title: window.t ? window.t('buttons.screenShare') : '屏幕分享',
                     titleKey: 'buttons.screenShare',
-                    hasPopup: true,
+                    hasPopup: false,
                     toggle: true,
-                    separatePopupTrigger: true,
+                    mobileOnly: true,
                     iconOff: `/static/icons/screen_icon_off.png${iconVersion}`,
                     iconOn: `/static/icons/screen_icon_on.png${iconVersion}`
                 },
@@ -35,6 +184,16 @@ Object.assign(AvatarButtonMixin.methods, {
                     exclusive: 'settings',
                     iconOff: `/static/icons/Agent_off.png${iconVersion}`,
                     iconOn: `/static/icons/Agent_on.png${iconVersion}`
+                },
+                {
+                    // N.E.K.O.Servers 社交平台入口（替代桌面 screen 槽位）。
+                    id: 'social',
+                    title: window.t ? window.t('buttons.social') : '喵宇宙',
+                    titleKey: 'buttons.social',
+                    hasPopup: false,
+                    iconOff: `/static/icons/neko_community_off.png${iconVersion}`,
+                    iconOn: `/static/icons/neko_community_on.png${iconVersion}`,
+                    imageRendering: 'auto'
                 },
                 {
                     id: 'settings',
@@ -68,6 +227,9 @@ Object.assign(AvatarButtonMixin.methods, {
 
             // 创建包装器
             const btnWrapper = document.createElement('div');
+            if (config.mobileOnly) {
+                btnWrapper.dataset.mobileOnly = 'true';
+            }
             Object.assign(btnWrapper.style, {
                 position: 'relative',
                 display: 'flex',
@@ -126,7 +288,7 @@ Object.assign(AvatarButtonMixin.methods, {
                     transition: 'opacity 0.3s ease',
                     transform: 'translate(-50%, -50%)',
                     transformOrigin: 'center center',
-                    imageRendering: 'crisp-edges'
+                    imageRendering: config.imageRendering || 'crisp-edges'
                 });
 
                 imgOn = document.createElement('img');
@@ -145,7 +307,7 @@ Object.assign(AvatarButtonMixin.methods, {
                     transition: 'opacity 0.3s ease',
                     transform: 'translate(-50%, -50%)',
                     transformOrigin: 'center center',
-                    imageRendering: 'crisp-edges'
+                    imageRendering: config.imageRendering || 'crisp-edges'
                 });
 
                 imgContainer.appendChild(imgOff);
@@ -175,6 +337,17 @@ Object.assign(AvatarButtonMixin.methods, {
                 pointerEvents: 'auto'
             });
 
+            if (config.id === 'social' && window.nekoSocialUnlock) {
+                // 捕获阶段拦截，保证各渲染器稍后注册的 click 监听器无法绕过锁定。
+                btn.addEventListener('click', (e) => {
+                    if (window.nekoSocialUnlock.isLocked()) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                    }
+                }, true);
+                window.nekoSocialUnlock.registerButton(btn, imgOff, imgOn);
+            }
+
             // 阻止按钮上的指针事件传播
             const stopBtnEvent = (e) => { e.stopPropagation(); };
             ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend'].forEach(evt => {
@@ -183,6 +356,10 @@ Object.assign(AvatarButtonMixin.methods, {
 
             // 悬停效果
             btn.addEventListener('mouseenter', () => {
+                if (config.id === 'social' && window.nekoSocialUnlock && window.nekoSocialUnlock.isLocked()) {
+                    window.nekoSocialUnlock.applyButtonState(btn, imgOff, imgOn);
+                    return;
+                }
                 btn.style.transform = 'scale(1.05)';
                 btn.style.boxShadow = 'var(--neko-btn-shadow-hover, 0 4px 8px rgba(0,0,0,0.08), 0 8px 16px rgba(0,0,0,0.08))';
                 btn.style.background = 'var(--neko-btn-bg-hover, rgba(255, 255, 255, 0.8))';
@@ -200,6 +377,10 @@ Object.assign(AvatarButtonMixin.methods, {
             });
 
             btn.addEventListener('mouseleave', () => {
+                if (config.id === 'social' && window.nekoSocialUnlock && window.nekoSocialUnlock.isLocked()) {
+                    window.nekoSocialUnlock.applyButtonState(btn, imgOff, imgOn);
+                    return;
+                }
                 btn.style.transform = 'scale(1)';
                 btn.style.boxShadow = 'var(--neko-btn-shadow, 0 2px 4px rgba(0,0,0,0.04), 0 4px 8px rgba(0,0,0,0.08))';
                 const isActive = btn.dataset.active === 'true';
@@ -220,6 +401,15 @@ Object.assign(AvatarButtonMixin.methods, {
             });
 
             return { btnWrapper, btn, imgOff, imgOn };
+        };
+
+        ManagerPrototype.syncResponsiveButtonVisibility = function(buttonsContainer) {
+            const isMobile = typeof window.isMobileWidth === 'function'
+                ? window.isMobileWidth()
+                : window.innerWidth <= 768;
+            buttonsContainer.querySelectorAll('[data-mobile-only="true"]').forEach((wrapper) => {
+                wrapper.style.display = isMobile ? 'flex' : 'none';
+            });
         };
 
         /**

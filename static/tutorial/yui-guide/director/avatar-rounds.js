@@ -994,6 +994,10 @@
             const nextSceneId = scene && typeof scene.id === 'string' ? scene.id : '';
             return !!(
                 (
+                    previousSceneId === 'day1_takeover_capture_cursor'
+                    && nextSceneId === 'day1_takeover_return_control'
+                )
+                || (
                     previousSceneId === 'day2_intro_context'
                     && nextSceneId === 'day2_screen_entry'
                 )
@@ -1625,7 +1629,7 @@
                     existingHud && existingHud.style.display !== 'none' && this.isElementVisible(existingHud)
                 );
                 if (window.AgentHUD && typeof window.AgentHUD.showAgentTaskHUD === 'function') {
-                    window.AgentHUD.showAgentTaskHUD();
+                    window.AgentHUD.showAgentTaskHUD({ ignoreVisibilityPreference: true });
                     this.avatarFloatingGuideTemporaryHudShown = true;
                     if (typeof window.AgentHUD.expandAgentTaskHUD === 'function') {
                         window.AgentHUD.expandAgentTaskHUD();

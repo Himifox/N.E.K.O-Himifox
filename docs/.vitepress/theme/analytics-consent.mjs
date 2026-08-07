@@ -1,8 +1,21 @@
+import { LOCALE_HOME_PATHS, SITE_ORIGIN } from '../seo-shared.mjs'
+
 export const GA4_MEASUREMENT_ID = 'G-N4QZK4PHE3'
 export const ANALYTICS_CONSENT_STORAGE_KEY = 'neko.docs.analytics-consent.v1'
 export const ANALYTICS_CONSENT_EVENT = 'neko:analytics-consent-changed'
+export const STEAM_CTA_EVENT_NAME = 'steam_cta_click'
+export const DOCS_HOME_EVENT_NAME = 'docs_home_click'
+export const ANALYTICS_CAMPAIGN_PARAMETERS = Object.freeze([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+])
 
 const GOOGLE_TAG_SCRIPT_ID = 'neko-google-analytics'
+const STEAM_STORE_HOSTNAME = 'store.steampowered.com'
+const STEAM_APP_PATH = '/app/4099310'
 const CONSENT_VERSION = 1
 const CONSENT_TTL_MILLISECONDS = 180 * 24 * 60 * 60 * 1000
 const DENIED_CONSENT = Object.freeze({
@@ -18,6 +31,7 @@ const ANALYTICS_GRANTED_CONSENT = Object.freeze({
 
 let runtimeChoice = null
 let analyticsEnabled = false
+const trackedDocuments = new WeakSet()
 
 function browserStorage(windowObject = globalThis.window) {
   try {
@@ -111,6 +125,28 @@ function installGtag(windowObject) {
   return windowObject.gtag
 }
 
+export function sanitizeAnalyticsPageUrl(
+  target,
+  baseUrl = globalThis.window?.location?.href || 'https://project-neko.online/',
+) {
+  const sourceUrl = new URL(target || baseUrl, baseUrl)
+  const sanitizedUrl = new URL(sourceUrl.origin)
+  sanitizedUrl.pathname = sourceUrl.pathname
+
+  for (const parameter of ANALYTICS_CAMPAIGN_PARAMETERS) {
+    const value = sourceUrl.searchParams.get(parameter)
+    if (value) sanitizedUrl.searchParams.set(parameter, value.slice(0, 100))
+  }
+  return sanitizedUrl
+}
+
+export function normalizeAnalyticsDestinationUrl(target, baseUrl) {
+  const destinationUrl = new URL(target, baseUrl)
+  const normalizedUrl = new URL(destinationUrl.origin)
+  normalizedUrl.pathname = destinationUrl.pathname
+  return normalizedUrl
+}
+
 export function trackAnalyticsPageView(
   target,
   {
@@ -126,15 +162,170 @@ export function trackAnalyticsPageView(
     return false
   }
 
-  const pageUrl = new URL(
+  const pageUrl = sanitizeAnalyticsPageUrl(
     target || windowObject.location.href,
-    windowObject.location.origin,
+    windowObject.location.href,
   )
   windowObject.gtag('event', 'page_view', {
     page_location: pageUrl.href,
     page_path: `${pageUrl.pathname}${pageUrl.search}`,
     page_title: documentObject.title,
   })
+  return true
+}
+
+export function isSteamCtaUrl(
+  target,
+  baseUrl = 'https://project-neko.online/',
+) {
+  try {
+    const url = new URL(target, baseUrl)
+    const normalizedPath = url.pathname.replace(/\/+$/, '')
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === STEAM_STORE_HOSTNAME &&
+      (normalizedPath === STEAM_APP_PATH ||
+        normalizedPath.startsWith(`${STEAM_APP_PATH}/`))
+    )
+  } catch {
+    return false
+  }
+}
+
+function normalizedDocsPath(pathname) {
+  if (pathname === '/') return '/'
+  return `${pathname.replace(/\/+$/, '')}/`
+}
+
+export function isDocsHomeUrl(
+  target,
+  currentUrl = `${SITE_ORIGIN}/guide/`,
+) {
+  try {
+    const current = new URL(currentUrl, SITE_ORIGIN)
+    const destination = new URL(target, current)
+    const currentPath = normalizedDocsPath(current.pathname)
+    const destinationPath = normalizedDocsPath(destination.pathname)
+    return (
+      current.origin === SITE_ORIGIN
+      && destination.origin === SITE_ORIGIN
+      && LOCALE_HOME_PATHS.has(destinationPath)
+      && !LOCALE_HOME_PATHS.has(currentPath)
+    )
+  } catch {
+    return false
+  }
+}
+
+function closestAnchor(target) {
+  if (typeof target?.closest === 'function') return target.closest('a[href]')
+  return target?.parentElement?.closest?.('a[href]') ?? null
+}
+
+export function trackSteamCtaClick(
+  anchor,
+  {
+    windowObject = globalThis.window,
+    documentObject = globalThis.document,
+  } = {},
+) {
+  if (
+    !analyticsEnabled ||
+    getAnalyticsConsent({ storage: browserStorage(windowObject) }) !== 'granted' ||
+    typeof windowObject?.gtag !== 'function'
+  ) {
+    return false
+  }
+
+  const rawUrl = anchor?.href || anchor?.getAttribute?.('href')
+  const baseUrl = windowObject?.location?.href || windowObject?.location?.origin
+  if (!rawUrl || !isSteamCtaUrl(rawUrl, baseUrl)) return false
+
+  const linkUrl = new URL(rawUrl, baseUrl)
+  const normalizedLinkUrl = normalizeAnalyticsDestinationUrl(rawUrl, baseUrl)
+  const sanitizedLinkUrl = sanitizeAnalyticsPageUrl(rawUrl, baseUrl)
+  const pageUrl = sanitizeAnalyticsPageUrl(
+    windowObject.location.href,
+    windowObject.location.href,
+  )
+  const eventParameters = {
+    link_url: normalizedLinkUrl.href,
+    link_domain: linkUrl.hostname,
+    cta_location:
+      sanitizedLinkUrl.searchParams.get('utm_content') || 'unspecified',
+    page_location: pageUrl.href,
+    page_title: documentObject?.title || '',
+    transport_type: 'beacon',
+  }
+
+  windowObject.gtag('event', STEAM_CTA_EVENT_NAME, eventParameters)
+  return true
+}
+
+export function handleSteamCtaClick(event, options = {}) {
+  const anchor = closestAnchor(event?.target)
+  if (!anchor) return false
+  return trackSteamCtaClick(anchor, options)
+}
+
+export function trackDocsHomeClick(
+  anchor,
+  {
+    windowObject = globalThis.window,
+    documentObject = globalThis.document,
+  } = {},
+) {
+  if (
+    !analyticsEnabled
+    || getAnalyticsConsent({ storage: browserStorage(windowObject) }) !== 'granted'
+    || typeof windowObject?.gtag !== 'function'
+  ) {
+    return false
+  }
+
+  const rawUrl = anchor?.href || anchor?.getAttribute?.('href')
+  const currentUrl = windowObject?.location?.href || `${SITE_ORIGIN}/`
+  if (!rawUrl || !isDocsHomeUrl(rawUrl, currentUrl)) return false
+
+  const linkUrl = new URL(rawUrl, currentUrl)
+  const normalizedLinkUrl = normalizeAnalyticsDestinationUrl(rawUrl, currentUrl)
+  const pageUrl = sanitizeAnalyticsPageUrl(currentUrl, currentUrl)
+  const eventParameters = {
+    link_url: normalizedLinkUrl.href,
+    link_domain: linkUrl.hostname,
+    source_path: pageUrl.pathname,
+    destination_path: normalizedDocsPath(linkUrl.pathname),
+    page_location: pageUrl.href,
+    page_title: documentObject?.title || '',
+    transport_type: 'beacon',
+  }
+
+  windowObject.gtag('event', DOCS_HOME_EVENT_NAME, eventParameters)
+  return true
+}
+
+export function handleDocsHomeClick(event, options = {}) {
+  const anchor = closestAnchor(event?.target)
+  if (!anchor) return false
+  return trackDocsHomeClick(anchor, options)
+}
+
+export function installSteamCtaClickTracking({
+  windowObject = globalThis.window,
+  documentObject = globalThis.document,
+} = {}) {
+  if (
+    !documentObject?.addEventListener ||
+    trackedDocuments.has(documentObject)
+  ) {
+    return false
+  }
+
+  documentObject.addEventListener('click', (event) => {
+    handleSteamCtaClick(event, { windowObject, documentObject })
+    handleDocsHomeClick(event, { windowObject, documentObject })
+  })
+  trackedDocuments.add(documentObject)
   return true
 }
 

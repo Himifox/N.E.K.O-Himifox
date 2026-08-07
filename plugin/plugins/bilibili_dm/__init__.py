@@ -923,6 +923,22 @@ class BiliDMPlugin(NekoPluginBase):
 
             config_manager = get_config_manager()
 
+            # 会话 key 提前算：只有「要新建会话」时才需要等区域落定，已有会话的线路
+            # 早就冻好了，再等只会给每条消息平白加最多 1.5 秒。
+            session_key = self._build_session_key(sender_uid)
+
+            # 新会话的线路会连 base_url 一起冻进 OmniOfflineClient 并缓存整场，所以
+            # 先给仍在飞的区域探测一个收尾窗口（与 core/lifecycle、游戏会话池对偶）。
+            # 已落定时零开销；自配 API 用户不会因此发起探测。fail-open：插件不该因
+            # 区域探测本身出错而起不了会话。
+            # 必须在下面读角色数据**之前**等：等待期间用户可能切换当前角色，等完再
+            # 读才不会把切换前的人格冻进整场会话（与游戏会话池等待后重读对偶）。
+            if session_key not in self._user_sessions:
+                try:
+                    await config_manager.aensure_region_resolved()
+                except Exception as _geo_err:
+                    self.logger.warning(f"[GeoIP] 插件会话区域落定失败，退化到当前配置继续: {_geo_err}")
+
             # 获取角色数据
             master_name, her_name, _, catgirl_data, _, lanlan_prompt_map, _, _, _ = (
                 config_manager.get_character_data()
@@ -979,9 +995,7 @@ class BiliDMPlugin(NekoPluginBase):
                 should_use_memory if persist_memory is None else bool(persist_memory)
             )
 
-            # 会话管理
-            session_key = self._build_session_key(sender_uid)
-
+            # 会话管理（session_key 已在上面为区域落定判断算过）
             if session_key not in self._user_sessions:
                 self.logger.info(f"为 B站用户 {sender_uid} 创建新的 AI 会话")
 
@@ -1105,24 +1119,20 @@ class BiliDMPlugin(NekoPluginBase):
         user_title: str,
     ) -> str:
         """构建 AI 会话系统提示词"""
-        from config.prompts.prompts_sys import SESSION_INIT_PROMPT
-        from utils.language_utils import get_global_language
-
-        try:
-            from utils.i18n_utils import normalize_language_code
-        except Exception:
-            normalize_language_code = None
-
-        user_language = get_global_language()
-        short_language = (
-            normalize_language_code(user_language, format="short")
-            if normalize_language_code
-            else user_language
+        from config.prompts.prompts_sys import (
+            SESSION_INIT_PROMPT,
+            normalize_sys_prompt_locale,
         )
+        from utils.language_utils import get_global_language_full
+
+        # #2500 第 2 步：取全码再经 prompts_sys 归一。原先那次 format="short" 的
+        # 短码化是顺手做的、不是有意的——它把 zh-TW 塌成 zh，繁中用户拿简体模板，
+        # 下面那级 ``.get(user_language)`` 兜底永远够不到。⚠️ 也不能拿全码裸查：
+        # 简中的全码是 'zh-CN'，而 prompts_sys 这套表的简体键是 'zh'。
+        short_language = normalize_sys_prompt_locale(get_global_language_full())
 
         init_prompt_template = SESSION_INIT_PROMPT.get(
-            short_language,
-            SESSION_INIT_PROMPT.get(user_language, SESSION_INIT_PROMPT["en"]),
+            short_language, SESSION_INIT_PROMPT["en"],
         )
 
         system_prompt_parts = [
@@ -1139,19 +1149,23 @@ class BiliDMPlugin(NekoPluginBase):
                 async with httpx.AsyncClient(
                     timeout=5.0, proxy=None, trust_env=False
                 ) as client:
+                    # Bilibili has no explicit per-user locale.  Let Memory
+                    # Server restore the durable character locale instead of
+                    # persisting the host process fallback.
                     response = await client.get(
-                        f"http://127.0.0.1:{MEMORY_SERVER_PORT}/new_dialog/{her_name}"
+                        f"http://127.0.0.1:{MEMORY_SERVER_PORT}/new_dialog/{her_name}",
                     )
                     if response.is_success:
                         memory_context = response.text.strip()
                         if memory_context:
-                            from config.prompts.prompts_sys import CONTEXT_SUMMARY_READY
+                            from config.prompts.prompts_sys import (
+                                get_context_summary_ready,
+                            )
 
-                            context_ready_template = CONTEXT_SUMMARY_READY.get(
-                                short_language,
-                                CONTEXT_SUMMARY_READY.get(
-                                    user_language, CONTEXT_SUMMARY_READY["en"]
-                                ),
+                            # B站私聊是文字一对一，不是语音（与 QQ 插件、
+                            # 桌面 text 模式同一口径）。
+                            context_ready_template = get_context_summary_ready(
+                                short_language, input_mode="text",
                             )
                             system_prompt_parts.append(
                                 memory_context
@@ -1376,9 +1390,13 @@ class BiliDMPlugin(NekoPluginBase):
         from config import MEMORY_SERVER_PORT
 
         async with httpx.AsyncClient() as client:
+            # No Bilibili session locale is user-declared, so persistence-
+            # bearing endpoints must not receive the process fallback.
             response = await client.post(
                 f"http://localhost:{MEMORY_SERVER_PORT}/{endpoint}/{her_name}",
-                json={"input_history": json.dumps(messages, ensure_ascii=False)},
+                json={
+                    "input_history": json.dumps(messages, ensure_ascii=False),
+                },
                 timeout=timeout,
             )
             response.raise_for_status()

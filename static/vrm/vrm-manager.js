@@ -10,6 +10,38 @@ const VRM_IDLE_FPS = 30;
 const VRM_INTERACTIVE_FPS_HOLD_MS = 900;
 const VRM_IDLE_FPS_GOVERNOR_INTERVAL_MS = 300;
 
+const COMPRESSED_BUNDLED_VRMA_NAMES = new Set([
+    'liked',
+    'wait01',
+    'wait02',
+    'wait03',
+    'wait04',
+    'wait05',
+    '全身展示',
+    '射击姿态',
+    '屈伸运动',
+    '旋转',
+    '模特姿势',
+    '比 V 手势',
+    '致意问候'
+]);
+
+function normalizeBundledVrmAnimationPath(animationPath) {
+    const value = String(animationPath || '');
+    const match = value.match(/^\/static\/vrm\/animation\/([^/?#]+)\.vrma(?:[?#]|$)/i);
+    if (!match) {
+        return animationPath;
+    }
+    let assetName = match[1];
+    try {
+        assetName = decodeURIComponent(assetName);
+    } catch (_) {
+        // Keep the original path segment when it is not valid URI encoding.
+    }
+    if (!COMPRESSED_BUNDLED_VRMA_NAMES.has(assetName)) return animationPath;
+    return value.replace(/\.vrma(?=[?#]|$)/i, '.vrma.gz');
+}
+
 class VRMManager {
     constructor() {
         this.scene = null;
@@ -284,6 +316,7 @@ class VRMManager {
         }
 
         // ── 回退：旧的 lookAt 跟踪（CursorFollowController 未加载时） ──
+        if (!this.isMouseTrackingEnabled()) return;
         if (!this._ensureMouseLookAtResources()) return;
 
         if (!this._lookAtTarget) {
@@ -307,6 +340,7 @@ class VRMManager {
 
         if (!this._mouseMoveHandler) {
             this._mouseMoveHandler = (event) => {
+                if (!this.isMouseTrackingEnabled()) return;
                 // 供空闲低频 governor 判定"光标最近在动"（legacy 视线跟随路径）
                 this._lastLookAtPointerMoveAt = performance.now();
                 this._setLookAtTargetByMouse(event.clientX, event.clientY);
@@ -670,6 +704,7 @@ class VRMManager {
         this._exitIdleTickMode(false);
         if (this._animationFrameId) cancelAnimationFrame(this._animationFrameId);
         this._lastRenderTime = 0;
+        this._nextRenderTime = 0;
 
         // 帧体：rAF 驱动与空闲低频 interval 共用（interval 直接调用本函数，
         // 定时器周期即节流器，不经过 rAF 驱动里的 targetFrameRate 跳帧）
@@ -713,6 +748,11 @@ class VRMManager {
                         }
                     } else if (this._cursorFollow && !this._cursorFollow.isEnabled()) {
                         // CursorFollow 已加载但禁用 → 设为 null，SDK 内部自动跳过 lookAt 求解
+                        if (this.currentModel.vrm.lookAt.target !== null) {
+                            this.currentModel.vrm.lookAt.target = null;
+                        }
+                    } else if (!this.isMouseTrackingEnabled()) {
+                        // 旧 fallback 也必须遵守禁用状态（例如轻量卡片嵌入未加载 CursorFollow）
                         if (this.currentModel.vrm.lookAt.target !== null) {
                             this.currentModel.vrm.lookAt.target = null;
                         }
@@ -798,6 +838,31 @@ class VRMManager {
             if (this.renderer && this.scene && this.camera) {
                 this.renderer.render(this.scene, this.camera);
             }
+
+            // 10. VMC Protocol 采样钩子。全局 active 标志由按需加载的
+            // sender 维护；未显式启用时不调用任何 VMC 逐帧逻辑。
+            if (
+                window.__NEKO_VMC_ACTIVE__ === true
+                && window.vrmVmcSender
+                && this.currentModel
+                && this.currentModel.vrm
+            ) {
+                try {
+                    window.vrmVmcSender.sample(this.currentModel.vrm);
+                } catch (e) {
+                    // VMC 采样异常绝不能影响渲染循环。挂起采样避免每帧重试
+                    // 抛异常污染控制台；vrm-vmc-sender.js 的状态轮询会在后端
+                    // 仍启用 VMC 时自动恢复采样（最多延迟一个轮询周期）。
+                    console.warn('[VRM Manager] VMC sample failed, suspending hook:', e);
+                    if (typeof window.vrmVmcSender.suspendSampling === 'function') {
+                        window.vrmVmcSender.suspendSampling();
+                    } else {
+                        // Mixed-cache/third-party fallback: preserve the old
+                        // fail-closed behavior when suspension is unavailable.
+                        window.vrmVmcSender = null;
+                    }
+                }
+            }
         };
         this._renderFrame = renderFrame;
 
@@ -813,14 +878,28 @@ class VRMManager {
 
             this._animationFrameId = requestAnimationFrame(animateLoop);
 
-            // 帧率限制：根据 targetFrameRate 跳帧（0 = 不限帧，跟随 VSync）
+            // VMC 启用时使用累计目标时间，避免 144Hz 等非整数倍刷新率
+            // 下发送速率退化；关闭时保留原渲染节流行为，隔离功能影响。
             const now = performance.now();
             const targetFps = typeof window.targetFrameRate === 'number' ? window.targetFrameRate : 60;
             if (targetFps > 0) {
                 const frameInterval = 1000 / targetFps;
-                if (now - this._lastRenderTime < frameInterval * 0.9) return;
+                if (window.__NEKO_VMC_ACTIVE__ === true) {
+                    if (this._nextRenderTime <= 0 || now - this._nextRenderTime > frameInterval * 4) {
+                        this._nextRenderTime = now;
+                    }
+                    if (now < this._nextRenderTime) return;
+                    this._nextRenderTime += frameInterval;
+                    this._lastRenderTime = now;
+                } else {
+                    this._nextRenderTime = 0;
+                    if (now - this._lastRenderTime < frameInterval * 0.9) return;
+                    this._lastRenderTime = now;
+                }
+            } else {
+                this._nextRenderTime = 0;
+                this._lastRenderTime = now;
             }
-            this._lastRenderTime = now;
             renderFrame(now);
         };
         this._rafDriver = animateLoop;
@@ -874,6 +953,7 @@ class VRMManager {
         if (restartRaf && this.renderer && this.scene && this.camera &&
             !this._animationFrameId && this._rafDriver) {
             this._lastRenderTime = 0;
+            this._nextRenderTime = 0;
             this._animationFrameId = requestAnimationFrame(this._rafDriver);
         }
     }
@@ -1042,7 +1122,7 @@ class VRMManager {
                     targetScale = Math.max(0.4, Math.min(0.8, screenHeight / 1800));
                 } else if (unscaledHeight > 0 && Number.isFinite(unscaledHeight) && this.camera && this.camera.fov) {
                     // 使用固定参考距离（而非 camera.position.z，因相机可能已被 orbit 偏移）
-                    const targetScreenHeight = screenHeight * 0.45;
+                    const targetScreenHeight = screenHeight * 0.40;
                     const fov = this.camera.fov * (Math.PI / 180);
                     // 5 = vrm-core.js 首次加载计算缩放时所用的默认相机距离
                     //（见 vrm-core.js 里 `camera.position?.z || 5` 的 fallback）
@@ -1074,7 +1154,7 @@ class VRMManager {
                 const isMobileDevice = typeof window.isMobileWidth === 'function' ? window.isMobileWidth() : (screenWidth <= 768);
 
                 const scaledModelHeight = size.y > 0 ? size.y : 1.5;
-                const targetScreenHeight = screenHeight * 0.45;
+                const targetScreenHeight = screenHeight * 0.40;
                 const fov = this.camera.fov * (Math.PI / 180);
                 const distance = (scaledModelHeight / 2) / Math.tan(fov / 2) / targetScreenHeight * screenHeight;
 
@@ -1277,9 +1357,11 @@ class VRMManager {
         if (!this._animationFrameId) this.startAnimateLoop();
 
         // 获取默认循环动画路径：优先从 options 传入，其次从配置读取，最后使用默认值
-        const DEFAULT_LOOP_ANIMATION = options.idleAnimation ||
-            window.lanlan_config?.vrmIdleAnimation ||
-            '/static/vrm/animation/wait03.vrma';
+        const DEFAULT_LOOP_ANIMATION = normalizeBundledVrmAnimationPath(
+            options.idleAnimation ||
+                window.lanlan_config?.vrmIdleAnimation ||
+                '/static/vrm/animation/wait03.vrma.gz'
+        );
 
         // 确保 animation 模块已初始化
         if (!this.animation) {
@@ -1522,7 +1604,10 @@ class VRMManager {
 
     async playVRMAAnimation(url, opts) {
         if (!this.animation) this._initModules();
-        if (this.animation) return this.animation.playVRMAAnimation(url, opts);
+        if (this.animation) {
+            return this.animation.playVRMAAnimation(normalizeBundledVrmAnimationPath(url), opts);
+        }
+        return false;
     }
 
     seekVRMAAnimation(timeSeconds, options) {
@@ -1629,6 +1714,22 @@ class VRMManager {
      */
     async dispose() {
         console.log('[VRM Manager] 开始完整清理 VRM 资源...');
+        // Release the process-wide VMC publisher lease before tearing down
+        // the model. This also removes vrm-vmc-sender.js' strong reference to
+        // the VRM so switching to Live2D/MMD cannot retain a disposed model.
+        const vmcVrm = this.currentModel?.vrm;
+        if (
+            vmcVrm
+            && window.__NEKO_VMC_ACTIVE__ === true
+            && window.vrmVmcSender
+            && typeof window.vrmVmcSender.releaseVrm === 'function'
+        ) {
+            try {
+                window.vrmVmcSender.releaseVrm(vmcVrm);
+            } catch (error) {
+                console.warn('[VRM Manager] VMC source release failed:', error);
+            }
+        }
         this._isDisposed = true;
 
         // 使在途的 loadModel 失效：bump token 后，被取代的旧 load 的 core.loadModel
@@ -1857,7 +1958,21 @@ class VRMManager {
 
         if (this._cursorFollow) {
             this._cursorFollow.setEnabled(effectiveEnabled);
+            return;
         }
+
+        if (!effectiveEnabled) {
+            if (this._mouseMoveHandler) {
+                document.removeEventListener('mousemove', this._mouseMoveHandler);
+                this._mouseMoveHandler = null;
+            }
+            if (this.currentModel?.vrm?.lookAt) {
+                this.currentModel.vrm.lookAt.target = null;
+            }
+            return;
+        }
+
+        this._initMouseLookAtTracking();
     }
 
     /**

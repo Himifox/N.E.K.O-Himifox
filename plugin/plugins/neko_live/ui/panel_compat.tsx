@@ -22,12 +22,12 @@ import {
   Tabs,
   Text,
   Textarea,
-  Tooltip,
   Toolbar,
   ToolbarGroup,
   useCallback,
   useEffect,
   useForm,
+  useRef,
   useState,
   useToast,
 } from "@neko/plugin-ui"
@@ -51,6 +51,7 @@ type LiveConfig = {
   live_platform?: string
   live_room_ref?: string
   live_room_id?: number
+  twitch_client_id?: string
   live_enabled?: boolean
   avatar_roast_enabled?: boolean
   avatar_analysis_enabled?: boolean
@@ -103,6 +104,7 @@ const configDefaults = {
   live_platform: "bilibili",
   live_room_ref: "",
   live_room_id: "0",
+  twitch_client_id: "",
   douyin_cookie: "",
   douyin_uid: "",
   douyin_nickname: "",
@@ -181,14 +183,18 @@ function liveStateTone(state: string): "success" | "warning" | "danger" | "defau
 }
 
 function recentResultTone(status: string): "success" | "warning" | "danger" | "default" {
+  // "pushed"/"queued" only mean the request was handed to the host
+  // (submitted/awaiting), not that the cat actually spoke on stream —
+  // keep "queued" neutral, never a warning.
   if (status === "pushed") return "success"
+  if (status === "queued") return "default"
   if (status === "failed") return "danger"
   if (status === "skipped") return "warning"
   return "default"
 }
 
 function speechExplanationTone(summary: string): "success" | "warning" | "danger" | "default" {
-  if (summary === "ready" || summary === "recently_spoke") return "success"
+  if (summary === "ready" || summary === "recently_handed_off" || summary === "recently_spoke") return "success"
   if (summary === "cannot_stream" || summary === "failed") return "danger"
   if (summary === "test_only" || summary === "temporarily_not_speaking" || summary === "waiting_for_activity" || summary === "recently_skipped") return "warning"
   return "default"
@@ -287,7 +293,8 @@ function labelFallback(group: string, value: string): string {
       temporarily_not_speaking: "NEKO 暂时不会说话",
       cannot_stream: "NEKO 还不能开播",
       waiting_for_activity: "正在等合适的开口时机",
-      recently_spoke: "NEKO 刚刚说过话",
+      recently_handed_off: "最近请求已交给宿主",
+      recently_spoke: "最近请求已交给宿主",
       recently_skipped: "最近事件没有输出",
       failed: "最近输出失败",
       waiting: "正在等待合适时机",
@@ -307,7 +314,8 @@ function labelFallback(group: string, value: string): string {
       quiet_activity_gap: "直播间已经安静了一小会。",
       no_recent_activity: "最近没有新的互动。",
       waiting_for_viewer_or_idle_slot: "正在等待观众接话或冷场补位时机。",
-      recent_output: "NEKO 刚刚已经输出过。",
+      host_handoff: "最近请求已交给宿主；尚未确认播放完成。",
+      recent_output: "最近请求已交给宿主；尚未确认播放完成。",
       recently_skipped: "最近事件被策略跳过。",
       failed: "最近输出链路失败。",
       "dispatcher.dry_run": "Dispatcher 以 dry_run 完成。",
@@ -1305,6 +1313,8 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
   const [queriedRoomRef, setQueriedRoomRef] = useState("")
   const [loginState, setLoginState] = useState<any>(null)
   const [douyinAuthState, setDouyinAuthState] = useState<any>(null)
+  const [twitchAuthState, setTwitchAuthState] = useState<any>(null)
+  const [twitchRemainingSeconds, setTwitchRemainingSeconds] = useState(0)
   const [consoleDialog, setConsoleDialog] = useState<"account" | "room" | "theme" | "pacing" | "diagnostics" | "">("")
   const [interactionDialog, setInteractionDialog] = useState<"avatar_roast" | "danmaku_response" | "live_support_events" | "warmup_hosting" | "idle_hosting" | "active_engagement" | "">("")
   const [connectPending, setConnectPending] = useState(false)
@@ -1343,6 +1353,20 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
   const sandboxForm = useForm({ ...sandboxDefaults })
   const presetViewerNickname = t("panel.dev.emitter.defaultNickname")
   const presetViewerDanmaku = t("panel.dev.emitter.defaultDanmaku")
+  const twitchPollTimerRef = useRef<number | null>(null)
+  const twitchPollGenerationRef = useRef(0)
+  const twitchPollIntervalRef = useRef(5)
+  const twitchPollBackoffRef = useRef(0)
+  const twitchValidationClientRef = useRef("")
+  const twitchValidationGenerationRef = useRef(0)
+
+  function stopTwitchAuthorizationPolling() {
+    twitchPollGenerationRef.current += 1
+    if (twitchPollTimerRef.current !== null) {
+      window.clearTimeout(twitchPollTimerRef.current)
+      twitchPollTimerRef.current = null
+    }
+  }
 
   useEffect(() => {
     try {
@@ -1352,6 +1376,10 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
     } catch {
       /* The panel remains usable when the host blocks browser storage. */
     }
+  }, [])
+
+  useEffect(() => () => {
+    twitchValidationGenerationRef.current += 1
   }, [])
 
   useEffect(() => {
@@ -1367,6 +1395,7 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
       idle_hosting_enabled: config.idle_hosting_enabled !== false,
       active_engagement_enabled: config.active_engagement_enabled !== false,
       live_room_id: String(config.live_room_id || ""),
+      twitch_client_id: String(config.twitch_client_id || ""),
       douyin_cookie: configForm.values.douyin_cookie || "",
       douyin_uid: configForm.values.douyin_uid || "",
       douyin_nickname: configForm.values.douyin_nickname || "",
@@ -1398,6 +1427,7 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
     config.idle_hosting_enabled,
     config.active_engagement_enabled,
     config.live_room_id,
+    config.twitch_client_id,
     config.developer_tools_enabled,
     config.live_mode,
     config.activity_level,
@@ -1862,6 +1892,69 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
     }
   }
 
+  async function twitchAuthorize() {
+    if (authPending || sessionInProgress) return
+    const clientId = String(configForm.values.twitch_client_id || "").trim()
+    if (!clientId) {
+      toast.error(t("panel.placeholders.twitchClientId"))
+      return
+    }
+    setAuthPending("twitch_device_authorization_start")
+    try {
+      const result = unwrapActionResult(await props.api.call("twitch_device_authorization_start", { client_id: clientId }))
+      setTwitchAuthState(result)
+      if (result.started === true && result.pending === true) toast.info(t("panel.twitchAuth.deviceHint"))
+      else toast.error(String(result.message || t("panel.twitchAuth.notAuthorized")))
+      await refreshDashboard(true)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAuthPending("")
+    }
+  }
+
+  async function twitchCancelAuthorization() {
+    if (authPending || sessionInProgress) return
+    stopTwitchAuthorizationPolling()
+    setTwitchAuthState(null)
+    setAuthPending("twitch_device_authorization_cancel")
+    try {
+      const result = unwrapActionResult(await props.api.call("twitch_device_authorization_cancel"))
+      setTwitchAuthState(result)
+      if (result.cancelled === true) toast.info(t("panel.twitchAuth.cancelled"))
+      else if (result.logged_in === true) toast.success(t("panel.twitchAuth.authorized"))
+      else if (result.pending === true) toast.info(t("panel.twitchAuth.deviceHint"))
+      else toast.warning(t("panel.twitchAuth.notAuthorized"))
+      await refreshDashboard(true)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+      setTwitchAuthState(null)
+      try {
+        setTwitchAuthState(unwrapActionResult(await props.api.call("twitch_login_status")))
+      } catch {
+        /* A later panel refresh can recover the pending session. */
+      }
+    } finally {
+      setAuthPending("")
+    }
+  }
+
+  async function twitchLogout() {
+    if (authPending || sessionInProgress) return
+    stopTwitchAuthorizationPolling()
+    setAuthPending("twitch_logout")
+    try {
+      const result = unwrapActionResult(await props.api.call("twitch_logout"))
+      setTwitchAuthState(result)
+      toast.success(t("panel.actions.twitchLogout"))
+      await refreshDashboard(true)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAuthPending("")
+    }
+  }
+
   useEffect(() => {
     ;(async () => {
       try {
@@ -1874,8 +1967,124 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
       } catch {
         /* Douyin auth status is optional until that provider is selected. */
       }
+      try {
+        setTwitchAuthState(unwrapActionResult(await props.api.call("twitch_login_status")))
+      } catch {
+        /* Twitch auth status is optional until that provider is selected. */
+      }
     })()
   }, [])
+
+  useEffect(() => {
+    if (twitchAuthState?.pending !== true) return
+    const generation = twitchPollGenerationRef.current + 1
+    twitchPollGenerationRef.current = generation
+    const expiresAt = Date.now() + Math.max(0, Number(twitchAuthState.expires_in) || 0) * 1000
+    const safeInterval = (value: unknown) => Math.min(60, Math.max(5, Number(value) || 5))
+    twitchPollIntervalRef.current = safeInterval(twitchAuthState.interval)
+    twitchPollBackoffRef.current = 0
+    const clearPollTimer = () => {
+      if (twitchPollTimerRef.current !== null) {
+        window.clearTimeout(twitchPollTimerRef.current)
+        twitchPollTimerRef.current = null
+      }
+    }
+    const schedule = (seconds: number) => {
+      if (twitchPollGenerationRef.current !== generation) return
+      if (document.visibilityState !== "visible") return
+      clearPollTimer()
+      twitchPollTimerRef.current = window.setTimeout(poll, safeInterval(seconds) * 1000)
+    }
+    const poll = async () => {
+      if (twitchPollGenerationRef.current !== generation) return
+      if (document.visibilityState !== "visible") return
+      if (expiresAt > 0 && Date.now() >= expiresAt) {
+        setTwitchAuthState({ platform: "twitch", logged_in: false, pending: false, authorization_state: "unauthorized" })
+        toast.warning(t("panel.twitchAuth.expired"))
+        return
+      }
+      try {
+        const result = unwrapActionResult(await props.api.call("twitch_device_authorization_check"))
+        if (twitchPollGenerationRef.current !== generation) return
+        setTwitchAuthState(result)
+        if (result.logged_in === true) {
+          toast.success(t("panel.twitchAuth.authorized"))
+          await refreshDashboard(true)
+          return
+        }
+        if (result.pending === true) {
+          twitchPollIntervalRef.current = safeInterval(result.interval)
+          twitchPollBackoffRef.current = 0
+          schedule(twitchPollIntervalRef.current)
+          return
+        }
+        toast.warning(t("panel.twitchAuth.notAuthorized"))
+        await refreshDashboard(true)
+      } catch {
+        if (twitchPollGenerationRef.current !== generation) return
+        twitchPollBackoffRef.current = Math.min(
+          60,
+          twitchPollBackoffRef.current > 0 ? twitchPollBackoffRef.current * 2 : twitchPollIntervalRef.current,
+        )
+        schedule(twitchPollBackoffRef.current)
+      }
+    }
+    const handleTwitchVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        clearPollTimer()
+        return
+      }
+      schedule(twitchPollBackoffRef.current || twitchPollIntervalRef.current)
+    }
+    document.addEventListener("visibilitychange", handleTwitchVisibilityChange)
+    schedule(twitchPollIntervalRef.current)
+    return () => {
+      document.removeEventListener("visibilitychange", handleTwitchVisibilityChange)
+      if (twitchPollGenerationRef.current === generation) stopTwitchAuthorizationPolling()
+    }
+  }, [twitchAuthState?.pending])
+
+  useEffect(() => {
+    if (twitchAuthState?.pending !== true) {
+      setTwitchRemainingSeconds(0)
+      return
+    }
+    const deadline = Date.now() + Math.max(0, Number(twitchAuthState.expires_in) || 0) * 1000
+    let timer: number | null = null
+    const updateRemaining = () => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      setTwitchRemainingSeconds(remaining)
+      if (remaining > 0) timer = window.setTimeout(updateRemaining, 1000)
+    }
+    updateRemaining()
+    return () => {
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [twitchAuthState?.pending, twitchAuthState?.expires_in])
+
+  useEffect(() => {
+    const selectedPlatform = String(configForm.values.live_platform || config.live_platform || "bilibili")
+    const clientId = String(configForm.values.twitch_client_id || "").trim()
+    if (consoleDialog !== "account" || selectedPlatform !== "twitch" || twitchAuthState?.authorization_state !== "unverified" || !clientId) return
+    if (twitchValidationClientRef.current === clientId) return
+    twitchValidationClientRef.current = clientId
+    const generation = twitchValidationGenerationRef.current + 1
+    twitchValidationGenerationRef.current = generation
+    ;(async () => {
+      try {
+        const result = unwrapActionResult(await props.api.call("twitch_credential_validate"))
+        if (twitchValidationGenerationRef.current !== generation) return
+        setTwitchAuthState(result)
+        if (result.logged_in !== true) toast.warning(t("panel.twitchAuth.notAuthorized"))
+        await refreshDashboard(true)
+      } catch {
+        if (twitchValidationGenerationRef.current === generation) {
+          twitchValidationClientRef.current = ""
+          toast.warning(t("panel.twitchAuth.notAuthorized"))
+        }
+      }
+    })()
+  }, [consoleDialog, configForm.values.live_platform, configForm.values.twitch_client_id, twitchAuthState?.authorization_state])
 
   async function callSimple(action: string) {
     if (simpleActionPending) return
@@ -2076,9 +2285,10 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
     panelText(t, `${keyPrefix}.${value}`, labelFallback(group, value))
   )
   const livePlatform = String(configForm.values.live_platform || config.live_platform || "bilibili")
-  const livePlatformLabel = t(`panel.platform.${livePlatform === "douyin" ? "douyin" : "bilibili"}`)
-  const roomFieldLabel = livePlatform === "douyin" ? t("panel.fields.douyinRoom") : t("panel.fields.roomId")
-  const roomPlaceholder = livePlatform === "douyin" ? t("panel.placeholders.douyinRoom") : t("panel.placeholders.roomId")
+  const livePlatformKey = livePlatform === "douyin" ? "douyin" : livePlatform === "twitch" ? "twitch" : "bilibili"
+  const livePlatformLabel = t(`panel.platform.${livePlatformKey}`)
+  const roomFieldLabel = livePlatform === "douyin" ? t("panel.fields.douyinRoom") : livePlatform === "twitch" ? t("panel.fields.twitchRoom") : t("panel.fields.roomId")
+  const roomPlaceholder = livePlatform === "douyin" ? t("panel.placeholders.douyinRoom") : livePlatform === "twitch" ? t("panel.placeholders.twitchRoom") : t("panel.placeholders.roomId")
   const configuredRoomRef = String(config.live_room_ref || config.live_room_id || "").trim()
   const currentRoomRef = String(connection.room_ref || configuredRoomRef || "").trim()
   const lookupRoomRef = String(liveRoomResult?.room_ref || liveRoomResult?.room_id || "").trim()
@@ -2102,6 +2312,13 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
   const douyinSavedAt = String((douyinAuthState && douyinAuthState.saved_at) || "")
   const douyinValidationMessage = String((douyinAuthState && douyinAuthState.message) || "")
   const douyinValidationStatus = String((douyinAuthState && douyinAuthState.live_status) || "")
+  const twitchLoggedIn = twitchAuthState?.logged_in === true
+  const twitchAuthorizationPending = twitchAuthState?.pending === true
+  const twitchAuthorizationUnverified = twitchAuthState?.authorization_state === "unverified"
+  const twitchClientIdConfigured = Boolean(String(configForm.values.twitch_client_id || "").trim())
+  const twitchAuthorizationValidating = twitchAuthorizationUnverified && twitchClientIdConfigured
+  const twitchLogin = String(twitchAuthState?.display_name || twitchAuthState?.login || "")
+  const twitchUserId = String(twitchAuthState?.user_id || "")
   const connectionPlan = connection && typeof connection.connection_plan === "object" ? connection.connection_plan : null
   const connectionMissing = connectionPlan && Array.isArray(connectionPlan.missing) ? connectionPlan.missing.map((item: any) => String(item)).filter(Boolean) : []
   const reconnectState = connection && typeof connection.reconnect === "object" ? connection.reconnect : null
@@ -2133,13 +2350,13 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
     !!connectionLastError
   )
   const consoleState = connectPending || connectionTransitioning ? "connecting" : connectionFailed ? "error" : started ? "live" : "ready"
-  const accountReady = livePlatform === "douyin" ? douyinLoggedIn : loginLoggedIn
+  const accountReady = livePlatform === "douyin" ? douyinLoggedIn : livePlatform === "twitch" ? twitchLoggedIn : loginLoggedIn
   const connectionAuthMode = String(connection.auth_mode || "unknown")
   const limitedConnection = livePlatform === "bilibili" && !loginLoggedIn && (
     allowLimitedConnection || connectionAuthMode === "limited_accountless"
   )
   const loginRequired = livePlatform === "bilibili" && !loginLoggedIn && !limitedConnection
-  const accountStartReady = livePlatform === "bilibili" ? (loginLoggedIn || limitedConnection) : douyinLoggedIn
+  const accountStartReady = livePlatform === "bilibili" ? (loginLoggedIn || limitedConnection) : livePlatform === "twitch" ? twitchLoggedIn : douyinLoggedIn
   const savedCooldownSeconds = Number(config.rate_limit_seconds ?? configForm.values.rate_limit_seconds ?? 20)
   const liveSettingsReady = Boolean(String(config.live_mode || configForm.values.live_mode || "").trim()) && Number.isFinite(savedCooldownSeconds) && savedCooldownSeconds >= 0
   const unsafeSafetyStates = new Set(["paused", "tripped", "degraded"])
@@ -2177,7 +2394,7 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
   const safetyStatus = String(safety.status || "")
   const showSafetyStatus = started || (!!safetyStatus && safetyStatus !== "disconnected" && safetyStatus !== "unknown")
   const accountLabel = accountReady
-    ? (livePlatform === "douyin" ? (douyinNickname || douyinUid || t("panel.douyinAuth.cookieReady")) : (loginName || loginUid || t("panel.auth.loggedIn")))
+    ? (livePlatform === "douyin" ? (douyinNickname || douyinUid || t("panel.douyinAuth.cookieReady")) : livePlatform === "twitch" ? (twitchLogin || twitchUserId || t("panel.twitchAuth.authorized")) : (loginName || loginUid || t("panel.auth.loggedIn")))
     : (limitedConnection ? t("panel.console.limitedConnection") : t("panel.auth.loggedOut"))
   const modules = Array.isArray(safeState.modules) ? safeState.modules : []
 
@@ -2303,6 +2520,8 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
                     ? t("panel.messages.roomRequired")
                     : livePlatform === "douyin" && !douyinLoggedIn
                       ? t("panel.douyinAuth.cookieMissing")
+                      : livePlatform === "twitch" && !twitchLoggedIn
+                        ? (twitchAuthorizationValidating ? t("panel.twitchAuth.unverified") : t("panel.twitchAuth.notAuthorized"))
                       : loginRequired
                         ? t("panel.console.loginRequired")
                       : t("panel.console.readyHint")}
@@ -2313,6 +2532,48 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
             <Button tone="default" onClick={() => { openConsoleDialog("theme") }}>{t("panel.streamTheme.title")}</Button>
             <Button tone="default" onClick={() => { openConsoleDialog("pacing") }}>{t("panel.pacing.title")}</Button>
           </Grid>
+          <div
+            className="neko-live-inline-control"
+            aria-label={t("panel.console.runtimeTitle")}
+            title={!started && !canStart && !connectPending ? readinessReason : undefined}
+          >
+            {!started && !canStart && !connectPending ? (
+              <button
+                type="button"
+                className="neko-button"
+                data-tone="default"
+                aria-describedby="neko-live-readiness-reason"
+                disabled
+                style={{ width: "100%", minHeight: "48px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed" }}
+              >
+                <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "999px", background: "var(--warning)" }} />
+                {t("panel.console.preparation.notReady")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="neko-button"
+                data-tone={started ? "danger" : "success"}
+                disabled={connectPending || !!simpleActionPending}
+                onClick={() => {
+                  if (started) setStopConfirmOpen(true)
+                  else if (canStart) setStartConfirmOpen(true)
+                }}
+                style={{ width: "100%", minHeight: "48px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px" }}
+              >
+                <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "999px", background: started ? "var(--danger)" : connectPending ? "var(--primary)" : "var(--success)" }} />
+                {connectPending ? t("panel.console.state.connecting") : started ? t("panel.actions.disconnect") : t("panel.actions.connect")}
+              </button>
+            )}
+            {!started && !canStart && !connectPending ? (
+              <span
+                id="neko-live-readiness-reason"
+                style={{ position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}
+              >
+                {readinessReason}
+              </span>
+            ) : null}
+          </div>
         </Stack>
       </Card>
 
@@ -2344,6 +2605,7 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
               options={[
                 { value: "bilibili", label: t("panel.platform.bilibili") },
                 { value: "douyin", label: `${t("panel.platform.douyin")} ${t("panel.platform.incompleteSuffix")}` },
+                { value: "twitch", label: t("panel.platform.twitch") },
               ]}
               onChange={(value) => switchLivePlatform(String(value))}
             />
@@ -2368,6 +2630,25 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
                 <Button tone="danger" disabled={sessionInProgress || !!authPending} onClick={douyinCookieDelete}>{t("panel.actions.douyinCookieDelete")}</Button>
               </Grid>
               <Text>{t("panel.douyinAuth.manualHint")}</Text>
+            </Stack>
+          ) : livePlatform === "twitch" ? (
+            <Stack>
+              <StatusBadge tone={twitchLoggedIn ? "success" : "warning"} label={twitchLoggedIn ? (twitchLogin || t("panel.twitchAuth.authorized")) : twitchAuthorizationPending ? t("panel.twitchAuth.waiting") : twitchAuthorizationValidating ? t("panel.twitchAuth.validating") : t("panel.twitchAuth.notAuthorized")} />
+              <Field label={t("panel.fields.twitchClientId")}>
+                <Input disabled={sessionInProgress || !!authPending || twitchAuthorizationPending || twitchLoggedIn} value={configForm.values.twitch_client_id} placeholder={t("panel.placeholders.twitchClientId")} onChange={(value) => { configForm.setField("twitch_client_id", value) }} />
+              </Field>
+              {twitchAuthorizationPending && twitchAuthState?.user_code ? <CodeBlock>{`${t("panel.twitchAuth.userCode")}: ${String(twitchAuthState.user_code)}`}</CodeBlock> : null}
+              {twitchAuthorizationPending && twitchAuthState?.verification_uri ? <Text>{t("panel.twitchAuth.verificationUri")}: <a href={String(twitchAuthState.verification_uri)} target="_blank" rel="noreferrer">{String(twitchAuthState.verification_uri)}</a></Text> : null}
+              {twitchAuthorizationPending ? <Alert tone="info">{t("panel.twitchAuth.waitingCountdown", { seconds: twitchRemainingSeconds })}</Alert> : null}
+              {twitchAuthorizationPending ? (
+                <Button tone="danger" disabled={sessionInProgress || !!authPending} onClick={twitchCancelAuthorization}>{t("panel.actions.twitchCancelAuthorization")}</Button>
+              ) : twitchLoggedIn ? (
+                <Button tone="danger" disabled={sessionInProgress || !!authPending} onClick={twitchLogout}>{t("panel.actions.twitchLogout")}</Button>
+              ) : twitchAuthorizationValidating ? (
+                <Text>{t("panel.twitchAuth.validating")}</Text>
+              ) : (
+                <Button tone="success" disabled={sessionInProgress || !!authPending} onClick={twitchAuthorize}>{t("panel.actions.twitchAuthorize")}</Button>
+              )}
             </Stack>
           ) : (
             <Stack>
@@ -2569,65 +2850,6 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
         onCancel={() => { setStopConfirmOpen(false) }}
       />
         </Stack>
-      </div>
-      <div
-        className="neko-live-live-fab"
-        aria-label={t("panel.console.runtimeTitle")}
-        style={{ position: "fixed", right: "24px", bottom: "24px", zIndex: 100, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
-      >
-        {!started && !canStart && !connectPending ? (
-          <Tooltip content={readinessReason} placement="top">
-            <span tabIndex={0} style={{ display: "inline-flex" }}>
-              <button
-              type="button"
-              className="neko-button"
-              data-tone="default"
-              disabled
-              style={{ minWidth: "148px", minHeight: "48px", borderRadius: "999px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "not-allowed", boxShadow: "0 10px 28px rgba(15, 23, 42, 0.16)" }}
-            >
-              <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "999px", background: "var(--warning)" }} />
-              {t("panel.console.preparation.notReady")}
-              </button>
-            </span>
-          </Tooltip>
-        ) : (
-          <button
-            type="button"
-            className="neko-button"
-            data-tone={started ? "danger" : "success"}
-            disabled={connectPending || !!simpleActionPending}
-            onClick={() => {
-              if (started) setStopConfirmOpen(true)
-              else if (canStart) setStartConfirmOpen(true)
-            }}
-            style={{
-              minWidth: "148px",
-              minHeight: "48px",
-              borderRadius: "999px",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              boxShadow: "0 10px 28px rgba(15, 23, 42, 0.16)",
-              ...(!started && canStart && !simpleActionPending
-                ? {
-                    minWidth: "188px",
-                    minHeight: "56px",
-                    borderRadius: "16px",
-                    background: "rgba(103, 194, 58, 0.1)",
-                    borderColor: "rgba(103, 194, 58, 0.38)",
-                    color: "var(--success)",
-                    fontSize: "22px",
-                    fontWeight: 700,
-                    opacity: 1,
-                  }
-                : {}),
-            }}
-          >
-            <span aria-hidden="true" style={{ width: "8px", height: "8px", borderRadius: "999px", background: started ? "var(--danger)" : connectPending ? "var(--primary)" : "var(--success)" }} />
-            {connectPending ? t("panel.console.state.connecting") : started ? t("panel.actions.disconnect") : t("panel.actions.connect")}
-          </button>
-        )}
       </div>
     </div>
   )
@@ -3361,7 +3583,7 @@ export default function NekoLivePanel(props: CompatPluginSurfaceProps<DashboardS
                       columns={[
                         { key: "uid", label: "UID", render: (row: any) => row.uid || "-" },
                         { key: "nickname", label: t("panel.columns.nickname"), render: (row: any) => row.nickname || "-" },
-                        { key: "status", label: t("panel.columns.status"), render: (row: any) => <StatusBadge tone={row.status === "pushed" ? "success" : "warning"} label={localizedStatusCode(t, String(row.status || ""))} /> },
+                        { key: "status", label: t("panel.columns.status"), render: (row: any) => <StatusBadge tone={row.status === "pushed" ? "success" : row.status === "queued" ? "default" : "warning"} label={localizedStatusCode(t, String(row.status || ""))} /> },
                         { key: "reason", label: t("panel.columns.reason"), render: (row: any) => row.reason || row.output || "-" },
                       ]}
                     />

@@ -193,6 +193,18 @@ describe('App', () => {
   const renderInputApp = (
     props: React.ComponentProps<typeof App> = {},
   ) => render(<App compactChatState="input" {...props} />);
+  const pressEnter = (target: Element, options: { shiftKey?: boolean } = {}) => {
+    fireEvent.keyDown(target, {
+      key: 'Enter',
+      code: 'Enter',
+      shiftKey: options.shiftKey ?? false,
+    });
+    fireEvent.keyUp(target, {
+      key: 'Enter',
+      code: 'Enter',
+      shiftKey: options.shiftKey ?? false,
+    });
+  };
   const queryAvatarToolVisualOverlay = () => document.body.querySelector<HTMLElement>('.avatar-tool-visual-overlay');
   const queryAvatarToolImpactEffect = () => document.body.querySelector<HTMLElement>(
     '.avatar-tool-visual-overlay-hammer, .avatar-tool-impact-effect',
@@ -416,7 +428,7 @@ describe('App', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Emoji' }));
       const toolGroup = screen.getByRole('group', { name: 'Tool icons' });
-      expect(Array.from(toolGroup.querySelectorAll<HTMLButtonElement>('.composer-icon-button'))
+      expect(Array.from(toolGroup.querySelectorAll<HTMLButtonElement>('.composer-icon-button[data-avatar-tool-id]'))
         .map(button => button.getAttribute('aria-label'))).toEqual(['棒棒糖', '猫爪', '锤子']);
       fireEvent.click(screen.getByRole('button', { name: '棒棒糖' }));
 
@@ -448,6 +460,50 @@ describe('App', () => {
     } finally {
       restoreLive2dBounds();
     }
+  });
+
+  it('lets the full chat configure the avatar tools shown in its emoji menu', async () => {
+    const onAvatarToolStateChange = vi.fn();
+    const { container } = render(
+      <App
+        chatSurfaceMode="full"
+        assistantName="Neko"
+        onAvatarToolStateChange={onAvatarToolStateChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Emoji' }));
+    const toolGroup = screen.getByRole('group', { name: 'Tool icons' });
+    expect(toolGroup.querySelectorAll('[data-avatar-tool-id]')).toHaveLength(3);
+    expect(toolGroup).toHaveAttribute('data-avatar-tool-button-count', '4');
+    expect(toolGroup.querySelector('.full-avatar-tool-settings-divider')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Edit quick tools' })).toHaveClass(
+      'composer-icon-button',
+      'full-avatar-tool-settings-button',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit quick tools' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Manage tools' });
+    expect(dialog.querySelector('[data-avatar-tool-library-id="rps"]')).not.toBeNull();
+
+    fireEvent.click(dialog.querySelector('.avatar-tool-manager-remove') as HTMLButtonElement);
+    fireEvent.click(dialog.querySelector('[data-avatar-tool-library-id="rps"]') as HTMLButtonElement);
+    fireEvent.click(dialog.querySelector('.avatar-tool-manager-action.primary') as HTMLButtonElement);
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Manage tools' })).toBeNull());
+    expect(Array.from(toolGroup.querySelectorAll<HTMLElement>('[data-avatar-tool-id]'))
+      .map(button => button.dataset.avatarToolId)).toEqual(['rps', 'fist', 'hammer']);
+    expect(JSON.parse(window.localStorage.getItem(ACTIVE_AVATAR_TOOLS_STORAGE_KEY) || '[]'))
+      .toEqual(['rps', 'fist', 'hammer']);
+
+    fireEvent.click(container.querySelector('[data-avatar-tool-id="rps"]') as HTMLButtonElement);
+    await waitFor(() => expect(onAvatarToolStateChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      active: true,
+      toolId: 'rps',
+      roundChoiceResultLabels: expect.objectContaining({
+        avatar_win: 'Neko wins',
+      }),
+    })));
   });
 
   it('publishes only the strict desktop descriptor from the full chat surface', async () => {
@@ -3986,6 +4042,273 @@ describe('App', () => {
     }
   });
 
+  it('restores the compact empty state when active-route sync opens after the game turn starts', async () => {
+    vi.useFakeTimers();
+    const gameLine = '哈，这球终于被我拿下了！';
+    const gameMessage = parseChatMessage({
+      id: 'assistant-badminton-exit-line',
+      role: 'assistant',
+      author: 'YUI',
+      time: '12:23',
+      createdAt: 2,
+      turnId: 'badminton-exit-turn',
+      blocks: [{ type: 'text', text: gameLine }],
+      status: 'streaming',
+    });
+
+    try {
+      const { container, rerender } = render(<App chatSurfaceMode="compact" messages={[]} />);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(container.querySelector('.compact-chat-capsule-text')).toHaveTextContent(
+        DEFAULT_CHAT_EMPTY_STATE_FALLBACK,
+      );
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-start', {
+          detail: {
+            turnId: 'badminton-exit-turn',
+            source: 'visible_gemini_bubble',
+            meta: {
+              source: 'game_route',
+              kind: 'badminton',
+              session_id: 'badminton-session',
+              mirror: {
+                kind: 'badminton',
+                session_id: 'badminton-session',
+                event: {},
+              },
+            },
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'opened',
+            gameType: 'badminton',
+            sessionId: 'badminton-session',
+          },
+        }));
+      });
+      rerender(<App chatSurfaceMode="compact" messages={[gameMessage]} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(container.querySelector('.compact-chat-capsule-text')?.textContent ?? '').toBe('');
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'closed',
+            gameType: 'badminton',
+            sessionId: 'badminton-session',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(container.querySelector('.compact-chat-capsule-text')).toHaveTextContent(
+        DEFAULT_CHAT_EMPTY_STATE_FALLBACK,
+      );
+      expect(container.querySelector('.compact-chat-capsule-text')).not.toHaveTextContent(gameLine);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the compact empty state from an identity-less reconnect close for a tracked game', async () => {
+    vi.useFakeTimers();
+    const gameLine = '比赛已经结束啦！';
+
+    try {
+      const { container } = render(<App chatSurfaceMode="compact" messages={[]} />);
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-start', {
+          detail: {
+            turnId: 'reconnected-badminton-turn',
+            source: 'gemini_response_first_chunk',
+            meta: {
+              source: 'game_route',
+              kind: 'badminton',
+              session_id: 'reconnected-badminton-session',
+              mirror: {
+                kind: 'badminton',
+                session_id: 'reconnected-badminton-session',
+                event: {},
+              },
+            },
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-compact-caption-update', {
+          detail: {
+            turnId: 'reconnected-badminton-turn',
+            segmentId: 'reconnected-badminton-turn:segment:1',
+            text: gameLine,
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-assistant-speech-unavailable', {
+          detail: {
+            turnId: 'reconnected-badminton-turn',
+            source: 'test',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(container.querySelector('.compact-chat-capsule-text')?.textContent ?? '').not.toBe('');
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'closed',
+            gameType: '',
+            sessionId: '',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(container.querySelector('.compact-chat-capsule-text')).toHaveTextContent(
+        DEFAULT_CHAT_EMPTY_STATE_FALLBACK,
+      );
+      expect(container.querySelector('.compact-chat-capsule-text')).not.toHaveTextContent(gameLine);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the compact empty state after a text-less assistant turn fully ends', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const { container } = render(<App chatSurfaceMode="compact" messages={[]} />);
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-start', {
+          detail: {
+            turnId: 'badminton-postgame-turn',
+            source: 'test',
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-ending', {
+          detail: {
+            turnId: 'badminton-postgame-turn',
+            source: 'turn_end_flush',
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-end', {
+          detail: {
+            turnId: 'badminton-postgame-turn',
+            source: 'turn_end',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(container.querySelector('.compact-chat-capsule-text')).toHaveTextContent(
+        DEFAULT_CHAT_EMPTY_STATE_FALLBACK,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not bind an ordinary assistant caption to a stale active game session', async () => {
+    vi.useFakeTimers();
+    const normalLine = '这是一条与小游戏无关的正常回复。';
+
+    try {
+      const { container } = render(<App chatSurfaceMode="compact" messages={[]} />);
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'opened',
+            gameType: 'badminton',
+            sessionId: 'stale-game-session',
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-assistant-turn-start', {
+          detail: {
+            turnId: 'ordinary-assistant-turn',
+            source: 'gemini_response_first_chunk',
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-compact-caption-update', {
+          detail: {
+            turnId: 'ordinary-assistant-turn',
+            segmentId: 'ordinary-assistant-turn:segment:1',
+            text: normalLine,
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-assistant-speech-unavailable', {
+          detail: {
+            turnId: 'ordinary-assistant-turn',
+            source: 'test',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      const visibleBeforeSync = container.querySelector('.compact-chat-capsule-text')?.textContent ?? '';
+      expect(visibleBeforeSync.length).toBeGreaterThan(0);
+      expect(normalLine.startsWith(visibleBeforeSync)).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'closed',
+            gameType: '',
+            sessionId: '',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      const visibleAfterSync = container.querySelector('.compact-chat-capsule-text')?.textContent ?? '';
+      expect(visibleAfterSync.length).toBeGreaterThanOrEqual(visibleBeforeSync.length);
+      expect(normalLine.startsWith(visibleAfterSync)).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'opened',
+            gameType: 'badminton',
+            sessionId: 'overlapping-game-session',
+          },
+        }));
+        window.dispatchEvent(new CustomEvent('neko-game-window-state-change', {
+          detail: {
+            action: 'closed',
+            gameType: 'badminton',
+            sessionId: 'overlapping-game-session',
+          },
+        }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      const visibleAfterRealClose = container.querySelector('.compact-chat-capsule-text')?.textContent ?? '';
+      expect(visibleAfterRealClose.length).toBeGreaterThanOrEqual(visibleAfterSync.length);
+      expect(normalLine.startsWith(visibleAfterRealClose)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not flash the previous sentence when the next assistant sentence streams under a new turn id', async () => {
     vi.useFakeTimers();
     const firstSentence = '第一句话已经说完了，不能在第二句话开始时闪回来。';
@@ -5013,7 +5336,7 @@ describe('App', () => {
     expect(fan?.querySelectorAll('.compact-input-tool-item[data-compact-tool-wheel-slot="-2"], .compact-input-tool-item[data-compact-tool-wheel-slot="-1"], .compact-input-tool-item[data-compact-tool-wheel-slot="0"], .compact-input-tool-item[data-compact-tool-wheel-slot="1"], .compact-input-tool-item[data-compact-tool-wheel-slot="2"]')).toHaveLength(5);
     expect(fan?.querySelectorAll('.compact-input-tool-item[data-compact-tool-wheel-slot="hidden-forward"]')).toHaveLength(1);
     expect(fan?.querySelectorAll('.compact-input-tool-item[data-compact-tool-wheel-slot="hidden-backward"]')).toHaveLength(1);
-    expect(fan?.querySelectorAll('[tabindex="0"]')).toHaveLength(3);
+    expect(fan?.querySelectorAll('[tabindex="0"]')).toHaveLength(5);
     expect(container.querySelectorAll('.send-button-circle')).toHaveLength(1);
   });
 
@@ -5724,7 +6047,7 @@ describe('App', () => {
 
     const editButton = container.querySelector('.avatar-tool-quickbar-edit') as HTMLButtonElement;
     expect(editButton).not.toBeNull();
-    editButton.focus();
+    act(() => editButton.focus());
     expect(editButton).toHaveFocus();
     fireEvent.click(editButton);
 
@@ -6231,7 +6554,7 @@ describe('App', () => {
     }
   });
 
-  it('keeps faded compact tool edge buttons visible but not confirmable', async () => {
+  it('keeps every visible compact tool button keyboard and pointer actionable', async () => {
     vi.useFakeTimers();
     const onExportConversationClick = vi.fn();
     const onGalgameModeToggle = vi.fn();
@@ -6264,9 +6587,9 @@ describe('App', () => {
       const galgameButton = fan.querySelector('.compact-input-tool-item-galgame') as HTMLButtonElement;
 
       expect(exportButton).toHaveAttribute('data-compact-tool-wheel-slot', '-2');
-      expect(exportButton).toHaveAttribute('tabindex', '-1');
+      expect(exportButton).toHaveAttribute('tabindex', '0');
       expect(exportButton).toHaveAttribute('aria-hidden', 'false');
-      expect(exportButton).toBeDisabled();
+      expect(exportButton).not.toBeDisabled();
       expect(galgameButton).toHaveAttribute('data-compact-tool-wheel-slot', '-1');
       expect(galgameButton).toHaveAttribute('tabindex', '0');
       expect(galgameButton).toHaveAttribute('aria-hidden', 'false');
@@ -6277,15 +6600,15 @@ describe('App', () => {
 
       expect(container.querySelector('.compact-export-history-controls')).toBeNull();
       fireEvent.click(exportButton, { clientX: 140, clientY: 140 });
+      expect(exportButton).toHaveAttribute('aria-pressed', 'true');
+      expect(container.querySelector('.compact-export-history-controls')).not.toBeNull();
       expect(onExportConversationClick).not.toHaveBeenCalled();
-      expect(container.querySelector('.compact-export-history-controls')).toBeNull();
-      expect(exportButton).toHaveAttribute('aria-pressed', 'false');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('rotates compact input tools by pointer dragging while keeping only center and adjacent buttons active', () => {
+  it('rotates compact input tools by pointer dragging while keeping all visible buttons active', () => {
     render(
       <App
         chatSurfaceMode="compact"
@@ -6306,9 +6629,9 @@ describe('App', () => {
 
       const nextCenter = fan.querySelector('[data-compact-tool-wheel-slot="0"]');
       expect(nextCenter).toHaveClass('compact-input-tool-item-avatar');
-      expect(fan.querySelectorAll('[tabindex="0"]')).toHaveLength(3);
-      expect(fan.querySelectorAll('[data-compact-tool-wheel-slot="-2"][tabindex="-1"]')).toHaveLength(1);
-      expect(fan.querySelectorAll('[data-compact-tool-wheel-slot="2"][tabindex="-1"]')).toHaveLength(1);
+      expect(fan.querySelectorAll('[tabindex="0"]')).toHaveLength(5);
+      expect(fan.querySelectorAll('[data-compact-tool-wheel-slot="-2"][tabindex="0"]')).toHaveLength(1);
+      expect(fan.querySelectorAll('[data-compact-tool-wheel-slot="2"][tabindex="0"]')).toHaveLength(1);
     } finally {
       fanRectSpy.mockRestore();
     }
@@ -6854,6 +7177,95 @@ describe('App', () => {
     );
   });
 
+  it('uses the bundled Yozai font for conversation content while controls keep the UI font', () => {
+    expect(compactChatStyles).toMatch(
+      /@font-face\s*\{[\s\S]*?font-family:\s*"Neko Chat Hand";[\s\S]*?url\("\/static\/react\/neko-chat\/assets\/Yozai-Medium\.ttf"\)/,
+    );
+    expect(compactChatStyles).toContain('--neko-ui-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;');
+    expect(compactChatStyles).toContain('--neko-chat-content-font: "Neko Chat Hand", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;');
+    expect(compactChatStyles).toMatch(
+      /\.message-block-text,\s*\.message-block-markdown,\s*\.composer-input,\s*\.compact-chat-capsule-text\s*\{[\s\S]*?font-family:\s*var\(--neko-chat-content-font\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\.composer-choice-layer,\s*\.avatar-tool-manager-dialog\s*\{[\s\S]*?font-family:\s*var\(--neko-ui-font\);/,
+    );
+    expect(compactChatStyles).not.toContain('Neko ChillReunion Round');
+  });
+
+  it('gives the compact surface the full chat liquid-glass edge hierarchy', () => {
+    const steadyFrameRule = compactChatStyles.match(/\.compact-chat-surface-frame\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(compactChatStyles).toContain('--compact-chat-surface-edge-top: rgba(255, 255, 255, 0.7);');
+    expect(compactChatStyles).toContain('border-width: 2px 1px 1px 1px;');
+    expect(compactChatStyles).toContain('box-shadow: var(--compact-chat-surface-shadow);');
+    expect(steadyFrameRule).not.toContain('clip-path: inset(0 round 999px);');
+    expect(compactChatStyles).toMatch(
+      /\.compact-chat-surface-frame::after\s*\{[\s\S]*?radial-gradient\(ellipse at 14% 4%[\s\S]*?inset -2px 0 4px[\s\S]*?animation: compact-chat-liquid-edge 20s ease-in-out infinite;/,
+    );
+    expect(compactChatStyles).toContain('@keyframes compact-chat-liquid-edge');
+    expect(compactChatStyles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.compact-chat-surface-frame::after\s*\{\s*animation: none;/,
+    );
+    expect(compactChatStyles).toContain('--compact-chat-surface-edge-top: rgba(196, 228, 255, 0.44);');
+  });
+
+  it('keeps the backdrop layer pill-clipped while compact reveal masks are active', () => {
+    expect(compactChatStyles).toMatch(
+      /\.compact-chat-surface-shell\.neko-compact-collapsing > \.compact-chat-surface-frame,\s*\.compact-chat-surface-shell\.neko-compact-expanding > \.compact-chat-surface-frame\s*\{[\s\S]*?-webkit-clip-path: inset\(0 round 999px\);[\s\S]*?clip-path: inset\(0 round 999px\);/,
+    );
+  });
+
+  it('frosts the backdrop while strengthening compact surface opacity', () => {
+    expect(compactChatStyles).toMatch(
+      /\.compact-chat-surface-frame\s*\{[\s\S]*?background-clip: padding-box;[\s\S]*?background-color: rgba\(255, 255, 255, 0\.035\);[\s\S]*?backdrop-filter: blur\(36px\) saturate\(0\.9\) contrast\(0\.78\) brightness\(1\.08\);/,
+    );
+    expect(compactChatStyles).toContain(
+      'linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(242, 249, 255, 0.42) 46%, rgba(219, 238, 253, 0.48))',
+    );
+    expect(compactChatStyles).toContain(
+      'linear-gradient(180deg, rgba(31, 48, 66, 0.80), rgba(15, 29, 46, 0.76) 58%, rgba(8, 17, 30, 0.72))',
+    );
+    expect(compactChatStyles).toContain(
+      '--compact-chat-capsule-surface-bg:\n    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(242, 249, 255, 0.68) 46%, rgba(219, 238, 253, 0.72));',
+    );
+    expect(compactChatStyles).toContain(
+      '--compact-chat-capsule-surface-bg:\n    linear-gradient(180deg, rgba(31, 48, 66, 0.86), rgba(15, 29, 46, 0.82) 58%, rgba(8, 17, 30, 0.78));',
+    );
+    expect(compactChatStyles).toMatch(
+      /\.compact-chat-surface-frame\[data-compact-chat-state="default"\]::before,[\s\S]*?\.compact-chat-surface-frame\[data-compact-chat-state="options"\]::before,[\s\S]*?\.compact-chat-surface-frame\[data-compact-chat-state="input"\]::before\s*\{[\s\S]*?background: var\(--compact-chat-capsule-surface-bg\);/,
+    );
+  });
+
+  it('adds a restrained edge hierarchy to the export preview stage', () => {
+    expect(compactChatStyles).toMatch(
+      /\.compact-export-preview-stage\s*\{[\s\S]*?inset 0 0 0 1px rgba\(159, 202, 238, 0\.36\),[\s\S]*?inset 0 1px 0 rgba\(255, 255, 255, 0\.7\),[\s\S]*?0 5px 12px rgba\(22, 48, 84, 0\.06\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\[data-theme="dark"\] \.compact-export-preview-stage\s*\{[\s\S]*?inset 0 0 0 1px rgba\(116, 187, 255, 0\.24\),[\s\S]*?0 5px 12px rgba\(0, 0, 0, 0\.14\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\.compact-export-preview-stage\.is-fallback\s*\{[\s\S]*?box-shadow: none;/,
+    );
+  });
+
+  it('keeps history bubble shadows inside the scroll viewport clipping edge', () => {
+    expect(compactChatStyles).toContain('--compact-export-history-shadow-gutter-right: 32px;');
+    expect(compactChatStyles).toMatch(
+      /\.compact-export-history-scroll\s*\{[\s\S]*?overflow-y: auto;[\s\S]*?padding: 4px 0 16px;/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\.compact-export-history-scroll-content\s*\{[\s\S]*?width: 100%;[\s\S]*?padding-right: var\(--compact-export-history-shadow-gutter-right\);[\s\S]*?padding-left: var\(--compact-export-history-shadow-gutter-left\);/,
+    );
+  });
+
+  it('keeps compact composer text legible over both light and dark backdrops', () => {
+    expect(compactChatStyles).toMatch(
+      /\.compact-chat-surface-frame\[data-compact-chat-state="input"\] \.composer-input\s*\{[\s\S]*?color: #2f526b;[\s\S]*?caret-color: #167fbd;[\s\S]*?0 1px 1px rgba\(255, 255, 255, 0\.94\),[\s\S]*?0 0 4px rgba\(255, 255, 255, 0\.72\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\[data-theme="dark"\] \.compact-chat-surface-frame\[data-compact-chat-state="input"\] \.composer-input\s*\{[\s\S]*?caret-color: #74d7ff;[\s\S]*?text-shadow: 0 1px 2px rgba\(0, 0, 0, 0\.42\);/,
+    );
+  });
+
   it('uses the same visual slot stacking hierarchy for both compact tool wheel layouts', () => {
     expect(compactChatStyles).toMatch(
       /data-compact-input-tool-fan-open="true"\]\s+\.compact-input-tool-item\[data-compact-tool-wheel-slot="-2"\],[\s\S]*?data-compact-tool-wheel-slot="2"\]\s*\{\s*z-index:\s*1;/s,
@@ -6880,6 +7292,21 @@ describe('App', () => {
     expect(darkToolButtonRule).not.toContain('rgba(255, 255, 255, 0.98)');
   });
 
+  it('uses light tooltip bubbles by default and dark bubbles only in dark mode', () => {
+    expect(compactChatStyles).toMatch(
+      /\.neko-chat-tooltip\s*\{[\s\S]*?linear-gradient\(145deg, rgba\(255, 255, 255, 0\.97\), rgba\(232, 246, 255, 0\.96\)\)[\s\S]*?color: rgba\(43, 72, 96, 0\.96\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\.compact-input-tool-fan \.compact-input-tool-tooltip\s*\{[\s\S]*?linear-gradient\(145deg, rgba\(255, 255, 255, 0\.97\), rgba\(232, 246, 255, 0\.96\)\)[\s\S]*?color: rgba\(43, 72, 96, 0\.96\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\[data-theme="dark"\] \.neko-chat-tooltip,\s*\[data-theme="dark"\] \.compact-input-tool-fan \.compact-input-tool-tooltip\s*\{[\s\S]*?rgba\(13, 24, 37, 0\.96\)[\s\S]*?color: rgba\(244, 250, 255, 0\.98\);/,
+    );
+    expect(compactChatStyles).toMatch(
+      /\[data-theme="dark"\] \.neko-chat-tooltip::after\s*\{[\s\S]*?background: rgba\(20, 34, 49, 0\.98\);/,
+    );
+  });
+
   it('shows compact tool wheel tooltips from pointer hover or keyboard-visible focus only', () => {
     const tooltipVisibilityRule = compactChatStyles.match(
       /\.compact-input-tool-fan\[data-compact-input-tool-fan-open="true"\]\[data-compact-input-tool-fan-interactive="true"\][^{]+>\s*\.compact-input-tool-tooltip\s*\{/s,
@@ -6891,7 +7318,7 @@ describe('App', () => {
     expect(compactChatStyles).not.toMatch(/:focus-within\s*>\s*\.compact-input-tool-tooltip/);
   });
 
-  it('retargets compact tool hover to the visual button under the pointer after wheel rotation', async () => {
+  it('retargets every visible compact tool hover to the visual button under the pointer', async () => {
     render(
       <App
         chatSurfaceMode="compact"
@@ -6903,10 +7330,23 @@ describe('App', () => {
     const fan = document.body.querySelector('.compact-input-tool-fan') as HTMLDivElement;
     const fanRectSpy = mockCompactToolFanRect(fan);
     // The default wheel's slot 0 sits at 45deg on the 80px orbit, initially the screenshot tool.
+    const pointerAtEdgeSlot = compactToolWheelPoint(107.35 * (Math.PI / 180), 80);
     const pointerAtSelectedSlot = compactToolWheelPoint(45 * (Math.PI / 180), 80);
     const pointerAtPreviousSlot = compactToolWheelPoint(75.82 * (Math.PI / 180), 80);
 
     try {
+      fireEvent.pointerMove(fan, {
+        pointerId: 81,
+        ...pointerAtEdgeSlot,
+        buttons: 0,
+        pointerType: 'mouse',
+      });
+
+      const exportButton = fan.querySelector('.compact-input-tool-item-export');
+      expect(exportButton).toHaveAttribute('data-compact-tool-wheel-slot', '-2');
+      expect(exportButton).toHaveAttribute('data-compact-tool-pointer-hovered', 'true');
+      expect(fan.style.getPropertyValue('--compact-tool-wheel-selection-angle')).toBe('107.35deg');
+
       fireEvent.pointerMove(fan, {
         pointerId: 81,
         ...pointerAtSelectedSlot,
@@ -6941,6 +7381,76 @@ describe('App', () => {
       expect(avatarButton).toHaveAttribute('data-compact-tool-pointer-hovered', 'true');
       expect(avatarButton).toHaveAttribute('data-compact-tool-wheel-slot', '0');
       expect(fan.style.getPropertyValue('--compact-tool-wheel-selection-angle')).toBe('45deg');
+    } finally {
+      fanRectSpy.mockRestore();
+    }
+  });
+
+  it('forwards a compact wheel background hit to the visible action at the same geometry', async () => {
+    const onTranslateToggle = vi.fn();
+    render(
+      <App
+        chatSurfaceMode="compact"
+        compactChatState="input"
+        onTranslateToggle={onTranslateToggle}
+      />,
+    );
+
+    await openCompactInputTools();
+    const fan = document.body.querySelector<HTMLDivElement>('.compact-input-tool-fan')!;
+    const hitRegion = fan.querySelector<HTMLDivElement>('.compact-input-tool-fan-hit-region')!;
+    const fanRectSpy = mockCompactToolFanRect(fan);
+    // Initial tool index 0 makes translate (index 2) the faded but actionable
+    // slot +2. Dispatch at the fan background to model Chromium returning the
+    // old compositor hit target while painting the button at this position.
+    const pointerAtTranslate = compactToolWheelPoint(-17.35 * (Math.PI / 180), 80);
+
+    try {
+      expect(fan.querySelector('.compact-input-tool-item-translate')).toHaveAttribute(
+        'data-compact-tool-wheel-slot',
+        '2',
+      );
+      fireEvent.pointerMove(hitRegion, {
+        pointerId: 91,
+        buttons: 0,
+        pointerType: 'mouse',
+        ...pointerAtTranslate,
+      });
+      expect(fan.querySelector('.compact-input-tool-item-translate')).toHaveAttribute(
+        'data-compact-tool-pointer-hovered',
+        'true',
+      );
+      fireEvent.pointerDown(hitRegion, {
+        pointerId: 91,
+        button: 0,
+        buttons: 1,
+        pointerType: 'mouse',
+        ...pointerAtTranslate,
+      });
+      fireEvent.pointerUp(hitRegion, {
+        pointerId: 91,
+        button: 0,
+        buttons: 0,
+        pointerType: 'mouse',
+        ...pointerAtTranslate,
+      });
+      fireEvent.click(hitRegion, {
+        button: 0,
+        ...pointerAtTranslate,
+      });
+      expect(fan.querySelector('.compact-input-tool-item-translate')).toHaveAttribute(
+        'data-compact-tool-pointer-hovered',
+        'true',
+      );
+      expect(onTranslateToggle).toHaveBeenCalledTimes(1);
+
+      // The delegation is geometric, not a blanket fan-background click.
+      fireEvent.click(hitRegion, {
+        button: 0,
+        clientX: 116,
+        clientY: 116,
+      });
+      expect(onTranslateToggle).toHaveBeenCalledTimes(1);
     } finally {
       fanRectSpy.mockRestore();
     }
@@ -7790,6 +8300,8 @@ describe('App', () => {
     );
     const ball = container.querySelector('.compact-chat-minimize-ball');
     expect(ball).not.toBeNull();
+    expect(ball).toHaveAttribute('data-neko-tooltip-variant', 'compact-tool');
+    expect(ball).toHaveAttribute('data-neko-tooltip-placement', 'top');
     // 毛绒球走 origin-drag 手势（单击折叠 / 长按拖 surface，与右侧轮盘原点对偶），
     // 标记 no-drag 避免宿主被动 hit-test 重复起拖。
     expect(ball).toHaveAttribute('data-compact-no-drag', 'true');
@@ -8785,8 +9297,175 @@ describe('App', () => {
     const input = screen.getByPlaceholderText('Type a message...');
     fireEvent.change(input, { target: { value: 'Test send' } });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
 
     expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'Test send' });
+  });
+
+  it('submits plain Enter when WebKit inserts a line break before keyup', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'Send without newline' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.input(input, {
+      target: { value: 'Send without\nnewline' },
+      inputType: 'insertLineBreak',
+    });
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'Send without newline' });
+    expect(input).toHaveValue('');
+  });
+
+  it('uses the value diff fallback when WebKit omits inputType for a line break', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'Fallback send' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.input(input, {
+      target: { value: 'Fallback\n send' },
+    });
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'Fallback send' });
+  });
+
+  it('treats an inputType-less text replacement as an IME candidate commit', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: '候选' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.input(input, {
+      target: { value: 'candidate' },
+    });
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('candidate');
+
+    pressEnter(input);
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'candidate' });
+  });
+
+  it('keeps a Shift+Enter line break without submitting', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'First line' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', shiftKey: true });
+    fireEvent.input(input, {
+      target: { value: 'First line\n' },
+      inputType: 'insertLineBreak',
+    });
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter', shiftKey: true });
+
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('First line\n');
+  });
+
+  it('uses the first Enter to confirm active IME text and the second Enter to submit', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.keyDown(input, {
+      key: 'Enter',
+      code: 'Enter',
+      isComposing: true,
+    });
+    fireEvent.compositionEnd(input);
+    fireEvent.submit(input.closest('form')!);
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('你好');
+
+    pressEnter(input);
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: '你好' });
+  });
+
+  it('treats macOS WebKit keyCode 229 as IME confirmation until keyup', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.keyDown(input, {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 229,
+      isComposing: true,
+    });
+    fireEvent.compositionEnd(input);
+    fireEvent.input(input, {
+      target: { value: '你好' },
+      inputType: 'insertText',
+    });
+    fireEvent.submit(input.closest('form')!);
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('你好');
+
+    pressEnter(input);
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: '你好' });
+  });
+
+  it('submits on the first Enter after an IME commit completed without Enter', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.compositionEnd(input);
+
+    pressEnter(input);
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: '你好' });
+  });
+
+  it('does not submit an ASCII candidate committed without composition metadata', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'ok' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.input(input, {
+      target: { value: 'ok' },
+      inputType: 'insertText',
+    });
+    fireEvent.submit(input.closest('form')!);
+    fireEvent.keyUp(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('ok');
+
+    pressEnter(input);
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'ok' });
+  });
+
+  it('allows an explicit pointer send while an IME composition is active', () => {
+    const onComposerSubmit = vi.fn();
+    renderInputApp({ onComposerSubmit });
+
+    const input = screen.getByPlaceholderText('Type a message...');
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }), { detail: 1 });
+
+    expect(onComposerSubmit).toHaveBeenCalledWith({ text: '你好' });
   });
 
   it('disables composer submission while the home tutorial owns interaction', () => {
@@ -8833,7 +9512,7 @@ describe('App', () => {
 
     const input = screen.getByPlaceholderText('Type a message...');
     fireEvent.change(input, { target: { value: 'No local optimistic bubble' } });
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    pressEnter(input);
 
     expect(onComposerSubmit).toHaveBeenCalledWith({ text: 'No local optimistic bubble' });
     expect(screen.queryByText('No local optimistic bubble')).not.toBeInTheDocument();
@@ -9280,7 +9959,7 @@ describe('App', () => {
     expect(fan).toHaveAttribute('data-compact-input-tool-fan-open', 'false');
   });
 
-  it('disables avatar sub-actions when the avatar wheel slot is not actionable', async () => {
+  it('disables avatar sub-actions only after the avatar wheel slot is hidden', async () => {
     const { container } = renderInputApp();
 
     await openCompactInputTools();
@@ -9296,8 +9975,9 @@ describe('App', () => {
     fireEvent.wheel(fan, { deltaY: 80 });
     fireEvent.wheel(fan, { deltaY: 80 });
     fireEvent.wheel(fan, { deltaY: 80 });
+    fireEvent.wheel(fan, { deltaY: 80 });
 
-    expect(fan.querySelector('.compact-input-tool-item-avatar')).toHaveAttribute('data-compact-tool-wheel-slot', '-2');
+    expect(fan.querySelector('.compact-input-tool-item-avatar')).toHaveAttribute('data-compact-tool-wheel-slot', 'hidden-backward');
     expect(lollipopButton).toBeDisabled();
     expect(editButton).toBeDisabled();
   });
