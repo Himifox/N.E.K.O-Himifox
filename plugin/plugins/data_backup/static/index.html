@@ -8,41 +8,58 @@
 </head>
 <body>
   <main class="shell">
-    <header>
-      <div>
-        <p class="eyebrow">N.E.K.O DATA SNAPSHOTS</p>
-        <h1>数据备份</h1>
-        <p class="subtitle">为配置、角色卡、记忆和模型资源创建本地快照。</p>
+    <header class="hero">
+      <div class="hero-copy">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z"/><path d="m8 9 4 2.2L16 9M12 11.2V16"/></svg>
+        </div>
+        <div>
+          <p class="eyebrow">N.E.K.O · DATA VAULT</p>
+          <h1>数据备份</h1>
+          <p class="subtitle">妥善保存角色、记忆与模型资源，随时回到安心的状态。</p>
+        </div>
       </div>
-      <button id="refresh" class="secondary" type="button">刷新</button>
+      <button id="refresh" class="secondary refresh-button" type="button">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M19 11a7 7 0 1 0 .2 5"/></svg>
+        刷新
+      </button>
     </header>
 
     <section class="summary" aria-label="存储位置">
-      <div><span>数据目录</span><code id="data-root">—</code></div>
-      <div><span>备份目录</span><code id="backup-root">—</code></div>
-      <div><span>每组保留</span><strong id="retention">—</strong></div>
+      <div class="summary-item"><span>数据目录</span><code id="data-root">—</code></div>
+      <div class="summary-item"><span>备份目录</span><code id="backup-root">—</code></div>
+      <div class="summary-item retention-item"><span>每组保留</span><strong id="retention">—</strong></div>
     </section>
 
-    <nav class="tabs" aria-label="备份组">
-      <button class="tab active" type="button" data-group="core">核心数据</button>
-      <button class="tab" type="button" data-group="assets">模型资源</button>
-    </nav>
+    <section class="workspace">
+      <nav class="tabs" aria-label="备份组">
+        <button class="tab active" type="button" data-group="core">核心数据</button>
+        <button class="tab" type="button" data-group="assets">模型资源</button>
+      </nav>
 
-    <section class="group-card">
-      <div>
-        <h2 id="group-title">核心数据</h2>
-        <p id="group-description">配置、角色卡与长期记忆</p>
-        <div id="paths" class="chips"></div>
+      <div class="group-card">
+        <div>
+          <p class="group-label">当前备份组</p>
+          <h2 id="group-title">核心数据</h2>
+          <p id="group-description">配置、角色卡与长期记忆</p>
+          <div id="paths" class="chips"></div>
+        </div>
+        <button id="create" class="primary" type="button">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          创建快照
+        </button>
       </div>
-      <button id="create" class="primary" type="button">立即创建快照</button>
     </section>
 
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
-    <section>
+    <section class="snapshot-section">
       <div class="section-heading">
-        <h2>已有快照</h2>
-        <span id="snapshot-count">0 份</span>
+        <div>
+          <p class="section-label">SNAPSHOT HISTORY</p>
+          <h2>快照记录</h2>
+        </div>
+        <span id="snapshot-count" class="count-badge">0 份</span>
       </div>
       <div id="snapshots" class="snapshot-list"></div>
     </section>

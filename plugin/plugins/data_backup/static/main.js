@@ -84,7 +84,14 @@ function render() {
   if (!group.snapshots.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = '还没有快照。';
+    const mark = document.createElement('span');
+    mark.className = 'empty-mark';
+    mark.textContent = '◇';
+    const title = document.createElement('strong');
+    title.textContent = '还没有快照';
+    const hint = document.createElement('span');
+    hint.textContent = '创建第一份快照，为重要数据留一个安心的还原点。';
+    empty.append(mark, title, hint);
     list.append(empty);
     return;
   }
