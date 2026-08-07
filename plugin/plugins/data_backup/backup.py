@@ -149,12 +149,16 @@ class BackupEngine:
             self._verify_snapshot(snapshot, manifest)
 
             safety = self.create_snapshot(group, protected={snapshot_id})
+            safety_path = self._snapshot_path(group, safety["id"])
+            safety_manifest = self._load_manifest(safety_path)
             restore_token = uuid.uuid4().hex
             stage = self.data_root / f".data-backup-restore-{restore_token}"
             old_root = self.data_root / f".data-backup-old-{restore_token}"
             present_paths = set(manifest.get("present_paths", ()))
+            safety_present_paths = set(safety_manifest.get("present_paths", ()))
             moved_old: list[str] = []
             installed: list[str] = []
+            restored_in_place: list[str] = []
 
             try:
                 for relative_root in paths:
@@ -172,13 +176,22 @@ class BackupEngine:
                     replacement = stage / relative_root
                     if current.exists():
                         old.parent.mkdir(parents=True, exist_ok=True)
-                        current.replace(old)
-                        moved_old.append(relative_root)
+                        try:
+                            current.replace(old)
+                            moved_old.append(relative_root)
+                        except PermissionError:
+                            restored_in_place.append(relative_root)
+                            self._restore_root_in_place(
+                                relative_root,
+                                replacement if relative_root in present_paths else None,
+                            )
+                            continue
                     if relative_root in present_paths:
                         current.parent.mkdir(parents=True, exist_ok=True)
                         replacement.replace(current)
                         installed.append(relative_root)
             except Exception as exc:
+                rollback_errors: list[str] = []
                 for relative_root in reversed(installed):
                     self._remove_path(self.data_root / relative_root)
                 for relative_root in reversed(moved_old):
@@ -187,6 +200,21 @@ class BackupEngine:
                     if old.exists():
                         current.parent.mkdir(parents=True, exist_ok=True)
                         old.replace(current)
+                for relative_root in reversed(restored_in_place):
+                    try:
+                        self._restore_root_in_place(
+                            relative_root,
+                            safety_path / "files" / relative_root
+                            if relative_root in safety_present_paths
+                            else None,
+                        )
+                    except Exception as rollback_exc:
+                        rollback_errors.append(str(rollback_exc))
+                if rollback_errors:
+                    raise BackupError(
+                        "restore failed and rollback also failed: "
+                        + "; ".join(rollback_errors)
+                    ) from exc
                 raise BackupError(f"restore failed and was rolled back: {exc}") from exc
             finally:
                 shutil.rmtree(stage, ignore_errors=True)
@@ -311,6 +339,83 @@ class BackupEngine:
                     source_db.backup(target_db)
         except sqlite3.Error as exc:
             raise BackupError(f"SQLite backup failed: {source}") from exc
+
+    def _restore_root_in_place(
+        self, relative_root: str, replacement: Path | None
+    ) -> None:
+        current = self._safe_source(relative_root)
+        expected: set[str] = set()
+
+        if replacement is not None:
+            current.mkdir(parents=True, exist_ok=True)
+            for source in self._iter_files(replacement):
+                relative = source.relative_to(replacement)
+                expected.add(relative.as_posix())
+                target = current / relative
+                resolved_target = target.resolve(strict=False)
+                if self.data_root not in resolved_target.parents:
+                    raise BackupError(f"restore target escapes data root: {relative}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if self._is_sqlite_database(source) and self._is_sqlite_database(
+                    target
+                ):
+                    self._restore_sqlite(source, target)
+                else:
+                    self._replace_file(source, target)
+
+        if current.exists():
+            self._remove_unexpected_files(current, expected)
+
+    @staticmethod
+    def _replace_file(source: Path, target: Path) -> None:
+        temporary = target.with_name(f".{target.name}.restore-{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copy2(source, temporary)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _restore_sqlite(source: Path, target: Path) -> None:
+        source_uri = f"{source.resolve(strict=True).as_uri()}?mode=ro"
+        try:
+            with closing(
+                sqlite3.connect(source_uri, uri=True, timeout=10)
+            ) as source_db:
+                with closing(sqlite3.connect(target, timeout=10)) as target_db:
+                    source_db.backup(target_db)
+        except sqlite3.Error as exc:
+            raise BackupError(f"SQLite restore failed: {target}") from exc
+
+    def _remove_unexpected_files(self, root: Path, expected: set[str]) -> None:
+        for directory, dirnames, filenames in os.walk(
+            root, topdown=False, followlinks=False
+        ):
+            base = Path(directory)
+            for filename in filenames:
+                path = base / filename
+                relative = path.relative_to(root).as_posix()
+                if relative in expected:
+                    continue
+                if self._is_sqlite_sidecar(path):
+                    main_relative = relative.rsplit("-", 1)[0]
+                    if main_relative in expected:
+                        continue
+                path.unlink()
+            for dirname in dirnames:
+                path = base / dirname
+                if path.is_symlink():
+                    path.unlink()
+                else:
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+        if not expected:
+            try:
+                root.rmdir()
+            except OSError:
+                pass
 
     @staticmethod
     def _sha256(path: Path) -> str:

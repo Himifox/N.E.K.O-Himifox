@@ -44,6 +44,42 @@ def test_snapshot_and_restore_exact_core_state(tmp_path: Path) -> None:
     assert result["restart_required"] is True
 
 
+def test_restore_locked_memory_directory_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine(tmp_path)
+    database = engine.data_root / "memory" / "cat" / "memory.db"
+    database.parent.mkdir(parents=True)
+
+    with sqlite3.connect(database) as live_connection:
+        live_connection.execute("PRAGMA journal_mode=WAL")
+        live_connection.execute("CREATE TABLE facts (value TEXT)")
+        live_connection.execute("INSERT INTO facts VALUES ('before')")
+        live_connection.commit()
+        snapshot = engine.create_snapshot("core")
+
+        live_connection.execute("UPDATE facts SET value = 'after'")
+        live_connection.commit()
+        extra = database.parent / "extra.txt"
+        extra.write_text("remove me", encoding="utf-8")
+
+        original_replace = Path.replace
+
+        def deny_memory_move(path: Path, target: Path) -> Path:
+            if path == engine.data_root / "memory":
+                raise PermissionError(5, "directory is in use")
+            return original_replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", deny_memory_move)
+        result = engine.restore_snapshot("core", snapshot["id"])
+
+        assert live_connection.execute("SELECT value FROM facts").fetchone() == (
+            "before",
+        )
+        assert not extra.exists()
+        assert result["restart_required"] is True
+
+
 def test_snapshot_retention_keeps_latest(tmp_path: Path) -> None:
     engine = _engine(tmp_path)
     source = engine.data_root / "config" / "value.txt"
