@@ -100,6 +100,23 @@ function formatTime(value) {
   return value ? new Date(value).toLocaleString() : '—';
 }
 
+function updateScheduleToggle() {
+  if (!state?.schedule) return;
+  const enabled = $('#schedule-enabled').checked;
+  const changed = enabled !== state.schedule.enabled;
+  $('#schedule-toggle').classList.toggle('is-enabled', enabled);
+  $('#schedule-options').classList.toggle('is-muted', !enabled);
+  $('#schedule-toggle-state').textContent = enabled ? '开启' : '关闭';
+  $('#schedule-toggle-title').textContent = changed
+    ? enabled ? '将开启定时快照' : '将关闭定时快照'
+    : enabled ? '定时快照已开启' : '定时快照已关闭';
+  $('#schedule-toggle-help').textContent = changed
+    ? '当前更改尚未保存，点击下方按钮后生效。'
+    : enabled
+      ? '到达设定时间后自动创建快照，可随时在这里关闭。'
+      : '不会自动创建快照，仍可随时手动备份。';
+}
+
 function renderSchedule() {
   const schedule = state?.schedule;
   if (!schedule) return;
@@ -107,6 +124,7 @@ function renderSchedule() {
   $('#schedule-interval').value = schedule.interval_days;
   $('#schedule-core').checked = schedule.groups.includes('core');
   $('#schedule-assets').checked = schedule.groups.includes('assets');
+  updateScheduleToggle();
   $('#schedule-status').textContent = schedule.running
     ? '正在创建定时快照…'
     : schedule.enabled
@@ -320,6 +338,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
 $('#refresh').addEventListener('click', refresh);
 $('#create').addEventListener('click', createSnapshot);
 $('#change-directory').addEventListener('click', openDirectoryDialog);
+$('#schedule-enabled').addEventListener('change', updateScheduleToggle);
 $('#schedule-form').addEventListener('submit', (event) => {
   event.preventDefault();
   saveSchedule();

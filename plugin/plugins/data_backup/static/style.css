@@ -87,15 +87,33 @@ h2 { margin-bottom: 7px; font-size: 1.2rem; letter-spacing: -.02em; }
 .schedule-copy > span { color: var(--muted); font-size: .74rem; line-height: 1.55; }
 .schedule-copy .schedule-error { color: #b43c50; }
 .schedule-form { display: grid; gap: 13px; }
-.switch-field, .schedule-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #514b5c; font-size: .82rem; font-weight: 650; }
-.switch-field input { width: 18px; height: 18px; accent-color: var(--accent); }
+.schedule-toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-muted); padding: 15px 16px; cursor: pointer; transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
+.schedule-toggle:hover { border-color: #cfc7e8; }
+.schedule-toggle.is-enabled { border-color: #b9aae9; background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(114, 87, 217, .08); }
+.schedule-toggle-copy { min-width: 0; }
+.schedule-toggle-copy strong, .schedule-toggle-copy small { display: block; }
+.schedule-toggle-copy strong { margin-bottom: 4px; color: #514b5c; font-size: .88rem; }
+.schedule-toggle.is-enabled .schedule-toggle-copy strong { color: var(--accent-strong); }
+.schedule-toggle-copy small { color: var(--muted); font-size: .7rem; font-weight: 500; line-height: 1.45; }
+.switch-control { position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.switch-control input { position: absolute; width: 46px; height: 28px; margin: 0; opacity: 0; }
+.switch-track { display: block; width: 46px; height: 28px; border-radius: 999px; background: #c9c5d0; padding: 3px; transition: background .18s ease, box-shadow .18s ease; }
+.switch-track > span { display: block; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(37, 31, 53, .25); transition: transform .18s ease; }
+.switch-control input:checked + .switch-track { background: var(--accent); }
+.switch-control input:checked + .switch-track > span { transform: translateX(18px); }
+.switch-control input:focus-visible + .switch-track { box-shadow: 0 0 0 4px rgba(114, 87, 217, .2); }
+.switch-control b { min-width: 28px; color: var(--muted); font-size: .72rem; }
+.schedule-toggle.is-enabled .switch-control b { color: var(--accent-strong); }
+.schedule-options { display: grid; gap: 13px; border: 1px solid var(--border); border-radius: 13px; padding: 13px 15px; transition: opacity .18s ease; }
+.schedule-options.is-muted { opacity: .58; }
+.schedule-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #514b5c; font-size: .82rem; font-weight: 650; }
 .interval-input { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .78rem; }
 .interval-input input { width: 82px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-solid); color: inherit; padding: 8px 10px; font: inherit; outline: 0; }
 .interval-input input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(114, 87, 217, .13); }
 .schedule-groups { display: flex; gap: 16px; margin: 0; border: 0; padding: 0; color: var(--muted); font-size: .78rem; }
 .schedule-groups legend { margin-bottom: 8px; color: #514b5c; font-weight: 650; }
 .schedule-groups input { accent-color: var(--accent); }
-.schedule-save { justify-self: end; }
+.schedule-save { justify-self: stretch; }
 .primary, .danger { border: 0; color: #fff; padding: 11px 16px; font-weight: 750; }
 .primary { flex: 0 0 auto; background: linear-gradient(135deg, #7d62df, #6045c5); box-shadow: 0 10px 24px rgba(96, 69, 197, .24); }
 .primary:hover { box-shadow: 0 13px 28px rgba(96, 69, 197, .31); transform: translateY(-1px); }
@@ -182,7 +200,9 @@ dialog[open] { animation: dialog-in .16s ease-out; }
   .notice.success { border-color: #295b4b; background: #173229; color: #a9e8d1; }
   .empty { border-color: #403b49; background: rgba(28,26,35,.45); }
   .empty strong { color: #ddd7e5; }
-  .switch-field, .schedule-field, .schedule-groups legend { color: #ddd7e5; }
+  .schedule-toggle-copy strong, .schedule-field, .schedule-groups legend { color: #ddd7e5; }
+  .schedule-toggle.is-enabled { border-color: #6655a2; }
+  .switch-track { background: #595461; }
   dialog::backdrop { background: rgba(4, 3, 8, .62); }
 }
 
