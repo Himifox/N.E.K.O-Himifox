@@ -102,6 +102,12 @@ def unpack_model(model: dict, packs_root: Path = PACKS_ROOT, output_root: Path =
         raise ValueError("invalid built-in PNGTuber archive hash")
 
     target_dir = output_root / folder_path.as_posix()
+    backup_dir = output_root / f".{folder}.backup"
+    if backup_dir.exists():
+        if target_dir.exists():
+            shutil.rmtree(backup_dir)
+        else:
+            backup_dir.rename(target_dir)
     marker = target_dir / READY_MARKER
     existing_files = (
         sum(1 for path in target_dir.rglob("*") if path.is_file() and path.name != READY_MARKER)
@@ -153,8 +159,15 @@ def unpack_model(model: dict, packs_root: Path = PACKS_ROOT, output_root: Path =
         _validate_package(temp_dir)
         (temp_dir / READY_MARKER).write_text(expected_hash, encoding="utf-8")
         if target_dir.exists():
-            shutil.rmtree(target_dir)
-        temp_dir.rename(target_dir)
+            target_dir.rename(backup_dir)
+        try:
+            temp_dir.rename(target_dir)
+        except Exception:
+            if backup_dir.exists() and not target_dir.exists():
+                backup_dir.rename(target_dir)
+            raise
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
         print(f"[build_frontend] PNGTuber {folder} unpacked")
         return target_dir
     finally:
