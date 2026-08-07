@@ -90,8 +90,13 @@ def _validate_package(package_dir: Path) -> None:
 def unpack_model(model: dict, packs_root: Path = PACKS_ROOT, output_root: Path = OUTPUT_ROOT) -> Path:
     folder = model.get("folder")
     folder_path = _safe_relative_path(folder) if isinstance(folder, str) else None
-    if folder_path is None or len(folder_path.parts) != 1:
+    if (
+        folder_path is None
+        or len(folder_path.parts) != 1
+        or folder != folder_path.as_posix()
+    ):
         raise ValueError("invalid built-in PNGTuber folder")
+    folder_name = folder_path.name
 
     archive_name = model.get("archive")
     archive_path = _safe_relative_path(archive_name) if isinstance(archive_name, str) else None
@@ -101,8 +106,8 @@ def unpack_model(model: dict, packs_root: Path = PACKS_ROOT, output_root: Path =
     if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
         raise ValueError("invalid built-in PNGTuber archive hash")
 
-    target_dir = output_root / folder_path.as_posix()
-    backup_dir = output_root / f".{folder}.backup"
+    target_dir = output_root / folder_name
+    backup_dir = output_root / f".{folder_name}.backup"
     if backup_dir.exists():
         if target_dir.exists():
             shutil.rmtree(backup_dir)
@@ -129,7 +134,7 @@ def unpack_model(model: dict, packs_root: Path = PACKS_ROOT, output_root: Path =
         raise ValueError(f"archive missing or checksum failed: {source_archive}")
 
     output_root.mkdir(parents=True, exist_ok=True)
-    temp_dir = output_root / f".{folder}.{uuid.uuid4().hex}.tmp"
+    temp_dir = output_root / f".{folder_name}.{uuid.uuid4().hex}.tmp"
     temp_dir.mkdir()
     try:
         with zipfile.ZipFile(source_archive) as archive:

@@ -95,6 +95,22 @@ def test_unpack_builtin_pngtuber_rejects_path_traversal(tmp_path):
     assert not (tmp_path / "static" / "escape.png").exists()
 
 
+@pytest.mark.parametrize("folder", ["bad\\outside", "bad\\", "bad/"])
+def test_unpack_builtin_pngtuber_rejects_non_posix_folder(folder, tmp_path):
+    model = {
+        "folder": folder,
+        "archive": "missing.zip",
+        "archive_sha256": "0" * 64,
+    }
+
+    with pytest.raises(ValueError, match="invalid built-in PNGTuber folder"):
+        unpack_builtin_pngtuber.unpack_model(
+            model,
+            tmp_path / "packs",
+            tmp_path / "static" / "pngtuber",
+        )
+
+
 def test_publish_failure_restores_previous_pngtuber_model(monkeypatch, tmp_path):
     packs_root = tmp_path / "packs"
     output_root = tmp_path / "static" / "pngtuber"
