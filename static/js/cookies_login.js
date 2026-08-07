@@ -358,6 +358,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const mascotButton = document.querySelector('.char-avatar-wrap');
     const mascotBubble = document.querySelector('.mascot-bubble');
     const reactionClasses = ['mascot-angry', 'mascot-success', 'mascot-failure', 'mascot-curious'];
+    const MASCOT_DEFERRED_RETRY_MS = 500;
+    const MASCOT_DEFERRED_MAX_MS = 4000;
     let mascotReactionTimer = null;
     let mascotDeferredTimer = null;
     let mascotBubbleTimer = null;
@@ -368,18 +370,41 @@ document.addEventListener('DOMContentLoaded', () => {
         reactionClasses.forEach(className => characterBanner?.classList.remove(className));
     };
 
+    const showMascotReaction = (type, duration) => {
+        clearMascotReaction();
+        characterBanner.classList.add(`mascot-${type}`);
+        mascotReactionTimer = window.setTimeout(clearMascotReaction, duration);
+    };
+
+    // 隐私遮罩期间把成功/失败反应顺延到失焦之后，但最多顺延 MASCOT_DEFERRED_MAX_MS：
+    // 不设上限的话，只要用户一直聚焦凭证输入框，定时器就会无限自我重排，
+    // 等失焦时弹出的是几分钟前那次保存的表情。
+    const deferMascotReaction = (type, duration, deadline) => {
+        window.clearTimeout(mascotDeferredTimer);
+        mascotDeferredTimer = null;
+        if (Date.now() >= deadline) return;
+        mascotDeferredTimer = window.setTimeout(() => {
+            mascotDeferredTimer = null;
+            if (!characterBanner) return;
+            if (characterBanner.classList.contains('credential-privacy-active')) {
+                deferMascotReaction(type, duration, deadline);
+                return;
+            }
+            showMascotReaction(type, duration);
+        }, MASCOT_DEFERRED_RETRY_MS);
+    };
+
     window.triggerMascotReaction = (type, duration = 900) => {
         if (!characterBanner) return;
         if (characterBanner.classList.contains('credential-privacy-active')) {
             if (type === 'success' || type === 'failure') {
-                window.clearTimeout(mascotDeferredTimer);
-                mascotDeferredTimer = window.setTimeout(() => window.triggerMascotReaction(type, duration), 500);
+                deferMascotReaction(type, duration, Date.now() + MASCOT_DEFERRED_MAX_MS);
             }
             return;
         }
-        clearMascotReaction();
-        characterBanner.classList.add(`mascot-${type}`);
-        mascotReactionTimer = window.setTimeout(clearMascotReaction, duration);
+        window.clearTimeout(mascotDeferredTimer);
+        mascotDeferredTimer = null;
+        showMascotReaction(type, duration);
     };
 
     mascotButton?.addEventListener('click', (event) => {
@@ -872,7 +897,11 @@ function switchTab(platformKey, btnElement, isReRender = false) {
     currentPlatform = platformKey;
     const config = PLATFORM_CONFIG[platformKey];
     const tutorialBanner = document.querySelector('#main-panel > .tutorial-link');
-    if (tutorialBanner) tutorialBanner.style.display = config.authMode ? 'none' : '';
+    // 通用教程教的是「在 Application 面板逐个字段复制 Cookie Value」，
+    // 对 cookieStringMode 平台（YouTube 要整条 Cookie 请求头）是错的流程，
+    // 这些平台改由自己的 instruction 文案指路，所以这里一并隐藏。
+    const hideTutorial = Boolean(config.authMode || config.cookieStringMode);
+    if (tutorialBanner) tutorialBanner.style.display = hideTutorial ? 'none' : '';
     const encryptRow = document.getElementById('encrypt-toggle')?.parentElement;
     if (encryptRow) encryptRow.style.display = config.authMode ? 'none' : '';
     // 更新选项卡文本

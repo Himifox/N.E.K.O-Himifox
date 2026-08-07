@@ -173,6 +173,76 @@ def test_credentials_page_opens_the_universal_guide_in_a_named_window():
     assert "window.open(guideUrl.toString(), windowName, features)" in script
 
 
+def test_credentials_universal_guide_hides_for_cookie_string_platforms():
+    """通用教程教的是逐字段复制 Cookie Value，对整条 Cookie 请求头的平台是错流程。"""
+    script = read_text("static/js/cookies_login.js")
+
+    assert "cookieStringMode: true" in script
+    assert "const hideTutorial = Boolean(config.authMode || config.cookieStringMode);" in script
+    assert "tutorialBanner.style.display = hideTutorial ? 'none' : ''" in script
+
+
+def test_credentials_tabs_are_wired_to_the_single_tab_panel():
+    template = read_text("templates/cookies_login.html")
+
+    tab_buttons = re.findall(r'<button class="tab-btn[^>]*>', template)
+    assert len(tab_buttons) == 10
+    for button in tab_buttons:
+        assert 'role="tab"' in button, button
+        assert 'aria-controls="main-panel"' in button, button
+    assert re.search(
+        r'<div class="tab-content" id="main-panel"[^>]*role="tabpanel"', template
+    )
+
+
+def test_credentials_deferred_mascot_reaction_has_a_bounded_deadline():
+    """隐私遮罩期间顺延反应必须有上限，否则失焦时弹出的是几分钟前那次的表情。"""
+    script = read_text("static/js/cookies_login.js")
+
+    assert "const MASCOT_DEFERRED_MAX_MS = 4000;" in script
+    assert "deferMascotReaction(type, duration, Date.now() + MASCOT_DEFERRED_MAX_MS)" in script
+
+    defer_body = re.search(
+        r"const deferMascotReaction = \(type, duration, deadline\) => \{"
+        r"(?P<body>[\s\S]*?)\n    \};",
+        script,
+    )
+    assert defer_body
+    # 重排必须沿用同一个 deadline，重新取一次 Date.now() 等于上限失效。
+    assert "if (Date.now() >= deadline) return;" in defer_body.group("body")
+    assert "deferMascotReaction(type, duration, deadline);" in defer_body.group("body")
+    assert "Date.now() + MASCOT_DEFERRED_MAX_MS" not in defer_body.group("body")
+
+
+def test_credentials_guide_screenshot_keeps_no_readable_cookie_value():
+    """step-5 截图底部的 Cookie Value 面板必须是抹掉的，不能留真实凭证。"""
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    asset = PROJECT_ROOT / "static" / "images" / "cookies" / "guide" / "step-5-value.png"
+    with Image.open(asset) as image:
+        pane = image.convert("RGB").crop((334, 843, image.width, image.height))
+
+    rgb = np.asarray(pane).astype(int)
+    # 面板上压着红色标注箭头，它本来就是高对比度的，先连边缘一起排除。
+    red = (
+        (rgb[:, :, 0] > 140)
+        & (rgb[:, :, 1] < 110)
+        & (rgb[:, :, 2] < 110)
+        & (rgb[:, :, 0] - rgb[:, :, 1] > 60)
+    )
+    keep = ~np.asarray(
+        Image.fromarray((red * 255).astype("uint8")).filter(ImageFilter.MaxFilter(9))
+    ).astype(bool)
+
+    # 字形靠相邻像素的高对比度成立；抹干净之后剩下的只有平滑渐变。
+    gray = np.asarray(pane.convert("L")).astype(int)
+    horizontal = np.abs(np.diff(gray, axis=1))[keep[:, :-1] & keep[:, 1:]]
+    vertical = np.abs(np.diff(gray, axis=0))[keep[:-1, :] & keep[1:, :]]
+    contrast = int(max(horizontal.max(), vertical.max()))
+    assert contrast < 60, f"Cookie Value 面板仍有高对比度笔画（{contrast}）"
+
+
 def test_credentials_tutorial_link_has_distinct_interaction_states():
     template = read_text("templates/cookies_login.html")
 

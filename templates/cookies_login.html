@@ -1389,22 +1389,22 @@
 
         <!-- Platform tab bar (uses same class names as JS expects) -->
         <div class="platform-bar tabs" role="tablist">
-            <button class="tab-btn active" onclick="switchTab('netease', this)" data-platform="netease" data-i18n="cookiesLogin.netease" role="tab" aria-selected="true">网易云音乐</button>
-            <button class="tab-btn" onclick="switchTab('bilibili', this)" data-platform="bilibili" data-i18n="cookiesLogin.bilibili" role="tab" aria-selected="false">Bilibili</button>
-            <button class="tab-btn" onclick="switchTab('xhh', this)" data-platform="xhh" data-i18n="cookiesLogin.xhh" role="tab" aria-selected="false">小黑盒</button>
-            <button class="tab-btn" onclick="switchTab('youtube', this)" data-platform="youtube" data-i18n="cookiesLogin.youtube" role="tab" aria-selected="false">YouTube</button>
-            <button class="tab-btn" onclick="switchTab('twitch', this)" data-platform="twitch" data-i18n="cookiesLogin.twitch" role="tab" aria-selected="false">Twitch</button>
-            <button class="tab-btn" onclick="switchTab('douyin', this)" data-platform="douyin" data-i18n="cookiesLogin.douyin" role="tab" aria-selected="false">抖音</button>
-            <button class="tab-btn" onclick="switchTab('kuaishou', this)" data-platform="kuaishou" data-i18n="cookiesLogin.kuaishou" role="tab" aria-selected="false">快手</button>
-            <button class="tab-btn" onclick="switchTab('weibo', this)" data-platform="weibo" data-i18n="cookiesLogin.weibo" role="tab" aria-selected="false">微博</button>
-            <button class="tab-btn" onclick="switchTab('twitter', this)" data-platform="twitter" data-i18n="cookiesLogin.twitter" role="tab" aria-selected="false">Twitter/X</button>
-            <button class="tab-btn" onclick="switchTab('reddit', this)" data-platform="reddit" data-i18n="cookiesLogin.reddit" role="tab" aria-selected="false">Reddit</button>
+            <button class="tab-btn active" onclick="switchTab('netease', this)" data-platform="netease" data-i18n="cookiesLogin.netease" role="tab" aria-controls="main-panel" aria-selected="true">网易云音乐</button>
+            <button class="tab-btn" onclick="switchTab('bilibili', this)" data-platform="bilibili" data-i18n="cookiesLogin.bilibili" role="tab" aria-controls="main-panel" aria-selected="false">Bilibili</button>
+            <button class="tab-btn" onclick="switchTab('xhh', this)" data-platform="xhh" data-i18n="cookiesLogin.xhh" role="tab" aria-controls="main-panel" aria-selected="false">小黑盒</button>
+            <button class="tab-btn" onclick="switchTab('youtube', this)" data-platform="youtube" data-i18n="cookiesLogin.youtube" role="tab" aria-controls="main-panel" aria-selected="false">YouTube</button>
+            <button class="tab-btn" onclick="switchTab('twitch', this)" data-platform="twitch" data-i18n="cookiesLogin.twitch" role="tab" aria-controls="main-panel" aria-selected="false">Twitch</button>
+            <button class="tab-btn" onclick="switchTab('douyin', this)" data-platform="douyin" data-i18n="cookiesLogin.douyin" role="tab" aria-controls="main-panel" aria-selected="false">抖音</button>
+            <button class="tab-btn" onclick="switchTab('kuaishou', this)" data-platform="kuaishou" data-i18n="cookiesLogin.kuaishou" role="tab" aria-controls="main-panel" aria-selected="false">快手</button>
+            <button class="tab-btn" onclick="switchTab('weibo', this)" data-platform="weibo" data-i18n="cookiesLogin.weibo" role="tab" aria-controls="main-panel" aria-selected="false">微博</button>
+            <button class="tab-btn" onclick="switchTab('twitter', this)" data-platform="twitter" data-i18n="cookiesLogin.twitter" role="tab" aria-controls="main-panel" aria-selected="false">Twitter/X</button>
+            <button class="tab-btn" onclick="switchTab('reddit', this)" data-platform="reddit" data-i18n="cookiesLogin.reddit" role="tab" aria-controls="main-panel" aria-selected="false">Reddit</button>
         </div>
 
         <!-- Main content card -->
         <div class="content-card">
 
-            <div class="tab-content" id="main-panel">
+            <div class="tab-content" id="main-panel" role="tabpanel" tabindex="0">
 
                 <!-- Tutorial entry -->
                 <a class="tutorial-link" href="/api/auth/guide" target="neko_credential_guide" onclick="return openCredentialGuide(event)">
