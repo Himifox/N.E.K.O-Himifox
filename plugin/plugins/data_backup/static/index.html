@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N.E.K.O 数据备份</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">N.E.K.O DATA SNAPSHOTS</p>
+        <h1>数据备份</h1>
+        <p class="subtitle">为配置、角色卡、记忆和模型资源创建本地快照。</p>
+      </div>
+      <button id="refresh" class="secondary" type="button">刷新</button>
+    </header>
+
+    <section class="summary" aria-label="存储位置">
+      <div><span>数据目录</span><code id="data-root">—</code></div>
+      <div><span>备份目录</span><code id="backup-root">—</code></div>
+      <div><span>每组保留</span><strong id="retention">—</strong></div>
+    </section>
+
+    <nav class="tabs" aria-label="备份组">
+      <button class="tab active" type="button" data-group="core">核心数据</button>
+      <button class="tab" type="button" data-group="assets">模型资源</button>
+    </nav>
+
+    <section class="group-card">
+      <div>
+        <h2 id="group-title">核心数据</h2>
+        <p id="group-description">配置、角色卡与长期记忆</p>
+        <div id="paths" class="chips"></div>
+      </div>
+      <button id="create" class="primary" type="button">立即创建快照</button>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+    <section>
+      <div class="section-heading">
+        <h2>已有快照</h2>
+        <span id="snapshot-count">0 份</span>
+      </div>
+      <div id="snapshots" class="snapshot-list"></div>
+    </section>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>
