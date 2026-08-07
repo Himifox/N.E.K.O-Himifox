@@ -151,8 +151,8 @@ async def test_pngtuber_save_preserves_and_bounds_mobile_layout_fields(monkeypat
         {
             'model_type': 'pngtuber',
             'pngtuber': {
-                'idle_image': '/api/model/pngtuber/builtin/yui-origin/idle.png',
-                'talking_image': '/api/model/pngtuber/builtin/yui-origin/idle.png',
+                'idle_image': '/static/pngtuber/default/idle.png',
+                'talking_image': '/static/pngtuber/default/talking.png',
                 'scale': 1.4,
                 'offset_x': -42,
                 'offset_y': 84,

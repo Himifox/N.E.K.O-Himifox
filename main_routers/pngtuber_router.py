@@ -2,19 +2,15 @@
 """PNGTuber model package endpoints."""
 
 import asyncio
-import hashlib
 import json
 import math
 import re
 import shutil
-import stat
-import uuid
-import zipfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Body, File, UploadFile
+from fastapi.responses import JSONResponse
 
 from .pngtuber_importers import PNGTuberImportError, import_pngtuber_package
 from .shared_state import get_config_manager
@@ -24,15 +20,11 @@ router = APIRouter(prefix="/api/model/pngtuber", tags=["pngtuber"])
 logger = get_module_logger(__name__, "Main")
 
 PNGTUBER_USER_PATH = "/user_pngtuber"
-PNGTUBER_BUILTIN_PATH = "/api/model/pngtuber/builtin"
-PNGTUBER_PACKS_DIRNAME = "pngtuber-packs"
+PNGTUBER_STATIC_PATH = "/static/pngtuber"
 PNGTUBER_EXTENSIONS = {".png", ".gif", ".jpg", ".jpeg", ".webp"}
-PNGTUBER_ASSET_EXTENSIONS = PNGTUBER_EXTENSIONS | {".json"}
 MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_PACKAGE_SIZE = 250 * 1024 * 1024
-MAX_ARCHIVE_FILES = 1000
 CHUNK_SIZE = 1024 * 1024
-_builtin_extract_locks: dict[str, asyncio.Lock] = {}
 
 
 def _slugify_name(name: str) -> str:
@@ -94,145 +86,6 @@ def _split_upload_root(paths: list[PurePosixPath]) -> tuple[str, dict[PurePosixP
 def _read_model_json(package_dir: Path) -> dict:
     with open(package_dir / "model.json", "r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def _builtin_packs_dir(config_mgr) -> Path:
-    return Path(config_mgr.project_root) / "static" / PNGTUBER_PACKS_DIRNAME
-
-
-def _read_builtin_manifest(config_mgr) -> list[dict]:
-    manifest_path = _builtin_packs_dir(config_mgr) / "manifest.json"
-    if not manifest_path.is_file():
-        return []
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-    models = manifest.get("models") if isinstance(manifest, dict) else None
-    if not isinstance(manifest, dict) or manifest.get("version") != 1 or not isinstance(models, list):
-        raise ValueError("内置 PNGTuber 清单格式无效")
-    return models
-
-
-def _find_builtin_model(config_mgr, folder: str) -> dict | None:
-    if _safe_relative_path(folder) != PurePosixPath(folder) or "/" in folder or "\\" in folder:
-        return None
-    for model in _read_builtin_manifest(config_mgr):
-        if isinstance(model, dict) and model.get("folder") == folder:
-            return model
-    return None
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _validate_layered_metadata(package_dir: Path, model_json: dict) -> None:
-    config = model_json.get("pngtuber") or model_json.get("_reserved", {}).get("avatar", {}).get("pngtuber") or {}
-    metadata_name = config.get("layered_metadata") or config.get("metadata")
-    if not metadata_name:
-        return
-    rel = _safe_relative_path(metadata_name) if isinstance(metadata_name, str) else None
-    if rel is None or rel.suffix.lower() != ".json":
-        raise ValueError("内置 PNGTuber 分层 metadata 路径无效")
-    metadata_path = package_dir / rel.as_posix()
-    if not metadata_path.is_file():
-        raise ValueError("内置 PNGTuber 分层 metadata 不存在")
-    with open(metadata_path, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-    layers = metadata.get("layers") if isinstance(metadata, dict) else None
-    if not isinstance(layers, list):
-        raise ValueError("内置 PNGTuber 分层 metadata 格式无效")
-    for layer in layers:
-        image_name = layer.get("image") if isinstance(layer, dict) else None
-        image_rel = _safe_relative_path(image_name) if isinstance(image_name, str) else None
-        if image_rel is None or image_rel.suffix.lower() not in PNGTUBER_EXTENSIONS:
-            raise ValueError("内置 PNGTuber 图层图片路径无效")
-        if not (package_dir / image_rel.as_posix()).is_file():
-            raise ValueError(f"内置 PNGTuber 图层图片不存在: {image_name}")
-
-
-def _extract_builtin_model(config_mgr, model: dict) -> Path:
-    folder = model.get("folder")
-    archive_name = model.get("archive")
-    expected_sha256 = str(model.get("archive_sha256") or "").lower()
-    folder_rel = _safe_relative_path(folder) if isinstance(folder, str) else None
-    if folder_rel is None or len(folder_rel.parts) != 1:
-        raise ValueError("内置 PNGTuber 文件夹名称无效")
-    archive_rel = _safe_relative_path(archive_name) if isinstance(archive_name, str) else None
-    if archive_rel is None or len(archive_rel.parts) != 1 or archive_rel.suffix.lower() != ".zip":
-        raise ValueError("内置 PNGTuber 压缩包名称无效")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
-        raise ValueError("内置 PNGTuber 压缩包哈希无效")
-
-    archive_path = _builtin_packs_dir(config_mgr) / archive_rel.as_posix()
-    cache_parent = Path(config_mgr.app_docs_dir) / "cache" / "builtin_pngtuber" / folder
-    target_dir = cache_parent / expected_sha256[:16]
-    ready_marker = target_dir / ".ready"
-    if ready_marker.is_file() and ready_marker.read_text(encoding="utf-8").strip() == expected_sha256:
-        return target_dir
-    if not archive_path.is_file() or _sha256_file(archive_path) != expected_sha256:
-        raise ValueError(f"内置 PNGTuber 压缩包缺失或校验失败: {archive_name}")
-
-    cache_parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = cache_parent / f".{expected_sha256[:16]}.{uuid.uuid4().hex}.tmp"
-    temp_dir.mkdir()
-    try:
-        with zipfile.ZipFile(archive_path) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            if len(infos) > MAX_ARCHIVE_FILES:
-                raise ValueError("内置 PNGTuber 压缩包文件数量过多")
-            if sum(info.file_size for info in infos) > MAX_PACKAGE_SIZE:
-                raise ValueError("内置 PNGTuber 解压后体积过大")
-            if model.get("file_count") != len(infos) or model.get("unpacked_size") != sum(info.file_size for info in infos):
-                raise ValueError("内置 PNGTuber 压缩包与清单不一致")
-
-            seen: set[str] = set()
-            for info in infos:
-                raw_name = info.filename.replace("\\", "/")
-                rel = _safe_relative_path(info.filename)
-                unix_mode = info.external_attr >> 16
-                if (
-                    rel is None
-                    or raw_name.startswith("/")
-                    or re.match(r"^[a-zA-Z]:", raw_name)
-                    or stat.S_IFMT(unix_mode) == stat.S_IFLNK
-                ):
-                    raise ValueError(f"内置 PNGTuber 压缩包包含不安全路径: {info.filename}")
-                normalized = rel.as_posix().casefold()
-                if normalized in seen:
-                    raise ValueError(f"内置 PNGTuber 压缩包包含重复路径: {info.filename}")
-                seen.add(normalized)
-                if info.file_size > MAX_FILE_SIZE:
-                    raise ValueError(f"内置 PNGTuber 单个文件过大: {info.filename}")
-                output_path = (temp_dir / rel.as_posix()).resolve()
-                output_path.relative_to(temp_dir.resolve())
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as source, open(output_path, "xb") as output:
-                    shutil.copyfileobj(source, output, CHUNK_SIZE)
-
-        model_json = _read_model_json(temp_dir)
-        ok, error = _validate_model_package(temp_dir, model_json)
-        if not ok:
-            raise ValueError(error)
-        _validate_layered_metadata(temp_dir, model_json)
-        (temp_dir / ".ready").write_text(expected_sha256, encoding="utf-8")
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        temp_dir.rename(target_dir)
-        return target_dir
-    finally:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-async def _ensure_builtin_model(config_mgr, model: dict) -> Path:
-    folder = str(model.get("folder") or "")
-    lock = _builtin_extract_locks.setdefault(folder, asyncio.Lock())
-    async with lock:
-        return await asyncio.to_thread(_extract_builtin_model, config_mgr, model)
 
 
 def _normalize_pngtuber_config(
@@ -463,28 +316,13 @@ async def get_pngtuber_models():
         config_mgr = get_config_manager()
         config_mgr.ensure_pngtuber_directory()
         models = []
-        for model_json in sorted(_read_builtin_manifest(config_mgr), key=lambda item: str(item.get("folder", "")).lower()):
-            try:
-                folder = model_json.get("folder")
-                if not isinstance(folder, str) or _find_builtin_model(config_mgr, folder) is None:
-                    continue
-                pngtuber = _normalize_pngtuber_config(folder, model_json, PNGTUBER_BUILTIN_PATH)
-                models.append({
-                    "name": model_json.get("name") or folder,
-                    "folder": folder,
-                    "filename": folder,
-                    "location": "builtin",
-                    "type": "pngtuber",
-                    "model_type": "pngtuber",
-                    "url": f"{PNGTUBER_BUILTIN_PATH}/{folder}/model.json",
-                    "pngtuber": pngtuber,
-                    "source_format": model_json.get("source_format", "simple_package"),
-                })
-            except Exception as exc:
-                logger.warning("跳过无效内置 PNGTuber 模型 %s: %s", model_json, exc)
-
-        root = config_mgr.pngtuber_dir
-        if root.is_dir():
+        roots = (
+            (config_mgr.project_root / "static" / "pngtuber", "builtin", PNGTUBER_STATIC_PATH),
+            (config_mgr.pngtuber_dir, "user", PNGTUBER_USER_PATH),
+        )
+        for root, location, url_root in roots:
+            if not root.is_dir():
+                continue
             for package_dir in sorted(root.iterdir(), key=lambda p: p.name.lower()):
                 if not package_dir.is_dir() or not (package_dir / "model.json").exists():
                     continue
@@ -492,16 +330,16 @@ async def get_pngtuber_models():
                     model_json = await asyncio.to_thread(_read_model_json, package_dir)
                     if model_json.get("model_type") != "pngtuber":
                         continue
-                    pngtuber = _normalize_pngtuber_config(package_dir.name, model_json, PNGTUBER_USER_PATH)
+                    pngtuber = _normalize_pngtuber_config(package_dir.name, model_json, url_root)
                     display_name = model_json.get("name") or package_dir.name
                     models.append({
                         "name": display_name,
                         "folder": package_dir.name,
                         "filename": package_dir.name,
-                        "location": "user",
+                        "location": location,
                         "type": "pngtuber",
                         "model_type": "pngtuber",
-                        "url": f"{PNGTUBER_USER_PATH}/{package_dir.name}/model.json",
+                        "url": f"{url_root}/{package_dir.name}/model.json",
                         "pngtuber": pngtuber,
                         "source_format": model_json.get("source_format", "simple_package"),
                     })
@@ -511,40 +349,6 @@ async def get_pngtuber_models():
     except Exception as exc:
         logger.error("获取PNGTuber模型列表失败: %s", exc, exc_info=True)
         return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
-
-
-@router.get("/builtin/{folder}/{asset_path:path}")
-async def get_builtin_pngtuber_asset(folder: str, asset_path: str):
-    config_mgr = get_config_manager()
-    try:
-        model = _find_builtin_model(config_mgr, folder)
-    except Exception as exc:
-        logger.error("读取内置 PNGTuber 清单失败: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="读取内置 PNGTuber 清单失败") from exc
-    if model is None:
-        raise HTTPException(status_code=404, detail="内置 PNGTuber 模型不存在")
-
-    rel = _safe_relative_path(asset_path)
-    if rel is None or rel.suffix.lower() not in PNGTUBER_ASSET_EXTENSIONS:
-        raise HTTPException(status_code=404, detail="内置 PNGTuber 资源不存在")
-    try:
-        package_dir = await _ensure_builtin_model(config_mgr, model)
-        asset = (package_dir / rel.as_posix()).resolve()
-        asset.relative_to(package_dir.resolve())
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("解压内置 PNGTuber 模型 %s 失败: %s", folder, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="内置 PNGTuber 模型解压失败") from exc
-    if not asset.is_file():
-        raise HTTPException(status_code=404, detail="内置 PNGTuber 资源不存在")
-    return FileResponse(
-        asset,
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
 
 
 @router.delete("/model")

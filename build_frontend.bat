@@ -8,7 +8,20 @@ if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
 set "FAIL=0"
 
-rem --- 0. yui-origin Live2D model (unpack from assets/) ---
+where uv >nul 2>&1
+if errorlevel 1 (
+  echo [build_frontend] uv not found, please install uv
+  exit /b 1
+)
+
+rem --- 0. Built-in PNGTuber models ---
+uv run --no-sync python "%ROOT_DIR%\scripts\unpack_builtin_pngtuber.py"
+if errorlevel 1 (
+  echo [build_frontend] built-in PNGTuber unpack failed
+  exit /b 1
+)
+
+rem --- 1. yui-origin Live2D model (unpack from assets/) ---
 set "YUI_ARCHIVE=%ROOT_DIR%\assets\yui-origin.tar.gz"
 set "YUI_DIR=%ROOT_DIR%\static\yui-origin"
 set "YUI_MARKER=%YUI_DIR%\yui-origin.moc3"
@@ -42,7 +55,7 @@ if "%YUI_NEED_EXTRACT%"=="1" (
   echo [build_frontend] yui-origin up to date, skip
 )
 
-rem --- 1. Plugin Manager (Vue) ---
+rem --- 2. Plugin Manager (Vue) ---
 set "PM_DIR=%ROOT_DIR%\frontend\plugin-manager"
 set "PM_DIST=%PM_DIR%\dist"
 
@@ -73,7 +86,7 @@ if not exist "%PM_DIST%\index.html" (
 )
 echo [build_frontend] plugin-manager done: %PM_DIST%
 
-rem --- 2. React Neko Chat ---
+rem --- 3. React Neko Chat ---
 set "RC_DIR=%ROOT_DIR%\frontend\react-neko-chat"
 set "RC_DIST=%ROOT_DIR%\static\react\neko-chat"
 

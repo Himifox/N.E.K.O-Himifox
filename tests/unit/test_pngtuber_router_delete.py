@@ -1,7 +1,5 @@
-import hashlib
 import json
 import io
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,7 +56,7 @@ def test_normalize_pngtuber_config_defaults_mobile_scale_from_desktop_scale_stri
     assert result["mobile_offset_y"] == 0
 
 
-def test_normalize_pngtuber_config_supports_builtin_asset_root():
+def test_normalize_pngtuber_config_supports_builtin_static_root():
     result = pngtuber_router._normalize_pngtuber_config(
         "yui-origin",
         {
@@ -68,36 +66,27 @@ def test_normalize_pngtuber_config_supports_builtin_asset_root():
                 "layered_metadata": "metadata.pngtube-remix.json",
             },
         },
-        pngtuber_router.PNGTUBER_BUILTIN_PATH,
+        pngtuber_router.PNGTUBER_STATIC_PATH,
     )
 
-    assert result["idle_image"] == "/api/model/pngtuber/builtin/yui-origin/idle.png"
-    assert result["layered_metadata"] == "/api/model/pngtuber/builtin/yui-origin/metadata.pngtube-remix.json"
+    assert result["idle_image"] == "/static/pngtuber/yui-origin/idle.png"
+    assert result["layered_metadata"] == "/static/pngtuber/yui-origin/metadata.pngtube-remix.json"
 
 
 async def test_get_pngtuber_models_lists_builtin_and_user_packages(monkeypatch, tmp_path):
     project_root = tmp_path / "project"
-    packs_dir = project_root / "static" / "pngtuber-packs"
+    builtin_dir = project_root / "static" / "pngtuber" / "yui-origin"
     user_root = tmp_path / "user_pngtuber"
     user_dir = user_root / "custom"
-    packs_dir.mkdir(parents=True)
+    builtin_dir.mkdir(parents=True)
     user_dir.mkdir(parents=True)
     model_template = {
         "model_type": "pngtuber",
         "source_format": "pngtube_remix_pngremix",
         "pngtuber": {"idle_image": "idle.png"},
     }
-    (packs_dir / "manifest.json").write_text(
-        json.dumps({
-            "version": 1,
-            "models": [{
-                **model_template,
-                "folder": "yui-origin",
-                "name": "YUI Origin",
-                "archive": "yui-origin.zip",
-                "archive_sha256": "0" * 64,
-            }],
-        }),
+    (builtin_dir / "model.json").write_text(
+        json.dumps({**model_template, "name": "YUI Origin"}),
         encoding="utf-8",
     )
     (user_dir / "model.json").write_text(
@@ -107,7 +96,6 @@ async def test_get_pngtuber_models_lists_builtin_and_user_packages(monkeypatch, 
     config_manager = SimpleNamespace(
         project_root=project_root,
         pngtuber_dir=user_root,
-        app_docs_dir=tmp_path / "app-docs",
         ensure_pngtuber_directory=lambda: True,
     )
     monkeypatch.setattr(pngtuber_router, "get_config_manager", lambda: config_manager)
@@ -120,93 +108,8 @@ async def test_get_pngtuber_models_lists_builtin_and_user_packages(monkeypatch, 
         ("yui-origin", "builtin"),
         ("custom", "user"),
     ]
-    assert body["models"][0]["url"] == "/api/model/pngtuber/builtin/yui-origin/model.json"
-    assert body["models"][0]["pngtuber"]["idle_image"] == "/api/model/pngtuber/builtin/yui-origin/idle.png"
-    assert not (tmp_path / "app-docs" / "cache" / "builtin_pngtuber").exists()
-
-
-def _write_builtin_pack(project_root: Path, folder: str = "yui-test", extra_members: dict[str, bytes] | None = None):
-    packs_dir = project_root / "static" / "pngtuber-packs"
-    packs_dir.mkdir(parents=True)
-    image = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    members = {
-        "idle.png": buffer.getvalue(),
-        "layers/layer.png": buffer.getvalue(),
-        "metadata.pngtube-remix.json": json.dumps({"layers": [{"image": "layers/layer.png"}]}).encode(),
-        "model.json": json.dumps({
-            "name": "YUI Test",
-            "model_type": "pngtuber",
-            "pngtuber": {
-                "idle_image": "idle.png",
-                "talking_image": "idle.png",
-                "layered_metadata": "metadata.pngtube-remix.json",
-            },
-        }).encode(),
-    }
-    members.update(extra_members or {})
-    archive_path = packs_dir / f"{folder}.zip"
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, data in members.items():
-            archive.writestr(name, data)
-    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-    model = {
-        "folder": folder,
-        "name": "YUI Test",
-        "archive": archive_path.name,
-        "archive_sha256": digest,
-        "file_count": len(members),
-        "unpacked_size": sum(len(data) for data in members.values()),
-        "source_format": "pngtube_remix_pngremix",
-        "pngtuber": {
-            "idle_image": "idle.png",
-            "talking_image": "idle.png",
-            "layered_metadata": "metadata.pngtube-remix.json",
-        },
-    }
-    (packs_dir / "manifest.json").write_text(
-        json.dumps({"version": 1, "models": [model]}),
-        encoding="utf-8",
-    )
-    return model
-
-
-async def test_builtin_asset_is_extracted_to_cache_on_first_request(monkeypatch, tmp_path):
-    project_root = tmp_path / "project"
-    model = _write_builtin_pack(project_root)
-    config_manager = SimpleNamespace(
-        project_root=project_root,
-        app_docs_dir=tmp_path / "app-docs",
-    )
-    monkeypatch.setattr(pngtuber_router, "get_config_manager", lambda: config_manager)
-
-    response = await pngtuber_router.get_builtin_pngtuber_asset("yui-test", "idle.png")
-    cache_dir = (
-        config_manager.app_docs_dir
-        / "cache"
-        / "builtin_pngtuber"
-        / "yui-test"
-        / model["archive_sha256"][:16]
-    )
-
-    assert Path(response.path) == cache_dir / "idle.png"
-    assert (cache_dir / ".ready").read_text(encoding="utf-8") == model["archive_sha256"]
-    assert (project_root / "static" / "pngtuber-packs" / "yui-test.zip").is_file()
-
-
-def test_builtin_archive_rejects_path_traversal(tmp_path):
-    project_root = tmp_path / "project"
-    model = _write_builtin_pack(project_root, extra_members={"../escape.png": b"escape"})
-    config_manager = SimpleNamespace(
-        project_root=project_root,
-        app_docs_dir=tmp_path / "app-docs",
-    )
-
-    with pytest.raises(ValueError, match="不安全路径"):
-        pngtuber_router._extract_builtin_model(config_manager, model)
-
-    assert not (config_manager.app_docs_dir / "cache" / "builtin_pngtuber" / "escape.png").exists()
+    assert body["models"][0]["url"] == "/static/pngtuber/yui-origin/model.json"
+    assert body["models"][0]["pngtuber"]["idle_image"] == "/static/pngtuber/yui-origin/idle.png"
 
 
 @pytest.mark.parametrize("scale", ["nan", "inf", "-inf"])

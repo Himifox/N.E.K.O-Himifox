@@ -62,6 +62,9 @@ _REQUIRED_ASSETS: tuple[tuple[str, str | None], ...] = (
     # 只编 .py 不带；守该目录里至少有一份 locale json，否则非默认语言用户的角色种子回退错语言。
     ("config/characters", "*.json"),
     ("static", None),
+    ("static/pngtuber/yui-lolita", "model.json"),
+    ("static/pngtuber/yui-origin", "model.json"),
+    ("static/pngtuber/yui-sister", "model.json"),
     ("templates", None),
     ("assets", None),
     ("data/browser_use_prompts", None),

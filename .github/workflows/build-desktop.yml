@@ -324,6 +324,7 @@ jobs:
             bash scripts/verify_frontend_build.sh
             exit 0
           fi
+          uv run --no-sync python scripts/unpack_builtin_pngtuber.py
           cd frontend/plugin-manager
           npm ci
           npm run build-only

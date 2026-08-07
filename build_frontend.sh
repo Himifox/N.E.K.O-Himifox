@@ -9,7 +9,15 @@ if ! command -v npm &> /dev/null; then
   exit 1
 fi
 
-# --- 0. yui-origin Live2D model (unpack from assets/) ---
+if ! command -v uv &> /dev/null; then
+  echo "[build_frontend] uv not found, please install uv" >&2
+  exit 1
+fi
+
+# --- 0. Built-in PNGTuber models ---
+uv run --no-sync python "$SCRIPT_DIR/scripts/unpack_builtin_pngtuber.py"
+
+# --- 1. yui-origin Live2D model (unpack from assets/) ---
 YUI_ARCHIVE="$SCRIPT_DIR/assets/yui-origin.tar.gz"
 YUI_DIR="$SCRIPT_DIR/static/yui-origin"
 YUI_MARKER="$YUI_DIR/yui-origin.moc3"
@@ -32,7 +40,7 @@ else
   echo "[build_frontend] yui-origin up to date, skip"
 fi
 
-# --- 1. Plugin Manager (Vue) ---
+# --- 2. Plugin Manager (Vue) ---
 PM_DIR="$SCRIPT_DIR/frontend/plugin-manager"
 PM_DIST="$PM_DIR/dist"
 
@@ -54,7 +62,7 @@ if [ ! -f "$PM_DIST/index.html" ]; then
 fi
 echo "[build_frontend] plugin-manager done: $PM_DIST"
 
-# --- 2. React Neko Chat ---
+# --- 3. React Neko Chat ---
 RC_DIR="$SCRIPT_DIR/frontend/react-neko-chat"
 RC_DIST="$SCRIPT_DIR/static/react/neko-chat"
 
