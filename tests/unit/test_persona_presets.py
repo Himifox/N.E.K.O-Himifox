@@ -218,7 +218,10 @@ def test_legacy_prompt_ids_are_hidden_by_default_but_remain_selectable():
     assert "classic_genki" not in active_ids
     assert all_ids[-3:] == ["classic_genki", "tsundere_helper", "elegant_butler"]
     assert get_persona_preset("classic_genki") is not None
-    assert "sunny cat girl" in get_persona_prompt_guidance("classic_genki", "zh")
+    classic_prompt = get_persona_prompt_guidance("classic_genki", "zh")
+    assert "sunny cat girl" in classic_prompt
+    assert "{MASTER_NAME}是{LANLAN_NAME}的亲人" in classic_prompt
+    assert "{LANLAN_NAME}对{MASTER_NAME}毫无保留" in classic_prompt
 
 
 @pytest.mark.unit
@@ -229,6 +232,8 @@ def test_legacy_persona_prompts_resolve_in_every_language(lang):
 
     assert all(prompts)
     assert all("{_" not in prompt for prompt in prompts)
+    assert all("output only words {LANLAN_NAME} can actually say aloud" in prompt for prompt in prompts)
+    assert all("Punctuation may guide TTS" in prompt for prompt in prompts)
     assert len(set(prompts)) == len(legacy_ids)
 
 

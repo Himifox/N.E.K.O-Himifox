@@ -1268,12 +1268,39 @@ async def test_character_persona_routes_reject_invalid_json_and_normalize_non_ob
                 "error": "无效的人格预设",
             }
 
-            legacy_preset_selection = await router_module.update_character_persona_selection(
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_character_persona_selection_accepts_legacy_preset_id():
+    with TemporaryDirectory() as td:
+        config_manager = _make_config_manager(Path(td))
+        bootstrap_local_cloudsave_environment(config_manager)
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with patch("utils.config_manager._config_manager", config_manager):
+            init_shared_state(
+                role_state={},
+                steamworks=None,
+                templates=None,
+                config_manager=config_manager,
+                logger=None,
+                initialize_character_data=_noop,
+                switch_current_catgirl_fast=_noop,
+                init_one_catgirl=_noop,
+                remove_one_catgirl=_noop,
+            )
+
+            crud_module, cards_module, notify_module, router_module = _reload_persona_modules()
+            current_name = config_manager.load_characters()["当前猫娘"]
+
+            result = await router_module.update_character_persona_selection(
                 current_name,
                 _DummyRequest({"preset_id": "classic_genki", "source": "manual_reselect"}),
             )
-            assert legacy_preset_selection["success"] is True
-            assert legacy_preset_selection["selection"]["preset_id"] == "classic_genki"
+
+            assert result["success"] is True
+            assert result["selection"]["preset_id"] == "classic_genki"
 
 
 @pytest.mark.unit
