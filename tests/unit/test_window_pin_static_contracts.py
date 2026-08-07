@@ -182,6 +182,67 @@ def test_credentials_universal_guide_hides_for_cookie_string_platforms():
     assert "tutorialBanner.style.display = hideTutorial ? 'none' : ''" in script
 
 
+def test_credentials_shared_submit_button_is_scoped_to_the_latest_request():
+    """#submit-btn is shared by every platform; a stale finally must not unlock it."""
+    script = read_text("static/js/cookies_login.js")
+
+    assert "let submitButtonGeneration = 0;" in script
+    assert "const generation = ++submitButtonGeneration;" in script
+    # 恢复必须过代数闸，不能再有裸的 submitBtn.disabled = false
+    release = re.search(
+        r"function releaseSubmitButtonLock\(generation\) \{(?P<body>[\s\S]*?)\n\}",
+        script,
+    )
+    assert release
+    assert "if (generation !== submitButtonGeneration) return;" in release.group("body")
+
+    # 保存凭证和 Twitch 授权两条路径都走同一把锁，函数体里不许再直接动按钮。
+    assert script.count("const submitLock = beginSubmitButtonLock();") == 2
+    assert script.count("releaseSubmitButtonLock(submitLock);") == 2
+    for name in ("startTwitchDeviceCode", "submitCurrentCookie"):
+        body = re.search(
+            rf"async function {name}\((?:[^)]*)\) \{{(?P<body>[\s\S]*?)\n\}}", script
+        )
+        assert body, name
+        assert "beginSubmitButtonLock()" in body.group("body"), name
+        assert "releaseSubmitButtonLock(" in body.group("body"), name
+        assert not re.search(r"\.\s*disabled\s*=", body.group("body")), name
+
+    # 换平台放行共用按钮，但语言切换的同平台重渲染不能放行。
+    assert re.search(
+        r"if \(!isReRender && previousPlatform !== platformKey\) \{\s*\n"
+        r"\s*submitButtonGeneration\+\+;",
+        script,
+    )
+
+
+def test_credentials_mascot_bubble_leaves_the_accessibility_tree_when_hidden():
+    """The bubble carries aria-live, so opacity alone still gets announced."""
+    template = read_text("templates/cookies_login.html")
+
+    assert 'class="mascot-bubble" aria-live="polite"' in template
+    base = re.search(r"\n        \.mascot-bubble \{(?P<body>[\s\S]*?)\n        \}", template)
+    visible = re.search(
+        r"\n        \.mascot-bubble\.visible \{(?P<body>[\s\S]*?)\n        \}", template
+    )
+    assert base and visible
+    assert "visibility: hidden;" in base.group("body")
+    assert "visibility: visible;" in visible.group("body")
+    assert re.search(
+        r"\.character-banner\.credential-privacy-active \.mascot-bubble \{"
+        r"[\s\S]*?visibility: hidden !important;",
+        template,
+    )
+
+
+def test_credentials_status_icon_lookup_ignores_inherited_properties():
+    """A platform key like `constructor` would otherwise render function source."""
+    template = read_text("templates/cookies_login.html")
+
+    assert "Object.prototype.hasOwnProperty.call(platformIcons, key)" in template
+    assert not re.search(r"var svg = platformIcons\[key\];", template)
+
+
 def test_credentials_tabs_are_wired_to_the_single_tab_panel():
     template = read_text("templates/cookies_login.html")
 

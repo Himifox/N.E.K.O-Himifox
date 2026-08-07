@@ -502,16 +502,23 @@
             font-weight: 650;
             line-height: 1.35;
             opacity: 0;
+            /* 这个气泡带 aria-live：只归零 opacity 的话它还留在无障碍树里，
+               读屏用户会听到看不见的内容。visibility 才能把它移出播报。 */
+            visibility: hidden;
             pointer-events: none;
         }
         .mascot-bubble.visible {
             opacity: 1;
+            visibility: visible;
             animation: mascotEffectPop 0.32s ease-out both;
         }
         .character-banner.credential-privacy-active .mascot-effect,
         .character-banner.credential-privacy-active .mascot-bubble {
             opacity: 0 !important;
             animation: none !important;
+        }
+        .character-banner.credential-privacy-active .mascot-bubble {
+            visibility: hidden !important;
         }
         @keyframes mascotEffectPop {
             from { opacity: 0; transform: translateY(3px) scale(0.86); }
@@ -1508,7 +1515,9 @@
           var name = (nameEl.textContent || '').trim();
           var key = card.dataset.platform || platKey(name);
           if (!key) return;
-          var svg = platformIcons[key];
+          var svg = Object.prototype.hasOwnProperty.call(platformIcons, key)
+            ? platformIcons[key]
+            : null;
           if (!svg) return;
           var wrap = document.createElement('span');
           wrap.className = 'plat-icon';

@@ -310,4 +310,11 @@ def test_all_locales_define_complete_voice_identity_copy() -> None:
 def test_voice_identity_locale_addition_bumps_locale_cache_key() -> None:
     bootstrap = (ROOT / "static/i18n-i18next.js").read_text(encoding="utf-8")
 
-    assert "LOCALE_VERSION = '2026-08-05-voice-identity-a11y'" in bootstrap
+    # 只要求存在一个非空的 LOCALE_VERSION（locale 文件靠它做 cache-bust），
+    # 不再钉死具体取值：钉死等于让每一次无关的版本串变更都打红这条用例。
+    # tests/unit/test_window_pin_static_contracts.py 里的同族判据已经因为
+    # 同样的原因退役过一次，这条是漏网的第二处。
+    locale_version = re.search(r"const\s+LOCALE_VERSION\s*=\s*'([^']+)'", bootstrap)
+    assert locale_version and locale_version.group(1).strip(), (
+        "i18n-i18next.js 必须带一个非空的 LOCALE_VERSION 常量做 locale cache-bust"
+    )

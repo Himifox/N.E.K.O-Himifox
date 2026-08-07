@@ -575,6 +575,24 @@ let currentQrKey = null;
 let qrRequestGeneration = 0;
 let qrRequestAbortController = null;
 
+// #submit-btn 是所有平台共用的一个按钮：保存凭证和启动 Twitch 授权都会禁用它。
+// 用代数把「谁禁用的」和「谁有资格恢复」绑起来——旧请求晚到的 finally 不许恢复
+// 按钮（否则会解开新请求刚上的锁），切平台则作废当前代数并直接放行新平台。
+let submitButtonGeneration = 0;
+
+function beginSubmitButtonLock() {
+    const generation = ++submitButtonGeneration;
+    const submitBtn = document.getElementById('submit-btn');
+    if (submitBtn) submitBtn.disabled = true;
+    return generation;
+}
+
+function releaseSubmitButtonLock(generation) {
+    if (generation !== submitButtonGeneration) return;
+    const submitBtn = document.getElementById('submit-btn');
+    if (submitBtn) submitBtn.disabled = false;
+}
+
 function cancelQrRequest() {
     qrRequestGeneration++;
     qrRequestAbortController?.abort();
@@ -1008,6 +1026,16 @@ function switchTab(platformKey, btnElement, isReRender = false) {
         }
     }
 
+    // 换平台就作废上一轮的按钮锁：旧请求还在飞不该拖住新平台提交，
+    // 它晚到的 finally 也会因为代数对不上而不再动这个共用按钮。
+    // 只在真正换平台时放行——语言切换走的是同平台重渲染，那时候在飞的请求
+    // 还是当前平台的，放开按钮等于允许重复提交。
+    if (!isReRender && previousPlatform !== platformKey) {
+        submitButtonGeneration++;
+        const sharedSubmitBtn = document.getElementById('submit-btn');
+        if (sharedSubmitBtn) sharedSubmitBtn.disabled = false;
+    }
+
     // 更新提交按钮文本
     const submitText = document.getElementById('submit-text');
     if (submitText) {
@@ -1093,8 +1121,7 @@ async function startTwitchDeviceCode() {
         return;
     }
     stopTwitchDevicePoll();
-    const submitBtn = document.getElementById('submit-btn');
-    if (submitBtn) submitBtn.disabled = true;
+    const submitLock = beginSubmitButtonLock();
     try {
         const response = await fetch('/api/auth/twitch/device/start', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: clientId })
@@ -1113,7 +1140,7 @@ async function startTwitchDeviceCode() {
             showAlert(false, safeT('cookiesLogin.networkError', '网络请求失败，请检查连接'));
         }
     } finally {
-        if (submitBtn) submitBtn.disabled = false;
+        releaseSubmitButtonLock(submitLock);
     }
 }
 
@@ -1226,11 +1253,10 @@ async function submitCurrentCookie() {
         }
         cookieString = cookiePairs.join('; ');
     }
-    const submitBtn = document.getElementById('submit-btn');
     const submitText = document.getElementById('submit-text');
     const encryptToggle = document.getElementById('encrypt-toggle');
     // 禁用提交按钮，防止重复点击
-    if (submitBtn) submitBtn.disabled = true;
+    const submitLock = beginSubmitButtonLock();
     if (submitText) submitText.textContent = safeT('cookiesLogin.submitting', '安全加密传输中...');
     // 发送 POST 请求保存 Cookies
     try {
@@ -1267,7 +1293,7 @@ async function submitCurrentCookie() {
         window.triggerMascotReaction?.('failure', 1050);
         console.error("Submit error:", err);
     } finally {
-        if (submitBtn) submitBtn.disabled = false;
+        releaseSubmitButtonLock(submitLock);
         if (submitText && currentPlatform === submittedPlatform) {
             const activeConfig = PLATFORM_CONFIG[submittedPlatform];
             const translatedText = activeConfig.authMode === 'deviceCode'
