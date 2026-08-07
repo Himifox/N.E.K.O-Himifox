@@ -57,6 +57,36 @@
       </div>
     </section>
 
+    <section class="schedule-card" aria-labelledby="schedule-title">
+      <div class="schedule-copy">
+        <p class="section-label">AUTOMATION</p>
+        <h2 id="schedule-title">定时快照</h2>
+        <p>默认关闭。开启后从保存时间开始计时，手动快照不会改变计划。</p>
+        <strong id="schedule-status">已关闭</strong>
+        <span id="schedule-history"></span>
+        <span id="schedule-error" class="schedule-error"></span>
+      </div>
+      <form id="schedule-form" class="schedule-form">
+        <label class="switch-field" for="schedule-enabled">
+          <span>启用定时快照</span>
+          <input id="schedule-enabled" type="checkbox">
+        </label>
+        <label class="schedule-field" for="schedule-interval">
+          <span>执行周期</span>
+          <span class="interval-input">
+            <input id="schedule-interval" type="number" min="1" max="365" value="7" required>
+            <span>天</span>
+          </span>
+        </label>
+        <fieldset class="schedule-groups">
+          <legend>备份组</legend>
+          <label><input id="schedule-core" type="checkbox" value="core" checked> 核心数据</label>
+          <label><input id="schedule-assets" type="checkbox" value="assets"> 模型资源</label>
+        </fieldset>
+        <button class="secondary schedule-save" type="submit">保存计划</button>
+      </form>
+    </section>
+
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
     <section class="snapshot-section">

@@ -96,6 +96,30 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 ** index)).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function formatTime(value) {
+  return value ? new Date(value).toLocaleString() : '—';
+}
+
+function renderSchedule() {
+  const schedule = state?.schedule;
+  if (!schedule) return;
+  $('#schedule-enabled').checked = schedule.enabled;
+  $('#schedule-interval').value = schedule.interval_days;
+  $('#schedule-core').checked = schedule.groups.includes('core');
+  $('#schedule-assets').checked = schedule.groups.includes('assets');
+  $('#schedule-status').textContent = schedule.running
+    ? '正在创建定时快照…'
+    : schedule.enabled
+      ? `下次执行：${formatTime(schedule.next_run_at)}`
+      : '已关闭';
+  $('#schedule-history').textContent = schedule.last_run_at
+    ? `上次执行：${formatTime(schedule.last_run_at)}`
+    : '尚未执行过定时快照';
+  $('#schedule-error').textContent = schedule.last_error
+    ? `最近错误：${schedule.last_error}`
+    : '';
+}
+
 async function callPlugin(entryId, args = {}) {
   const created = await fetch(RUNS_URL, {
     method: 'POST',
@@ -138,6 +162,7 @@ function render() {
   $('#data-root').textContent = state.data_root;
   $('#backup-root').textContent = state.backup_root;
   $('#retention').textContent = `${state.retention} 份`;
+  renderSchedule();
   $('#group-title').textContent = title;
   $('#group-description').textContent = description;
   $('#paths').replaceChildren(...group.paths.map((path) => {
@@ -257,6 +282,34 @@ async function deleteSnapshot(snapshotId) {
   }
 }
 
+async function saveSchedule() {
+  const intervalDays = Number.parseInt($('#schedule-interval').value, 10);
+  const groups = ['core', 'assets'].filter((group) => $(`#schedule-${group}`).checked);
+  if (!Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 365) {
+    setNotice('定时周期必须是 1 到 365 天。', 'error');
+    return;
+  }
+  if (!groups.length) {
+    setNotice('请至少选择一个备份组。', 'error');
+    return;
+  }
+  setBusy(true);
+  setNotice('正在保存定时快照计划…');
+  try {
+    state = await callPlugin('backup_set_schedule', {
+      enabled: $('#schedule-enabled').checked,
+      interval_days: intervalDays,
+      groups,
+    });
+    render();
+    setNotice(state.schedule.enabled ? '定时快照计划已启用。' : '定时快照已关闭。', 'success');
+  } catch (error) {
+    setNotice(error.message || String(error), 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     activeGroup = tab.dataset.group;
@@ -267,6 +320,10 @@ document.querySelectorAll('.tab').forEach((tab) => {
 $('#refresh').addEventListener('click', refresh);
 $('#create').addEventListener('click', createSnapshot);
 $('#change-directory').addEventListener('click', openDirectoryDialog);
+$('#schedule-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  saveSchedule();
+});
 $('#confirm-form').addEventListener('submit', (event) => {
   event.preventDefault();
   submitConfirmation();

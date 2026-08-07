@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 from plugin.sdk.plugin import (
@@ -13,13 +14,16 @@ from plugin.sdk.plugin import (
     lifecycle,
     neko_plugin,
     plugin_entry,
+    timer_interval,
 )
 from plugin.sdk.shared.core.base_runtime import resolve_runtime_data_root
 
 if __package__:
     from .backup import BACKUP_GROUPS, BackupEngine, BackupError
+    from .schedule import ScheduleState
 else:  # Standalone repository tests import this file as top-level ``__init__``.
     from backup import BACKUP_GROUPS, BackupEngine, BackupError
+    from schedule import ScheduleState
 
 
 @neko_plugin
@@ -27,6 +31,10 @@ class DataBackupPlugin(NekoPluginBase):
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
         self._engine: BackupEngine | None = None
+        self._schedule = ScheduleState()
+        self._schedule_lock = threading.RLock()
+        self._schedule_running = False
+        self._schedule_revision = 0
 
     @lifecycle(id="startup")
     async def startup(self, **_):
@@ -42,6 +50,16 @@ class DataBackupPlugin(NekoPluginBase):
                 self._engine = BackupEngine(data_root, backup_root)
             except (BackupError, OSError, ValueError):
                 self._engine = BackupEngine(data_root, default_backup_root)
+            raw_schedule = await self.config.get(
+                "backup.schedule", default={}, timeout=5.0
+            )
+            schedule = ScheduleState.from_config(raw_schedule)
+            with self._schedule_lock:
+                self._schedule = schedule
+            if schedule.enabled and schedule.to_dict() != raw_schedule:
+                await self.config.set(
+                    "backup.schedule", schedule.to_dict(), timeout=5.0
+                )
             self.register_static_ui("static", cache_control="no-store")
             self.set_list_actions(
                 [
@@ -74,6 +92,8 @@ class DataBackupPlugin(NekoPluginBase):
         status["default_backup_root"] = str(
             self.data_path("snapshots").resolve(strict=False)
         )
+        with self._schedule_lock:
+            status["schedule"] = self._schedule.to_dict(running=self._schedule_running)
         return status
 
     @staticmethod
@@ -144,6 +164,86 @@ class DataBackupPlugin(NekoPluginBase):
             return Ok(await asyncio.to_thread(self._backup().create_snapshot, group))
         except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
+
+    @plugin_entry(
+        id="backup_set_schedule",
+        name="设置定时快照",
+        description="启用或关闭定时快照，并设置执行周期与备份组。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "interval_days": {"type": "integer", "minimum": 1, "maximum": 365},
+                "groups": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(BACKUP_GROUPS)},
+                    "minItems": 1,
+                    "uniqueItems": True,
+                },
+            },
+            "required": ["enabled", "interval_days", "groups"],
+            "additionalProperties": False,
+        },
+        timeout=30.0,
+    )
+    async def backup_set_schedule(
+        self, enabled: bool, interval_days: int, groups: list[str], **_
+    ):
+        try:
+            with self._schedule_lock:
+                schedule = self._schedule.reconfigured(
+                    enabled=enabled,
+                    interval_days=interval_days,
+                    groups=groups,
+                )
+            await self.config.set("backup.schedule", schedule.to_dict(), timeout=5.0)
+            with self._schedule_lock:
+                self._schedule = schedule
+                self._schedule_revision += 1
+            return Ok(self._status())
+        except (BackupError, OSError, ValueError) as exc:
+            return Err(SdkError(str(exc)))
+
+    @timer_interval(
+        id="scheduled_backup",
+        seconds=3600,
+        name="检查定时快照",
+        description="每小时检查用户配置的定时快照计划。",
+        auto_start=True,
+    )
+    async def scheduled_backup(self, **_):
+        with self._schedule_lock:
+            schedule = self._schedule
+            if self._schedule_running or not schedule.is_due():
+                return Ok({"created": {}, "schedule": schedule.to_dict()})
+            self._schedule_running = True
+            revision = self._schedule_revision
+
+        created: dict[str, str] = {}
+        error: str | None = None
+        try:
+            engine = self._backup()
+            for group in schedule.groups:
+                snapshot = await asyncio.to_thread(engine.create_snapshot, group)
+                created[group] = snapshot["id"]
+        except Exception as exc:
+            error = str(exc)
+            updated = schedule.failed(error)
+        else:
+            updated = schedule.succeeded()
+
+        with self._schedule_lock:
+            self._schedule_running = False
+            if revision != self._schedule_revision:
+                return Ok({"created": created, "settings_changed": True})
+            self._schedule = updated
+        try:
+            await self.config.set("backup.schedule", updated.to_dict(), timeout=5.0)
+        except Exception as exc:
+            return Err(SdkError(f"failed to save schedule state: {exc}"))
+        if error:
+            return Err(SdkError(error))
+        return Ok({"created": created, "schedule": updated.to_dict()})
 
     @plugin_entry(
         id="backup_restore",

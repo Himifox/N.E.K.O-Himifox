@@ -4,11 +4,13 @@ import os
 import shutil
 import sqlite3
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from plugin.plugins.data_backup.backup import BackupEngine, BackupError
+from plugin.plugins.data_backup.schedule import ScheduleState
 
 
 def _engine(tmp_path: Path) -> BackupEngine:
@@ -18,6 +20,44 @@ def _engine(tmp_path: Path) -> BackupEngine:
         data_root,
         data_root / "plugins" / "data_backup" / "data" / "snapshots",
     )
+
+
+def test_schedule_is_disabled_by_default_and_starts_from_save_time() -> None:
+    now = datetime(2026, 8, 7, 6, tzinfo=UTC)
+    schedule = ScheduleState.from_config({})
+
+    assert schedule.enabled is False
+    assert schedule.next_run_at is None
+
+    enabled = schedule.reconfigured(
+        enabled=True, interval_days=7, groups=["core"], now=now
+    )
+
+    assert enabled.is_due(now=now + timedelta(days=6)) is False
+    assert enabled.is_due(now=now + timedelta(days=7)) is True
+    assert (
+        ScheduleState.from_config(
+            enabled.to_dict(), now=now + timedelta(days=1)
+        ).next_run_at
+        == enabled.next_run_at
+    )
+
+
+def test_schedule_success_and_failure_advance_persisted_plan() -> None:
+    now = datetime(2026, 8, 7, 6, tzinfo=UTC)
+    schedule = ScheduleState().reconfigured(
+        enabled=True, interval_days=3, groups=["core", "assets"], now=now
+    )
+
+    succeeded = schedule.succeeded(now=now + timedelta(days=3))
+    failed = schedule.failed("disk unavailable", now=now + timedelta(days=3))
+
+    assert succeeded.last_run_at == (now + timedelta(days=3)).isoformat()
+    assert succeeded.next_run_at == (now + timedelta(days=6)).isoformat()
+    assert succeeded.last_error is None
+    assert failed.last_run_at is None
+    assert failed.next_run_at == (now + timedelta(days=4)).isoformat()
+    assert failed.last_error == "disk unavailable"
 
 
 def test_snapshot_and_restore_exact_core_state(tmp_path: Path) -> None:
