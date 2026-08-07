@@ -59,6 +59,14 @@ def test_snapshot_retention_keeps_latest(tmp_path: Path) -> None:
     )
 
 
+def test_rejects_backup_directory_inside_backed_up_data(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+
+    with pytest.raises(BackupError, match="inside a backed-up data directory"):
+        BackupEngine(data_root, data_root / "memory" / "snapshots")
+
+
 def test_restore_safety_snapshot_counts_toward_retention(tmp_path: Path) -> None:
     engine = _engine(tmp_path)
     source = engine.data_root / "config" / "value.txt"

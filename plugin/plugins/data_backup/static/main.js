@@ -7,6 +7,7 @@ const GROUP_COPY = {
 
 let activeGroup = 'core';
 let state = null;
+let pendingConfirmation = null;
 
 const $ = (selector) => document.querySelector(selector);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,6 +20,73 @@ function setNotice(message = '', type = '') {
 
 function setBusy(busy) {
   document.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+}
+
+function openConfirmation(action, snapshotId) {
+  const restoring = action === 'restore';
+  pendingConfirmation = { action, snapshotId };
+  $('#confirm-label').textContent = restoring ? 'RESTORE SNAPSHOT' : 'DELETE SNAPSHOT';
+  $('#confirm-title').textContent = restoring ? '确认恢复快照' : '确认删除快照';
+  $('#confirm-description').textContent = restoring
+    ? '当前备份组会恢复到此快照的状态，操作前将自动创建安全快照。'
+    : '删除后将无法从快照列表恢复，请确认目标无误。';
+  $('#confirm-snapshot-id').textContent = snapshotId;
+  $('#confirm-input').value = '';
+  $('#confirm-error').textContent = '';
+  const submit = $('#confirm-submit');
+  submit.textContent = restoring ? '确认恢复' : '确认删除';
+  submit.className = `${restoring ? 'primary' : 'danger'} dialog-submit`;
+  $('#confirm-dialog').showModal();
+  $('#confirm-input').focus();
+}
+
+function closeConfirmation() {
+  const dialog = $('#confirm-dialog');
+  if (dialog.open) dialog.close();
+  pendingConfirmation = null;
+}
+
+function openDirectoryDialog() {
+  if (!state) return;
+  $('#directory-input').value = state.backup_root;
+  $('#default-backup-root').textContent = state.default_backup_root;
+  $('#directory-error').textContent = '';
+  $('#directory-dialog').showModal();
+  $('#directory-input').focus();
+  $('#directory-input').select();
+}
+
+function closeDirectoryDialog() {
+  const dialog = $('#directory-dialog');
+  if (dialog.open) dialog.close();
+}
+
+async function saveBackupDirectory(directory) {
+  $('#directory-error').textContent = '';
+  setBusy(true);
+  try {
+    state = await callPlugin('backup_set_directory', { directory });
+    render();
+    closeDirectoryDialog();
+    setNotice(`备份目录已切换为 ${state.backup_root}`, 'success');
+  } catch (error) {
+    $('#directory-error').textContent = error.message || String(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function submitConfirmation() {
+  if (!pendingConfirmation) return;
+  const { action, snapshotId } = pendingConfirmation;
+  if ($('#confirm-input').value.trim() !== snapshotId) {
+    $('#confirm-error').textContent = '快照 ID 不匹配，请重新输入。';
+    $('#confirm-input').focus();
+    return;
+  }
+  closeConfirmation();
+  if (action === 'restore') restoreSnapshot(snapshotId);
+  else deleteSnapshot(snapshotId);
 }
 
 function formatBytes(bytes) {
@@ -115,12 +183,12 @@ function render() {
     restore.type = 'button';
     restore.className = 'secondary';
     restore.textContent = '恢复';
-    restore.addEventListener('click', () => restoreSnapshot(snapshot.id));
+    restore.addEventListener('click', () => openConfirmation('restore', snapshot.id));
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'danger';
     remove.textContent = '删除';
-    remove.addEventListener('click', () => deleteSnapshot(snapshot.id));
+    remove.addEventListener('click', () => openConfirmation('delete', snapshot.id));
     actions.append(restore, remove);
     row.append(meta, actions);
     list.append(row);
@@ -157,15 +225,10 @@ async function createSnapshot() {
 }
 
 async function restoreSnapshot(snapshotId) {
-  const confirmation = window.prompt(`恢复会替换当前组数据，并在操作前自动备份。请输入快照 ID 继续：\n${snapshotId}`);
-  if (confirmation !== snapshotId) {
-    if (confirmation !== null) setNotice('快照 ID 不匹配，已取消恢复。', 'error');
-    return;
-  }
   setBusy(true);
   setNotice('正在校验并恢复快照，请勿关闭 N.E.K.O…');
   try {
-    const result = await callPlugin('backup_restore', { group: activeGroup, snapshot_id: snapshotId, confirmation });
+    const result = await callPlugin('backup_restore', { group: activeGroup, snapshot_id: snapshotId, confirmation: snapshotId });
     setNotice(`恢复完成；安全快照为 ${result.safety_snapshot}。请立即重启 N.E.K.O。`, 'success');
     state = await callPlugin('backup_status');
     render();
@@ -177,15 +240,10 @@ async function restoreSnapshot(snapshotId) {
 }
 
 async function deleteSnapshot(snapshotId) {
-  const confirmation = window.prompt(`删除后无法从列表恢复。请输入快照 ID 继续：\n${snapshotId}`);
-  if (confirmation !== snapshotId) {
-    if (confirmation !== null) setNotice('快照 ID 不匹配，已取消删除。', 'error');
-    return;
-  }
   setBusy(true);
   setNotice('正在删除快照…');
   try {
-    await callPlugin('backup_delete', { group: activeGroup, snapshot_id: snapshotId, confirmation });
+    await callPlugin('backup_delete', { group: activeGroup, snapshot_id: snapshotId, confirmation: snapshotId });
     state = await callPlugin('backup_status');
     render();
     setNotice(`快照 ${snapshotId} 已删除。`, 'success');
@@ -205,4 +263,26 @@ document.querySelectorAll('.tab').forEach((tab) => {
 });
 $('#refresh').addEventListener('click', refresh);
 $('#create').addEventListener('click', createSnapshot);
+$('#change-directory').addEventListener('click', openDirectoryDialog);
+$('#confirm-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitConfirmation();
+});
+$('#confirm-cancel').addEventListener('click', closeConfirmation);
+$('#confirm-close').addEventListener('click', closeConfirmation);
+$('#confirm-dialog').addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeConfirmation();
+});
+$('#directory-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  saveBackupDirectory($('#directory-input').value.trim());
+});
+$('#directory-default').addEventListener('click', () => saveBackupDirectory(''));
+$('#directory-cancel').addEventListener('click', closeDirectoryDialog);
+$('#directory-close').addEventListener('click', closeDirectoryDialog);
+$('#directory-dialog').addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeDirectoryDialog();
+});
 refresh();

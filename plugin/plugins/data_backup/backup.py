@@ -38,6 +38,16 @@ class BackupEngine:
 
         if self.backup_root == self.data_root:
             raise BackupError("backup directory cannot be the data root")
+        for paths in BACKUP_GROUPS.values():
+            for relative in paths:
+                source_root = (self.data_root / relative).resolve(strict=False)
+                if (
+                    self.backup_root == source_root
+                    or source_root in self.backup_root.parents
+                ):
+                    raise BackupError(
+                        "backup directory cannot be inside a backed-up data directory"
+                    )
         self.backup_root.mkdir(parents=True, exist_ok=True)
 
     def create_snapshot(

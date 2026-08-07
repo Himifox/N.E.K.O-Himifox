@@ -27,7 +27,13 @@
 
     <section class="summary" aria-label="存储位置">
       <div class="summary-item"><span>数据目录</span><code id="data-root">—</code></div>
-      <div class="summary-item"><span>备份目录</span><code id="backup-root">—</code></div>
+      <div class="summary-item">
+        <div class="summary-heading">
+          <span>备份目录</span>
+          <button id="change-directory" class="summary-action" type="button">更改</button>
+        </div>
+        <code id="backup-root">—</code>
+      </div>
       <div class="summary-item retention-item"><span>每组保留</span><strong id="retention">—</strong></div>
     </section>
 
@@ -64,6 +70,55 @@
       <div id="snapshots" class="snapshot-list"></div>
     </section>
   </main>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form id="confirm-form" class="dialog-card">
+      <div class="dialog-heading">
+        <div>
+          <p id="confirm-label" class="dialog-label">确认操作</p>
+          <h2 id="confirm-title">确认快照操作</h2>
+        </div>
+        <button id="confirm-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p id="confirm-description" class="dialog-description"></p>
+      <code id="confirm-snapshot-id" class="dialog-snapshot"></code>
+      <label class="confirm-field" for="confirm-input">
+        <span>输入上方快照 ID 以继续</span>
+        <input id="confirm-input" type="text" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p id="confirm-error" class="dialog-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="secondary" type="button">取消</button>
+        <button id="confirm-submit" class="primary dialog-submit" type="submit">确认</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="directory-dialog" aria-labelledby="directory-title">
+    <form id="directory-form" class="dialog-card">
+      <div class="dialog-heading">
+        <div>
+          <p class="dialog-label">BACKUP LOCATION</p>
+          <h2 id="directory-title">更改备份目录</h2>
+        </div>
+        <button id="directory-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-description">输入本机绝对路径。切换目录不会移动或删除原有快照。</p>
+      <label class="confirm-field" for="directory-input">
+        <span>备份目录</span>
+        <input id="directory-input" type="text" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p class="directory-default">默认目录：<code id="default-backup-root">—</code></p>
+      <p id="directory-error" class="dialog-error" role="alert"></p>
+      <div class="dialog-actions directory-actions">
+        <button id="directory-default" class="secondary" type="button">恢复默认</button>
+        <span class="dialog-action-spacer"></span>
+        <button id="directory-cancel" class="secondary" type="button">取消</button>
+        <button class="primary dialog-submit" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="main.js"></script>
 </body>
 </html>

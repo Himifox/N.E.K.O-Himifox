@@ -67,6 +67,9 @@ h2 { margin-bottom: 7px; font-size: 1.2rem; letter-spacing: -.02em; }
 .summary-item { min-width: 0; padding: 18px 20px; }
 .summary-item + .summary-item { border-left: 1px solid var(--border); }
 .summary span { display: block; margin-bottom: 7px; color: var(--muted); font-size: .72rem; }
+.summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.summary-heading span { margin-bottom: 7px; }
+.summary-action { border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 0 0 7px; font-size: .72rem; font-weight: 750; }
 .summary code { display: block; overflow: hidden; color: #4d4858; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
 .retention-item strong { color: var(--accent-strong); font-size: 1.05rem; }
 .workspace { overflow: hidden; border: 1px solid var(--border); border-radius: 22px; background: var(--surface-solid); box-shadow: var(--shadow); }
@@ -105,6 +108,40 @@ button:disabled { cursor: wait; opacity: .55; transform: none; }
 .empty-mark { display: grid; width: 46px; height: 46px; margin: 0 auto 12px; place-items: center; border-radius: 15px; background: var(--accent-soft); color: var(--accent); font-size: 1.4rem; }
 .empty strong { margin-bottom: 5px; color: #514b5c; font-size: .95rem; }
 .empty span:last-child { font-size: .8rem; }
+dialog {
+  width: min(480px, calc(100% - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface-solid);
+  box-shadow: 0 30px 80px rgba(30, 24, 49, .24);
+  color: inherit;
+}
+dialog::backdrop { background: rgba(29, 24, 43, .48); backdrop-filter: blur(4px); }
+dialog[open] { animation: dialog-in .16s ease-out; }
+.dialog-card { padding: 25px; }
+.dialog-heading, .dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dialog-heading h2 { margin: 0; }
+.dialog-label { margin-bottom: 5px; color: var(--accent); font-size: .68rem; font-weight: 800; letter-spacing: .13em; }
+.dialog-close { width: 34px; height: 34px; border: 0; border-radius: 10px; background: var(--surface-muted); color: var(--muted); cursor: pointer; font-size: 1.35rem; line-height: 1; }
+.dialog-description { margin: 19px 0 12px; color: var(--muted); line-height: 1.65; }
+.dialog-snapshot { display: block; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-muted); color: var(--accent-strong); padding: 11px 12px; font-size: .78rem; }
+.confirm-field { display: grid; gap: 8px; margin-top: 17px; color: var(--muted); font-size: .76rem; }
+.confirm-field input { width: 100%; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-solid); color: inherit; padding: 11px 12px; font: .8rem ui-monospace, monospace; outline: 0; }
+.confirm-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(114, 87, 217, .13); }
+.dialog-error { min-height: 19px; margin: 7px 0 4px; color: #b43c50; font-size: .76rem; }
+.dialog-actions { justify-content: flex-end; }
+.dialog-actions button { min-width: 88px; }
+.dialog-submit.danger { padding: 11px 16px; }
+.directory-default { margin: 10px 0 0; color: var(--muted); font-size: .7rem; line-height: 1.55; }
+.directory-default code { overflow-wrap: anywhere; color: var(--accent-strong); }
+.directory-actions { flex-wrap: wrap; }
+.dialog-action-spacer { flex: 1; }
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -129,6 +166,7 @@ button:disabled { cursor: wait; opacity: .55; transform: none; }
   .notice.success { border-color: #295b4b; background: #173229; color: #a9e8d1; }
   .empty { border-color: #403b49; background: rgba(28,26,35,.45); }
   .empty strong { color: #ddd7e5; }
+  dialog::backdrop { background: rgba(4, 3, 8, .62); }
 }
 
 @media (max-width: 700px) {
@@ -141,6 +179,10 @@ button:disabled { cursor: wait; opacity: .55; transform: none; }
   .group-card { padding: 23px 20px 22px; }
   .primary { width: 100%; }
   .snapshot-actions { justify-content: flex-end; }
+  .dialog-card { padding: 21px; }
+  .dialog-actions .primary { width: auto; }
+  .dialog-action-spacer { display: none; }
+  .directory-actions button { flex: 1; }
 }
 
 @media (max-width: 430px) {
