@@ -234,6 +234,8 @@ def test_legacy_persona_prompts_resolve_in_every_language(lang):
     assert all("{_" not in prompt for prompt in prompts)
     assert all("output only words {LANLAN_NAME} can actually say aloud" in prompt for prompt in prompts)
     assert all("Punctuation may guide TTS" in prompt for prompt in prompts)
+    assert all("Camera language and narrated memory-search processes are always forbidden" in prompt for prompt in prompts)
+    assert all("Unless {MASTER_NAME} explicitly requests text role-play" in prompt for prompt in prompts)
     assert len(set(prompts)) == len(legacy_ids)
 
 
