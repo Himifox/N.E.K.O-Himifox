@@ -229,7 +229,10 @@ async function restoreSnapshot(snapshotId) {
   setNotice('正在校验并恢复快照，请勿关闭 N.E.K.O…');
   try {
     const result = await callPlugin('backup_restore', { group: activeGroup, snapshot_id: snapshotId, confirmation: snapshotId });
-    setNotice(`恢复完成；安全快照为 ${result.safety_snapshot}。请立即重启 N.E.K.O。`, 'success');
+    const safety = result.safety_snapshot
+      ? `安全快照为 ${result.safety_snapshot}`
+      : '当前备份组为空，未创建安全快照';
+    setNotice(`恢复完成；${safety}。请立即重启 N.E.K.O。`, 'success');
     state = await callPlugin('backup_status');
     render();
   } catch (error) {

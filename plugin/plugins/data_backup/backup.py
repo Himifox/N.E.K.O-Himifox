@@ -76,11 +76,11 @@ class BackupEngine:
             stage.mkdir(parents=True)
             try:
                 for relative_root in present_paths:
-                    source_root = self._safe_source(relative_root)
-                    if source_root.is_symlink():
+                    if (self.data_root / relative_root).is_symlink():
                         raise BackupError(
                             f"symbolic-link backup roots are not allowed: {relative_root}"
                         )
+                    source_root = self._safe_source(relative_root)
                     for source in self._iter_files(source_root):
                         relative = source.relative_to(self.data_root)
                         key = relative.as_posix()
@@ -148,9 +148,22 @@ class BackupEngine:
                 raise BackupError("snapshot group metadata does not match")
             self._verify_snapshot(snapshot, manifest)
 
-            safety = self.create_snapshot(group, protected={snapshot_id})
-            safety_path = self._snapshot_path(group, safety["id"])
-            safety_manifest = self._load_manifest(safety_path)
+            current_roots = [self.data_root / relative for relative in paths]
+            if any(path.is_symlink() for path in current_roots):
+                raise BackupError(
+                    "symbolic-link backup roots must be removed before restore"
+                )
+            safety = (
+                self.create_snapshot(group, protected={snapshot_id})
+                if any(path.exists() for path in current_roots)
+                else None
+            )
+            safety_path = (
+                self._snapshot_path(group, safety["id"]) if safety is not None else None
+            )
+            safety_manifest = (
+                self._load_manifest(safety_path) if safety_path is not None else {}
+            )
             restore_token = uuid.uuid4().hex
             stage = self.data_root / f".data-backup-restore-{restore_token}"
             old_root = self.data_root / f".data-backup-old-{restore_token}"
@@ -171,7 +184,7 @@ class BackupEngine:
                             target.mkdir(parents=True, exist_ok=True)
 
                 for relative_root in paths:
-                    current = self._safe_source(relative_root)
+                    current = self.data_root / relative_root
                     old = old_root / relative_root
                     replacement = stage / relative_root
                     if current.exists():
@@ -193,15 +206,28 @@ class BackupEngine:
             except Exception as exc:
                 rollback_errors: list[str] = []
                 for relative_root in reversed(installed):
-                    self._remove_path(self.data_root / relative_root)
+                    current = self.data_root / relative_root
+                    try:
+                        self._remove_path(current)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(
+                            f"remove installed path {current}: {rollback_exc}"
+                        )
                 for relative_root in reversed(moved_old):
                     old = old_root / relative_root
                     current = self.data_root / relative_root
                     if old.exists():
-                        current.parent.mkdir(parents=True, exist_ok=True)
-                        old.replace(current)
+                        try:
+                            current.parent.mkdir(parents=True, exist_ok=True)
+                            old.replace(current)
+                        except Exception as rollback_exc:
+                            rollback_errors.append(
+                                f"restore {old} to {current}: {rollback_exc}"
+                            )
                 for relative_root in reversed(restored_in_place):
                     try:
+                        if safety_path is None:
+                            raise BackupError("safety snapshot is unavailable")
                         self._restore_root_in_place(
                             relative_root,
                             safety_path / "files" / relative_root
@@ -209,7 +235,9 @@ class BackupEngine:
                             else None,
                         )
                     except Exception as rollback_exc:
-                        rollback_errors.append(str(rollback_exc))
+                        rollback_errors.append(
+                            f"restore in place {relative_root}: {rollback_exc}"
+                        )
                 if rollback_errors:
                     raise BackupError(
                         "restore failed and rollback also failed: "
@@ -220,10 +248,13 @@ class BackupEngine:
                 shutil.rmtree(stage, ignore_errors=True)
 
             shutil.rmtree(old_root, ignore_errors=True)
-            self._prune(group, protected={snapshot_id, safety["id"]})
+            protected = {snapshot_id}
+            if safety is not None:
+                protected.add(safety["id"])
+            self._prune(group, protected=protected)
             return {
                 "restored": snapshot_id,
-                "safety_snapshot": safety["id"],
+                "safety_snapshot": safety["id"] if safety is not None else None,
                 "restart_required": True,
             }
 
@@ -516,7 +547,10 @@ class BackupEngine:
             keep.add(path.name)
         for path in snapshots:
             if path.name not in keep:
-                shutil.rmtree(path)
+                try:
+                    shutil.rmtree(path)
+                except OSError:
+                    continue
 
     @staticmethod
     def _remove_path(path: Path) -> None:

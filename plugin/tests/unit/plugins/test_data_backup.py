@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -51,7 +53,7 @@ def test_restore_locked_memory_directory_in_place(
     database = engine.data_root / "memory" / "cat" / "memory.db"
     database.parent.mkdir(parents=True)
 
-    with sqlite3.connect(database) as live_connection:
+    with closing(sqlite3.connect(database)) as live_connection:
         live_connection.execute("PRAGMA journal_mode=WAL")
         live_connection.execute("CREATE TABLE facts (value TEXT)")
         live_connection.execute("INSERT INTO facts VALUES ('before')")
@@ -121,7 +123,51 @@ def test_restore_safety_snapshot_counts_toward_retention(tmp_path: Path) -> None
     assert result["safety_snapshot"] in remaining
 
 
+def test_restore_empty_group_without_safety_snapshot(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("recover me", encoding="utf-8")
+    snapshot = engine.create_snapshot("core")
+    shutil.rmtree(source.parent)
+
+    result = engine.restore_snapshot("core", snapshot["id"])
+
+    assert source.read_text(encoding="utf-8") == "recover me"
+    assert result["safety_snapshot"] is None
+
+
+def test_restore_rejects_symbolic_link_group_root(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    source_root = engine.data_root / "config"
+    source_root.mkdir()
+    (source_root / "value.txt").write_text("snapshot", encoding="utf-8")
+    snapshot = engine.create_snapshot("core")
+    shutil.rmtree(source_root)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "value.txt"
+    outside_file.write_text("outside", encoding="utf-8")
+    try:
+        source_root.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(BackupError, match="symbolic-link backup roots"):
+        engine.restore_snapshot("core", snapshot["id"])
+    assert outside_file.read_text(encoding="utf-8") == "outside"
+
+
 def test_unchanged_files_are_hard_linked_when_supported(tmp_path: Path) -> None:
+    probe = tmp_path / "hard-link-probe"
+    probe_link = tmp_path / "hard-link-probe-link"
+    probe.write_text("probe", encoding="utf-8")
+    try:
+        os.link(probe, probe_link)
+    except (OSError, NotImplementedError, AttributeError) as exc:
+        pytest.skip(f"filesystem does not support hard links: {exc}")
+
     engine = _engine(tmp_path)
     source = engine.data_root / "config" / "same.txt"
     source.parent.mkdir(parents=True)
@@ -205,7 +251,7 @@ def test_sqlite_snapshot_includes_uncheckpointed_wal_data(tmp_path: Path) -> Non
     database = engine.data_root / "memory" / "cat" / "time_indexed.db"
     database.parent.mkdir(parents=True)
 
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA wal_autocheckpoint=0")
         connection.execute("CREATE TABLE facts (value TEXT)")
@@ -223,7 +269,62 @@ def test_sqlite_snapshot_includes_uncheckpointed_wal_data(tmp_path: Path) -> Non
         / "time_indexed.db"
     )
     assert not archived.with_name("time_indexed.db-wal").exists()
-    with sqlite3.connect(archived) as connection:
+    with closing(sqlite3.connect(archived)) as connection:
         assert connection.execute("SELECT value FROM facts").fetchone() == (
             "remember me",
         )
+
+
+def test_prune_failure_does_not_report_snapshot_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+    snapshots = []
+    for value in ("one", "two", "three"):
+        source.write_text(value, encoding="utf-8")
+        snapshots.append(engine.create_snapshot("core"))
+
+    oldest = engine.backup_root / "core" / snapshots[0]["id"]
+    original_rmtree = shutil.rmtree
+
+    def deny_oldest_cleanup(path: Path, *args, **kwargs) -> None:
+        if Path(path) == oldest:
+            raise PermissionError(5, "snapshot is in use")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", deny_oldest_cleanup)
+    source.write_text("four", encoding="utf-8")
+
+    created = engine.create_snapshot("core")
+
+    assert created["id"] in {item["id"] for item in engine.list_snapshots("core")}
+    assert oldest.exists()
+
+
+def test_restore_reports_incomplete_rollback_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("before", encoding="utf-8")
+    snapshot = engine.create_snapshot("core")
+    source.write_text("after", encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_install_and_rollback(path: Path, target: Path) -> Path:
+        parent_name = path.parent.name
+        if parent_name.startswith(".data-backup-restore-"):
+            raise OSError("install failed")
+        if parent_name.startswith(".data-backup-old-"):
+            raise OSError("rollback failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_install_and_rollback)
+
+    with pytest.raises(BackupError, match=r"\.data-backup-old-.*rollback failed"):
+        engine.restore_snapshot("core", snapshot["id"])
+
+    assert list(engine.data_root.glob(".data-backup-old-*/config/value.txt"))

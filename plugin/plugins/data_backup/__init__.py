@@ -14,6 +14,7 @@ from plugin.sdk.plugin import (
     neko_plugin,
     plugin_entry,
 )
+from plugin.sdk.shared.core.base_runtime import resolve_runtime_data_root
 
 if __package__:
     from .backup import BACKUP_GROUPS, BackupEngine, BackupError
@@ -30,29 +31,33 @@ class DataBackupPlugin(NekoPluginBase):
     @lifecycle(id="startup")
     async def startup(self, **_):
         plugin_data = self.data_path().resolve(strict=False)
-        data_root = plugin_data.parents[2]
+        data_root = resolve_runtime_data_root()
         default_backup_root = plugin_data / "snapshots"
-        configured = await self.config.get_str(
-            "backup.directory", default="", timeout=5.0
-        )
         try:
-            backup_root = self._resolve_backup_root(configured, default_backup_root)
-            self._engine = BackupEngine(data_root, backup_root)
-        except (BackupError, OSError, ValueError):
-            self._engine = BackupEngine(data_root, default_backup_root)
-        self.register_static_ui("static", cache_control="no-store")
-        self.set_list_actions(
-            [
-                {
-                    "id": "open_ui",
-                    "label": "打开备份管理",
-                    "kind": "ui",
-                    "target": f"/plugin/{self.plugin_id}/ui/",
-                    "open_in": "new_tab",
-                }
-            ]
-        )
-        return Ok(self._status())
+            configured = await self.config.get_str(
+                "backup.directory", default="", timeout=5.0
+            )
+            try:
+                backup_root = self._resolve_backup_root(configured, default_backup_root)
+                self._engine = BackupEngine(data_root, backup_root)
+            except (BackupError, OSError, ValueError):
+                self._engine = BackupEngine(data_root, default_backup_root)
+            self.register_static_ui("static", cache_control="no-store")
+            self.set_list_actions(
+                [
+                    {
+                        "id": "open_ui",
+                        "label": "打开备份管理",
+                        "kind": "ui",
+                        "target": f"/plugin/{self.plugin_id}/ui/",
+                        "open_in": "new_tab",
+                    }
+                ]
+            )
+            return Ok(self._status())
+        except (BackupError, OSError, ValueError) as exc:
+            self._engine = None
+            return Err(SdkError(str(exc)))
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_):
@@ -90,7 +95,7 @@ class DataBackupPlugin(NekoPluginBase):
     async def backup_status(self, **_):
         try:
             return Ok(await asyncio.to_thread(self._status))
-        except BackupError as exc:
+        except (BackupError, OSError) as exc:
             return Err(SdkError(str(exc)))
 
     @plugin_entry(
