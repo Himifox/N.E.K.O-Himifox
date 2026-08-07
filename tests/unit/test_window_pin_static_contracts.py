@@ -174,7 +174,7 @@ def test_credentials_page_opens_the_universal_guide_in_a_named_window():
 
 
 def test_credentials_universal_guide_hides_for_cookie_string_platforms():
-    """通用教程教的是逐字段复制 Cookie Value，对整条 Cookie 请求头的平台是错流程。"""
+    """The universal guide teaches per-field copying, wrong for cookie-header platforms."""
     script = read_text("static/js/cookies_login.js")
 
     assert "cookieStringMode: true" in script
@@ -196,7 +196,7 @@ def test_credentials_tabs_are_wired_to_the_single_tab_panel():
 
 
 def test_credentials_deferred_mascot_reaction_has_a_bounded_deadline():
-    """隐私遮罩期间顺延反应必须有上限，否则失焦时弹出的是几分钟前那次的表情。"""
+    """A deferred reaction needs a ceiling, or a stale one fires minutes later."""
     script = read_text("static/js/cookies_login.js")
 
     assert "const MASCOT_DEFERRED_MAX_MS = 4000;" in script
@@ -215,7 +215,7 @@ def test_credentials_deferred_mascot_reaction_has_a_bounded_deadline():
 
 
 def test_credentials_guide_screenshot_keeps_no_readable_cookie_value():
-    """step-5 截图底部的 Cookie Value 面板必须是抹掉的，不能留真实凭证。"""
+    """The Cookie Value pane in the step-5 screenshot must carry no real credential."""
     import numpy as np
     from PIL import Image, ImageFilter
 
