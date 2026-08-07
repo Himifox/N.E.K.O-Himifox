@@ -235,12 +235,13 @@ def test_credentials_guide_screenshot_keeps_no_readable_cookie_value():
         Image.fromarray((red * 255).astype("uint8")).filter(ImageFilter.MaxFilter(9))
     ).astype(bool)
 
-    # 字形靠相邻像素的高对比度成立；抹干净之后剩下的只有平滑渐变。
-    gray = np.asarray(pane.convert("L")).astype(int)
-    horizontal = np.abs(np.diff(gray, axis=1))[keep[:, :-1] & keep[:, 1:]]
-    vertical = np.abs(np.diff(gray, axis=0))[keep[:-1, :] & keep[1:, :]]
+    # 字形靠相邻像素的突变成立；抹干净之后剩下的只有平滑渐变。
+    # 逐通道比而不是转灰度：白字压在浅蓝选中底色上，亮度差只有 38，
+    # 转灰度会把这条判据糊过去，逐通道能看到 70。
+    horizontal = np.abs(np.diff(rgb, axis=1)).max(axis=2)[keep[:, :-1] & keep[:, 1:]]
+    vertical = np.abs(np.diff(rgb, axis=0)).max(axis=2)[keep[:-1, :] & keep[1:, :]]
     contrast = int(max(horizontal.max(), vertical.max()))
-    assert contrast < 60, f"Cookie Value 面板仍有高对比度笔画（{contrast}）"
+    assert contrast < 20, f"Cookie Value 面板仍有高对比度笔画（{contrast}）"
 
 
 def test_credentials_tutorial_link_has_distinct_interaction_states():
