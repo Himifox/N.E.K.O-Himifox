@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import threading
 import uuid
 from contextlib import closing
@@ -70,6 +71,8 @@ class BackupEngine:
                 Path(previous["_snapshot_path"]) / "files" if previous else None
             )
             manifest_files: dict[str, dict[str, Any]] = {}
+            manifest_directories: set[str] = set()
+            warnings: list[str] = []
             total_bytes = 0
 
             group_root.mkdir(parents=True, exist_ok=True)
@@ -81,6 +84,10 @@ class BackupEngine:
                             f"symbolic-link backup roots are not allowed: {relative_root}"
                         )
                     source_root = self._safe_source(relative_root)
+                    for source_directory in self._iter_directories(source_root):
+                        relative_directory = source_directory.relative_to(self.data_root)
+                        manifest_directories.add(relative_directory.as_posix())
+                        (files_root / relative_directory).mkdir(parents=True, exist_ok=True)
                     for source in self._iter_files(source_root):
                         relative = source.relative_to(self.data_root)
                         key = relative.as_posix()
@@ -91,19 +98,25 @@ class BackupEngine:
                         previous_file = (
                             previous_root / relative if previous_root else None
                         )
-                        digest, size = self._copy_snapshot_file(
+                        digest, size, mode, warning = self._copy_snapshot_file(
                             source,
                             target,
                             previous_file=previous_file,
                             previous_meta=previous_meta,
                         )
 
-                        manifest_files[key] = {"sha256": digest, "size": size}
+                        manifest_files[key] = {
+                            "sha256": digest,
+                            "size": size,
+                            "mode": mode,
+                        }
+                        if warning:
+                            warnings.append(warning)
                         total_bytes += size
 
                 created_at = datetime.now(UTC).isoformat()
                 manifest = {
-                    "version": 1,
+                    "version": 2,
                     "id": snapshot_id,
                     "group": group,
                     "created_at": created_at,
@@ -111,6 +124,7 @@ class BackupEngine:
                     "present_paths": present_paths,
                     "file_count": len(manifest_files),
                     "total_bytes": total_bytes,
+                    "directories": sorted(manifest_directories),
                     "files": manifest_files,
                 }
                 (stage / "manifest.json").write_text(
@@ -118,12 +132,18 @@ class BackupEngine:
                     encoding="utf-8",
                 )
                 stage.replace(destination)
+                try:
+                    self._make_read_only(destination / "manifest.json")
+                except OSError as exc:
+                    warnings.append(f"failed to protect manifest {snapshot_id}: {exc}")
             except Exception:
-                shutil.rmtree(stage, ignore_errors=True)
+                self._remove_tree(stage, ignore_errors=True)
                 raise
 
-            self._prune(group, protected={snapshot_id, *protected})
-            return self._public_manifest(manifest)
+            warnings.extend(self._prune(group, protected={snapshot_id, *protected}))
+            result = self._public_manifest(manifest)
+            result["warnings"] = warnings
+            return result
 
     def list_snapshots(self, group: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -164,6 +184,7 @@ class BackupEngine:
             safety_manifest = (
                 self._load_manifest(safety_path) if safety_path is not None else {}
             )
+            warnings = list(safety.get("warnings", ())) if safety is not None else []
             restore_token = uuid.uuid4().hex
             stage = self.data_root / f".data-backup-restore-{restore_token}"
             old_root = self.data_root / f".data-backup-old-{restore_token}"
@@ -182,6 +203,7 @@ class BackupEngine:
                             shutil.copytree(source, target, copy_function=shutil.copy2)
                         else:
                             target.mkdir(parents=True, exist_ok=True)
+                self._restore_staged_modes(stage, manifest)
 
                 for relative_root in paths:
                     current = self.data_root / relative_root
@@ -245,17 +267,22 @@ class BackupEngine:
                     ) from exc
                 raise BackupError(f"restore failed and was rolled back: {exc}") from exc
             finally:
-                shutil.rmtree(stage, ignore_errors=True)
+                self._remove_tree(stage, ignore_errors=True)
 
-            shutil.rmtree(old_root, ignore_errors=True)
+            if old_root.exists():
+                try:
+                    self._remove_tree(old_root)
+                except OSError as exc:
+                    warnings.append(f"failed to remove previous data staging area: {exc}")
             protected = {snapshot_id}
             if safety is not None:
                 protected.add(safety["id"])
-            self._prune(group, protected=protected)
+            warnings.extend(self._prune(group, protected=protected))
             return {
                 "restored": snapshot_id,
                 "safety_snapshot": safety["id"] if safety is not None else None,
                 "restart_required": True,
+                "warnings": warnings,
             }
 
     def delete_snapshot(self, group: str, snapshot_id: str) -> dict[str, str]:
@@ -263,7 +290,7 @@ class BackupEngine:
             snapshot = self._snapshot_path(group, snapshot_id)
             if not snapshot.is_dir():
                 raise BackupError("snapshot not found")
-            shutil.rmtree(snapshot)
+            self._remove_tree(snapshot)
             return {"deleted": snapshot_id}
 
     def status(self) -> dict[str, Any]:
@@ -271,15 +298,23 @@ class BackupEngine:
             groups = {
                 group: {
                     "paths": list(paths),
-                    "snapshots": self.list_snapshots(group),
+                    "snapshots": snapshots,
+                    "retention_exceeded": len(snapshots) > self.retention,
                 }
                 for group, paths in BACKUP_GROUPS.items()
+                for snapshots in (self.list_snapshots(group),)
             }
+            warnings = [
+                f"{group} has {len(details['snapshots'])} snapshots; retention is {self.retention}"
+                for group, details in groups.items()
+                if details["retention_exceeded"]
+            ]
             return {
                 "data_root": str(self.data_root),
                 "backup_root": str(self.backup_root),
                 "retention": self.retention,
                 "groups": groups,
+                "warnings": warnings,
             }
 
     def _group_paths(self, group: str) -> tuple[str, ...]:
@@ -293,6 +328,13 @@ class BackupEngine:
         if candidate == self.data_root or self.data_root not in candidate.parents:
             raise BackupError(f"path escapes data root: {relative}")
         return candidate
+
+    @staticmethod
+    def _iter_directories(root: Path) -> Iterable[Path]:
+        for directory, dirnames, _filenames in os.walk(root, followlinks=False):
+            base = Path(directory)
+            dirnames[:] = [name for name in dirnames if not (base / name).is_symlink()]
+            yield base
 
     @staticmethod
     def _iter_files(root: Path) -> Iterable[Path]:
@@ -313,22 +355,27 @@ class BackupEngine:
         *,
         previous_file: Path | None,
         previous_meta: Any,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, int, str | None]:
+        source_mode = stat.S_IMODE(source.stat().st_mode)
+        warning: str | None = None
         if self._is_sqlite_database(source):
             self._backup_sqlite(source, target)
             digest = self._sha256(target)
-            return digest, target.stat().st_size
         else:
             digest = self._sha256(source)
             if self._can_link_previous(previous_file, previous_meta, digest):
                 try:
                     os.link(previous_file, target)
-                    return digest, target.stat().st_size
+                    return digest, target.stat().st_size, source_mode, None
                 except OSError:
                     pass
             shutil.copy2(source, target)
             digest = self._sha256(target)
-        return digest, target.stat().st_size
+        try:
+            self._make_read_only(target)
+        except OSError as exc:
+            warning = f"snapshot file could not be made read-only: {source}: {exc}"
+        return digest, target.stat().st_size, source_mode, warning
 
     def _can_link_previous(
         self, previous_file: Path | None, previous_meta: Any, digest: str
@@ -339,8 +386,21 @@ class BackupEngine:
             and previous_file is not None
             and previous_file.is_file()
             and not previous_file.is_symlink()
+            and not self._has_write_bits(previous_file)
             and self._sha256(previous_file) == digest
         )
+
+    @staticmethod
+    def _has_write_bits(path: Path) -> bool:
+        return bool(
+            stat.S_IMODE(path.stat().st_mode)
+            & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+        )
+
+    @staticmethod
+    def _make_read_only(path: Path) -> None:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        os.chmod(path, mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
 
     @staticmethod
     def _is_sqlite_database(path: Path) -> bool:
@@ -398,6 +458,18 @@ class BackupEngine:
             self._remove_unexpected_files(current, expected)
 
     @staticmethod
+    def _restore_staged_modes(stage: Path, manifest: dict[str, Any]) -> None:
+        files = manifest.get("files", {})
+        for relative, metadata in files.items():
+            target = stage / Path(relative)
+            mode = metadata.get("mode") if isinstance(metadata, dict) else None
+            if isinstance(mode, int) and not isinstance(mode, bool):
+                os.chmod(target, mode)
+            else:
+                current_mode = stat.S_IMODE(target.stat().st_mode)
+                os.chmod(target, current_mode | stat.S_IWRITE)
+
+    @staticmethod
     def _replace_file(source: Path, target: Path) -> None:
         temporary = target.with_name(f".{target.name}.restore-{uuid.uuid4().hex}.tmp")
         try:
@@ -415,6 +487,7 @@ class BackupEngine:
             ) as source_db:
                 with closing(sqlite3.connect(target, timeout=10)) as target_db:
                     source_db.backup(target_db)
+            os.chmod(target, stat.S_IMODE(source.stat().st_mode))
         except sqlite3.Error as exc:
             raise BackupError(f"SQLite restore failed: {target}") from exc
 
@@ -506,11 +579,21 @@ class BackupEngine:
         return None
 
     def _verify_snapshot(self, snapshot: Path, manifest: dict[str, Any]) -> None:
+        version = manifest.get("version")
+        if version not in (1, 2):
+            raise BackupError("snapshot manifest version is unsupported")
         files = manifest.get("files")
         if not isinstance(files, dict):
             raise BackupError("snapshot file manifest is missing")
+        directories = manifest.get("directories", [])
+        if version >= 2 and (
+            not isinstance(directories, list)
+            or any(not isinstance(item, str) for item in directories)
+        ):
+            raise BackupError("snapshot directory manifest is invalid")
         files_root = (snapshot / "files").resolve(strict=False)
         actual_files: set[str] = set()
+        actual_directories: set[str] = set()
         if files_root.exists():
             for directory, dirnames, filenames in os.walk(
                 files_root, followlinks=False
@@ -518,6 +601,10 @@ class BackupEngine:
                 base = Path(directory)
                 if any((base / name).is_symlink() for name in dirnames):
                     raise BackupError("snapshot contains a symbolic link")
+                actual_directories.update(
+                    (base / name).relative_to(files_root).as_posix()
+                    for name in dirnames
+                )
                 for filename in filenames:
                     path = base / filename
                     if path.is_symlink():
@@ -525,6 +612,8 @@ class BackupEngine:
                     actual_files.add(path.relative_to(files_root).as_posix())
         if actual_files != set(files):
             raise BackupError("snapshot files do not match the manifest")
+        if version >= 2 and actual_directories != set(directories):
+            raise BackupError("snapshot directories do not match the manifest")
         for relative, metadata in files.items():
             if not isinstance(relative, str) or not isinstance(metadata, dict):
                 raise BackupError("snapshot file manifest is invalid")
@@ -538,24 +627,42 @@ class BackupEngine:
             if self._sha256(source) != metadata.get("sha256"):
                 raise BackupError(f"snapshot checksum mismatch: {relative}")
 
-    def _prune(self, group: str, *, protected: set[str]) -> None:
+    def _prune(self, group: str, *, protected: set[str]) -> list[str]:
         snapshots = sorted(self._snapshot_dirs(group), reverse=True)
         keep = {path.name for path in snapshots if path.name in protected}
         for path in snapshots:
             if len(keep) >= self.retention:
                 break
             keep.add(path.name)
+        warnings: list[str] = []
         for path in snapshots:
             if path.name not in keep:
                 try:
-                    shutil.rmtree(path)
-                except OSError:
-                    continue
+                    self._remove_tree(path)
+                except OSError as exc:
+                    warnings.append(f"failed to prune snapshot {path.name}: {exc}")
+        return warnings
 
     @staticmethod
-    def _remove_path(path: Path) -> None:
+    def _remove_tree(path: Path, *, ignore_errors: bool = False) -> None:
+        errors: list[OSError] = []
+
+        def retry_with_write_access(function, raw_path, _exc_info) -> None:
+            try:
+                target = Path(raw_path)
+                os.chmod(target, stat.S_IMODE(target.stat().st_mode) | stat.S_IWRITE)
+                function(raw_path)
+            except OSError as exc:
+                errors.append(exc)
+
+        shutil.rmtree(path, onerror=retry_with_write_access)
+        if errors and not ignore_errors:
+            raise errors[0]
+
+    @classmethod
+    def _remove_path(cls, path: Path) -> None:
         if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
+            cls._remove_tree(path)
         elif path.exists() or path.is_symlink():
             path.unlink()
 

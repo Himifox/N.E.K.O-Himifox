@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
+import stat
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,6 +86,42 @@ def test_snapshot_and_restore_exact_core_state(tmp_path: Path) -> None:
     assert result["restored"] == snapshot["id"]
     assert result["safety_snapshot"] != snapshot["id"]
     assert result["restart_required"] is True
+    assert stat.S_IMODE(config_file.stat().st_mode) & stat.S_IWRITE
+    config_file.write_text('{"name":"writable"}', encoding="utf-8")
+
+
+def test_snapshot_and_restore_preserve_nested_empty_directories(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    nested = engine.data_root / "config" / "empty" / "nested"
+    nested.mkdir(parents=True)
+
+    snapshot = engine.create_snapshot("core")
+    shutil.rmtree(engine.data_root / "config")
+    engine.restore_snapshot("core", snapshot["id"])
+
+    assert nested.is_dir()
+
+
+def test_restore_accepts_version_one_snapshot_manifests(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("before", encoding="utf-8")
+    snapshot = engine.create_snapshot("core")
+    manifest_path = engine.backup_root / "core" / snapshot["id"] / "manifest.json"
+    manifest_path.chmod(stat.S_IMODE(manifest_path.stat().st_mode) | stat.S_IWRITE)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = 1
+    manifest.pop("directories")
+    for metadata in manifest["files"].values():
+        metadata.pop("mode")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source.write_text("after", encoding="utf-8")
+
+    engine.restore_snapshot("core", snapshot["id"])
+
+    assert source.read_text(encoding="utf-8") == "before"
+    assert stat.S_IMODE(source.stat().st_mode) & stat.S_IWRITE
 
 
 def test_restore_locked_memory_directory_in_place(
@@ -224,6 +262,8 @@ def test_unchanged_files_are_hard_linked_when_supported(tmp_path: Path) -> None:
     if os.stat(first_file).st_ino == 0:
         pytest.skip("filesystem does not expose inode identifiers")
     assert os.path.samefile(first_file, second_file)
+    assert not stat.S_IMODE(first_file.stat().st_mode) & stat.S_IWRITE
+    assert not stat.S_IMODE(second_file.stat().st_mode) & stat.S_IWRITE
 
 
 def test_rejects_unknown_group_and_snapshot_traversal(tmp_path: Path) -> None:
@@ -244,6 +284,7 @@ def test_restore_rejects_tampered_snapshot(tmp_path: Path) -> None:
     archived = (
         engine.backup_root / "core" / snapshot["id"] / "files" / "config" / "value.txt"
     )
+    archived.chmod(stat.S_IMODE(archived.stat().st_mode) | stat.S_IWRITE)
     archived.write_text("tampered", encoding="utf-8")
 
     with pytest.raises(BackupError, match="checksum mismatch"):
@@ -275,6 +316,7 @@ def test_new_snapshot_does_not_link_tampered_previous_file(tmp_path: Path) -> No
     first_file = (
         engine.backup_root / "core" / first["id"] / "files" / "config" / "value.txt"
     )
+    first_file.chmod(stat.S_IMODE(first_file.stat().st_mode) | stat.S_IWRITE)
     first_file.write_text("tampered", encoding="utf-8")
 
     second = engine.create_snapshot("core")
@@ -340,7 +382,11 @@ def test_prune_failure_does_not_report_snapshot_failure(
     created = engine.create_snapshot("core")
 
     assert created["id"] in {item["id"] for item in engine.list_snapshots("core")}
+    assert created["warnings"]
     assert oldest.exists()
+    status = engine.status()
+    assert status["groups"]["core"]["retention_exceeded"] is True
+    assert status["warnings"]
 
 
 def test_restore_reports_incomplete_rollback_location(
