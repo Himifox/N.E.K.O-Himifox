@@ -307,7 +307,7 @@ def test_all_locales_define_complete_voice_identity_copy() -> None:
         assert payload["settings"]["menu"]["voiceIdentity"]
 
 
-def test_voice_identity_locale_addition_bumps_locale_cache_key() -> None:
+def test_locale_bootstrap_declares_a_non_empty_locale_cache_key() -> None:
     bootstrap = (ROOT / "static/i18n-i18next.js").read_text(encoding="utf-8")
 
     # 只要求存在一个非空的 LOCALE_VERSION（locale 文件靠它做 cache-bust），
