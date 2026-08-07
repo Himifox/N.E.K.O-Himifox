@@ -22,8 +22,5 @@ enabled = false
 enabled = true
 auto_start = false
 
-[backup]
-retention = 10
-
 [plugin.ui]
 enabled = true

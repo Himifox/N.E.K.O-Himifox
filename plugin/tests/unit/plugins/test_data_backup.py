@@ -9,13 +9,12 @@ import pytest
 from plugin.plugins.data_backup.backup import BackupEngine, BackupError
 
 
-def _engine(tmp_path: Path, *, retention: int = 10) -> BackupEngine:
+def _engine(tmp_path: Path) -> BackupEngine:
     data_root = tmp_path / "data"
     data_root.mkdir()
     return BackupEngine(
         data_root,
         data_root / "plugins" / "data_backup" / "data" / "snapshots",
-        retention=retention,
     )
 
 
@@ -46,18 +45,36 @@ def test_snapshot_and_restore_exact_core_state(tmp_path: Path) -> None:
 
 
 def test_snapshot_retention_keeps_latest(tmp_path: Path) -> None:
-    engine = _engine(tmp_path, retention=2)
+    engine = _engine(tmp_path)
     source = engine.data_root / "config" / "value.txt"
     source.parent.mkdir(parents=True)
 
     created = []
-    for value in ("one", "two", "three"):
+    for value in ("one", "two", "three", "four"):
         source.write_text(value, encoding="utf-8")
         created.append(engine.create_snapshot("core")["id"])
 
     assert [item["id"] for item in engine.list_snapshots("core")] == list(
-        reversed(created[-2:])
+        reversed(created[-3:])
     )
+
+
+def test_restore_safety_snapshot_counts_toward_retention(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    source = engine.data_root / "config" / "value.txt"
+    source.parent.mkdir(parents=True)
+
+    snapshots = []
+    for value in ("one", "two", "three"):
+        source.write_text(value, encoding="utf-8")
+        snapshots.append(engine.create_snapshot("core"))
+
+    result = engine.restore_snapshot("core", snapshots[0]["id"])
+    remaining = {item["id"] for item in engine.list_snapshots("core")}
+
+    assert len(remaining) == 3
+    assert snapshots[0]["id"] in remaining
+    assert result["safety_snapshot"] in remaining
 
 
 def test_unchanged_files_are_hard_linked_when_supported(tmp_path: Path) -> None:

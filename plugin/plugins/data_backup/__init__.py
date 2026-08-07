@@ -28,18 +28,9 @@ class DataBackupPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def startup(self, **_):
-        config = await self.config.dump(timeout=5.0)
-        backup_config = config.get("backup", {}) if isinstance(config, dict) else {}
-        retention = (
-            backup_config.get("retention", 10)
-            if isinstance(backup_config, dict)
-            else 10
-        )
         plugin_data = self.data_path().resolve(strict=False)
         data_root = plugin_data.parents[2]
-        self._engine = BackupEngine(
-            data_root, plugin_data / "snapshots", retention=int(retention)
-        )
+        self._engine = BackupEngine(data_root, plugin_data / "snapshots")
         self.register_static_ui("static", cache_control="no-store")
         self.set_list_actions(
             [

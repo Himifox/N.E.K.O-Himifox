@@ -21,6 +21,7 @@ BACKUP_GROUPS: dict[str, tuple[str, ...]] = {
     "assets": ("card_faces", "live2d", "vrm", "mmd", "pngtuber", "workshop"),
 }
 _SNAPSHOT_ID_RE = re.compile(r"^\d{8}T\d{12}Z-[0-9a-f]{8}$")
+_SNAPSHOT_RETENTION = 3
 
 
 class BackupError(RuntimeError):
@@ -28,12 +29,10 @@ class BackupError(RuntimeError):
 
 
 class BackupEngine:
-    def __init__(
-        self, data_root: Path, backup_root: Path, *, retention: int = 10
-    ) -> None:
+    def __init__(self, data_root: Path, backup_root: Path) -> None:
         self.data_root = data_root.expanduser().resolve(strict=False)
         self.backup_root = backup_root.expanduser().resolve(strict=False)
-        self.retention = max(1, min(int(retention), 100))
+        self.retention = _SNAPSHOT_RETENTION
         self._lock = threading.RLock()
         self._last_snapshot_time: datetime | None = None
 
@@ -395,7 +394,11 @@ class BackupEngine:
 
     def _prune(self, group: str, *, protected: set[str]) -> None:
         snapshots = sorted(self._snapshot_dirs(group), reverse=True)
-        keep = set(path.name for path in snapshots[: self.retention]) | protected
+        keep = {path.name for path in snapshots if path.name in protected}
+        for path in snapshots:
+            if len(keep) >= self.retention:
+                break
+            keep.add(path.name)
         for path in snapshots:
             if path.name not in keep:
                 shutil.rmtree(path)
