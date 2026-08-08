@@ -30,6 +30,10 @@ const HOME_TUTORIAL_RESET_CHANNEL = 'neko_tutorial_events';
 const AVATAR_FLOATING_GUIDE_USAGE_STORAGE_KEY = 'neko_avatar_floating_guide_usage_v1';
 const YUI_GUIDE_CHAT_BRIDGE_QUEUE_KEY = 'neko_yui_guide_chat_bridge_queue_v1';
 const STARTUP_GREETING_RELEASE_EVENT = 'neko:startup-greeting-release';
+// Stable, non-consuming startup barrier for other UI queues. The greeting path
+// consumes __NEKO_STARTUP_GREETING_RELEASED__, so it cannot also be used as a
+// reliable changelog/tutorial mutex.
+window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;
 // PC 端最长可能先等折叠动画结束再展开；这里额外留出跨窗口转发余量，但不让教程无限等待。
 const YUI_GUIDE_COMPACT_CHAT_PREPARE_TIMEOUT_MS = 4500;
 
@@ -423,6 +427,7 @@ class UniversalTutorialManager {
             timestamp: Date.now()
         }, detail || {});
         try {
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
             window.__NEKO_STARTUP_GREETING_RELEASED__ = releaseDetail;
             window.dispatchEvent(new CustomEvent(STARTUP_GREETING_RELEASE_EVENT, {
                 detail: releaseDetail
@@ -437,6 +442,7 @@ class UniversalTutorialManager {
         // 教程已进入运行态（isTutorialRunning/isInTutorial 已置），由运行锁接管占屏，结束 pending 窗口。
         this.setHomeTutorialPending(false);
         try {
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;
             const detail = window.__NEKO_STARTUP_GREETING_RELEASED__;
             if (detail && detail.released === true) {
                 delete window.__NEKO_STARTUP_GREETING_RELEASED__;
@@ -4370,6 +4376,7 @@ function dispatchStartupGreetingReleaseWithoutManager(reason, detail = {}) {
         timestamp: Date.now()
     }, detail || {});
     try {
+        window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
         window.__NEKO_STARTUP_GREETING_RELEASED__ = releaseDetail;
         window.dispatchEvent(new CustomEvent(STARTUP_GREETING_RELEASE_EVENT, {
             detail: releaseDetail

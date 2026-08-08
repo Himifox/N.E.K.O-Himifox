@@ -284,6 +284,71 @@ window.addEventListener('load', async () => {
         if (typeof window.showProminentNotice !== 'function') return;
 
         const NOTICE_GATE_FALLBACK_MS = 15000;
+        const TUTORIAL_GATE_QUIET_MS = 200;
+        const waitForTutorialStartupBarrier = () => new Promise((resolve) => {
+            let fallbackExpired = false;
+            let quietSince = 0;
+            let pollTimer = null;
+            let fallbackTimer = null;
+            let done = false;
+
+            const hasTutorialSurface = () => !!document.querySelector([
+                '.yui-guide-overlay',
+                '.yui-guide-stage',
+                '.driver-overlay',
+                '.driver-popover',
+                '#neko-day1-systray-intro-modal',
+            ].join(', '));
+            const hasActiveTutorial = () => {
+                const manager = window.universalTutorialManager || null;
+                return window.isNekoHomeTutorialPending === true
+                    || window.isInTutorial === true
+                    || !!(manager && (
+                        manager.isTutorialRunning
+                        || manager.activeAvatarFloatingGuideRound
+                        || manager._pendingI18nStart
+                        || manager._teardownPromise
+                    ))
+                    || hasTutorialSurface();
+            };
+            const finish = () => {
+                if (done) return;
+                done = true;
+                clearInterval(pollTimer);
+                clearTimeout(fallbackTimer);
+                window.removeEventListener('neko:startup-greeting-release', check);
+                window.removeEventListener('neko:day1-systray-intro-closed', check);
+                resolve();
+            };
+            const check = () => {
+                if (done) return;
+                const startupSettled = window.__NEKO_TUTORIAL_STARTUP_SETTLED__ === true;
+                if ((!startupSettled && !fallbackExpired) || hasActiveTutorial()) {
+                    quietSince = 0;
+                    return;
+                }
+                const now = Date.now();
+                if (!quietSince) {
+                    quietSince = now;
+                    return;
+                }
+                if (now - quietSince >= TUTORIAL_GATE_QUIET_MS) {
+                    finish();
+                }
+            };
+
+            window.addEventListener('neko:startup-greeting-release', check);
+            window.addEventListener('neko:day1-systray-intro-closed', check);
+            pollTimer = setInterval(check, 50);
+            fallbackTimer = setTimeout(() => {
+                fallbackExpired = true;
+                check();
+            }, NOTICE_GATE_FALLBACK_MS);
+            check();
+        });
+        // Register before awaiting the other startup gates so a fast tutorial
+        // release cannot be missed while storage/personality setup is pending.
+        const tutorialStartupBarrier = waitForTutorialStartupBarrier();
         try {
             if (typeof window.waitForStorageLocationStartupBarrier === 'function') {
                 await window.waitForStorageLocationStartupBarrier();
@@ -305,6 +370,7 @@ window.addEventListener('load', async () => {
                 }
             }
         } catch (_) { }
+        await tutorialStartupBarrier;
 
         // 更新日志/问卷要把 UI 语言传给后端做本地化下发。坑：本启动流程可能早于 i18next
         // init 完成就跑到这（init 内部要先 await 一次 Steam 语言查询），此时 window.i18next
