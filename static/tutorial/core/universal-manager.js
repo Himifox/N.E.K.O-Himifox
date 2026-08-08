@@ -4427,6 +4427,24 @@ function bindUniversalTutorialManagerResizeRetry() {
  * 应在 DOM 加载完成后调用
  */
 async function initUniversalTutorialManager() {
+    try {
+        return await initializeUniversalTutorialManager();
+    } catch (error) {
+        // 模块已经建立了稳定的 pending 标记；初始化失败时必须显式结束它，
+        // 否则更新日志会永久等待一个不可能再出现的教程终态。
+        let failedPage = 'unknown';
+        try {
+            failedPage = UniversalTutorialManager.detectPage();
+        } catch (_) {}
+        dispatchStartupGreetingReleaseWithoutManager('tutorial-manager-init-failed', {
+            page: failedPage,
+            errorName: error && error.name ? error.name : 'Error'
+        });
+        throw error;
+    }
+}
+
+async function initializeUniversalTutorialManager() {
     const sevenDayStateApi = getSevenDayTutorialStateApi();
     if (typeof sevenDayStateApi.ready === 'function') {
         await sevenDayStateApi.ready();

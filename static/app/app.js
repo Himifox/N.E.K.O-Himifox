@@ -278,7 +278,7 @@ window.addEventListener('load', async () => {
 
     // 拉取待弹重要通知 + 版本更新日志（chat 独立窗口跳过）
     // 同一个 modal 队列；按 changelog（背景）→ pending notices（行动召唤）顺序入队。
-    // 启动 gate：先等存档迁移/位置选择 + tutorial/初始人设走完，最多 15s 兜底防 hang。
+    // 启动 gate：先等存档迁移/位置选择 + tutorial/初始人设走完；15s 只兜底教程模块未加载。
     (async () => {
         if (_isChatPage) return;
         if (typeof window.showProminentNotice !== 'function') return;
@@ -286,7 +286,7 @@ window.addEventListener('load', async () => {
         const NOTICE_GATE_FALLBACK_MS = 15000;
         const TUTORIAL_GATE_QUIET_MS = 200;
         const waitForTutorialStartupBarrier = () => new Promise((resolve) => {
-            let fallbackExpired = false;
+            let moduleUnavailableFallbackExpired = false;
             let quietSince = 0;
             let pollTimer = null;
             let fallbackTimer = null;
@@ -322,8 +322,12 @@ window.addEventListener('load', async () => {
             };
             const check = () => {
                 if (done) return;
-                const startupSettled = window.__NEKO_TUTORIAL_STARTUP_SETTLED__ === true;
-                if ((!startupSettled && !fallbackExpired) || hasActiveTutorial()) {
+                const startupState = window.__NEKO_TUTORIAL_STARTUP_SETTLED__;
+                const tutorialModuleLoaded = typeof startupState === 'boolean';
+                const tutorialDecisionPending = tutorialModuleLoaded
+                    ? startupState !== true
+                    : !moduleUnavailableFallbackExpired;
+                if (tutorialDecisionPending || hasActiveTutorial()) {
                     quietSince = 0;
                     return;
                 }
@@ -341,7 +345,9 @@ window.addEventListener('load', async () => {
             window.addEventListener('neko:day1-systray-intro-closed', check);
             pollTimer = setInterval(check, 50);
             fallbackTimer = setTimeout(() => {
-                fallbackExpired = true;
+                // 仅在教程脚本完全没有建立状态标记时 fail-open。模块已加载但仍在等待
+                // 存储、模型或自动轮次判定时不能按时间放行，否则教程可能晚于更新日志启动。
+                moduleUnavailableFallbackExpired = true;
                 check();
             }, NOTICE_GATE_FALLBACK_MS);
             check();
