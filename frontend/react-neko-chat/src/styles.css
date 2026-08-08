@@ -3404,6 +3404,20 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   line-height: 1.48;
 }
 
+/* Link cards (including music shares) must follow the resizable compact bubble.
+   The shared card style keeps a 220px minimum for the full chat surface, while
+   the compact surface itself can be narrower than that. */
+.compact-export-history-content > .message-block-link {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.compact-export-history-content > .message-block-link .message-link-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .compact-export-history-controls,
 .compact-export-preview-region {
   display: flex;
