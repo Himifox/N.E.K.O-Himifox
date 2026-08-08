@@ -2963,6 +2963,12 @@ body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
   --compact-export-history-shadow-gutter-right: 32px;
   --compact-export-history-shadow-gutter-left: 12px;
   --compact-export-history-max-inline-size: calc(100vw - var(--compact-export-history-viewport-gutter));
+  --compact-export-link-card-min-inline-size: 170px;
+  /* 170px card + 23px bubble padding/border + 48px row reserve + 44px shadow gutters. */
+  --compact-export-link-history-min-inline-size: calc(
+    var(--compact-export-link-card-min-inline-size) + 23px + 48px +
+      var(--compact-export-history-shadow-gutter-left) + var(--compact-export-history-shadow-gutter-right)
+  );
   --compact-export-history-inline-size: min(
     calc(var(--compact-export-surface-width) * var(--compact-export-history-width-ratio)),
     var(--compact-export-history-max-inline-size)
@@ -3404,13 +3410,20 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   line-height: 1.48;
 }
 
-/* Link cards (including music shares) must follow the resizable compact bubble.
-   The shared card style keeps a 220px minimum for the full chat surface, while
-   the compact surface itself can be narrower than that. */
+/* Preserve a readable card at the 180px compact-surface minimum without
+   changing the compact surface itself. Only a history panel containing a link
+   card expands, and the viewport cap still wins on exceptionally narrow screens. */
+.compact-export-history-anchor:has(.compact-export-history-content > .message-block-link) {
+  width: min(
+    max(var(--compact-export-history-inline-size), var(--compact-export-link-history-min-inline-size)),
+    var(--compact-export-history-max-inline-size)
+  );
+}
+
 .compact-export-history-content > .message-block-link {
   width: 100%;
   max-width: 100%;
-  min-width: 0;
+  min-width: min(var(--compact-export-link-card-min-inline-size), 100%);
 }
 
 .compact-export-history-content > .message-block-link .message-link-copy {
