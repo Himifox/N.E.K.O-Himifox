@@ -290,6 +290,8 @@ def replace_seven_day_tutorial_state(
             "revision": current["revision"] + 1,
             "state": normalize_seven_day_tutorial_state(raw_state),
         }
+        if current.get("settledByLegacyMigration") is True:
+            store["settledByLegacyMigration"] = True
         atomic_write_json(
             get_seven_day_tutorial_state_path(config_manager),
             store,
