@@ -188,7 +188,7 @@
         };
     }
 
-    function reportMusicPlaybackState(state, track, playbackContext) {
+    function reportMusicPlaybackState(state, track, playbackContext, failureReason) {
         try {
             const appState = window.appState;
             const socket = appState && appState.socket;
@@ -209,6 +209,9 @@
                 playback_started_at: context.lifecycleStartedAt,
                 request_id: context.requestId,
                 source: context.source,
+                reason: state === 'error'
+                    ? String(failureReason || 'unknown').slice(0, 32)
+                    : '',
                 track: {
                     name: String(currentTrack.name || '').slice(0, 120),
                     artist: String(currentTrack.artist || '').slice(0, 120)
@@ -2667,7 +2670,7 @@
                         showErrorToast('music.playError', errorDetail);
                         updatePlayBtnState(false);
                         setMusicBarVisualState(musicBar, 'error');
-                        reportMusicPlaybackState('error', null, reportContext);
+                        reportMusicPlaybackState('error', null, reportContext, 'media_error');
 
                         if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                         autoDestroyTimer = setTimeout(() => {
@@ -2998,7 +3001,12 @@
                             showErrorToast('music.playError', 'Music playback failed to load');
                         }
                         setMusicBarVisualState(musicBar, 'error');
-                        reportMusicPlaybackState('error', null, playbackReportContext);
+                        reportMusicPlaybackState(
+                            'error',
+                            null,
+                            playbackReportContext,
+                            mediaResult.reason
+                        );
                         updateMusicCard('error', currentPlayingTrack);
                         emitBarState();
                     }
@@ -3018,7 +3026,12 @@
         } catch (err) {
             if (currentToken !== latestMusicRequestToken) return musicPlayResult(false, 'superseded');
             console.error('[Music UI] 播放器处理异常:', err);
-            reportMusicPlaybackState('error', null, playbackReportContext);
+            reportMusicPlaybackState(
+                'error',
+                null,
+                playbackReportContext,
+                'player_error'
+            );
             updateMusicCard('error', currentPlayingTrack);
             destroyMusicPlayer(true, false, true);
             showErrorToast('music.playError', 'Music playback failed to load');
