@@ -533,7 +533,8 @@
         ) {
             options = Object.assign({}, options, {
                 cardScopeId: window._proactiveMusicCardScopeId,
-                deferFailureUi: window._proactiveMusicHasNextCandidate === true
+                deferFailureUi: window._proactiveMusicHasNextCandidate === true,
+                fallbackDeadlineAt: window._proactiveMusicFallbackDeadlineAt
             });
         }
 

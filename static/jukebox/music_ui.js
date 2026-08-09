@@ -51,7 +51,7 @@
     // Frontend-only plugin allowlist entries have not passed server-side SSRF checks.
     const backendProxyDomains = new Set(MUSIC_CONFIG.allowlist);
     const MAX_RECOMMENDED_TRACK_DURATION_SECONDS = 10 * 60;
-    const MUSIC_MEDIA_LOAD_TIMEOUT_MS = 10000;
+    const MUSIC_MEDIA_LOAD_TIMEOUT_MS = 4000;
 
     const musicT = (key, fallback, params = {}) => {
         const fallbackText = String(fallback || key).replace(/\{\{(\w+)\}\}/g, (match, name) => (
@@ -99,10 +99,20 @@
         if (!path) return res();
         if (document.querySelector(`link[href*="${path}"]`)) return res();
         const link = document.createElement('link');
+        let settled = false;
+        const finish = (loaded) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutId);
+            if (loaded) console.log('[Music UI] 样式加载成功:', path);
+            else console.warn('[Music UI] 样式加载超时或失败:', path);
+            res();
+        };
+        const timeoutId = window.setTimeout(() => finish(false), MUSIC_MEDIA_LOAD_TIMEOUT_MS);
         link.rel = 'stylesheet';
         link.href = path;
-        link.onload = () => { console.log('[Music UI] 样式加载成功:', path); res(); };
-        link.onerror = () => { console.error('[Music UI] 样式加载失败，请检查路径:', path); res(); };
+        link.onload = () => finish(true);
+        link.onerror = () => finish(false);
         document.head.appendChild(link);
     });
 
@@ -1902,7 +1912,8 @@
         token,
         expectedUrl,
         enforceRecommendationLimit,
-        requestId
+        requestId,
+        timeoutMs = MUSIC_MEDIA_LOAD_TIMEOUT_MS
     ) => new Promise((resolve) => {
         const audio = player && player.audio;
         if (!audio) {
@@ -1977,7 +1988,11 @@
         audio.addEventListener('loadedmetadata', onMetadata);
         audio.addEventListener('canplay', onCanPlay);
         audio.addEventListener('error', onError);
-        timeoutId = window.setTimeout(() => finish(false, 'load_timeout'), MUSIC_MEDIA_LOAD_TIMEOUT_MS);
+        const effectiveTimeoutMs = Math.max(
+            1,
+            Math.min(MUSIC_MEDIA_LOAD_TIMEOUT_MS, Number(timeoutMs) || MUSIC_MEDIA_LOAD_TIMEOUT_MS)
+        );
+        timeoutId = window.setTimeout(() => finish(false, 'load_timeout'), effectiveTimeoutMs);
 
         if (!audio.error && audio.readyState >= 1) {
             window.queueMicrotask(() => validateDuration('already_ready'));
@@ -2240,9 +2255,27 @@
                 ...cssPromises,
                 new Promise((resJS, rejJS) => {
                     const script = document.createElement('script');
+                    let settled = false;
+                    const finish = (error) => {
+                        if (settled) return;
+                        settled = true;
+                        window.clearTimeout(timeoutId);
+                        script.onload = null;
+                        script.onerror = null;
+                        if (error) rejJS(error);
+                        else resJS();
+                    };
+                    const timeoutId = window.setTimeout(() => {
+                        script.remove();
+                        finish(new Error('APlayer script load timed out'));
+                    }, MUSIC_MEDIA_LOAD_TIMEOUT_MS);
                     script.src = MUSIC_CONFIG.assets.jsPath;
-                    script.onload = () => (typeof window.APlayer !== 'undefined' ? resJS() : rejJS());
-                    script.onerror = rejJS;
+                    script.onload = () => finish(
+                        typeof window.APlayer !== 'undefined'
+                            ? null
+                            : new Error('APlayer script loaded without exposing APlayer')
+                    );
+                    script.onerror = () => finish(new Error('APlayer script failed to load'));
                     document.head.appendChild(script);
                 })
             ]).then(() => {
@@ -2923,12 +2956,17 @@
             localPlayer._latestToken = currentToken;
             localPlayer._musicPlaybackReportContext = playbackReportContext;
             localPlayer._loadError = false;
+            const fallbackDeadlineAt = Number(playbackOptions.fallbackDeadlineAt);
+            const fallbackRemainingMs = Number.isFinite(fallbackDeadlineAt) && fallbackDeadlineAt > 0
+                ? fallbackDeadlineAt - Date.now()
+                : MUSIC_MEDIA_LOAD_TIMEOUT_MS;
             const mediaReadyPromise = waitForMusicMediaReady(
                 localPlayer,
                 currentToken,
                 trackInfo.url,
                 playbackOptions.source === 'proactive',
-                playbackOptions.requestId
+                playbackOptions.requestId,
+                fallbackRemainingMs
             );
 
             // 执行播放
