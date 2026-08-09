@@ -1421,6 +1421,9 @@
                     console.log('主动搭话已发送:', result.message, result.source_mode ? '(来源: ' + result.source_mode + ')' : '');
 
                     var dispatchedTrackUrl = null;
+                    var proactiveMusicCardScopeId = 'proactive:' + (
+                        result.turn_id || (Date.now() + '-' + Math.random().toString(36).slice(2, 8))
+                    );
 
                     // 如果模式包含音乐信号，按顺序尝试音轨；候选 URL 或媒体自身
                     // 的错误（包括加载超时）才回退，播放器/调度错误结束本轮推荐。
@@ -1464,7 +1467,16 @@
                                     console.log('[ProactiveChat] 尝试音乐候选 ' + (musicIndex + 1) + '/' + musicLinks.length + ':', track);
                                     var dispatchResult;
                                     if (typeof window.dispatchMusicPlayDetailed === 'function') {
-                                        dispatchResult = await window.dispatchMusicPlayDetailed(track, { source: 'proactive' });
+                                        window._proactiveMusicCardScopeId = proactiveMusicCardScopeId;
+                                        window._proactiveMusicHasNextCandidate = musicIndex < musicLinks.length - 1;
+                                        try {
+                                            dispatchResult = await window.dispatchMusicPlayDetailed(track, { source: 'proactive' });
+                                        } finally {
+                                            if (window._proactiveMusicCardScopeId === proactiveMusicCardScopeId) {
+                                                window._proactiveMusicCardScopeId = null;
+                                                window._proactiveMusicHasNextCandidate = false;
+                                            }
+                                        }
                                     } else {
                                         var legacyAccepted = await window.dispatchMusicPlay(track, { source: 'proactive' });
                                         dispatchResult = {

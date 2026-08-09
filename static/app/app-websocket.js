@@ -700,7 +700,8 @@
                 if (typeof window.dispatchMusicPlayDetailed === 'function') {
                     dispatchResult = await window.dispatchMusicPlayDetailed(track, {
                         source: 'user',
-                        requestId: response.request_id
+                        requestId: response.request_id,
+                        deferFailureUi: index < tracks.length - 1
                     });
                 } else if (typeof window.dispatchMusicPlay === 'function') {
                     var accepted = await window.dispatchMusicPlay(track, {
