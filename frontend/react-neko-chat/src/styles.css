@@ -2964,9 +2964,13 @@ body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
   --compact-export-history-shadow-gutter-left: 12px;
   --compact-export-history-max-inline-size: calc(100vw - var(--compact-export-history-viewport-gutter));
   --compact-export-link-card-min-inline-size: 170px;
-  /* 170px card + 23px bubble padding/border + 48px row reserve + 44px shadow gutters. */
+  --compact-export-link-bubble-chrome-inline-size: 23px;
+  --compact-export-link-row-reserve-inline-size: 48px;
+  /* 170px card + bubble chrome + row reserve + 44px shadow gutters. */
   --compact-export-link-history-min-inline-size: calc(
-    var(--compact-export-link-card-min-inline-size) + 23px + 48px +
+    var(--compact-export-link-card-min-inline-size) +
+      var(--compact-export-link-bubble-chrome-inline-size) +
+      var(--compact-export-link-row-reserve-inline-size) +
       var(--compact-export-history-shadow-gutter-left) + var(--compact-export-history-shadow-gutter-right)
   );
   --compact-export-history-inline-size: min(
@@ -3420,10 +3424,21 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   );
 }
 
+.compact-export-history-bubble:has(> .compact-export-history-content > .message-block-link) {
+  width: calc(100% - var(--compact-export-link-row-reserve-inline-size));
+  min-width: min(
+    calc(
+      var(--compact-export-link-card-min-inline-size) +
+        var(--compact-export-link-bubble-chrome-inline-size)
+    ),
+    calc(100% - var(--compact-export-link-row-reserve-inline-size))
+  );
+}
+
 .compact-export-history-content > .message-block-link {
   width: 100%;
   max-width: 100%;
-  min-width: min(var(--compact-export-link-card-min-inline-size), 100%);
+  min-width: 0;
 }
 
 .compact-export-history-content > .message-block-link .message-link-copy {
