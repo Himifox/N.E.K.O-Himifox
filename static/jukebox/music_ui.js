@@ -51,7 +51,7 @@
     // Frontend-only plugin allowlist entries have not passed server-side SSRF checks.
     const backendProxyDomains = new Set(MUSIC_CONFIG.allowlist);
     const MAX_RECOMMENDED_TRACK_DURATION_SECONDS = 10 * 60;
-    const MUSIC_MEDIA_LOAD_TIMEOUT_MS = 4000;
+    const MUSIC_MEDIA_LOAD_TIMEOUT_MS = 3000;
 
     const musicT = (key, fallback, params = {}) => {
         const fallbackText = String(fallback || key).replace(/\{\{(\w+)\}\}/g, (match, name) => (
