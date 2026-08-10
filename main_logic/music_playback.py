@@ -21,14 +21,8 @@ import math
 from collections.abc import Callable
 from typing import Any
 
-from config.prompts._locale import normalize_prompt_locale
-from config.prompts.prompts_music import get_music_intent_classifier_prompt
-from config.prompts.prompts_proactive import (
-    BEGIN_GENERATE,
-    build_unified_phase1_prompt,
-    get_music_request_pending_prompt,
-)
-from config.prompts.prompts_sys import _loc
+from config.prompts.prompts_music import get_music_intent_tool_texts
+from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_command_parser import (
     is_strict_music_cancellation,
@@ -40,8 +34,7 @@ from main_logic.music_requests import (
     fetch_music_request,
     mark_music_request_query,
 )
-from utils.config_manager import get_config_manager
-from utils.llm_client import HumanMessage, SystemMessage, create_chat_llm_async
+from main_logic.tool_calling import ToolDefinition, register_builtin_tool_factory
 from utils.logger_config import get_module_logger
 
 logger = get_module_logger(__name__, "Main")
@@ -60,11 +53,6 @@ _PLAYBACK_FAILURE_REASONS = frozenset(
 _REPLY_START_GRACE_SECONDS = 1.0
 _REPLY_WAIT_TIMEOUT_SECONDS = 5.0
 _REPLY_WAIT_POLL_SECONDS = 0.05
-_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS = 8.0
-_MUSIC_INTENT_CLASSIFIER_MAX_TOKENS = 180
-_MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS = 500
-_MUSIC_INTENT_CONTEXT_MESSAGES = 6
-_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS = 300
 
 
 def register_music_session_manager_getter(
@@ -82,36 +70,18 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     if manager is None:
         return
     content = str(event.get("content") or "")
-    generation = _begin_music_intent_generation(manager)
     request = parse_strict_music_command(content)
     cancellation = request is None and is_strict_music_cancellation(content)
+    strict_handled = request is not None or cancellation
+    manager._music_intent_turn = {
+        "handled": strict_handled,
+        "consumed": strict_handled,
+    }
     if request is None:
         if cancellation:
             _cancel_music_request(manager)
-            return
-        fire_task = getattr(manager, "_fire_task", None)
-        if callable(fire_task) and content.strip():
-            manager._music_intent_classifier_task = fire_task(
-                _classify_and_apply_music_intent(manager, content, generation)
-            )
         return
     _start_music_request(manager, request)
-
-
-def _begin_music_intent_generation(manager: Any) -> int:
-    previous = getattr(manager, "_music_intent_classifier_task", None)
-    if previous is not None:
-        try:
-            if not previous.done():
-                previous.cancel()
-        except Exception:
-            pass
-    generation = int(
-        getattr(manager, "_music_intent_classifier_generation", 0) or 0
-    ) + 1
-    manager._music_intent_classifier_generation = generation
-    manager._music_intent_classifier_task = None
-    return generation
 
 
 def _start_music_request(
@@ -166,66 +136,6 @@ def _clean_music_intent_text(value: Any) -> str:
     return cleaned if len(cleaned) <= 120 else ""
 
 
-def _classifier_message_text(message: Any) -> str:
-    content = getattr(message, "content", "")
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        text = " ".join(
-            str(part.get("text") or "")
-            for part in content
-            if isinstance(part, dict)
-            and str(part.get("type") or "") in {"text", "input_text", "output_text"}
-        )
-    else:
-        return ""
-    return " ".join(text.split())[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
-
-
-def _recent_music_dialogue(manager: Any, latest_user_text: str) -> str:
-    session = getattr(manager, "session", None)
-    history = getattr(session, "_conversation_history", None)
-    if not isinstance(history, list):
-        return ""
-
-    latest_normalized = " ".join(str(latest_user_text or "").split())
-    skipped_latest = False
-    rows: list[str] = []
-    for message in reversed(history):
-        role = str(getattr(message, "type", "") or "").lower()
-        if role not in {"human", "ai"}:
-            continue
-        text = _classifier_message_text(message)
-        if not text:
-            continue
-        if (
-            role == "human"
-            and not skipped_latest
-            and text == latest_normalized[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
-        ):
-            skipped_latest = True
-            continue
-        rows.append(f"{'user' if role == 'human' else 'assistant'}: {text}")
-        if len(rows) >= _MUSIC_INTENT_CONTEXT_MESSAGES:
-            break
-    rows.reverse()
-    return "\n".join(rows)
-
-
-def _music_playback_context(manager: Any) -> str:
-    state = _clean_music_intent_text(
-        getattr(manager, "_music_playback_state", "")
-    ) or "unknown"
-    track = getattr(manager, "_music_current_track", None)
-    track = track if isinstance(track, dict) else {}
-    name = _clean_music_intent_text(track.get("name"))
-    artist = _clean_music_intent_text(track.get("artist"))
-    return (
-        f"state={state}; title={name or 'unknown'}; "
-        f"artist={artist or 'unknown'}"
-    )
-
-
 def _music_request_from_intent(arguments: dict[str, Any]) -> MusicRequest | None:
     target_type = str(arguments.get("target_type") or "").strip().lower()
     song = _clean_music_intent_text(arguments.get("song"))
@@ -262,207 +172,100 @@ def _has_active_music(manager: Any) -> bool:
     return getattr(manager, "_music_playback_state", "") in {"playing", "paused"}
 
 
-def _parse_music_intent_response(raw: Any) -> dict[str, Any] | None:
-    if not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if not text or len(text) > 4096:
-        return None
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    music_line = next(
-        (line for line in lines if line.upper().startswith("[MUSIC]")),
-        "",
-    )
-    if not music_line:
-        return None
-    value = music_line[len("[MUSIC]") :].strip()
-    if not value or value.upper() in {"[PASS]", "PASS"}:
-        return None
-    if value.lower() == "stop":
-        return {"action": "stop", "target_type": "generic"}
-
-    target_type = "query"
-    song = artist = playlist = query = ""
-    prefix, separator, remainder = value.partition(":")
-    normalized_prefix = prefix.strip().lower()
-    target = remainder.strip() if separator else value
-    if normalized_prefix == "song":
-        target_type = "song"
-        song, artist_separator, artist = target.partition("|")
-        song = song.strip()
-        artist = artist.strip() if artist_separator else ""
-    elif normalized_prefix == "artist":
-        target_type = "artist"
-        artist = target
-    elif normalized_prefix == "playlist":
-        target_type = "playlist"
-        playlist = target
-    elif normalized_prefix == "source" and target.lower() in {"liked", "daily"}:
-        target_type = target.lower()
-    elif normalized_prefix in {"query", "search"}:
-        query = target
-    elif value.lower() == "personalized":
-        target_type = "generic"
-    else:
-        query = value
-    arguments = {
-        "action": "play",
-        "target_type": target_type,
-        "song": _clean_music_intent_text(song),
-        "artist": _clean_music_intent_text(artist),
-        "playlist": _clean_music_intent_text(playlist),
-        "query": _clean_music_intent_text(query),
-    }
-    return arguments if _music_request_from_intent(arguments) is not None else None
-
-
-async def _classify_music_intent(
-    user_text: str,
-    language: str | None,
-    *,
-    lanlan_name: str = "",
-    master_name: str = "",
-    recent_dialogue: str = "",
-    playback_context: str = "",
-) -> dict[str, Any] | None:
-    cleaned = " ".join(str(user_text or "").split())
-    if not cleaned or len(cleaned) > _MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS:
-        return None
-
-    config_manager = get_config_manager()
-    core_config = await config_manager.aget_core_config()
-    model_config = await config_manager.aget_model_api_config(
-        "conversation",
-        core_config=core_config,
-    )
-    model = str(model_config.get("model") or "").strip()
-    base_url = str(model_config.get("base_url") or "").strip()
-    if not model or not base_url:
-        return None
-
-    from utils.token_tracker import set_call_type
-
-    set_call_type("music_intent")
-    locale = normalize_prompt_locale(
-        language,
-        default="en",
-        simplified="zh",
-        keep_traditional=True,
-    )
-    assistant_name = lanlan_name or "N.E.K.O"
-    user_name = master_name or "user"
-    system_prompt = build_unified_phase1_prompt(
-        locale,
-        memory_context="",
-        music_ctx={
-            "lanlan_name": assistant_name,
-            "master_name": user_name,
-        },
-        lanlan_name=assistant_name,
-        master_name=user_name,
-    )
-    classifier_prompt = get_music_intent_classifier_prompt(locale)
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(
-            content=(
-                f"{classifier_prompt}\n"
-                "<recent_dialogue_before_latest>\n"
-                f"{recent_dialogue or '(none)'}\n"
-                "</recent_dialogue_before_latest>\n"
-                "<current_playback_state>\n"
-                f"{playback_context or 'state=unknown; title=unknown; artist=unknown'}\n"
-                "</current_playback_state>\n"
-                "<latest_user_message>\n"
-                f"{cleaned}\n"
-                "</latest_user_message>\n\n"
-                f"{_loc(BEGIN_GENERATE, locale)}"
-            )
-        ),
-    ]
-    async with await create_chat_llm_async(
-        model,
-        base_url,
-        model_config.get("api_key"),
-        provider_type=model_config.get("provider_type"),
-        temperature=0,
-        streaming=False,
-        max_retries=0,
-        max_completion_tokens=_MUSIC_INTENT_CLASSIFIER_MAX_TOKENS,
-        timeout=_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS,
-    ) as llm:
-        response = await asyncio.wait_for(
-            llm.ainvoke(messages),
-            timeout=_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS,
-        )
-    return _parse_music_intent_response(getattr(response, "content", None))
-
-
-def _apply_classified_music_intent(
+def _music_tool_result(
     manager: Any,
-    arguments: dict[str, Any] | None,
-    generation: int,
-) -> bool:
-    if generation != int(
-        getattr(manager, "_music_intent_classifier_generation", 0) or 0
-    ):
-        return False
-    if generation == int(
-        getattr(manager, "_music_intent_classifier_consumed_generation", 0) or 0
-    ):
-        return False
-    manager._music_intent_classifier_consumed_generation = generation
-    if not arguments:
-        return False
+    status: str,
+    **details: str,
+) -> dict[str, str]:
+    result = {"status": status, **details}
+    log = logger.info if status == "accepted" else logger.debug
+    log(
+        "[%s] music tool %s: %s",
+        getattr(manager, "lanlan_name", "") or "unknown",
+        status,
+        details.get("action") or details.get("reason") or "unknown",
+    )
+    return result
 
+
+async def handle_music_intent_tool(
+    manager: Any,
+    arguments: dict[str, Any],
+) -> dict[str, str]:
+    """Execute at most one model-reported music action for the latest user turn."""
+    turn = getattr(manager, "_music_intent_turn", None)
+    if not isinstance(turn, dict):
+        return _music_tool_result(manager, "ignored", reason="no_current_user_turn")
+    if turn.get("handled"):
+        return _music_tool_result(
+            manager, "ignored", reason="already_handled_by_strict_command"
+        )
+    if turn.get("consumed"):
+        return _music_tool_result(
+            manager, "ignored", reason="music_intent_already_reported"
+        )
+    turn["consumed"] = True
+
+    if not isinstance(arguments, dict):
+        return _music_tool_result(manager, "ignored", reason="invalid_arguments")
     action = str(arguments.get("action") or "").strip().lower()
     if action == "stop":
         if not _has_active_music(manager):
-            return False
+            return _music_tool_result(manager, "ignored", reason="no_active_music")
         _cancel_music_request(manager)
-        return True
+        return _music_tool_result(
+            manager, "accepted", action="stop", playback_state="stopped"
+        )
     if action != "play":
-        return False
+        return _music_tool_result(manager, "ignored", reason="invalid_action")
+
     request = _music_request_from_intent(arguments)
     if request is None:
-        return False
-    return _start_music_request(manager, request)
+        return _music_tool_result(manager, "ignored", reason="invalid_target")
+    if not _start_music_request(manager, request, enqueue_context=False):
+        return _music_tool_result(manager, "ignored", reason="playback_unavailable")
+    return _music_tool_result(
+        manager, "accepted", action="play", playback_state="searching"
+    )
 
 
-async def _classify_and_apply_music_intent(
-    manager: Any,
-    user_text: str,
-    generation: int,
-) -> bool:
-    recent_dialogue = _recent_music_dialogue(manager, user_text)
-    playback_context = _music_playback_context(manager)
-    try:
-        arguments = await _classify_music_intent(
-            user_text,
-            getattr(manager, "user_language", None),
-            lanlan_name=getattr(manager, "lanlan_name", ""),
-            master_name=getattr(manager, "master_name", ""),
-            recent_dialogue=recent_dialogue,
-            playback_context=playback_context,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning(
-            "[%s] music intent classifier failed closed: %s",
-            getattr(manager, "lanlan_name", "") or "unknown",
-            type(exc).__name__,
-        )
-        return False
-    applied = _apply_classified_music_intent(manager, arguments, generation)
-    if applied:
-        logger.info(
-            "[%s] classified music intent accepted: action=%s target=%s",
-            getattr(manager, "lanlan_name", "") or "unknown",
-            arguments.get("action"),
-            arguments.get("target_type"),
-        )
-    return applied
+def _build_music_intent_tool(manager: Any) -> ToolDefinition:
+    texts = get_music_intent_tool_texts(getattr(manager, "user_language", None))
+    return ToolDefinition(
+        name="request_music_playback",
+        description=texts["description"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["play", "stop"],
+                    "description": texts["action"],
+                },
+                "target_type": {
+                    "type": "string",
+                    "enum": [
+                        "song", "artist", "playlist", "liked",
+                        "daily", "query", "generic",
+                    ],
+                    "description": texts["target_type"],
+                },
+                "song": {"type": "string", "description": texts["song"]},
+                "artist": {
+                    "type": "string",
+                    "description": texts["artist"],
+                },
+                "playlist": {
+                    "type": "string",
+                    "description": texts["playlist"],
+                },
+                "query": {"type": "string", "description": texts["query"]},
+            },
+            "required": ["action", "target_type"],
+        },
+        handler=lambda arguments: handle_music_intent_tool(manager, arguments),
+        metadata={"source": "builtin"},
+    )
 
 
 def _next_music_request_epoch(manager: Any) -> int:
@@ -664,8 +467,6 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
         return False
     manager._music_playback_event_key = event_key
     manager._music_playback_state = state
-    if name or artist:
-        manager._music_current_track = {"name": name, "artist": artist}
 
     if state == "error":
         logger.warning(
@@ -915,4 +716,5 @@ async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
     return delivered
 
 
+register_builtin_tool_factory(_build_music_intent_tool)
 register_user_utterance_sink(_on_user_utterance)
