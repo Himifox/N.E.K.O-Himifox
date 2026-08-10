@@ -304,14 +304,7 @@ class ProactiveDeliveryManager:
         behind earlier low-priority ones on redelivery."""
         ordered = sorted(self._queue, key=lambda c: c.sort_key)
         self._queue = []
-        callbacks = []
-        now = self._now()
-        for cue in ordered:
-            if callback_is_expired(cue.callback, now=now):
-                resolve_callback_delivery_ack(cue.callback, False)
-                continue
-            callbacks.append(cue.callback)
-        return callbacks
+        return [cue.callback for cue in ordered]
 
     def latest_queued_coalesce_seq(self, key: str) -> Optional[int]:
         """Return the newest submit seq still waiting under ``key``."""
@@ -348,14 +341,12 @@ class ProactiveDeliveryManager:
         now = self._now()
         fresh: list[_QueuedCue] = []
         for c in self._queue:
-            expired = callback_is_expired(c.callback, now=now)
             ttl_stale = self._ttl_s > 0 and now - c.submitted_at > self._ttl_s
-            if expired or ttl_stale:
+            if ttl_stale:
                 resolve_callback_delivery_ack(c.callback, False)
                 logger.info(
-                    "[proactive%s] dropping stale cue key=%r age=%.1fs reason=%s",
+                    "[proactive%s] dropping stale cue key=%r age=%.1fs reason=ttl",
                     self._suffix(), c.coalesce_key, now - c.submitted_at,
-                    "expired" if expired else "ttl",
                 )
             else:
                 fresh.append(c)
@@ -447,16 +438,11 @@ class ProactiveDeliveryManager:
         self._schedule_pump(self._inflight_timeout_s)
 
     async def _run_deliver(self, callbacks: list[dict]) -> None:
-        ready = []
-        now = self._now()
-        for callback in callbacks:
-            if callback.get(DELIVERY_RETRACTED_KEY):
-                continue
-            if callback_is_expired(callback, now=now):
-                resolve_callback_delivery_ack(callback, False)
-                continue
-            ready.append(callback)
-        callbacks = ready
+        callbacks = [
+            callback
+            for callback in callbacks
+            if not callback.get(DELIVERY_RETRACTED_KEY)
+        ]
         if not callbacks:
             self._inflight = False
             self._schedule_pump(0.0)

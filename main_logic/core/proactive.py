@@ -554,92 +554,74 @@ class ProactiveMixin:
         print(f"[{self.lanlan_name}] Proactive stream delivered: {(full_text or '')[:40]}…")
         return True
 
-    def _purge_retracted_agent_callbacks(self) -> None:
-        callbacks = getattr(self, "pending_agent_callbacks", None) or []
-        for cb in callbacks:
-            if (
-                callback_is_expired(cb)
-                and not cb.get(VOICE_DELIVERY_COMMITTED_KEY)
-                and not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
-            ):
-                resolve_callback_delivery_ack(cb, False)
-                cb[DELIVERY_RETRACTED_KEY] = True
-        purgeable = [
-            cb for cb in callbacks
-            if cb.get(DELIVERY_RETRACTED_KEY)
-            and not (
-                cb.get(VOICE_DELIVERY_COMMITTED_KEY)
-                or cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
-            )
-        ]
-        purgeable_obj_ids = {id(cb) for cb in purgeable}
-        retracted_ids = {
-            cb.get("_callback_delivery_id")
-            for cb in purgeable
-            if cb.get("_callback_delivery_id")
+    def filter_deliverable_callbacks(self, callbacks: list) -> list:
+        """Drop undeliverable callbacks and their paired voice mirrors."""
+        deliverable = []
+        dropped = []
+        for callback in callbacks:
+            if not isinstance(callback, dict):
+                deliverable.append(callback)
+                continue
+            if callback_is_expired(callback):
+                callback[DELIVERY_RETRACTED_KEY] = True
+            if callback.get(DELIVERY_RETRACTED_KEY):
+                dropped.append(callback)
+            else:
+                deliverable.append(callback)
+        if not dropped:
+            return deliverable
+
+        dropped_obj_ids = {id(callback) for callback in dropped}
+        dropped_delivery_ids = {
+            callback.get("_callback_delivery_id")
+            for callback in dropped
+            if callback.get("_callback_delivery_id")
         }
-        for cb in purgeable:
-            resolve_callback_delivery_ack(cb, False)
-        if purgeable_obj_ids:
-            self.pending_agent_callbacks = [
-                cb for cb in callbacks
-                if id(cb) not in purgeable_obj_ids
-            ]
-        if retracted_ids:
-            self.pending_extra_replies = [
-                extra for extra in self.pending_extra_replies
-                if not isinstance(extra, dict)
-                or extra.get("_callback_delivery_id") not in retracted_ids
-            ]
-        # The callback side may already have been drained while its voice
-        # hot-swap mirror remains. Expire those orphan mirrors independently.
+        paired_callbacks = [
+            callback
+            for callback in (getattr(self, "pending_agent_callbacks", None) or [])
+            if id(callback) in dropped_obj_ids
+            or callback.get("_callback_delivery_id") in dropped_delivery_ids
+        ]
+        dropped_callbacks = list({id(cb): cb for cb in dropped + paired_callbacks}.values())
+        self._clear_voice_delivery_committed(dropped_callbacks)
+        for callback in dropped_callbacks:
+            callback[DELIVERY_RETRACTED_KEY] = True
+            resolve_callback_delivery_ack(callback, False)
+
+        self.pending_agent_callbacks = [
+            callback
+            for callback in (getattr(self, "pending_agent_callbacks", None) or [])
+            if id(callback) not in dropped_obj_ids
+            and callback.get("_callback_delivery_id") not in dropped_delivery_ids
+        ]
         self.pending_extra_replies = [
-            extra for extra in self.pending_extra_replies
+            extra
+            for extra in (getattr(self, "pending_extra_replies", None) or [])
             if not isinstance(extra, dict)
-            or extra.get(VOICE_DELIVERY_COMMITTED_KEY)
-            or extra.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
-            or not callback_is_expired(extra)
-        ]
-
-    def _purge_retracted_agent_callback_extras(self, callbacks: list) -> None:
-        retracted_ids = {
-            cb.get("_callback_delivery_id")
-            for cb in callbacks
-            if cb.get(DELIVERY_RETRACTED_KEY)
-            and not (
-                cb.get(VOICE_DELIVERY_COMMITTED_KEY)
-                or cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            or (
+                id(extra) not in dropped_obj_ids
+                and extra.get("_callback_delivery_id") not in dropped_delivery_ids
             )
-            and cb.get("_callback_delivery_id")
-        }
-        if retracted_ids:
-            self.pending_extra_replies = [
-                extra for extra in self.pending_extra_replies
-                if not isinstance(extra, dict)
-                or extra.get("_callback_delivery_id") not in retracted_ids
-            ]
-
-    def _retract_expired_callback_snapshots(
-        self,
-        callbacks: list,
-        *,
-        clear_voice_commit: bool = False,
-    ) -> bool:
-        """Retract expired callbacks that are currently held outside queues."""
-        expired = [
-            cb for cb in callbacks
-            if isinstance(cb, dict) and callback_is_expired(cb)
         ]
-        if not expired:
-            return False
-        if clear_voice_commit:
-            self._clear_voice_delivery_committed(expired)
-        for cb in expired:
-            resolve_callback_delivery_ack(cb, False)
-            cb[DELIVERY_RETRACTED_KEY] = True
-        self._purge_retracted_agent_callback_extras(expired)
-        self._purge_retracted_agent_callbacks()
-        return True
+        return deliverable
+
+    def _purge_undeliverable_callbacks(self) -> None:
+        callbacks = [
+            callback
+            for callback in (getattr(self, "pending_agent_callbacks", None) or [])
+            if not callback.get(VOICE_DELIVERY_COMMITTED_KEY)
+            and not callback.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+        ]
+        self.filter_deliverable_callbacks(callbacks)
+        extras = [
+            extra
+            for extra in (getattr(self, "pending_extra_replies", None) or [])
+            if isinstance(extra, dict)
+            and not extra.get(VOICE_DELIVERY_COMMITTED_KEY)
+            and not extra.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+        ]
+        self.filter_deliverable_callbacks(extras)
 
     async def trigger_agent_callbacks(self) -> bool:
         """Proactively deliver pending agent task results via LLM rephrase.
@@ -672,7 +654,7 @@ class ProactiveMixin:
         )
         if not self.pending_agent_callbacks:
             return False
-        self._purge_retracted_agent_callbacks()
+        self._purge_undeliverable_callbacks()
         if not self.pending_agent_callbacks:
             return False
         if self.is_goodbye_silent():
@@ -732,7 +714,7 @@ class ProactiveMixin:
                     return False
                 # Re-filter inside the lock: a concurrent task may have already
                 # injected+pruned these cbs while we waited on the lock.
-                self._purge_retracted_agent_callbacks()
+                self._purge_undeliverable_callbacks()
                 proactive_cbs = _active_proactive_callbacks(self.pending_agent_callbacks)
                 if not proactive_cbs:
                     return False
@@ -825,15 +807,11 @@ class ProactiveMixin:
                     # out. Do not restore that obsolete cue (or retry its
                     # already-rejected media) into provider context.
                     self._retract_stale_coalesced(_snapshot)
-                    retry_snapshot = [
-                        cb
-                        for cb in _snapshot
-                        if not cb.get(DELIVERY_RETRACTED_KEY)
-                    ]
+                    retry_snapshot = self.filter_deliverable_callbacks(
+                        _snapshot
+                    )
                     _state["rejected"] = True
                     if not retry_snapshot:
-                        self._purge_retracted_agent_callback_extras(_snapshot)
-                        self._purge_retracted_agent_callbacks()
                         return False
                     logger.warning(
                         "[%s] voice proactive inject rejected by server: %s; re-enqueuing %d cb(s) for retry",
@@ -921,11 +899,9 @@ class ProactiveMixin:
                 # context before stream_image returns.  Keep media + callback
                 # text committed as one delivery window.
                 self._retract_stale_coalesced(voice_snapshot)
-                voice_snapshot[:] = [
-                    cb for cb in voice_snapshot
-                    if not cb.get(DELIVERY_RETRACTED_KEY)
-                ]
-                self._purge_retracted_agent_callbacks()
+                voice_snapshot[:] = self.filter_deliverable_callbacks(
+                    voice_snapshot
+                )
                 if not voice_snapshot:
                     return False
                 # Callback delivery bypasses prompt_ephemeral(), so it owns the
@@ -968,13 +944,10 @@ class ProactiveMixin:
                 # same-key callback may have retracted this snapshot while the
                 # await yielded, so re-filter once more before making any media
                 # irreversible.
-                self._retract_expired_callback_snapshots(voice_snapshot)
                 self._retract_stale_coalesced(voice_snapshot)
-                voice_snapshot[:] = [
-                    cb for cb in voice_snapshot
-                    if not cb.get(DELIVERY_RETRACTED_KEY)
-                ]
-                self._purge_retracted_agent_callbacks()
+                voice_snapshot[:] = self.filter_deliverable_callbacks(
+                    voice_snapshot
+                )
                 if not voice_snapshot:
                     self.proactive_manager.release_inflight_noop()
                     return False
@@ -1020,20 +993,10 @@ class ProactiveMixin:
                 # after the commit boundary remain queued for the next turn;
                 # they do not invalidate media already persisted for this one.
                 try:
-                    self._retract_expired_callback_snapshots(
-                        voice_snapshot,
-                        clear_voice_commit=True,
-                    )
                     self._retract_stale_coalesced(voice_snapshot)
-                    voice_snapshot[:] = [
-                        cb for cb in voice_snapshot
-                        if not cb.get(DELIVERY_RETRACTED_KEY)
-                    ]
-                    self._clear_voice_delivery_committed([
-                        cb for cb in voice_commit_snapshot
-                        if cb.get(DELIVERY_RETRACTED_KEY)
-                    ])
-                    self._purge_retracted_agent_callbacks()
+                    voice_snapshot[:] = self.filter_deliverable_callbacks(
+                        voice_snapshot
+                    )
                     if not voice_snapshot:
                         self._clear_voice_delivery_committed(
                             voice_commit_snapshot
@@ -1208,11 +1171,9 @@ class ProactiveMixin:
             )
             return False
 
-        callbacks_snapshot = [
-            cb for cb in callbacks_snapshot
-            if not cb.get(DELIVERY_RETRACTED_KEY)
-        ]
-        self._purge_retracted_agent_callbacks()
+        callbacks_snapshot = self.filter_deliverable_callbacks(
+            callbacks_snapshot
+        )
         if not callbacks_snapshot:
             await self.state.fire(SessionEvent.PROACTIVE_DONE)
             return False
@@ -1290,12 +1251,9 @@ class ProactiveMixin:
                 # so a newer same-coalesce_key cue enqueued meanwhile could not
                 # retract it via the push-side queue scan.
                 self._retract_stale_coalesced(callbacks_snapshot)
-                self._retract_expired_callback_snapshots(callbacks_snapshot)
-                self._purge_retracted_agent_callback_extras(callbacks_snapshot)
-                active_callbacks = [
-                    cb for cb in callbacks_snapshot
-                    if not cb.get(DELIVERY_RETRACTED_KEY)
-                ]
+                active_callbacks = self.filter_deliverable_callbacks(
+                    callbacks_snapshot
+                )
                 if not active_callbacks:
                     logger.info("[%s] trigger_agent_callbacks: text proactive callbacks retracted before prompt", self.lanlan_name)
                     # Nothing will emit text_start/text_end to free the manager's
@@ -1352,12 +1310,9 @@ class ProactiveMixin:
             # prompt_ephemeral): catches a newer same-coalesce_key cue that
             # landed during the CLAIM/PHASE2 awaits above.
             self._retract_stale_coalesced(active_callbacks)
-            self._retract_expired_callback_snapshots(active_callbacks)
-            self._purge_retracted_agent_callback_extras(active_callbacks)
-            active_callbacks = [
-                cb for cb in active_callbacks
-                if not cb.get(DELIVERY_RETRACTED_KEY)
-            ]
+            active_callbacks = self.filter_deliverable_callbacks(
+                active_callbacks
+            )
             callbacks_snapshot[:] = active_callbacks
             if not active_callbacks:
                 logger.info("[%s] trigger_agent_callbacks: text proactive callbacks retracted before prompt", self.lanlan_name)
@@ -1411,11 +1366,9 @@ class ProactiveMixin:
             # The topic-hint websocket write above is another await after the
             # earlier snapshot checks. Revalidate expiry at the final text
             # injection boundary and rebuild media/instruction from survivors.
-            self._retract_expired_callback_snapshots(active_callbacks)
-            active_callbacks = [
-                cb for cb in active_callbacks
-                if not cb.get(DELIVERY_RETRACTED_KEY)
-            ]
+            active_callbacks = self.filter_deliverable_callbacks(
+                active_callbacks
+            )
             callbacks_snapshot[:] = active_callbacks
             if topic_hint_sent and not any(
                 isinstance(cb, dict) and cb.get("channel") == "topic_hook"
@@ -1425,11 +1378,9 @@ class ProactiveMixin:
                 topic_hint_sent = False
                 # The cancellation write yielded once more; keep the final
                 # injection boundary authoritative for the remaining batch.
-                self._retract_expired_callback_snapshots(active_callbacks)
-                active_callbacks = [
-                    cb for cb in active_callbacks
-                    if not cb.get(DELIVERY_RETRACTED_KEY)
-                ]
+                active_callbacks = self.filter_deliverable_callbacks(
+                    active_callbacks
+                )
                 callbacks_snapshot[:] = active_callbacks
             if not active_callbacks:
                 if topic_hint_sent:
@@ -1756,6 +1707,38 @@ class ProactiveMixin:
             return
         self.proactive_manager.submit(callback, priority=priority, coalesce_key=coalesce_key)
 
+    def _drop_receipts_shadowed_by_terminal_result(
+        self,
+        callbacks: list,
+    ) -> list:
+        terminal_task_ids = {
+            str(callback.get("task_id") or "")
+            for callback in callbacks
+            if callback.get("origin") == "task_result"
+            and callback.get("status") in {
+                "completed", "partial", "blocked", "failed", "cancelled"
+            }
+            and str(callback.get("task_id") or "")
+        }
+        if not terminal_task_ids:
+            return callbacks
+        dropped = 0
+        for callback in callbacks:
+            if (
+                callback.get("origin") == "event"
+                and callback.get("channel") == "user_plugin"
+                and str(callback.get("task_id") or "") in terminal_task_ids
+            ):
+                callback[DELIVERY_RETRACTED_KEY] = True
+                dropped += 1
+        if dropped:
+            logger.info(
+                "[%s] dropped %d stale user-plugin receipt(s) shadowed by terminal task results",
+                self.lanlan_name,
+                dropped,
+            )
+        return self.filter_deliverable_callbacks(callbacks)
+
     async def _deliver_proactive_batch(self, callbacks: list) -> None:
         """Release hook invoked by ProactiveDeliveryManager when the gate is
         open. Enqueues the WHOLE batch then fires ONE trigger — trigger drains
@@ -1763,45 +1746,8 @@ class ProactiveMixin:
         legacy "several near-simultaneous cues batched into one turn"
         behaviour (the manager only governs WHEN the batch is released, not
         how many cues per turn)."""
-        ready = []
-        for cb in callbacks:
-            if cb.get(DELIVERY_RETRACTED_KEY):
-                continue
-            if callback_is_expired(cb):
-                resolve_callback_delivery_ack(cb, False)
-                continue
-            ready.append(cb)
-        callbacks = ready
-        terminal_task_ids = {
-            str(cb.get("task_id") or "")
-            for cb in callbacks
-            if cb.get("origin") == "task_result"
-            and cb.get("status") in {
-                "completed", "partial", "blocked", "failed", "cancelled"
-            }
-            and str(cb.get("task_id") or "")
-        }
-        if terminal_task_ids:
-            kept = []
-            dropped_receipts = 0
-            for cb in callbacks:
-                is_obsolete_receipt = (
-                    cb.get("origin") == "event"
-                    and cb.get("channel") == "user_plugin"
-                    and str(cb.get("task_id") or "") in terminal_task_ids
-                )
-                if is_obsolete_receipt:
-                    resolve_callback_delivery_ack(cb, False)
-                    dropped_receipts += 1
-                else:
-                    kept.append(cb)
-            callbacks = kept
-            if dropped_receipts:
-                logger.info(
-                    "[%s] dropped %d stale user-plugin receipt(s) shadowed by terminal task results",
-                    self.lanlan_name,
-                    dropped_receipts,
-                )
+        callbacks = self.filter_deliverable_callbacks(callbacks)
+        callbacks = self._drop_receipts_shadowed_by_terminal_result(callbacks)
         # Topic hooks re-validate the delivery gate at RELEASE: the submit-time
         # check in trigger_topic_hook_once can go stale while the manager paces
         # the cue (min-gap / playback). If the user has since moved into a
@@ -2168,7 +2114,7 @@ class ProactiveMixin:
         1. ``pending_agent_callbacks``: hooks here still carry their callback, so
            resolve each one's delivery ack False (``TopicHookPool`` defers +
            retries on a text session) and retract it, letting
-           ``_purge_retracted_agent_callbacks`` sweep it and its paired
+           ``_purge_undeliverable_callbacks`` sweep it and its paired
            ``pending_extra_replies`` entry by ``_callback_delivery_id``.
         2. ``pending_extra_replies`` orphans: ``drain_agent_callbacks_for_llm``
            clears ``pending_agent_callbacks`` on a text user turn but leaves the
@@ -2190,7 +2136,7 @@ class ProactiveMixin:
             resolve_callback_delivery_ack(cb, False)
             cb[DELIVERY_RETRACTED_KEY] = True
         if hooks:
-            self._purge_retracted_agent_callbacks()
+            self._purge_undeliverable_callbacks()
         # Sweep extras-only topic hooks (callback side already gone).
         extras = getattr(self, "pending_extra_replies", None)
         dropped_extras = 0
@@ -2631,7 +2577,7 @@ class ProactiveMixin:
         ended up here because the SM denied the claim earlier). The caller
         therefore should NOT prepend an additional notification template.
         """
-        self._purge_retracted_agent_callbacks()
+        self._purge_undeliverable_callbacks()
         if not self.pending_agent_callbacks:
             return ""
         candidate_callbacks = list(self.pending_agent_callbacks)
@@ -2645,12 +2591,10 @@ class ProactiveMixin:
         # that re-appends without the push-side scan) must not deliver once a
         # newer same-coalesce_key cue exists.
         self._retract_stale_coalesced(candidate_callbacks)
-        self._purge_retracted_agent_callback_extras(candidate_callbacks)
-        self._purge_retracted_agent_callbacks()
         active_callbacks = [
-            cb for cb in candidate_callbacks
-            if not cb.get(DELIVERY_RETRACTED_KEY)
-            and not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            callback
+            for callback in self.filter_deliverable_callbacks(candidate_callbacks)
+            if not callback.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
         ]
         if not active_callbacks:
             return ""

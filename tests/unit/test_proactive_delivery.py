@@ -300,7 +300,7 @@ async def test_stale_cue_dropped_by_ttl():
     assert delivered == []          # dropped as stale, never spoken
 
 
-async def test_per_callback_expiry_drops_before_release_and_acks_false():
+async def test_delivery_manager_defers_callback_expiry_to_session_filter():
     delivered = []
     mgr = _make(delivered, ttl_s=0)
     mgr.on_playback_start()
@@ -316,11 +316,11 @@ async def test_per_callback_expiry_drops_before_release_and_acks_false():
     mgr.on_playback_end()
     await _settle()
 
-    assert delivered == []
-    assert future.done() and future.result() is False
+    assert [callback["id"] for callback in delivered] == ["expired"]
+    assert not future.done()
 
 
-def test_drain_pending_drops_expired_callback():
+def test_drain_pending_preserves_expired_callback_for_session_filter():
     delivered = []
     mgr = _make(delivered, ttl_s=0)
     mgr.on_playback_start()
@@ -334,8 +334,8 @@ def test_drain_pending_drops_expired_callback():
         priority=1,
     )
 
-    assert mgr.drain_pending() == []
-    assert future.done() and future.result is False
+    assert [callback["id"] for callback in mgr.drain_pending()] == ["expired"]
+    assert not future.done()
 
 
 # ── enqueue_agent_callback path (passive / ai_behavior="read") ────────────────
@@ -794,6 +794,34 @@ def test_passive_drain_drops_expired_callback_and_voice_mirror():
     assert future.done() and future.result is False
     assert mgr.pending_agent_callbacks == []
     assert mgr.pending_extra_replies == []
+
+
+def test_filter_deliverable_callbacks_drops_expired_and_paired_mirror():
+    mgr = _make_session_mgr()
+    future = _FakeAckFuture()
+    expired = _proactive_cb(
+        "expired",
+        **{
+            CALLBACK_EXPIRES_AT_KEY: time.monotonic() - 1,
+            DELIVERY_ACK_FUTURE_KEY: future,
+        },
+    )
+    active = _proactive_cb(
+        "active",
+        **{CALLBACK_EXPIRES_AT_KEY: time.monotonic() + 60},
+    )
+    mgr.enqueue_agent_callback(expired)
+    mgr.enqueue_agent_callback(active)
+
+    deliverable = core_module.LLMSessionManager.filter_deliverable_callbacks(
+        mgr,
+        list(mgr.pending_agent_callbacks),
+    )
+
+    assert deliverable == [active]
+    assert mgr.pending_agent_callbacks == [active]
+    assert [extra["summary"] for extra in mgr.pending_extra_replies] == ["active"]
+    assert future.done() and future.result is False
 
 
 def test_drain_skips_read_superseded_by_manager_held_respond():

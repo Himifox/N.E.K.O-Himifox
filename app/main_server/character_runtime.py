@@ -27,6 +27,7 @@ from typing import Any, Optional
 from config import MONITOR_SERVER_PORT, USER_NOTIFICATION_ERROR_MAX_CHARS
 from main_logic import core, cross_server
 from main_logic.agent_event_bus import notify_analyze_ack
+from main_logic.proactive_delivery import CALLBACK_EXPIRES_AT_KEY
 from utils.config_manager import get_reserved
 
 from ._shared import runtime
@@ -766,7 +767,7 @@ async def _handle_agent_event(event: dict):
                     "timestamp": event.get("timestamp") or "",
                     "metadata": event_metadata,
                     "context_type": event_metadata.get("context_type") or "",
-                    "_expires_at_monotonic": expires_at_monotonic,
+                    CALLBACK_EXPIRES_AT_KEY: expires_at_monotonic,
                 }
                 if delivery_mode != "silent":
                     if delivery_mode == "passive":

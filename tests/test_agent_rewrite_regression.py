@@ -2392,16 +2392,40 @@ def test_plugin_result_contract_invalid_runtime_falls_back_to_static(monkeypatch
 
 
 def test_plugin_contract_lookups_use_executor_resolved_entry_ids():
-    dispatch_source = Path("app/agent_server/channels/user_plugin.py").read_text(
-        encoding="utf-8"
-    )
-    direct_source = Path("app/agent_server/api_runtime.py").read_text(encoding="utf-8")
+    def _assert_resolved_entry_arg(func_node, result_name):
+        target_calls = {
+            "_lookup_llm_result_fields": [],
+            "_resolve_plugin_result_contract": [],
+        }
+        for node in ast.walk(func_node):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in target_calls
+            ):
+                target_calls[node.func.id].append(node)
+        for call_name, calls in target_calls.items():
+            assert len(calls) == 1, f"expected one {call_name} call"
+            entry_arg = calls[0].args[1]
+            assert isinstance(entry_arg, ast.Attribute)
+            assert entry_arg.attr == "entry_id"
+            assert isinstance(entry_arg.value, ast.Name)
+            assert entry_arg.value.id == result_name
 
-    assert "_resolved_entry_id = up_result.entry_id or entry_id" in dispatch_source
-    assert "_resolved_entry_id = res.entry_id or entry_id" in direct_source
-    for source in (dispatch_source, direct_source):
-        assert "_lookup_llm_result_fields(plugin_id, _resolved_entry_id)" in source
-        assert "plugin_id,\n                    _resolved_entry_id," in source
+    _assert_resolved_entry_arg(
+        _get_function_def(
+            "app/agent_server/channels/user_plugin.py",
+            "dispatch",
+        ),
+        "up_result",
+    )
+    _assert_resolved_entry_arg(
+        _get_function_def(
+            "app/agent_server/api_runtime.py",
+            "plugin_execute_direct",
+        ),
+        "res",
+    )
 
 
 def test_callback_instruction_renders_blocked_plugin_result_as_not_executed():

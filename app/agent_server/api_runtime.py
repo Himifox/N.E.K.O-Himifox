@@ -1065,8 +1065,7 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
             try:
                 run_data = res.result.get("run_data") if isinstance(res.result, dict) else None
                 run_error = res.result.get("run_error") if isinstance(res.result, dict) else None
-                _resolved_entry_id = res.entry_id or entry_id
-                _llm_fields = _lookup_llm_result_fields(plugin_id, _resolved_entry_id)
+                _llm_fields = _lookup_llm_result_fields(plugin_id, res.entry_id)
                 _plugin_msg = str(res.result.get("message") or "") if isinstance(res.result, dict) else ""
                 _error_to_pass = (run_error or res.error) if not res.success else None
                 detail = parse_plugin_result(
@@ -1078,7 +1077,7 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
                 _delivery_mode = _resolve_delivery_mode(res.result if isinstance(res.result, dict) else None)
                 _result_kind, _expires_in_s = _resolve_plugin_result_contract(
                     plugin_id,
-                    _resolved_entry_id,
+                    res.entry_id,
                     res.result if isinstance(res.result, dict) else None,
                 )
                 _suppress_reply = _delivery_mode == "silent"
