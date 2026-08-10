@@ -619,6 +619,28 @@ class ProactiveMixin:
                 or extra.get("_callback_delivery_id") not in retracted_ids
             ]
 
+    def _retract_expired_callback_snapshots(
+        self,
+        callbacks: list,
+        *,
+        clear_voice_commit: bool = False,
+    ) -> bool:
+        """Retract expired callbacks that are currently held outside queues."""
+        expired = [
+            cb for cb in callbacks
+            if isinstance(cb, dict) and callback_is_expired(cb)
+        ]
+        if not expired:
+            return False
+        if clear_voice_commit:
+            self._clear_voice_delivery_committed(expired)
+        for cb in expired:
+            resolve_callback_delivery_ack(cb, False)
+            cb[DELIVERY_RETRACTED_KEY] = True
+        self._purge_retracted_agent_callback_extras(expired)
+        self._purge_retracted_agent_callbacks()
+        return True
+
     async def trigger_agent_callbacks(self) -> bool:
         """Proactively deliver pending agent task results via LLM rephrase.
 
@@ -946,6 +968,7 @@ class ProactiveMixin:
                 # same-key callback may have retracted this snapshot while the
                 # await yielded, so re-filter once more before making any media
                 # irreversible.
+                self._retract_expired_callback_snapshots(voice_snapshot)
                 self._retract_stale_coalesced(voice_snapshot)
                 voice_snapshot[:] = [
                     cb for cb in voice_snapshot
@@ -953,6 +976,7 @@ class ProactiveMixin:
                 ]
                 self._purge_retracted_agent_callbacks()
                 if not voice_snapshot:
+                    self.proactive_manager.release_inflight_noop()
                     return False
                 self._mark_voice_delivery_committed(voice_snapshot)
                 voice_commit_snapshot = tuple(voice_snapshot)
@@ -996,6 +1020,10 @@ class ProactiveMixin:
                 # after the commit boundary remain queued for the next turn;
                 # they do not invalidate media already persisted for this one.
                 try:
+                    self._retract_expired_callback_snapshots(
+                        voice_snapshot,
+                        clear_voice_commit=True,
+                    )
                     self._retract_stale_coalesced(voice_snapshot)
                     voice_snapshot[:] = [
                         cb for cb in voice_snapshot
@@ -1014,6 +1042,7 @@ class ProactiveMixin:
                             "[%s] trigger_agent_callbacks: voice proactive callbacks retracted before inject",
                             self.lanlan_name,
                         )
+                        self.proactive_manager.release_inflight_noop()
                         return False
                     instruction = _build_callback_instruction(
                         voice_snapshot,
@@ -1261,6 +1290,7 @@ class ProactiveMixin:
                 # so a newer same-coalesce_key cue enqueued meanwhile could not
                 # retract it via the push-side queue scan.
                 self._retract_stale_coalesced(callbacks_snapshot)
+                self._retract_expired_callback_snapshots(callbacks_snapshot)
                 self._purge_retracted_agent_callback_extras(callbacks_snapshot)
                 active_callbacks = [
                     cb for cb in callbacks_snapshot
@@ -1322,6 +1352,7 @@ class ProactiveMixin:
             # prompt_ephemeral): catches a newer same-coalesce_key cue that
             # landed during the CLAIM/PHASE2 awaits above.
             self._retract_stale_coalesced(active_callbacks)
+            self._retract_expired_callback_snapshots(active_callbacks)
             self._purge_retracted_agent_callback_extras(active_callbacks)
             active_callbacks = [
                 cb for cb in active_callbacks
@@ -1344,29 +1375,6 @@ class ProactiveMixin:
                 callbacks_snapshot[:] = []
                 self.proactive_manager.release_inflight_noop()
                 return False
-            _proactive_images: list = []
-            for _cb in active_callbacks:
-                if isinstance(_cb, dict):
-                    _proactive_images.extend(_cb.get("media_images") or [])
-            # 同 trigger_agent_callbacks：字形要留到 _build_callback_instruction。
-            _lang = normalize_language_code(self.user_language, format='full')
-            instruction = _build_callback_instruction(
-                active_callbacks,
-                lang=_lang,
-                lanlan_name=self.lanlan_name,
-                master_name=self.master_name,
-                passive=False,
-            )
-            ack_resolved = False
-
-            def _resolve_text_delivery_ack(delivered: bool) -> None:
-                nonlocal ack_resolved
-                if ack_resolved:
-                    return
-                ack_resolved = True
-                for cb in active_callbacks:
-                    resolve_callback_delivery_ack(cb, delivered)
-
             # Deep-topic teaser: now committed to opening (passed both re-gates
             # and the preempt check), surface the frontend-only "she has a topic
             # she'd like to bring up" bubble just before the opener streams. One
@@ -1399,6 +1407,57 @@ class ProactiveMixin:
                     callbacks_snapshot[:] = []
                     self.proactive_manager.release_inflight_noop()
                     return False
+
+            # The topic-hint websocket write above is another await after the
+            # earlier snapshot checks. Revalidate expiry at the final text
+            # injection boundary and rebuild media/instruction from survivors.
+            self._retract_expired_callback_snapshots(active_callbacks)
+            active_callbacks = [
+                cb for cb in active_callbacks
+                if not cb.get(DELIVERY_RETRACTED_KEY)
+            ]
+            callbacks_snapshot[:] = active_callbacks
+            if topic_hint_sent and not any(
+                isinstance(cb, dict) and cb.get("channel") == "topic_hook"
+                for cb in active_callbacks
+            ):
+                await self.send_cancel_topic_hint(turn_id=proactive_sid)
+                topic_hint_sent = False
+                # The cancellation write yielded once more; keep the final
+                # injection boundary authoritative for the remaining batch.
+                self._retract_expired_callback_snapshots(active_callbacks)
+                active_callbacks = [
+                    cb for cb in active_callbacks
+                    if not cb.get(DELIVERY_RETRACTED_KEY)
+                ]
+                callbacks_snapshot[:] = active_callbacks
+            if not active_callbacks:
+                if topic_hint_sent:
+                    await self.send_cancel_topic_hint(turn_id=proactive_sid)
+                self.proactive_manager.release_inflight_noop()
+                return False
+            _proactive_images: list = []
+            for _cb in active_callbacks:
+                if isinstance(_cb, dict):
+                    _proactive_images.extend(_cb.get("media_images") or [])
+            # Preserve the full language code until callback rendering.
+            _lang = normalize_language_code(self.user_language, format='full')
+            instruction = _build_callback_instruction(
+                active_callbacks,
+                lang=_lang,
+                lanlan_name=self.lanlan_name,
+                master_name=self.master_name,
+                passive=False,
+            )
+            ack_resolved = False
+
+            def _resolve_text_delivery_ack(delivered: bool) -> None:
+                nonlocal ack_resolved
+                if ack_resolved:
+                    return
+                ack_resolved = True
+                for cb in active_callbacks:
+                    resolve_callback_delivery_ack(cb, delivered)
 
             _sid_token = _proactive_expected_sid.set(proactive_sid)
             # Text-mode playback boundary for the pacing manager: no frontend

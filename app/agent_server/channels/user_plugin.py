@@ -316,7 +316,8 @@ async def dispatch(
                 )
                 run_data = up_result.result.get("run_data") if isinstance(up_result.result, dict) else None
                 run_error = up_result.result.get("run_error") if isinstance(up_result.result, dict) else None
-                _llm_fields = _lookup_llm_result_fields(plugin_id, entry_id)
+                _resolved_entry_id = up_result.entry_id or entry_id
+                _llm_fields = _lookup_llm_result_fields(plugin_id, _resolved_entry_id)
                 _plugin_msg = str(up_result.result.get("message") or "") if isinstance(up_result.result, dict) else ""
                 _error_to_pass = (run_error or up_result.error) if not up_result.success else None
                 detail = parse_plugin_result(
@@ -328,7 +329,7 @@ async def dispatch(
                 up_terminal = _plugin_terminal_status(up_result.success, run_data)
                 _result_kind, _expires_in_s = _resolve_plugin_result_contract(
                     plugin_id,
-                    entry_id,
+                    _resolved_entry_id,
                     up_result.result if isinstance(up_result.result, dict) else None,
                 )
                 # Resolve plugin's declared delivery mode (proactive/passive/silent).

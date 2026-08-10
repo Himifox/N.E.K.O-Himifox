@@ -37,6 +37,7 @@ AND the pre-existing fail-closes — while direct-await tests stayed green.
 its cancel set; ``assert not swap_task.cancelled()`` pins that guard.
 """
 import asyncio
+import time
 
 import pytest
 
@@ -44,6 +45,7 @@ import main_logic.core as core_module
 from main_logic.omni_offline_client import OmniOfflineClient
 from main_logic.omni_realtime_client import OmniRealtimeClient
 from main_logic.proactive_delivery import (
+    CALLBACK_EXPIRES_AT_KEY,
     DELIVERY_ACK_FUTURE_KEY,
     DELIVERY_RETRACTED_KEY,
     SWAP_PRIME_DELIVERY_CLAIM_KEY,
@@ -393,6 +395,28 @@ async def _run_swap_as_final_swap_task(mgr):
         # report the regression instead of the test erroring out.
         pass
     return task
+
+
+@pytest.mark.asyncio
+async def test_final_swap_drops_expired_orphan_extra_before_render():
+    """An orphan voice mirror expiring during warm-up is never primed."""
+    mgr = _make_swap_manager()
+    old_session = _FakeSession("old")
+    new_session = _FakeSession("pending")
+    mgr.session = old_session
+    mgr.pending_session = new_session
+    mgr.is_hot_swap_imminent = True
+    mgr.message_handler_task = None
+    extra = _extra_entry("id-expired", "stale event")
+    extra[CALLBACK_EXPIRES_AT_KEY] = time.monotonic() - 1
+    mgr.pending_extra_replies = [extra]
+
+    swap_task = await _run_swap_as_final_swap_task(mgr)
+
+    assert not swap_task.cancelled()
+    assert mgr.pending_extra_replies == []
+    assert new_session.prime_calls
+    assert all("stale event" not in text for text, _skipped in new_session.prime_calls)
 
 
 def _passive_callback(summary, *, coalesce_key=""):

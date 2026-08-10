@@ -2391,6 +2391,19 @@ def test_plugin_result_contract_invalid_runtime_falls_back_to_static(monkeypatch
     )
 
 
+def test_plugin_contract_lookups_use_executor_resolved_entry_ids():
+    dispatch_source = Path("app/agent_server/channels/user_plugin.py").read_text(
+        encoding="utf-8"
+    )
+    direct_source = Path("app/agent_server/api_runtime.py").read_text(encoding="utf-8")
+
+    assert "_resolved_entry_id = up_result.entry_id or entry_id" in dispatch_source
+    assert "_resolved_entry_id = res.entry_id or entry_id" in direct_source
+    for source in (dispatch_source, direct_source):
+        assert "_lookup_llm_result_fields(plugin_id, _resolved_entry_id)" in source
+        assert "plugin_id,\n                    _resolved_entry_id," in source
+
+
 def test_callback_instruction_renders_blocked_plugin_result_as_not_executed():
     from main_logic.core import _build_callback_instruction
 

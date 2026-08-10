@@ -3,19 +3,18 @@
 The host derives ``origin`` from upstream ``event_type`` plus the validated
 user-plugin result-kind contract:
 - ``event_type == "task_result"`` (agent_server._emit_task_result):
-  real task completion → ``origin="task_result"`` → TASK_* templates
-  ("任务已完成，请汇报" semantics).
+  real task completion → ``origin="task_result"`` → TASK_* reporting templates.
 - ``event_type == "proactive_message"`` (proactive_bridge from
-  plugin push_message): event stream → ``origin="event"`` → EVENT_*
-  templates ("新消息，请回应" semantics; **no** "任务"/"汇报" wording).
+  plugin push_message): event stream → ``origin="event"`` → neutral EVENT_*
+  response templates without task-completion wording.
 
 Plugin authors cannot set ``origin`` directly. A successful user-plugin entry
 may only downgrade its task result to neutral event wording.
 
 These tests pin both the active/passive split and the cross-axis
 guarantees:
-- TASK ACTIVE renders status_phrase + action_phrase ("已完成 / 汇报").
-- EVENT ACTIVE renders neutral wording with no "任务"/"汇报".
+- TASK ACTIVE renders status and reporting phrases.
+- EVENT ACTIVE renders neutral wording without task-reporting phrases.
 - Missing origin silently falls back to "event" (pre-migration compat).
 - Explicitly unknown origin values fall back to "event" + warn (signals
   a typo or a producer using an unsupported value, worth surfacing).
