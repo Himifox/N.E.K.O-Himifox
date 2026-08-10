@@ -23,13 +23,15 @@ from typing import Any
 
 from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
+from main_logic.music_command_parser import (
+    is_strict_music_cancellation,
+    parse_strict_music_command,
+)
 from main_logic.proactive_delivery import DELIVERY_RETRACTED_KEY
 from main_logic.music_requests import (
     MusicRequest,
     fetch_music_request,
-    is_explicit_music_cancellation,
     mark_music_request_query,
-    parse_explicit_user_music_request,
 )
 from utils.logger_config import get_module_logger
 
@@ -66,9 +68,9 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     if manager is None:
         return
     content = str(event.get("content") or "")
-    request = parse_explicit_user_music_request(content)
+    request = parse_strict_music_command(content)
     if request is None:
-        if is_explicit_music_cancellation(content):
+        if is_strict_music_cancellation(content):
             previous_task = getattr(manager, "_music_request_task", None)
             if previous_task is not None and not previous_task.done():
                 previous_task.cancel()

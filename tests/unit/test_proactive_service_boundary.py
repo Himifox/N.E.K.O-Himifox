@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config import APP_NAME
-from main_logic import music_playback, music_requests
+from main_logic import music_command_parser, music_playback, music_requests
 from main_logic.proactive_chat import (
     break_reminders,
     contracts,
@@ -411,6 +411,72 @@ def test_parse_explicit_user_music_request(
     assert request.song_artist == artist
     assert request.playlist_name == playlist
     assert request.personalization_source == source
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    (
+        ("播放晴天", music_requests.MusicRequest(keyword="晴天")),
+        (
+            "请帮我播放《晴天》",
+            music_requests.MusicRequest(keyword="晴天", song_name="晴天"),
+        ),
+        (
+            "放一首周杰伦的稻香",
+            music_requests.MusicRequest(
+                keyword="稻香 周杰伦",
+                song_name="稻香",
+                song_artist="周杰伦",
+            ),
+        ),
+        ("播放我的红心歌单", music_requests.MusicRequest(personalization_source="liked")),
+        ("播放网易云的日推", music_requests.MusicRequest(personalization_source="daily")),
+        (
+            "Could you please play Yellow by Coldplay?",
+            music_requests.MusicRequest(
+                keyword="Yellow Coldplay",
+                song_name="Yellow",
+                song_artist="Coldplay",
+            ),
+        ),
+    ),
+)
+def test_strict_music_commands_are_recognized(text, expected) -> None:
+    assert music_command_parser.parse_strict_music_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "我想听晴天",
+        "有点想听晴天",
+        "来点摇滚",
+        "推荐几首适合写代码的歌",
+        "给我整点能提神的",
+        "我今天心情不好",
+        "你觉得晴天这首歌怎么样？",
+        "播放一下视频",
+        "播放按钮换个颜色",
+    ),
+)
+def test_ambiguous_music_language_is_not_an_immediate_command(text) -> None:
+    assert music_command_parser.parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("停止播放", "请暂停音乐", "关掉音乐", "别再放歌", "pause playback"),
+)
+def test_strict_music_stop_commands_are_recognized(text) -> None:
+    assert music_command_parser.is_strict_music_cancellation(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("我想停止播放吗？", "停止讨论音乐", "取消收藏这首歌", "不要推荐音乐"),
+)
+def test_ambiguous_or_non_playback_stop_language_is_rejected(text) -> None:
+    assert music_command_parser.is_strict_music_cancellation(text) is False
 
 
 @pytest.mark.parametrize(
