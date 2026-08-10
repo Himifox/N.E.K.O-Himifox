@@ -115,3 +115,83 @@ def test_non_strict_requests_are_left_for_the_model_tool(
 ) -> None:
     assert parse_strict_music_command(simplified) is None
     assert parse_strict_music_command(traditional) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "播放我的歌",
+        "播放你的晴天",
+        "放假",
+        "放大一点",
+        "play with me",
+        "play with us",
+    ),
+)
+def test_ambiguous_or_non_music_play_phrases_fail_closed(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "song", "artist"),
+    (
+        ("播放周杰伦的晴天这首歌", "晴天", "周杰伦"),
+        ("播放周杰伦的晴天歌曲", "晴天", "周杰伦"),
+        ("play the song Yellow by Coldplay", "Yellow", "Coldplay"),
+    ),
+)
+def test_explicit_song_wrappers_are_removed(
+    text: str,
+    song: str,
+    artist: str,
+) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.song_name == song
+    assert request.song_artist == artist
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("play me a song", "play some music for me", "play music for us"),
+)
+def test_generic_english_recipient_phrases_do_not_become_searches(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "play favorites",
+        "play my favourites",
+        "play a song from my liked songs",
+    ),
+)
+def test_english_liked_aliases_are_personalized(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "liked"
+
+
+def test_english_playlist_source_wrapper_is_not_part_of_the_name() -> None:
+    request = parse_strict_music_command("play a song from my Night Loop playlist")
+    assert request is not None
+    assert request.playlist_name == "Night Loop"
+
+
+def test_generic_song_by_artist_becomes_an_artist_request() -> None:
+    request = parse_strict_music_command("play a song by Coldplay")
+    assert request is not None
+    assert request.song_name == ""
+    assert request.song_artist == "Coldplay"
+
+
+@pytest.mark.parametrize("text", ("取消播放音乐", "不要再听歌了", "不要再聽歌了"))
+def test_additional_direct_stop_phrases_are_recognized(text: str) -> None:
+    assert is_strict_music_cancellation(text) is True
+
+
+def test_non_music_cancel_phrase_is_not_a_music_stop() -> None:
+    assert is_strict_music_cancellation("取消收藏这首歌") is False

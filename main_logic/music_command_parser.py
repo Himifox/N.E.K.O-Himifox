@@ -15,14 +15,17 @@ from main_logic.music_requests import MusicRequest
 _ZH_PREFIX = r"(?:(?:请|請|麻烦|麻煩)\s*)?(?:(?:帮|幫|给|給)我\s*)?"
 _ZH_PLAY_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}"
-    r"(?P<action>播放(?:一下|下|一首|首)?|放(?:一首|首)?|[听聽](?:一首|首)|[来來](?:一首|首))"
+    r"(?P<action>播放(?:一下|下|一首|首)?|放(?:一首|首)|"
+    r"放(?=\s*(?:音乐|音樂|歌曲?|歌|[《「『【]))|"
+    r"[听聽](?:一首|首)|[来來](?:一首|首))"
     r"\s*(?P<target>.{1,80}?)(?:吧|啊|呀|哦|喔)?$"
 )
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
     r"(?:停止|停掉|暂停|暫停)(?:播放|音乐|音樂|歌曲?|歌|当前音乐|當前音樂)"
     r"|(?:关掉|關掉|关闭|關閉)(?:音乐|音樂|歌曲?|歌)"
-    r"|(?:不要|别|別)(?:再)?(?:播放|放|播)(?:音乐|音樂|歌曲?|歌)?"
+    r"|取消(?:播放)?(?:音乐|音樂|歌曲?|歌)"
+    r"|(?:不要|别|別)(?:再)?(?:播放|放|播|听|聽)(?:音乐|音樂|歌曲?|歌)?"
     r")(?:了|吧)?$"
 )
 _ZH_NON_MUSIC_TARGET = re.compile(
@@ -45,8 +48,9 @@ _EN_STOP_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _EN_NON_MUSIC_TARGET = re.compile(
-    r"^(?:(?:a|an|the|this|that|some)\s+)?"
-    r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?)\b",
+    r"^(?:(?:(?:a|an|the|this|that|some)\s+)?"
+    r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?)|"
+    r"(?:with|along|around|outside|inside)\b)",
     re.IGNORECASE,
 )
 _EN_SECOND_COMMAND = re.compile(
@@ -58,6 +62,12 @@ _EN_SECOND_COMMAND = re.compile(
 _TRAILING_STATEMENT_MARKS = "。.!！"
 _CLAUSE_MARKS = frozenset("，,；;、")
 _ZH_QUOTES = (("《", "》"), ("「", "」"), ("『", "』"), ("【", "】"))
+_ZH_AMBIGUOUS_ARTISTS = frozenset(
+    {
+        "我", "你", "他", "她", "它", "我们", "我們", "你们", "你們",
+        "他们", "他們", "她们", "她們", "它们", "它們", "自己", "本人",
+    }
+)
 
 
 def _normalize_command(text: str, *, allow_polite_question: bool = False) -> str:
@@ -77,6 +87,10 @@ def _normalize_command(text: str, *, allow_polite_question: bool = False) -> str
 
 def _strip_target(value: str) -> str:
     return value.strip(" \t'\"“”‘’《》「」『』【】")
+
+
+def _strip_zh_song_suffix(value: str) -> str:
+    return re.sub(r"(?:这首歌曲|這首歌曲|这首歌|這首歌|歌曲)$", "", value).rstrip()
 
 
 def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
@@ -128,12 +142,18 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
     artist_music = re.fullmatch(r"(.{1,40}?)的(?:歌|歌曲|音乐|音樂)", target)
     if artist_music:
         artist = _strip_target(artist_music.group(1))
+        if artist in _ZH_AMBIGUOUS_ARTISTS:
+            return None
         return MusicRequest(keyword=artist, song_artist=artist)
 
     artist_song = re.fullmatch(r"(.{1,30}?)的(.{1,60})", target)
     if artist_song:
         artist = _strip_target(artist_song.group(1))
-        song = _strip_target(artist_song.group(2))
+        if artist in _ZH_AMBIGUOUS_ARTISTS:
+            return None
+        song = _strip_target(_strip_zh_song_suffix(artist_song.group(2)))
+        if not song:
+            return None
         return MusicRequest(
             keyword=f"{song} {artist}",
             song_name=song,
@@ -149,15 +169,34 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     target = _strip_target(target)
     if not target or _EN_NON_MUSIC_TARGET.search(target):
         return None
-    folded = target.casefold()
-    if folded in {"music", "some music", "a song", "any song", "songs", "something"}:
+    if re.fullmatch(
+        r"(?:(?:me|us)\s+)?(?:music|some music|a song|any song|songs?|something)"
+        r"(?:\s+for\s+(?:me|us))?",
+        target,
+        re.IGNORECASE,
+    ):
         return MusicRequest()
-    if folded in {"my liked songs", "liked songs", "my favorites", "my favourite songs"}:
+    if re.fullmatch(
+        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
+        r"(?:liked songs?|favorites?|favourites?|favorite songs?|favourite songs?)",
+        target,
+        re.IGNORECASE,
+    ):
         return MusicRequest(personalization_source="liked")
-    if folded in {"my daily mix", "daily mix", "daily recommendations"}:
+    if re.fullmatch(
+        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
+        r"(?:daily mix|daily recommendations?)",
+        target,
+        re.IGNORECASE,
+    ):
         return MusicRequest(personalization_source="daily")
 
-    playlist = re.fullmatch(r"(?:my\s+)?(.{1,60}?)\s+playlist", target, re.IGNORECASE)
+    playlist = re.fullmatch(
+        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
+        r"(.{1,60}?)\s+playlist",
+        target,
+        re.IGNORECASE,
+    )
     if playlist:
         return MusicRequest(playlist_name=_strip_target(playlist.group(1)))
 
@@ -165,6 +204,9 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     if by_artist:
         song = _strip_target(by_artist.group(1))
         artist = _strip_target(by_artist.group(2))
+        if song.casefold() in {"song", "a song", "the song"}:
+            return MusicRequest(keyword=artist, song_artist=artist)
+        song = re.sub(r"^(?:a|the)\s+song\s+", "", song, flags=re.IGNORECASE)
         return MusicRequest(
             keyword=f"{song} {artist}",
             song_name=song,
