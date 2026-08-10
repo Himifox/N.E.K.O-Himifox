@@ -109,6 +109,7 @@ from .api_shared import (  # noqa: F401
     _redact_cancelled_user_turns,
     _repo_root,
     _resolve_delivery_mode,
+    _resolve_plugin_result_contract,
     _resolve_openclaw_sender_id,
     _rewire_computer_use_dependents,
     _rp_lang,
@@ -1074,6 +1075,11 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
                     error=_error_to_pass,
                 )
                 _delivery_mode = _resolve_delivery_mode(res.result if isinstance(res.result, dict) else None)
+                _result_kind, _expires_in_s = _resolve_plugin_result_contract(
+                    plugin_id,
+                    entry_id,
+                    res.result if isinstance(res.result, dict) else None,
+                )
                 _suppress_reply = _delivery_mode == "silent"
                 _terminal_status = _plugin_terminal_status(res.success, run_data)
                 info["status"] = _terminal_status
@@ -1113,6 +1119,8 @@ async def plugin_execute_direct(payload: Dict[str, Any]):
                         source_kind="plugin",
                         source_name=display_id,
                         delivery_mode=_delivery_mode,
+                        result_kind=_result_kind if _completed else "task_result",
+                        expires_in_s=_expires_in_s if _completed else None,
                     )
                 elif not _completed:
                     info["error"] = _tt((detail or str(res.error or "")), TASK_ERROR_MAX_TOKENS)

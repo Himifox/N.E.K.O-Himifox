@@ -30,9 +30,11 @@ from main_logic.omni_offline_client import OmniOfflineClient
 from utils.llm_client import AIMessage
 from main_logic.session_state import SessionEvent, ProactivePhase
 from main_logic.proactive_delivery import (
+    CALLBACK_EXPIRES_AT_KEY,
     DELIVERY_RETRACTED_KEY,
     SWAP_PRIME_DELIVERY_CLAIM_KEY,
     VOICE_DELIVERY_COMMITTED_KEY,
+    callback_is_expired,
     resolve_callback_delivery_ack,
 )
 from config import ANTI_REPEAT_EXEMPT_SOURCE_TAGS
@@ -553,9 +555,15 @@ class ProactiveMixin:
         return True
 
     def _purge_retracted_agent_callbacks(self) -> None:
-        callbacks = getattr(self, "pending_agent_callbacks", None)
-        if not callbacks:
-            return
+        callbacks = getattr(self, "pending_agent_callbacks", None) or []
+        for cb in callbacks:
+            if (
+                callback_is_expired(cb)
+                and not cb.get(VOICE_DELIVERY_COMMITTED_KEY)
+                and not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            ):
+                resolve_callback_delivery_ack(cb, False)
+                cb[DELIVERY_RETRACTED_KEY] = True
         purgeable = [
             cb for cb in callbacks
             if cb.get(DELIVERY_RETRACTED_KEY)
@@ -564,8 +572,6 @@ class ProactiveMixin:
                 or cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
             )
         ]
-        if not purgeable:
-            return
         purgeable_obj_ids = {id(cb) for cb in purgeable}
         retracted_ids = {
             cb.get("_callback_delivery_id")
@@ -574,16 +580,26 @@ class ProactiveMixin:
         }
         for cb in purgeable:
             resolve_callback_delivery_ack(cb, False)
-        self.pending_agent_callbacks = [
-            cb for cb in callbacks
-            if id(cb) not in purgeable_obj_ids
-        ]
+        if purgeable_obj_ids:
+            self.pending_agent_callbacks = [
+                cb for cb in callbacks
+                if id(cb) not in purgeable_obj_ids
+            ]
         if retracted_ids:
             self.pending_extra_replies = [
                 extra for extra in self.pending_extra_replies
                 if not isinstance(extra, dict)
                 or extra.get("_callback_delivery_id") not in retracted_ids
             ]
+        # The callback side may already have been drained while its voice
+        # hot-swap mirror remains. Expire those orphan mirrors independently.
+        self.pending_extra_replies = [
+            extra for extra in self.pending_extra_replies
+            if not isinstance(extra, dict)
+            or extra.get(VOICE_DELIVERY_COMMITTED_KEY)
+            or extra.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            or not callback_is_expired(extra)
+        ]
 
     def _purge_retracted_agent_callback_extras(self, callbacks: list) -> None:
         retracted_ids = {
@@ -1688,7 +1704,45 @@ class ProactiveMixin:
         legacy "several near-simultaneous cues batched into one turn"
         behaviour (the manager only governs WHEN the batch is released, not
         how many cues per turn)."""
-        callbacks = [cb for cb in callbacks if not cb.get(DELIVERY_RETRACTED_KEY)]
+        ready = []
+        for cb in callbacks:
+            if cb.get(DELIVERY_RETRACTED_KEY):
+                continue
+            if callback_is_expired(cb):
+                resolve_callback_delivery_ack(cb, False)
+                continue
+            ready.append(cb)
+        callbacks = ready
+        terminal_task_ids = {
+            str(cb.get("task_id") or "")
+            for cb in callbacks
+            if cb.get("origin") == "task_result"
+            and cb.get("status") in {
+                "completed", "partial", "blocked", "failed", "cancelled"
+            }
+            and str(cb.get("task_id") or "")
+        }
+        if terminal_task_ids:
+            kept = []
+            dropped_receipts = 0
+            for cb in callbacks:
+                is_obsolete_receipt = (
+                    cb.get("origin") == "event"
+                    and cb.get("channel") == "user_plugin"
+                    and str(cb.get("task_id") or "") in terminal_task_ids
+                )
+                if is_obsolete_receipt:
+                    resolve_callback_delivery_ack(cb, False)
+                    dropped_receipts += 1
+                else:
+                    kept.append(cb)
+            callbacks = kept
+            if dropped_receipts:
+                logger.info(
+                    "[%s] dropped %d stale user-plugin receipt(s) shadowed by terminal task results",
+                    self.lanlan_name,
+                    dropped_receipts,
+                )
         # Topic hooks re-validate the delivery gate at RELEASE: the submit-time
         # check in trigger_topic_hook_once can go stale while the manager paces
         # the cue (min-gap / playback). If the user has since moved into a
@@ -2447,6 +2501,7 @@ class ProactiveMixin:
                     # drained, and only when the incoming cue is actually newer.
                     "coalesce_key": new_key,
                     "_coalesce_submit_seq": callback.get("_coalesce_submit_seq"),
+                    CALLBACK_EXPIRES_AT_KEY: callback.get(CALLBACK_EXPIRES_AT_KEY),
                     "origin": origin,
                     "summary": summary,
                     "detail": detail,

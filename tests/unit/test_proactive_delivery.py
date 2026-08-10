@@ -8,6 +8,7 @@ turn), min-gap pacing, and drain-on-teardown (cues are handed back, never
 silently dropped).
 """
 import asyncio
+import time
 
 import pytest
 
@@ -15,6 +16,7 @@ import main_logic.core as core_module
 from main_logic.proactive_delivery import (
     DELIVERY_ACK_FUTURE_KEY,
     DELIVERY_RETRACTED_KEY,
+    CALLBACK_EXPIRES_AT_KEY,
     ProactiveDeliveryManager,
     SWAP_PRIME_DELIVERY_CLAIM_KEY,
     VOICE_DELIVERY_COMMITTED_KEY,
@@ -296,6 +298,44 @@ async def test_stale_cue_dropped_by_ttl():
     mgr.on_playback_end()
     await _settle()
     assert delivered == []          # dropped as stale, never spoken
+
+
+async def test_per_callback_expiry_drops_before_release_and_acks_false():
+    delivered = []
+    mgr = _make(delivered, ttl_s=0)
+    mgr.on_playback_start()
+    future = asyncio.get_running_loop().create_future()
+    mgr.submit(
+        {
+            "id": "expired",
+            CALLBACK_EXPIRES_AT_KEY: time.monotonic() - 1,
+            DELIVERY_ACK_FUTURE_KEY: future,
+        },
+        priority=1,
+    )
+    mgr.on_playback_end()
+    await _settle()
+
+    assert delivered == []
+    assert future.done() and future.result() is False
+
+
+def test_drain_pending_drops_expired_callback():
+    delivered = []
+    mgr = _make(delivered, ttl_s=0)
+    mgr.on_playback_start()
+    future = _FakeAckFuture()
+    mgr.submit(
+        {
+            "id": "expired",
+            CALLBACK_EXPIRES_AT_KEY: time.monotonic() - 1,
+            DELIVERY_ACK_FUTURE_KEY: future,
+        },
+        priority=1,
+    )
+
+    assert mgr.drain_pending() == []
+    assert future.done() and future.result is False
 
 
 # ── enqueue_agent_callback path (passive / ai_behavior="read") ────────────────
@@ -699,6 +739,61 @@ async def test_deliver_batch_releases_inflight_when_all_superseded():
     assert released == [True]   # inflight slot freed immediately
     assert triggered == []      # no pointless trigger for an empty batch
     assert [c["summary"] for c in mgr.pending_agent_callbacks] == ["newer read"]
+
+
+async def test_deliver_batch_drops_receipt_shadowed_by_terminal_task_result():
+    mgr = _make_session_mgr()
+    triggered = []
+
+    class _MgrStub:
+        def release_inflight_noop(self):
+            raise AssertionError("terminal task result should still be delivered")
+
+    mgr.proactive_manager = _MgrStub()
+    mgr._topic_hook_release_allowed = lambda cb: True
+
+    async def _fake_trigger():
+        triggered.append(True)
+        return True
+
+    mgr.trigger_agent_callbacks = _fake_trigger
+    receipt_ack = _FakeAckFuture()
+    receipt = _proactive_cb(
+        "started",
+        task_id="task-1",
+        channel="user_plugin",
+        **{DELIVERY_ACK_FUTURE_KEY: receipt_ack},
+    )
+    terminal = _proactive_cb(
+        "finished",
+        task_id="task-1",
+        channel="user_plugin",
+        origin="task_result",
+    )
+
+    await core_module.LLMSessionManager._deliver_proactive_batch(
+        mgr, [terminal, receipt]
+    )
+
+    assert receipt_ack.done() and receipt_ack.result is False
+    assert [cb["summary"] for cb in mgr.pending_agent_callbacks] == ["finished"]
+    assert triggered == [True]
+
+
+def test_passive_drain_drops_expired_callback_and_voice_mirror():
+    mgr = _make_session_mgr()
+    callback = _proactive_cb(
+        "old status",
+        **{CALLBACK_EXPIRES_AT_KEY: time.monotonic() - 1},
+    )
+    future = _FakeAckFuture()
+    callback[DELIVERY_ACK_FUTURE_KEY] = future
+    mgr.enqueue_agent_callback(callback)
+
+    assert core_module.LLMSessionManager.drain_agent_callbacks_for_llm(mgr) == ""
+    assert future.done() and future.result is False
+    assert mgr.pending_agent_callbacks == []
+    assert mgr.pending_extra_replies == []
 
 
 def test_drain_skips_read_superseded_by_manager_held_respond():
