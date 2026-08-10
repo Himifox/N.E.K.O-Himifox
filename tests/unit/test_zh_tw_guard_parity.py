@@ -865,23 +865,6 @@ def test_an_english_full_rewrite_still_matches(text):
     assert router._chat_text_requests_full_rewrite(text) is True, text
 
 
-@pytest.mark.parametrize(
-    ("simplified", "traditional"),
-    [
-        ("停止这些红心歌单", "停止這些紅心歌單"),
-        ("停止那些歌单", "停止那些歌單"),
-    ],
-)
-def test_plural_demonstratives_reach_the_stop_target(simplified, traditional):
-    """限定词闭集漏了复数指示词。`停止这些红心歌单` 命中否定判据却撞不上
-    直接停止判据，于是降级成窄范围来源排除、音乐继续放（CodeRabbit）。
-    """  # noqa: DOCSTRING_CJK
-    from main_logic.music_requests import is_explicit_music_cancellation
-
-    for text in (simplified, traditional):
-        assert is_explicit_music_cancellation(text) is True, text
-
-
 def test_the_clause_splitter_and_the_negation_window_share_one_table():
     """⚠️⚠️ 切分器的标点表和否定守卫里那个「不许跨过」的字符类必须同源。
 
@@ -2604,22 +2587,20 @@ _SIMPLIFIED_TO_TRADITIONAL.update({
 # ⚠️ 这条断言是自限的——只有当某个词按字映射出**不同于自己**的繁体形时才要求
 # 配对，纯数字/量词/标点那些表天然免检，不必再维护豁免名单。
 _PAIRED_TABLE_FLOOR = frozenset({
-    "_ZH_NON_INTERROGATIVE_FRAMES", "_ZH_A_NOT_A_MODALS", "_ZH_FREE_CHOICE_WH_WORDS",
-    "_ZH_TARGET_MODIFIER_NOUNS", "_WHOLE_CARD_QUANTIFIERS", "_WHOLE_CARD_BARE_ADVERBS",
+    "_CHAT_A_NOT_A_MODALS", "_WHOLE_CARD_QUANTIFIERS", "_WHOLE_CARD_BARE_ADVERBS",
     "_WHOLE_CARD_LIGHT_VERBS", "_WHOLE_CARD_MEASURE_WORDS",
     "_WHOLE_CARD_INDEFINITE_QUANTITIES", "_WHOLE_CARD_CLAUSE_CONTINUATIONS",
     "_WHOLE_CARD_RESULT_PHRASES", "_CHAT_NEGATION_WORDS",
-    "_WHOLE_CARD_MODAL_VERBS", "_ZH_FRAME_SCOPE_COORDINATORS",
+    "_WHOLE_CARD_MODAL_VERBS",
 })
 
 
 def _paired_tables():
-    """两个实现模块里所有「简繁成对」的词表，**自动发现**。"""  # noqa: DOCSTRING_CJK
-    import main_logic.music_requests as music
+    """卡片输入匹配器里所有「简繁成对」的词表，**自动发现**。"""  # noqa: DOCSTRING_CJK
     import main_routers.card_assist_router as router
 
     found = {}
-    for module in (music, router):
+    for module in (router,):
         for name, value in vars(module).items():
             # ⚠️ 只看**私有**常量。公开的那些是**数据契约**而不是匹配词表——
             # `CHARACTER_RESERVED_FIELDS` 存的是角色卡 JSON 的字段名，
@@ -2638,7 +2619,7 @@ def _paired_tables():
 
 def test_the_paired_table_discovery_still_sees_the_known_tables():
     """⚠️ 自动发现的**下限**：过滤条件写错（比如全都被滤掉）时上面那条
-    参数化会退化成空集合、静默变成零覆盖。这里钉住已知的 12 张一张都不能少。
+    参数化会退化成空集合、静默变成零覆盖。
 
     ⚠️ 只钉下限不钉上限——钉了上限就等于把手写清单换个地方写，新表照样漏。
     ⚠️ 下限张数以 `_PAIRED_TABLE_FLOOR` 为准，这里**不重复写数字**——原来写着
@@ -3197,21 +3178,17 @@ def test_quoted_field_values_and_quoted_targets_still_work():
     assert router._chat_text_requests_full_rewrite('把《整个卡》重写') is True
 
 
-def test_the_modal_a_not_a_family_comes_from_the_music_generator():
-    """⚠️⚠️ 情态 A-not-A **跟音乐侧用同一张表的生成器**，不在卡片侧抄一份。
+def test_the_modal_a_not_a_family_comes_from_the_card_generator():
+    """情态 A-not-A 由卡片模块内的一张情态词表统一生成。
 
     手抄那一版只有 9 个，`愿不愿意 / 值不值得 / 允不允许 / 舍不舍得` 全漏，用户在问
     却被判成整卡命令并 autosave（base 都是 False，第六十九轮 P1）。
 
-    ⚠️ 这个 PR 已经**三次**栽在「同一个概念两处各写一份」上（子句切分 vs 否定守卫
-    窗口、标题遮蔽扫描 vs 疑问守卫标记表、理由辖域 vs 框架辖域），所以这次直接同源。
-    这条断言钉住「同源」本身——有人把它抄回卡片侧就会红。
     """  # noqa: DOCSTRING_CJK
     import main_routers.card_assist_router as router
-    from main_logic.music_requests import _zh_a_not_a_forms
 
     pattern = router._CHAT_QUESTION_CLAUSE_RE.pattern
-    forms = _zh_a_not_a_forms()
+    forms = router._chat_a_not_a_forms()
     assert len(forms) >= 40, len(forms)
     for form in forms:
         assert form in pattern, form

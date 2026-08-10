@@ -37,7 +37,7 @@ _EN_PLAY_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _EN_STOP_COMMAND = re.compile(
-    r"^(?:(?:please\s+)?(?:stop|pause|cancel)\s+(?:the\s+)?"
+    r"^(?:(?:please\s+)?(?:stop|pause|cancel)\s+(?:(?:this|that|the)\s+)?"
     r"(?:music|playback|songs?|tracks?)"
     r"|(?:please\s+)?(?:turn|shut)\s+off\s+(?:the\s+)?(?:music|playback)"
     r"|(?:please\s+)?(?:do\s+not|don't|don’t|dont)\s+play\s+"
@@ -47,6 +47,11 @@ _EN_STOP_COMMAND = re.compile(
 _EN_NON_MUSIC_TARGET = re.compile(
     r"^(?:(?:a|an|the|this|that|some)\s+)?"
     r"(?:games?|videos?|movies?|films?|shows?|podcasts?|audiobooks?)\b",
+    re.IGNORECASE,
+)
+_EN_SECOND_COMMAND = re.compile(
+    r"(?:[.!]\s+|\b(?:and|but)\s+)"
+    r"(?:please\s+)?(?:(?:do\s+not|don't|don’t|dont)\s+play|stop|pause|cancel)\b",
     re.IGNORECASE,
 )
 
@@ -177,7 +182,7 @@ def parse_strict_music_command(text: str) -> MusicRequest | None:
             return _parse_zh_target(match.group("action"), match.group("target"))
 
     normalized = _normalize_command(text, allow_polite_question=True)
-    if not normalized:
+    if not normalized or _EN_SECOND_COMMAND.search(normalized):
         return None
     match = _EN_PLAY_COMMAND.fullmatch(normalized)
     if not match:

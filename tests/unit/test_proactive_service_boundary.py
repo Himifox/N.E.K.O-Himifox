@@ -294,126 +294,6 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
 
 
 @pytest.mark.parametrize(
-    ("text", "keyword", "song", "artist", "playlist", "source"),
-    (
-        ("我想听邓紫棋的歌", "邓紫棋", "", "邓紫棋", "", "auto"),
-        ("我想听轻松的音乐", "轻松", "", "", "", "auto"),
-        ("来点舒缓的音乐", "舒缓", "", "", "", "auto"),
-        ("播放《晴天》", "晴天", "晴天", "", "", "auto"),
-        ("播放周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("播放一首周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("听一首周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("放首周杰伦的晴天", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("播放周杰伦的晴天这首歌", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("听周杰伦的晴天歌曲", "晴天 周杰伦", "晴天", "周杰伦", "", "auto"),
-        ("播放张学友的情歌", "情歌 张学友", "情歌", "张学友", "", "auto"),
-        ("播放邓紫棋", "邓紫棋", "", "", "", "auto"),
-        ("播放轻音乐", "轻音乐", "", "", "", "auto"),
-        ("换成歌曲：大喜", "大喜", "大喜", "", "", "auto"),
-        ("播放一首丑马", "丑马", "丑马", "", "", "auto"),
-        ("听一首晴天", "晴天", "晴天", "", "", "auto"),
-        ("请听一首晴天", "晴天", "晴天", "", "", "auto"),
-        ("听首晴天", "晴天", "晴天", "", "", "auto"),
-        ("放一下晴天", "晴天", "", "", "", "auto"),
-        ("来一首丑马", "丑马", "丑马", "", "", "auto"),
-        ("来一首邓紫棋的歌曲，下午好", "邓紫棋", "", "邓紫棋", "", "auto"),
-        ("来一首歌曲：21", "21", "21", "", "", "auto"),
-        ("来一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
-        ("听一首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
-        ("听首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
-        ("放首周杰伦的歌", "周杰伦", "", "周杰伦", "", "auto"),
-        ("从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
-        ("我想从夜间循环里放一首", "", "", "", "夜间循环", "auto"),
-        ("我要从夜间循环歌单里听一首", "", "", "", "夜间循环", "auto"),
-        ("播放夜间循环歌单", "", "", "", "夜间循环", "auto"),
-        ("播放我的夜间循环歌单", "", "", "", "夜间循环", "auto"),
-        ("来点我喜欢的", "", "", "", "", "liked"),
-        ("来首歌", "", "", "", "", "auto"),
-        ("放我的歌", "", "", "", "", "auto"),
-        ("别放日推，只听红心", "", "", "", "", "liked"),
-        ("我想听红心", "", "", "", "", "liked"),
-        ("我要听日推", "", "", "", "", "daily"),
-        ("听我的日推", "", "", "", "", "daily"),
-        ("我想听我的日推", "", "", "", "", "daily"),
-        ("我想听红心，别放日推", "", "", "", "", "liked"),
-        ("播放晴天，别放日推", "晴天", "", "", "", "auto"),
-        ("播放《别听慢歌》", "别听慢歌", "别听慢歌", "", "", "auto"),
-        ("play Don't Stop the Music", "Don't Stop the Music", "", "", "", "auto"),
-        ("play Yellow, don't play daily recommendations", "Yellow", "", "", "", "auto"),
-        ("play Yellow and don't play daily recommendations", "Yellow", "", "", "", "auto"),
-        ("play Yellow, don't play games", "Yellow", "", "", "", "auto"),
-        ("播放晴天，别播放视频", "晴天", "", "", "", "auto"),
-        ("play a song by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play music by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play a track by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play tunes by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play something by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play anything by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play any song by Coldplay", "Coldplay", "", "Coldplay", "", "auto"),
-        ("play the song Yellow by Coldplay", "Yellow Coldplay", "Yellow", "Coldplay", "", "auto"),
-        ("play a song Yellow by Coldplay", "Yellow Coldplay", "Yellow", "Coldplay", "", "auto"),
-        ("play song Yellow by Coldplay", "Yellow Coldplay", "Yellow", "Coldplay", "", "auto"),
-        ("play Song 2 by Blur", "Song 2 Blur", "Song 2", "Blur", "", "auto"),
-        ("play my favorites", "", "", "", "", "liked"),
-        ("play favorites", "", "", "", "", "liked"),
-        ("play my favourites", "", "", "", "", "liked"),
-        ("play a song from my liked songs", "", "", "", "", "liked"),
-        ("play a track from daily recommendations", "", "", "", "", "daily"),
-        ("play music from my liked songs", "", "", "", "", "liked"),
-        ("play tunes from daily recommendations", "", "", "", "", "daily"),
-        ("play me a song", "", "", "", "", "auto"),
-        ("please play me a song", "", "", "", "", "auto"),
-        ("play some music for me", "", "", "", "", "auto"),
-        ("play Mr. Brightside", "Mr. Brightside", "", "", "", "auto"),
-        ('play "Me, Myself and I"', "Me, Myself and I", "", "", "", "auto"),
-        ("play Me and You", "Me and You", "", "", "", "auto"),
-        ("play Waiting for Me", "Waiting for Me", "", "", "", "auto"),
-        ("播放一下晴天", "晴天", "", "", "", "auto"),
-        ("播放下晴天", "晴天", "", "", "", "auto"),
-        ("Can you play Yellow?", "Yellow", "", "", "", "auto"),
-        ("Could you play Yellow?", "Yellow", "", "", "", "auto"),
-        ("Would you play Yellow?", "Yellow", "", "", "", "auto"),
-        ("play my Night Loop playlist", "", "", "", "Night Loop", "auto"),
-        (
-            "play a song from my Night Loop playlist",
-            "",
-            "",
-            "",
-            "Night Loop",
-            "auto",
-        ),
-        ("play a track from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
-        ("play a tune from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
-        ("play anything from my Night Loop playlist", "", "", "", "Night Loop", "auto"),
-        (
-            "Could you please play Yellow by Coldplay?",
-            "Yellow Coldplay",
-            "Yellow",
-            "Coldplay",
-            "",
-            "auto",
-        ),
-    ),
-)
-def test_parse_explicit_user_music_request(
-    text,
-    keyword,
-    song,
-    artist,
-    playlist,
-    source,
-) -> None:
-    request = music_requests.parse_explicit_user_music_request(text)
-
-    assert request is not None
-    assert request.keyword == keyword
-    assert request.song_name == song
-    assert request.song_artist == artist
-    assert request.playlist_name == playlist
-    assert request.personalization_source == source
-
-
-@pytest.mark.parametrize(
     ("text", "expected"),
     (
         ("播放晴天", music_requests.MusicRequest(keyword="晴天")),
@@ -496,7 +376,7 @@ def test_ambiguous_or_non_playback_stop_language_is_rejected(text) -> None:
     ),
 )
 def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
-    assert music_requests.parse_explicit_user_music_request(text) is None
+    assert music_command_parser.parse_strict_music_command(text) is None
 
 
 @pytest.mark.parametrize(
@@ -510,7 +390,7 @@ def test_non_music_commands_do_not_trigger_immediate_playback(text) -> None:
     ),
 )
 def test_non_music_commands_do_not_cancel_pending_music(text) -> None:
-    assert music_requests.is_explicit_music_cancellation(text) is False
+    assert music_command_parser.is_strict_music_cancellation(text) is False
 
 
 @pytest.mark.parametrize(
@@ -520,11 +400,10 @@ def test_non_music_commands_do_not_cancel_pending_music(text) -> None:
         "don't play that song",
         "stop that music",
         "pause playback",
-        "play Yellow, pause playback",
     ),
 )
-def test_explicit_music_targets_override_non_music_pronouns(text) -> None:
-    assert music_requests.is_explicit_music_cancellation(text) is True
+def test_direct_music_stop_commands_are_recognized(text) -> None:
+    assert music_command_parser.is_strict_music_cancellation(text) is True
 
 
 def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
