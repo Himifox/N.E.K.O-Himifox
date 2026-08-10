@@ -11,9 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tool-calling surface for ``LLMSessionManager``: register/unregister
-and sync of tools, the builtin ``recall_memory`` tool, and tool-call
-dispatch.
+"""Tool-calling surface for ``LLMSessionManager``: register/unregister,
+built-in tools, and tool-call dispatch.
 
 Method-only mixin: every instance attribute is assigned in
 ``LLMSessionManager.__init__`` (``main_logic.core.manager``).
@@ -22,7 +21,12 @@ Method-only mixin: every instance attribute is assigned in
 import asyncio
 import os
 from main_logic.omni_realtime_client import OmniRealtimeClient
-from main_logic.tool_calling import ToolCall, ToolDefinition, ToolResult
+from main_logic.tool_calling import (
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    build_feature_builtin_tools,
+)
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_memory import (
     RECALL_MEMORY_TOOL_DESCRIPTION,
@@ -114,7 +118,7 @@ class ToolCallingMixin:
         return await self.tool_registry.execute(call)
 
     # ------------------------------------------------------------------
-    # 内置 pseudo 工具：recall_memory
+    # 内置工具
     # ------------------------------------------------------------------
     # 机制层占位：先让 offline / realtime 两条路径都能 register、把
     # description / parameters 推到 wire、收到模型的 tool call、回 result。
@@ -138,7 +142,7 @@ class ToolCallingMixin:
         """
         if os.environ.get("NEKO_DISABLE_BUILTIN_TOOLS", "").strip().lower() in ("1", "true", "yes"):
             logger.info(
-                "[builtin tools] NEKO_DISABLE_BUILTIN_TOOLS set — skipping recall_memory registration"
+                "[builtin tools] NEKO_DISABLE_BUILTIN_TOOLS set — skipping registration"
             )
             return
         _lang = _normalize_memory_prompt_lang(self.user_language)
@@ -166,6 +170,9 @@ class ToolCallingMixin:
             metadata={"source": "builtin"},
         )
         self.tool_registry.register(recall_tool, replace=True)
+
+        for tool in build_feature_builtin_tools(self):
+            self.tool_registry.register(tool, replace=True)
 
     async def _handle_recall_memory_call(self, arguments: dict) -> str:
         """Handler for ``recall_memory`` — calls memory_server's

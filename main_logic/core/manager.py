@@ -489,8 +489,11 @@ class LLMSessionManager(
         # sync_message_queue 控制消息更原子：meta 与 turn end 事件
         # 同生共死，不会因为两条消息的时序错乱而把 avatar 轮当成 proactive。
         self._pending_turn_meta: Optional[dict] = None
+        # 最新用户轮是否允许内置音乐意图工具执行；严格正则已处理的轮次
+        # 也会写入此处，但标记为 handled 以拒绝模型重复播放。
+        self._music_intent_turn: Optional[dict] = None
 
-        # 内置 pseudo 工具（目前只有 recall_memory）。在 __init__ 末尾注册
+        # 内置工具。在 __init__ 末尾注册
         # 一份占位，此时 user_language 还可能是 None → 短码兜底回退 'en'；
         # 真正进 session 前会再 refresh 一次，把 description 对齐到当时
         # 已知的 user_language。

@@ -406,6 +406,212 @@ def test_direct_music_stop_commands_are_recognized(text) -> None:
     assert music_command_parser.is_strict_music_cancellation(text) is True
 
 
+def test_builtin_music_intent_tool_uses_the_shared_model_registry(monkeypatch) -> None:
+    from main_logic.core.tool_calling import ToolCallingMixin
+    from main_logic.tool_calling import ToolRegistry
+
+    monkeypatch.delenv("NEKO_DISABLE_BUILTIN_TOOLS", raising=False)
+    manager = object.__new__(ToolCallingMixin)
+    manager.user_language = "zh-TW"
+    manager.tool_registry = ToolRegistry()
+
+    manager._register_builtin_tools()
+
+    tool = manager.tool_registry.get("report_music_intent")
+    assert tool is not None
+    assert tool.handler is not None
+    assert "最新一則使用者訊息" in tool.description
+    assert tool.parameters["required"] == ["action", "target_type"]
+    assert tool.parameters["properties"]["action"]["enum"] == ["play", "stop"]
+    assert "query" in tool.parameters["properties"]["target_type"]["enum"]
+
+
+def test_music_intent_tool_text_covers_every_core_locale() -> None:
+    from config.prompts._locale import NEKO_CORE_LOCALES
+    from config.prompts.prompts_music import get_music_intent_tool_texts
+
+    descriptions = {
+        get_music_intent_tool_texts(locale)["description"]
+        for locale in NEKO_CORE_LOCALES
+    }
+
+    assert len(descriptions) == len(NEKO_CORE_LOCALES)
+
+
+def test_strict_music_still_works_when_builtin_tools_are_disabled(monkeypatch) -> None:
+    from main_logic.core.tool_calling import ToolCallingMixin
+    from main_logic.tool_calling import ToolRegistry
+
+    monkeypatch.setenv("NEKO_DISABLE_BUILTIN_TOOLS", "1")
+    manager = object.__new__(ToolCallingMixin)
+    manager.user_language = "zh"
+    manager.tool_registry = ToolRegistry()
+
+    manager._register_builtin_tools()
+
+    assert manager.tool_registry.get("report_music_intent") is None
+    assert music_command_parser.parse_strict_music_command("播放晴天") is not None
+
+
+def test_non_strict_user_message_is_deferred_to_the_model_tool(monkeypatch) -> None:
+    manager = SimpleNamespace(lanlan_name="YUI", _fire_task=MagicMock())
+    monkeypatch.setattr(music_playback, "_session_manager_getter", lambda _: manager)
+
+    music_playback._on_user_utterance(
+        "YUI",
+        {"lanlan": "YUI", "content": "我想听晴天"},
+    )
+
+    assert manager._music_intent_turn == {"handled": False, "consumed": False}
+    manager._fire_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_music_intent_starts_one_validated_request(monkeypatch) -> None:
+    captured = {}
+    pending_coroutines = []
+    next_task = MagicMock()
+
+    async def completed_request():
+        return None
+
+    def execute(manager, request, epoch):
+        captured.update(manager=manager, request=request, epoch=epoch)
+        return completed_request()
+
+    def fire_task(coro):
+        pending_coroutines.append(coro)
+        return next_task
+
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        user_language="zh",
+        _music_intent_turn={"handled": False, "consumed": False},
+        _fire_task=fire_task,
+        enqueue_agent_callback=MagicMock(),
+    )
+    monkeypatch.setattr(music_playback, "_execute_music_request", execute)
+
+    try:
+        result = await music_playback.handle_music_intent_tool(
+            manager,
+            {
+                "action": "play",
+                "target_type": "song",
+                "song": "晴天",
+                "artist": "周杰伦",
+            },
+        )
+        duplicate = await music_playback.handle_music_intent_tool(
+            manager,
+            {"action": "play", "target_type": "query", "query": "摇滚"},
+        )
+    finally:
+        for coro in pending_coroutines:
+            coro.close()
+
+    assert result == {
+        "status": "accepted",
+        "action": "play",
+        "playback_state": "searching",
+    }
+    assert duplicate == {
+        "status": "ignored",
+        "reason": "music_intent_already_reported",
+    }
+    assert captured["request"] == music_requests.MusicRequest(
+        keyword="晴天 周杰伦",
+        song_name="晴天",
+        song_artist="周杰伦",
+    )
+    assert captured["epoch"] == 1
+    assert manager._music_request_task is next_task
+    manager.enqueue_agent_callback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        (
+            {"target_type": "artist", "artist": "Coldplay"},
+            music_requests.MusicRequest(keyword="Coldplay", song_artist="Coldplay"),
+        ),
+        (
+            {"target_type": "playlist", "playlist": "夜间循环"},
+            music_requests.MusicRequest(playlist_name="夜间循环"),
+        ),
+        (
+            {"target_type": "liked"},
+            music_requests.MusicRequest(personalization_source="liked"),
+        ),
+        (
+            {"target_type": "daily"},
+            music_requests.MusicRequest(personalization_source="daily"),
+        ),
+        (
+            {"target_type": "query", "query": "适合工作的轻音乐"},
+            music_requests.MusicRequest(keyword="适合工作的轻音乐"),
+        ),
+        ({"target_type": "generic"}, music_requests.MusicRequest()),
+        ({"target_type": "song", "song": "x" * 121}, None),
+    ),
+)
+def test_model_music_intent_target_mapping_is_closed(arguments, expected) -> None:
+    assert music_playback._music_request_from_intent(arguments) == expected
+
+
+@pytest.mark.asyncio
+async def test_model_music_intent_cannot_repeat_a_strict_command() -> None:
+    manager = SimpleNamespace(
+        _music_intent_turn={"handled": True, "consumed": True},
+    )
+
+    result = await music_playback.handle_music_intent_tool(
+        manager,
+        {"action": "play", "target_type": "song", "song": "晴天"},
+    )
+
+    assert result == {
+        "status": "ignored",
+        "reason": "already_handled_by_strict_command",
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_stop_intent_requires_active_music() -> None:
+    inactive = SimpleNamespace(
+        _music_intent_turn={"handled": False, "consumed": False},
+    )
+    assert await music_playback.handle_music_intent_tool(
+        inactive,
+        {"action": "stop", "target_type": "generic"},
+    ) == {"status": "ignored", "reason": "no_active_music"}
+
+    pending_coroutines = []
+    active = SimpleNamespace(
+        _music_intent_turn={"handled": False, "consumed": False},
+        _music_playback_state="playing",
+        _music_request_epoch=3,
+        _fire_task=lambda coro: pending_coroutines.append(coro),
+    )
+    try:
+        result = await music_playback.handle_music_intent_tool(
+            active,
+            {"action": "stop", "target_type": "generic"},
+        )
+    finally:
+        for coro in pending_coroutines:
+            coro.close()
+
+    assert result == {
+        "status": "accepted",
+        "action": "stop",
+        "playback_state": "stopped",
+    }
+    assert active._music_request_epoch == 4
+    assert active._music_playback_state == "stopped"
+
+
 def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     previous_task = MagicMock()
     previous_task.done.return_value = False
@@ -441,6 +647,7 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     previous_task.cancel.assert_called_once_with()
     assert manager._music_request_task is next_task
     assert manager._music_request_epoch == 1
+    assert manager._music_intent_turn == {"handled": True, "consumed": True}
     pending_context = manager.enqueue_agent_callback.call_args.args[0]
     assert pending_context["delivery_mode"] == "passive"
     assert pending_context["context_type"] == "music_request_pending"

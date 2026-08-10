@@ -21,6 +21,7 @@ import math
 from collections.abc import Callable
 from typing import Any
 
+from config.prompts.prompts_music import get_music_intent_tool_texts
 from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_command_parser import (
@@ -33,6 +34,7 @@ from main_logic.music_requests import (
     fetch_music_request,
     mark_music_request_query,
 )
+from main_logic.tool_calling import ToolDefinition, register_builtin_tool_factory
 from utils.logger_config import get_module_logger
 
 logger = get_module_logger(__name__, "Main")
@@ -69,35 +71,184 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
         return
     content = str(event.get("content") or "")
     request = parse_strict_music_command(content)
+    cancellation = request is None and is_strict_music_cancellation(content)
+    strict_handled = request is not None or cancellation
+    manager._music_intent_turn = {
+        "handled": strict_handled,
+        "consumed": strict_handled,
+    }
     if request is None:
-        if is_strict_music_cancellation(content):
-            previous_task = getattr(manager, "_music_request_task", None)
-            if previous_task is not None and not previous_task.done():
-                previous_task.cancel()
-            epoch = _next_music_request_epoch(manager)
-            pending_context = getattr(manager, "_music_request_pending_context", None)
-            if isinstance(pending_context, dict):
-                pending_context[DELIVERY_RETRACTED_KEY] = True
-                manager._music_request_pending_context = None
-            fire_task = getattr(manager, "_fire_task", None)
-            if callable(fire_task):
-                fire_task(
-                    _push_music_payload(
-                        manager,
-                        {
-                            "type": "music_request_cancelled",
-                            "request_id": epoch,
-                        },
-                    )
-                )
+        if cancellation:
+            _cancel_music_request(manager)
         return
+    _start_music_request(manager, request)
+
+
+def _start_music_request(
+    manager: Any,
+    request: MusicRequest,
+    *,
+    enqueue_context: bool = True,
+) -> bool:
+    fire_task = getattr(manager, "_fire_task", None)
+    if not callable(fire_task):
+        return False
     previous_task = getattr(manager, "_music_request_task", None)
     if previous_task is not None and not previous_task.done():
         previous_task.cancel()
     epoch = _next_music_request_epoch(manager)
-    _enqueue_music_request_context(manager, epoch)
-    manager._music_request_task = manager._fire_task(
+    if enqueue_context:
+        _enqueue_music_request_context(manager, epoch)
+    manager._music_request_task = fire_task(
         _execute_music_request(manager, request, epoch)
+    )
+    return True
+
+
+def _cancel_music_request(manager: Any) -> int:
+    previous_task = getattr(manager, "_music_request_task", None)
+    if previous_task is not None and not previous_task.done():
+        previous_task.cancel()
+    epoch = _next_music_request_epoch(manager)
+    pending_context = getattr(manager, "_music_request_pending_context", None)
+    if isinstance(pending_context, dict):
+        pending_context[DELIVERY_RETRACTED_KEY] = True
+        manager._music_request_pending_context = None
+    manager._music_playback_state = "stopped"
+    fire_task = getattr(manager, "_fire_task", None)
+    if callable(fire_task):
+        fire_task(
+            _push_music_payload(
+                manager,
+                {
+                    "type": "music_request_cancelled",
+                    "request_id": epoch,
+                },
+            )
+        )
+    return epoch
+
+
+def _clean_music_intent_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = " ".join(value.split())
+    return cleaned if len(cleaned) <= 120 else ""
+
+
+def _music_request_from_intent(arguments: dict[str, Any]) -> MusicRequest | None:
+    target_type = str(arguments.get("target_type") or "").strip().lower()
+    song = _clean_music_intent_text(arguments.get("song"))
+    artist = _clean_music_intent_text(arguments.get("artist"))
+    playlist = _clean_music_intent_text(arguments.get("playlist"))
+    query = _clean_music_intent_text(arguments.get("query"))
+    if target_type == "song" and song:
+        return MusicRequest(
+            keyword=" ".join(part for part in (song, artist) if part),
+            song_name=song,
+            song_artist=artist,
+        )
+    if target_type == "artist" and artist:
+        return MusicRequest(keyword=artist, song_artist=artist)
+    if target_type == "playlist" and playlist:
+        return MusicRequest(playlist_name=playlist)
+    if target_type in {"liked", "daily"}:
+        return MusicRequest(personalization_source=target_type)
+    if target_type == "query" and query:
+        return MusicRequest(keyword=query)
+    if target_type == "generic":
+        return MusicRequest()
+    return None
+
+
+def _has_active_music(manager: Any) -> bool:
+    task = getattr(manager, "_music_request_task", None)
+    if task is not None:
+        try:
+            if not task.done():
+                return True
+        except Exception:
+            pass
+    return getattr(manager, "_music_playback_state", "") in {"playing", "paused"}
+
+
+async def handle_music_intent_tool(
+    manager: Any,
+    arguments: dict[str, Any],
+) -> dict[str, str]:
+    """Execute at most one model-reported music action for the latest user turn."""
+    turn = getattr(manager, "_music_intent_turn", None)
+    if not isinstance(turn, dict):
+        return {"status": "ignored", "reason": "no_current_user_turn"}
+    if turn.get("handled"):
+        return {"status": "ignored", "reason": "already_handled_by_strict_command"}
+    if turn.get("consumed"):
+        return {"status": "ignored", "reason": "music_intent_already_reported"}
+    turn["consumed"] = True
+
+    if not isinstance(arguments, dict):
+        return {"status": "ignored", "reason": "invalid_arguments"}
+    action = str(arguments.get("action") or "").strip().lower()
+    if action == "stop":
+        if not _has_active_music(manager):
+            return {"status": "ignored", "reason": "no_active_music"}
+        _cancel_music_request(manager)
+        return {
+            "status": "accepted",
+            "action": "stop",
+            "playback_state": "stopped",
+        }
+    if action != "play":
+        return {"status": "ignored", "reason": "invalid_action"}
+
+    request = _music_request_from_intent(arguments)
+    if request is None:
+        return {"status": "ignored", "reason": "invalid_target"}
+    if not _start_music_request(manager, request, enqueue_context=False):
+        return {"status": "ignored", "reason": "playback_unavailable"}
+    return {
+        "status": "accepted",
+        "action": "play",
+        "playback_state": "searching",
+    }
+
+
+def _build_music_intent_tool(manager: Any) -> ToolDefinition:
+    texts = get_music_intent_tool_texts(getattr(manager, "user_language", None))
+    return ToolDefinition(
+        name="report_music_intent",
+        description=texts["description"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["play", "stop"],
+                    "description": texts["action"],
+                },
+                "target_type": {
+                    "type": "string",
+                    "enum": [
+                        "song", "artist", "playlist", "liked",
+                        "daily", "query", "generic",
+                    ],
+                    "description": texts["target_type"],
+                },
+                "song": {"type": "string", "description": texts["song"]},
+                "artist": {
+                    "type": "string",
+                    "description": texts["artist"],
+                },
+                "playlist": {
+                    "type": "string",
+                    "description": texts["playlist"],
+                },
+                "query": {"type": "string", "description": texts["query"]},
+            },
+            "required": ["action", "target_type"],
+        },
+        handler=lambda arguments: handle_music_intent_tool(manager, arguments),
+        metadata={"source": "builtin"},
     )
 
 
@@ -299,6 +450,7 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     if getattr(manager, "_music_playback_event_key", None) == event_key:
         return False
     manager._music_playback_event_key = event_key
+    manager._music_playback_state = state
 
     if state == "error":
         logger.warning(
@@ -529,4 +681,5 @@ async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
     return delivered
 
 
+register_builtin_tool_factory(_build_music_intent_tool)
 register_user_utterance_sink(_on_user_utterance)
