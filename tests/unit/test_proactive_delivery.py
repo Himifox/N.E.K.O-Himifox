@@ -606,6 +606,28 @@ def test_extra_flood_guard_keeps_provider_owned_voice_mirror(monkeypatch):
     assert mgr.pending_extra_replies == [committed_mirror]
 
 
+@pytest.mark.parametrize(
+    "ownership_key",
+    [VOICE_DELIVERY_COMMITTED_KEY, SWAP_PRIME_DELIVERY_CLAIM_KEY],
+)
+def test_expired_mirror_does_not_retract_provider_owned_callback(ownership_key):
+    mgr = _make_session_mgr()
+    future = _FakeAckFuture()
+    callback = _proactive_cb("provider-owned callback")
+    callback[DELIVERY_ACK_FUTURE_KEY] = future
+    mgr.enqueue_agent_callback(callback)
+    callback[ownership_key] = True
+    mirror = mgr.pending_extra_replies[0]
+    mirror[CALLBACK_EXPIRES_AT_KEY] = time.monotonic() - 1
+
+    mgr._purge_undeliverable_callbacks()
+
+    assert mgr.pending_agent_callbacks == [callback]
+    assert mgr.pending_extra_replies == []
+    assert callback.get(ownership_key) is True
+    assert not future.done()
+
+
 def test_enqueue_coalesce_resolves_superseded_ack_false():
     # A superseded cue's delivery-ack future resolves False immediately so a
     # waiter unblocks instead of stalling until timeout (parity with the
@@ -778,6 +800,75 @@ async def test_deliver_batch_drops_receipt_shadowed_by_terminal_task_result():
     assert receipt_ack.done() and receipt_ack.result is False
     assert [cb["summary"] for cb in mgr.pending_agent_callbacks] == ["finished"]
     assert triggered == [True]
+
+
+async def test_deliver_batch_drops_pending_receipt_shadowed_by_later_terminal():
+    mgr = _make_session_mgr()
+    triggered = []
+
+    class _MgrStub:
+        def release_inflight_noop(self):
+            raise AssertionError("terminal task result should still be delivered")
+
+    mgr.proactive_manager = _MgrStub()
+    mgr._topic_hook_release_allowed = lambda cb: True
+
+    async def _fake_trigger():
+        triggered.append(True)
+        return True
+
+    mgr.trigger_agent_callbacks = _fake_trigger
+    receipt_ack = _FakeAckFuture()
+    receipt = _proactive_cb(
+        "started",
+        task_id="task-1",
+        channel="user_plugin",
+        **{DELIVERY_ACK_FUTURE_KEY: receipt_ack},
+    )
+    mgr.enqueue_agent_callback(receipt)
+    terminal = _proactive_cb(
+        "finished",
+        task_id="task-1",
+        channel="user_plugin",
+        origin="task_result",
+    )
+
+    await core_module.LLMSessionManager._deliver_proactive_batch(
+        mgr, [terminal]
+    )
+
+    assert receipt_ack.done() and receipt_ack.result is False
+    assert [cb["summary"] for cb in mgr.pending_agent_callbacks] == ["finished"]
+    assert [extra["summary"] for extra in mgr.pending_extra_replies] == ["finished"]
+    assert triggered == [True]
+
+
+def test_terminal_result_preserves_provider_owned_pending_receipt():
+    mgr = _make_session_mgr()
+    receipt_ack = _FakeAckFuture()
+    receipt = _proactive_cb(
+        "provider already owns receipt",
+        task_id="task-1",
+        channel="user_plugin",
+        **{DELIVERY_ACK_FUTURE_KEY: receipt_ack},
+    )
+    mgr.enqueue_agent_callback(receipt)
+    receipt[VOICE_DELIVERY_COMMITTED_KEY] = True
+    terminal = _proactive_cb(
+        "finished",
+        task_id="task-1",
+        channel="user_plugin",
+        origin="task_result",
+    )
+
+    deliverable = core_module.LLMSessionManager._drop_receipts_shadowed_by_terminal_result(
+        mgr, [terminal]
+    )
+
+    assert deliverable == [terminal]
+    assert mgr.pending_agent_callbacks == [receipt]
+    assert not receipt_ack.done()
+    assert receipt.get(VOICE_DELIVERY_COMMITTED_KEY) is True
 
 
 def test_passive_drain_drops_expired_callback_and_voice_mirror():

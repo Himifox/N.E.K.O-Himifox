@@ -581,7 +581,11 @@ class ProactiveMixin:
             callback
             for callback in (getattr(self, "pending_agent_callbacks", None) or [])
             if id(callback) in dropped_obj_ids
-            or callback.get("_callback_delivery_id") in dropped_delivery_ids
+            or (
+                callback.get("_callback_delivery_id") in dropped_delivery_ids
+                and not callback.get(VOICE_DELIVERY_COMMITTED_KEY)
+                and not callback.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            )
         ]
         dropped_callbacks = list({id(cb): cb for cb in dropped + paired_callbacks}.values())
         self._clear_voice_delivery_committed(dropped_callbacks)
@@ -593,7 +597,11 @@ class ProactiveMixin:
             callback
             for callback in (getattr(self, "pending_agent_callbacks", None) or [])
             if id(callback) not in dropped_obj_ids
-            and callback.get("_callback_delivery_id") not in dropped_delivery_ids
+            and (
+                callback.get("_callback_delivery_id") not in dropped_delivery_ids
+                or callback.get(VOICE_DELIVERY_COMMITTED_KEY)
+                or callback.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+            )
         ]
         self.pending_extra_replies = [
             extra
@@ -1176,6 +1184,7 @@ class ProactiveMixin:
         )
         if not callbacks_snapshot:
             await self.state.fire(SessionEvent.PROACTIVE_DONE)
+            self.proactive_manager.release_inflight_noop()
             return False
 
         # Drop only the snapshot cbs from the queue once we have the SM
@@ -1711,9 +1720,17 @@ class ProactiveMixin:
         self,
         callbacks: list,
     ) -> list:
+        callback_obj_ids = {id(callback) for callback in callbacks}
+        combined_callbacks = callbacks + [
+            callback
+            for callback in (
+                getattr(self, "pending_agent_callbacks", None) or []
+            )
+            if id(callback) not in callback_obj_ids
+        ]
         terminal_task_ids = {
             str(callback.get("task_id") or "")
-            for callback in callbacks
+            for callback in combined_callbacks
             if callback.get("origin") == "task_result"
             and callback.get("status") in {
                 "completed", "partial", "blocked", "failed", "cancelled"
@@ -1722,22 +1739,29 @@ class ProactiveMixin:
         }
         if not terminal_task_ids:
             return callbacks
-        dropped = 0
-        for callback in callbacks:
+        shadowed_receipts = []
+        for callback in combined_callbacks:
             if (
                 callback.get("origin") == "event"
                 and callback.get("channel") == "user_plugin"
                 and str(callback.get("task_id") or "") in terminal_task_ids
+                and not callback.get(VOICE_DELIVERY_COMMITTED_KEY)
+                and not callback.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
             ):
                 callback[DELIVERY_RETRACTED_KEY] = True
-                dropped += 1
-        if dropped:
+                shadowed_receipts.append(callback)
+        if shadowed_receipts:
             logger.info(
                 "[%s] dropped %d stale user-plugin receipt(s) shadowed by terminal task results",
                 self.lanlan_name,
-                dropped,
+                len(shadowed_receipts),
             )
-        return self.filter_deliverable_callbacks(callbacks)
+            self.filter_deliverable_callbacks(shadowed_receipts)
+        return [
+            callback
+            for callback in callbacks
+            if not callback.get(DELIVERY_RETRACTED_KEY)
+        ]
 
     async def _deliver_proactive_batch(self, callbacks: list) -> None:
         """Release hook invoked by ProactiveDeliveryManager when the gate is

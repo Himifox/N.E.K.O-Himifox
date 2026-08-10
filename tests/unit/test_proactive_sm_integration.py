@@ -689,6 +689,36 @@ async def test_text_mode_acks_only_callbacks_that_reach_prompt():
     assert active_future.result() is True
 
 
+async def test_trigger_releases_inflight_when_callback_expires_during_claim():
+    sess = _FakeOmniOffline(delivered=True)
+    mgr = _make_mgr(session=sess)
+    future = asyncio.get_running_loop().create_future()
+    callback = {
+        "_callback_delivery_id": "id-expired-during-trigger-claim",
+        "status": "completed",
+        "summary": "stale event",
+        CALLBACK_EXPIRES_AT_KEY: time.monotonic() + 60,
+        DELIVERY_ACK_FUTURE_KEY: future,
+    }
+    mgr.pending_agent_callbacks = [callback]
+    original_try_start = mgr.state.try_start_proactive
+
+    async def _try_start_and_expire(*args, **kwargs):
+        claimed = await original_try_start(*args, **kwargs)
+        callback[CALLBACK_EXPIRES_AT_KEY] = time.monotonic() - 1
+        return claimed
+
+    mgr.state.try_start_proactive = _try_start_and_expire
+
+    delivered = await core_module.LLMSessionManager.trigger_agent_callbacks(mgr)
+
+    assert delivered is False
+    assert sess.called_with == []
+    assert mgr.pending_agent_callbacks == []
+    assert future.done() and future.result() is False
+    mgr.proactive_manager.release_inflight_noop.assert_called_once()
+
+
 async def test_text_mode_resolves_delivery_ack_after_committed_output_before_completion_flush():
     class _FlushCancellingSess(_FakeOmniOffline):
         async def prompt_ephemeral(self, instruction: str, *, images=None, on_committed=None) -> bool:
