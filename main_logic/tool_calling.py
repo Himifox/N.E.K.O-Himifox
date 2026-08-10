@@ -100,30 +100,6 @@ class ToolDefinition:
         }
 
 
-BuiltinToolFactory = Callable[[Any], Optional[ToolDefinition]]
-_builtin_tool_factories: List[BuiltinToolFactory] = []
-
-
-def register_builtin_tool_factory(factory: BuiltinToolFactory) -> None:
-    """Register one process-local feature tool factory, idempotently."""
-    if factory not in _builtin_tool_factories:
-        _builtin_tool_factories.append(factory)
-
-
-def build_feature_builtin_tools(owner: Any) -> List[ToolDefinition]:
-    """Build feature-owned tools without coupling the core manager to them."""
-    tools: List[ToolDefinition] = []
-    for factory in tuple(_builtin_tool_factories):
-        try:
-            tool = factory(owner)
-        except Exception as exc:
-            logger.warning("Failed to build feature builtin tool: %s", exc)
-            continue
-        if tool is not None:
-            tools.append(tool)
-    return tools
-
-
 @dataclass
 class ToolCall:
     """Parsed tool invocation from the model.

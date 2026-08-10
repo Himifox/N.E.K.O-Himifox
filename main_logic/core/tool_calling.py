@@ -25,7 +25,6 @@ from main_logic.tool_calling import (
     ToolCall,
     ToolDefinition,
     ToolResult,
-    build_feature_builtin_tools,
 )
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_memory import (
@@ -170,9 +169,6 @@ class ToolCallingMixin:
             metadata={"source": "builtin"},
         )
         self.tool_registry.register(recall_tool, replace=True)
-
-        for tool in build_feature_builtin_tools(self):
-            self.tool_registry.register(tool, replace=True)
 
     async def _handle_recall_memory_call(self, arguments: dict) -> str:
         """Handler for ``recall_memory`` — calls memory_server's

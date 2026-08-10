@@ -367,7 +367,6 @@ class TurnMixin:
         - ``handle_response_discarded``'s truncate-recovery / too-long-final
         Unified semantics: sync queue and WS carry the same meta, avoiding one
         having meta while the other doesn't."""
-        self._music_intent_turn = None
         turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
         pending_meta = self._pending_turn_meta
         if pending_meta:
@@ -424,7 +423,6 @@ class TurnMixin:
             logger.info("[%s] session takeover active: dropping ordinary realtime response completion", self.lanlan_name)
             await self._clear_tts_pipeline()
             self._pending_turn_meta = None
-            self._music_intent_turn = None
             self._current_ai_turn_text = ""
             self._active_text_request_id = None
             return
@@ -759,7 +757,6 @@ class TurnMixin:
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
-                self._music_intent_turn = None
 
         # Recovery / too-long-final 路径相当于"这一轮 LLM 已完成"——必须
         # 跑跟 handle_response_complete 同款的 turn 后置流程（renew/prewarm
