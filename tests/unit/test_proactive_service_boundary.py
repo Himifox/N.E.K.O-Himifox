@@ -470,10 +470,20 @@ def test_non_strict_user_message_is_deferred_to_the_model_tool(monkeypatch) -> N
 
     music_playback._on_user_utterance(
         "YUI",
-        {"lanlan": "YUI", "content": "我想听晴天"},
+        {
+            "lanlan": "YUI",
+            "content": "我想听晴天",
+            "request_id": "req-B",
+            "turn_id": "speech-B",
+        },
     )
 
-    assert manager._music_intent_turn == {"handled": False, "consumed": False}
+    assert manager._music_intent_turn == {
+        "handled": False,
+        "consumed": False,
+        "request_id": "req-B",
+        "turn_id": "speech-B",
+    }
     manager._fire_task.assert_not_called()
 
 
@@ -538,6 +548,48 @@ async def test_model_music_intent_starts_one_validated_request(monkeypatch) -> N
     assert captured["epoch"] == 1
     assert manager._music_request_task is next_task
     manager.enqueue_agent_callback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invalid_model_music_call_can_be_corrected_in_the_same_turn(
+    monkeypatch,
+) -> None:
+    pending_coroutines = []
+    next_task = MagicMock()
+
+    async def completed_request():
+        return None
+
+    def fire_task(coro):
+        pending_coroutines.append(coro)
+        return next_task
+
+    manager = SimpleNamespace(
+        _music_intent_turn={"handled": False, "consumed": False},
+        _fire_task=fire_task,
+    )
+    monkeypatch.setattr(
+        music_playback,
+        "_execute_music_request",
+        lambda *_: completed_request(),
+    )
+
+    try:
+        invalid = await music_playback.handle_music_intent_tool(
+            manager,
+            {"action": "play", "target_type": "song", "artist": "周杰伦"},
+        )
+        corrected = await music_playback.handle_music_intent_tool(
+            manager,
+            {"action": "play", "target_type": "song", "song": "晴天"},
+        )
+    finally:
+        for coro in pending_coroutines:
+            coro.close()
+
+    assert invalid == {"status": "ignored", "reason": "invalid_target"}
+    assert corrected["status"] == "accepted"
+    assert manager._music_intent_turn["consumed"] is True
 
 
 @pytest.mark.parametrize(
@@ -1051,6 +1103,31 @@ def test_player_confirmation_stays_passive_after_request_context_was_injected() 
     assert callback["delivery_mode"] == "passive"
     assert manager._music_request_pending_context is None
     manager.submit_proactive_callback.assert_not_called()
+
+
+def test_unowned_player_event_does_not_clear_pending_request_context() -> None:
+    pending_context = {"metadata": {"context_type": "music_request_pending"}}
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        _music_request_pending_context=pending_context,
+        pending_agent_callbacks=[pending_context],
+        submit_proactive_callback=MagicMock(),
+        enqueue_agent_callback=MagicMock(),
+    )
+
+    assert music_playback.handle_music_playback_state(
+        manager,
+        {
+            "state": "playing",
+            "playback_id": "player:unowned",
+            "playback_window_id": "window:unowned",
+            "playback_started_at": 102,
+            "request_id": "not-a-number",
+            "source": "proactive",
+        },
+    ) is True
+
+    assert manager._music_request_pending_context is pending_context
 
 
 def test_non_user_music_state_is_passive_and_coalesced() -> None:

@@ -409,6 +409,7 @@ class StreamingMixin:
                     self._publish_user_utterance_to_plugin_bus(
                         record_data,
                         is_voice_source=False,
+                        request_id=message.get("request_id"),
                     )
 
                     # Mini-game 邀请的关键词文本兜底（PR #1141 follow-up E2）。

@@ -1140,6 +1140,40 @@ async def test_text_stream_discard_callback_keeps_original_request_owner(monkeyp
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_stale_turn_end_preserves_newer_music_intent_state():
+    mgr = _make_manager()
+    mgr._music_intent_turn = {
+        "handled": False,
+        "consumed": False,
+        "request_id": "req-B",
+        "turn_id": "speech-B",
+    }
+    mgr._activity_tracker = MagicMock()
+
+    await core_module.LLMSessionManager._emit_turn_end(
+        mgr,
+        "req-A",
+        active_turn_id="speech-A",
+    )
+
+    assert mgr._music_intent_turn == {
+        "handled": False,
+        "consumed": False,
+        "request_id": "req-B",
+        "turn_id": "speech-B",
+    }
+
+    await core_module.LLMSessionManager._emit_turn_end(
+        mgr,
+        "req-B",
+        active_turn_id="speech-B",
+    )
+
+    assert mgr._music_intent_turn is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_stale_truncated_recovery_does_not_mutate_newer_request_state():
     """Request A's late recovery must not emit or consume request B's turn state.
 
@@ -1271,7 +1305,10 @@ async def test_owned_truncated_recovery_still_finalizes_when_owner_stays_current
         request_id="req-A",
     )
 
-    mgr._emit_turn_end.assert_awaited_once_with("req-A")
+    mgr._emit_turn_end.assert_awaited_once_with(
+        "req-A",
+        active_turn_id="old-speech",
+    )
     mgr._finalize_turn_after_emit.assert_awaited_once()
     assert mgr._active_text_request_id is None
 
@@ -2400,7 +2437,7 @@ async def test_truncated_recovery_flushes_only_recovery_body_to_tracker():
     # _flush_ai_turn_text_to_tracker 由 _emit_turn_end 调用，捕获调用当刻的 buffer。
     buffer_at_turn_end = []
 
-    async def capture_emit(request_id):
+    async def capture_emit(request_id, *, active_turn_id=None):
         buffer_at_turn_end.append(mgr._current_ai_turn_text)
 
     mgr._emit_turn_end = capture_emit

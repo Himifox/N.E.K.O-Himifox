@@ -73,10 +73,15 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     request = parse_strict_music_command(content)
     cancellation = request is None and is_strict_music_cancellation(content)
     strict_handled = request is not None or cancellation
-    manager._music_intent_turn = {
+    turn_state = {
         "handled": strict_handled,
         "consumed": strict_handled,
     }
+    for owner_key in ("request_id", "turn_id"):
+        owner_value = event.get(owner_key)
+        if owner_value is not None:
+            turn_state[owner_key] = owner_value
+    manager._music_intent_turn = turn_state
     if request is None:
         if cancellation:
             _cancel_music_request(manager)
@@ -204,7 +209,6 @@ async def handle_music_intent_tool(
         return _music_tool_result(
             manager, "ignored", reason="music_intent_already_reported"
         )
-    turn["consumed"] = True
 
     if not isinstance(arguments, dict):
         return _music_tool_result(manager, "ignored", reason="invalid_arguments")
@@ -213,6 +217,7 @@ async def handle_music_intent_tool(
         if not _has_active_music(manager):
             return _music_tool_result(manager, "ignored", reason="no_active_music")
         _cancel_music_request(manager)
+        turn["consumed"] = True
         return _music_tool_result(
             manager, "accepted", action="stop", playback_state="stopped"
         )
@@ -224,6 +229,7 @@ async def handle_music_intent_tool(
         return _music_tool_result(manager, "ignored", reason="invalid_target")
     if not _start_music_request(manager, request, enqueue_context=False):
         return _music_tool_result(manager, "ignored", reason="playback_unavailable")
+    turn["consumed"] = True
     return _music_tool_result(
         manager, "accepted", action="play", playback_state="searching"
     )
@@ -508,7 +514,7 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
         and getattr(manager, "_music_playback_acknowledged_key", None)
         != acknowledge_key
     )
-    if pending_request_id == numeric_request_id:
+    if pending_request_id is not None and pending_request_id == numeric_request_id:
         manager._music_request_pending_context = None
     if should_respond:
         manager._music_playback_acknowledged_key = acknowledge_key

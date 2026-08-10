@@ -359,7 +359,29 @@ class TurnMixin:
         except Exception as e:
             logger.warning("[%s] handle_proactive_complete: WS send turn_end error: %s", self.lanlan_name, e)
 
-    async def _emit_turn_end(self, active_request_id) -> None:
+    def _clear_music_intent_turn_if_owned(
+        self,
+        active_request_id: object,
+        active_turn_id: object,
+    ) -> None:
+        turn = getattr(self, "_music_intent_turn", None)
+        if not isinstance(turn, dict):
+            return
+        if (
+            "request_id" in turn
+            and turn["request_id"] != active_request_id
+        ):
+            return
+        if "turn_id" in turn and turn["turn_id"] != active_turn_id:
+            return
+        self._music_intent_turn = None
+
+    async def _emit_turn_end(
+        self,
+        active_request_id,
+        *,
+        active_turn_id=None,
+    ) -> None:
         """Send the turn end signal to both sync_message_queue and the WebSocket,
         passing ``_pending_turn_meta`` through both channels before clearing it.
         Shared by two paths:
@@ -367,7 +389,10 @@ class TurnMixin:
         - ``handle_response_discarded``'s truncate-recovery / too-long-final
         Unified semantics: sync queue and WS carry the same meta, avoiding one
         having meta while the other doesn't."""
-        self._music_intent_turn = None
+        self._clear_music_intent_turn_if_owned(
+            active_request_id,
+            active_turn_id,
+        )
         turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
         pending_meta = self._pending_turn_meta
         if pending_meta:
@@ -430,6 +455,7 @@ class TurnMixin:
             return
 
         active_request_id = self._active_text_request_id
+        active_turn_id = getattr(self, "current_speech_id", None)
 
         if self.use_tts and self.tts_thread and self.tts_thread.is_alive():
             logger.info("📨 Response complete (LLM 回复结束)")
@@ -438,7 +464,10 @@ class TurnMixin:
             except Exception as e:
                 logger.warning(f"⚠️ 发送TTS结束信号失败: {e}")
         try:
-            await self._emit_turn_end(active_request_id)
+            await self._emit_turn_end(
+                active_request_id,
+                active_turn_id=active_turn_id,
+            )
         finally:
             # Compare-and-clear：仅在共享字段仍是本轮快照时才清空，避免
             # 抹掉用户在 turn end 发出前提交的新轮 request_id。
@@ -558,6 +587,7 @@ class TurnMixin:
             if request_id is _REQUEST_ID_UNSET
             else request_id
         )
+        active_turn_id = getattr(self, "current_speech_id", None)
         request_has_owner = (
             request_id is not _REQUEST_ID_UNSET
             and active_request_id is not None
@@ -736,7 +766,12 @@ class TurnMixin:
                 # 注：_append_recovery_history 读 pending_meta 已经触发 is_ephemeral
                 # 判定，但这里 _emit_turn_end 自己会再读一次 _pending_turn_meta 做
                 # 透传 + 清空，二者读的是同一个值，幂等。
-                recovery_steps.append(lambda: self._emit_turn_end(active_request_id))
+                recovery_steps.append(
+                    lambda: self._emit_turn_end(
+                        active_request_id,
+                        active_turn_id=active_turn_id,
+                    )
+                )
 
                 for recovery_step in recovery_steps:
                     await recovery_step()
@@ -759,7 +794,10 @@ class TurnMixin:
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
-                self._music_intent_turn = None
+                self._clear_music_intent_turn_if_owned(
+                    active_request_id,
+                    active_turn_id,
+                )
 
         # Recovery / too-long-final 路径相当于"这一轮 LLM 已完成"——必须
         # 跑跟 handle_response_complete 同款的 turn 后置流程（renew/prewarm
@@ -816,7 +854,11 @@ class TurnMixin:
             await self.send_audio_done(self.current_speech_id)
 
     def _publish_user_utterance_to_plugin_bus(
-        self, text: Optional[str], *, is_voice_source: bool
+        self,
+        text: Optional[str],
+        *,
+        is_voice_source: bool,
+        request_id: object = None,
     ) -> None:
         """Publish one verbatim user utterance to the plugin bus's user-context bucket.
 
@@ -845,6 +887,11 @@ class TurnMixin:
             "is_voice": bool(is_voice_source),
             "source": "main_logic.core",
         }
+        turn_id = getattr(self, "current_speech_id", None)
+        if turn_id is not None:
+            event["turn_id"] = turn_id
+        if request_id is not None:
+            event["request_id"] = request_id
         # dict.fromkeys 保留顺序的同时去重：lanlan_name == "default" 或为空
         # 时不会重复写入 default bucket。
         for bucket in dict.fromkeys(("default", self.lanlan_name)):
