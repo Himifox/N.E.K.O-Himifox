@@ -494,6 +494,7 @@ class LLMSessionManager(
         self._music_intent_classifier_generation = 0
         self._music_intent_classifier_consumed_generation = 0
         self._music_intent_classifier_task: Optional[asyncio.Task] = None
+        self._music_current_track: dict[str, str] = {}
 
         # 内置工具。在 __init__ 末尾注册
         # 一份占位，此时 user_language 还可能是 None → 短码兜底回退 'en'；

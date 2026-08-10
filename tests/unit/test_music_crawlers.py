@@ -14,7 +14,7 @@ from utils.music_crawlers import (
     NeteaseCrawler, iTunesCrawler, SoundCloudCrawler, 
     MusopenCrawler, FMACrawler, BandcampCrawler, MusicCache, fetch_music_content,
     music_cache, close_all_crawlers, _select_requested_song,
-    _sample_distinct_background_sources,
+    _filter_requested_music_results, _sample_distinct_background_sources,
 )
 
 # ==========================================
@@ -667,6 +667,22 @@ def test_requested_song_rejects_single_character_artist_substring():
     candidate = {'name': 'Hello', 'artist': 'A', 'url': 'wrong'}
 
     assert _select_requested_song('Hello', 'Adele', [candidate]) is None
+
+
+@pytest.mark.unit
+def test_requested_artist_keeps_collaboration_and_rejects_unrelated_tracks():
+    collaboration = {
+        'name': 'Try (Kung Fu Panda 3 Official Theme Song)',
+        'artist': '派伟俊 / 周杰伦',
+        'url': 'matched',
+    }
+    unrelated = {'name': 'Try', 'artist': 'Asher Monroe', 'url': 'unrelated'}
+
+    assert _filter_requested_music_results(
+        [unrelated, collaboration],
+        requested_song='',
+        requested_artist='周杰伦',
+    ) == [collaboration]
 
 
 @pytest.mark.unit

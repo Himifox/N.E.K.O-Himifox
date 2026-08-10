@@ -63,6 +63,8 @@ _REPLY_WAIT_POLL_SECONDS = 0.05
 _MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS = 8.0
 _MUSIC_INTENT_CLASSIFIER_MAX_TOKENS = 180
 _MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS = 500
+_MUSIC_INTENT_CONTEXT_MESSAGES = 6
+_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS = 300
 
 
 def register_music_session_manager_getter(
@@ -164,6 +166,66 @@ def _clean_music_intent_text(value: Any) -> str:
     return cleaned if len(cleaned) <= 120 else ""
 
 
+def _classifier_message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = " ".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+            and str(part.get("type") or "") in {"text", "input_text", "output_text"}
+        )
+    else:
+        return ""
+    return " ".join(text.split())[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
+
+
+def _recent_music_dialogue(manager: Any, latest_user_text: str) -> str:
+    session = getattr(manager, "session", None)
+    history = getattr(session, "_conversation_history", None)
+    if not isinstance(history, list):
+        return ""
+
+    latest_normalized = " ".join(str(latest_user_text or "").split())
+    skipped_latest = False
+    rows: list[str] = []
+    for message in reversed(history):
+        role = str(getattr(message, "type", "") or "").lower()
+        if role not in {"human", "ai"}:
+            continue
+        text = _classifier_message_text(message)
+        if not text:
+            continue
+        if (
+            role == "human"
+            and not skipped_latest
+            and text == latest_normalized[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
+        ):
+            skipped_latest = True
+            continue
+        rows.append(f"{'user' if role == 'human' else 'assistant'}: {text}")
+        if len(rows) >= _MUSIC_INTENT_CONTEXT_MESSAGES:
+            break
+    rows.reverse()
+    return "\n".join(rows)
+
+
+def _music_playback_context(manager: Any) -> str:
+    state = _clean_music_intent_text(
+        getattr(manager, "_music_playback_state", "")
+    ) or "unknown"
+    track = getattr(manager, "_music_current_track", None)
+    track = track if isinstance(track, dict) else {}
+    name = _clean_music_intent_text(track.get("name"))
+    artist = _clean_music_intent_text(track.get("artist"))
+    return (
+        f"state={state}; title={name or 'unknown'}; "
+        f"artist={artist or 'unknown'}"
+    )
+
+
 def _music_request_from_intent(arguments: dict[str, Any]) -> MusicRequest | None:
     target_type = str(arguments.get("target_type") or "").strip().lower()
     song = _clean_music_intent_text(arguments.get("song"))
@@ -260,6 +322,8 @@ async def _classify_music_intent(
     *,
     lanlan_name: str = "",
     master_name: str = "",
+    recent_dialogue: str = "",
+    playback_context: str = "",
 ) -> dict[str, Any] | None:
     cleaned = " ".join(str(user_text or "").split())
     if not cleaned or len(cleaned) > _MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS:
@@ -302,7 +366,16 @@ async def _classify_music_intent(
         SystemMessage(content=system_prompt),
         HumanMessage(
             content=(
-                f"{classifier_prompt}\nLatest user message:\n{cleaned}\n\n"
+                f"{classifier_prompt}\n"
+                "<recent_dialogue_before_latest>\n"
+                f"{recent_dialogue or '(none)'}\n"
+                "</recent_dialogue_before_latest>\n"
+                "<current_playback_state>\n"
+                f"{playback_context or 'state=unknown; title=unknown; artist=unknown'}\n"
+                "</current_playback_state>\n"
+                "<latest_user_message>\n"
+                f"{cleaned}\n"
+                "</latest_user_message>\n\n"
                 f"{_loc(BEGIN_GENERATE, locale)}"
             )
         ),
@@ -361,12 +434,16 @@ async def _classify_and_apply_music_intent(
     user_text: str,
     generation: int,
 ) -> bool:
+    recent_dialogue = _recent_music_dialogue(manager, user_text)
+    playback_context = _music_playback_context(manager)
     try:
         arguments = await _classify_music_intent(
             user_text,
             getattr(manager, "user_language", None),
             lanlan_name=getattr(manager, "lanlan_name", ""),
             master_name=getattr(manager, "master_name", ""),
+            recent_dialogue=recent_dialogue,
+            playback_context=playback_context,
         )
     except asyncio.CancelledError:
         raise
@@ -587,6 +664,8 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
         return False
     manager._music_playback_event_key = event_key
     manager._music_playback_state = state
+    if name or artist:
+        manager._music_current_track = {"name": name, "artist": artist}
 
     if state == "error":
         logger.warning(
@@ -605,12 +684,31 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     }
     detail = facts[state]
     acknowledge_key = (playback_id, request_id)
+    pending_context = getattr(manager, "_music_request_pending_context", None)
+    pending_request_id = None
+    if isinstance(pending_context, dict):
+        metadata = pending_context.get("metadata")
+        if isinstance(metadata, dict):
+            pending_request_id = _clean_music_request_id(metadata.get("request_id"))
+    numeric_request_id = _clean_music_request_id(request_id)
+    pending_was_injected = bool(
+        pending_request_id is not None
+        and pending_request_id == numeric_request_id
+        and not pending_context.get(DELIVERY_RETRACTED_KEY)
+        and not any(
+            callback is pending_context
+            for callback in (getattr(manager, "pending_agent_callbacks", None) or [])
+        )
+    )
     should_respond = (
         state == "playing"
         and source == "user"
+        and not pending_was_injected
         and getattr(manager, "_music_playback_acknowledged_key", None)
         != acknowledge_key
     )
+    if pending_request_id == numeric_request_id:
+        manager._music_request_pending_context = None
     if should_respond:
         manager._music_playback_acknowledged_key = acknowledge_key
         detail += " 请简短自然地确认已经开始播放，不要再次调用音乐播放工具。"
