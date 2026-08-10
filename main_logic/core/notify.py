@@ -70,7 +70,6 @@ from config.prompts.prompts_sys import (
     AGENT_TASKS_HEADER,
     AGENT_TASKS_NOTICE,
 )
-from config.prompts.prompts_music import get_music_intent_response_prompt
 from utils.language_utils import normalize_language_code, is_supported_language_code
 from ._shared import logger
 
@@ -160,8 +159,6 @@ class NotifyMixin:
             prompt = _loc(SESSION_INIT_PROMPT_AGENT, _lang).format(name=self.lanlan_name) + self.lanlan_prompt
         else:
             prompt = _loc(SESSION_INIT_PROMPT, _lang).format(name=self.lanlan_name) + self.lanlan_prompt
-        if self.input_mode == "text":
-            prompt += get_music_intent_response_prompt(_lang)
         if self._is_agent_enabled():
             # Plugin summary (with plugin ids) is intentionally disabled to avoid
             # exposing implementation identifiers in the general agent prompt.

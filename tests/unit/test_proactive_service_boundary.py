@@ -411,91 +411,98 @@ def test_direct_music_stop_commands_are_recognized(text) -> None:
     assert music_command_parser.is_strict_music_cancellation(text) is True
 
 
-def test_music_intent_response_prompt_covers_every_core_locale() -> None:
+def test_music_intent_classifier_prompt_covers_every_core_locale() -> None:
     from config.prompts._locale import NEKO_CORE_LOCALES
-    from config.prompts.prompts_music import get_music_intent_response_prompt
+    from config.prompts.prompts_music import get_music_intent_classifier_prompt
 
     prompts = {
-        get_music_intent_response_prompt(locale)
+        get_music_intent_classifier_prompt(locale)
         for locale in NEKO_CORE_LOCALES
     }
 
     assert len(prompts) == len(NEKO_CORE_LOCALES)
-    assert all("append no control suffix" in prompt for prompt in prompts)
-    assert all("<|music_action|>[PASS]" not in prompt for prompt in prompts)
-    assert all("<|music_action|>song:title|artist" in prompt for prompt in prompts)
-    assert all("<|music_action|>artist:name" in prompt for prompt in prompts)
-    assert all("normal in-character reply first" in prompt for prompt in prompts)
+    assert all("[MUSIC] [PASS]" in prompt for prompt in prompts)
+    assert all("[MUSIC] song:title|artist" in prompt for prompt in prompts)
+    assert all("[MUSIC] artist:name" in prompt for prompt in prompts)
+    assert all("recommendation rules" in prompt for prompt in prompts)
 
 
-def test_non_strict_user_message_reuses_main_response(monkeypatch) -> None:
-    manager = SimpleNamespace(lanlan_name="YUI", input_mode="text")
+def test_non_strict_user_message_schedules_classifier(monkeypatch) -> None:
+    scheduled = []
+
+    def fire_task(coro):
+        scheduled.append(coro)
+        return MagicMock()
+
+    manager = SimpleNamespace(lanlan_name="YUI", _fire_task=fire_task)
     monkeypatch.setattr(music_playback, "_session_manager_getter", lambda _: manager)
 
-    music_playback._on_user_utterance(
-        "YUI",
-        {"lanlan": "YUI", "content": "来点邓紫棋的歌"},
-    )
-
-    assert manager._music_intent_generation == 1
-    assert manager._music_intent_stream.allow_action is True
-    assert not hasattr(manager, "_music_intent_classifier_task")
-    playback_source = Path(music_playback.__file__).read_text(encoding="utf-8")
-    assert "create_chat_llm_async" not in playback_source
-    assert ".ainvoke(" not in playback_source
-
-
-def test_music_action_suffix_is_hidden_across_chunks() -> None:
-    manager = SimpleNamespace(input_mode="text", _music_intent_generation=1)
-    manager._music_intent_stream = music_playback._MusicActionStream(1)
-    manager._music_intent_stream.allow_action = True
-
-    visible = "".join(
-        music_playback.filter_music_response_chunk(manager, chunk)
-        for chunk in (
-            "好呀，你想听哪首？<|music_",
-            "action|>artist:邓紫棋<|/music_",
-            "action|>",
+    try:
+        music_playback._on_user_utterance(
+            "YUI",
+            {"lanlan": "YUI", "content": "来点邓紫棋的歌"},
         )
+    finally:
+        for coro in scheduled:
+            coro.close()
+
+    assert manager._music_intent_classifier_generation == 1
+    assert len(scheduled) == 1
+
+
+@pytest.mark.asyncio
+async def test_classifier_uses_current_conversation_model(monkeypatch) -> None:
+    class FakeConfigManager:
+        async def aget_core_config(self):
+            return {"marker": "current"}
+
+        async def aget_model_api_config(self, model_type, *, core_config):
+            assert model_type == "conversation"
+            assert core_config == {"marker": "current"}
+            return {
+                "model": "user-selected-model",
+                "base_url": "https://user.example/v1",
+                "api_key": "secret",
+                "provider_type": "openai",
+            }
+
+    class FakeLLM:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def ainvoke(self, messages):
+            assert "来点邓紫棋的歌" in messages[-1].content
+            assert "[MUSIC] [PASS]" in messages[-1].content
+            assert "[MUSIC] [PASS]" in messages[0].content
+            assert "assistant: 你想听谁的歌？" in messages[-1].content
+            assert "state=playing; title=晴天; artist=周杰伦" in messages[-1].content
+            return SimpleNamespace(content="[MUSIC] artist:邓紫棋")
+
+    create_llm = AsyncMock(return_value=FakeLLM())
+    monkeypatch.setattr(music_playback, "get_config_manager", FakeConfigManager)
+    monkeypatch.setattr(music_playback, "create_chat_llm_async", create_llm)
+
+    result = await music_playback._classify_music_intent(
+        "来点邓紫棋的歌",
+        "zh-CN",
+        recent_dialogue="assistant: 你想听谁的歌？",
+        playback_context="state=playing; title=晴天; artist=周杰伦",
     )
 
-    assert visible == "好呀，你想听哪首？"
-    assert manager._music_intent_stream.captured == "artist:邓紫棋"
-
-
-def test_same_response_music_action_is_applied_and_removed_from_history(
-    monkeypatch,
-) -> None:
-    start_request = MagicMock(return_value=True)
-    manager = SimpleNamespace(
-        lanlan_name="YUI",
-        input_mode="text",
-        _music_intent_generation=1,
-        _music_intent_consumed_generation=0,
-        session=SimpleNamespace(
-            _conversation_history=[
-                AIMessage(
-                    content=(
-                        "好呀！<|music_action|>artist:邓紫棋"
-                        "<|/music_action|>"
-                    )
-                )
-            ]
-        ),
-    )
-    manager._music_intent_stream = music_playback._MusicActionStream(1)
-    manager._music_intent_stream.allow_action = True
-    manager._music_intent_stream.feed(
-        "好呀！<|music_action|>artist:邓紫棋<|/music_action|>"
-    )
-    monkeypatch.setattr(music_playback, "_start_music_request", start_request)
-
-    assert music_playback.finish_music_response(manager) is None
-    assert manager.session._conversation_history[-1].content == "好呀！"
-    assert manager._music_intent_stream is None
-    start_request.assert_called_once_with(
-        manager,
-        music_requests.MusicRequest(keyword="邓紫棋", song_artist="邓紫棋"),
+    assert result == {
+        "action": "play",
+        "target_type": "artist",
+        "song": "",
+        "artist": "邓紫棋",
+        "playlist": "",
+        "query": "",
+    }
+    assert create_llm.await_args.args[:2] == (
+        "user-selected-model",
+        "https://user.example/v1",
     )
 
 
@@ -538,7 +545,68 @@ def test_music_intent_classifier_response_is_fail_closed(raw, expected) -> None:
     assert music_playback._parse_music_intent_response(raw) == expected
 
 
-def test_reported_music_intent_starts_one_validated_request(monkeypatch) -> None:
+def test_music_intent_context_uses_recent_dialogue_without_latest_duplicate() -> None:
+    manager = SimpleNamespace(
+        session=SimpleNamespace(
+            _conversation_history=[
+                HumanMessage(content="来点邓紫棋的歌"),
+                AIMessage(content="你想听她的哪首？"),
+                HumanMessage(content="《光年之外》吧，你会唱吗？"),
+            ]
+        ),
+        _music_playback_state="playing",
+        _music_current_track={"name": "泡沫", "artist": "邓紫棋"},
+    )
+
+    dialogue = music_playback._recent_music_dialogue(
+        manager,
+        "《光年之外》吧，你会唱吗？",
+    )
+
+    assert dialogue == (
+        "user: 来点邓紫棋的歌\n"
+        "assistant: 你想听她的哪首？"
+    )
+    assert music_playback._music_playback_context(manager) == (
+        "state=playing; title=泡沫; artist=邓紫棋"
+    )
+
+
+@pytest.mark.asyncio
+async def test_music_intent_classifier_failure_is_closed_and_uses_context(
+    monkeypatch,
+) -> None:
+    classify = AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    start_request = MagicMock()
+    manager = SimpleNamespace(
+        lanlan_name="YUI",
+        master_name="人类",
+        user_language="zh",
+        session=SimpleNamespace(
+            _conversation_history=[AIMessage(content="你想听哪首？")]
+        ),
+        _music_playback_state="playing",
+        _music_current_track={"name": "Try", "artist": "派伟俊 / 周杰伦"},
+        _music_intent_classifier_generation=1,
+        _music_intent_classifier_consumed_generation=0,
+    )
+    monkeypatch.setattr(music_playback, "_classify_music_intent", classify)
+    monkeypatch.setattr(music_playback, "_start_music_request", start_request)
+
+    assert await music_playback._classify_and_apply_music_intent(
+        manager,
+        "是功夫熊猫的Try",
+        1,
+    ) is False
+
+    assert classify.await_args.kwargs["recent_dialogue"] == "assistant: 你想听哪首？"
+    assert classify.await_args.kwargs["playback_context"] == (
+        "state=playing; title=Try; artist=派伟俊 / 周杰伦"
+    )
+    start_request.assert_not_called()
+
+
+def test_classified_music_intent_starts_one_validated_request(monkeypatch) -> None:
     captured = {}
     pending_coroutines = []
     next_task = MagicMock()
@@ -557,15 +625,15 @@ def test_reported_music_intent_starts_one_validated_request(monkeypatch) -> None
     manager = SimpleNamespace(
         lanlan_name="YUI",
         user_language="zh",
-        _music_intent_generation=1,
-        _music_intent_consumed_generation=0,
+        _music_intent_classifier_generation=1,
+        _music_intent_classifier_consumed_generation=0,
         _fire_task=fire_task,
         enqueue_agent_callback=MagicMock(),
     )
     monkeypatch.setattr(music_playback, "_execute_music_request", execute)
 
     try:
-        result = music_playback._apply_reported_music_intent(
+        result = music_playback._apply_classified_music_intent(
             manager,
             {
                 "action": "play",
@@ -575,7 +643,7 @@ def test_reported_music_intent_starts_one_validated_request(monkeypatch) -> None
             },
             1,
         )
-        duplicate = music_playback._apply_reported_music_intent(
+        duplicate = music_playback._apply_classified_music_intent(
             manager,
             {"action": "play", "target_type": "query", "query": "摇滚"},
             1,
@@ -623,18 +691,18 @@ def test_reported_music_intent_starts_one_validated_request(monkeypatch) -> None
         ({"target_type": "song", "song": "x" * 121}, None),
     ),
 )
-def test_reported_music_intent_target_mapping_is_closed(arguments, expected) -> None:
+def test_classified_music_intent_target_mapping_is_closed(arguments, expected) -> None:
     assert music_playback._music_request_from_intent(arguments) == expected
 
 
-def test_stale_music_intent_result_is_ignored() -> None:
+def test_stale_music_intent_classifier_result_is_ignored() -> None:
     manager = SimpleNamespace(
-        _music_intent_generation=2,
-        _music_intent_consumed_generation=0,
+        _music_intent_classifier_generation=2,
+        _music_intent_classifier_consumed_generation=0,
         _fire_task=MagicMock(),
     )
 
-    result = music_playback._apply_reported_music_intent(
+    result = music_playback._apply_classified_music_intent(
         manager,
         {"action": "play", "target_type": "song", "song": "晴天"},
         1,
@@ -644,12 +712,12 @@ def test_stale_music_intent_result_is_ignored() -> None:
     manager._fire_task.assert_not_called()
 
 
-def test_reported_stop_intent_requires_active_music() -> None:
+def test_classified_stop_intent_requires_active_music() -> None:
     inactive = SimpleNamespace(
-        _music_intent_generation=1,
-        _music_intent_consumed_generation=0,
+        _music_intent_classifier_generation=1,
+        _music_intent_classifier_consumed_generation=0,
     )
-    assert music_playback._apply_reported_music_intent(
+    assert music_playback._apply_classified_music_intent(
         inactive,
         {"action": "stop", "target_type": "generic"},
         1,
@@ -657,14 +725,14 @@ def test_reported_stop_intent_requires_active_music() -> None:
 
     pending_coroutines = []
     active = SimpleNamespace(
-        _music_intent_generation=1,
-        _music_intent_consumed_generation=0,
+        _music_intent_classifier_generation=1,
+        _music_intent_classifier_consumed_generation=0,
         _music_playback_state="playing",
         _music_request_epoch=3,
         _fire_task=lambda coro: pending_coroutines.append(coro),
     )
     try:
-        result = music_playback._apply_reported_music_intent(
+        result = music_playback._apply_classified_music_intent(
             active,
             {"action": "stop", "target_type": "generic"},
             1,
@@ -713,8 +781,8 @@ def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     previous_task.cancel.assert_called_once_with()
     assert manager._music_request_task is next_task
     assert manager._music_request_epoch == 1
-    assert manager._music_intent_generation == 1
-    assert manager._music_intent_consumed_generation == 1
+    assert manager._music_intent_classifier_generation == 1
+    assert manager._music_intent_classifier_task is None
     pending_context = manager.enqueue_agent_callback.call_args.args[0]
     assert pending_context["delivery_mode"] == "passive"
     assert pending_context["context_type"] == "music_request_pending"
@@ -781,12 +849,17 @@ def test_source_exclusion_does_not_cancel_unrelated_pending_search(
 ) -> None:
     previous_task = MagicMock()
     previous_task.done.return_value = False
+    scheduled = []
+
+    def fire_task(coro):
+        scheduled.append(coro)
+        return MagicMock()
 
     manager = SimpleNamespace(
         lanlan_name="YUI",
-        input_mode="text",
         _music_request_epoch=4,
         _music_request_task=previous_task,
+        _fire_task=fire_task,
         enqueue_agent_callback=MagicMock(),
     )
     monkeypatch.setattr(
@@ -795,14 +868,18 @@ def test_source_exclusion_does_not_cancel_unrelated_pending_search(
         lambda _: manager,
     )
 
-    music_playback._on_user_utterance(
-        "YUI",
-        {"lanlan": "YUI", "content": "不要日推"},
-    )
+    try:
+        music_playback._on_user_utterance(
+            "YUI",
+            {"lanlan": "YUI", "content": "不要日推"},
+        )
+    finally:
+        for coro in scheduled:
+            coro.close()
 
     previous_task.cancel.assert_not_called()
     assert manager._music_request_epoch == 4
-    assert manager._music_intent_stream.allow_action is True
+    assert len(scheduled) == 1
 
 
 @pytest.mark.asyncio

@@ -180,12 +180,6 @@ class TurnMixin:
             logger.info("[%s] session takeover active: dropping ordinary realtime text chunk len=%d", self.lanlan_name, len(text or ""))
             return
 
-        from main_logic.music_playback import filter_music_response_chunk
-
-        text = filter_music_response_chunk(self, text)
-        if not text:
-            return
-
         if not ui_enabled and not tts_enabled:
             return
 
@@ -341,9 +335,6 @@ class TurnMixin:
         analyze_request, or agent-callback re-delivery — those belong
         exclusively to user-initiated conversation turns.
         """
-        from main_logic.music_playback import finish_music_response
-
-        finish_music_response(self)
         if not content_committed:
             logger.debug("[%s] handle_proactive_complete: no content committed, skipping completion flush", self.lanlan_name)
             return
@@ -437,10 +428,6 @@ class TurnMixin:
             return
 
         active_request_id = self._active_text_request_id
-
-        from main_logic.music_playback import finish_music_response
-
-        finish_music_response(self)
 
         if self.use_tts and self.tts_thread and self.tts_thread.is_alive():
             logger.info("📨 Response complete (LLM 回复结束)")
