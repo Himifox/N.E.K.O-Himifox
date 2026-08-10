@@ -21,14 +21,8 @@ import math
 from collections.abc import Callable
 from typing import Any
 
-from config.prompts._locale import normalize_prompt_locale
-from config.prompts.prompts_music import get_music_intent_classifier_prompt
-from config.prompts.prompts_proactive import (
-    BEGIN_GENERATE,
-    build_unified_phase1_prompt,
-    get_music_request_pending_prompt,
-)
-from config.prompts.prompts_sys import _loc
+from config.prompts.prompts_music import MUSIC_ACTION_CLOSE, MUSIC_ACTION_OPEN
+from config.prompts.prompts_proactive import get_music_request_pending_prompt
 from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.music_command_parser import (
     is_strict_music_cancellation,
@@ -40,8 +34,6 @@ from main_logic.music_requests import (
     fetch_music_request,
     mark_music_request_query,
 )
-from utils.config_manager import get_config_manager
-from utils.llm_client import HumanMessage, SystemMessage, create_chat_llm_async
 from utils.logger_config import get_module_logger
 
 logger = get_module_logger(__name__, "Main")
@@ -60,11 +52,6 @@ _PLAYBACK_FAILURE_REASONS = frozenset(
 _REPLY_START_GRACE_SECONDS = 1.0
 _REPLY_WAIT_TIMEOUT_SECONDS = 5.0
 _REPLY_WAIT_POLL_SECONDS = 0.05
-_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS = 8.0
-_MUSIC_INTENT_CLASSIFIER_MAX_TOKENS = 180
-_MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS = 500
-_MUSIC_INTENT_CONTEXT_MESSAGES = 6
-_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS = 300
 
 
 def register_music_session_manager_getter(
@@ -87,31 +74,143 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
     cancellation = request is None and is_strict_music_cancellation(content)
     if request is None:
         if cancellation:
+            manager._music_intent_consumed_generation = generation
             _cancel_music_request(manager)
             return
-        fire_task = getattr(manager, "_fire_task", None)
-        if callable(fire_task) and content.strip():
-            manager._music_intent_classifier_task = fire_task(
-                _classify_and_apply_music_intent(manager, content, generation)
-            )
+        stream = getattr(manager, "_music_intent_stream", None)
+        if stream is not None and content.strip():
+            stream.allow_action = True
         return
+    manager._music_intent_consumed_generation = generation
     _start_music_request(manager, request)
 
 
 def _begin_music_intent_generation(manager: Any) -> int:
-    previous = getattr(manager, "_music_intent_classifier_task", None)
-    if previous is not None:
-        try:
-            if not previous.done():
-                previous.cancel()
-        except Exception:
-            pass
     generation = int(
-        getattr(manager, "_music_intent_classifier_generation", 0) or 0
+        getattr(manager, "_music_intent_generation", 0) or 0
     ) + 1
-    manager._music_intent_classifier_generation = generation
-    manager._music_intent_classifier_task = None
+    manager._music_intent_generation = generation
+    manager._music_intent_stream = _MusicActionStream(generation)
     return generation
+
+
+class _MusicActionStream:
+    """Strip one hidden music suffix while retaining its validated payload."""
+
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+        self.allow_action = False
+        self.pending = ""
+        self.captured = ""
+        self.capture_buffer = ""
+        self.capturing = False
+        self.closed = False
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return text
+        if self.capturing:
+            return self._capture(text)
+
+        combined = self.pending + text
+        self.pending = ""
+        marker_at = combined.find(MUSIC_ACTION_OPEN)
+        if marker_at >= 0:
+            visible = combined[:marker_at]
+            self.capturing = True
+            return visible + self._capture(
+                combined[marker_at + len(MUSIC_ACTION_OPEN) :]
+            )
+
+        held = _matching_marker_suffix(combined)
+        if held:
+            self.pending = combined[-held:]
+            return combined[:-held]
+        return combined
+
+    def _capture(self, text: str) -> str:
+        combined = self.capture_buffer + text
+        close_at = combined.find(MUSIC_ACTION_CLOSE)
+        if close_at < 0:
+            self.capture_buffer = combined[:4096]
+            return ""
+        if not self.closed:
+            self.captured = combined[:close_at].strip()
+            self.closed = True
+        self.capture_buffer = ""
+        self.capturing = False
+        return self.feed(combined[close_at + len(MUSIC_ACTION_CLOSE) :])
+
+    def finish(self) -> str:
+        # A partial control opener at end-of-stream is malformed machine data,
+        # so fail closed instead of leaking it into UI/TTS.
+        self.pending = ""
+        return ""
+
+
+def _matching_marker_suffix(text: str) -> int:
+    limit = min(len(text), len(MUSIC_ACTION_OPEN) - 1)
+    for length in range(limit, 0, -1):
+        if text.endswith(MUSIC_ACTION_OPEN[:length]):
+            return length
+    return 0
+
+
+def filter_music_response_chunk(manager: Any, text: str) -> str:
+    """Remove hidden music metadata from a text-mode response chunk."""
+    if getattr(manager, "input_mode", None) != "text":
+        return text
+    stream = getattr(manager, "_music_intent_stream", None)
+    if stream is None:
+        stream = _MusicActionStream(
+            int(getattr(manager, "_music_intent_generation", 0) or 0)
+        )
+        manager._music_intent_stream = stream
+    return stream.feed(text)
+
+
+def _strip_music_action_from_history(manager: Any) -> None:
+    history = getattr(getattr(manager, "session", None), "_conversation_history", None)
+    if not isinstance(history, list):
+        return
+    for message in reversed(history):
+        content = getattr(message, "content", None)
+        if not isinstance(content, str) or MUSIC_ACTION_OPEN not in content:
+            continue
+        cleaned = content
+        while MUSIC_ACTION_OPEN in cleaned:
+            start = cleaned.find(MUSIC_ACTION_OPEN)
+            end = cleaned.find(
+                MUSIC_ACTION_CLOSE,
+                start + len(MUSIC_ACTION_OPEN),
+            )
+            if end < 0:
+                cleaned = cleaned[:start]
+                break
+            cleaned = cleaned[:start] + cleaned[end + len(MUSIC_ACTION_CLOSE) :]
+        message.content = cleaned
+        return
+
+
+def finish_music_response(manager: Any) -> None:
+    """Finalize hidden metadata, clean history, and apply the same-call action."""
+    stream = getattr(manager, "_music_intent_stream", None)
+    if stream is None:
+        return
+    manager._music_intent_stream = None
+    stream.finish()
+    _strip_music_action_from_history(manager)
+    arguments = None
+    if stream.closed and stream.allow_action:
+        arguments = _parse_music_intent_response(f"[MUSIC] {stream.captured}")
+    applied = _apply_reported_music_intent(manager, arguments, stream.generation)
+    if applied:
+        logger.info(
+            "[%s] same-response music intent accepted: action=%s target=%s",
+            getattr(manager, "lanlan_name", "") or "unknown",
+            arguments.get("action"),
+            arguments.get("target_type"),
+        )
 
 
 def _start_music_request(
@@ -164,66 +263,6 @@ def _clean_music_intent_text(value: Any) -> str:
         return ""
     cleaned = " ".join(value.split())
     return cleaned if len(cleaned) <= 120 else ""
-
-
-def _classifier_message_text(message: Any) -> str:
-    content = getattr(message, "content", "")
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        text = " ".join(
-            str(part.get("text") or "")
-            for part in content
-            if isinstance(part, dict)
-            and str(part.get("type") or "") in {"text", "input_text", "output_text"}
-        )
-    else:
-        return ""
-    return " ".join(text.split())[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
-
-
-def _recent_music_dialogue(manager: Any, latest_user_text: str) -> str:
-    session = getattr(manager, "session", None)
-    history = getattr(session, "_conversation_history", None)
-    if not isinstance(history, list):
-        return ""
-
-    latest_normalized = " ".join(str(latest_user_text or "").split())
-    skipped_latest = False
-    rows: list[str] = []
-    for message in reversed(history):
-        role = str(getattr(message, "type", "") or "").lower()
-        if role not in {"human", "ai"}:
-            continue
-        text = _classifier_message_text(message)
-        if not text:
-            continue
-        if (
-            role == "human"
-            and not skipped_latest
-            and text == latest_normalized[:_MUSIC_INTENT_CONTEXT_MESSAGE_CHARS]
-        ):
-            skipped_latest = True
-            continue
-        rows.append(f"{'user' if role == 'human' else 'assistant'}: {text}")
-        if len(rows) >= _MUSIC_INTENT_CONTEXT_MESSAGES:
-            break
-    rows.reverse()
-    return "\n".join(rows)
-
-
-def _music_playback_context(manager: Any) -> str:
-    state = _clean_music_intent_text(
-        getattr(manager, "_music_playback_state", "")
-    ) or "unknown"
-    track = getattr(manager, "_music_current_track", None)
-    track = track if isinstance(track, dict) else {}
-    name = _clean_music_intent_text(track.get("name"))
-    artist = _clean_music_intent_text(track.get("artist"))
-    return (
-        f"state={state}; title={name or 'unknown'}; "
-        f"artist={artist or 'unknown'}"
-    )
 
 
 def _music_request_from_intent(arguments: dict[str, Any]) -> MusicRequest | None:
@@ -316,102 +355,20 @@ def _parse_music_intent_response(raw: Any) -> dict[str, Any] | None:
     return arguments if _music_request_from_intent(arguments) is not None else None
 
 
-async def _classify_music_intent(
-    user_text: str,
-    language: str | None,
-    *,
-    lanlan_name: str = "",
-    master_name: str = "",
-    recent_dialogue: str = "",
-    playback_context: str = "",
-) -> dict[str, Any] | None:
-    cleaned = " ".join(str(user_text or "").split())
-    if not cleaned or len(cleaned) > _MUSIC_INTENT_CLASSIFIER_MAX_INPUT_CHARS:
-        return None
-
-    config_manager = get_config_manager()
-    core_config = await config_manager.aget_core_config()
-    model_config = await config_manager.aget_model_api_config(
-        "conversation",
-        core_config=core_config,
-    )
-    model = str(model_config.get("model") or "").strip()
-    base_url = str(model_config.get("base_url") or "").strip()
-    if not model or not base_url:
-        return None
-
-    from utils.token_tracker import set_call_type
-
-    set_call_type("music_intent")
-    locale = normalize_prompt_locale(
-        language,
-        default="en",
-        simplified="zh",
-        keep_traditional=True,
-    )
-    assistant_name = lanlan_name or "N.E.K.O"
-    user_name = master_name or "user"
-    system_prompt = build_unified_phase1_prompt(
-        locale,
-        memory_context="",
-        music_ctx={
-            "lanlan_name": assistant_name,
-            "master_name": user_name,
-        },
-        lanlan_name=assistant_name,
-        master_name=user_name,
-    )
-    classifier_prompt = get_music_intent_classifier_prompt(locale)
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(
-            content=(
-                f"{classifier_prompt}\n"
-                "<recent_dialogue_before_latest>\n"
-                f"{recent_dialogue or '(none)'}\n"
-                "</recent_dialogue_before_latest>\n"
-                "<current_playback_state>\n"
-                f"{playback_context or 'state=unknown; title=unknown; artist=unknown'}\n"
-                "</current_playback_state>\n"
-                "<latest_user_message>\n"
-                f"{cleaned}\n"
-                "</latest_user_message>\n\n"
-                f"{_loc(BEGIN_GENERATE, locale)}"
-            )
-        ),
-    ]
-    async with await create_chat_llm_async(
-        model,
-        base_url,
-        model_config.get("api_key"),
-        provider_type=model_config.get("provider_type"),
-        temperature=0,
-        streaming=False,
-        max_retries=0,
-        max_completion_tokens=_MUSIC_INTENT_CLASSIFIER_MAX_TOKENS,
-        timeout=_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS,
-    ) as llm:
-        response = await asyncio.wait_for(
-            llm.ainvoke(messages),
-            timeout=_MUSIC_INTENT_CLASSIFIER_TIMEOUT_SECONDS,
-        )
-    return _parse_music_intent_response(getattr(response, "content", None))
-
-
-def _apply_classified_music_intent(
+def _apply_reported_music_intent(
     manager: Any,
     arguments: dict[str, Any] | None,
     generation: int,
 ) -> bool:
     if generation != int(
-        getattr(manager, "_music_intent_classifier_generation", 0) or 0
+        getattr(manager, "_music_intent_generation", 0) or 0
     ):
         return False
     if generation == int(
-        getattr(manager, "_music_intent_classifier_consumed_generation", 0) or 0
+        getattr(manager, "_music_intent_consumed_generation", 0) or 0
     ):
         return False
-    manager._music_intent_classifier_consumed_generation = generation
+    manager._music_intent_consumed_generation = generation
     if not arguments:
         return False
 
@@ -427,42 +384,6 @@ def _apply_classified_music_intent(
     if request is None:
         return False
     return _start_music_request(manager, request)
-
-
-async def _classify_and_apply_music_intent(
-    manager: Any,
-    user_text: str,
-    generation: int,
-) -> bool:
-    recent_dialogue = _recent_music_dialogue(manager, user_text)
-    playback_context = _music_playback_context(manager)
-    try:
-        arguments = await _classify_music_intent(
-            user_text,
-            getattr(manager, "user_language", None),
-            lanlan_name=getattr(manager, "lanlan_name", ""),
-            master_name=getattr(manager, "master_name", ""),
-            recent_dialogue=recent_dialogue,
-            playback_context=playback_context,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning(
-            "[%s] music intent classifier failed closed: %s",
-            getattr(manager, "lanlan_name", "") or "unknown",
-            type(exc).__name__,
-        )
-        return False
-    applied = _apply_classified_music_intent(manager, arguments, generation)
-    if applied:
-        logger.info(
-            "[%s] classified music intent accepted: action=%s target=%s",
-            getattr(manager, "lanlan_name", "") or "unknown",
-            arguments.get("action"),
-            arguments.get("target_type"),
-        )
-    return applied
 
 
 def _next_music_request_epoch(manager: Any) -> int:

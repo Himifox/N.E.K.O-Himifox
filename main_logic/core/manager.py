@@ -489,11 +489,10 @@ class LLMSessionManager(
         # sync_message_queue 控制消息更原子：meta 与 turn end 事件
         # 同生共死，不会因为两条消息的时序错乱而把 avatar 轮当成 proactive。
         self._pending_turn_meta: Optional[dict] = None
-        # 非严格点歌走独立短分类请求。generation 让迟到的旧结果失效，task
-        # 用于新用户消息到来时及时取消仍在运行的分类。
-        self._music_intent_classifier_generation = 0
-        self._music_intent_classifier_consumed_generation = 0
-        self._music_intent_classifier_task: Optional[asyncio.Task] = None
+        # 非严格点歌复用主回复携带的隐藏动作；不创建第二次 LLM 请求。
+        self._music_intent_generation = 0
+        self._music_intent_consumed_generation = 0
+        self._music_intent_stream = None
         self._music_current_track: dict[str, str] = {}
 
         # 内置工具。在 __init__ 末尾注册
