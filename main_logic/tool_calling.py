@@ -272,7 +272,12 @@ class ToolRegistry:
         start = time.time()
         try:
             if tool.handler is not None:
-                result_value = tool.handler(call.arguments or {})
+                handler_arguments = dict(call.arguments or {})
+                handler_arguments.pop("_neko_turn_owner", None)
+                turn_owner = call.provider_meta.get("turn_owner")
+                if isinstance(turn_owner, dict):
+                    handler_arguments["_neko_turn_owner"] = dict(turn_owner)
+                result_value = tool.handler(handler_arguments)
                 if asyncio.iscoroutine(result_value) or isinstance(result_value, asyncio.Future):
                     result_value = await result_value
                 return ToolResult(

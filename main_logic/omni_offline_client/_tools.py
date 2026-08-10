@@ -93,6 +93,7 @@ class _ToolingMixin:
         calls,
         assistant_text: str = "",
         assistant_reasoning: str = "",
+        tool_call_owner: dict | None = None,
     ) -> int:
         """Run each tool call through ``on_tool_call`` and mutate
         ``messages`` in place: append one assistant turn announcing all
@@ -164,6 +165,9 @@ class _ToolingMixin:
                 arguments=parse_arguments_json(c.arguments),
                 call_id=c.id or f"call_{i}",
                 raw_arguments=c.arguments or "",
+                provider_meta={"turn_owner": dict(tool_call_owner)}
+                if isinstance(tool_call_owner, dict)
+                else {},
             )
             handler = self.on_tool_call
             if handler is None:
@@ -388,6 +392,7 @@ class _ToolingMixin:
         ``self.max_tool_iterations`` total LLM calls."""
         tool_leak_filter = overrides.pop("_tool_leak_filter", None)
         tool_leak_provider = overrides.pop("_tool_leak_provider", None)
+        tool_call_owner = overrides.pop("_tool_call_owner", None)
         tools_payload = self._openai_tools_payload()
         if tools_payload:
             overrides.setdefault("tools", tools_payload)
@@ -516,6 +521,7 @@ class _ToolingMixin:
                     # clean replies (no think tag present).
                     assistant_text=strip_thinking_segments(streamed_text_buffer),
                     assistant_reasoning=streamed_reasoning_buffer,
+                    tool_call_owner=tool_call_owner,
                 )
                 executed_tool_calls += executed_this_round
                 if executed_this_round:

@@ -81,6 +81,8 @@ def _on_user_utterance(bucket: str, event: dict[str, Any]) -> None:
         owner_value = event.get(owner_key)
         if owner_value is not None:
             turn_state[owner_key] = owner_value
+    if event.get("is_voice"):
+        turn_state["is_voice"] = True
     manager._music_intent_turn = turn_state
     if request is None:
         if cancellation:
@@ -201,6 +203,13 @@ async def handle_music_intent_tool(
     turn = getattr(manager, "_music_intent_turn", None)
     if not isinstance(turn, dict):
         return _music_tool_result(manager, "ignored", reason="no_current_user_turn")
+    turn_owner = arguments.get("_neko_turn_owner") if isinstance(arguments, dict) else None
+    if isinstance(turn_owner, dict) and any(
+        owner_key in turn_owner
+        and turn.get(owner_key) != turn_owner[owner_key]
+        for owner_key in ("request_id", "turn_id")
+    ):
+        return _music_tool_result(manager, "ignored", reason="stale_music_intent_turn")
     if turn.get("handled"):
         return _music_tool_result(
             manager, "ignored", reason="already_handled_by_strict_command"

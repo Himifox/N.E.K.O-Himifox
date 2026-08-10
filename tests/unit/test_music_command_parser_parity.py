@@ -122,6 +122,10 @@ def test_non_strict_requests_are_left_for_the_model_tool(
     (
         "播放我的歌",
         "播放你的晴天",
+        "播放妳的晴天",
+        "播放咱的晴天",
+        "播放咱们的晴天",
+        "播放咱們的晴天",
         "放假",
         "放大一点",
         "play with me",
@@ -195,3 +199,70 @@ def test_additional_direct_stop_phrases_are_recognized(text: str) -> None:
 
 def test_non_music_cancel_phrase_is_not_a_music_stop() -> None:
     assert is_strict_music_cancellation("取消收藏这首歌") is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "play some songs",
+        "play the music",
+        "play a track",
+        "play some tunes for us",
+    ),
+)
+def test_additional_generic_english_targets_do_not_become_searches(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "keyword"),
+    (
+        ("listen to Yellow", "Yellow"),
+        ("please listen to Yellow", "Yellow"),
+        ("I want to play Yellow", "Yellow"),
+    ),
+)
+def test_direct_english_listen_and_request_prefixes_are_strict(
+    text: str,
+    keyword: str,
+) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == keyword
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("turn the music off", "turn the songs off", "shut the playback off"),
+)
+def test_object_before_off_english_stops_are_recognized(text: str) -> None:
+    assert is_strict_music_cancellation(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("停止播放红心歌单", "停止我的红心歌单", "暂停播放每日推荐"),
+)
+def test_source_named_chinese_stops_are_recognized(text: str) -> None:
+    assert is_strict_music_cancellation(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("play Yellow and play Fix You", "play Yellow but listen to Fix You"),
+)
+def test_chained_english_play_commands_fail_closed(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("播放我的歌单", "播放我的播放列表", "播放我的播放清單"),
+)
+def test_bare_possessive_playlists_are_generic(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.playlist_name == ""
+    assert request.keyword == ""

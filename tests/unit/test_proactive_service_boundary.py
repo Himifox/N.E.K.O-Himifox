@@ -592,6 +592,39 @@ async def test_invalid_model_music_call_can_be_corrected_in_the_same_turn(
     assert manager._music_intent_turn["consumed"] is True
 
 
+@pytest.mark.asyncio
+async def test_stale_model_music_call_cannot_use_a_newer_turn(monkeypatch) -> None:
+    manager = SimpleNamespace(
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "request_id": "req-B",
+            "turn_id": "speech-B",
+        },
+        _fire_task=MagicMock(),
+    )
+
+    result = await music_playback.handle_music_intent_tool(
+        manager,
+        {
+            "action": "play",
+            "target_type": "query",
+            "query": "jazz",
+            "_neko_turn_owner": {
+                "request_id": "req-A",
+                "turn_id": "speech-A",
+            },
+        },
+    )
+
+    assert result == {
+        "status": "ignored",
+        "reason": "stale_music_intent_turn",
+    }
+    assert manager._music_intent_turn["consumed"] is False
+    manager._fire_task.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     (

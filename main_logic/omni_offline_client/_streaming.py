@@ -496,6 +496,7 @@ class _StreamingMixin:
         response_discarded_callback: Optional[
             Callable[[str, int, int, bool, Optional[str]], Awaitable[None]]
         ] = None,
+        tool_call_owner: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Send a text message to the API and stream the response.
@@ -835,7 +836,9 @@ class _StreamingMixin:
                             else None
                         )
                         async for chunk in self._astream_visible_with_tools(
-                            self._conversation_history, **_focus_overrides,
+                            self._conversation_history,
+                            _tool_call_owner=tool_call_owner,
+                            **_focus_overrides,
                         ):
                             if not _ttft_recorded:
                                 _ttft_recorded = True

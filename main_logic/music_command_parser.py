@@ -25,6 +25,8 @@ _ZH_STOP_COMMAND = re.compile(
     r"(?:停止|停掉|暂停|暫停)(?:播放|音乐|音樂|歌曲?|歌|当前音乐|當前音樂)"
     r"|(?:关掉|關掉|关闭|關閉)(?:音乐|音樂|歌曲?|歌)"
     r"|取消(?:播放)?(?:音乐|音樂|歌曲?|歌)"
+    r"|(?:停止|停掉|暂停|暫停)(?:播放)?(?:我的)?"
+    r"(?:红心歌单|紅心歌單|每日推荐|每日推薦|日推)"
     r"|(?:不要|别|別)(?:再)?(?:播放|放|播|听|聽)(?:音乐|音樂|歌曲?|歌)?"
     r")(?:了|吧)?$"
 )
@@ -35,14 +37,18 @@ _ZH_NON_MUSIC_TARGET = re.compile(
 )
 
 _EN_PLAY_COMMAND = re.compile(
-    r"^(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)"
-    r"play\s+(?P<target>.{1,100})$",
+    r"^(?:(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)play"
+    r"|(?:please\s+)?listen\s+to"
+    r"|i\s+(?:want|would\s+like)\s+to\s+(?:play|listen\s+to))"
+    r"\s+(?P<target>.{1,100})$",
     re.IGNORECASE,
 )
 _EN_STOP_COMMAND = re.compile(
     r"^(?:(?:please\s+)?(?:stop|pause|cancel)\s+(?:(?:this|that|the)\s+)?"
     r"(?:music|playback|songs?|tracks?)"
     r"|(?:please\s+)?(?:turn|shut)\s+off\s+(?:the\s+)?(?:music|playback)"
+    r"|(?:please\s+)?(?:turn|shut)\s+(?:the\s+)?"
+    r"(?:music|playback|songs?|tracks?)\s+off"
     r"|(?:please\s+)?(?:do\s+not|don't|don’t|dont)\s+play\s+"
     r"(?:(?:this|that|the)\s+)?(?:music|songs?))$",
     re.IGNORECASE,
@@ -55,7 +61,8 @@ _EN_NON_MUSIC_TARGET = re.compile(
 )
 _EN_SECOND_COMMAND = re.compile(
     r"(?:[.!]\s+|\b(?:and|but)\s+)"
-    r"(?:please\s+)?(?:(?:do\s+not|don't|don’t|dont)\s+play|stop|pause|cancel)\b",
+    r"(?:please\s+)?(?:(?:do\s+not|don't|don’t|dont)\s+play|"
+    r"play|listen\s+to|stop|pause|cancel)\b",
     re.IGNORECASE,
 )
 
@@ -64,7 +71,8 @@ _CLAUSE_MARKS = frozenset("，,；;、")
 _ZH_QUOTES = (("《", "》"), ("「", "」"), ("『", "』"), ("【", "】"))
 _ZH_AMBIGUOUS_ARTISTS = frozenset(
     {
-        "我", "你", "他", "她", "它", "我们", "我們", "你们", "你們",
+        "我", "你", "妳", "他", "她", "它", "咱", "我们", "我們", "咱们", "咱們",
+        "你们", "你們",
         "他们", "他們", "她们", "她們", "它们", "它們", "自己", "本人",
     }
 )
@@ -109,7 +117,10 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
         "网易云的日推", "網易雲的日推",
     }:
         return MusicRequest(personalization_source="daily")
-    if compact in {"音乐", "音樂", "歌曲", "歌", "一首歌", "首歌"}:
+    if compact in {
+        "音乐", "音樂", "歌曲", "歌", "一首歌", "首歌",
+        "我的歌单", "我的歌單", "我的播放列表", "我的播放清单", "我的播放清單",
+    }:
         return MusicRequest()
 
     playlist_match = re.fullmatch(
@@ -170,7 +181,9 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     if not target or _EN_NON_MUSIC_TARGET.search(target):
         return None
     if re.fullmatch(
-        r"(?:(?:me|us)\s+)?(?:music|some music|a song|any song|songs?|something)"
+        r"(?:(?:me|us)\s+)?(?:"
+        r"(?:(?:some|any|the)\s+)?music|"
+        r"(?:(?:a|any|some|the)\s+)?(?:songs?|tracks?|tunes?)|something)"
         r"(?:\s+for\s+(?:me|us))?",
         target,
         re.IGNORECASE,

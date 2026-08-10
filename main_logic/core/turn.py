@@ -91,6 +91,21 @@ class TurnMixin:
             # 再覆盖成 proactive sid。完整 USER_INPUT 事件仍在锁外 fire，以更新
             # owner/user_sid 并派发订阅者。
             self.state.mark_user_input_preempt()
+        pending_music_turn_id = getattr(
+            self,
+            "_pending_music_intent_voice_turn_id",
+            None,
+        )
+        if pending_music_turn_id is not None:
+            music_turn = getattr(self, "_music_intent_turn", None)
+            if (
+                isinstance(music_turn, dict)
+                and music_turn.get("is_voice") is True
+                and music_turn.get("turn_id") == pending_music_turn_id
+            ):
+                music_turn["turn_id"] = new_sid
+                self._music_intent_voice_input_turn_id = new_sid
+            self._pending_music_intent_voice_turn_id = None
         await self.state.fire(SessionEvent.USER_INPUT, sid=new_sid)
 
     def read_current_speech_id(self) -> str | None:
@@ -887,7 +902,11 @@ class TurnMixin:
             "is_voice": bool(is_voice_source),
             "source": "main_logic.core",
         }
-        turn_id = getattr(self, "current_speech_id", None)
+        turn_id = (
+            getattr(self, "_music_intent_voice_input_turn_id", None)
+            if is_voice_source
+            else getattr(self, "current_speech_id", None)
+        )
         if turn_id is not None:
             event["turn_id"] = turn_id
         if request_id is not None:
@@ -902,6 +921,19 @@ class TurnMixin:
             # startup via app/runtime_bindings.py). Per-sink errors are
             # swallowed inside the dispatcher.
             dispatch_user_utterance(bucket, event)
+
+    def _music_intent_turn_id_for_voice_input(self, source: str | None) -> str:
+        session = getattr(self, "session", None)
+        response_turn_already_started = bool(
+            source == "independent_asr"
+            or getattr(session, "_has_server_vad", False)
+        )
+        current_turn_id = getattr(self, "current_speech_id", None)
+        if response_turn_already_started and current_turn_id is not None:
+            return str(current_turn_id)
+        provisional_turn_id = f"voice-input:{uuid4()}"
+        self._pending_music_intent_voice_turn_id = provisional_turn_id
+        return provisional_turn_id
 
     def _clean_frontend_memory_text(self, value: Any) -> str:
         if not isinstance(value, str):
@@ -1289,7 +1321,13 @@ class TurnMixin:
                 # 与 on_user_message 对偶：把"用户原话"推到插件总线 user-context
                 # bucket。文本路径在 _process_stream_data_internal 已自行调用，
                 # 这里只覆盖语音路径，避免非语音复用路径重复发布。
-                self._publish_user_utterance_to_plugin_bus(transcript, is_voice_source=True)
+                self._music_intent_voice_input_turn_id = (
+                    self._music_intent_turn_id_for_voice_input(source)
+                )
+                self._publish_user_utterance_to_plugin_bus(
+                    transcript,
+                    is_voice_source=True,
+                )
 
                 # Mini-game 邀请关键词兜底：与文本路径
                 # （_process_stream_data_internal）对偶。语音用户没法点

@@ -524,6 +524,10 @@ class StreamingMixin:
                         "system_prefix": _agent_cb_ctx or None,
                         "thinking_on": _focus_thinking,
                         "response_discarded_callback": response_discarded_callback,
+                        "tool_call_owner": {
+                            "request_id": text_request_id,
+                            "turn_id": new_user_sid,
+                        },
                     }
                     if input_transcript_callback:
                         stream_text_kwargs["input_transcript_callback"] = input_transcript_callback

@@ -93,6 +93,47 @@ async def test_registry_local_handler_runs():
 
 
 @pytest.mark.asyncio
+async def test_registry_injects_trusted_turn_owner_and_drops_spoofed_owner():
+    from main_logic.tool_calling import ToolCall, ToolDefinition, ToolRegistry
+
+    reg = ToolRegistry()
+    seen = []
+
+    async def handler(args):
+        seen.append(args)
+        return {"ok": True}
+
+    reg.register(ToolDefinition(name="owned", description="owned", handler=handler))
+    result = await reg.execute(
+        ToolCall(
+            name="owned",
+            arguments={
+                "value": 1,
+                "_neko_turn_owner": {"request_id": "spoofed"},
+            },
+            call_id="c-owned",
+            provider_meta={
+                "turn_owner": {
+                    "request_id": "req-A",
+                    "turn_id": "speech-A",
+                }
+            },
+        )
+    )
+
+    assert result.is_error is False
+    assert seen == [
+        {
+            "value": 1,
+            "_neko_turn_owner": {
+                "request_id": "req-A",
+                "turn_id": "speech-A",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_registry_unknown_tool_returns_error_not_raise():
     from main_logic.tool_calling import ToolCall, ToolRegistry
 
@@ -259,6 +300,7 @@ async def test_offline_openai_path_runs_tool_then_text():
 
     # Tool that records invocations.
     seen_args = []
+    seen_owner = []
 
     async def get_weather(args):
         seen_args.append(args)
@@ -307,6 +349,7 @@ async def test_offline_openai_path_runs_tool_then_text():
     # bridge handler — the registry isn't exercised here, just the
     # client→handler contract.
     async def handler(call: ToolCall) -> ToolResult:
+        seen_owner.append(call.provider_meta.get("turn_owner"))
         result_value = await get_weather(call.arguments)
         return ToolResult(call_id=call.call_id, name=call.name, output=result_value)
 
@@ -314,7 +357,10 @@ async def test_offline_openai_path_runs_tool_then_text():
 
     messages = [{"role": "user", "content": "what's the weather in Paris?"}]
     out_chunks = []
-    async for ch in client._astream_with_tools(messages):
+    async for ch in client._astream_with_tools(
+        messages,
+        _tool_call_owner={"request_id": "req-A", "turn_id": "speech-A"},
+    ):
         out_chunks.append(ch)
 
     # Two LLM calls, second one yielded the text.
@@ -322,6 +368,7 @@ async def test_offline_openai_path_runs_tool_then_text():
     text_emitted = "".join(ch.content for ch in out_chunks)
     assert "Paris" in text_emitted
     assert seen_args == [{"city": "Paris"}]
+    assert seen_owner == [{"request_id": "req-A", "turn_id": "speech-A"}]
 
     # History after the loop must include the assistant tool_calls turn
     # and the tool result message before the final assistant text.
@@ -1086,19 +1133,26 @@ async def test_offline_genai_streamed_text_persisted_with_tool_call(monkeypatch)
     client._genai_tools_unsupported = False
     client.llm = type("F", (), {"max_completion_tokens": 100})()
 
+    seen_owner = []
+
     async def handler(call: ToolCall) -> ToolResult:
+        seen_owner.append(call.provider_meta.get("turn_owner"))
         return ToolResult(call_id=call.call_id, name=call.name, output={"temp_c": 22})
 
     client.on_tool_call = handler
 
     messages = [{"role": "user", "content": "weather Tokyo"}]
     out = []
-    async for ch in client._astream_genai_with_tools(messages):
+    async for ch in client._astream_genai_with_tools(
+        messages,
+        _tool_call_owner={"request_id": "req-A", "turn_id": "speech-A"},
+    ):
         if ch.content:
             out.append(ch.content)
 
     # 用户拿到的 text 应该是前半句 + 后半句
     full_user_text = "".join(out)
+    assert seen_owner == [{"request_id": "req-A", "turn_id": "speech-A"}]
     assert "让我查一下天气" in full_user_text
     assert "22°C" in full_user_text
 

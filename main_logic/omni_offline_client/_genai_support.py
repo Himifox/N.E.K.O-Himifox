@@ -428,6 +428,7 @@ class _GenaiMixin:
         cannot handle tools — caller falls back to OpenAI-compat."""
         tool_leak_filter = overrides.pop("_tool_leak_filter", None)
         tool_leak_provider = overrides.pop("_tool_leak_provider", None)
+        tool_call_owner = overrides.pop("_tool_call_owner", None)
         if not _ensure_genai():
             raise _GenaiToolsUnsupported("google-genai SDK not importable")
         types = _genai_types
@@ -744,6 +745,9 @@ class _GenaiMixin:
                         arguments=tc_args,
                         call_id=tc_id or f"call_{i}",
                         raw_arguments=tc_raw,
+                        provider_meta={"turn_owner": dict(tool_call_owner)}
+                        if isinstance(tool_call_owner, dict)
+                        else {},
                     )
                     try:
                         with _suspend_dialog_slop():

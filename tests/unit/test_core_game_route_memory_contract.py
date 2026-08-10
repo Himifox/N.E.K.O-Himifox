@@ -10,6 +10,7 @@ import main_logic.core as core_module
 import main_logic.core.streaming as streaming_module
 import main_logic.core.tts_runtime as tts_runtime_module
 import main_logic.core.turn as turn_module
+import main_logic.music_playback as music_playback_module
 from tests.fake_clock import patch_module_clock
 
 # 假时钟一律打到「真正读 time.time() 的那个模块」上，而不是 core_module
@@ -1123,6 +1124,10 @@ async def test_text_stream_discard_callback_keeps_original_request_owner(monkeyp
     )
 
     discard_callback = mgr.session.stream_text.await_args.kwargs["response_discarded_callback"]
+    assert mgr.session.stream_text.await_args.kwargs["tool_call_owner"] == {
+        "request_id": "req-A",
+        "turn_id": mgr.current_speech_id,
+    }
     mgr._active_text_request_id = "req-B"
     mgr.websocket = _FakeConnectedWebSocket()
     mgr._clear_tts_pipeline = AsyncMock()
@@ -1168,6 +1173,63 @@ async def test_stale_turn_end_preserves_newer_music_intent_state():
         "req-B",
         active_turn_id="speech-B",
     )
+
+    assert mgr._music_intent_turn is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_voice_music_intent_rebinds_to_response_turn_and_is_cleared(
+    monkeypatch,
+):
+    mgr = _make_transcript_manager()
+    mgr.session = MagicMock()
+    mgr.session._has_server_vad = False
+    mgr._pending_music_intent_voice_turn_id = None
+    mgr._clear_tts_pipeline = AsyncMock()
+    mgr._finalize_turn_after_emit = AsyncMock()
+    mgr._flush_ai_turn_text_to_tracker = Mock()
+    mgr._dispatch_mini_game_invite_keyword = AsyncMock()
+    mgr._broadcast_voice_transcript_observed = AsyncMock()
+    mgr._fire_task = lambda coro: coro.close()
+    mgr.send_user_activity = AsyncMock()
+
+    def publish_user_utterance(text, **kwargs):
+        return core_module.LLMSessionManager._publish_user_utterance_to_plugin_bus(
+            mgr,
+            text,
+            **kwargs,
+        )
+
+    mgr._publish_user_utterance_to_plugin_bus = publish_user_utterance
+    generated_ids = iter(("provisional", "response-B"))
+    monkeypatch.setattr(turn_module, "uuid4", lambda: next(generated_ids))
+    monkeypatch.setattr(
+        music_playback_module,
+        "_session_manager_getter",
+        lambda _: mgr,
+    )
+    monkeypatch.setattr(
+        music_playback_module,
+        "_start_music_request",
+        Mock(return_value=True),
+    )
+
+    await core_module.LLMSessionManager.handle_input_transcript(
+        mgr,
+        "播放晴天",
+        is_voice_source=True,
+    )
+
+    assert mgr._music_intent_turn["turn_id"] == "voice-input:provisional"
+    assert mgr._music_intent_turn["is_voice"] is True
+
+    await core_module.LLMSessionManager.handle_new_message(mgr)
+
+    assert mgr.current_speech_id == "response-B"
+    assert mgr._music_intent_turn["turn_id"] == "response-B"
+
+    await core_module.LLMSessionManager.handle_response_complete(mgr)
 
     assert mgr._music_intent_turn is None
 
