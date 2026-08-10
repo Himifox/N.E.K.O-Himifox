@@ -1817,7 +1817,7 @@
             // 对内部代理路径直接放行（后端已做安全检查）
             if (url.startsWith('/api/')) return true;
             const parsed = new URL(url);
-            if (parsed.protocol !== 'https:') return false;
+            if (!['http:', 'https:'].includes(parsed.protocol)) return false;
             const hostname = parsed.hostname;
             return MUSIC_CONFIG.allowlist.some(d => hostname === d || hostname.endsWith('.' + d));
         } catch { return false; }

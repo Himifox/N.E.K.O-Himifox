@@ -48,8 +48,19 @@ def test_music_dispatch_waits_for_media_and_reports_real_failure():
     assert "endsWith('.m3u8')" in source
     assert "const backendProxyDomains = new Set(MUSIC_CONFIG.allowlist)" in source
     assert "const toBackendMusicProxyUrl = (url) =>" in source
-    assert source.count("if (parsed.protocol !== 'https:')") == 2
-    assert "['http:', 'https:'].includes(parsed.protocol)" not in source
+    safe_url_source = source.split("const isSafeUrl = (url) => {", 1)[1].split(
+        "const normalizeMusicCoverUrl", 1
+    )[0]
+    assert "['http:', 'https:'].includes(parsed.protocol)" in safe_url_source
+    assert "MUSIC_CONFIG.allowlist.some" in safe_url_source
+    for blocked_protocol in ("ftp:", "file:", "data:", "javascript:"):
+        assert blocked_protocol not in safe_url_source
+
+    proxy_source = source.split("const toBackendMusicProxyUrl = (url) =>", 1)[1].split(
+        "const isMusicOccupied", 1
+    )[0]
+    assert "if (parsed.protocol !== 'https:') return url;" in proxy_source
+    assert "['http:', 'https:'].includes(parsed.protocol)" not in proxy_source
     assert "trackInfo.url = toBackendMusicProxyUrl(originalUrl)" in source
     assert "trackInfo.url.includes('music.163.com')" not in source
 
