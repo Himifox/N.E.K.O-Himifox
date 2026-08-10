@@ -1,192 +1,147 @@
-# 主动搭话偏好推荐最小闭环 Demo 计划
+# 基于现有 Web 链路的普通聊天推荐 Demo
 
-## 1. 目标
+## 1. 验证目标与结论边界
 
-验证 NEKO 能否在**不新增 LLM 线程、不新增 LLM 请求**的前提下，复用现有主动搭话 Phase 1 调用提取用户偏好，并让偏好从下一轮开始影响媒体候选池。
-
-最小闭环为：
+本 Demo 只验证以下因果链：
 
 ```text
-用户对话证据
-  -> 现有 Phase 1 同一次输出附带 [PREFERENCE]
-  -> 本地校验并更新内存偏好事件
-  -> 计算带衰减的偏好分数
-  -> 按概率混合资源池并保留探索候选
-  -> 下一轮仍由现有 Phase 1 完成最终选择
+现有 Web 候选
+  -> 本地确定性主题分类
+  -> Web 候选池临时加权
+  -> 现有 Phase 1 按标题选择
+  -> Web 链接成功提交
+  -> 按角色登记进程内回执
+  -> 后续资源 Phase 1 从普通用户回复提取态度
+  -> 再下一次资源 Phase 1 的 Web 候选池发生变化
 ```
 
-## 2. 范围与约束
+它不代表生产推荐系统已经完成，也不证明 Music/Meme 的实际资源已个性化。Music/Meme 仍只在 Phase 1 前参与搜索任务名额分配，实际资源继续在 Phase 1 后按原链路抓取并使用原素材衰减。
 
-### 本 Demo 包含
+明确不包含：统一媒体排序、crawler 新主题字段、候选 ID 契约或硬校验、长期画像、持久化偏好、前端按钮、行为埋点、数据库、新 LLM 调用，以及新的媒体重复时间。
 
-- 复用现有统一 Phase 1 LLM 调用输出结构化偏好事件。
-- 固定且正交的三维标签体系。
-- 事件置信度、信号强度、正负方向、作用域、TTL 和时间衰减。
-- 本地候选预筛选、资源池概率混合和探索保留。
-- 同一用户消息的事件去重。
-- 功能开关、指标日志、单元测试和离线演示入口。
+## 2. Web 候选与资源身份
 
-### 本 Demo 不包含
+分类和选择只读取现有 Web 字段：
 
-- 新增 LLM 线程或第二次 LLM 调用。
-- 数据库持久化、跨进程同步或多设备画像。
-- 在线学习、向量召回或复杂排序模型。
-- 让 LLM 自由创造标签。
-- 本轮刚提取的标签立即反过来改变本轮已经生成的结果。
+```json
+{
+  "title": "Python桌宠开发记录",
+  "url": "https://example.com/item",
+  "source": "Bilibili",
+  "mode": "video"
+}
+```
 
-## 3. 标签体系
+分类输入限定为 `title`、`description_hint`、`reason`、`source`、`url`。资源身份继续调用 `_source_hash(url, title)`：有 URL 时使用现有规范化 URL 哈希，没有 URL 时使用现有标题哈希降级。没有新增 `candidate_id`、`source_id` 或持久化字段。
 
-标签按维度拆分，避免把主题、载体和场景混在一个扁平集合中。
+## 3. 确定性一级主题
 
-| 维度 | 标签 | 用途 |
-| --- | --- | --- |
-| `domain` | `tech`、`acg`、`gaming`、`companion`、`entertainment`、`internet_culture`、`daily_life` | 用户关注的内容领域 |
-| `media` | `news`、`video`、`music`、`meme` | 用户偏好的媒体载体 |
-| `context` | `focus`、`relax`、`energy`、`sleep` | 用户当前或近期使用场景 |
-
-这组标签覆盖 NEKO 猫娘陪伴项目常见需求，例如 ACG、游戏、陪伴、网络文化、日常生活、助眠和专注，同时保持资源侧容易映射。
-
-## 4. 复用现有 LLM 输出
-
-启用 Demo 后，在现有 Phase 1 提示词中追加偏好提取规则，并允许模型在原输出末尾增加可选区段：
+候选最多得到一个主主题：
 
 ```text
-[PREFERENCE]
-[{"dimension":"domain","tag":"tech","signal":"explicit_like","polarity":1,"confidence":0.95,"scope":"session","evidence":"用户原话片段"}]
+technology, programming, digital_devices, science, games,
+anime_comics, music_culture, film_tv, internet_culture,
+books_education, art_creative, finance_business, society, sports,
+automotive, health_fitness, food_culture, travel_culture,
+fashion_lifestyle, pets_animals
 ```
 
-规则：
+固定关键词表按命中数选择；同分按上述顺序决定；零命中为空主题。分类不调用 LLM，`news/video/music/meme` 不是主题，内部修正键仅使用 `topic.*`。
 
-1. 每轮最多输出 3 个事件。
-2. 标签必须来自固定集合。
-3. 只有当前对话中的用户原话才能作为新证据。
-4. “提到”不等于“喜欢”，必须区分信号类型。
-5. 历史画像只作为推荐上下文，不能重复当作新证据。
-6. 偏好区段解析失败时静默忽略，不影响原有 Phase 1 结果。
+## 4. 回执与反馈验证
 
-因此混合方案不会增加 LLM 线程或调用次数。额外延迟只可能来自同一次调用中少量提示词和输出 token；启用时把候选目标从 12 降到 10，用于抵消部分上下文开销。
+回执只在主动搭话成功提交后登记，并且必须同时满足：
 
-## 5. 偏好事件与计分
+- Phase 2 实际选择 `[WEB]`；
+- 存在 `selected_web_link`；
+- 现有 `_is_link_selected()` 确认该链接位于实际发送的 `source_links`；
+- `_source_hash()` 返回非空资源键。
 
-事件使用以下信号强度：
+标题没有匹配到真实链接、纯聊天、Music、Meme 都不登记。回执按角色保存在进程内，每个角色最多 10 条，2 小时后过期，不写入跨角色 source history。
 
-| 信号 | 基础权重 |
-| --- | ---: |
-| `explicit_like` | `+5.0` |
-| `explicit_dislike` | `-5.0` |
-| `current_intent` | `+2.0` |
-| `inferred_interest` | `+0.5` |
-| `topic_mention` | `+0.2` |
+```json
+{
+  "receipt_id": "derived-from-turn-and-resource",
+  "turn_id": "existing-proactive-sid",
+  "resource_key": "existing-source-hash",
+  "source_key": "normalized-host-or-source",
+  "title": "实际发送标题",
+  "primary_topic": "programming",
+  "delivered_at": 1234567890,
+  "evidence_snapshot": {}
+}
+```
 
-单个事件的有效贡献为：
+`evidence_snapshot` 保存投递时已有用户行的指纹与次数。反馈只接受快照之后新增的用户原话；因此相同文字在投递前已经出现时，必须在投递后再次真实出现才可作为证据。
+
+下一次确实包含资源任务的现有 Phase 1 调用会按需附加：
 
 ```text
-event_score = signal_weight * confidence * polarity * time_decay
+[RECOMMENDATION_FEEDBACK]
+{"receipt_id":"rec-001","reaction":"not_interested","confidence":0.91,"evidence":"这种游戏我没兴趣"}
 ```
 
-- `session` 半衰期为 6 小时。
-- `long_term` 半衰期为 30 天。
-- TTL 到期后事件不再参与计算。
-- 明确喜欢/不喜欢、当前意图、弱推测和普通提及使用不同 TTL。
-- 同一条用户消息产生的相同事件只计入一次；用户之后再次明确表达可以形成新事件。
+固定 reaction 为 `positive`、`not_interested`、`quality_issue`、`source_distrust`、`temporary_skip`、`unclear`。解析器只消费这四个字段；模型附加的主题、通道、用户标签或未知字段不能决定状态。没有回执时不注入反馈任务，不产生新调用或线程。原始反馈段和 evidence 在既有 Phase 1 日志中统一脱敏。
 
-Demo 仅使用按角色实例隔离的内存队列，重启后自动清空，不保存用户原始证据。
+## 5. 本地短期规则
 
-## 6. 资源池混合与候选选择
+反馈必须满足：回执未超过 2 小时、`confidence >= 0.6`、evidence 能在快照后新增用户原话中定位、同一用户原话/回执/reaction 未处理过。
 
-资源侧候选通过现有来源、标题和摘要进行本地标签映射。资源池亲和度为：
+- `positive`、`not_interested`：分别记录主主题正、负证据。证据只保留 2 小时；两个不同 `resource_key` 对同一主题给出同方向证据后，才形成 5 小时 `topic.*` 修正。分值为两条置信度均值乘方向，修正按主题覆盖而非累加。
+- `quality_issue`：不改主题和来源；资源重复仍由成功投递后的现有 source history 处理。
+- `source_distrust`：仅为当前角色抑制相同 `source_key` 的 Web 候选 5 小时；过滤在候选分组和探索之前。
+- `temporary_skip`：不形成主题或来源状态；具体资源仍受现有 5 小时硬去重保护。
+- `unclear`：不形成任何状态。
+
+主题分数只作用于 Web 候选。空主题候选保留现有来源权重和顺序；负修正通过有限指数权重降低概率，不会把主题概率变成零。15% 探索保留，但候选先经过 `_should_skip_source()` 和角色来源抑制，所以探索不能绕过硬约束。Music/Meme 搜索任务是中性候选，不读取 `topic.*`。
+
+## 6. 生效时序
+
+真实时序不能简写成“下一轮立即生效”：
 
 ```text
-pool_affinity = 0.6 * domain + 0.3 * media + 0.1 * max(context)
+第 N 轮：Web 资源实际发送，登记回执
+用户回复：在普通聊天中表达态度
+第 N+1 次资源 Phase 1：候选已按旧状态选完；同一次调用提取反馈
+第 N+2 次资源 Phase 1：才读取更新后的临时主题状态并改变 Web 候选池
 ```
 
-将亲和度归一化为资源池概率，并固定保留 15% 的均匀探索概率。候选数为 10 时至少保留 2 个探索位，避免早期标签把用户锁进单一内容类型。
+如果 2 小时内没有再次执行包含资源任务的 Phase 1，回执过期，之后不再提取该反馈。只有一条主题证据时也不会改变概率。
 
-偏好只调整软权重，不改变现有的新鲜度、重复内容和来源抑制等硬约束。候选经过本地预筛选后，仍交给同一个 Phase 1 调用做最终选择。
+## 7. 功能开关与手动验证
 
-## 7. 时序
-
-偏好事件在 Phase 1 返回后才写入画像，所以新标签从下一轮生效：
-
-```text
-第 N 轮：旧画像 -> 候选 -> Phase 1 输出内容和新事件 -> 更新画像
-第 N+1 轮：新画像 -> 个性化候选 -> Phase 1 最终选择
-```
-
-一轮延迟避免为了“立即生效”增加第二次 LLM 调用，是本 Demo 的明确设计约束。
-
-## 8. 功能开关与可观测性
-
-默认关闭：
+功能默认关闭；修改环境变量后需重启：
 
 ```powershell
 $env:NEKO_PROACTIVE_PREFERENCE_DEMO_ENABLED='1'
 ```
 
-环境变量在进程启动时读取，修改后需要重启应用。关闭时保持原候选选择、原提示词和原 Phase 1 解析行为。
-
-日志记录：
-
-- Phase 1 输入 token、输出 token 和耗时。
-- 偏好事件的解析数、接受数、实际新增数和画像标签数。
-- 原始 `[PREFERENCE]` 内容统一显示为 `<redacted>`，避免在日志中保存用户证据。
-
-## 9. 验证方案
-
-### 离线闭环
+离线固定运行：
 
 ```powershell
-& '.venv-codex311\Scripts\python.exe' -m main_logic.proactive_chat.preference_recommendation
+& '.venv\Scripts\python.exe' -m main_logic.proactive_chat.preference_recommendation
 ```
 
-预期看到：
+应看到：`new_llm_calls` 和 `new_llm_threads` 都为 0；第一条游戏负向证据后没有主题分数；第二个不同游戏资源产生第二条负向证据后形成 `topic.games` 负修正；再下一次候选池的游戏概率下降；`music_meme_behavior_changed` 为 `false`。
 
-- `new_llm_threads: 0`
-- `new_llm_calls: 0`
-- 明确偏好事件被接受并形成分数。
-- 技术新闻池概率上升，但未知池仍有探索概率。
-- 下一轮候选与第一轮不同。
+真实链路手测：
 
-### 实际主动搭话
+1. 开启功能并重启，准备至少两个来源或 URL 不同的游戏 Web 候选，以及非游戏对照候选。
+2. 触发主动搭话，确认 `[WEB]` 链接 A 实际出现在响应 `source_links`，日志出现脱敏后的回执登记信息。
+3. 用户普通回复“这种游戏我没兴趣”。
+4. 触发下一次包含资源任务的主动搭话；确认该轮候选仍按旧状态选择，Phase 1 同一次调用接受第一条反馈，但没有 `topic.games` 修正。
+5. 让不同 `resource_key` 的游戏链接 B 实际发送，再回复“还是不想看游戏”。
+6. 再触发一次资源 Phase 1；确认该轮先按旧状态选候选，再提取第二条证据并形成 5 小时负修正。
+7. 再触发一次资源 Phase 1；确认游戏进入 Top K 的概率和候选占比下降，同时现有硬去重、来源抑制和探索约束仍成立。
+8. 验证 Music/Meme 仍按原后置抓取和素材衰减工作，不把结果描述为主题个性化。
+9. 关闭功能并重启，确认提示词、解析后处理、回执和 Web 加权全部不启用。
 
-1. 设置功能开关并启动 NEKO。
-2. 输入：“我最近很喜欢看 AI、Python 和开源项目的新闻，之后可以多给我推荐这类内容。”
-3. 触发一次主动搭话，确认日志出现已接受事件。
-4. 再触发一轮，确认画像标签参与候选筛选，且重复事件没有再次写入。
-5. 输入：“我不喜欢游戏视频，暂时别给我推荐这类内容。”
-6. 后续轮次确认游戏视频权重降低，但探索位仍存在。
-7. 检查日志中偏好原文已脱敏。
-8. 将开关设为 `0` 并重启，确认恢复原行为。
+## 8. 自动测试范围
 
-### 自动测试
+自动测试覆盖 20 个主题、确定性与字段边界、空主题、真实 Web 投递回执门、2 小时过期与投递后证据、模型标签隔离、两资源证据门槛、5 小时修正、各非主题 reaction、角色来源隔离、现有 5 小时硬去重和概率衰减、探索硬约束、N+2 时序、零新增调用/线程、关闭开关、多语言提示词契约，以及 Python 3.11 环境。
 
-使用项目 Python 3.11 环境运行相关单元测试，并覆盖：
+## 9. 验收表述
 
-- 标签和事件校验。
-- 证据必须来自用户历史。
-- 去重、TTL 和时间衰减。
-- 正负偏好和概率混合。
-- 探索位保留。
-- Phase 1 可选区段解析及异常回退。
-- 功能关闭时的行为兼容。
+> Demo证明普通聊天反馈能够在不新增LLM调用的情况下，经过两次后续资源Phase 1，改变Web候选池的主题概率和候选组成。
 
-## 10. 验收标准
-
-- 不新增 LLM 线程和 LLM 请求。
-- 功能默认关闭，关闭时不改变现有流程。
-- 标签只能来自固定三维集合。
-- 无效或模型臆造的证据不能进入画像。
-- 新偏好从下一轮生效，同一证据不会重复累计。
-- 推荐权重会随偏好变化，同时始终保留探索内容。
-- 原始偏好证据不进入日志或持久化存储。
-- Python 3.11 下相关测试通过。
-
-## 11. Demo 后续决策点
-
-只有在离线和真实主动搭话验证均达到验收标准后，再评估：
-
-1. 是否将内存画像迁移到现有用户存储。
-2. 是否引入点击、跳过、收藏和播放完成度等行为信号。
-3. 是否为资源爬虫建立统一的离线标签流水线。
-4. 是否通过 A/B 数据调整 60/30/10 维度权重和 15% 探索率。
-5. 是否提供用户可查看、修改和清空的偏好设置。
+不得扩写为 Music/Meme 实际内容已个性化，也不得声称最终 LLM 文本受到候选 ID 硬约束。

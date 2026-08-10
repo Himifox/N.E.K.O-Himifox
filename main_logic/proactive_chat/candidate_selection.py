@@ -13,6 +13,7 @@ from typing import Any
 from .decisions import _should_skip_source
 from .preference_recommendation import (
     calculate_pool_probabilities,
+    is_candidate_source_suppressed,
     select_preference_candidate_batch,
 )
 from .state import _source_hash
@@ -114,6 +115,7 @@ def _preference_weighted_phase1_pool(
     modes: list[str],
     sources: dict[str, Any],
     *,
+    role: str,
     total: int,
     preference_scores: dict[str, float],
     source_weights: dict[str, float],
@@ -121,7 +123,7 @@ def _preference_weighted_phase1_pool(
     include_meme: bool,
     rng: random.Random | None = None,
 ) -> PreferencePhase1PoolSelection:
-    """Build one shared web/music/meme pool and reserve uniform exploration."""
+    """Weight Web topics while keeping music/meme as neutral search tasks."""
 
     web_candidates: list[dict[str, Any]] = []
     positions = {mode: 0 for mode in modes}
@@ -139,6 +141,8 @@ def _preference_weighted_phase1_pool(
                 positions[mode] += 1
                 key = _source_hash(link.get("url", ""), link.get("title", ""))
                 if key and (key in seen_keys or _should_skip_source(key)):
+                    continue
+                if is_candidate_source_suppressed(role, link):
                     continue
                 if key:
                     seen_keys.add(key)

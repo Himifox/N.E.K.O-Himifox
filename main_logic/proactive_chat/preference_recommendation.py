@@ -1,17 +1,7 @@
-"""Feature-gated preference recommendation primitives for proactive chat.
+"""Process-local Web recommendation feedback demo for proactive chat.
 
-The implementation is intentionally process-local.  It proves the causal loop
-without adding a model request or a persistence dependency:
-
-Phase 1 output -> validated preference events -> decayed profile -> next-round
-source/candidate weighting.
-
-Run the deterministic offline loop with::
-
-    python -m main_logic.proactive_chat.preference_recommendation
-
-Set ``NEKO_PROACTIVE_PREFERENCE_DEMO_ENABLED=1`` before starting N.E.K.O. to
-enable the same path in the existing proactive Phase 1 flow.
+The feature reuses the existing Phase 1 call and source-history identity.  It
+does not build a durable profile and never changes music or meme resources.
 """
 
 from __future__ import annotations
@@ -22,134 +12,204 @@ import math
 import random
 import re
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 
-TAG_VALUES: dict[str, tuple[str, ...]] = {
-    "domain": (
-        "tech",
-        "acg",
-        "gaming",
-        "companion",
-        "entertainment",
-        "internet_culture",
-        "daily_life",
+PRIMARY_TOPICS = (
+    "technology",
+    "programming",
+    "digital_devices",
+    "science",
+    "games",
+    "anime_comics",
+    "music_culture",
+    "film_tv",
+    "internet_culture",
+    "books_education",
+    "art_creative",
+    "finance_business",
+    "society",
+    "sports",
+    "automotive",
+    "health_fitness",
+    "food_culture",
+    "travel_culture",
+    "fashion_lifestyle",
+    "pets_animals",
+)
+CHANNEL_NAMES = ("news", "video", "music", "meme")
+REACTIONS = (
+    "positive",
+    "not_interested",
+    "quality_issue",
+    "source_distrust",
+    "temporary_skip",
+    "unclear",
+)
+
+_RECEIPT_TTL_SECONDS = 2 * 3600
+_TOPIC_EVIDENCE_TTL_SECONDS = 2 * 3600
+_CORRECTION_TTL_SECONDS = 5 * 3600
+_SOURCE_SUPPRESSION_TTL_SECONDS = 5 * 3600
+_MAX_RECEIPTS_PER_ROLE = 10
+_MAX_TOPIC_EVIDENCE_PER_ROLE = 64
+_MAX_EVIDENCE_CHARS = 100
+
+
+_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "technology": (
+        "人工智能", "生成式ai", "机器学习", "深度学习", "大模型", "ai", "llm",
+        "ai agent", "robotics", "机器人", "科技",
     ),
-    "media": ("news", "video", "music", "meme"),
-    "context": ("focus", "relax", "energy", "sleep"),
-}
-
-SIGNAL_WEIGHTS = {
-    "explicit_like": 5.0,
-    "explicit_dislike": 5.0,
-    "current_intent": 2.0,
-    "inferred_interest": 0.5,
-    "topic_mention": 0.2,
-}
-
-SESSION_TTL_SECONDS = {
-    "explicit_like": 24 * 3600,
-    "explicit_dislike": 24 * 3600,
-    "current_intent": 6 * 3600,
-    "inferred_interest": 2 * 3600,
-    "topic_mention": 3600,
-}
-
-_SCOPE_HALF_LIFE_SECONDS = {
-    "session": 6 * 3600,
-    "long_term": 30 * 86400,
-}
-_PROFILE_MAX_EVENTS = 128
-_MAX_EVENTS_PER_TURN = 3
-_MAX_EVIDENCE_CHARS = 60
-
-
-@dataclass(frozen=True, slots=True)
-class PreferenceEvent:
-    dimension: str
-    value: str
-    signal: str
-    polarity: int
-    confidence: float
-    scope: str
-    occurred_at: float
-    evidence_id: str
-    expires_at: float | None
-
-    @property
-    def tag(self) -> str:
-        return f"{self.dimension}.{self.value}"
-
-    @property
-    def dedupe_key(self) -> str:
-        return f"{self.evidence_id}|{self.tag}|{self.polarity}"
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateTags:
-    domain: str | None
-    media: str | None
-    contexts: tuple[str, ...] = ()
-
-    @property
-    def pool(self) -> str:
-        if self.domain and self.media:
-            return f"{self.domain}/{self.media}"
-        return "unknown"
-
-
-_profile_events: dict[str, deque[PreferenceEvent]] = {}
-
-
-_DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "tech": (
-        "ai", "llm", "agent", "python", "github", "open source",
-        "人工智能", "模型", "智能体", "编程", "代码", "开源", "数码",
+    "programming": (
+        "编程", "程序员", "代码", "开发者", "开源", "github", "python",
+        "javascript", "typescript", "rust", "golang", "java", "api", "coding",
     ),
-    "acg": (
-        "anime", "manga", "vtuber", "vocaloid", "cosplay",
-        "动画", "动漫", "漫画", "二次元", "虚拟主播", "虚拟歌手", "初音", "插画",
+    "digital_devices": (
+        "数码", "手机", "电脑", "笔记本", "显卡", "芯片", "处理器", "相机",
+        "iphone", "android", "ipad", "macbook", "gpu", "cpu", "smartphone",
     ),
-    "gaming": (
-        "game", "gaming", "esports", "steam", "playstation", "xbox", "nintendo",
-        "游戏", "电竞", "手游", "主机", "攻略",
+    "science": (
+        "科学", "物理", "化学", "生物学", "天文", "宇宙", "航天", "研究论文",
+        "quantum", "physics", "chemistry", "biology", "astronomy", "space",
     ),
-    "companion": (
-        "desktop pet", "virtual companion", "live2d", "vrm", "desktop mascot",
-        "桌宠", "虚拟陪伴", "ai伴侣", "虚拟角色",
+    "games": (
+        "游戏", "电竞", "手游", "主机", "攻略", "steam", "playstation", "xbox",
+        "nintendo", "switch", "esports", "gaming", "game",
     ),
-    "entertainment": (
-        "movie", "film", "celebrity", "television", "pop music",
-        "电影", "影视", "综艺", "明星", "娱乐", "新歌",
+    "anime_comics": (
+        "动画", "动漫", "漫画", "二次元", "轻小说", "番剧", "acg", "anime",
+        "manga", "comic", "cosplay", "vtuber", "vocaloid",
+    ),
+    "music_culture": (
+        "音乐", "歌曲", "歌手", "乐队", "演唱会", "专辑", "新歌", "music",
+        "song", "singer", "album", "concert", "band",
+    ),
+    "film_tv": (
+        "电影", "电视剧", "影视", "综艺", "纪录片", "票房", "影评", "movie",
+        "film", "television", "tv series", "documentary", "box office",
     ),
     "internet_culture": (
-        "meme", "viral", "trending", "reddit", "weibo", "tieba",
-        "梗", "热搜", "热议", "网络文化", "社区",
+        "网络文化", "热搜", "热议", "梗", "表情包", "网红", "社区", "meme",
+        "viral", "trending", "reddit", "weibo", "微博", "贴吧",
     ),
-    "daily_life": (
-        "cat", "pet", "food", "travel", "health", "lifestyle",
-        "猫", "宠物", "美食", "旅行", "生活", "健康",
+    "books_education": (
+        "书籍", "读书", "阅读", "教育", "课程", "学习方法", "考试", "学校",
+        "book", "reading", "education", "course", "university", "school",
+    ),
+    "art_creative": (
+        "艺术", "绘画", "插画", "摄影", "设计", "创意", "美术", "art",
+        "painting", "illustration", "photography", "design", "creative",
+    ),
+    "finance_business": (
+        "财经", "金融", "股票", "基金", "投资", "商业", "创业", "公司财报",
+        "finance", "stock", "fund", "investment", "business", "startup",
+    ),
+    "society": (
+        "社会", "民生", "法律", "公共政策", "公益", "社区治理", "society",
+        "social issue", "law", "public policy", "charity",
+    ),
+    "sports": (
+        "体育", "足球", "篮球", "网球", "羽毛球", "乒乓球", "奥运", "世界杯",
+        "sports", "football", "soccer", "basketball", "tennis", "olympic",
+    ),
+    "automotive": (
+        "汽车", "新能源车", "电动车", "车展", "试驾", "自动驾驶", "automotive",
+        "car", "vehicle", "electric vehicle", "ev", "driving",
+    ),
+    "health_fitness": (
+        "健康", "健身", "运动训练", "跑步", "瑜伽", "营养", "医疗", "养生",
+        "health", "fitness", "workout", "running", "yoga", "nutrition",
+    ),
+    "food_culture": (
+        "美食", "餐厅", "料理", "菜谱", "烹饪", "咖啡", "茶文化", "food",
+        "restaurant", "recipe", "cooking", "coffee", "cuisine",
+    ),
+    "travel_culture": (
+        "旅行", "旅游", "景点", "酒店", "攻略", "城市漫游", "travel",
+        "tourism", "destination", "hotel", "trip",
+    ),
+    "fashion_lifestyle": (
+        "时尚", "穿搭", "美妆", "护肤", "家居", "生活方式", "fashion",
+        "outfit", "beauty", "skincare", "lifestyle", "home decor",
+    ),
+    "pets_animals": (
+        "宠物", "猫咪", "狗狗", "动物", "养猫", "养狗", "萌宠", "pet",
+        "cat", "dog", "animal", "wildlife",
     ),
 }
 
-_CONTEXT_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "focus": ("focus", "study", "work", "coding", "专注", "学习", "工作", "写代码"),
-    "relax": ("relax", "chill", "lofi", "lo-fi", "放松", "治愈", "轻松"),
-    "energy": ("energetic", "workout", "high energy", "元气", "高能", "燃"),
-    "sleep": ("sleep", "night", "bedtime", "睡前", "助眠", "夜晚"),
-}
+_WEB_FIELDS = ("title", "description_hint", "reason", "source", "url")
 
-_VIDEO_SOURCES = (
-    "bilibili", "b站", "youtube", "twitch", "douyin", "抖音", "kuaishou", "快手",
-)
-_CHANNEL_MEDIA = {
-    "news": "news",
-    "video": "video",
-    "music": "music",
-    "meme": "meme",
-}
+
+@dataclass(frozen=True, slots=True)
+class CandidateTopic:
+    primary_topic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RecommendationReceipt:
+    receipt_id: str
+    turn_id: str
+    resource_key: str
+    source_key: str
+    title: str
+    primary_topic: str | None
+    delivered_at: float
+    evidence_snapshot: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class RecommendationFeedback:
+    receipt_id: str
+    reaction: str
+    confidence: float
+    evidence_id: str
+    resource_key: str
+    source_key: str
+    primary_topic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TopicEvidence:
+    topic: str
+    direction: int
+    confidence: float
+    resource_key: str
+    evidence_id: str
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class TopicCorrection:
+    topic: str
+    score: float
+    resource_keys: tuple[str, str]
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackProcessResult:
+    accepted: bool
+    reaction: str | None = None
+    state_changed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PreferenceCandidateSelection:
+    items: list[dict[str, Any]]
+    personalized_slots: int
+    exploration_slots: int
+
+
+_receipts: dict[str, deque[RecommendationReceipt]] = {}
+_topic_evidence: dict[str, deque[TopicEvidence]] = {}
+_topic_corrections: dict[str, dict[str, TopicCorrection]] = {}
+_source_suppressions: dict[str, dict[str, float]] = {}
+_processed_feedback: set[tuple[str, str, str, str]] = set()
 
 
 def _normalized(value: Any) -> str:
@@ -157,10 +217,37 @@ def _normalized(value: Any) -> str:
 
 
 def _keyword_hit(text: str, keyword: str) -> bool:
-    keyword = keyword.casefold()
-    if keyword.isascii():
-        return bool(re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text))
-    return keyword in text
+    folded = keyword.casefold()
+    if folded.isascii():
+        return bool(re.search(rf"(?<!\w){re.escape(folded)}(?!\w)", text))
+    return folded in text
+
+
+def classify_candidate(item: Mapping[str, Any]) -> CandidateTopic:
+    """Classify one Web candidate using only the five existing Web fields."""
+    text = " ".join(_normalized(item.get(field)) for field in _WEB_FIELDS).casefold()
+    hits = {
+        topic: sum(_keyword_hit(text, keyword) for keyword in keywords)
+        for topic, keywords in _TOPIC_KEYWORDS.items()
+    }
+    primary_topic = max(
+        PRIMARY_TOPICS,
+        key=lambda topic: (hits[topic], -PRIMARY_TOPICS.index(topic)),
+    )
+    if hits[primary_topic] == 0:
+        primary_topic = None
+    return CandidateTopic(primary_topic=primary_topic)
+
+
+def source_key_for_candidate(item: Mapping[str, Any]) -> str:
+    url = _normalized(item.get("url"))
+    if url:
+        hostname = (urlsplit(url).hostname or "").casefold().strip(".")
+        if hostname.startswith("www."):
+            hostname = hostname[4:]
+        if hostname:
+            return hostname
+    return _normalized(item.get("source")).casefold()
 
 
 def _user_history_lines(memory_context: str, master_name: str) -> list[str]:
@@ -172,235 +259,297 @@ def _user_history_lines(memory_context: str, master_name: str) -> list[str]:
     ]
 
 
-def _resolve_evidence_id(
-    evidence: str, *, memory_context: str, master_name: str
-) -> str | None:
-    evidence = _normalized(evidence)
-    if not 4 <= len(evidence) <= _MAX_EVIDENCE_CHARS:
+def _line_fingerprint(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()[:16]
+
+
+def capture_evidence_snapshot(memory_context: str, master_name: str) -> dict[str, int]:
+    return dict(Counter(_line_fingerprint(line) for line in _user_history_lines(
+        memory_context, master_name
+    )))
+
+
+def register_recommendation_receipt(
+    role: str,
+    *,
+    turn_id: Any,
+    web_link: Mapping[str, Any],
+    memory_context: str,
+    master_name: str,
+    now: float | None = None,
+) -> RecommendationReceipt | None:
+    """Register a receipt after delivery code has proved the Web link was sent."""
+    from .state import _source_hash
+
+    title = _normalized(web_link.get("title"))
+    resource_key = _source_hash(_normalized(web_link.get("url")), title)
+    if not role or not resource_key:
         return None
-    user_lines = _user_history_lines(memory_context, master_name)
-    folded_evidence = evidence.casefold()
-    matches = [
-        index
-        for index, line in enumerate(user_lines)
-        if folded_evidence in line.casefold()
+    timestamp = time.time() if now is None else now
+    receipt_id = "rec-" + hashlib.sha256(
+        f"{turn_id}|{resource_key}".encode("utf-8")
+    ).hexdigest()[:16]
+    receipt = RecommendationReceipt(
+        receipt_id=receipt_id,
+        turn_id=str(turn_id),
+        resource_key=resource_key,
+        source_key=source_key_for_candidate(web_link),
+        title=title,
+        primary_topic=classify_candidate(web_link).primary_topic,
+        delivered_at=timestamp,
+        evidence_snapshot=capture_evidence_snapshot(memory_context, master_name),
+    )
+    active = deque(
+        (item for item in _receipts.get(role, ()) if item.receipt_id != receipt_id),
+        maxlen=_MAX_RECEIPTS_PER_ROLE,
+    )
+    active.append(receipt)
+    _receipts[role] = active
+    return receipt
+
+
+def get_pending_receipts(
+    role: str, *, now: float | None = None
+) -> tuple[RecommendationReceipt, ...]:
+    timestamp = time.time() if now is None else now
+    active = deque(
+        (
+            receipt
+            for receipt in _receipts.get(role, ())
+            if timestamp - receipt.delivered_at <= _RECEIPT_TTL_SECONDS
+        ),
+        maxlen=_MAX_RECEIPTS_PER_ROLE,
+    )
+    if active:
+        _receipts[role] = active
+    else:
+        _receipts.pop(role, None)
+    return tuple(active)
+
+
+def format_feedback_receipts(role: str, *, now: float | None = None) -> str:
+    payload = [
+        {
+            "receipt_id": receipt.receipt_id,
+            "title": receipt.title,
+            "delivered_at": int(receipt.delivered_at),
+        }
+        for receipt in get_pending_receipts(role, now=now)
     ]
-    if not matches:
-        return None
-    index = matches[-1]
-    full_line = user_lines[index]
-    occurrence = sum(1 for line in user_lines[: index + 1] if line == full_line)
-    digest = hashlib.sha256(full_line.encode("utf-8")).hexdigest()[:12]
-    return f"{digest}:{occurrence}"
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload else ""
 
 
-def validate_preference_events(
-    raw_events: Any,
+def _find_new_evidence_id(
+    receipt: RecommendationReceipt,
+    evidence: str,
+    *,
+    memory_context: str,
+    master_name: str,
+) -> str | None:
+    folded_evidence = evidence.casefold()
+    seen: Counter[str] = Counter()
+    match: str | None = None
+    for line in _user_history_lines(memory_context, master_name):
+        fingerprint = _line_fingerprint(line)
+        seen[fingerprint] += 1
+        if (
+            folded_evidence in line.casefold()
+            and seen[fingerprint] > receipt.evidence_snapshot.get(fingerprint, 0)
+        ):
+            match = f"{fingerprint}:{seen[fingerprint]}"
+    return match
+
+
+def _remove_receipt(role: str, receipt_id: str) -> None:
+    remaining = deque(
+        (item for item in _receipts.get(role, ()) if item.receipt_id != receipt_id),
+        maxlen=_MAX_RECEIPTS_PER_ROLE,
+    )
+    if remaining:
+        _receipts[role] = remaining
+    else:
+        _receipts.pop(role, None)
+
+
+def _active_topic_evidence(role: str, now: float) -> deque[TopicEvidence]:
+    active = deque(
+        (item for item in _topic_evidence.get(role, ()) if item.expires_at >= now),
+        maxlen=_MAX_TOPIC_EVIDENCE_PER_ROLE,
+    )
+    if active:
+        _topic_evidence[role] = active
+    else:
+        _topic_evidence.pop(role, None)
+    return active
+
+
+def _apply_topic_evidence(
+    role: str,
+    feedback: RecommendationFeedback,
+    *,
+    direction: int,
+    now: float,
+) -> bool:
+    if feedback.primary_topic is None:
+        return False
+    active = _active_topic_evidence(role, now)
+    active.append(
+        TopicEvidence(
+            topic=feedback.primary_topic,
+            direction=direction,
+            confidence=feedback.confidence,
+            resource_key=feedback.resource_key,
+            evidence_id=feedback.evidence_id,
+            expires_at=now + _TOPIC_EVIDENCE_TTL_SECONDS,
+        )
+    )
+    _topic_evidence[role] = active
+    latest_pair: list[TopicEvidence] = []
+    seen_resources: set[str] = set()
+    for item in reversed(active):
+        if (
+            item.topic == feedback.primary_topic
+            and item.direction == direction
+            and item.resource_key not in seen_resources
+        ):
+            latest_pair.append(item)
+            seen_resources.add(item.resource_key)
+            if len(latest_pair) == 2:
+                break
+    if len(latest_pair) < 2:
+        return False
+    pair = tuple(reversed(latest_pair))
+    correction = TopicCorrection(
+        topic=feedback.primary_topic,
+        score=direction * sum(item.confidence for item in pair) / 2.0,
+        resource_keys=(pair[0].resource_key, pair[1].resource_key),
+        expires_at=now + _CORRECTION_TTL_SECONDS,
+    )
+    _topic_corrections.setdefault(role, {})[feedback.primary_topic] = correction
+    return True
+
+
+def process_recommendation_feedback(
+    role: str,
+    raw: Any,
     *,
     memory_context: str,
     master_name: str,
     now: float | None = None,
-) -> tuple[PreferenceEvent, ...]:
-    """Validate model output and ground every event in a real user line."""
-
-    if not isinstance(raw_events, list) or len(raw_events) > _MAX_EVENTS_PER_TURN:
-        return ()
+) -> FeedbackProcessResult:
+    """Validate one Phase 1 feedback object and update only receipt-derived state."""
+    if not isinstance(raw, Mapping):
+        return FeedbackProcessResult(False)
     timestamp = time.time() if now is None else now
-    accepted: list[PreferenceEvent] = []
-    for raw in raw_events:
-        if not isinstance(raw, Mapping):
-            continue
-        dimension = str(raw.get("dimension", ""))
-        value = str(raw.get("value", ""))
-        signal = str(raw.get("signal", ""))
-        scope = str(raw.get("scope", ""))
-        if dimension not in TAG_VALUES or value not in TAG_VALUES[dimension]:
-            continue
-        if signal not in SIGNAL_WEIGHTS or scope not in _SCOPE_HALF_LIFE_SECONDS:
-            continue
-        try:
-            polarity = int(raw.get("polarity", 0))
-            confidence = float(raw.get("confidence", 0.0))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if polarity not in {-1, 1} or not 0.0 <= confidence <= 1.0:
-            continue
-        if signal == "explicit_like" and polarity != 1:
-            continue
-        if signal == "explicit_dislike" and polarity != -1:
-            continue
-        if scope == "long_term" and signal not in {
-            "explicit_like", "explicit_dislike"
-        }:
-            continue
-        if dimension == "context" or signal in {
-            "inferred_interest", "topic_mention"
-        }:
-            scope = "session"
-        evidence_id = _resolve_evidence_id(
-            str(raw.get("evidence", "")),
-            memory_context=memory_context,
-            master_name=master_name,
-        )
-        if evidence_id is None:
-            continue
-        expires_at = (
-            timestamp + SESSION_TTL_SECONDS[signal]
-            if scope == "session"
-            else None
-        )
-        accepted.append(
-            PreferenceEvent(
-                dimension=dimension,
-                value=value,
-                signal=signal,
-                polarity=polarity,
-                confidence=confidence,
-                scope=scope,
-                occurred_at=timestamp,
-                evidence_id=evidence_id,
-                expires_at=expires_at,
-            )
-        )
-    return tuple(accepted)
-
-
-def _active_events(lanlan_name: str, now: float) -> deque[PreferenceEvent]:
-    active = deque(
-        (
-            event
-            for event in _profile_events.get(lanlan_name, ())
-            if event.expires_at is None or event.expires_at >= now
-        ),
-        maxlen=_PROFILE_MAX_EVENTS,
+    receipt_id = str(raw.get("receipt_id", ""))
+    reaction = str(raw.get("reaction", ""))
+    receipt = next(
+        (item for item in get_pending_receipts(role, now=timestamp) if item.receipt_id == receipt_id),
+        None,
     )
+    if receipt is None or reaction not in REACTIONS:
+        return FeedbackProcessResult(False)
+    try:
+        confidence = float(raw.get("confidence", 0.0))
+    except (TypeError, ValueError, OverflowError):
+        return FeedbackProcessResult(False)
+    evidence = _normalized(raw.get("evidence"))
+    if confidence < 0.6 or confidence > 1.0 or not 1 <= len(evidence) <= _MAX_EVIDENCE_CHARS:
+        return FeedbackProcessResult(False)
+    evidence_id = _find_new_evidence_id(
+        receipt,
+        evidence,
+        memory_context=memory_context,
+        master_name=master_name,
+    )
+    if evidence_id is None:
+        return FeedbackProcessResult(False)
+    dedupe_key = (role, receipt_id, reaction, evidence_id)
+    if dedupe_key in _processed_feedback:
+        return FeedbackProcessResult(False)
+    _processed_feedback.add(dedupe_key)
+    _remove_receipt(role, receipt_id)
+    feedback = RecommendationFeedback(
+        receipt_id=receipt_id,
+        reaction=reaction,
+        confidence=confidence,
+        evidence_id=evidence_id,
+        resource_key=receipt.resource_key,
+        source_key=receipt.source_key,
+        primary_topic=receipt.primary_topic,
+    )
+
+    changed = False
+    if reaction == "positive":
+        changed = _apply_topic_evidence(role, feedback, direction=1, now=timestamp)
+    elif reaction == "not_interested":
+        changed = _apply_topic_evidence(role, feedback, direction=-1, now=timestamp)
+    elif reaction == "source_distrust" and feedback.source_key:
+        _source_suppressions.setdefault(role, {})[feedback.source_key] = (
+            timestamp + _SOURCE_SUPPRESSION_TTL_SECONDS
+        )
+        changed = True
+    # quality_issue, temporary_skip and unclear deliberately create no state.
+    return FeedbackProcessResult(True, reaction, changed)
+
+
+def get_topic_scores(role: str, *, now: float | None = None) -> dict[str, float]:
+    timestamp = time.time() if now is None else now
+    active = {
+        topic: correction
+        for topic, correction in _topic_corrections.get(role, {}).items()
+        if correction.expires_at >= timestamp
+    }
     if active:
-        _profile_events[lanlan_name] = active
+        _topic_corrections[role] = active
     else:
-        _profile_events.pop(lanlan_name, None)
-    return active
-
-
-def update_preference_profile(
-    lanlan_name: str,
-    events: Sequence[PreferenceEvent],
-    *,
-    now: float | None = None,
-) -> int:
-    """Add new evidence-backed events and return the number actually added."""
-
-    timestamp = time.time() if now is None else now
-    active = _active_events(lanlan_name, timestamp)
-    seen = {event.dedupe_key for event in active}
-    added = 0
-    for event in events:
-        if event.dedupe_key in seen:
-            continue
-        active.append(event)
-        seen.add(event.dedupe_key)
-        added += 1
-    if active:
-        _profile_events[lanlan_name] = active
-    return added
-
-
-def get_preference_scores(
-    lanlan_name: str, *, now: float | None = None
-) -> dict[str, float]:
-    timestamp = time.time() if now is None else now
-    scores: dict[str, float] = {}
-    for event in _active_events(lanlan_name, timestamp):
-        age = max(0.0, timestamp - event.occurred_at)
-        decay = 0.5 ** (age / _SCOPE_HALF_LIFE_SECONDS[event.scope])
-        delta = (
-            SIGNAL_WEIGHTS[event.signal]
-            * event.confidence
-            * event.polarity
-            * decay
-        )
-        scores[event.tag] = scores.get(event.tag, 0.0) + delta
-    return {tag: round(value, 4) for tag, value in scores.items()}
-
-
-def format_preference_summary(scores: Mapping[str, float], *, limit: int = 3) -> str:
-    strongest = sorted(scores.items(), key=lambda item: (-abs(item[1]), item[0]))
-    return "\n".join(f"{tag}={score:+.2f}" for tag, score in strongest[:limit])
-
-
-def clear_preference_profiles() -> None:
-    """Reset process-local state; used by the executable demo and tests."""
-
-    _profile_events.clear()
-
-
-def classify_candidate(item: Mapping[str, Any]) -> CandidateTags:
-    text = " ".join(
-        _normalized(item.get(field))
-        for field in ("title", "description_hint", "reason", "source", "url")
-    ).casefold()
-    hits = {
-        domain: sum(_keyword_hit(text, keyword) for keyword in keywords)
-        for domain, keywords in _DOMAIN_KEYWORDS.items()
-    }
-    domain = max(hits, key=lambda key: (hits[key], -list(hits).index(key)))
-    if hits[domain] == 0:
-        domain = None
-
-    mode = str(item.get("mode", "")).lower()
-    media = _CHANNEL_MEDIA.get(mode)
-    if media is None and mode in {"home", "personal"}:
-        media = (
-            "video"
-            if any(source in text for source in _VIDEO_SOURCES)
-            else "news"
-        )
-    contexts = tuple(
-        context
-        for context, keywords in _CONTEXT_KEYWORDS.items()
-        if any(_keyword_hit(text, keyword) for keyword in keywords)
-    )
-    return CandidateTags(domain=domain, media=media, contexts=contexts)
-
-
-def _candidate_affinity(tags: CandidateTags, scores: Mapping[str, float]) -> float:
-    domain_score = scores.get(f"domain.{tags.domain}", 0.0) if tags.domain else 0.0
-    media_score = scores.get(f"media.{tags.media}", 0.0) if tags.media else 0.0
-    context_score = max(
-        (scores.get(f"context.{context}", 0.0) for context in tags.contexts),
-        default=0.0,
-    )
-    return 0.6 * domain_score + 0.3 * media_score + 0.1 * context_score
-
-
-def _candidate_pool(item: Mapping[str, Any], tags: CandidateTags) -> str:
-    """Return the semantic pool, allowing synthetic media-task candidates."""
-
-    explicit_pool = _normalized(item.get("_preference_pool"))
-    return explicit_pool or tags.pool
-
-
-def _pool_source_priors(
-    candidates: Sequence[Mapping[str, Any]],
-    source_weights: Mapping[str, float] | None,
-) -> dict[str, float]:
-    """Average channel freshness per pool without rewarding larger pools."""
-
-    if not source_weights:
-        return {}
-    weights_by_pool: dict[str, list[float]] = {}
-    fallback = 1.0 / max(1, len(source_weights))
-    for item in candidates:
-        tags = classify_candidate(item)
-        pool = _candidate_pool(item, tags)
-        mode = str(item.get("mode", ""))
-        weights_by_pool.setdefault(pool, []).append(
-            max(0.0, float(source_weights.get(mode, fallback)))
-        )
+        _topic_corrections.pop(role, None)
+    _active_topic_evidence(role, timestamp)
     return {
-        pool: sum(values) / len(values)
-        for pool, values in weights_by_pool.items()
-        if values
+        f"topic.{topic}": round(correction.score, 4)
+        for topic, correction in active.items()
     }
+
+
+def get_source_suppressions(role: str, *, now: float | None = None) -> frozenset[str]:
+    timestamp = time.time() if now is None else now
+    active = {
+        source: expires_at
+        for source, expires_at in _source_suppressions.get(role, {}).items()
+        if expires_at >= timestamp
+    }
+    if active:
+        _source_suppressions[role] = active
+    else:
+        _source_suppressions.pop(role, None)
+    return frozenset(active)
+
+
+def is_candidate_source_suppressed(
+    role: str, item: Mapping[str, Any], *, now: float | None = None
+) -> bool:
+    source_key = source_key_for_candidate(item)
+    return bool(source_key and source_key in get_source_suppressions(role, now=now))
+
+
+def clear_recommendation_feedback_state() -> None:
+    _receipts.clear()
+    _topic_evidence.clear()
+    _topic_corrections.clear()
+    _source_suppressions.clear()
+    _processed_feedback.clear()
+
+
+def _candidate_pool(item: Mapping[str, Any], topic: CandidateTopic) -> str:
+    task = _normalized(item.get("_phase1_task"))
+    mode = _normalized(item.get("mode")) or "web"
+    if task:
+        return f"task/{task}"
+    return f"{('topic.' + topic.primary_topic) if topic.primary_topic else 'untagged'}/{mode}"
+
+
+def _candidate_affinity(topic: CandidateTopic, scores: Mapping[str, float]) -> float:
+    return scores.get(f"topic.{topic.primary_topic}", 0.0) if topic.primary_topic else 0.0
 
 
 def calculate_pool_probabilities(
@@ -410,41 +559,29 @@ def calculate_pool_probabilities(
     exploration: float = 0.15,
     source_weights: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
-    pools: dict[str, CandidateTags] = {}
+    pools: dict[str, tuple[CandidateTopic, list[float]]] = {}
+    fallback = 1.0 / max(1, len(source_weights or {}))
     for item in candidates:
-        tags = classify_candidate(item)
-        pools.setdefault(_candidate_pool(item, tags), tags)
+        topic = classify_candidate(item)
+        pool = _candidate_pool(item, topic)
+        source_prior = max(
+            0.0,
+            float((source_weights or {}).get(str(item.get("mode", "")), fallback)),
+        ) if source_weights else 1.0
+        pools.setdefault(pool, (topic, []))[1].append(source_prior)
     if not pools:
         return {}
-    has_preferences = any(abs(value) > 1e-9 for value in scores.values())
-    if not has_preferences and not source_weights:
-        uniform = 1.0 / len(pools)
-        return {pool: uniform for pool in pools}
-
-    known = {pool: tags for pool, tags in pools.items() if pool != "unknown"}
-    if not known:
-        return {"unknown": 1.0}
-    source_priors = _pool_source_priors(candidates, source_weights)
     raw = {
-        pool: max(source_priors.get(pool, 1.0), 1e-9)
-        * math.exp(max(-4.0, min(4.0, _candidate_affinity(tags, scores))))
-        for pool, tags in known.items()
+        pool: max(sum(priors) / len(priors), 1e-9)
+        * math.exp(max(-4.0, min(4.0, _candidate_affinity(topic, scores))))
+        for pool, (topic, priors) in pools.items()
     }
     total = sum(raw.values())
     uniform = exploration / len(pools)
     return {
-        pool: (1.0 - exploration) * (raw.get(pool, 0.0) / total) + uniform
-        for pool in pools
+        pool: (1.0 - exploration) * value / total + uniform
+        for pool, value in raw.items()
     }
-
-
-@dataclass(frozen=True, slots=True)
-class PreferenceCandidateSelection:
-    """Selected candidates plus the slots actually used by each strategy."""
-
-    items: list[dict[str, Any]]
-    personalized_slots: int
-    exploration_slots: int
 
 
 def select_preference_candidate_batch(
@@ -455,63 +592,49 @@ def select_preference_candidate_batch(
     rng: random.Random | None = None,
     source_weights: Mapping[str, float] | None = None,
 ) -> PreferenceCandidateSelection:
-    """Select personalized candidates while reserving a 15% exploration slice."""
-
+    """Select from already hard-filtered candidates with a fixed exploration slice."""
     ordered = list(candidates)
     if total <= 0 or not ordered:
         return PreferenceCandidateSelection([], 0, 0)
     effective_total = min(total, len(ordered))
-    if not any(abs(value) > 1e-9 for value in scores.values()) and not source_weights:
+    if not scores and not source_weights:
         return PreferenceCandidateSelection(ordered[:effective_total], 0, 0)
-
     randomizer = rng or random.Random()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in ordered:
-        tags = classify_candidate(item)
-        pool = _candidate_pool(item, tags)
-        grouped.setdefault(pool, []).append(item)
-
-    known_pools = [pool for pool in grouped if pool != "unknown"]
-    if not known_pools:
-        return PreferenceCandidateSelection(
-            ordered[:effective_total], 0, effective_total
-        )
-    personalized_probabilities = calculate_pool_probabilities(
-        ordered,
-        scores,
-        exploration=0.0,
-        source_weights=source_weights,
+        topic = classify_candidate(item)
+        grouped.setdefault(_candidate_pool(item, topic), []).append(item)
+    probabilities = calculate_pool_probabilities(
+        ordered, scores, exploration=0.0, source_weights=source_weights
     )
-    exploration_slots = min(
-        effective_total, max(1, math.ceil(effective_total * 0.15))
-    )
-    personalized_slots = effective_total - exploration_slots
+    exploration_slots = min(effective_total, max(1, math.ceil(effective_total * 0.15)))
+    personalized_target = effective_total - exploration_slots
     selected: list[dict[str, Any]] = []
-    while len(selected) < personalized_slots and known_pools:
-        weights = [personalized_probabilities.get(pool, 0.0) for pool in known_pools]
+    available_pools = list(grouped)
+    while len(selected) < personalized_target and available_pools:
+        weights = [probabilities.get(pool, 0.0) for pool in available_pools]
         if not any(weights):
             break
-        pool = randomizer.choices(known_pools, weights=weights, k=1)[0]
+        pool = randomizer.choices(available_pools, weights=weights, k=1)[0]
         selected.append(grouped[pool].pop(0))
         if not grouped[pool]:
-            known_pools.remove(pool)
-
+            available_pools.remove(pool)
     selected_ids = {id(item) for item in selected}
     remaining = [item for item in ordered if id(item) not in selected_ids]
-    actual_personalized_slots = len(selected)
+    personalized_slots = len(selected)
     while len(selected) < effective_total and remaining:
         remaining_by_pool: dict[str, list[dict[str, Any]]] = {}
         for item in remaining:
-            tags = classify_candidate(item)
-            remaining_by_pool.setdefault(_candidate_pool(item, tags), []).append(item)
+            topic = classify_candidate(item)
+            remaining_by_pool.setdefault(_candidate_pool(item, topic), []).append(item)
         exploration_pool = randomizer.choice(list(remaining_by_pool))
         item = randomizer.choice(remaining_by_pool[exploration_pool])
         remaining.remove(item)
         selected.append(item)
     return PreferenceCandidateSelection(
-        items=selected,
-        personalized_slots=actual_personalized_slots,
-        exploration_slots=len(selected) - actual_personalized_slots,
+        selected,
+        personalized_slots,
+        len(selected) - personalized_slots,
     )
 
 
@@ -523,8 +646,6 @@ def select_preference_candidates(
     rng: random.Random | None = None,
     source_weights: Mapping[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Compatibility wrapper returning only the selected candidates."""
-
     return select_preference_candidate_batch(
         candidates,
         scores,
@@ -540,68 +661,87 @@ def blend_source_weights(
     *,
     exploration: float = 0.15,
 ) -> dict[str, float]:
-    if not base_weights or not any(abs(value) > 1e-9 for value in scores.values()):
-        return dict(base_weights)
-    raw: dict[str, float] = {}
-    for channel, base in base_weights.items():
-        media = _CHANNEL_MEDIA.get(channel)
-        media_score = scores.get(f"media.{media}", 0.0) if media else 0.0
-        raw[channel] = base * math.exp(max(-4.0, min(4.0, 0.3 * media_score)))
-    total = sum(raw.values())
-    uniform = 1.0 / len(raw)
-    return {
-        channel: (1.0 - exploration) * value / total + exploration * uniform
-        for channel, value in raw.items()
-    }
-
-
-def _demo_candidates() -> list[dict[str, Any]]:
-    return [
-        {"title": "AI Agent 开源工具速览", "mode": "news", "source": "GitHub"},
-        {"title": "Python 桌宠开发记录", "mode": "video", "source": "B站"},
-        {"title": "本季动画新作整理", "mode": "video", "source": "B站"},
-        {"title": "虚拟歌手新曲", "mode": "music", "source": "网易云"},
-        {"title": "独立游戏试玩合集", "mode": "video", "source": "B站"},
-        {"title": "今日社区热议", "mode": "news", "source": "微博"},
-        {"title": "适合工作的 Lo-fi", "mode": "music", "source": "网易云"},
-        {"title": "周末宠物日常", "mode": "video", "source": "B站"},
-    ]
+    """Topic feedback must not create channel-level user preferences."""
+    return dict(base_weights)
 
 
 def run_demo() -> dict[str, Any]:
-    """Execute a deterministic two-round loop without calling an external model."""
-
-    from .generation import _parse_unified_phase1_result
-
-    clear_preference_profiles()
-    character = "DemoNeko"
+    """Run the fixed Web-only feedback loop without an LLM call or thread."""
+    clear_recommendation_feedback_state()
+    role = "DemoNeko"
     master = "主人"
-    memory_context = "主人 | 我最近在研究 AI Agent，也喜欢看编程新闻\n"
-    candidates = _demo_candidates()
-    before = select_preference_candidates(
-        candidates, {}, total=5, rng=random.Random(7)
+    game_a = {
+        "title": "独立游戏试玩记录", "url": "https://a.example/game-1",
+        "source": "A", "mode": "video",
+    }
+    game_b = {
+        "title": "主机游戏攻略", "url": "https://b.example/game-2",
+        "source": "B", "mode": "video",
+    }
+    candidates = [
+        game_a,
+        game_b,
+        {"title": "Python 开源周报", "url": "https://c.example/python", "source": "C", "mode": "news"},
+        {"title": "天文观测新发现", "url": "https://d.example/space", "source": "D", "mode": "news"},
+        {"title": "电影票房观察", "url": "https://e.example/film", "source": "E", "mode": "news"},
+        {"title": "猫咪宠物日常", "url": "https://f.example/cat", "source": "F", "mode": "video"},
+    ]
+    first = register_recommendation_receipt(
+        role, turn_id="turn-1", web_link=game_a,
+        memory_context="主人 | 今天天气不错", master_name=master, now=0.0,
     )
-    phase1_output = """[WEB]\nTopic: AI Agent 开源工具速览\nSource: GitHub\n[PREFERENCE]\n[{"dimension":"domain","value":"tech","signal":"explicit_like","polarity":1,"confidence":0.95,"scope":"long_term","evidence":"最近在研究 AI Agent"},{"dimension":"media","value":"news","signal":"explicit_like","polarity":1,"confidence":0.9,"scope":"long_term","evidence":"喜欢看编程新闻"}]"""
-    parsed = _parse_unified_phase1_result(phase1_output)
-    events = validate_preference_events(
-        parsed.get("preference_events"),
-        memory_context=memory_context,
+    assert first is not None
+    first_result = process_recommendation_feedback(
+        role,
+        {"receipt_id": first.receipt_id, "reaction": "not_interested", "confidence": 0.9, "evidence": "这类游戏我没兴趣"},
+        memory_context="主人 | 今天天气不错\n主人 | 这类游戏我没兴趣",
         master_name=master,
-        now=0.0,
+        now=60.0,
     )
-    update_preference_profile(character, events, now=0.0)
-    scores = get_preference_scores(character, now=0.0)
-    after = select_preference_candidates(
-        candidates, scores, total=5, rng=random.Random(7)
+    scores_after_first_phase1 = get_topic_scores(role, now=60.0)
+    second = register_recommendation_receipt(
+        role, turn_id="turn-2", web_link=game_b,
+        memory_context="主人 | 今天天气不错\n主人 | 这类游戏我没兴趣",
+        master_name=master, now=120.0,
+    )
+    assert second is not None
+    second_result = process_recommendation_feedback(
+        role,
+        {"receipt_id": second.receipt_id, "reaction": "not_interested", "confidence": 0.8, "evidence": "还是不想看游戏"},
+        memory_context="主人 | 这类游戏我没兴趣\n主人 | 还是不想看游戏",
+        master_name=master,
+        now=180.0,
+    )
+    scores_after_second_phase1 = get_topic_scores(role, now=180.0)
+    before = calculate_pool_probabilities(candidates, {})
+    after = calculate_pool_probabilities(candidates, scores_after_second_phase1)
+    source_weights = {"video": 0.5, "news": 0.5}
+    top_k_before = select_preference_candidates(
+        candidates,
+        {},
+        total=3,
+        rng=random.Random(1),
+        source_weights=source_weights,
+    )
+    top_k_after = select_preference_candidates(
+        candidates,
+        scores_after_second_phase1,
+        total=3,
+        rng=random.Random(1),
+        source_weights=source_weights,
     )
     return {
-        "new_llm_threads": 0,
         "new_llm_calls": 0,
-        "accepted_events": [asdict(event) for event in events],
-        "scores": scores,
-        "pool_probabilities": calculate_pool_probabilities(candidates, scores),
-        "round_1_candidates": [item["title"] for item in before],
-        "round_2_candidates": [item["title"] for item in after],
+        "new_llm_threads": 0,
+        "first_feedback_accepted": first_result.accepted,
+        "second_feedback_accepted": second_result.accepted,
+        "scores_after_first_phase1": scores_after_first_phase1,
+        "scores_after_second_phase1": scores_after_second_phase1,
+        "game_probability_before": sum(value for pool, value in before.items() if "topic.games" in pool),
+        "game_probability_after": sum(value for pool, value in after.items() if "topic.games" in pool),
+        "top_k_before_correction": [item["title"] for item in top_k_before],
+        "top_k_after_correction": [item["title"] for item in top_k_after],
+        "music_meme_behavior_changed": False,
     }
 
 

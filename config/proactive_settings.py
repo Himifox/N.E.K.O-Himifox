@@ -21,10 +21,11 @@ from .network import _read_bool_env
 PROACTIVE_PREFERENCE_DEMO_ENABLED = _read_bool_env(
     "PROACTIVE_PREFERENCE_DEMO_ENABLED", False
 )
-"""Feature gate for the in-memory preference recommendation demo.
+"""Feature gate for the process-local Web recommendation feedback demo.
 
 The demo reuses the existing unified Phase 1 request.  It never creates an
-extra model request and remains disabled by default.
+extra model request, does not personalize music/memes, and remains disabled by
+default.
 """
 
 MINI_GAME_INVITE_ENABLED = True

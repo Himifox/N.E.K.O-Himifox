@@ -116,10 +116,9 @@ from main_logic.proactive_chat.music_recommendation import (
     _select_music_recommendation,
 )
 from main_logic.proactive_chat.preference_recommendation import (
-    format_preference_summary,
-    get_preference_scores,
-    update_preference_profile,
-    validate_preference_events,
+    format_feedback_receipts,
+    get_topic_scores,
+    process_recommendation_feedback,
 )
 from main_logic.proactive_chat.state import (
     _enter_proactive_phase2,
@@ -1329,8 +1328,8 @@ async def handle_proactive_chat(
             return history_part, inner_thoughts_part
 
         memory_context, inner_thoughts = _parse_new_dialog(raw_memory_context)
-        preference_scores = (
-            get_preference_scores(lanlan_name)
+        topic_scores = (
+            get_topic_scores(lanlan_name)
             if PROACTIVE_PREFERENCE_DEMO_ENABLED
             else {}
         )
@@ -1594,8 +1593,9 @@ async def handle_proactive_chat(
             pool_selection = _preference_weighted_phase1_pool(
                 web_modes,
                 sources,
+                role=lanlan_name,
                 total=selection_total,
-                preference_scores=preference_scores,
+                preference_scores=topic_scores,
                 source_weights=source_weights,
                 include_music=bool(
                     music_content and music_content.get("placeholder")
@@ -1724,6 +1724,11 @@ async def handle_proactive_chat(
                         body=_proactive_preempted_json("phase1_pre_llm")
                     )
                 )
+        feedback_receipts = (
+            format_feedback_receipts(lanlan_name)
+            if PROACTIVE_PREFERENCE_DEMO_ENABLED
+            else ""
+        )
         unified_parsed = await _run_unified_phase1(
             model_config=model_config,
             proactive_lang=proactive_lang,
@@ -1735,27 +1740,26 @@ async def handle_proactive_chat(
             has_music_task=has_music_task,
             has_meme_task=has_meme_task,
             log=logger,
-            preference_enabled=PROACTIVE_PREFERENCE_DEMO_ENABLED,
-            preference_summary=format_preference_summary(preference_scores),
+            feedback_enabled=bool(feedback_receipts),
+            feedback_receipts=feedback_receipts,
         )
 
         if PROACTIVE_PREFERENCE_DEMO_ENABLED:
-            preference_events = validate_preference_events(
-                unified_parsed.get("preference_events"),
+            feedback_result = process_recommendation_feedback(
+                lanlan_name,
+                unified_parsed.get("recommendation_feedback"),
                 memory_context=memory_context,
                 master_name=master_name_current,
             )
-            added_events = update_preference_profile(
-                lanlan_name, preference_events
-            )
-            profile_tag_count = len(get_preference_scores(lanlan_name))
             logger.debug(
-                "[%s] preference demo: parsed=%d accepted=%d added=%d profile_tags=%d",
+                "[%s] recommendation feedback demo: parsed=%s accepted=%s "
+                "reaction=%s state_changed=%s active_topic_corrections=%d",
                 lanlan_name,
-                len(unified_parsed.get("preference_events", [])),
-                len(preference_events),
-                added_events,
-                profile_tag_count,
+                bool(unified_parsed.get("recommendation_feedback")),
+                feedback_result.accepted,
+                feedback_result.reaction,
+                feedback_result.state_changed,
+                len(get_topic_scores(lanlan_name)),
             )
 
         # ============================================================
@@ -2418,6 +2422,10 @@ async def handle_proactive_chat(
             selected_web_link=selected_web_link,
             selected_web_topic_key=selected_web_topic_key,
             web_parsed=web_parsed,
+            proactive_sid=proactive_sid,
+            recommendation_feedback_enabled=PROACTIVE_PREFERENCE_DEMO_ENABLED,
+            memory_context=memory_context,
+            master_name=master_name_current,
             selected_music_link=selected_music_link,
             selected_music_topic_key=selected_music_topic_key,
             selected_meme_link=selected_meme_link,

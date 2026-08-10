@@ -36,6 +36,7 @@ from .contracts import (
 from .decisions import build_proactive_response
 from .mini_game_invite import _mini_game_invite_count_post_response_chat
 from .music_recommendation import _append_music_recommendations
+from .preference_recommendation import register_recommendation_receipt
 from .state import (
     _increment_proactive_chat_total,
     _proactive_feed_rejected_for_takeover,
@@ -177,6 +178,34 @@ def _is_link_selected(
         == target_signature
         for link in source_links
         if link
+    )
+
+
+def _register_web_feedback_receipt_if_delivered(
+    *,
+    enabled: bool,
+    role: str,
+    source_tag: str,
+    proactive_sid: Any,
+    selected_web_link: dict[str, Any] | None,
+    source_links: list[dict[str, Any]],
+    memory_context: str,
+    master_name: str,
+):
+    """Gate receipt creation on the existing actual-link delivery check."""
+    if (
+        not enabled
+        or str(source_tag).upper() != "WEB"
+        or selected_web_link is None
+        or not _is_link_selected(selected_web_link, source_links)
+    ):
+        return None
+    return register_recommendation_receipt(
+        role,
+        turn_id=proactive_sid,
+        web_link=selected_web_link,
+        memory_context=memory_context,
+        master_name=master_name,
     )
 
 
@@ -383,6 +412,10 @@ async def _record_committed_delivery(
     selected_web_link: dict[str, Any] | None,
     selected_web_topic_key: str | None,
     web_parsed: dict[str, Any] | None,
+    proactive_sid: Any,
+    recommendation_feedback_enabled: bool,
+    memory_context: str,
+    master_name: str,
     selected_music_link: dict[str, Any] | None,
     selected_music_topic_key: str | None,
     selected_meme_link: dict[str, Any] | None,
@@ -460,6 +493,26 @@ async def _record_committed_delivery(
         )
         print(
             f"[{lanlan_name}] 已记录 Web source 衰减历史: {selected_web_topic_key[:16]}"
+        )
+
+    receipt = _register_web_feedback_receipt_if_delivered(
+        enabled=recommendation_feedback_enabled,
+        role=lanlan_name,
+        source_tag=source_tag,
+        proactive_sid=proactive_sid,
+        selected_web_link=selected_web_link,
+        source_links=source_links,
+        memory_context=memory_context,
+        master_name=master_name,
+    )
+    if receipt is not None:
+        active_logger.debug(
+            "[%s] recommendation feedback receipt registered: id=%s "
+            "topic=%s source=%s",
+            lanlan_name,
+            receipt.receipt_id,
+            receipt.primary_topic or "empty",
+            receipt.source_key or "empty",
         )
 
     if selected_music_topic_key and (

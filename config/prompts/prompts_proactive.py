@@ -3073,96 +3073,53 @@ Responda estritamente no formato abaixo. Cada tarefa começa com sua tag. Respon
 }
 
 
-_UNIFIED_P1_PREFERENCE_PROFILE = {
-    "zh": """\n======当前推荐画像======\n{summary}\n以上画像只用于本轮选材，不能作为新的偏好证据。\n""",
-    "zh-TW": """\n======目前推薦畫像======\n{summary}\n以上畫像只用於本輪選材，不能當作新的偏好證據。\n""",
-    "en": """\n======Current Recommendation Profile======\n{summary}\nUse this profile only to choose material. It is not evidence for a new preference event.\n""",
-    "ja": """\n======現在の推薦プロファイル======\n{summary}\nこのプロファイルは素材選択にのみ使用し、新しい嗜好イベントの根拠にしないでください。\n""",
-    "ko": """\n======현재 추천 프로필======\n{summary}\n이 프로필은 소재 선택에만 사용하며 새 선호 이벤트의 근거로 삼지 마세요.\n""",
-    "ru": """\n======Текущий профиль рекомендаций======\n{summary}\nИспользуйте профиль только для выбора материала, но не как доказательство нового предпочтения.\n""",
-    "es": """\n======Perfil de recomendación actual======\n{summary}\nUsa este perfil solo para elegir material; no sirve como evidencia de una preferencia nueva.\n""",
-    "pt": """\n======Perfil de recomendação atual======\n{summary}\nUse este perfil apenas para escolher material; ele não é evidência de uma nova preferência.\n""",
-}
-
-_UNIFIED_P1_PREFERENCE_SECTION = {
+_UNIFIED_P1_FEEDBACK_SECTION = {
     "zh": """
-======任务: 偏好事件======
-从对话历史中提取可能影响下一轮媒体推荐的用户偏好。只允许使用“{master_name} | ...”用户行中的原话作为证据，绝不能使用角色回复、当前推荐画像或主动搭话记录。
-
-固定值：
-- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
-- media: news, video, music, meme
-- context: focus, relax, energy, sleep
-- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
-
-规则：最多3条；只是提及不能视为喜欢；弱推测和 context 只能是 session；只有明确喜欢/不喜欢可以是 long_term；evidence 必须复制一段4到60字的用户原话。没有可靠证据就返回空数组。
+======任务: Web推荐反馈======
+待反馈回执：{receipts}
+只判断用户在对应Web链接送达后，对其中一条推荐表达的态度。证据必须逐字复制自“{master_name} | ...”用户行；不得使用角色回复或送达前原话。只能选择回执中的receipt_id和以下reaction：positive、not_interested、quality_issue、source_distrust、temporary_skip、unclear。不要输出主题、通道、用户标签或其他字段。没有可核实的新反馈时，完全省略[RECOMMENDATION_FEEDBACK]段。
 """,
     "zh-TW": """
-======任務: 偏好事件======
-從對話紀錄擷取可能影響下一輪媒體推薦的使用者偏好。只能使用「{master_name} | ...」使用者行裡的原話作為證據，不能使用角色回覆、目前推薦畫像或主動搭話紀錄。
-
-固定值：
-- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
-- media: news, video, music, meme
-- context: focus, relax, energy, sleep
-- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
-
-規則：最多3筆；只提到不能當作喜歡；弱推測與 context 只能是 session；只有明確喜歡／不喜歡可用 long_term；evidence 必須複製4到60字的使用者原話。沒有可靠證據就回傳空陣列。
+======任務: Web推薦回饋======
+待回饋收據：{receipts}
+只判斷使用者在對應Web連結送達後，對其中一筆推薦表達的態度。證據必須逐字複製自「{master_name} | ...」使用者行；不得使用角色回覆或送達前原話。只能選擇收據中的receipt_id與以下reaction：positive、not_interested、quality_issue、source_distrust、temporary_skip、unclear。不要輸出主題、通道、使用者標籤或其他欄位。沒有可核實的新回饋時，完全省略[RECOMMENDATION_FEEDBACK]段。
 """,
     "en": """
-======Task: Preference Events======
-Extract user preferences that may affect the next media recommendation. Evidence must be copied only from a “{master_name} | ...” user line. Never use assistant replies, the current recommendation profile, or proactive-chat records as evidence.
-
-Allowed values:
-- domain: tech, acg, gaming, companion, entertainment, internet_culture, daily_life
-- media: news, video, music, meme
-- context: focus, relax, energy, sleep
-- signal: explicit_like, explicit_dislike, current_intent, inferred_interest, topic_mention
-
-Rules: at most 3 events; a mention is not a like; inference and context must be session-scoped; only explicit likes/dislikes may be long_term; evidence must copy 4-60 characters from the user. Return an empty array without reliable evidence.
+======Task: Web Recommendation Feedback======
+Pending receipts: {receipts}
+Judge only an attitude expressed after delivery toward one listed Web recommendation. Evidence must be copied verbatim from a “{master_name} | ...” user line; never use assistant text or pre-delivery words. Use only a listed receipt_id and one reaction: positive, not_interested, quality_issue, source_distrust, temporary_skip, unclear. Do not output topics, channels, user labels, or extra fields. Omit the entire [RECOMMENDATION_FEEDBACK] section when there is no verifiable new feedback.
 """,
     "ja": """
-======タスク: 嗜好イベント======
-次回のメディア推薦に影響するユーザーの嗜好を抽出してください。根拠は「{master_name} | ...」のユーザー行の原文だけに限定し、キャラクターの返答、現在の推薦プロファイル、能動会話履歴は根拠にしないでください。
-
-許可値：domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life、media=news/video/music/meme、context=focus/relax/energy/sleep、signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention。
-最大3件。言及だけを好みとみなさず、推測と context は session のみ、long_term は明示的な好悪のみ。evidence はユーザー原文の4〜60文字をコピーし、根拠がなければ空配列を返してください。
+======タスク: Web推薦フィードバック======
+保留中の受領票：{receipts}
+該当Webリンクの配信後に、一覧中の1件へ示された態度だけを判定してください。evidenceは「{master_name} | ...」のユーザー行から原文をコピーし、キャラクターの返答や配信前の発言は使わないでください。receipt_idは一覧から、reactionはpositive、not_interested、quality_issue、source_distrust、temporary_skip、unclearのみ。トピック、チャネル、ユーザータグ、余分な項目は出力しないでください。検証可能な新しい反応がなければ[RECOMMENDATION_FEEDBACK]段全体を省略してください。
 """,
     "ko": """
-======작업: 선호 이벤트======
-다음 미디어 추천에 영향을 줄 사용자 선호를 추출하세요. 근거는 “{master_name} | ...” 사용자 줄의 원문만 사용하며 캐릭터 답변, 현재 추천 프로필, 선제 대화 기록은 사용하지 마세요.
-
-허용값: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life, media=news/video/music/meme, context=focus/relax/energy/sleep, signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
-최대 3개. 단순 언급은 좋아함이 아니며 추론과 context는 session만, long_term은 명시적 호불호만 허용합니다. evidence는 사용자 원문 4~60자를 복사하고 근거가 없으면 빈 배열을 반환하세요.
+======작업: Web 추천 피드백======
+대기 중 영수증: {receipts}
+해당 Web 링크가 전달된 뒤 목록의 추천 하나에 표현된 태도만 판단하세요. evidence는 “{master_name} | ...” 사용자 줄에서 그대로 복사하고 캐릭터 답변이나 전달 전 발언은 사용하지 마세요. 목록의 receipt_id와 positive, not_interested, quality_issue, source_distrust, temporary_skip, unclear 중 하나의 reaction만 사용하세요. 주제, 채널, 사용자 태그 또는 추가 필드를 출력하지 마세요. 검증 가능한 새 피드백이 없으면 [RECOMMENDATION_FEEDBACK] 구간 전체를 생략하세요.
 """,
     "ru": """
-======Задача: События предпочтений======
-Извлеките предпочтения пользователя для следующей рекомендации. Доказательство берите только дословно из строки «{master_name} | ...»; ответы персонажа, текущий профиль и историю проактивных сообщений использовать нельзя.
-
-Допустимо: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
-Не более 3 событий. Упоминание не означает симпатию; выводы и context — только session; long_term — только явная симпатия/антипатия. evidence — дословные 4–60 символов пользователя. Без доказательств верните пустой массив.
+======Задача: Отзыв о Web-рекомендации======
+Ожидающие квитанции: {receipts}
+Определите только отношение, выраженное после доставки к одной Web-рекомендации из списка. evidence дословно копируется из строки пользователя «{master_name} | ...»; ответы персонажа и слова до доставки запрещены. Используйте receipt_id из списка и только reaction: positive, not_interested, quality_issue, source_distrust, temporary_skip или unclear. Не выводите темы, каналы, метки пользователя и лишние поля. Если нового проверяемого отзыва нет, полностью опустите раздел [RECOMMENDATION_FEEDBACK].
 """,
     "es": """
-======Tarea: Eventos de preferencia======
-Extrae preferencias para la próxima recomendación. La evidencia solo puede copiarse de una línea de usuario “{master_name} | ...”; nunca uses respuestas del personaje, el perfil actual ni chats proactivos.
-
-Valores: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
-Máximo 3 eventos. Una mención no implica gusto; inferencias y context solo pueden ser session; long_term solo para gusto/rechazo explícito. evidence copia 4-60 caracteres del usuario. Sin evidencia, devuelve un array vacío.
+======Tarea: Feedback de recomendación Web======
+Recibos pendientes: {receipts}
+Evalúa solo una actitud expresada después de la entrega hacia una recomendación Web listada. evidence debe copiarse literalmente de una línea de usuario “{master_name} | ...”; no uses respuestas del personaje ni palabras anteriores a la entrega. Usa un receipt_id listado y solo una reaction: positive, not_interested, quality_issue, source_distrust, temporary_skip o unclear. No generes temas, canales, etiquetas de usuario ni campos extra. Si no hay feedback nuevo verificable, omite por completo [RECOMMENDATION_FEEDBACK].
 """,
     "pt": """
-======Tarefa: Eventos de preferência======
-Extraia preferências para a próxima recomendação. A evidência só pode ser copiada de uma linha de usuário “{master_name} | ...”; nunca use respostas da personagem, o perfil atual ou chats proativos.
-
-Valores: domain=tech/acg/gaming/companion/entertainment/internet_culture/daily_life; media=news/video/music/meme; context=focus/relax/energy/sleep; signal=explicit_like/explicit_dislike/current_intent/inferred_interest/topic_mention.
-No máximo 3 eventos. Menção não significa preferência; inferências e context só podem ser session; long_term apenas para gosto/rejeição explícitos. evidence copia 4-60 caracteres do usuário. Sem evidência, retorne um array vazio.
+======Tarefa: Feedback de recomendação Web======
+Recibos pendentes: {receipts}
+Avalie somente uma atitude expressa após a entrega sobre uma recomendação Web listada. evidence deve ser copiada literalmente de uma linha de usuário “{master_name} | ...”; não use respostas da personagem nem falas anteriores à entrega. Use um receipt_id listado e apenas uma reaction: positive, not_interested, quality_issue, source_distrust, temporary_skip ou unclear. Não gere temas, canais, rótulos de usuário nem campos extras. Sem feedback novo verificável, omita por completo a seção [RECOMMENDATION_FEEDBACK].
 """,
 }
 
-_UNIFIED_P1_PREFERENCE_FORMAT = {
-    lang: """[PREFERENCE]
-- Return one compact JSON array. Each item has: dimension, value, signal, polarity (-1 or 1), confidence (0-1), scope (session or long_term), evidence.
-- Example: [PREFERENCE] [{"dimension":"domain","value":"tech","signal":"current_intent","polarity":1,"confidence":0.9,"scope":"session","evidence":"AI Agent updates"}]
-- No evidence: [PREFERENCE] []"""
+_UNIFIED_P1_FEEDBACK_FORMAT = {
+    lang: """Optional feedback output (omit it when there is no new evidence):
+[RECOMMENDATION_FEEDBACK]
+{"receipt_id":"rec-001","reaction":"not_interested","confidence":0.91,"evidence":"这种游戏我没兴趣"}"""
     for lang in ("zh", "zh-TW", "en", "ja", "ko", "ru", "es", "pt")
 }
 
@@ -3177,8 +3134,8 @@ def build_unified_phase1_prompt(
     meme_enabled: bool = False,
     lanlan_name: str = "",
     master_name: str = "",
-    preference_enabled: bool = False,
-    preference_summary: str = "",
+    feedback_enabled: bool = False,
+    feedback_receipts: str = "",
 ) -> str:
     """
     Dynamically assemble the merged Phase 1 prompt.
@@ -3194,8 +3151,8 @@ def build_unified_phase1_prompt(
         meme_enabled: whether meme keyword generation is enabled
         lanlan_name: character name (for the music prompt)
         master_name: master name (for the music prompt)
-        preference_enabled: append the optional preference extraction task
-        preference_summary: bounded prior profile used only for material selection
+        feedback_enabled: append feedback extraction to this existing call
+        feedback_receipts: bounded process-local receipts awaiting feedback
     """
     lang_key = _normalize_prompt_language(lang)
 
@@ -3209,13 +3166,6 @@ def build_unified_phase1_prompt(
             recent_chats_section=recent_chats_section,
         )
     ]
-    if preference_enabled and preference_summary:
-        parts.append(
-            _get(_UNIFIED_P1_PREFERENCE_PROFILE).format(
-                summary=preference_summary
-            )
-        )
-
     # --- 收集启用的 section 和对应格式 ---
     format_parts = []
     fmt = _get(_UNIFIED_P1_FORMAT)
@@ -3241,11 +3191,14 @@ def build_unified_phase1_prompt(
         parts.append(_get(_UNIFIED_P1_MEME_SECTION))
         format_parts.append(fmt["meme"])
 
-    if preference_enabled:
+    if feedback_enabled and feedback_receipts:
         parts.append(
-            _get(_UNIFIED_P1_PREFERENCE_SECTION).format(master_name=master_name)
+            _get(_UNIFIED_P1_FEEDBACK_SECTION).format(
+                master_name=master_name,
+                receipts=feedback_receipts,
+            )
         )
-        format_parts.append(_get(_UNIFIED_P1_PREFERENCE_FORMAT))
+        format_parts.append(_get(_UNIFIED_P1_FEEDBACK_FORMAT))
 
     # --- 尾部 ---
     if format_parts:

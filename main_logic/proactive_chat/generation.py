@@ -86,12 +86,18 @@ _PROACTIVE_LLM_RETRY_ERROR_TYPES: tuple[type[BaseException], ...] | None = None
 
 
 def _redact_preference_section_for_log(text: str) -> str:
-    """Keep evidence excerpts out of the existing raw Phase 1 debug logs."""
+    """Keep feedback evidence out of every existing raw Phase 1 log."""
 
-    marker = re.search(r"(?im)^\s*\[PREFERENCE\]", text or "")
+    marker = re.search(
+        r"(?im)^\s*\[(?:RECOMMENDATION_FEEDBACK|PREFERENCE)\]",
+        text or "",
+    )
     if marker is None:
         return text
-    return text[: marker.start()].rstrip() + "\n[PREFERENCE] <redacted>"
+    return (
+        text[: marker.start()].rstrip()
+        + "\n[RECOMMENDATION_FEEDBACK] <redacted>"
+    )
 
 
 def _proactive_silence_since(mgr: Any) -> float | None:
@@ -351,8 +357,8 @@ async def _run_unified_phase1(
     has_music_task: bool,
     has_meme_task: bool,
     log: logging.Logger | None = None,
-    preference_enabled: bool = False,
-    preference_summary: str = "",
+    feedback_enabled: bool = False,
+    feedback_receipts: str = "",
 ) -> dict[str, Any]:
     """Build, call, and parse the unified Phase 1 model request."""
     active_logger = log or logger
@@ -360,7 +366,7 @@ async def _run_unified_phase1(
         "web": None,
         "music_keyword": None,
         "meme_keyword": None,
-        "preference_events": [],
+        "recommendation_feedback": None,
     }
     has_web_task = bool(merged_web_content)
     if not (has_web_task or has_music_task or has_meme_task):
@@ -381,8 +387,8 @@ async def _run_unified_phase1(
             meme_enabled=has_meme_task,
             lanlan_name=lanlan_name,
             master_name=master_name,
-            preference_enabled=preference_enabled,
-            preference_summary=preference_summary,
+            feedback_enabled=feedback_enabled,
+            feedback_receipts=feedback_receipts,
         )
         call_started = time.perf_counter()
         result_text = await _llm_call_with_retry(
@@ -396,12 +402,12 @@ async def _run_unified_phase1(
         elapsed_ms = (time.perf_counter() - call_started) * 1000.0
         active_logger.debug(
             "[%s] Phase 1 metrics: input_tokens=%d output_tokens=%d "
-            "elapsed_ms=%.1f preference_demo=%s",
+            "elapsed_ms=%.1f recommendation_feedback=%s",
             lanlan_name,
             count_tokens(prompt),
             count_tokens(result_text),
             elapsed_ms,
-            preference_enabled,
+            feedback_enabled,
         )
         log_text = _redact_preference_section_for_log(result_text)
         print(f"[{lanlan_name}] Phase 1 合并 LLM 结果: {log_text[:500]}")
@@ -411,7 +417,7 @@ async def _run_unified_phase1(
             f"web={'有' if parsed.get('web') else '无'}, "
             f"music_kw={parsed.get('music_keyword', 'N/A')}, "
             f"meme_kw={parsed.get('meme_keyword', 'N/A')}, "
-            f"preference_events={len(parsed.get('preference_events', []))}"
+            f"recommendation_feedback={bool(parsed.get('recommendation_feedback'))}"
         )
         return parsed
     except Exception as exc:
@@ -1768,6 +1774,36 @@ def _parse_unified_phase1_result(text: str) -> dict:
         if isinstance(payload, list):
             result['preference_events'] = payload
 
+    return result
+
+
+_parse_unified_phase1_without_recommendation_feedback = _parse_unified_phase1_result
+
+
+def _parse_unified_phase1_result(text: str) -> dict:
+    """Parse the existing tasks plus one optional feedback JSON object."""
+    feedback_match = re.search(
+        r"(?ims)^\s*\[RECOMMENDATION_FEEDBACK\]\s*(.*?)(?=^\s*\[(?:WEB|MUSIC|MEME|PREFERENCE)\]|\Z)",
+        text or "",
+    )
+    base_text = text or ""
+    raw_feedback = ""
+    if feedback_match is not None:
+        raw_feedback = feedback_match.group(1).strip()
+        base_text = base_text[: feedback_match.start()] + base_text[feedback_match.end():]
+    result = _parse_unified_phase1_without_recommendation_feedback(base_text)
+    result.pop("preference_events", None)
+    result["recommendation_feedback"] = None
+    if raw_feedback:
+        cleaned = re.sub(
+            r"^```(?:json)?\s*|\s*```$", "", raw_feedback, flags=re.I
+        )
+        try:
+            payload = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            result["recommendation_feedback"] = payload
     return result
 
 
