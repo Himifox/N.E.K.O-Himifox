@@ -26,7 +26,6 @@ def _request_shape(text: str) -> tuple[str, bool, bool, bool, bool] | None:
 @pytest.mark.parametrize(
     ("simplified", "traditional", "expected_shape"),
     (
-        ("听一首晴天", "聽一首晴天", ("auto", False, True, False, True)),
         (
             "播放周杰伦的晴天这首歌",
             "播放周杰倫的晴天這首歌",
@@ -109,6 +108,7 @@ def test_non_commands_fail_closed_in_both_scripts(
         ("播放轻松的音乐", "播放輕鬆的音樂"),
         ("播放一段你说话的声音", "播放一段你說話的聲音"),
         ("我想听晴天", "我想聽晴天"),
+        ("听一首晴天", "聽一首晴天"),
         ("来点摇滚", "來點搖滾"),
         ("从我的健身歌单里随机放一首", "從我的健身歌單裡隨機放一首"),
     ),
@@ -212,40 +212,6 @@ def test_multiple_quoted_chinese_titles_fail_closed(text: str) -> None:
     assert parse_strict_music_command(text) is None
 
 
-@pytest.mark.parametrize("text", ("听一下歌", "聽一下音樂"))
-def test_listen_briefly_to_explicit_chinese_music_objects(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.keyword == ""
-
-
-@pytest.mark.parametrize("text", ("播放我的收藏歌曲", "播放我的红心歌曲"))
-def test_possessive_chinese_liked_song_aliases(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.personalization_source == "liked"
-
-
-@pytest.mark.parametrize(
-    "text",
-    ("播放每日推荐歌曲", "播放每日推荐音乐", "播放日推歌曲"),
-)
-def test_daily_source_with_music_object_is_personalized(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.personalization_source == "daily"
-
-
-@pytest.mark.parametrize(
-    "text",
-    ("播放网易云的日推歌曲", "播放網易雲的日推音樂"),
-)
-def test_netease_daily_source_with_music_object_is_personalized(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.personalization_source == "daily"
-
-
 @pytest.mark.parametrize(
     "text",
     ("play me a song", "play some music for me", "play music for us"),
@@ -261,10 +227,6 @@ def test_generic_english_recipient_phrases_do_not_become_searches(text: str) -> 
     (
         "play favorites",
         "play my favourites",
-        "play a song from my liked songs",
-        "play liked music",
-        "play favorite music",
-        "play my favourite music",
     ),
 )
 def test_english_liked_aliases_are_personalized(text: str) -> None:
@@ -275,44 +237,15 @@ def test_english_liked_aliases_are_personalized(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ("play my favorites playlist", "play liked songs playlist"),
+    (
+        "play a song from my Night Loop playlist",
+        "play a song from my liked songs",
+        "play from my Night Loop playlist",
+        "please play from Night Loop playlist",
+    ),
 )
-def test_english_liked_playlist_aliases_are_personalized(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.personalization_source == "liked"
-
-
-def test_from_liked_playlist_alias_is_personalized() -> None:
-    request = parse_strict_music_command("play from my liked songs playlist")
-    assert request is not None
-    assert request.personalization_source == "liked"
-
-
-@pytest.mark.parametrize(
-    "text",
-    ("play daily music", "play daily songs", "listen to my daily music"),
-)
-def test_english_daily_music_aliases_are_personalized(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.personalization_source == "daily"
-
-
-def test_english_playlist_source_wrapper_is_not_part_of_the_name() -> None:
-    request = parse_strict_music_command("play a song from my Night Loop playlist")
-    assert request is not None
-    assert request.playlist_name == "Night Loop"
-
-
-@pytest.mark.parametrize(
-    "text",
-    ("play from my Night Loop playlist", "please play from Night Loop playlist"),
-)
-def test_english_from_playlist_wrapper_is_not_part_of_the_name(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.playlist_name == "Night Loop"
+def test_english_playlist_source_wrappers_are_left_for_the_model(text: str) -> None:
+    assert parse_strict_music_command(text) is None
 
 
 @pytest.mark.parametrize("text", ("play my playlist", "play the playlist"))
@@ -440,9 +373,6 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
     (
         "停止播放音乐",
         "暂停播放歌曲",
-        "请停止播放",
-        "停止播放",
-        "暂停播放",
         "停止播放音樂",
         "暫停播放歌曲",
         "停止这首歌",
@@ -462,16 +392,6 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "stop current music",
         "stop the current music",
         "stop playing music",
-        "turn off the songs",
-        "shut off the tracks",
-        "stop the music please",
-        "pause the song please",
-        "stop music now",
-        "stop my music",
-        "pause my song",
-        "turn off our songs",
-        "don't play tracks",
-        "do not listen to the track",
         "don't listen to music",
         "do not listen to songs",
     ),
@@ -483,8 +403,19 @@ def test_composed_music_stop_commands_are_recognized(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     (
+        "请停止播放",
+        "停止播放",
+        "暂停播放",
         "停止播放视频",
         "别给我放视频",
+        "turn off the songs",
+        "shut off the tracks",
+        "stop the music please",
+        "stop music now",
+        "stop my music",
+        "turn off our songs",
+        "don't play tracks",
+        "do not listen to the track",
         "stop playing games",
         "don't listen to podcasts",
     ),
@@ -516,8 +447,8 @@ def test_object_before_off_english_stops_are_recognized(text: str) -> None:
         "停止正在播放的音乐",
     ),
 )
-def test_source_named_chinese_stops_are_recognized(text: str) -> None:
-    assert is_strict_music_cancellation(text) is True
+def test_source_named_chinese_stops_are_left_for_the_model(text: str) -> None:
+    assert is_strict_music_cancellation(text) is False
 
 
 @pytest.mark.parametrize(

@@ -15,9 +15,9 @@ from main_logic.music_requests import MusicRequest
 _ZH_PREFIX = r"(?:(?:请|請|麻烦|麻煩)\s*)?(?:(?:帮|幫|给|給)我\s*)?"
 _ZH_PLAY_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}"
-    r"(?P<action>播放(?:一下|下|一首|首)?|放(?:一首|首)|"
+    r"(?:播放(?:一下|下|一首|首)?|放(?:一首|首)|"
     r"放(?=\s*(?:音乐|音樂|歌曲?|歌|[《「『【]))|"
-    r"[听聽](?:一下|下|一首|首)|[来來](?:一首|首))"
+    r"[听聽](?:一首|首)|[来來](?:一首|首))"
     r"\s*(?P<target>.{1,80}?)(?:吧|啊|呀|哦|喔)?$"
 )
 _ZH_SWITCH_COMMAND = re.compile(
@@ -28,15 +28,7 @@ _ZH_SWITCH_COMMAND = re.compile(
 _ZH_STOP_ACTION = r"(?:停止|停掉|暂停|暫停)"
 _ZH_CLOSE_ACTION = r"(?:关掉|關掉|关闭|關閉)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
-_ZH_MUSIC_OBJECT = (
-    r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌|"
-    r"(?:我的)?(?:歌单|歌單|播放列表|播放清单|播放清單)|播放器|"
-    r"正在播放的(?:音乐|音樂))"
-)
-_ZH_MUSIC_SOURCE = (
-    r"(?:红心(?:歌单)?|紅心(?:歌單)?|"
-    r"(?:每日推荐|每日推薦|日推)(?:歌曲?|音乐|音樂)?)"
-)
+_ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
 _ZH_NEGATIVE_LEAD = r"(?:不要|别|別)(?:(?:再|继续|繼續)|(?:(?:给|給|帮|幫)我))?"
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
@@ -44,8 +36,6 @@ _ZH_STOP_COMMAND = re.compile(
     rf"|{_ZH_CLOSE_ACTION}{_ZH_MUSIC_OBJECT}"
     rf"|把{_ZH_MUSIC_OBJECT}{_ZH_CLOSE_ACTION}"
     rf"|取消{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
-    rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}"
-    rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?(?:我的)?{_ZH_MUSIC_SOURCE}"
     rf"|{_ZH_NEGATIVE_LEAD}{_ZH_PLAYBACK_ACTION}{_ZH_MUSIC_OBJECT}"
     r")(?:了|吧)?$"
 )
@@ -59,8 +49,7 @@ _EN_PLAY_COMMAND = re.compile(
 )
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
-_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the|my|our)\s+|(?:the\s+)?current\s+)?"
-_EN_STOP_SUFFIX = r"(?:\s+(?:please|now))?"
+_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the)\s+|(?:the\s+)?current\s+)?"
 _EN_GENERIC_MUSIC_TARGET = (
     r"(?:"
     r"(?:(?:some|any|the)\s+)?music"
@@ -70,10 +59,10 @@ _EN_GENERIC_MUSIC_TARGET = (
 _EN_STOP_COMMAND = re.compile(
     rf"^(?:{_EN_PREFIX}(?:stop|pause|cancel)\s+(?:playing\s+)?"
     rf"{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}"
-    rf"|{_EN_PREFIX}(?:turn|shut)\s+off\s+{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}"
+    rf"|{_EN_PREFIX}(?:turn|shut)\s+off\s+{_EN_MUSIC_DETERMINER}(?:music|playback)"
     rf"|{_EN_PREFIX}(?:turn|shut)\s+{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}\s+off"
     rf"|{_EN_PREFIX}(?:do\s+not|don't|don’t|dont)\s+(?:play|listen\s+to)\s+"
-    rf"{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}){_EN_STOP_SUFFIX}$",
+    rf"{_EN_MUSIC_DETERMINER}(?:music|songs?))$",
     re.IGNORECASE,
 )
 _EN_SECOND_COMMAND = re.compile(
@@ -137,7 +126,7 @@ def _strip_target(value: str) -> str:
     return value.strip(" \t'\"“”‘’《》「」『』【】")
 
 
-def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
+def _parse_zh_target(target: str) -> MusicRequest | None:
     target = target.strip()
     if not target:
         return None
@@ -146,17 +135,11 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
     if compact in {
         "红心", "紅心", "红心歌单", "紅心歌單", "我的红心歌单", "我的紅心歌單",
         "我喜欢的", "我喜歡的", "我喜欢的歌", "我喜歡的歌", "收藏歌曲", "收藏的歌",
-        "我的收藏歌曲", "我的红心歌曲", "我的紅心歌曲",
     }:
         return MusicRequest(personalization_source="liked")
     if compact in {
         "日推", "每日推荐", "每日推薦", "网易云日推", "網易雲日推",
         "网易云的日推", "網易雲的日推",
-        "日推歌曲", "日推音乐", "日推音樂",
-        "每日推荐歌曲", "每日推荐音乐", "每日推薦歌曲", "每日推薦音樂",
-        "网易云日推歌曲", "网易云日推音乐", "網易雲日推歌曲", "網易雲日推音樂",
-        "网易云的日推歌曲", "网易云的日推音乐",
-        "網易雲的日推歌曲", "網易雲的日推音樂",
     }:
         return MusicRequest(personalization_source="daily")
     if compact in {
@@ -225,16 +208,14 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
             song_artist=artist,
         )
 
-    if any(token in action for token in ("一首", "首")):
-        if "的" in target:
-            return None
-        return MusicRequest(keyword=target, song_name=target)
     return None
 
 
 def _parse_en_target(target: str) -> MusicRequest | None:
     target = target.strip()
     if not target:
+        return None
+    if "from" in target.casefold().split():
         return None
     if re.fullmatch(
         rf"(?:(?:me|us)\s+)?{_EN_GENERIC_MUSIC_TARGET}"
@@ -244,25 +225,21 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     ):
         return MusicRequest()
     if re.fullmatch(
-        r"(?:(?:(?:a|some)\s+songs?\s+from|from)\s+)?(?:my\s+)?"
-        r"(?:liked (?:songs?|music)|favorites?|favourites?|"
-        r"favou?rite (?:songs?|music))"
-        r"(?:\s+playlist)?",
+        r"(?:my\s+)?"
+        r"(?:liked songs?|favorites?|favourites?|favorite songs?|favourite songs?)",
         target,
         re.IGNORECASE,
     ):
         return MusicRequest(personalization_source="liked")
     if re.fullmatch(
-        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
-        r"daily (?:mix|recommendations?|music|songs?)",
+        r"(?:my\s+)?(?:daily mix|daily recommendations?)",
         target,
         re.IGNORECASE,
     ):
         return MusicRequest(personalization_source="daily")
 
     playlist = re.fullmatch(
-        r"(?:(?:(?:a|some)\s+songs?\s+from|from)\s+)?(?:my\s+)?"
-        r"(.{1,60}?)\s+playlist",
+        r"(?:my\s+)?(.{1,60}?)\s+playlist",
         target,
         re.IGNORECASE,
     )
@@ -317,7 +294,7 @@ def parse_strict_music_command(text: str) -> MusicRequest | None:
             return MusicRequest(keyword=song, song_name=song) if song else None
         match = _ZH_PLAY_COMMAND.fullmatch(normalized)
         if match:
-            return _parse_zh_target(match.group("action"), match.group("target"))
+            return _parse_zh_target(match.group("target"))
 
     normalized = _normalize_command(text, allow_polite_question=True)
     if not normalized or _EN_SECOND_COMMAND.search(_outside_complete_quotes(normalized)):
