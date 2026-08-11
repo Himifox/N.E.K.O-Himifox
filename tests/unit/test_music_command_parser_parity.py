@@ -281,6 +281,12 @@ def test_english_liked_playlist_aliases_are_personalized(text: str) -> None:
     assert request.personalization_source == "liked"
 
 
+def test_from_liked_playlist_alias_is_personalized() -> None:
+    request = parse_strict_music_command("play from my liked songs playlist")
+    assert request is not None
+    assert request.personalization_source == "liked"
+
+
 @pytest.mark.parametrize(
     "text",
     ("play daily music", "play daily songs", "listen to my daily music"),
@@ -305,6 +311,11 @@ def test_english_from_playlist_wrapper_is_not_part_of_the_name(text: str) -> Non
     request = parse_strict_music_command(text)
     assert request is not None
     assert request.playlist_name == "Night Loop"
+
+
+@pytest.mark.parametrize("text", ("play my playlist", "play the playlist"))
+def test_english_playlists_without_concrete_names_fail_closed(text: str) -> None:
+    assert parse_strict_music_command(text) is None
 
 
 @pytest.mark.parametrize(
@@ -373,6 +384,9 @@ def test_unlabeled_english_targets_are_left_for_the_model_tool(text: str) -> Non
         ('play "Yellow"', "Yellow"),
         ("play 'Yellow'", "Yellow"),
         ("play ‘Yellow’", "Yellow"),
+        ('play "Stop and Play"', "Stop and Play"),
+        ('play "Hello but Stop"', "Hello but Stop"),
+        ('play "A. Play"', "A. Play"),
         ("play song: Yellow", "Yellow"),
         ("play track: Fix You", "Fix You"),
     ),
@@ -448,6 +462,9 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "stop the music please",
         "pause the song please",
         "stop music now",
+        "stop my music",
+        "pause my song",
+        "turn off our songs",
         "don't play tracks",
         "do not listen to the track",
         "don't listen to music",
@@ -489,6 +506,10 @@ def test_object_before_off_english_stops_are_recognized(text: str) -> None:
         "停止播放日推歌曲",
         "停止每日推荐歌曲",
         "停止播放红心",
+        "停止播放我的歌单",
+        "别放我的歌单",
+        "关掉播放器",
+        "停止正在播放的音乐",
     ),
 )
 def test_source_named_chinese_stops_are_recognized(text: str) -> None:

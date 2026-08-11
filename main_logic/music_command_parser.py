@@ -28,7 +28,11 @@ _ZH_SWITCH_COMMAND = re.compile(
 _ZH_STOP_ACTION = r"(?:停止|停掉|暂停|暫停)"
 _ZH_CLOSE_ACTION = r"(?:关掉|關掉|关闭|關閉)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
-_ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
+_ZH_MUSIC_OBJECT = (
+    r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌|"
+    r"(?:我的)?(?:歌单|歌單|播放列表|播放清单|播放清單)|播放器|"
+    r"正在播放的(?:音乐|音樂))"
+)
 _ZH_MUSIC_SOURCE = (
     r"(?:红心(?:歌单)?|紅心(?:歌單)?|"
     r"(?:每日推荐|每日推薦|日推)(?:歌曲?|音乐|音樂)?)"
@@ -54,7 +58,7 @@ _EN_PLAY_COMMAND = re.compile(
 )
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
-_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the)\s+|(?:the\s+)?current\s+)?"
+_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the|my|our)\s+|(?:the\s+)?current\s+)?"
 _EN_STOP_SUFFIX = r"(?:\s+(?:please|now))?"
 _EN_GENERIC_MUSIC_TARGET = (
     r"(?:"
@@ -239,7 +243,7 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     ):
         return MusicRequest()
     if re.fullmatch(
-        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
+        r"(?:(?:(?:a|some)\s+songs?\s+from|from)\s+)?(?:my\s+)?"
         r"(?:liked (?:songs?|music)|favorites?|favourites?|"
         r"favou?rite (?:songs?|music))"
         r"(?:\s+playlist)?",
@@ -262,7 +266,10 @@ def _parse_en_target(target: str) -> MusicRequest | None:
         re.IGNORECASE,
     )
     if playlist:
-        return MusicRequest(playlist_name=_strip_target(playlist.group(1)))
+        playlist_name = _strip_target(playlist.group(1))
+        if playlist_name.casefold() in {"my", "the", "a", "some"}:
+            return None
+        return MusicRequest(playlist_name=playlist_name)
 
     quoted = re.fullmatch(
         r"(?:\"([^\"\r\n]{1,60})\"|“([^”\r\n]{1,60})”|"
@@ -312,7 +319,7 @@ def parse_strict_music_command(text: str) -> MusicRequest | None:
             return _parse_zh_target(match.group("action"), match.group("target"))
 
     normalized = _normalize_command(text, allow_polite_question=True)
-    if not normalized or _EN_SECOND_COMMAND.search(normalized):
+    if not normalized or _EN_SECOND_COMMAND.search(_outside_complete_quotes(normalized)):
         return None
     match = _EN_PLAY_COMMAND.fullmatch(normalized)
     if not match:
