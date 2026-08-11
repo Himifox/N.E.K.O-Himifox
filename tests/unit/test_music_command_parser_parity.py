@@ -135,6 +135,7 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "播放一首我的《晴天》",
         "放一首周杰伦的稻香",
         "聽一首周杰倫的稻香",
+        "听一下故事",
         "放假",
         "放大一点",
         "play with me",
@@ -209,11 +210,35 @@ def test_multiple_quoted_chinese_titles_fail_closed(text: str) -> None:
     assert parse_strict_music_command(text) is None
 
 
+@pytest.mark.parametrize("text", ("听一下歌", "聽一下音樂"))
+def test_listen_briefly_to_explicit_chinese_music_objects(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == ""
+
+
+@pytest.mark.parametrize("text", ("播放我的收藏歌曲", "播放我的红心歌曲"))
+def test_possessive_chinese_liked_song_aliases(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "liked"
+
+
 @pytest.mark.parametrize(
     "text",
     ("播放每日推荐歌曲", "播放每日推荐音乐", "播放日推歌曲"),
 )
 def test_daily_source_with_music_object_is_personalized(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "daily"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("播放网易云的日推歌曲", "播放網易雲的日推音樂"),
+)
+def test_netease_daily_source_with_music_object_is_personalized(text: str) -> None:
     request = parse_strict_music_command(text)
     assert request is not None
     assert request.personalization_source == "daily"
@@ -268,6 +293,16 @@ def test_english_daily_music_aliases_are_personalized(text: str) -> None:
 
 def test_english_playlist_source_wrapper_is_not_part_of_the_name() -> None:
     request = parse_strict_music_command("play a song from my Night Loop playlist")
+    assert request is not None
+    assert request.playlist_name == "Night Loop"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("play from my Night Loop playlist", "please play from Night Loop playlist"),
+)
+def test_english_from_playlist_wrapper_is_not_part_of_the_name(text: str) -> None:
+    request = parse_strict_music_command(text)
     assert request is not None
     assert request.playlist_name == "Night Loop"
 
@@ -336,6 +371,8 @@ def test_unlabeled_english_targets_are_left_for_the_model_tool(text: str) -> Non
     ("text", "song"),
     (
         ('play "Yellow"', "Yellow"),
+        ("play 'Yellow'", "Yellow"),
+        ("play ‘Yellow’", "Yellow"),
         ("play song: Yellow", "Yellow"),
         ("play track: Fix You", "Fix You"),
     ),
@@ -345,6 +382,20 @@ def test_labeled_or_quoted_english_songs_are_strict(text: str, song: str) -> Non
     assert request is not None
     assert request.song_name == song
     assert request.keyword == song
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "can you listen to music?",
+        "could you listen to some songs",
+        "would you listen to a track",
+    ),
+)
+def test_modal_listen_to_generic_music_is_strict(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == ""
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ _ZH_PLAY_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}"
     r"(?P<action>播放(?:一下|下|一首|首)?|放(?:一首|首)|"
     r"放(?=\s*(?:音乐|音樂|歌曲?|歌|[《「『【]))|"
-    r"[听聽](?:一首|首)|[来來](?:一首|首))"
+    r"[听聽](?:一下|下|一首|首)|[来來](?:一首|首))"
     r"\s*(?P<target>.{1,80}?)(?:吧|啊|呀|哦|喔)?$"
 )
 _ZH_SWITCH_COMMAND = re.compile(
@@ -46,8 +46,8 @@ _ZH_STOP_COMMAND = re.compile(
 )
 
 _EN_PLAY_COMMAND = re.compile(
-    r"^(?:(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)play"
-    r"|(?:please\s+)?listen\s+to"
+    r"^(?:(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)"
+    r"(?:play|listen\s+to)"
     r"|i\s+(?:want|would\s+like)\s+to\s+(?:play|listen\s+to))"
     r"\s+(?P<target>.{1,100})$",
     re.IGNORECASE,
@@ -82,7 +82,9 @@ _TRAILING_STATEMENT_MARKS = "。.!！"
 _CLAUSE_MARKS = frozenset("，,；;、")
 _ZH_QUOTES = (("《", "》"), ("「", "」"), ("『", "』"), ("【", "】"))
 _ZH_QUOTE_MARKS = "".join(mark for pair in _ZH_QUOTES for mark in pair)
-_COMMAND_QUOTES = _ZH_QUOTES + (("\"", "\""), ("“", "”"))
+_COMMAND_QUOTES = _ZH_QUOTES + (
+    ("\"", "\""), ("“", "”"), ("'", "'"), ("‘", "’"),
+)
 _ZH_POSSESSIVE_REFERENTS = frozenset(
     {
         "我", "你", "妳", "您", "他", "她", "它", "牠", "咱", "自己", "本人",
@@ -139,6 +141,7 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
     if compact in {
         "红心", "紅心", "红心歌单", "紅心歌單", "我的红心歌单", "我的紅心歌單",
         "我喜欢的", "我喜歡的", "我喜欢的歌", "我喜歡的歌", "收藏歌曲", "收藏的歌",
+        "我的收藏歌曲", "我的红心歌曲", "我的紅心歌曲",
     }:
         return MusicRequest(personalization_source="liked")
     if compact in {
@@ -146,6 +149,9 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
         "网易云的日推", "網易雲的日推",
         "日推歌曲", "日推音乐", "日推音樂",
         "每日推荐歌曲", "每日推荐音乐", "每日推薦歌曲", "每日推薦音樂",
+        "网易云日推歌曲", "网易云日推音乐", "網易雲日推歌曲", "網易雲日推音樂",
+        "网易云的日推歌曲", "网易云的日推音乐",
+        "網易雲的日推歌曲", "網易雲的日推音樂",
     }:
         return MusicRequest(personalization_source="daily")
     if compact in {
@@ -250,7 +256,7 @@ def _parse_en_target(target: str) -> MusicRequest | None:
         return MusicRequest(personalization_source="daily")
 
     playlist = re.fullmatch(
-        r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
+        r"(?:(?:(?:a|some)\s+songs?\s+from|from)\s+)?(?:my\s+)?"
         r"(.{1,60}?)\s+playlist",
         target,
         re.IGNORECASE,
@@ -258,7 +264,11 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     if playlist:
         return MusicRequest(playlist_name=_strip_target(playlist.group(1)))
 
-    quoted = re.fullmatch(r'(?:"([^"\r\n]{1,60})"|“([^”\r\n]{1,60})”)', target)
+    quoted = re.fullmatch(
+        r"(?:\"([^\"\r\n]{1,60})\"|“([^”\r\n]{1,60})”|"
+        r"'([^'\r\n]{1,60})'|‘([^’\r\n]{1,60})’)",
+        target,
+    )
     if quoted:
         song = _strip_target(next(part for part in quoted.groups() if part))
         return MusicRequest(keyword=song, song_name=song) if song else None
