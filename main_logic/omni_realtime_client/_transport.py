@@ -1223,6 +1223,11 @@ class _TransportMixin:
             logger.warning("host turn id unreadable (%s); turn guard is off", exc)
             return None
 
+    def _current_tool_turn_owner(self) -> dict[str, str]:
+        """Return the host turn captured when the current response began."""
+        turn_id = self._current_turn_host_id
+        return {"turn_id": turn_id} if isinstance(turn_id, str) and turn_id else {}
+
     def _host_turn_is_still_ours(self) -> bool:
         """Has the host started a turn of its own since this one began?
 
@@ -1881,12 +1886,20 @@ class _TransportMixin:
                         # Execute and reply asynchronously — don't block the
                         # message loop. handle_messages stays responsive to
                         # other events while the tool runs.
-                        async def _run_tool(_name=name, _args=raw_args, _cid=call_id):
+                        turn_owner = self._current_tool_turn_owner()
+
+                        async def _run_tool(
+                            _name=name,
+                            _args=raw_args,
+                            _cid=call_id,
+                            _turn_owner=turn_owner,
+                        ):
                             call = ToolCall(
                                 name=_name,
                                 arguments=parse_arguments_json(_args),
                                 call_id=_cid,
                                 raw_arguments=_args,
+                                provider_meta={"turn_owner": dict(_turn_owner)},
                             )
                             result = await self._execute_tool_call(call)
                             await self._send_tool_result_openai_realtime(result)

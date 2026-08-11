@@ -528,6 +528,7 @@ class _GeminiMixin:
                         ]
                     else:
                         results = []
+                        turn_owner = self._current_tool_turn_owner()
                         for fc in fcs:
                             args = dict(getattr(fc, 'args', None) or {})
                             call = ToolCall(
@@ -535,6 +536,7 @@ class _GeminiMixin:
                                 arguments=args,
                                 call_id=getattr(fc, 'id', '') or '',
                                 raw_arguments=json.dumps(args, ensure_ascii=False),
+                                provider_meta={"turn_owner": dict(turn_owner)},
                             )
                             results.append(await self._execute_tool_call(call))
                     # Fire-and-forget — let the message loop continue. The

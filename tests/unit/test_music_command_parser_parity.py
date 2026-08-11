@@ -132,7 +132,6 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "播放咱們的晴天",
         "播放我的《晴天》",
         "播放你的《晴天》",
-        "播放周杰伦的《晴天》",
         "播放一首我的《晴天》",
         "放假",
         "放大一点",
@@ -154,6 +153,7 @@ def test_ambiguous_or_non_music_play_phrases_fail_closed(text: str) -> None:
     (
         ("播放周杰伦的晴天这首歌", "晴天", "周杰伦"),
         ("播放周杰伦的晴天歌曲", "晴天", "周杰伦"),
+        ("播放周杰伦的《晴天》", "晴天", "周杰伦"),
         ("play the song Yellow by Coldplay", "Yellow", "Coldplay"),
     ),
 )
@@ -166,6 +166,14 @@ def test_explicit_song_wrappers_are_removed(
     assert request is not None
     assert request.song_name == song
     assert request.song_artist == artist
+
+
+@pytest.mark.parametrize("text", ("播放歌曲《晴天》", "播放曲目《晴天》"))
+def test_labeled_quoted_chinese_titles_are_strict(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.song_name == "晴天"
+    assert request.song_artist == ""
 
 
 @pytest.mark.parametrize(
@@ -290,8 +298,15 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "暂停这首歌",
         "停止這首歌",
         "停止播放这首歌",
+        "把音乐关掉",
+        "把音樂關掉",
         "can you stop music",
+        "can you stop music?",
         "could you pause playback",
+        "could you pause playback?",
+        "pause current song",
+        "stop current track",
+        "stop current music",
         "stop playing music",
         "don't listen to music",
         "do not listen to songs",

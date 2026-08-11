@@ -211,10 +211,17 @@ async def handle_music_intent_tool(
     if not isinstance(turn, dict):
         return _music_tool_result(manager, "ignored", reason="no_current_user_turn")
     turn_owner = arguments.get("_neko_turn_owner") if isinstance(arguments, dict) else None
-    if isinstance(turn_owner, dict) and any(
+    owner_keys = ("request_id", "turn_id")
+    if not isinstance(turn_owner, dict) or not any(
+        owner_key in turn_owner for owner_key in owner_keys
+    ):
+        return _music_tool_result(
+            manager, "ignored", reason="missing_music_intent_turn_owner"
+        )
+    if any(
         owner_key in turn_owner
         and turn.get(owner_key) != turn_owner[owner_key]
-        for owner_key in ("request_id", "turn_id")
+        for owner_key in owner_keys
     ):
         return _music_tool_result(manager, "ignored", reason="stale_music_intent_turn")
     if turn.get("handled"):

@@ -26,13 +26,15 @@ _ZH_SWITCH_COMMAND = re.compile(
     r"(?P<target>.{1,60}?)(?:吧|啊|呀|哦|喔)?$"
 )
 _ZH_STOP_ACTION = r"(?:停止|停掉|暂停|暫停)"
+_ZH_CLOSE_ACTION = r"(?:关掉|關掉|关闭|關閉)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
 _ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
 _ZH_MUSIC_SOURCE = r"(?:红心歌单|紅心歌單|每日推荐|每日推薦|日推)"
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
     rf"{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
-    rf"|(?:关掉|關掉|关闭|關閉){_ZH_MUSIC_OBJECT}"
+    rf"|{_ZH_CLOSE_ACTION}{_ZH_MUSIC_OBJECT}"
+    rf"|把{_ZH_MUSIC_OBJECT}{_ZH_CLOSE_ACTION}"
     rf"|取消{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
     rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?(?:我的)?{_ZH_MUSIC_SOURCE}"
     rf"|(?:不要|别|別)(?:再)?{_ZH_PLAYBACK_ACTION}{_ZH_MUSIC_OBJECT}"
@@ -48,6 +50,7 @@ _EN_PLAY_COMMAND = re.compile(
 )
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
+_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the|current)\s+)?"
 _EN_GENERIC_MUSIC_TARGET = (
     r"(?:"
     r"(?:(?:some|any|the)\s+)?music"
@@ -56,11 +59,11 @@ _EN_GENERIC_MUSIC_TARGET = (
 )
 _EN_STOP_COMMAND = re.compile(
     rf"^(?:{_EN_PREFIX}(?:stop|pause|cancel)\s+(?:playing\s+)?"
-    rf"(?:(?:this|that|the)\s+)?{_EN_MUSIC_OBJECT}"
-    rf"|{_EN_PREFIX}(?:turn|shut)\s+off\s+(?:the\s+)?(?:music|playback)"
-    rf"|{_EN_PREFIX}(?:turn|shut)\s+(?:the\s+)?{_EN_MUSIC_OBJECT}\s+off"
+    rf"{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}"
+    rf"|{_EN_PREFIX}(?:turn|shut)\s+off\s+{_EN_MUSIC_DETERMINER}(?:music|playback)"
+    rf"|{_EN_PREFIX}(?:turn|shut)\s+{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}\s+off"
     rf"|{_EN_PREFIX}(?:do\s+not|don't|don’t|dont)\s+(?:play|listen\s+to)\s+"
-    r"(?:(?:this|that|the)\s+)?(?:music|songs?))$",
+    rf"{_EN_MUSIC_DETERMINER}(?:music|songs?))$",
     re.IGNORECASE,
 )
 _EN_SECOND_COMMAND = re.compile(
@@ -73,6 +76,13 @@ _EN_SECOND_COMMAND = re.compile(
 _TRAILING_STATEMENT_MARKS = "。.!！"
 _CLAUSE_MARKS = frozenset("，,；;、")
 _ZH_QUOTES = (("《", "》"), ("「", "」"), ("『", "』"), ("【", "】"))
+_ZH_POSSESSIVE_REFERENTS = frozenset(
+    {
+        "我", "你", "妳", "您", "他", "她", "它", "牠", "咱", "自己", "本人",
+        "我们", "我們", "你们", "你們", "他们", "他們", "她们", "她們",
+        "它们", "它們", "牠们", "牠們", "咱们", "咱們",
+    }
+)
 
 
 def _normalize_command(text: str, *, allow_polite_question: bool = False) -> str:
@@ -126,7 +136,7 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
 
     for opening, closing in _ZH_QUOTES:
         quoted = re.fullmatch(
-            rf"{re.escape(opening)}(.{{1,60}}){re.escape(closing)}",
+            rf"(?:歌曲?|曲目)?\s*{re.escape(opening)}(.{{1,60}}){re.escape(closing)}",
             target,
         )
         if quoted:
@@ -136,6 +146,20 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
             return MusicRequest(
                 keyword=song,
                 song_name=song,
+            )
+        qualified = re.fullmatch(
+            rf"(.{{1,30}}?)的\s*{re.escape(opening)}(.{{1,60}}){re.escape(closing)}",
+            target,
+        )
+        if qualified:
+            artist = _strip_target(qualified.group(1))
+            song = _strip_target(qualified.group(2))
+            if not artist or not song or artist in _ZH_POSSESSIVE_REFERENTS:
+                return None
+            return MusicRequest(
+                keyword=f"{song} {artist}",
+                song_name=song,
+                song_artist=artist,
             )
     if any(mark in target for pair in _ZH_QUOTES for mark in pair):
         return None
@@ -255,10 +279,7 @@ def parse_strict_music_command(text: str) -> MusicRequest | None:
 def is_strict_music_cancellation(text: str) -> bool:
     """Return True only for a complete, direct stop-music command."""
     normalized = _normalize_command(text)
-    return bool(
-        normalized
-        and (
-            _ZH_STOP_COMMAND.fullmatch(normalized)
-            or _EN_STOP_COMMAND.fullmatch(normalized)
-        )
-    )
+    if normalized and _ZH_STOP_COMMAND.fullmatch(normalized):
+        return True
+    english = _normalize_command(text, allow_polite_question=True)
+    return bool(english and _EN_STOP_COMMAND.fullmatch(english))

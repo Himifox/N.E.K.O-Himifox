@@ -52,10 +52,13 @@ import asyncio
 import contextlib
 import json
 import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from main_logic.omni_realtime_client import _transport
+from main_logic.tool_calling import ToolResult
 
 
 class _RecordingSocket:
@@ -356,3 +359,81 @@ async def test_a_turn_that_began_before_the_host_had_an_id_is_not_guarded():
     await client._notify_turn_finished()
 
     assert host.calls == ["response_done", "sid_rotate"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openai_realtime_tool_call_keeps_the_turn_that_created_it():
+    host = _Host()
+    seen_owners: list[dict] = []
+
+    async def on_tool_call(call):
+        seen_owners.append(call.provider_meta["turn_owner"])
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    client = _free_client(
+        host,
+        get_host_turn_id=host.read_speech_id,
+        on_tool_call=on_tool_call,
+    )
+    client._current_turn_host_id = "sid-turn-1"
+    client._current_response_id = "resp-1"
+    pending = []
+    client._fire_task = pending.append
+    client._send_tool_result_openai_realtime = AsyncMock()
+    socket = _RecordingSocket()
+    client.ws = socket
+    socket.feed(
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": "resp-1",
+            "call_id": "call-1",
+            "name": "request_music_playback",
+            "arguments": '{"action":"play"}',
+        }
+    )
+    socket.finish()
+
+    await client.handle_messages()
+    assert len(pending) == 1
+
+    client._current_turn_host_id = "sid-turn-2"
+    await pending[0]
+
+    assert seen_owners == [{"turn_id": "sid-turn-1"}]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_gemini_realtime_tool_call_carries_the_current_turn_owner():
+    host = _Host()
+    seen_owners: list[dict] = []
+
+    async def on_tool_call(call):
+        seen_owners.append(call.provider_meta["turn_owner"])
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    client = _free_client(
+        host,
+        get_host_turn_id=host.read_speech_id,
+        on_tool_call=on_tool_call,
+    )
+    client._current_turn_host_id = "sid-turn-1"
+    client._send_tool_result_gemini = AsyncMock()
+    response = SimpleNamespace(
+        tool_call=SimpleNamespace(
+            function_calls=[
+                SimpleNamespace(
+                    id="call-1",
+                    name="request_music_playback",
+                    args={"action": "play"},
+                )
+            ]
+        ),
+        server_content=None,
+    )
+
+    await client._process_gemini_response(response)
+    await _settle()
+
+    assert seen_owners == [{"turn_id": "sid-turn-1"}]

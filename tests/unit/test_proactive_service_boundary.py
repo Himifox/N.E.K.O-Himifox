@@ -44,6 +44,13 @@ _CHARACTER_DATA = (
 )
 
 
+def _owned_music_arguments(**arguments):
+    return {
+        **arguments,
+        "_neko_turn_owner": {"turn_id": "speech-A"},
+    }
+
+
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     modules: set[str] = set()
@@ -521,7 +528,11 @@ async def test_model_music_intent_starts_one_validated_request(monkeypatch) -> N
     manager = SimpleNamespace(
         lanlan_name="YUI",
         user_language="zh",
-        _music_intent_turn={"handled": False, "consumed": False},
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
         _fire_task=fire_task,
         enqueue_agent_callback=MagicMock(),
     )
@@ -530,16 +541,18 @@ async def test_model_music_intent_starts_one_validated_request(monkeypatch) -> N
     try:
         result = await music_playback.handle_music_intent_tool(
             manager,
-            {
-                "action": "play",
-                "target_type": "song",
-                "song": "晴天",
-                "artist": "周杰伦",
-            },
+            _owned_music_arguments(
+                action="play",
+                target_type="song",
+                song="晴天",
+                artist="周杰伦",
+            ),
         )
         duplicate = await music_playback.handle_music_intent_tool(
             manager,
-            {"action": "play", "target_type": "query", "query": "摇滚"},
+            _owned_music_arguments(
+                action="play", target_type="query", query="摇滚"
+            ),
         )
     finally:
         for coro in pending_coroutines:
@@ -579,7 +592,11 @@ async def test_invalid_model_music_call_can_be_corrected_in_the_same_turn(
         return next_task
 
     manager = SimpleNamespace(
-        _music_intent_turn={"handled": False, "consumed": False},
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
         _fire_task=fire_task,
     )
     monkeypatch.setattr(
@@ -591,11 +608,13 @@ async def test_invalid_model_music_call_can_be_corrected_in_the_same_turn(
     try:
         invalid = await music_playback.handle_music_intent_tool(
             manager,
-            {"action": "play", "target_type": "song", "artist": "周杰伦"},
+            _owned_music_arguments(
+                action="play", target_type="song", artist="周杰伦"
+            ),
         )
         corrected = await music_playback.handle_music_intent_tool(
             manager,
-            {"action": "play", "target_type": "song", "song": "晴天"},
+            _owned_music_arguments(action="play", target_type="song", song="晴天"),
         )
     finally:
         for coro in pending_coroutines:
@@ -639,6 +658,29 @@ async def test_stale_model_music_call_cannot_use_a_newer_turn(monkeypatch) -> No
     manager._fire_task.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_ownerless_model_music_call_fails_closed() -> None:
+    manager = SimpleNamespace(
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
+        _fire_task=MagicMock(),
+    )
+
+    result = await music_playback.handle_music_intent_tool(
+        manager,
+        {"action": "play", "target_type": "query", "query": "jazz"},
+    )
+
+    assert result == {
+        "status": "ignored",
+        "reason": "missing_music_intent_turn_owner",
+    }
+    manager._fire_task.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     (
@@ -673,12 +715,16 @@ def test_model_music_intent_target_mapping_is_closed(arguments, expected) -> Non
 @pytest.mark.asyncio
 async def test_model_music_intent_cannot_repeat_a_strict_command() -> None:
     manager = SimpleNamespace(
-        _music_intent_turn={"handled": True, "consumed": True},
+        _music_intent_turn={
+            "handled": True,
+            "consumed": True,
+            "turn_id": "speech-A",
+        },
     )
 
     result = await music_playback.handle_music_intent_tool(
         manager,
-        {"action": "play", "target_type": "song", "song": "晴天"},
+        _owned_music_arguments(action="play", target_type="song", song="晴天"),
     )
 
     assert result == {
@@ -690,16 +736,24 @@ async def test_model_music_intent_cannot_repeat_a_strict_command() -> None:
 @pytest.mark.asyncio
 async def test_model_stop_intent_requires_active_music() -> None:
     inactive = SimpleNamespace(
-        _music_intent_turn={"handled": False, "consumed": False},
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
     )
     assert await music_playback.handle_music_intent_tool(
         inactive,
-        {"action": "stop", "target_type": "generic"},
+        _owned_music_arguments(action="stop", target_type="generic"),
     ) == {"status": "ignored", "reason": "no_active_music"}
 
     pending_coroutines = []
     active = SimpleNamespace(
-        _music_intent_turn={"handled": False, "consumed": False},
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
         _music_playback_state="playing",
         _music_request_epoch=3,
         _fire_task=lambda coro: pending_coroutines.append(coro),
@@ -707,7 +761,7 @@ async def test_model_stop_intent_requires_active_music() -> None:
     try:
         result = await music_playback.handle_music_intent_tool(
             active,
-            {"action": "stop", "target_type": "generic"},
+            _owned_music_arguments(action="stop", target_type="generic"),
         )
     finally:
         for coro in pending_coroutines:
@@ -726,7 +780,11 @@ async def test_model_stop_intent_requires_active_music() -> None:
 async def test_model_stop_intent_cancels_queued_candidates() -> None:
     pending_coroutines = []
     manager = SimpleNamespace(
-        _music_intent_turn={"handled": False, "consumed": False},
+        _music_intent_turn={
+            "handled": False,
+            "consumed": False,
+            "turn_id": "speech-A",
+        },
         _music_playback_state="",
         _music_request_epoch=7,
         _music_queued_request_epoch=7,
@@ -735,7 +793,7 @@ async def test_model_stop_intent_cancels_queued_candidates() -> None:
     try:
         result = await music_playback.handle_music_intent_tool(
             manager,
-            {"action": "stop", "target_type": "generic"},
+            _owned_music_arguments(action="stop", target_type="generic"),
         )
     finally:
         for coro in pending_coroutines:
