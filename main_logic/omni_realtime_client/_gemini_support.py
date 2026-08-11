@@ -524,7 +524,8 @@ class _GeminiMixin:
             or not still_within_ai_window
         )
 
-        if is_new_turn and can_clear_interrupted:
+        starts_new_turn = is_new_turn and can_clear_interrupted
+        if starts_new_turn:
             # Gemini has no response.created event. Establish the host turn
             # before sampling its owner so a tool-only first event receives
             # the SID that on_new_message assigns to this response.
@@ -548,13 +549,13 @@ class _GeminiMixin:
                 time.time() - self._ai_recent_activity_time,
             )
 
-        # Keep these assignments adjacent: every observed turn start advances
-        # and records its epoch. Sample the host only after on_new_message has
-        # established the response's formal SID.
         self._is_responding = True
-        self._turn_epoch += 1
-        self._current_turn_epoch = self._turn_epoch
-        self._current_turn_host_id = self._read_host_turn_id()
+        if starts_new_turn:
+            # Sample the host only after on_new_message has established the
+            # response's formal SID. Continuations retain the original owner.
+            self._turn_epoch += 1
+            self._current_turn_epoch = self._turn_epoch
+            self._current_turn_host_id = self._read_host_turn_id()
 
     async def _process_gemini_response(self, response) -> None:
         """Process a single Gemini response event."""

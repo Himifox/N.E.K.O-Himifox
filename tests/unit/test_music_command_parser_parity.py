@@ -133,6 +133,8 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "播放我的《晴天》",
         "播放你的《晴天》",
         "播放一首我的《晴天》",
+        "放一首周杰伦的稻香",
+        "聽一首周杰倫的稻香",
         "放假",
         "放大一点",
         "play with me",
@@ -155,6 +157,7 @@ def test_ambiguous_or_non_music_play_phrases_fail_closed(text: str) -> None:
         ("播放周杰伦的晴天歌曲", "晴天", "周杰伦"),
         ("播放周杰伦的《晴天》", "晴天", "周杰伦"),
         ("play the song Yellow by Coldplay", "Yellow", "Coldplay"),
+        ("play song Yellow by Coldplay", "Yellow", "Coldplay"),
     ),
 )
 def test_explicit_song_wrappers_are_removed(
@@ -200,6 +203,24 @@ def test_separators_outside_quoted_titles_still_fail_closed(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
+    ("播放《晴天》和《稻香》", "播放《晴天》然后播放《稻香》"),
+)
+def test_multiple_quoted_chinese_titles_fail_closed(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("播放每日推荐歌曲", "播放每日推荐音乐", "播放日推歌曲"),
+)
+def test_daily_source_with_music_object_is_personalized(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "daily"
+
+
+@pytest.mark.parametrize(
+    "text",
     ("play me a song", "play some music for me", "play music for us"),
 )
 def test_generic_english_recipient_phrases_do_not_become_searches(text: str) -> None:
@@ -217,6 +238,16 @@ def test_generic_english_recipient_phrases_do_not_become_searches(text: str) -> 
     ),
 )
 def test_english_liked_aliases_are_personalized(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "liked"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("play my favorites playlist", "play liked songs playlist"),
+)
+def test_english_liked_playlist_aliases_are_personalized(text: str) -> None:
     request = parse_strict_music_command(text)
     assert request is not None
     assert request.personalization_source == "liked"
@@ -343,6 +374,8 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "stop current music",
         "stop the current music",
         "stop playing music",
+        "turn off the songs",
+        "shut off the tracks",
         "don't listen to music",
         "do not listen to songs",
     ),

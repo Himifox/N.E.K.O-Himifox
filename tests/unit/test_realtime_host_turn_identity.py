@@ -52,6 +52,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -462,5 +463,33 @@ async def test_gemini_tool_only_first_event_establishes_the_new_turn_owner():
     )
 
     assert host.speech_id == "sid-turn-2"
+    assert client._turn_epoch == 1
+    assert new_message_calls == 1
+
+    # A premature turn_complete can precede a late tool event. Even if the
+    # host has moved on, that event must retain the response's original owner.
+    client._ai_recent_activity_time = time.time()
+    await client._process_gemini_response(
+        SimpleNamespace(
+            tool_call=None,
+            server_content=SimpleNamespace(
+                input_transcription=None,
+                output_transcription=None,
+                model_turn=None,
+                turn_complete=True,
+                interrupted=False,
+            ),
+        )
+    )
+    host.speech_id = "sid-turn-3"
+    await client._process_gemini_response(tool_only)
+    await _settle()
+
+    assert seen_owners == [
+        {"turn_id": "sid-turn-2"},
+        {"turn_id": "sid-turn-2"},
+    ]
+    assert host.speech_id == "sid-turn-3"
+    assert client._current_turn_host_id == "sid-turn-2"
     assert client._turn_epoch == 1
     assert new_message_calls == 1
