@@ -384,6 +384,13 @@ def test_labeled_or_quoted_english_songs_are_strict(text: str, song: str) -> Non
     assert request.keyword == song
 
 
+@pytest.mark.parametrize("text", ("listen to music", "please listen to some songs"))
+def test_explicit_listen_to_generic_music_is_strict(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.keyword == ""
+
+
 @pytest.mark.parametrize(
     "text",
     (
@@ -392,10 +399,8 @@ def test_labeled_or_quoted_english_songs_are_strict(text: str, song: str) -> Non
         "would you listen to a track",
     ),
 )
-def test_modal_listen_to_generic_music_is_strict(text: str) -> None:
-    request = parse_strict_music_command(text)
-    assert request is not None
-    assert request.keyword == ""
+def test_modal_listen_to_generic_music_falls_back_to_model(text: str) -> None:
+    assert parse_strict_music_command(text) is None
 
 
 @pytest.mark.parametrize(

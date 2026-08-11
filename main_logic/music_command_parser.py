@@ -46,8 +46,8 @@ _ZH_STOP_COMMAND = re.compile(
 )
 
 _EN_PLAY_COMMAND = re.compile(
-    r"^(?:(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)"
-    r"(?:play|listen\s+to)"
+    r"^(?:(?:(?:please\s+)?|(?:can|could|would)\s+you\s+(?:please\s+)?)play"
+    r"|(?:please\s+)?listen\s+to"
     r"|i\s+(?:want|would\s+like)\s+to\s+(?:play|listen\s+to))"
     r"\s+(?P<target>.{1,100})$",
     re.IGNORECASE,
