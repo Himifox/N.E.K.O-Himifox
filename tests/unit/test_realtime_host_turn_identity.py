@@ -405,9 +405,15 @@ async def test_openai_realtime_tool_call_keeps_the_turn_that_created_it():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_gemini_realtime_tool_call_carries_the_current_turn_owner():
+async def test_gemini_tool_only_first_event_establishes_the_new_turn_owner():
     host = _Host()
     seen_owners: list[dict] = []
+    new_message_calls = 0
+
+    async def on_new_message():
+        nonlocal new_message_calls
+        new_message_calls += 1
+        host.starts_a_new_turn()
 
     async def on_tool_call(call):
         seen_owners.append(call.provider_meta["turn_owner"])
@@ -416,24 +422,45 @@ async def test_gemini_realtime_tool_call_carries_the_current_turn_owner():
     client = _free_client(
         host,
         get_host_turn_id=host.read_speech_id,
+        on_new_message=on_new_message,
         on_tool_call=on_tool_call,
     )
+    # The previous response owned sid-turn-1. The next response's first and
+    # only event is a tool call, so no text/audio branch can establish its SID.
     client._current_turn_host_id = "sid-turn-1"
     client._send_tool_result_gemini = AsyncMock()
-    response = SimpleNamespace(
-        tool_call=SimpleNamespace(
-            function_calls=[
-                SimpleNamespace(
-                    id="call-1",
-                    name="request_music_playback",
-                    args={"action": "play"},
-                )
-            ]
-        ),
+    tool_only = SimpleNamespace(
+        tool_call=SimpleNamespace(function_calls=[
+            SimpleNamespace(
+                id="call-1",
+                name="request_music_playback",
+                args={"action": "play"},
+            )
+        ]),
         server_content=None,
     )
 
-    await client._process_gemini_response(response)
+    await client._process_gemini_response(tool_only)
     await _settle()
 
-    assert seen_owners == [{"turn_id": "sid-turn-1"}]
+    assert seen_owners == [{"turn_id": "sid-turn-2"}]
+    assert client._current_turn_host_id == "sid-turn-2"
+    assert client._turn_epoch == 1
+
+    # Later content belongs to the same response and must not start it twice.
+    await client._process_gemini_response(
+        SimpleNamespace(
+            tool_call=None,
+            server_content=SimpleNamespace(
+                input_transcription=None,
+                output_transcription=SimpleNamespace(text="done"),
+                model_turn=None,
+                turn_complete=False,
+                interrupted=False,
+            ),
+        )
+    )
+
+    assert host.speech_id == "sid-turn-2"
+    assert client._turn_epoch == 1
+    assert new_message_calls == 1

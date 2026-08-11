@@ -504,14 +504,87 @@ class _GeminiMixin:
                 error_msg="Gemini realtime message loop ended"
             )
 
+    async def _begin_gemini_model_turn(self) -> None:
+        """Initialize one Gemini model turn before any content or tool runs."""
+        if self._is_responding:
+            return
+
+        user_spoke_after_ai = (
+            self._user_recent_activity_time > self._ai_recent_activity_time
+        )
+        still_within_ai_window = (
+            self._ai_recent_activity_time > 0
+            and time.time() - self._ai_recent_activity_time
+            <= self._ai_recent_activity_window
+        )
+        is_new_turn = user_spoke_after_ai or not still_within_ai_window
+        can_clear_interrupted = (
+            not self._interrupted
+            or self._gemini_user_transcript_after_interrupt
+            or not still_within_ai_window
+        )
+
+        if is_new_turn and can_clear_interrupted:
+            # Gemini has no response.created event. Establish the host turn
+            # before sampling its owner so a tool-only first event receives
+            # the SID that on_new_message assigns to this response.
+            self._interrupted = False
+            if self._gemini_user_transcript and self.on_input_transcript:
+                await self.on_input_transcript(self._gemini_user_transcript)
+                self._gemini_user_transcript = ""
+            self._gemini_user_transcript_after_interrupt = False
+            self._is_first_text_chunk = True
+            self._gemini_current_transcript = ""
+            if (
+                not self._skip_until_next_response
+                and not self._interrupted
+                and self.on_new_message
+            ):
+                await self.on_new_message()
+        else:
+            logger.debug(
+                "Gemini: late event after premature turn_complete/interruption "
+                "(%.2fs ago), treating as continuation",
+                time.time() - self._ai_recent_activity_time,
+            )
+
+        # Keep these assignments adjacent: every observed turn start advances
+        # and records its epoch. Sample the host only after on_new_message has
+        # established the response's formal SID.
+        self._is_responding = True
+        self._turn_epoch += 1
+        self._current_turn_epoch = self._turn_epoch
+        self._current_turn_host_id = self._read_host_turn_id()
+
     async def _process_gemini_response(self, response) -> None:
         """Process a single Gemini response event."""
         try:
+            server_content = getattr(response, 'server_content', None)
+            tool_call = getattr(response, 'tool_call', None)
+            fcs = list(getattr(tool_call, 'function_calls', []) or [])
+
+            if server_content:
+                # 用户输入转录先累积；起轮时会在 on_new_message 前完整发送。
+                input_trans = getattr(server_content, 'input_transcription', None)
+                if input_trans and getattr(input_trans, 'text', None):
+                    self._gemini_user_transcript += input_trans.text
+                    if self._interrupted:
+                        self._gemini_user_transcript_after_interrupt = True
+
+            has_ai_content = bool(
+                server_content
+                and (
+                    server_content.model_turn
+                    or getattr(server_content, 'output_transcription', None)
+                )
+            )
+            if (fcs or has_ai_content) and not self._is_responding:
+                await self._begin_gemini_model_turn()
+
             # 处理工具调用 —— 将 function_calls 中每一个调用都派给
             # ``on_tool_call``，结果通过 ``send_tool_response`` 一次性回写
             # （Gemini Live 期望批量回应，而不是逐个）。
-            if hasattr(response, 'tool_call') and response.tool_call:
-                fcs = list(getattr(response.tool_call, 'function_calls', []) or [])
+            if tool_call:
                 if fcs:
                     if self.on_tool_call is None:
                         logger.warning(
@@ -551,90 +624,7 @@ class _GeminiMixin:
                 # now; revisit if cancel-rate becomes a problem.
 
             # 检查是否有服务器内容
-            if response.server_content:
-                server_content = response.server_content
-
-                # 处理用户输入转录 - 只累积，不立即发送（避免碎片化显示）
-                if hasattr(server_content, 'input_transcription') and server_content.input_transcription:
-                    input_trans = server_content.input_transcription
-                    if hasattr(input_trans, 'text') and input_trans.text:
-                        self._gemini_user_transcript += input_trans.text
-                        if self._interrupted:
-                            self._gemini_user_transcript_after_interrupt = True
-
-                # 检查是否有 AI 内容（model_turn 或 output_transcription）
-                has_ai_content = (
-                    server_content.model_turn or 
-                    (hasattr(server_content, 'output_transcription') and server_content.output_transcription)
-                )
-
-                # ⚠️ 重要：检测 turn 开始 - 无论是 model_turn 还是 output_transcription 先到
-                if has_ai_content and not self._is_responding:
-                    # 区分"真新 turn"与"上个 turn 的迟到帧"。双判据合取：
-                    #   A. 用户在 AI 最后一帧之后发过声 → 必然新 turn（back-and-forth）
-                    #   B. AI 最后一帧距今超过 window → 静默够久也算新 turn
-                    # 仅当两条都不满足（短静默 + 用户全程没发声）才视为
-                    # late continuation —— 这正是 Gemini turn_complete 抢跑的迟到
-                    # 音频、或同一长回复被拆 sub-turn 的场景。
-                    # 早期版本只用时间窗，会把快速一问一答（AI→用户→AI in <3s）
-                    # 误判 late continuation 导致气泡合并 / user_transcript flush 延迟
-                    # （Codex P1 反馈）。加用户发声比较后合并两种场景均正确。
-                    _user_spoke_after_ai = (
-                        self._user_recent_activity_time > self._ai_recent_activity_time
-                    )
-                    _still_within_ai_window = (
-                        self._ai_recent_activity_time > 0
-                        and time.time() - self._ai_recent_activity_time
-                        <= self._ai_recent_activity_window
-                    )
-                    _is_new_turn = _user_spoke_after_ai or not _still_within_ai_window
-                    _can_clear_interrupted = (
-                        not self._interrupted
-                        or self._gemini_user_transcript_after_interrupt
-                        or not _still_within_ai_window
-                    )
-                    # The epoch bump below has no reader on this path today: a
-                    # Gemini client never enqueues through the arbiter (every
-                    # entry point takes an ``_is_gemini`` branch first), so
-                    # ``_on_arbiter_stuck_release`` — the epoch's only consumer
-                    # — cannot fire here. Maintained anyway because the
-                    # invariant is "every turn start advances the epoch", not
-                    # "every turn start something currently reads": once a turn
-                    # start stops advancing it, a release that DOES run cannot
-                    # tell that turn from its successor. The host-turn sample
-                    # (#2612) is maintained here for the same reason and is
-                    # equally unread today — this path ends its turn by calling
-                    # ``on_response_done`` directly rather than through
-                    # ``_notify_turn_finished``, which is where the comparison
-                    # lives. Tracked with the rest of that divergence.
-                    #
-                    # Kept above the assignment, not between it and the bump:
-                    # ``test_every_turn_start_advances_the_epoch`` discovers
-                    # turn starts by proximity, so a comment wedged in there
-                    # reads as a missing bump.
-                    self._is_responding = True
-                    self._turn_epoch += 1
-                    self._current_turn_epoch = self._turn_epoch
-                    self._current_turn_host_id = self._read_host_turn_id()
-                    if _is_new_turn and _can_clear_interrupted:
-                        # Gemini has no response.created event; clear stale interrupt state only
-                        # after SDK transcription or a quiet gap proves this is not a canceled tail.
-                        self._interrupted = False
-                        # 在AI开始响应前，发送累积的用户输入
-                        if self._gemini_user_transcript and self.on_input_transcript:
-                            await self.on_input_transcript(self._gemini_user_transcript)
-                            self._gemini_user_transcript = ""  # 清空累积
-                        self._gemini_user_transcript_after_interrupt = False
-                        self._is_first_text_chunk = True  # 重置第一个 chunk 标记
-                        self._gemini_current_transcript = ""  # 清空累积
-                        if not self._skip_until_next_response and not self._interrupted and self.on_new_message:
-                            await self.on_new_message()
-                    else:
-                        logger.debug(
-                            "Gemini: late content after premature turn_complete/interruption (%.2fs ago), treating as continuation",
-                            time.time() - self._ai_recent_activity_time,
-                        )
-
+            if server_content:
                 # 处理输出转录 - 流式发送每个 chunk 到前端
                 # 不参与新 turn 检测；turn_complete 后到达的迟到转录会以 isNewMessage=false
                 # 追加到当前轮次的气泡（正确行为）
