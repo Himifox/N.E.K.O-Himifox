@@ -406,6 +406,55 @@ async def test_openai_realtime_tool_call_keeps_the_turn_that_created_it():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_openai_tool_without_response_created_uses_live_host_owner():
+    host = _Host()
+    seen_owners: list[dict] = []
+
+    async def on_tool_call(call):
+        seen_owners.append(call.provider_meta["turn_owner"])
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    client = _free_client(
+        host,
+        get_host_turn_id=host.read_speech_id,
+        on_tool_call=on_tool_call,
+    )
+    client._send_tool_result_openai_realtime = AsyncMock()
+    pending = []
+    client._fire_task = pending.append
+    socket = _RecordingSocket()
+    client.ws = socket
+    socket.feed(
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": "resp-without-created",
+            "call_id": "call-1",
+            "name": "request_music_playback",
+            "arguments": '{"action":"play"}',
+        }
+    )
+    socket.finish()
+
+    await client.handle_messages()
+    assert client._announces_responses is False
+    assert client._current_turn_host_id is None
+    assert len(pending) == 1
+    await pending[0]
+
+    assert seen_owners == [{"turn_id": "sid-turn-1"}]
+
+
+def test_announcing_provider_does_not_fallback_when_owner_capture_is_missing():
+    host = _Host()
+    client = _free_client(host, get_host_turn_id=host.read_speech_id)
+    client._announces_responses = True
+    client._current_turn_host_id = None
+
+    assert client._current_tool_turn_owner() == {}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_gemini_tool_only_first_event_establishes_the_new_turn_owner():
     host = _Host()
     seen_owners: list[dict] = []

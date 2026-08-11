@@ -1226,6 +1226,12 @@ class _TransportMixin:
     def _current_tool_turn_owner(self) -> dict[str, str]:
         """Return the host turn captured when the current response began."""
         turn_id = self._current_turn_host_id
+        if not turn_id and not self._announces_responses:
+            # Compatibility providers can omit response.created entirely, so
+            # there is no response boundary at which to capture the host SID.
+            # Only those never-announcing connections may use the live SID;
+            # announcing providers still fail closed when capture is missing.
+            turn_id = self._read_host_turn_id()
         return {"turn_id": turn_id} if isinstance(turn_id, str) and turn_id else {}
 
     def _host_turn_is_still_ours(self) -> bool:
