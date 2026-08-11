@@ -28,9 +28,9 @@ def _request_shape(text: str) -> tuple[str, bool, bool, bool, bool] | None:
     (
         ("听一首晴天", "聽一首晴天", ("auto", False, True, False, True)),
         (
-            "请帮我播放林俊杰的音乐",
-            "請幫我播放林俊傑的音樂",
-            ("auto", False, False, True, True),
+            "播放周杰伦的晴天这首歌",
+            "播放周杰倫的晴天這首歌",
+            ("auto", False, True, True, True),
         ),
         (
             "播放我的红心歌单",
@@ -66,7 +66,7 @@ def test_direct_music_commands_keep_simplified_traditional_parity(
 @pytest.mark.parametrize(
     ("simplified", "traditional"),
     (
-        ("请停止播放", "請停止播放"),
+        ("请停止播放音乐", "請停止播放音樂"),
         ("暂停当前音乐", "暫停當前音樂"),
         ("关掉音乐", "關掉音樂"),
         ("别再放歌", "別再放歌"),
@@ -104,6 +104,10 @@ def test_non_commands_fail_closed_in_both_scripts(
 @pytest.mark.parametrize(
     ("simplified", "traditional"),
     (
+        ("播放晴天", "播放晴天"),
+        ("播放林俊杰的音乐", "播放林俊傑的音樂"),
+        ("播放轻松的音乐", "播放輕鬆的音樂"),
+        ("播放一段你说话的声音", "播放一段你說話的聲音"),
         ("我想听晴天", "我想聽晴天"),
         ("来点摇滚", "來點搖滾"),
         ("从我的健身歌单里随机放一首", "從我的健身歌單裡隨機放一首"),
@@ -130,6 +134,11 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "放大一点",
         "play with me",
         "play with us",
+        "play Yellow",
+        "play chess",
+        "play football",
+        "play soccer",
+        "play basketball",
     ),
 )
 def test_ambiguous_or_non_music_play_phrases_fail_closed(text: str) -> None:
@@ -217,20 +226,68 @@ def test_additional_generic_english_targets_do_not_become_searches(text: str) ->
 
 
 @pytest.mark.parametrize(
-    ("text", "keyword"),
+    "text",
+    ("listen to Yellow", "please listen to Yellow", "I want to play Yellow"),
+)
+def test_unlabeled_english_targets_are_left_for_the_model_tool(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "song"),
     (
-        ("listen to Yellow", "Yellow"),
-        ("please listen to Yellow", "Yellow"),
-        ("I want to play Yellow", "Yellow"),
+        ('play "Yellow"', "Yellow"),
+        ("play song: Yellow", "Yellow"),
+        ("play track: Fix You", "Fix You"),
     ),
 )
-def test_direct_english_listen_and_request_prefixes_are_strict(
-    text: str,
-    keyword: str,
-) -> None:
+def test_labeled_or_quoted_english_songs_are_strict(text: str, song: str) -> None:
     request = parse_strict_music_command(text)
     assert request is not None
-    assert request.keyword == keyword
+    assert request.song_name == song
+    assert request.keyword == song
+
+
+@pytest.mark.parametrize(
+    ("text", "song"),
+    (
+        ("换成歌曲：晴天", "晴天"),
+        ("換成歌曲：晴天", "晴天"),
+        ("切到音乐：稻香", "稻香"),
+        ("改放曲目：告白气球", "告白气球"),
+    ),
+)
+def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.song_name == song
+    assert request.keyword == song
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "停止播放音乐",
+        "暂停播放歌曲",
+        "停止播放音樂",
+        "暫停播放歌曲",
+        "can you stop music",
+        "could you pause playback",
+        "stop playing music",
+        "don't listen to music",
+        "do not listen to songs",
+    ),
+)
+def test_composed_music_stop_commands_are_recognized(text: str) -> None:
+    assert is_strict_music_cancellation(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("停止播放", "停止播放视频", "stop playing games", "don't listen to podcasts"),
+)
+def test_stop_commands_without_a_music_object_are_rejected(text: str) -> None:
+    assert is_strict_music_cancellation(text) is False
 
 
 @pytest.mark.parametrize(

@@ -296,13 +296,16 @@ async def test_music_failsafe_only_applies_to_strict_song_request(
 @pytest.mark.parametrize(
     ("text", "expected"),
     (
-        ("播放晴天", music_requests.MusicRequest(keyword="晴天")),
+        (
+            "播放歌曲：晴天",
+            music_requests.MusicRequest(keyword="晴天", song_name="晴天"),
+        ),
         (
             "请帮我播放《晴天》",
             music_requests.MusicRequest(keyword="晴天", song_name="晴天"),
         ),
         (
-            "放一首周杰伦的稻香",
+            "播放周杰伦的稻香这首歌",
             music_requests.MusicRequest(
                 keyword="稻香 周杰伦",
                 song_name="稻香",
@@ -328,6 +331,11 @@ def test_strict_music_commands_are_recognized(text, expected) -> None:
 @pytest.mark.parametrize(
     "text",
     (
+        "播放晴天",
+        "播放轻松的音乐",
+        "播放一段你说话的声音",
+        "play Yellow",
+        "play chess",
         "我想听晴天",
         "有点想听晴天",
         "来点摇滚",
@@ -345,7 +353,7 @@ def test_ambiguous_music_language_is_not_an_immediate_command(text) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ("停止播放", "请暂停音乐", "关掉音乐", "别再放歌", "pause playback"),
+    ("停止播放音乐", "请暂停音乐", "关掉音乐", "别再放歌", "pause playback"),
 )
 def test_strict_music_stop_commands_are_recognized(text) -> None:
     assert music_command_parser.is_strict_music_cancellation(text) is True
@@ -353,7 +361,13 @@ def test_strict_music_stop_commands_are_recognized(text) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ("我想停止播放吗？", "停止讨论音乐", "取消收藏这首歌", "不要推荐音乐"),
+    (
+        "停止播放",
+        "我想停止播放吗？",
+        "停止讨论音乐",
+        "取消收藏这首歌",
+        "不要推荐音乐",
+    ),
 )
 def test_ambiguous_or_non_playback_stop_language_is_rejected(text) -> None:
     assert music_command_parser.is_strict_music_cancellation(text) is False
@@ -461,7 +475,7 @@ def test_strict_music_still_works_when_builtin_tools_are_disabled(monkeypatch) -
     manager._register_builtin_tools()
 
     assert manager.tool_registry.get("request_music_playback") is None
-    assert music_command_parser.parse_strict_music_command("播放晴天") is not None
+    assert music_command_parser.parse_strict_music_command("播放歌曲：晴天") is not None
 
 
 def test_non_strict_user_message_is_deferred_to_the_model_tool(monkeypatch) -> None:
