@@ -369,7 +369,6 @@ def test_strict_music_stop_commands_are_recognized(text) -> None:
 @pytest.mark.parametrize(
     "text",
     (
-        "停止播放",
         "我想停止播放吗？",
         "停止讨论音乐",
         "取消收藏这首歌",

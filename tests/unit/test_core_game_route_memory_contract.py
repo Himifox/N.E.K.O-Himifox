@@ -1217,8 +1217,6 @@ async def test_voice_music_intent_survives_response_end_until_next_user_turn(
         )
 
     mgr._publish_user_utterance_to_plugin_bus = publish_user_utterance
-    generated_ids = iter(("provisional", "response-B"))
-    monkeypatch.setattr(turn_module, "uuid4", lambda: next(generated_ids))
     monkeypatch.setattr(
         music_playback_module,
         "_session_manager_getter",
@@ -1232,21 +1230,28 @@ async def test_voice_music_intent_survives_response_end_until_next_user_turn(
 
     await core_module.LLMSessionManager.handle_input_transcript(
         mgr,
-        "播放晴天",
+        "我想听爵士",
         is_voice_source=True,
     )
 
-    assert mgr._music_intent_turn["turn_id"] == "voice-input:provisional"
+    assert mgr._music_intent_turn["turn_id"] == "old-speech"
     assert mgr._music_intent_turn["is_voice"] is True
+    assert mgr._pending_music_intent_voice_turn_id is None
 
-    await core_module.LLMSessionManager.handle_new_message(mgr)
-
-    assert mgr.current_speech_id == "response-B"
-    assert mgr._music_intent_turn["turn_id"] == "response-B"
+    result = await music_playback_module.handle_music_intent_tool(
+        mgr,
+        {
+            "action": "play",
+            "target_type": "query",
+            "query": "jazz",
+            "_neko_turn_owner": {"turn_id": "old-speech"},
+        },
+    )
+    assert result["status"] == "accepted"
 
     await core_module.LLMSessionManager.handle_response_complete(mgr)
 
-    assert mgr._music_intent_turn["turn_id"] == "response-B"
+    assert mgr._music_intent_turn["turn_id"] == "old-speech"
 
     music_playback_module._on_user_utterance(
         mgr.lanlan_name,

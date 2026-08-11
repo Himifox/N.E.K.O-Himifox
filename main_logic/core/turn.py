@@ -902,13 +902,8 @@ class TurnMixin:
             dispatch_user_utterance(bucket, event)
 
     def _music_intent_turn_id_for_voice_input(self, source: str | None) -> str:
-        session = getattr(self, "session", None)
-        response_turn_already_started = bool(
-            source == "independent_asr"
-            or getattr(session, "_has_server_vad", False)
-        )
         current_turn_id = getattr(self, "current_speech_id", None)
-        if response_turn_already_started and current_turn_id is not None:
+        if current_turn_id is not None:
             return str(current_turn_id)
         provisional_turn_id = f"voice-input:{uuid4()}"
         self._pending_music_intent_voice_turn_id = provisional_turn_id

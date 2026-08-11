@@ -492,8 +492,8 @@ class LLMSessionManager(
         # 最新用户轮是否允许内置音乐意图工具执行；严格正则已处理的轮次
         # 也会写入此处，但标记为 handled 以拒绝模型重复播放。
         self._music_intent_turn: Optional[dict] = None
-        # 无 server-VAD 的语音后端先发布转写、后建立回复 speech_id。
-        # 暂存输入归属，等 handle_new_message 将其换成该回复的正式 sid。
+        # 语音转写优先绑定当前 live speech_id；仅会话尚未建立 sid 时暂存
+        # provisional owner，等 handle_new_message 将其换成正式 sid。
         self._music_intent_voice_input_turn_id: Optional[str] = None
         self._pending_music_intent_voice_turn_id: Optional[str] = None
 

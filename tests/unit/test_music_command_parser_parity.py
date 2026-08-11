@@ -133,6 +133,8 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "播放我的《晴天》",
         "播放你的《晴天》",
         "播放一首我的《晴天》",
+        "播放你的晴天这首歌",
+        "播放我的晴天歌曲",
         "放一首周杰伦的稻香",
         "聽一首周杰倫的稻香",
         "听一下故事",
@@ -438,6 +440,9 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
     (
         "停止播放音乐",
         "暂停播放歌曲",
+        "请停止播放",
+        "停止播放",
+        "暂停播放",
         "停止播放音樂",
         "暫停播放歌曲",
         "停止这首歌",
@@ -478,7 +483,6 @@ def test_composed_music_stop_commands_are_recognized(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     (
-        "停止播放",
         "停止播放视频",
         "别给我放视频",
         "stop playing games",

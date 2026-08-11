@@ -44,6 +44,7 @@ _ZH_STOP_COMMAND = re.compile(
     rf"|{_ZH_CLOSE_ACTION}{_ZH_MUSIC_OBJECT}"
     rf"|把{_ZH_MUSIC_OBJECT}{_ZH_CLOSE_ACTION}"
     rf"|取消{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
+    rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}"
     rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?(?:我的)?{_ZH_MUSIC_SOURCE}"
     rf"|{_ZH_NEGATIVE_LEAD}{_ZH_PLAYBACK_ACTION}{_ZH_MUSIC_OBJECT}"
     r")(?:了|吧)?$"
@@ -216,7 +217,7 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
     if artist_song:
         artist = _strip_target(artist_song.group(1))
         song = _strip_target(artist_song.group(2))
-        if not artist or not song:
+        if not artist or not song or artist in _ZH_POSSESSIVE_REFERENTS:
             return None
         return MusicRequest(
             keyword=f"{song} {artist}",
