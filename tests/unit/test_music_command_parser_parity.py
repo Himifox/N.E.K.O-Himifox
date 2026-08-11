@@ -235,6 +235,9 @@ def test_generic_english_recipient_phrases_do_not_become_searches(text: str) -> 
         "play favorites",
         "play my favourites",
         "play a song from my liked songs",
+        "play liked music",
+        "play favorite music",
+        "play my favourite music",
     ),
 )
 def test_english_liked_aliases_are_personalized(text: str) -> None:
@@ -251,6 +254,16 @@ def test_english_liked_playlist_aliases_are_personalized(text: str) -> None:
     request = parse_strict_music_command(text)
     assert request is not None
     assert request.personalization_source == "liked"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("play daily music", "play daily songs", "listen to my daily music"),
+)
+def test_english_daily_music_aliases_are_personalized(text: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.personalization_source == "daily"
 
 
 def test_english_playlist_source_wrapper_is_not_part_of_the_name() -> None:
@@ -376,6 +389,11 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "stop playing music",
         "turn off the songs",
         "shut off the tracks",
+        "stop the music please",
+        "pause the song please",
+        "stop music now",
+        "don't play tracks",
+        "do not listen to the track",
         "don't listen to music",
         "do not listen to songs",
     ),
@@ -408,10 +426,25 @@ def test_object_before_off_english_stops_are_recognized(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ("停止播放红心歌单", "停止我的红心歌单", "暂停播放每日推荐"),
+    (
+        "停止播放红心歌单",
+        "停止我的红心歌单",
+        "暂停播放每日推荐",
+        "停止播放日推歌曲",
+        "停止每日推荐歌曲",
+        "停止播放红心",
+    ),
 )
 def test_source_named_chinese_stops_are_recognized(text: str) -> None:
     assert is_strict_music_cancellation(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("stop music later", "stop music now please", "stop music whenever"),
+)
+def test_unlisted_english_stop_suffixes_fail_closed(text: str) -> None:
+    assert is_strict_music_cancellation(text) is False
 
 
 @pytest.mark.parametrize(

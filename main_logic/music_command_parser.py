@@ -29,7 +29,10 @@ _ZH_STOP_ACTION = r"(?:停止|停掉|暂停|暫停)"
 _ZH_CLOSE_ACTION = r"(?:关掉|關掉|关闭|關閉)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
 _ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
-_ZH_MUSIC_SOURCE = r"(?:红心歌单|紅心歌單|每日推荐|每日推薦|日推)"
+_ZH_MUSIC_SOURCE = (
+    r"(?:红心(?:歌单)?|紅心(?:歌單)?|"
+    r"(?:每日推荐|每日推薦|日推)(?:歌曲?|音乐|音樂)?)"
+)
 _ZH_NEGATIVE_LEAD = r"(?:不要|别|別)(?:(?:再|继续|繼續)|(?:(?:给|給|帮|幫)我))?"
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
@@ -52,6 +55,7 @@ _EN_PLAY_COMMAND = re.compile(
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
 _EN_MUSIC_DETERMINER = r"(?:(?:this|that|the)\s+|(?:the\s+)?current\s+)?"
+_EN_STOP_SUFFIX = r"(?:\s+(?:please|now))?"
 _EN_GENERIC_MUSIC_TARGET = (
     r"(?:"
     r"(?:(?:some|any|the)\s+)?music"
@@ -64,7 +68,7 @@ _EN_STOP_COMMAND = re.compile(
     rf"|{_EN_PREFIX}(?:turn|shut)\s+off\s+{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}"
     rf"|{_EN_PREFIX}(?:turn|shut)\s+{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}\s+off"
     rf"|{_EN_PREFIX}(?:do\s+not|don't|don’t|dont)\s+(?:play|listen\s+to)\s+"
-    rf"{_EN_MUSIC_DETERMINER}(?:music|songs?))$",
+    rf"{_EN_MUSIC_DETERMINER}{_EN_MUSIC_OBJECT}){_EN_STOP_SUFFIX}$",
     re.IGNORECASE,
 )
 _EN_SECOND_COMMAND = re.compile(
@@ -230,7 +234,8 @@ def _parse_en_target(target: str) -> MusicRequest | None:
         return MusicRequest()
     if re.fullmatch(
         r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
-        r"(?:liked songs?|favorites?|favourites?|favorite songs?|favourite songs?)"
+        r"(?:liked (?:songs?|music)|favorites?|favourites?|"
+        r"favou?rite (?:songs?|music))"
         r"(?:\s+playlist)?",
         target,
         re.IGNORECASE,
@@ -238,7 +243,7 @@ def _parse_en_target(target: str) -> MusicRequest | None:
         return MusicRequest(personalization_source="liked")
     if re.fullmatch(
         r"(?:(?:a|some)\s+songs?\s+from\s+)?(?:my\s+)?"
-        r"(?:daily mix|daily recommendations?)",
+        r"daily (?:mix|recommendations?|music|songs?)",
         target,
         re.IGNORECASE,
     ):
