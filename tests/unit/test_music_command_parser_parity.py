@@ -153,6 +153,11 @@ def test_ambiguous_or_non_music_play_phrases_fail_closed(text: str) -> None:
     assert parse_strict_music_command(text) is None
 
 
+@pytest.mark.parametrize("text", ('播放"晴天"', "播放'Yellow'"))
+def test_unparsed_chinese_quote_styles_are_left_for_the_model(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
 @pytest.mark.parametrize(
     ("text", "song", "artist"),
     (
@@ -421,6 +426,28 @@ def test_composed_music_stop_commands_are_recognized(text: str) -> None:
     ),
 )
 def test_stop_commands_without_a_music_object_are_rejected(text: str) -> None:
+    assert is_strict_music_cancellation(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "别再给我放歌",
+        "不要再给我放歌",
+        "停止这个红心歌单",
+        "停止红心歌单的音乐",
+        "别放晴天",
+        "别听他的歌",
+        "关掉背景音乐",
+        "停止那首歌",
+        "停止下一首歌",
+        "暂停一下音乐",
+        "我想停止播放",
+        "我要停止播放音乐",
+        "我想暂停音乐",
+    ),
+)
+def test_natural_language_music_stops_are_left_for_the_model(text: str) -> None:
     assert is_strict_music_cancellation(text) is False
 
 
