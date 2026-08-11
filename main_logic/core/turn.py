@@ -374,23 +374,6 @@ class TurnMixin:
         except Exception as e:
             logger.warning("[%s] handle_proactive_complete: WS send turn_end error: %s", self.lanlan_name, e)
 
-    def _clear_music_intent_turn_if_owned(
-        self,
-        active_request_id: object,
-        active_turn_id: object,
-    ) -> None:
-        turn = getattr(self, "_music_intent_turn", None)
-        if not isinstance(turn, dict):
-            return
-        if (
-            "request_id" in turn
-            and turn["request_id"] != active_request_id
-        ):
-            return
-        if "turn_id" in turn and turn["turn_id"] != active_turn_id:
-            return
-        self._music_intent_turn = None
-
     async def _emit_turn_end(
         self,
         active_request_id,
@@ -404,10 +387,10 @@ class TurnMixin:
         - ``handle_response_discarded``'s truncate-recovery / too-long-final
         Unified semantics: sync queue and WS carry the same meta, avoiding one
         having meta while the other doesn't."""
-        self._clear_music_intent_turn_if_owned(
-            active_request_id,
-            active_turn_id,
-        )
+        # Tool execution is asynchronous on realtime providers and can start
+        # after response.done reaches this path. Keep the owned intent until
+        # the next user event replaces it; owner matching prevents cross-turn
+        # execution and ``consumed`` still rejects duplicates from this turn.
         turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
         pending_meta = self._pending_turn_meta
         if pending_meta:
@@ -809,10 +792,6 @@ class TurnMixin:
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
-                self._clear_music_intent_turn_if_owned(
-                    active_request_id,
-                    active_turn_id,
-                )
 
         # Recovery / too-long-final 路径相当于"这一轮 LLM 已完成"——必须
         # 跑跟 handle_response_complete 同款的 turn 后置流程（renew/prewarm

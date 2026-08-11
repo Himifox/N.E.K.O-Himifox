@@ -1145,7 +1145,9 @@ async def test_text_stream_discard_callback_keeps_original_request_owner(monkeyp
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_stale_turn_end_preserves_newer_music_intent_state():
+async def test_turn_end_preserves_music_intent_for_delayed_realtime_tool(
+    monkeypatch,
+):
     mgr = _make_manager()
     mgr._music_intent_turn = {
         "handled": False,
@@ -1157,8 +1159,8 @@ async def test_stale_turn_end_preserves_newer_music_intent_state():
 
     await core_module.LLMSessionManager._emit_turn_end(
         mgr,
-        "req-A",
-        active_turn_id="speech-A",
+        "req-B",
+        active_turn_id="speech-B",
     )
 
     assert mgr._music_intent_turn == {
@@ -1168,18 +1170,31 @@ async def test_stale_turn_end_preserves_newer_music_intent_state():
         "turn_id": "speech-B",
     }
 
-    await core_module.LLMSessionManager._emit_turn_end(
+    monkeypatch.setattr(
+        music_playback_module,
+        "_start_music_request",
+        Mock(return_value=True),
+    )
+    result = await music_playback_module.handle_music_intent_tool(
         mgr,
-        "req-B",
-        active_turn_id="speech-B",
+        {
+            "action": "play",
+            "target_type": "query",
+            "query": "jazz",
+            "_neko_turn_owner": {
+                "request_id": "req-B",
+                "turn_id": "speech-B",
+            },
+        },
     )
 
-    assert mgr._music_intent_turn is None
+    assert result["status"] == "accepted"
+    assert mgr._music_intent_turn["consumed"] is True
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_voice_music_intent_rebinds_to_response_turn_and_is_cleared(
+async def test_voice_music_intent_survives_response_end_until_next_user_turn(
     monkeypatch,
 ):
     mgr = _make_transcript_manager()
@@ -1231,7 +1246,24 @@ async def test_voice_music_intent_rebinds_to_response_turn_and_is_cleared(
 
     await core_module.LLMSessionManager.handle_response_complete(mgr)
 
-    assert mgr._music_intent_turn is None
+    assert mgr._music_intent_turn["turn_id"] == "response-B"
+
+    music_playback_module._on_user_utterance(
+        mgr.lanlan_name,
+        {
+            "lanlan": mgr.lanlan_name,
+            "content": "我想听爵士",
+            "turn_id": "response-C",
+            "is_voice": True,
+        },
+    )
+
+    assert mgr._music_intent_turn == {
+        "handled": False,
+        "consumed": False,
+        "turn_id": "response-C",
+        "is_voice": True,
+    }
 
 
 @pytest.mark.unit

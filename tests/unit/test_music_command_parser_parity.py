@@ -177,6 +177,28 @@ def test_labeled_quoted_chinese_titles_are_strict(text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("text", "song"),
+    (
+        ("播放《Hello, Goodbye》", "Hello, Goodbye"),
+        ("播放《晴天、雨天》", "晴天、雨天"),
+        ('play "Hello, Goodbye"', "Hello, Goodbye"),
+    ),
+)
+def test_separators_inside_quoted_titles_are_preserved(text: str, song: str) -> None:
+    request = parse_strict_music_command(text)
+    assert request is not None
+    assert request.song_name == song
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("播放《晴天》，然后聊天", 'play "Hello, Goodbye", then chat'),
+)
+def test_separators_outside_quoted_titles_still_fail_closed(text: str) -> None:
+    assert parse_strict_music_command(text) is None
+
+
+@pytest.mark.parametrize(
     "text",
     ("play me a song", "play some music for me", "play music for us"),
 )
@@ -224,7 +246,17 @@ def test_generic_track_by_artist_becomes_an_artist_request(text: str) -> None:
     assert request.keyword == "Coldplay"
 
 
-@pytest.mark.parametrize("text", ("取消播放音乐", "不要再听歌了", "不要再聽歌了"))
+@pytest.mark.parametrize(
+    "text",
+    (
+        "取消播放音乐",
+        "不要再听歌了",
+        "不要再聽歌了",
+        "别给我放歌",
+        "別幫我播放音樂",
+        "别继续播放音乐",
+    ),
+)
 def test_additional_direct_stop_phrases_are_recognized(text: str) -> None:
     assert is_strict_music_cancellation(text) is True
 
@@ -305,8 +337,11 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "could you pause playback",
         "could you pause playback?",
         "pause current song",
+        "pause the current song",
         "stop current track",
+        "stop the current track",
         "stop current music",
+        "stop the current music",
         "stop playing music",
         "don't listen to music",
         "do not listen to songs",
@@ -318,7 +353,13 @@ def test_composed_music_stop_commands_are_recognized(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ("停止播放", "停止播放视频", "stop playing games", "don't listen to podcasts"),
+    (
+        "停止播放",
+        "停止播放视频",
+        "别给我放视频",
+        "stop playing games",
+        "don't listen to podcasts",
+    ),
 )
 def test_stop_commands_without_a_music_object_are_rejected(text: str) -> None:
     assert is_strict_music_cancellation(text) is False

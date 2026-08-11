@@ -30,6 +30,7 @@ _ZH_CLOSE_ACTION = r"(?:关掉|關掉|关闭|關閉)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
 _ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
 _ZH_MUSIC_SOURCE = r"(?:红心歌单|紅心歌單|每日推荐|每日推薦|日推)"
+_ZH_NEGATIVE_LEAD = r"(?:不要|别|別)(?:(?:再|继续|繼續)|(?:(?:给|給|帮|幫)我))?"
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
     rf"{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
@@ -37,7 +38,7 @@ _ZH_STOP_COMMAND = re.compile(
     rf"|把{_ZH_MUSIC_OBJECT}{_ZH_CLOSE_ACTION}"
     rf"|取消{_ZH_PLAYBACK_ACTION}?{_ZH_MUSIC_OBJECT}"
     rf"|{_ZH_STOP_ACTION}{_ZH_PLAYBACK_ACTION}?(?:我的)?{_ZH_MUSIC_SOURCE}"
-    rf"|(?:不要|别|別)(?:再)?{_ZH_PLAYBACK_ACTION}{_ZH_MUSIC_OBJECT}"
+    rf"|{_ZH_NEGATIVE_LEAD}{_ZH_PLAYBACK_ACTION}{_ZH_MUSIC_OBJECT}"
     r")(?:了|吧)?$"
 )
 
@@ -50,7 +51,7 @@ _EN_PLAY_COMMAND = re.compile(
 )
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
-_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the|current)\s+)?"
+_EN_MUSIC_DETERMINER = r"(?:(?:this|that|the)\s+|(?:the\s+)?current\s+)?"
 _EN_GENERIC_MUSIC_TARGET = (
     r"(?:"
     r"(?:(?:some|any|the)\s+)?music"
@@ -76,6 +77,7 @@ _EN_SECOND_COMMAND = re.compile(
 _TRAILING_STATEMENT_MARKS = "。.!！"
 _CLAUSE_MARKS = frozenset("，,；;、")
 _ZH_QUOTES = (("《", "》"), ("「", "」"), ("『", "』"), ("【", "】"))
+_COMMAND_QUOTES = _ZH_QUOTES + (("\"", "\""), ("“", "”"))
 _ZH_POSSESSIVE_REFERENTS = frozenset(
     {
         "我", "你", "妳", "您", "他", "她", "它", "牠", "咱", "自己", "本人",
@@ -85,16 +87,35 @@ _ZH_POSSESSIVE_REFERENTS = frozenset(
 )
 
 
+def _outside_complete_quotes(text: str) -> str:
+    masked = list(text)
+    for opening, closing in _COMMAND_QUOTES:
+        cursor = 0
+        while True:
+            start = text.find(opening, cursor)
+            if start < 0:
+                break
+            end = text.find(closing, start + len(opening))
+            if end < 0:
+                break
+            for index in range(start, end + len(closing)):
+                masked[index] = " "
+            cursor = end + len(closing)
+    return "".join(masked)
+
+
 def _normalize_command(text: str, *, allow_polite_question: bool = False) -> str:
     normalized = " ".join(str(text or "").strip().split())
     if not normalized or len(normalized) > 120:
         return ""
-    if any(mark in normalized for mark in _CLAUSE_MARKS):
+    outside_quotes = _outside_complete_quotes(normalized)
+    if any(mark in outside_quotes for mark in _CLAUSE_MARKS):
         return ""
-    if "?" in normalized or "？" in normalized:
-        if not allow_polite_question or normalized.count("?") + normalized.count("？") != 1:
+    question_count = outside_quotes.count("?") + outside_quotes.count("？")
+    if question_count:
+        if not allow_polite_question or question_count != 1:
             return ""
-        if normalized[-1] not in "?？":
+        if outside_quotes.rstrip()[-1] not in "?？":
             return ""
         normalized = normalized[:-1].rstrip()
     return normalized.rstrip(_TRAILING_STATEMENT_MARKS).rstrip()
