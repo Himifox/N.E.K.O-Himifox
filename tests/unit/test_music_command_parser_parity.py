@@ -130,6 +130,10 @@ def test_non_strict_requests_are_left_for_the_model_tool(
         "播放咱的晴天",
         "播放咱们的晴天",
         "播放咱們的晴天",
+        "播放我的《晴天》",
+        "播放你的《晴天》",
+        "播放周杰伦的《晴天》",
+        "播放一首我的《晴天》",
         "放假",
         "放大一点",
         "play with me",
@@ -194,11 +198,22 @@ def test_english_playlist_source_wrapper_is_not_part_of_the_name() -> None:
     assert request.playlist_name == "Night Loop"
 
 
-def test_generic_song_by_artist_becomes_an_artist_request() -> None:
-    request = parse_strict_music_command("play a song by Coldplay")
+@pytest.mark.parametrize(
+    "text",
+    (
+        "play a song by Coldplay",
+        "play a track by Coldplay",
+        "play some songs by Coldplay",
+        "play any song by Coldplay",
+        "play the tunes by Coldplay",
+    ),
+)
+def test_generic_track_by_artist_becomes_an_artist_request(text: str) -> None:
+    request = parse_strict_music_command(text)
     assert request is not None
     assert request.song_name == ""
     assert request.song_artist == "Coldplay"
+    assert request.keyword == "Coldplay"
 
 
 @pytest.mark.parametrize("text", ("取消播放音乐", "不要再听歌了", "不要再聽歌了"))
@@ -271,6 +286,10 @@ def test_labeled_chinese_switch_commands_are_strict(text: str, song: str) -> Non
         "暂停播放歌曲",
         "停止播放音樂",
         "暫停播放歌曲",
+        "停止这首歌",
+        "暂停这首歌",
+        "停止這首歌",
+        "停止播放这首歌",
         "can you stop music",
         "could you pause playback",
         "stop playing music",

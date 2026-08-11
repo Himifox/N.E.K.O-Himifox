@@ -168,7 +168,10 @@ def _music_request_from_intent(arguments: dict[str, Any]) -> MusicRequest | None
     return None
 
 
-def _has_active_music(manager: Any) -> bool:
+def _has_cancellable_music(manager: Any) -> bool:
+    current_epoch = int(getattr(manager, "_music_request_epoch", 0) or 0)
+    if getattr(manager, "_music_queued_request_epoch", None) == current_epoch:
+        return True
     task = getattr(manager, "_music_request_task", None)
     if task is not None:
         try:
@@ -176,7 +179,11 @@ def _has_active_music(manager: Any) -> bool:
                 return True
         except Exception:
             pass
-    return getattr(manager, "_music_playback_state", "") in {"playing", "paused"}
+    return getattr(manager, "_music_playback_state", "") in {
+        "queued",
+        "playing",
+        "paused",
+    }
 
 
 def _music_tool_result(
@@ -223,7 +230,7 @@ async def handle_music_intent_tool(
         return _music_tool_result(manager, "ignored", reason="invalid_arguments")
     action = str(arguments.get("action") or "").strip().lower()
     if action == "stop":
-        if not _has_active_music(manager):
+        if not _has_cancellable_music(manager):
             return _music_tool_result(manager, "ignored", reason="no_active_music")
         _cancel_music_request(manager)
         turn["consumed"] = True
@@ -286,6 +293,7 @@ def _build_music_intent_tool(manager: Any) -> ToolDefinition:
 def _next_music_request_epoch(manager: Any) -> int:
     epoch = int(getattr(manager, "_music_request_epoch", 0) or 0) + 1
     manager._music_request_epoch = epoch
+    manager._music_queued_request_epoch = None
     return epoch
 
 
@@ -481,6 +489,8 @@ def handle_music_playback_state(manager: Any, event: dict[str, Any]) -> bool:
     if getattr(manager, "_music_playback_event_key", None) == event_key:
         return False
     manager._music_playback_event_key = event_key
+    if request_id == str(getattr(manager, "_music_queued_request_epoch", None)):
+        manager._music_queued_request_epoch = None
     manager._music_playback_state = state
 
     if state == "error":
@@ -664,6 +674,14 @@ async def _execute_music_request(
     if not _is_current_music_request(manager, epoch):
         return {"status": "superseded"}
     if await _push_music_payload(manager, payload):
+        if not _is_current_music_request(manager, epoch):
+            return {"status": "superseded"}
+        manager._music_queued_request_epoch = epoch
+        if getattr(manager, "_music_playback_state", "") not in {
+            "playing",
+            "paused",
+        }:
+            manager._music_playback_state = "queued"
         return {
             "status": "queued",
             "candidates": len(candidates),

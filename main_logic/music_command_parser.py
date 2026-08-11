@@ -27,7 +27,7 @@ _ZH_SWITCH_COMMAND = re.compile(
 )
 _ZH_STOP_ACTION = r"(?:停止|停掉|暂停|暫停)"
 _ZH_PLAYBACK_ACTION = r"(?:播放|放|播|听|聽)"
-_ZH_MUSIC_OBJECT = r"(?:音乐|音樂|歌曲?|歌|当前音乐|當前音樂)"
+_ZH_MUSIC_OBJECT = r"(?:(?:当前|當前)?(?:音乐|音樂|歌曲?)|(?:这|這)首歌)"
 _ZH_MUSIC_SOURCE = r"(?:红心歌单|紅心歌單|每日推荐|每日推薦|日推)"
 _ZH_STOP_COMMAND = re.compile(
     rf"^{_ZH_PREFIX}(?:"
@@ -48,6 +48,12 @@ _EN_PLAY_COMMAND = re.compile(
 )
 _EN_PREFIX = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?)"
 _EN_MUSIC_OBJECT = r"(?:music|playback|songs?|tracks?)"
+_EN_GENERIC_MUSIC_TARGET = (
+    r"(?:"
+    r"(?:(?:some|any|the)\s+)?music"
+    r"|(?:(?:a|any|some|the)\s+)?(?:songs?|tracks?|tunes?)"
+    r")"
+)
 _EN_STOP_COMMAND = re.compile(
     rf"^(?:{_EN_PREFIX}(?:stop|pause|cancel)\s+(?:playing\s+)?"
     rf"(?:(?:this|that|the)\s+)?{_EN_MUSIC_OBJECT}"
@@ -120,19 +126,19 @@ def _parse_zh_target(action: str, target: str) -> MusicRequest | None:
 
     for opening, closing in _ZH_QUOTES:
         quoted = re.fullmatch(
-            rf"(?:(.{{1,30}}?)的)?{re.escape(opening)}(.{{1,60}}){re.escape(closing)}",
+            rf"{re.escape(opening)}(.{{1,60}}){re.escape(closing)}",
             target,
         )
         if quoted:
-            artist = _strip_target(quoted.group(1) or "")
-            song = _strip_target(quoted.group(2))
+            song = _strip_target(quoted.group(1))
             if not song:
                 return None
             return MusicRequest(
-                keyword=" ".join(part for part in (song, artist) if part),
+                keyword=song,
                 song_name=song,
-                song_artist=artist,
             )
+    if any(mark in target for pair in _ZH_QUOTES for mark in pair):
+        return None
 
     labeled_song = re.fullmatch(r"(?:歌曲?|曲目)\s*[:：]\s*(.{1,60})", target)
     if labeled_song:
@@ -166,9 +172,7 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     if not target:
         return None
     if re.fullmatch(
-        r"(?:(?:me|us)\s+)?(?:"
-        r"(?:(?:some|any|the)\s+)?music|"
-        r"(?:(?:a|any|some|the)\s+)?(?:songs?|tracks?|tunes?))"
+        rf"(?:(?:me|us)\s+)?{_EN_GENERIC_MUSIC_TARGET}"
         r"(?:\s+for\s+(?:me|us))?",
         target,
         re.IGNORECASE,
@@ -216,7 +220,7 @@ def _parse_en_target(target: str) -> MusicRequest | None:
     if by_artist:
         song = _strip_target(by_artist.group(1))
         artist = _strip_target(by_artist.group(2))
-        if song.casefold() in {"song", "a song", "the song"}:
+        if re.fullmatch(_EN_GENERIC_MUSIC_TARGET, song, re.IGNORECASE):
             return MusicRequest(keyword=artist, song_artist=artist)
         song = re.sub(r"^(?:a|the)\s+song\s+", "", song, flags=re.IGNORECASE)
         return MusicRequest(

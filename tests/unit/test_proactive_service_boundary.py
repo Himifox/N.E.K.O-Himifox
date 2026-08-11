@@ -722,6 +722,35 @@ async def test_model_stop_intent_requires_active_music() -> None:
     assert active._music_playback_state == "stopped"
 
 
+@pytest.mark.asyncio
+async def test_model_stop_intent_cancels_queued_candidates() -> None:
+    pending_coroutines = []
+    manager = SimpleNamespace(
+        _music_intent_turn={"handled": False, "consumed": False},
+        _music_playback_state="",
+        _music_request_epoch=7,
+        _music_queued_request_epoch=7,
+        _fire_task=lambda coro: pending_coroutines.append(coro),
+    )
+    try:
+        result = await music_playback.handle_music_intent_tool(
+            manager,
+            {"action": "stop", "target_type": "generic"},
+        )
+    finally:
+        for coro in pending_coroutines:
+            coro.close()
+
+    assert result == {
+        "status": "accepted",
+        "action": "stop",
+        "playback_state": "stopped",
+    }
+    assert manager._music_request_epoch == 8
+    assert manager._music_queued_request_epoch is None
+    assert manager._music_playback_state == "stopped"
+
+
 def test_new_user_music_request_cancels_previous_search(monkeypatch) -> None:
     previous_task = MagicMock()
     previous_task.done.return_value = False
@@ -927,6 +956,8 @@ async def test_fast_music_search_waits_for_current_reply_before_player(
     )
 
     assert result == {"status": "queued", "candidates": 1}
+    assert manager._music_queued_request_epoch == 1
+    assert manager._music_playback_state == "queued"
     assert order == [
         "music_request_started",
         "search",
@@ -1095,6 +1126,7 @@ def test_confirmed_user_music_playback_uses_existing_callback_delivery() -> None
     manager = SimpleNamespace(
         lanlan_name="YUI",
         _music_request_epoch=7,
+        _music_queued_request_epoch=7,
         submit_proactive_callback=MagicMock(),
         enqueue_agent_callback=MagicMock(),
     )
@@ -1109,6 +1141,7 @@ def test_confirmed_user_music_playback_uses_existing_callback_delivery() -> None
     }
 
     assert music_playback.handle_music_playback_state(manager, event) is True
+    assert manager._music_queued_request_epoch is None
     callback = manager.submit_proactive_callback.call_args.args[0]
     assert callback["delivery_mode"] == "proactive"
     assert callback["channel"] == "music_playback"
