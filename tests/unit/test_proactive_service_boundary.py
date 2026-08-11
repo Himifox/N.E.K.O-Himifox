@@ -459,6 +459,13 @@ def test_music_intent_tool_text_covers_every_core_locale() -> None:
     zh_description = get_music_intent_tool_texts("zh-CN")["description"]
     assert "直接回答了助手刚刚提出的选歌问题" in zh_description
     assert "只请求推荐但未要求播放" in zh_description
+    assert "带引号的歌曲标题不属于转述" in zh_description
+    assert "引用符付きの曲名は引用された依頼ではありません" in (
+        get_music_intent_tool_texts("ja")["description"]
+    )
+    assert "A song title in quotation marks is not a quoted request" in (
+        get_music_intent_tool_texts("en")["description"]
+    )
 
 
 def test_music_playback_has_no_independent_intent_classifier() -> None:
