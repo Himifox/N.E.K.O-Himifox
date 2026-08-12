@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -102,30 +103,40 @@ class CredentialStore:
         self._data_dir = Path(data_dir)
         self._cookie_path = self._data_dir / _COOKIE_FILE
         self._key_path = self._data_dir / _KEY_FILE
+        self._lock = asyncio.Lock()
 
     async def configured(self) -> bool:
         return bool((await self.load()).get("MUSIC_U"))
 
     async def load(self) -> dict[str, str]:
-        try:
-            return await asyncio.to_thread(self._load_sync)
-        except (OSError, InvalidToken, UnicodeError, ValueError, json.JSONDecodeError):
-            return {}
+        async with self._lock:
+            try:
+                return await asyncio.to_thread(self._load_sync)
+            except (
+                OSError,
+                InvalidToken,
+                UnicodeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                return {}
 
     async def save(self, value: object, *, nmtid: object = "") -> None:
         cookies = normalize_netease_cookies(value, nmtid=nmtid)
         if not cookies:
             raise CredentialError("MUSIC_U is invalid")
-        try:
-            await asyncio.to_thread(self._save_sync, cookies)
-        except (OSError, ValueError) as exc:
-            raise CredentialError("NetEase cookies could not be saved") from exc
+        async with self._lock:
+            try:
+                await asyncio.to_thread(self._save_sync, cookies)
+            except (OSError, ValueError) as exc:
+                raise CredentialError("NetEase cookies could not be saved") from exc
 
     async def clear(self) -> None:
-        try:
-            await asyncio.to_thread(self._clear_sync)
-        except OSError as exc:
-            raise CredentialError("MUSIC_U could not be cleared") from exc
+        async with self._lock:
+            try:
+                await asyncio.to_thread(self._clear_sync)
+            except OSError as exc:
+                raise CredentialError("MUSIC_U could not be cleared") from exc
 
     def _load_sync(self) -> dict[str, str]:
         if not self._cookie_path.is_file() or not self._key_path.is_file():
@@ -159,15 +170,24 @@ class CredentialStore:
 
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> None:
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary = Path(temporary_name)
         try:
-            temporary.write_bytes(content)
-            if os.name != "nt":
-                temporary.chmod(0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temporary, path)
             if os.name != "nt":
                 path.chmod(0o600)
         finally:
+            if descriptor >= 0:
+                os.close(descriptor)
             try:
                 temporary.unlink()
             except FileNotFoundError:

@@ -21,6 +21,7 @@ type CredentialState = {
   nmtid_configured?: boolean
   cookie_count?: number
   storage?: string
+  action_token?: string
 }
 
 function hasAction(actions: HostedAction[], id: string): boolean {
@@ -32,13 +33,14 @@ export default function NeteaseMusicPanel(
 ) {
   const configured = !!props.state?.cookie_configured
   const nmtidConfigured = !!props.state?.nmtid_configured
+  const actionToken = props.state?.action_token || ""
   const [musicU, setMusicU] = props.useLocalState("music_u", "")
   const [nmtid, setNmtid] = props.useLocalState("nmtid", "")
   const [saving, setSaving] = useState(false)
   const toast = useToast()
   const confirm = useConfirm()
-  const canSave = hasAction(props.actions || [], "save_music_u")
-  const canClear = hasAction(props.actions || [], "clear_music_u")
+  const canSave = !!actionToken && hasAction(props.actions || [], "save_music_u")
+  const canClear = !!actionToken && hasAction(props.actions || [], "clear_music_u")
 
   async function saveCookie() {
     const value = musicU.trim()
@@ -51,6 +53,7 @@ export default function NeteaseMusicPanel(
       await props.api.call("save_music_u", {
         music_u: value,
         nmtid: nmtid.trim(),
+        ui_token: actionToken,
       })
       setMusicU("")
       setNmtid("")
@@ -73,7 +76,7 @@ export default function NeteaseMusicPanel(
     })
     if (!accepted) return
     try {
-      await props.api.call("clear_music_u", {})
+      await props.api.call("clear_music_u", { ui_token: actionToken })
       setMusicU("")
       setNmtid("")
       await props.api.refresh()

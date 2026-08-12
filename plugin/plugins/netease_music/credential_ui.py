@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 from plugin.sdk.plugin import Err, Ok, SdkError, plugin_entry, tr, ui
@@ -14,11 +15,13 @@ class CredentialUiMixin:
 
     _credential_store: CredentialStore
     _netease_cookies: dict[str, str]
+    _credential_ui_token: str
     i18n: Any
 
     def _init_credential_store(self) -> None:
         self._credential_store = CredentialStore(self.data_path())  # type: ignore[attr-defined]
         self._netease_cookies = {}
+        self._credential_ui_token = secrets.token_urlsafe(32)
 
     async def _load_netease_cookies(self) -> None:
         self._netease_cookies = await self._credential_store.load()
@@ -30,7 +33,19 @@ class CredentialUiMixin:
             "nmtid_configured": bool(self._netease_cookies.get("NMTID")),
             "cookie_count": len(self._netease_cookies),
             "storage": "plugin_private_encrypted",
+            "action_token": self._credential_ui_token,
         }
+
+    def _valid_credential_ui_token(self, candidate: object) -> bool:
+        return isinstance(candidate, str) and secrets.compare_digest(
+            candidate,
+            self._credential_ui_token,
+        )
+
+    async def _invalidate_credential_users(self) -> None:
+        invalidator = getattr(self, "_invalidate_credential_requests", None)
+        if callable(invalidator):
+            await invalidator()
 
     @ui.action(
         id="save_music_u",
@@ -62,8 +77,13 @@ class CredentialUiMixin:
                     "writeOnly": True,
                     "maxLength": 4096,
                 },
+                "ui_token": {
+                    "type": "string",
+                    "writeOnly": True,
+                    "minLength": 1,
+                },
             },
-            "required": ["music_u"],
+            "required": ["music_u", "ui_token"],
             "additionalProperties": False,
         },
     )
@@ -71,8 +91,16 @@ class CredentialUiMixin:
         self,
         music_u: str = "",
         nmtid: str = "",
+        ui_token: str = "",
         **_: object,
     ):
+        if not self._valid_credential_ui_token(ui_token):
+            return Err(
+                SdkError(
+                    "该凭据操作只能从插件 Hosted UI 调用。",
+                    code="ui_only",
+                )
+            )
         cookies = normalize_netease_cookies(music_u, nmtid=nmtid)
         if not cookies:
             return Err(
@@ -87,6 +115,7 @@ class CredentialUiMixin:
                 SdkError(self.i18n.t("errors.save_cookie", default="凭据保存失败。"))
             )
         self._netease_cookies = cookies
+        await self._invalidate_credential_users()
         return Ok(
             {
                 "cookie_configured": True,
@@ -114,11 +143,25 @@ class CredentialUiMixin:
         ),
         input_schema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "ui_token": {
+                    "type": "string",
+                    "writeOnly": True,
+                    "minLength": 1,
+                }
+            },
+            "required": ["ui_token"],
             "additionalProperties": False,
         },
     )
-    async def clear_music_u(self, **_: object):
+    async def clear_music_u(self, ui_token: str = "", **_: object):
+        if not self._valid_credential_ui_token(ui_token):
+            return Err(
+                SdkError(
+                    "该凭据操作只能从插件 Hosted UI 调用。",
+                    code="ui_only",
+                )
+            )
         try:
             await self._credential_store.clear()
         except CredentialError:
@@ -126,6 +169,7 @@ class CredentialUiMixin:
                 SdkError(self.i18n.t("errors.clear_cookie", default="凭据清除失败。"))
             )
         self._netease_cookies = {}
+        await self._invalidate_credential_users()
         return Ok(
             {
                 "cookie_configured": False,

@@ -55,6 +55,7 @@ class NeteaseMusicPlugin(CredentialUiMixin, NekoPluginBase):
         self._closed = True
         self._generation_counter = 0
         self._session_generations: dict[str, int] = {}
+        self._active_play_tasks: set[asyncio.Task[Any]] = set()
 
     @lifecycle(id="startup")
     async def startup(self, **_: object):
@@ -97,6 +98,24 @@ class NeteaseMusicPlugin(CredentialUiMixin, NekoPluginBase):
         params: PlayRequest,
         _ctx: dict[str, Any] | None = None,
     ):
+        active_tasks = getattr(self, "_active_play_tasks", None)
+        if active_tasks is None:
+            active_tasks = set()
+            self._active_play_tasks = active_tasks
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            active_tasks.add(current_task)
+        try:
+            return await self._play_netease_music(params, _ctx)
+        finally:
+            if current_task is not None:
+                active_tasks.discard(current_task)
+
+    async def _play_netease_music(
+        self,
+        params: PlayRequest,
+        _ctx: dict[str, Any] | None = None,
+    ):
         ctx = _ctx if isinstance(_ctx, dict) else {}
         target_lanlan = self._target_lanlan(ctx)
         if not target_lanlan:
@@ -133,6 +152,20 @@ class NeteaseMusicPlugin(CredentialUiMixin, NekoPluginBase):
                 code="search_failed",
                 ctx=ctx,
             )
+
+    async def _invalidate_credential_requests(self) -> None:
+        self._generation_counter += 1
+        self._session_generations.clear()
+        current_task = asyncio.current_task()
+        pending = [
+            task
+            for task in getattr(self, "_active_play_tasks", set())
+            if task is not current_task and not task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _play_with_provider(
         self,
