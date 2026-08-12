@@ -109,7 +109,9 @@ def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
           'http://127.0.0.1:48916/plugin/music_pusher/ui/uploads/song.mp3',
           'http://[::1]:48916/plugin/music_pusher/ui/uploads/song.mp3',
         ];
-        MusicPluginAPI.addAllowlist(['localhost', '127.0.0.1', '::1'], exactUrls);
+        MusicPluginAPI.addAllowlist(['localhost', '127.0.0.1', '::1']);
+        MusicPluginAPI.addAllowlist(exactUrls[0]);
+        MusicPluginAPI.addAllowlist(exactUrls.slice(1));
 
         for (const url of exactUrls) {{
           if (!isSafeUrl(url)) throw new Error(`registered HTTP URL rejected: ${{url}}`);
@@ -145,15 +147,16 @@ def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
         if (!isSafeUrl('http://[::1]/default.mp3')) throw new Error('IPv6 default port was not normalized');
 
         const escapedUrl = 'http://localhost:48916/song.mp3?token=one&amp;amp;part=two';
-        MusicPluginAPI.addAllowlist([], [escapedUrl]);
+        MusicPluginAPI.addAllowlist(escapedUrl);
         if (!isSafeUrl('http://localhost:48916/song.mp3?token=one&part=two')) {{
           throw new Error('HTML-escaped HTTP URL was not normalized like playback');
         }}
-        for (const encoded of [
+        const encodedUrls = [
           'http://localhost:48916/encoded.mp3?token=one&amp%3Bpart=two',
           'http://localhost:48916/percent.mp3?token=one%26amp%3Bpart=two',
-        ]) {{
-          MusicPluginAPI.addAllowlist([], [encoded]);
+        ];
+        MusicPluginAPI.addAllowlist(encodedUrls);
+        for (const encoded of encodedUrls) {{
           const playbackUrl = normalizeMusicUrlEscapes(encoded);
           if (!isSafeUrl(playbackUrl)) throw new Error(`escaped HTTP URL rejected: ${{encoded}}`);
         }}

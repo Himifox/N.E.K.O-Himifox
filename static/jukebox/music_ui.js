@@ -3276,7 +3276,8 @@
             const newDomains = inputs
                 .map(extractHostname)
                 .filter(d => d && !MUSIC_CONFIG.allowlist.includes(d));
-            const httpInputs = Array.isArray(httpUrlInput) ? httpUrlInput : [httpUrlInput];
+            const explicitHttpInputs = Array.isArray(httpUrlInput) ? httpUrlInput : [httpUrlInput];
+            const httpInputs = inputs.concat(explicitHttpInputs);
             const newHttpUrls = httpInputs
                 .map(value => {
                     try {
