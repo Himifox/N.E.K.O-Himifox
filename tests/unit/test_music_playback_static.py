@@ -79,6 +79,9 @@ def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
         pytest.skip("node is required for the music URL allowlist browser contract test")
 
     source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    normalize_url = source.split("const normalizeMusicUrlEscapes = (url) => {", 1)[1].split(
+        "/**", 1
+    )[0]
     extract_hostname = source.split("const extractHostname = (input) => {", 1)[1].split(
         "const isSafeUrl = (url) => {", 1
     )[0]
@@ -96,6 +99,7 @@ def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
           dispatchEvent() {{}},
         }};
         class CustomEvent {{ constructor(type) {{ this.type = type; }} }}
+        const normalizeMusicUrlEscapes = (url) => {{{normalize_url}
         const extractHostname = (input) => {{{extract_hostname}
         const isSafeUrl = (url) => {{{safe_url}
         const MusicPluginAPI = {{{plugin_api}
@@ -139,6 +143,23 @@ def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
         ]);
         if (!isSafeUrl('http://localhost/default.mp3')) throw new Error('localhost default port was not normalized');
         if (!isSafeUrl('http://[::1]/default.mp3')) throw new Error('IPv6 default port was not normalized');
+
+        const escapedUrl = 'http://localhost:48916/song.mp3?token=one&amp;amp;part=two';
+        MusicPluginAPI.addAllowlist([], [escapedUrl]);
+        if (!isSafeUrl('http://localhost:48916/song.mp3?token=one&part=two')) {{
+          throw new Error('HTML-escaped HTTP URL was not normalized like playback');
+        }}
+        for (const encoded of [
+          'http://localhost:48916/encoded.mp3?token=one&amp%3Bpart=two',
+          'http://localhost:48916/percent.mp3?token=one%26amp%3Bpart=two',
+        ]) {{
+          MusicPluginAPI.addAllowlist([], [encoded]);
+          const playbackUrl = normalizeMusicUrlEscapes(encoded);
+          if (!isSafeUrl(playbackUrl)) throw new Error(`escaped HTTP URL rejected: ${{encoded}}`);
+        }}
+        if (isSafeUrl('http://localhost:48916/song.mp3?token=one&part=other')) {{
+          throw new Error('normalization widened exact query matching');
+        }}
         """
     )
     result: subprocess.CompletedProcess[str] = run_node_script(
@@ -175,6 +196,8 @@ def test_exact_http_allowlist_is_carried_without_enabling_http_proxy():
     assert '"http_urls": event.get("http_urls")' in runtime_source
     assert "response.http_urls || []" in websocket_source
     assert "getHttpUrls: () => [...pluginHttpUrls]" in source
+    assert "trackInfo.url = normalizeMusicUrlEscapes(trackInfo.url);" in source
+    assert "new URL(normalizeMusicUrlEscapes(value))" in source
 
     proxy_source = source.split("const toBackendMusicProxyUrl = (url) =>", 1)[1].split(
         "const isMusicOccupied", 1

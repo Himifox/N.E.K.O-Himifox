@@ -1796,6 +1796,20 @@
     let currentVolumeDragHandlers = null;
 
     // --- 2. 原始工具函数 ---
+    const normalizeMusicUrlEscapes = (url) => {
+        if (typeof url !== 'string') return url;
+        let normalized = url;
+        let previous = '';
+        while (normalized !== previous) {
+            previous = normalized;
+            normalized = normalized
+                .replace(/&amp;/g, '&')
+                .replace(/&amp%3B/g, '&')
+                .replace(/%26amp%3B/g, '&');
+        }
+        return normalized;
+    };
+
     /**
      * 安全提取域名/IP
      */
@@ -2984,20 +2998,9 @@
         };
         broadcastMusicCoord('music_pending');
 
-        // --- 核心修复：更鲁棒的 URL 预清理 ---
+        // Keep playback and plugin allowlist registration on the same URL form.
         if (trackInfo.url && typeof trackInfo.url === 'string') {
-            try {
-                let lastUrl = '';
-                while (trackInfo.url !== lastUrl) {
-                    lastUrl = trackInfo.url;
-                    trackInfo.url = trackInfo.url
-                        .replace(/&amp;/g, '&')
-                        .replace(/&amp%3B/g, '&')
-                        .replace(/%26amp%3B/g, '&');
-                }
-            } catch (e) {
-                console.warn('[Music UI] URL sanitization failed:', e);
-            }
+            trackInfo.url = normalizeMusicUrlEscapes(trackInfo.url);
         }
 
         const currentToken = ++latestMusicRequestToken;
@@ -3277,7 +3280,7 @@
             const newHttpUrls = httpInputs
                 .map(value => {
                     try {
-                        const parsed = new URL(value);
+                        const parsed = new URL(normalizeMusicUrlEscapes(value));
                         return parsed.protocol === 'http:' ? parsed.href : null;
                     } catch (_) { return null; }
                 })
