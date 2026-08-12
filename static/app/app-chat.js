@@ -19,6 +19,7 @@
 
     // ======================== 模块级变量 ========================
     let _musicDispatchId = 0;
+    let _queuedMusicDispatchCancel = null;
     let _reactMessageSeq = 0;
     let _userDisplayNamePromise = null;
 
@@ -574,11 +575,15 @@
                 var attempting = false;
                 var pollTimer = null;
                 var timeoutTimer = null;
+                var cancelQueuedDispatch = null;
 
                 var cleanup = function () {
                     if (pollTimer) clearInterval(pollTimer);
                     if (timeoutTimer) clearTimeout(timeoutTimer);
                     window.removeEventListener('music-ui-ready', retryPlay);
+                    if (_queuedMusicDispatchCancel === cancelQueuedDispatch) {
+                        _queuedMusicDispatchCancel = null;
+                    }
                 };
 
                 var finish = function (result) {
@@ -587,6 +592,12 @@
                     cleanup();
                     resolve(result);
                 };
+
+                cancelQueuedDispatch = function () {
+                    _musicDispatchId++;
+                    finish(musicDispatchResult(false, 'superseded', false));
+                };
+                _queuedMusicDispatchCancel = cancelQueuedDispatch;
 
                 var retryPlay = async function () {
                     if (settled || attempting) return;
@@ -620,6 +631,15 @@
                 window.addEventListener('music-ui-ready', retryPlay, { once: true });
             });
         }
+    };
+
+    window.cancelQueuedMusicDispatch = function () {
+        if (!_queuedMusicDispatchCancel) {
+            _musicDispatchId++;
+            return false;
+        }
+        _queuedMusicDispatchCancel();
+        return true;
     };
 
     window.dispatchMusicPlay = async function (trackInfo, options) {

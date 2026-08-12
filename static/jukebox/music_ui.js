@@ -3268,6 +3268,10 @@
     window.isMusicCooldown = isInMusicCooldown;
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;
+    window.cancelPendingMusicMediaReady = () => {
+        latestMusicRequestToken++;
+        if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();
+    };
     // 竞态拦截辅助：dispatch 流水线中（URL 校验/库加载/init）的占位标记
     window.isMusicPending = () => musicDispatchPendingCount > 0;
     // 跨窗口协调：其他窗口正在播歌（基于 BroadcastChannel 通报）

@@ -107,6 +107,37 @@ def test_new_track_cancels_pending_media_readiness_wait():
     assert allowlist_wait < stale_guard < send_source.index("isUnsupportedMusicStream")
 
 
+def test_websocket_reconnect_invalidates_pending_music_dispatches():
+    chat_source = APP_CHAT_PATH.read_text(encoding="utf-8")
+    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    websocket_source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
+    connect_source = websocket_source.split(
+        "function connectWebSocket()", 1
+    )[1].split("// ---- onopen ----", 1)[0]
+
+    same_socket_guard = connect_source.index(
+        "S.socket && S.socket.readyState === WebSocket.OPEN"
+    )
+    reset_media = connect_source.index("window.cancelPendingMusicMediaReady();")
+    reset_queued = connect_source.index("window.cancelQueuedMusicDispatch();")
+    new_socket = connect_source.index("S.socket = new WebSocket(wsUrl);")
+    assert same_socket_guard < reset_media < reset_queued < new_socket
+
+    chat_reset = chat_source.split(
+        "window.cancelQueuedMusicDispatch = function ()", 1
+    )[1].split("window.dispatchMusicPlay = async function", 1)[0]
+    assert "_musicDispatchId++;" in chat_reset
+    assert "_queuedMusicDispatchCancel();" in chat_reset
+    assert "requestId" not in chat_reset
+
+    player_reset = player_source.split(
+        "window.cancelPendingMusicMediaReady = () =>", 1
+    )[1].split("// ---", 1)[0]
+    assert "latestMusicRequestToken++;" in player_reset
+    assert "if (pendingMusicMediaReadyCancel) pendingMusicMediaReadyCancel();" in player_reset
+    assert "requestId" not in player_reset
+
+
 def test_music_player_reports_confirmed_state_to_backend():
     player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     router_source = WEBSOCKET_ROUTER_PATH.read_text(encoding="utf-8")

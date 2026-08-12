@@ -1788,6 +1788,15 @@
         if (S.socket && S.socket.readyState === WebSocket.OPEN && S.socket.url === wsUrl) {
             return;
         }
+        // A queued proactive/plugin dispatch belongs to the connection and
+        // character that created it. Invalidate both asynchronous playback
+        // stages before replacing that scope.
+        if (typeof window.cancelPendingMusicMediaReady === 'function') {
+            window.cancelPendingMusicMediaReady();
+        }
+        if (typeof window.cancelQueuedMusicDispatch === 'function') {
+            window.cancelQueuedMusicDispatch();
+        }
         // 新连接重置模型就绪标志，等待模型重新加载
         S._modelReady = false;
 
