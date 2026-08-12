@@ -22,7 +22,6 @@ from collections.abc import Callable
 from typing import Any
 
 from config.prompts.prompts_proactive import get_music_request_pending_prompt
-from main_logic.agent_event_bus import register_user_utterance_sink
 from main_logic.proactive_delivery import DELIVERY_RETRACTED_KEY
 from main_logic.music_requests import (
     MusicRequest,
@@ -504,6 +503,3 @@ async def _push_music_payload(manager: Any, payload: dict[str, Any]) -> bool:
     if delivered:
         manager.sync_message_queue.put({"type": "json", "data": payload})
     return delivered
-
-
-register_user_utterance_sink(_on_user_utterance)

@@ -55,6 +55,23 @@ def _imported_modules(path: Path) -> set[str]:
     return modules
 
 
+def test_core_conversational_music_requests_are_not_registered() -> None:
+    """User utterances must not activate the legacy core song-request path."""
+    from main_logic.agent_event_bus import _user_utterance_sinks
+
+    assert music_playback._on_user_utterance not in _user_utterance_sinks
+
+    playback_source = Path(music_playback.__file__).read_text(encoding="utf-8")
+    runtime_source = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "main_server"
+        / "character_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "register_user_utterance_sink(_on_user_utterance)" not in playback_source
+    assert "register_music_session_manager_getter(_get_session_manager)" not in runtime_source
+
+
 def test_service_has_no_http_or_router_dependency() -> None:
     modules = _imported_modules(Path(service.__file__))
 
