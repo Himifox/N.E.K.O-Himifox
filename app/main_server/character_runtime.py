@@ -429,6 +429,8 @@ async def _handle_agent_event(event: dict):
                 "type": "music_allowlist_add",
                 "domains": event.get("domains")
                 or event.get("metadata", {}).get("domains", []),
+                "http_urls": event.get("http_urls")
+                or event.get("metadata", {}).get("http_urls", []),
             }
 
             async def _send_allowlist(target_mgr):

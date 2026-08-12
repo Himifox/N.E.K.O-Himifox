@@ -4423,9 +4423,9 @@
                     }
                 // -------- music allowlist add --------
                 } else if (response.type === 'music_allowlist_add') {
-                    if (window.MusicPluginAPI && response.domains) {
-                        console.log('[Music] Received allowlist update from backend:', response.domains);
-                        window.MusicPluginAPI.addAllowlist(response.domains);
+                    if (window.MusicPluginAPI && (response.domains || response.http_urls)) {
+                        console.log('[Music] Received allowlist update from backend:', response.domains, response.http_urls);
+                        window.MusicPluginAPI.addAllowlist(response.domains || [], response.http_urls || []);
                     }
 
                 // -------- music play url --------

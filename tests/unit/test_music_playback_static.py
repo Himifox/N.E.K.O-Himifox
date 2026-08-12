@@ -1,5 +1,12 @@
 import json
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
+
+from tests.node_harness import run_node_script
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +58,8 @@ def test_music_dispatch_waits_for_media_and_reports_real_failure():
     safe_url_source = source.split("const isSafeUrl = (url) => {", 1)[1].split(
         "const normalizeMusicCoverUrl", 1
     )[0]
-    assert "['http:', 'https:'].includes(parsed.protocol)" in safe_url_source
+    assert "if (parsed.protocol === 'http:') return pluginHttpUrls.has(parsed.href);" in safe_url_source
+    assert "if (parsed.protocol !== 'https:') return false;" in safe_url_source
     assert "MUSIC_CONFIG.allowlist.some" in safe_url_source
     for blocked_protocol in ("ftp:", "file:", "data:", "javascript:"):
         assert blocked_protocol not in safe_url_source
@@ -63,6 +71,116 @@ def test_music_dispatch_waits_for_media_and_reports_real_failure():
     assert "['http:', 'https:'].includes(parsed.protocol)" not in proxy_source
     assert "trackInfo.url = toBackendMusicProxyUrl(originalUrl)" in source
     assert "trackInfo.url.includes('music.163.com')" not in source
+
+
+def test_plugin_http_allowlist_matches_only_normalized_complete_urls():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the music URL allowlist browser contract test")
+
+    source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    extract_hostname = source.split("const extractHostname = (input) => {", 1)[1].split(
+        "const isSafeUrl = (url) => {", 1
+    )[0]
+    safe_url = source.split("const isSafeUrl = (url) => {", 1)[1].split(
+        "const normalizeMusicCoverUrl", 1
+    )[0]
+    plugin_api = source.split("const MusicPluginAPI = {", 1)[1].split(
+        "// --- 暴露接口 ---", 1
+    )[0]
+    script = textwrap.dedent(
+        f"""
+        const MUSIC_CONFIG = {{ allowlist: ['localhost', '127.0.0.1', '::1', 'example.com'] }};
+        const pluginHttpUrls = new Set();
+        const window = {{
+          dispatchEvent() {{}},
+        }};
+        class CustomEvent {{ constructor(type) {{ this.type = type; }} }}
+        const extractHostname = (input) => {{{extract_hostname}
+        const isSafeUrl = (url) => {{{safe_url}
+        const MusicPluginAPI = {{{plugin_api}
+
+        const exactUrls = [
+          'http://localhost:48916/plugin/music_pusher/ui/uploads/song.mp3',
+          'http://127.0.0.1:48916/plugin/music_pusher/ui/uploads/song.mp3',
+          'http://[::1]:48916/plugin/music_pusher/ui/uploads/song.mp3',
+        ];
+        MusicPluginAPI.addAllowlist(['localhost', '127.0.0.1', '::1'], exactUrls);
+
+        for (const url of exactUrls) {{
+          if (!isSafeUrl(url)) throw new Error(`registered HTTP URL rejected: ${{url}}`);
+        }}
+        if (!isSafeUrl('HTTP://LOCALHOST:48916/plugin/music_pusher/ui/uploads/song.mp3')) {{
+          throw new Error('equivalent normalized localhost URL rejected');
+        }}
+        if (isSafeUrl('http://localhost:48917/plugin/music_pusher/ui/uploads/song.mp3')) {{
+          throw new Error('different HTTP port allowed');
+        }}
+        if (isSafeUrl('http://localhost:48916/plugin/music_pusher/ui/uploads/other.mp3')) {{
+          throw new Error('different HTTP path allowed');
+        }}
+        if (isSafeUrl('http://localhost:48916/plugin/music_pusher/ui/uploads/song.mp3?other=1')) {{
+          throw new Error('different HTTP query allowed');
+        }}
+        if (isSafeUrl('http://127.0.0.1/unregistered.mp3')) {{
+          throw new Error('host-only loopback entry allowed HTTP');
+        }}
+        if (!isSafeUrl('https://media.example.com/song.mp3')) {{
+          throw new Error('HTTPS hostname allowlist regressed');
+        }}
+        for (const url of ['ftp://example.com/song.mp3', 'file:///song.mp3', 'data:audio/mp3;base64,AA==']) {{
+          if (isSafeUrl(url)) throw new Error(`non-HTTP(S) URL allowed: ${{url}}`);
+        }}
+        if (!isSafeUrl('/api/music/proxy?url=x')) throw new Error('internal API URL rejected');
+
+        MusicPluginAPI.addAllowlist([], [
+          'http://localhost:80/default.mp3',
+          'http://[::1]:80/default.mp3',
+        ]);
+        if (!isSafeUrl('http://localhost/default.mp3')) throw new Error('localhost default port was not normalized');
+        if (!isSafeUrl('http://[::1]/default.mp3')) throw new Error('IPv6 default port was not normalized');
+        """
+    )
+    result: subprocess.CompletedProcess[str] = run_node_script(
+        node,
+        script,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_exact_http_allowlist_is_carried_without_enabling_http_proxy():
+    source = MUSIC_UI_PATH.read_text(encoding="utf-8")
+    websocket_source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
+    pusher_source = (ROOT / "plugin" / "plugins" / "music_pusher" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    schema_source = (ROOT / "plugin" / "sdk" / "shared" / "core" / "push_message_schema.py").read_text(
+        encoding="utf-8"
+    )
+    bridge_source = (ROOT / "plugin" / "server" / "messaging" / "proactive_bridge.py").read_text(
+        encoding="utf-8"
+    )
+    runtime_source = (ROOT / "app" / "main_server" / "character_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'metadata={"domains": domains, "http_urls": http_urls, "event_id": event_id}' in pusher_source
+    assert 'ui_part["http_urls"] = list(md_local["http_urls"])' in schema_source
+    assert '"http_urls": list(http_urls)' in bridge_source
+    assert '"http_urls": event.get("http_urls")' in runtime_source
+    assert "response.http_urls || []" in websocket_source
+    assert "getHttpUrls: () => [...pluginHttpUrls]" in source
+
+    proxy_source = source.split("const toBackendMusicProxyUrl = (url) =>", 1)[1].split(
+        "const isMusicOccupied", 1
+    )[0]
+    assert "if (parsed.protocol !== 'https:') return url;" in proxy_source
+    assert "pluginHttpUrls" not in proxy_source
 
 
 def test_proactive_music_only_retries_candidate_specific_failures():

@@ -50,6 +50,8 @@
     // Only domains advertised by the backend may use the local music proxy.
     // Frontend-only plugin allowlist entries have not passed server-side SSRF checks.
     const backendProxyDomains = new Set(MUSIC_CONFIG.allowlist);
+    // HTTP is allowed only for complete URLs explicitly advertised by a plugin.
+    const pluginHttpUrls = new Set();
     const MAX_RECOMMENDED_TRACK_DURATION_SECONDS = 10 * 60;
     const MUSIC_MEDIA_LOAD_TIMEOUT_MS = 10000;
 
@@ -1817,7 +1819,8 @@
             // 对内部代理路径直接放行（后端已做安全检查）
             if (url.startsWith('/api/')) return true;
             const parsed = new URL(url);
-            if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+            if (parsed.protocol === 'http:') return pluginHttpUrls.has(parsed.href);
+            if (parsed.protocol !== 'https:') return false;
             const hostname = parsed.hostname;
             return MUSIC_CONFIG.allowlist.some(d => hostname === d || hostname.endsWith('.' + d));
         } catch { return false; }
@@ -3264,15 +3267,31 @@
 
     const MusicPluginAPI = {
         getAllowlist: () => [...MUSIC_CONFIG.allowlist],
-        addAllowlist: (input) => {
+        getHttpUrls: () => [...pluginHttpUrls],
+        addAllowlist: (input, httpUrlInput = []) => {
             const inputs = Array.isArray(input) ? input : [input];
             const newDomains = inputs
                 .map(extractHostname)
                 .filter(d => d && !MUSIC_CONFIG.allowlist.includes(d));
+            const httpInputs = Array.isArray(httpUrlInput) ? httpUrlInput : [httpUrlInput];
+            const newHttpUrls = httpInputs
+                .map(value => {
+                    try {
+                        const parsed = new URL(value);
+                        return parsed.protocol === 'http:' ? parsed.href : null;
+                    } catch (_) { return null; }
+                })
+                .filter(value => value && !pluginHttpUrls.has(value));
 
             if (newDomains.length > 0) {
                 MUSIC_CONFIG.allowlist.push(...newDomains);
                 console.log('[Music UI] Allowlist updated:', newDomains);
+            }
+            if (newHttpUrls.length > 0) {
+                newHttpUrls.forEach(value => pluginHttpUrls.add(value));
+                console.log('[Music UI] HTTP URL allowlist updated:', newHttpUrls);
+            }
+            if (newDomains.length > 0 || newHttpUrls.length > 0) {
                 window.dispatchEvent(new CustomEvent('music-allowlist-updated'));
             }
         }
