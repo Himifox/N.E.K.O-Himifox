@@ -14,5 +14,6 @@
   "errors.missing_target": "无法确定当前播放会话，已取消点歌。",
   "errors.search_failed": "网易云搜索暂时不可用，请稍后重试。",
   "errors.media_failed": "网易云音源验证失败，未提交播放。",
-  "errors.delivery_failed": "播放动作提交失败，未开始播放。"
+  "errors.delivery_failed": "播放动作提交失败，未开始播放。",
+  "errors.message_delivery_failed": "结果消息提交失败。"
 }

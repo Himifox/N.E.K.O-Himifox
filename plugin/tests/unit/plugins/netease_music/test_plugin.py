@@ -247,6 +247,7 @@ def test_all_locales_have_the_same_required_keys() -> None:
         "errors.search_failed",
         "errors.media_failed",
         "errors.delivery_failed",
+        "errors.message_delivery_failed",
     } == expected_keys
 
 
@@ -405,6 +406,34 @@ async def test_allowlist_rejection_prevents_play_submission() -> None:
     assert result.error.code == "delivery_rejected"
     assert len(pushes) == 1
     assert _action(pushes[0])["action"] == "media_allowlist_add"
+    assert finish_calls == []
+
+
+@pytest.mark.plugin_unit
+@pytest.mark.asyncio
+async def test_result_message_rejection_uses_message_delivery_error() -> None:
+    plugin, pushes, finish_calls = _make_plugin(
+        _Provider(candidates=[]),
+        receipts=[
+            {
+                "ok": False,
+                "submitted": False,
+                "reason": "transport_unavailable",
+            }
+        ],
+    )
+
+    result = await plugin.play_netease_music(
+        PlayRequest(query="missing"),
+        _ctx(language="en"),
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "delivery_rejected"
+    assert "result message" in str(result.error).lower()
+    assert "playback" not in str(result.error).lower()
+    assert len(pushes) == 1
+    assert _action(pushes[0])["type"] == "text"
     assert finish_calls == []
 
 

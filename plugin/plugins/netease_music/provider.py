@@ -61,8 +61,7 @@ def _normalize_match(value: str) -> str:
 
 
 def _artist_names(candidate: SongCandidate) -> tuple[str, ...]:
-    names = tuple(part.strip() for part in candidate.artist.split(" / ") if part.strip())
-    return names or ((candidate.artist,) if candidate.artist else ())
+    return candidate.artist_names or ((candidate.artist,) if candidate.artist else ())
 
 
 def select_unique_exact_match(
@@ -191,6 +190,7 @@ def _parse_candidate(raw: object) -> SongCandidate | None:
         artist=" / ".join(artist_names)[:_DISPLAY_LIMIT].rstrip(),
         album=album,
         fee=_optional_fee(raw.get("fee")),
+        artist_names=tuple(artist_names),
     )
 
 
@@ -315,7 +315,7 @@ class NeteaseMusicProvider:
                     ):
                         raise MediaUnavailableError("NetEase media response was not audio")
                     return ResolvedMedia(url=current_url, hostname=current_hostname)
-            except (ProviderError, MediaUnavailableError):
+            except ProviderError:
                 raise
             except httpx.HTTPError as exc:
                 raise ProviderError("NetEase media request failed") from exc

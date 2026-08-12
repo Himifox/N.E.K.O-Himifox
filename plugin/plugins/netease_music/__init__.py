@@ -21,7 +21,6 @@ from .models import PlayRequest, ResolvedMedia, SongCandidate
 from .provider import (
     MediaUnavailableError,
     NeteaseMusicProvider,
-    ProviderError,
     select_unique_exact_match,
 )
 
@@ -115,15 +114,6 @@ class NeteaseMusicPlugin(NekoPluginBase):
                 )
         except asyncio.CancelledError:
             raise
-        except ProviderError:
-            if not self._is_current(session_key, generation):
-                return await self._finish_silent("superseded")
-            return self._error(
-                "errors.search_failed",
-                "网易云搜索暂时不可用，请稍后重试。",
-                code="search_failed",
-                ctx=ctx,
-            )
         except Exception:
             if not self._is_current(session_key, generation):
                 return await self._finish_silent("superseded")
@@ -196,15 +186,6 @@ class NeteaseMusicPlugin(NekoPluginBase):
                     ctx,
                 ),
                 data={"song": self._candidate_data(selected)},
-            )
-        except ProviderError:
-            if not self._is_current(session_key, generation):
-                return await self._finish_silent("superseded")
-            return self._error(
-                "errors.media_failed",
-                "网易云音源验证失败，未提交播放。",
-                code="media_validation_failed",
-                ctx=ctx,
             )
         except Exception:
             if not self._is_current(session_key, generation):
@@ -387,7 +368,7 @@ class NeteaseMusicPlugin(NekoPluginBase):
         )
         if not self._submitted(receipt):
             return self._error(
-                "errors.delivery_failed",
+                "errors.message_delivery_failed",
                 "结果消息提交失败。",
                 code="delivery_rejected",
                 ctx=ctx,

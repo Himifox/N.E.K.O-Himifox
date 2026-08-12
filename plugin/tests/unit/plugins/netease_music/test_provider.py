@@ -100,7 +100,14 @@ async def test_search_uses_fixed_anonymous_request_and_parses_sanitized_results(
     results = await provider.search("  晴天  ")
 
     assert len(results) == 5
-    assert results[0] == SongCandidate(1, "晴 天", "周杰伦", "叶惠美", 8)
+    assert results[0] == SongCandidate(
+        1,
+        "晴 天",
+        "周杰伦",
+        "叶惠美",
+        8,
+        ("周杰伦",),
+    )
     assert results[1].artist == "周杰伦 / 林俊杰"
     assert [candidate.song_id for candidate in results] == [1, 2, 3, 4, 5]
     request = requests[0]
@@ -135,7 +142,7 @@ async def test_search_skips_invalid_candidates_and_supports_new_field_names() ->
         )
 
     assert await _provider(handler).search("valid") == [
-        SongCandidate(9, "valid", "artist", "album", None)
+        SongCandidate(9, "valid", "artist", "album", None, ("artist",))
     ]
 
 
@@ -182,10 +189,22 @@ def test_unique_exact_match_is_conservative() -> None:
 
 
 def test_unique_exact_match_accepts_each_artist_and_deduplicates_song_id() -> None:
-    duet = SongCandidate(1, "歌曲", "甲 / 乙")
-    duplicate = SongCandidate(1, "歌曲", "甲 / 乙")
+    duet = SongCandidate(1, "歌曲", "甲 / 乙", artist_names=("甲", "乙"))
+    duplicate = SongCandidate(1, "歌曲", "甲 / 乙", artist_names=("甲", "乙"))
     assert select_unique_exact_match("歌曲 乙", [duet]) == duet
     assert select_unique_exact_match("歌曲 甲", [duet, duplicate]) == duet
+
+
+def test_unique_exact_match_does_not_split_one_artist_name_on_display_separator() -> None:
+    slash_artist = SongCandidate(
+        1,
+        "歌曲",
+        "AC / DC",
+        artist_names=("AC / DC",),
+    )
+
+    assert select_unique_exact_match("歌曲 AC / DC", [slash_artist]) == slash_artist
+    assert select_unique_exact_match("歌曲 AC", [slash_artist]) is None
 
 
 @pytest.mark.asyncio

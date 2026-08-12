@@ -14,5 +14,6 @@
   "errors.missing_target": "現在の再生セッションを特定できなかったため、リクエストをキャンセルしました。",
   "errors.search_failed": "NetEase Cloud Music の検索を一時的に利用できません。後でもう一度お試しください。",
   "errors.media_failed": "NetEase Cloud Music の音源を検証できなかったため、再生は送信されませんでした。",
-  "errors.delivery_failed": "再生アクションを送信できず、再生は開始されませんでした。"
+  "errors.delivery_failed": "再生アクションを送信できず、再生は開始されませんでした。",
+  "errors.message_delivery_failed": "結果メッセージを送信できませんでした。"
 }

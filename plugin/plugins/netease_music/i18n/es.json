@@ -14,5 +14,6 @@
   "errors.missing_target": "No se pudo determinar la sesión de reproducción actual, por lo que se canceló la petición.",
   "errors.search_failed": "La búsqueda de NetEase Music no está disponible temporalmente. Inténtalo más tarde.",
   "errors.media_failed": "No se pudo validar la fuente de NetEase Music, así que no se envió la reproducción.",
-  "errors.delivery_failed": "No se pudo enviar la acción y la reproducción no comenzó."
+  "errors.delivery_failed": "No se pudo enviar la acción y la reproducción no comenzó.",
+  "errors.message_delivery_failed": "No se pudo entregar el mensaje de resultado."
 }

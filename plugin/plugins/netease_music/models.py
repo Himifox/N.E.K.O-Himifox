@@ -37,6 +37,7 @@ class SongCandidate:
     artist: str
     album: str = ""
     fee: int | None = None
+    artist_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

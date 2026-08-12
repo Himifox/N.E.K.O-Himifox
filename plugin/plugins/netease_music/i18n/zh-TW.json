@@ -14,5 +14,6 @@
   "errors.missing_target": "無法確定目前播放工作階段，已取消點歌。",
   "errors.search_failed": "網易雲搜尋暫時無法使用，請稍後再試。",
   "errors.media_failed": "網易雲音源驗證失敗，未提交播放。",
-  "errors.delivery_failed": "播放動作提交失敗，未開始播放。"
+  "errors.delivery_failed": "播放動作提交失敗，未開始播放。",
+  "errors.message_delivery_failed": "結果訊息提交失敗。"
 }
