@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
+from pyncm_async import Session as NeteaseSession
+from pyncm_async.apis.track import GetTrackAudio
 
 from .models import PlayRequest, ResolvedMedia, SongCandidate
 
@@ -194,7 +196,13 @@ def _parse_candidate(raw: object) -> SongCandidate | None:
 class NeteaseMusicProvider:
     """Fixed-endpoint anonymous NetEase provider with manual redirect checks."""
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        *,
+        music_u: str = "",
+    ) -> None:
+        self._music_u = music_u
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=_TIMEOUT,
@@ -264,9 +272,49 @@ class NeteaseMusicProvider:
         if normalized_id is None:
             raise ProviderSecurityError("Song ID must be a positive decimal integer")
 
-        current_url, current_hostname = _validated_media_url(
+        if self._music_u:
+            authenticated_url = await self._resolve_authenticated_url(normalized_id)
+            if authenticated_url:
+                return await self._probe_media_url(authenticated_url)
+
+        return await self._probe_media_url(
             OUTER_MEDIA_URL.format(song_id=normalized_id),
             allow_http_cdn_upgrade=False,
+        )
+
+    async def _resolve_authenticated_url(self, song_id: int) -> str | None:
+        session = NeteaseSession(
+            timeout=_TIMEOUT,
+            follow_redirects=False,
+            proxy=None,
+            trust_env=False,
+        )
+        session.cookies.set("MUSIC_U", self._music_u)
+        session.eapi_config["MUSIC_U"] = self._music_u
+        try:
+            payload = await GetTrackAudio([song_id], session=session)
+        except httpx.HTTPError as exc:
+            raise ProviderError("NetEase authenticated media request failed") from exc
+        finally:
+            await session.aclose()
+
+        if not isinstance(payload, Mapping):
+            return None
+        data = payload.get("data")
+        if not isinstance(data, list) or not data or not isinstance(data[0], Mapping):
+            return None
+        url = data[0].get("url")
+        return url if isinstance(url, str) and url else None
+
+    async def _probe_media_url(
+        self,
+        initial_url: str,
+        *,
+        allow_http_cdn_upgrade: bool = True,
+    ) -> ResolvedMedia:
+        current_url, current_hostname = _validated_media_url(
+            initial_url,
+            allow_http_cdn_upgrade=allow_http_cdn_upgrade,
         )
         visited: set[str] = set()
         redirect_count = 0
