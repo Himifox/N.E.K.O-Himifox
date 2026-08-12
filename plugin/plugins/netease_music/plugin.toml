@@ -1,0 +1,23 @@
+[plugin]
+type = "plugin"
+id = "netease_music"
+name = "网易云匿名点歌"
+description = "匿名搜索网易云单曲，并在结果唯一明确且公开可用时提交安全的播放动作。"
+short_description = "匿名搜索并播放明确匹配的网易云歌曲。"
+version = "0.1.0"
+entry = "plugin.plugins.netease_music:NeteaseMusicPlugin"
+
+[plugin.author]
+name = "N.E.K.O Team"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin_runtime]
+enabled = false
+auto_start = false
