@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 import unicodedata
@@ -13,6 +14,7 @@ import httpx
 from pyncm_async import Session as NeteaseSession
 from pyncm_async.apis.track import GetTrackAudio
 
+from .credentials import normalize_netease_cookies
 from .models import PlayRequest, ResolvedMedia, SongCandidate
 
 SEARCH_URL = "https://music.163.com/api/search/get/web"
@@ -23,9 +25,12 @@ MAX_REDIRECTS = 5
 _DISPLAY_LIMIT = 200
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_SURROUNDING_QUOTES = " \t\r\n'\"\u2018\u2019\u201c\u201d\u300c\u300d\u300e\u300f\u300a\u300b"
+_SURROUNDING_QUOTES = (
+    " \t\r\n'\"\u2018\u2019\u201c\u201d\u300c\u300d\u300e\u300f\u300a\u300b"
+)
 _USER_AGENT = "N.E.K.O NetEase Music Plugin/0.1"
 _TIMEOUT = httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=3.0)
+_AUTH_COOKIE_NAMES = frozenset({"MUSIC_U", "MUSIC_A", "__csrf"})
 
 
 class ProviderError(RuntimeError):
@@ -130,7 +135,9 @@ def _validated_media_url(url: str, *, allow_http_cdn_upgrade: bool) -> tuple[str
     if parsed.scheme == "https":
         if port not in (None, 443):
             raise ProviderSecurityError("NetEase HTTPS media URL uses a forbidden port")
-        return urlunsplit(("https", hostname, parsed.path or "/", parsed.query, "")), hostname
+        return urlunsplit(
+            ("https", hostname, parsed.path or "/", parsed.query, "")
+        ), hostname
 
     if (
         parsed.scheme == "http"
@@ -140,7 +147,9 @@ def _validated_media_url(url: str, *, allow_http_cdn_upgrade: bool) -> tuple[str
     ):
         # NetEase currently emits HTTP CDN redirects.  Upgrade locally before
         # the next request; no clear-text request is ever sent.
-        return urlunsplit(("https", hostname, parsed.path or "/", parsed.query, "")), hostname
+        return urlunsplit(
+            ("https", hostname, parsed.path or "/", parsed.query, "")
+        ), hostname
 
     raise ProviderSecurityError("NetEase media URL is not HTTPS")
 
@@ -182,7 +191,11 @@ def _parse_candidate(raw: object) -> SongCandidate | None:
         return None
 
     raw_album = raw.get("album", raw.get("al", {}))
-    album = _sanitize_display(raw_album.get("name")) if isinstance(raw_album, Mapping) else ""
+    album = (
+        _sanitize_display(raw_album.get("name"))
+        if isinstance(raw_album, Mapping)
+        else ""
+    )
     return SongCandidate(
         song_id=song_id,
         name=name,
@@ -201,8 +214,11 @@ class NeteaseMusicProvider:
         client: httpx.AsyncClient | None = None,
         *,
         music_u: str = "",
+        cookies: Mapping[str, str] | None = None,
     ) -> None:
-        self._music_u = music_u
+        self._cookies = normalize_netease_cookies(
+            cookies if cookies is not None else music_u
+        )
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=_TIMEOUT,
@@ -272,10 +288,17 @@ class NeteaseMusicProvider:
         if normalized_id is None:
             raise ProviderSecurityError("Song ID must be a positive decimal integer")
 
-        if self._music_u:
-            authenticated_url = await self._resolve_authenticated_url(normalized_id)
-            if authenticated_url:
-                return await self._probe_media_url(authenticated_url)
+        if self._cookies:
+            try:
+                authenticated_url = await self._resolve_authenticated_url(normalized_id)
+                if authenticated_url:
+                    return await self._probe_media_url(authenticated_url)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Match the built-in player: an expired login or unavailable
+                # authenticated URL must not prevent anonymous playback.
+                pass
 
         return await self._probe_media_url(
             OUTER_MEDIA_URL.format(song_id=normalized_id),
@@ -289,8 +312,7 @@ class NeteaseMusicProvider:
             proxy=None,
             trust_env=False,
         )
-        session.cookies.set("MUSIC_U", self._music_u)
-        session.eapi_config["MUSIC_U"] = self._music_u
+        self._sync_session_cookies(session, self._cookies)
         try:
             payload = await GetTrackAudio([song_id], session=session)
         except httpx.HTTPError as exc:
@@ -305,6 +327,35 @@ class NeteaseMusicProvider:
             return None
         url = data[0].get("url")
         return url if isinstance(url, str) and url else None
+
+    @staticmethod
+    def _sync_session_cookies(
+        session: NeteaseSession,
+        cookies: Mapping[str, str],
+    ) -> None:
+        """Apply plugin cookies to pyncm the same way as the built-in player."""
+
+        jars = [getattr(session, "cookies", None)]
+        client = getattr(session, "client", None)
+        jars.append(getattr(client, "cookies", None))
+
+        seen: set[int] = set()
+        for jar in jars:
+            if jar is None or id(jar) in seen:
+                continue
+            seen.add(id(jar))
+            deleter = getattr(jar, "delete", None)
+            for name in _AUTH_COOKIE_NAMES - set(cookies):
+                if callable(deleter):
+                    try:
+                        deleter(name)
+                    except KeyError:
+                        pass
+                else:
+                    jar.set(name, "")
+            for name, value in cookies.items():
+                jar.set(name, value)
+        session.csrf_token = cookies.get("__csrf", "")
 
     async def _probe_media_url(
         self,
@@ -336,10 +387,14 @@ class NeteaseMusicProvider:
                 ) as response:
                     if response.status_code in _REDIRECT_STATUSES:
                         if redirect_count >= MAX_REDIRECTS:
-                            raise MediaUnavailableError("NetEase media redirected too many times")
+                            raise MediaUnavailableError(
+                                "NetEase media redirected too many times"
+                            )
                         location = response.headers.get("location")
                         if not location:
-                            raise MediaUnavailableError("NetEase media redirect had no location")
+                            raise MediaUnavailableError(
+                                "NetEase media redirect had no location"
+                            )
                         next_url = urljoin(current_url, location)
                         current_url, current_hostname = _validated_media_url(
                             next_url,
@@ -358,7 +413,9 @@ class NeteaseMusicProvider:
                         media_type.startswith("audio/")
                         or media_type == "application/octet-stream"
                     ):
-                        raise MediaUnavailableError("NetEase media response was not audio")
+                        raise MediaUnavailableError(
+                            "NetEase media response was not audio"
+                        )
                     return ResolvedMedia(url=current_url, hostname=current_hostname)
             except ProviderError:
                 raise
