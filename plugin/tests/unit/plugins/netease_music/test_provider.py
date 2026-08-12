@@ -13,7 +13,7 @@ from plugin.plugins.netease_music.provider import (
     NeteaseMusicProvider,
     ProviderError,
     ProviderSecurityError,
-    select_unique_exact_match,
+    select_first_exact_match,
 )
 
 
@@ -175,27 +175,27 @@ async def test_search_wraps_network_errors_without_leaking_url() -> None:
     assert "token" not in str(caught.value)
 
 
-def test_unique_exact_match_is_conservative() -> None:
+def test_first_exact_match_is_conservative() -> None:
     official = SongCandidate(1, "晴天", "周杰伦", "叶惠美")
     impersonator = SongCandidate(2, "晴天", "周杰伦-", "Other")
     other = SongCandidate(3, "晴天 (Live)", "周杰伦", "Live")
 
-    assert select_unique_exact_match("晴天 周杰伦", [official, impersonator, other]) == official
-    assert select_unique_exact_match("周杰伦 晴天", [official, impersonator, other]) == official
-    assert select_unique_exact_match("晴天 周杰伦-", [official, impersonator]) == impersonator
-    assert select_unique_exact_match("晴天", [official, impersonator, other]) is None
-    assert select_unique_exact_match("晴", [official]) is None
-    assert select_unique_exact_match("\u300c晴天 周杰伦\u300d", [official]) == official
+    assert select_first_exact_match("晴天 周杰伦", [official, impersonator, other]) == official
+    assert select_first_exact_match("周杰伦 晴天", [official, impersonator, other]) == official
+    assert select_first_exact_match("晴天 周杰伦-", [official, impersonator]) == impersonator
+    assert select_first_exact_match("晴天", [official, impersonator, other]) == official
+    assert select_first_exact_match("晴", [official]) is None
+    assert select_first_exact_match("\u300c晴天 周杰伦\u300d", [official]) == official
 
 
-def test_unique_exact_match_accepts_each_artist_and_deduplicates_song_id() -> None:
+def test_first_exact_match_accepts_each_artist() -> None:
     duet = SongCandidate(1, "歌曲", "甲 / 乙", artist_names=("甲", "乙"))
     duplicate = SongCandidate(1, "歌曲", "甲 / 乙", artist_names=("甲", "乙"))
-    assert select_unique_exact_match("歌曲 乙", [duet]) == duet
-    assert select_unique_exact_match("歌曲 甲", [duet, duplicate]) == duet
+    assert select_first_exact_match("歌曲 乙", [duet]) == duet
+    assert select_first_exact_match("歌曲 甲", [duet, duplicate]) == duet
 
 
-def test_unique_exact_match_does_not_split_one_artist_name_on_display_separator() -> None:
+def test_first_exact_match_does_not_split_one_artist_name_on_display_separator() -> None:
     slash_artist = SongCandidate(
         1,
         "歌曲",
@@ -203,8 +203,8 @@ def test_unique_exact_match_does_not_split_one_artist_name_on_display_separator(
         artist_names=("AC / DC",),
     )
 
-    assert select_unique_exact_match("歌曲 AC / DC", [slash_artist]) == slash_artist
-    assert select_unique_exact_match("歌曲 AC", [slash_artist]) is None
+    assert select_first_exact_match("歌曲 AC / DC", [slash_artist]) == slash_artist
+    assert select_first_exact_match("歌曲 AC", [slash_artist]) is None
 
 
 @pytest.mark.asyncio

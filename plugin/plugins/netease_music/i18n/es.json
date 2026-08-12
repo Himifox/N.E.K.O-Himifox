@@ -1,6 +1,6 @@
 {
   "plugin.name": "Peticiones anónimas de NetEase Music",
-  "plugin.description": "Busca canciones de NetEase Music de forma anónima y solo envía una reproducción segura cuando hay una coincidencia única, clara y disponible públicamente",
+  "plugin.description": "Busca canciones de NetEase Music de forma anónima y reproduce por defecto la primera coincidencia exacta disponible públicamente",
   "plugin.short_description": "Busca y reproduce de forma anónima una coincidencia exacta de NetEase Music",
   "entry.play.name": "Reproducir una canción de NetEase Music",
   "entry.play.description": "Úsalo solo cuando el usuario pida explícitamente reproducir una canción concreta de NetEase Music. Formatea query como «título artista» y conserva indicaciones como directo, versión o cover. No lo uses para letras, datos de canciones, recomendaciones generales, listas, pausa, detener, saltar o canción siguiente.",

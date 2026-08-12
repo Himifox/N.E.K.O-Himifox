@@ -1,6 +1,6 @@
 {
   "plugin.name": "NetEase Cloud Music 匿名リクエスト",
-  "plugin.description": "NetEase Cloud Music を匿名で検索し、結果が一意で明確かつ公開再生可能な場合だけ安全に再生を依頼します",
+  "plugin.description": "NetEase Cloud Music を匿名で検索し、公開再生可能な完全一致の先頭結果を既定で再生します",
   "plugin.short_description": "NetEase Cloud Music の完全一致曲を匿名検索して再生",
   "entry.play.name": "NetEase Cloud Music の曲を再生",
   "entry.play.description": "ユーザーが NetEase Cloud Music の特定の曲を明確に再生またはリクエストした場合だけ呼び出します。query は「曲名 アーティスト」に整え、ライブ版やカバー版などの指定を残してください。歌詞、曲の情報、一般的なおすすめ、プレイリスト、一時停止、停止、曲送り、次の曲には使用しません。",

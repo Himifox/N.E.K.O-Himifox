@@ -1,6 +1,6 @@
 {
   "plugin.name": "NetEase Cloud Music 익명 음악 신청",
-  "plugin.description": "NetEase Cloud Music을 익명으로 검색하고 결과가 유일하고 명확하며 공개 재생 가능한 경우에만 안전하게 재생을 요청합니다",
+  "plugin.description": "NetEase Cloud Music을 익명으로 검색하고 공개 재생 가능한 첫 번째 정확한 일치 항목을 기본으로 재생합니다",
   "plugin.short_description": "NetEase Cloud Music의 정확한 일치 곡을 익명 검색 및 재생",
   "entry.play.name": "NetEase Cloud Music 노래 재생",
   "entry.play.description": "사용자가 NetEase Cloud Music의 특정 노래를 명확하게 재생해 달라고 요청할 때만 호출합니다. query를 ‘곡명 아티스트’ 형식으로 정리하고 라이브, 커버 등 버전 조건을 유지하세요. 가사, 곡 정보, 일반 추천, 재생목록, 일시 정지, 정지, 건너뛰기 또는 다음 곡 요청에는 사용하지 마세요.",

@@ -64,18 +64,16 @@ def _artist_names(candidate: SongCandidate) -> tuple[str, ...]:
     return candidate.artist_names or ((candidate.artist,) if candidate.artist else ())
 
 
-def select_unique_exact_match(
+def select_first_exact_match(
     query: str,
     candidates: Iterable[SongCandidate],
 ) -> SongCandidate | None:
-    """Return the sole exact title/title+artist match; never rank fuzzy results."""
+    """Return the first exact title/title+artist match; never rank fuzzy results."""
 
     normalized_query = _normalize_match(query)
     if not normalized_query:
         return None
 
-    matches: list[SongCandidate] = []
-    seen_song_ids: set[int] = set()
     for candidate in candidates:
         title = _normalize_match(candidate.name)
         if not title:
@@ -86,11 +84,10 @@ def select_unique_exact_match(
             if artist:
                 signatures.add(f"{title} {artist}")
                 signatures.add(f"{artist} {title}")
-        if normalized_query in signatures and candidate.song_id not in seen_song_ids:
-            seen_song_ids.add(candidate.song_id)
-            matches.append(candidate)
+        if normalized_query in signatures:
+            return candidate
 
-    return matches[0] if len(matches) == 1 else None
+    return None
 
 
 def _is_valid_domain(hostname: str) -> bool:
@@ -328,5 +325,5 @@ __all__ = [
     "NeteaseMusicProvider",
     "ProviderError",
     "ProviderSecurityError",
-    "select_unique_exact_match",
+    "select_first_exact_match",
 ]

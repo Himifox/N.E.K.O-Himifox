@@ -1,6 +1,6 @@
 {
   "plugin.name": "Pedidos anônimos do NetEase Music",
-  "plugin.description": "Pesquisa músicas do NetEase Music anonimamente e só envia uma reprodução segura quando há uma correspondência única, clara e publicamente disponível",
+  "plugin.description": "Pesquisa músicas do NetEase Music anonimamente e reproduz por padrão a primeira correspondência exata disponível publicamente",
   "plugin.short_description": "Pesquisa e reproduz anonimamente uma correspondência exata do NetEase Music",
   "entry.play.name": "Reproduzir uma música do NetEase Music",
   "entry.play.description": "Use somente quando o usuário pedir explicitamente para tocar uma música específica do NetEase Music. Formate query como “título artista” e preserve indicações de versão, ao vivo ou cover. Não use para letras, informações sobre músicas, recomendações gerais, playlists, pausar, parar, pular ou próxima faixa.",

@@ -21,7 +21,7 @@ from .models import PlayRequest, ResolvedMedia, SongCandidate
 from .provider import (
     MediaUnavailableError,
     NeteaseMusicProvider,
-    select_unique_exact_match,
+    select_first_exact_match,
 )
 
 _SOURCE = "netease_music"
@@ -153,7 +153,7 @@ class NeteaseMusicPlugin(NekoPluginBase):
                 ),
             )
 
-        selected = select_unique_exact_match(params.query, candidates)
+        selected = select_first_exact_match(params.query, candidates)
         if selected is None:
             return await self._push_expected_outcome(
                 session_key=session_key,

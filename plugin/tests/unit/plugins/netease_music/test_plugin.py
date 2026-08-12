@@ -310,6 +310,27 @@ async def test_clear_match_submits_allowlist_then_play_to_same_target() -> None:
 
 @pytest.mark.plugin_unit
 @pytest.mark.asyncio
+async def test_duplicate_exact_titles_play_first_search_result() -> None:
+    first = _song(song_id=1, name="纸短情长", artist="烟把儿", album="纸短情长")
+    provider = _Provider(
+        candidates=[
+            first,
+            _song(song_id=2, name="纸短情长", artist="花粥", album="纸短情长"),
+        ]
+    )
+    plugin, pushes, finish_calls = _make_plugin(provider)
+
+    result = await plugin.play_netease_music(PlayRequest(query="纸短情长"), _ctx())
+
+    assert result["finish"]["delivery"] == "silent"
+    assert provider.resolve_calls == [first.song_id]
+    assert len(pushes) == 2
+    assert _action(pushes[1])["artist"] == "烟把儿"
+    assert finish_calls[-1]["data"]["status"] == "submitted"
+
+
+@pytest.mark.plugin_unit
+@pytest.mark.asyncio
 async def test_ambiguous_result_pushes_blind_candidate_text_and_finishes_silent() -> None:
     provider = _Provider(
         candidates=[
@@ -319,7 +340,7 @@ async def test_ambiguous_result_pushes_blind_candidate_text_and_finishes_silent(
     )
     plugin, pushes, finish_calls = _make_plugin(provider)
 
-    result = await plugin.play_netease_music(PlayRequest(query="晴天"), _ctx())
+    result = await plugin.play_netease_music(PlayRequest(query="晴"), _ctx())
 
     assert result["finish"]["delivery"] == "silent"
     assert provider.resolve_calls == []

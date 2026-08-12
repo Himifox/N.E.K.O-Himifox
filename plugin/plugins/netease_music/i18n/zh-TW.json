@@ -1,6 +1,6 @@
 {
   "plugin.name": "網易雲匿名點歌",
-  "plugin.description": "匿名搜尋網易雲單曲，並在結果唯一明確且公開可用時提交安全的播放動作",
+  "plugin.description": "匿名搜尋網易雲單曲，並預設播放第一個精確相符且可公開播放的結果",
   "plugin.short_description": "匿名搜尋並播放明確相符的網易雲歌曲",
   "entry.play.name": "播放網易雲歌曲",
   "entry.play.description": "僅在使用者明確要求播放或點播某首網易雲歌曲時呼叫。將 query 整理為「歌名 歌手」，保留現場版、翻唱等版本限定。不要用於歌詞或歌曲知識查詢、泛推薦、歌單、暫停、停止、切歌或下一首。",

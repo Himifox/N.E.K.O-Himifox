@@ -1,6 +1,6 @@
 {
   "plugin.name": "Anonymous NetEase Music",
-  "plugin.description": "Search NetEase Music anonymously and safely submit playback only for one clear, publicly available match",
+  "plugin.description": "Search NetEase Music anonymously and play the first exact, publicly available match by default",
   "plugin.short_description": "Anonymously search and play an exact NetEase Music match",
   "entry.play.name": "Play a NetEase Music song",
   "entry.play.description": "Call only when the user explicitly asks to play a specific song on NetEase Music. Format query as “title artist” and preserve live, cover, or version qualifiers. Do not use for lyrics, song facts, general recommendations, playlists, pause, stop, skip, or next-track requests.",

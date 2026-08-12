@@ -1,6 +1,6 @@
 {
   "plugin.name": "网易云匿名点歌",
-  "plugin.description": "匿名搜索网易云单曲，并在结果唯一明确且公开可用时提交安全的播放动作",
+  "plugin.description": "匿名搜索网易云单曲，并默认播放首个精确匹配且公开可用的结果",
   "plugin.short_description": "匿名搜索并播放明确匹配的网易云歌曲",
   "entry.play.name": "播放网易云歌曲",
   "entry.play.description": "仅在用户明确要求播放或点播某首网易云歌曲时调用。将 query 整理为“歌名 歌手”，保留现场版、翻唱等版本限定。不要用于歌词或歌曲知识查询、泛推荐、歌单、暂停、停止、切歌或下一首。",
