@@ -28,3 +28,10 @@ enabled = false
 [search]
 max_results = 8
 timeout_seconds = 15
+# Absorb repeated/high-burst calls instead of forwarding them to search engines.
+cache_ttl_seconds = 120
+stale_ttl_seconds = 600
+cache_entries = 128
+# At most one retry by default; 429 Retry-After is respected when present.
+retry_attempts = 2
+retry_base_delay_seconds = 0.5

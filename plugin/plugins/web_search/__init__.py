@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from typing import Any, Dict, List, Optional
 
 from plugin.sdk.plugin import (
@@ -33,12 +34,17 @@ from ._parsing import (
     parse_ddg_html,
     parse_ddg_lite_html,
 )
+from ._resilience import SearchCoordinator, request_with_retry
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+_USER_AGENTS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 )
+_UA = _USER_AGENTS[0]
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
@@ -75,9 +81,9 @@ async def _detect_country(timeout: float = 4.0) -> Optional[str]:
 # Fetchers (shared client: keeps cookies + connection reuse across searches)
 # ---------------------------------------------------------------------------
 
-def _ddg_headers() -> Dict[str, str]:
+def _ddg_headers(user_agent: str = _UA) -> Dict[str, str]:
     return {
-        "User-Agent": _UA,
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://duckduckgo.com/",
@@ -90,14 +96,20 @@ async def _search_ddg_html(
     max_results: int = 8,
     region: str = "wt-wt",
     timeout: float = 15.0,
+    user_agent: str = _UA,
+    retry_attempts: int = 2,
+    retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
-    resp = await client.post(
-        _DDG_HTML_URL,
-        data={"q": query, "kl": region},
-        headers=_ddg_headers(),
-        timeout=timeout,
+    resp = await request_with_retry(
+        lambda: client.post(
+            _DDG_HTML_URL,
+            data={"q": query, "kl": region},
+            headers=_ddg_headers(user_agent),
+            timeout=timeout,
+        ),
+        max_attempts=retry_attempts,
+        base_delay=retry_base_delay,
     )
-    resp.raise_for_status()
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     return parse_ddg_html(html, max_results)
 
@@ -108,14 +120,20 @@ async def _search_ddg_lite(
     max_results: int = 8,
     region: str = "wt-wt",
     timeout: float = 15.0,
+    user_agent: str = _UA,
+    retry_attempts: int = 2,
+    retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
-    resp = await client.post(
-        _DDG_LITE_URL,
-        data={"q": query, "kl": region},
-        headers=_ddg_headers(),
-        timeout=timeout,
+    resp = await request_with_retry(
+        lambda: client.post(
+            _DDG_LITE_URL,
+            data={"q": query, "kl": region},
+            headers=_ddg_headers(user_agent),
+            timeout=timeout,
+        ),
+        max_attempts=retry_attempts,
+        base_delay=retry_base_delay,
     )
-    resp.raise_for_status()
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     return parse_ddg_lite_html(html, max_results)
 
@@ -125,9 +143,12 @@ async def _search_baidu(
     query: str,
     max_results: int = 8,
     timeout: float = 15.0,
+    user_agent: str = _UA,
+    retry_attempts: int = 2,
+    retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
     headers = {
-        "User-Agent": _UA,
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": _BAIDU_HOME_URL,
@@ -143,10 +164,13 @@ async def _search_baidu(
             # 安全验证页，由下方 is_baidu_blocked 显式报错，无需在此处理
             pass
 
-    resp = await client.get(
-        _BAIDU_SEARCH_URL, params=params, headers=headers, timeout=timeout
+    resp = await request_with_retry(
+        lambda: client.get(
+            _BAIDU_SEARCH_URL, params=params, headers=headers, timeout=timeout
+        ),
+        max_attempts=retry_attempts,
+        base_delay=retry_base_delay,
     )
-    resp.raise_for_status()
 
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     # 被拦截时会 302 到 wappass.baidu.com 验证码页
@@ -171,6 +195,10 @@ class WebSearchPlugin(NekoPluginBase):
         self._is_cn: bool = False
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        # Pick one plausible browser identity per plugin session. Rotating on
+        # every request while reusing cookies looks less like a real browser.
+        self._user_agent = random.choice(_USER_AGENTS)
+        self._coordinator = SearchCoordinator()
 
     def _get_client(self) -> httpx.AsyncClient:
         # 宿主对 startup / 命令循环 / shutdown 分别 asyncio.run()（plugin/core/host.py），
@@ -190,6 +218,12 @@ class WebSearchPlugin(NekoPluginBase):
         cfg = await self.config.dump(timeout=5.0)
         cfg = cfg if isinstance(cfg, dict) else {}
         self._cfg = cfg.get("search") if isinstance(cfg.get("search"), dict) else {}
+        defs = self._defaults()
+        self._coordinator = SearchCoordinator(
+            ttl_seconds=defs["cache_ttl"],
+            stale_seconds=defs["stale_ttl"],
+            max_entries=defs["cache_entries"],
+        )
 
         self._country = await _detect_country()
         self._is_cn = self._country in _CN_COUNTRIES if self._country else False
@@ -227,7 +261,30 @@ class WebSearchPlugin(NekoPluginBase):
             to = 15.0
         if to <= 0:
             to = 15.0
-        return {"max_results": mr, "timeout": to}
+        def number(name: str, default: float, low: float, high: float) -> float:
+            try:
+                value = float(self._cfg.get(name, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(low, min(value, high))
+
+        try:
+            retry_attempts = int(self._cfg.get("retry_attempts", 2))
+        except (TypeError, ValueError):
+            retry_attempts = 2
+        try:
+            cache_entries = int(self._cfg.get("cache_entries", 128))
+        except (TypeError, ValueError):
+            cache_entries = 128
+        return {
+            "max_results": mr,
+            "timeout": to,
+            "retry_attempts": max(1, min(retry_attempts, 3)),
+            "retry_base_delay": number("retry_base_delay_seconds", 0.5, 0.0, 5.0),
+            "cache_ttl": number("cache_ttl_seconds", 120.0, 0.0, 3600.0),
+            "stale_ttl": number("stale_ttl_seconds", 600.0, 0.0, 86400.0),
+            "cache_entries": max(1, min(cache_entries, 1024)),
+        }
 
     async def _do_text_search(
         self,
@@ -235,16 +292,28 @@ class WebSearchPlugin(NekoPluginBase):
         max_results: int,
         timeout: float,
     ) -> List[Dict[str, str]]:
-        client = self._get_client()
-        if self._is_cn:
-            return await _search_baidu(client, query, max_results, timeout)
+        defs = self._defaults()
+        backend = "baidu" if self._is_cn else "duckduckgo"
+        key = (backend, " ".join(query.casefold().split()), max_results)
 
-        try:
-            return await _search_ddg_html(client, query, max_results, timeout=timeout)
-        except Exception as e:
-            self.logger.warning("DDG html failed, trying lite: {}", e)
+        async def fetch() -> List[Dict[str, str]]:
+            client = self._get_client()
+            kwargs = {
+                "timeout": timeout,
+                "user_agent": self._user_agent,
+                "retry_attempts": defs["retry_attempts"],
+                "retry_base_delay": defs["retry_base_delay"],
+            }
+            if self._is_cn:
+                return await _search_baidu(client, query, max_results, **kwargs)
 
-        return await _search_ddg_lite(client, query, max_results, timeout=timeout)
+            try:
+                return await _search_ddg_html(client, query, max_results, **kwargs)
+            except Exception as e:
+                self.logger.warning("DDG html failed, trying lite: {}", e)
+            return await _search_ddg_lite(client, query, max_results, **kwargs)
+
+        return await self._coordinator.run(key, fetch)
 
     @staticmethod
     def _build_summary(query: str, results: List[Dict[str, str]]) -> str:
