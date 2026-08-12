@@ -2,7 +2,7 @@
 type = "plugin"
 id = "netease_music"
 name = "网易云匿名点歌"
-description = "匿名搜索网易云单曲，并默认播放首个精确匹配且公开可用的结果。"
+description = "匿名搜索网易云单曲并播放搜索第一项，不确定时向用户给出委婉提示。"
 short_description = "匿名搜索并播放明确匹配的网易云歌曲。"
 version = "0.1.0"
 entry = "plugin.plugins.netease_music:NeteaseMusicPlugin"

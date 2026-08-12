@@ -1,6 +1,6 @@
 {
   "plugin.name": "Peticiones anónimas de NetEase Music",
-  "plugin.description": "Busca canciones de NetEase Music de forma anónima y reproduce por defecto la primera coincidencia exacta disponible públicamente",
+  "plugin.description": "Busca en NetEase Music de forma anónima y reproduce el primer resultado, con un aviso amable si hay dudas",
   "plugin.short_description": "Busca y reproduce de forma anónima una coincidencia exacta de NetEase Music",
   "entry.play.name": "Reproducir una canción de NetEase Music",
   "entry.play.description": "Úsalo solo cuando el usuario pida explícitamente reproducir una canción concreta de NetEase Music. Formatea query como «título artista» y conserva indicaciones como directo, versión o cover. No lo uses para letras, datos de canciones, recomendaciones generales, listas, pausa, detener, saltar o canción siguiente.",
@@ -8,9 +8,7 @@
   "messages.no_results": "No se encontró ninguna canción coincidente en NetEase Music. Prueba con un título o artista más específico.",
   "messages.unavailable": "Esta canción no tiene una fuente pública para reproducción anónima. Puede requerir inicio de sesión o una suscripción.",
   "messages.submitted": "La acción de reproducción se ha enviado.",
-  "messages.candidates.header": "Hay varios resultados posibles. Para evitar reproducir la canción equivocada, no se inició ninguna reproducción:",
-  "messages.candidates.item": "{index}. {name} — {artist}{album}",
-  "messages.candidates.hint": "Vuelve a pedirla indicando el título junto con el artista o la versión.",
+  "messages.fallback": "No estoy del todo seguro de que sea la versión que querías, pero reproduciré el primer resultado de la búsqueda.",
   "errors.missing_target": "No se pudo determinar la sesión de reproducción actual, por lo que se canceló la petición.",
   "errors.search_failed": "La búsqueda de NetEase Music no está disponible temporalmente. Inténtalo más tarde.",
   "errors.media_failed": "No se pudo validar la fuente de NetEase Music, así que no se envió la reproducción.",

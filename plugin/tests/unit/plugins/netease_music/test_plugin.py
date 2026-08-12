@@ -240,9 +240,7 @@ def test_all_locales_have_the_same_required_keys() -> None:
         "messages.no_results",
         "messages.unavailable",
         "messages.submitted",
-        "messages.candidates.header",
-        "messages.candidates.item",
-        "messages.candidates.hint",
+        "messages.fallback",
         "errors.missing_target",
         "errors.search_failed",
         "errors.media_failed",
@@ -331,7 +329,28 @@ async def test_duplicate_exact_titles_play_first_search_result() -> None:
 
 @pytest.mark.plugin_unit
 @pytest.mark.asyncio
-async def test_ambiguous_result_pushes_blind_candidate_text_and_finishes_silent() -> None:
+async def test_first_result_wins_even_when_later_result_is_exact() -> None:
+    first = _song(song_id=1, name="纸短情长 (翻唱版)", artist="其他歌手")
+    provider = _Provider(
+        candidates=[
+            first,
+            _song(song_id=2, name="纸短情长", artist="烟把儿"),
+        ]
+    )
+    plugin, pushes, finish_calls = _make_plugin(provider)
+
+    result = await plugin.play_netease_music(PlayRequest(query="纸短情长"), _ctx())
+
+    assert result["finish"]["delivery"] == "silent"
+    assert provider.resolve_calls == [first.song_id]
+    assert _action(pushes[1])["name"] == "纸短情长 (翻唱版)"
+    assert _action(pushes[2])["text"].startswith("我不太确定")
+    assert finish_calls[-1]["data"]["used_fallback"] is True
+
+
+@pytest.mark.plugin_unit
+@pytest.mark.asyncio
+async def test_fuzzy_query_plays_first_result_and_pushes_gentle_notice() -> None:
     provider = _Provider(
         candidates=[
             _song(song_id=1, artist="周杰伦"),
@@ -343,16 +362,45 @@ async def test_ambiguous_result_pushes_blind_candidate_text_and_finishes_silent(
     result = await plugin.play_netease_music(PlayRequest(query="晴"), _ctx())
 
     assert result["finish"]["delivery"] == "silent"
-    assert provider.resolve_calls == []
-    assert len(pushes) == 1
-    assert pushes[0]["visibility"] == ["chat"]
-    assert pushes[0]["ai_behavior"] == "blind"
-    assert pushes[0]["target_lanlan"] == "Mika"
-    text = _action(pushes[0])["text"]
-    assert "1. 晴天 — 周杰伦" in text
-    assert "2. 晴天 — 其他歌手" in text
-    assert "http" not in text
-    assert finish_calls[-1]["data"]["status"] == "ambiguous"
+    assert provider.resolve_calls == [1]
+    assert len(pushes) == 3
+    assert _action(pushes[1])["action"] == "media_play_url"
+    assert _action(pushes[1])["artist"] == "周杰伦"
+    assert pushes[2]["visibility"] == ["chat"]
+    assert pushes[2]["ai_behavior"] == "blind"
+    assert pushes[2]["target_lanlan"] == "Mika"
+    assert _action(pushes[2])["text"] == (
+        "我不太确定这是不是你想听的版本，先按搜索结果给你放第一首啦。"
+    )
+    assert finish_calls[-1]["data"]["status"] == "submitted"
+    assert finish_calls[-1]["data"]["used_fallback"] is True
+    assert finish_calls[-1]["data"]["notice_submitted"] is True
+
+
+@pytest.mark.plugin_unit
+@pytest.mark.asyncio
+async def test_fallback_notice_rejection_does_not_turn_submitted_play_into_error() -> None:
+    provider = _Provider(
+        candidates=[
+            _song(song_id=1, artist="周杰伦"),
+            _song(song_id=2, artist="其他歌手"),
+        ]
+    )
+    plugin, pushes, finish_calls = _make_plugin(
+        provider,
+        receipts=[
+            {"submitted": True},
+            {"submitted": True},
+            {"submitted": False, "reason": "transport_unavailable"},
+        ],
+    )
+
+    result = await plugin.play_netease_music(PlayRequest(query="晴"), _ctx())
+
+    assert result["finish"]["delivery"] == "silent"
+    assert len(pushes) == 3
+    assert finish_calls[-1]["data"]["status"] == "submitted"
+    assert finish_calls[-1]["data"]["notice_submitted"] is False
 
 
 @pytest.mark.plugin_unit

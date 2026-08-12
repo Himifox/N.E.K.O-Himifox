@@ -153,19 +153,8 @@ class NeteaseMusicPlugin(NekoPluginBase):
                 ),
             )
 
-        selected = select_first_exact_match(params.query, candidates)
-        if selected is None:
-            return await self._push_expected_outcome(
-                session_key=session_key,
-                generation=generation,
-                target_lanlan=target_lanlan,
-                ctx=ctx,
-                status="ambiguous",
-                text=self._candidate_text(candidates, ctx),
-                data={
-                    "candidates": [self._candidate_data(item) for item in candidates],
-                },
-            )
+        selected = candidates[0]
+        used_fallback = select_first_exact_match(params.query, [selected]) is None
 
         try:
             media = await provider.resolve_media(selected.song_id)
@@ -248,6 +237,26 @@ class NeteaseMusicPlugin(NekoPluginBase):
                 ctx=ctx,
             )
 
+        notice_submitted = True
+        if used_fallback:
+            notice_receipt = self.push_message(
+                source=_SOURCE,
+                visibility=["chat"],
+                ai_behavior="blind",
+                parts=[
+                    {
+                        "type": "text",
+                        "text": self._t(
+                            "messages.fallback",
+                            "我不太确定这是不是你想听的版本，先按搜索结果给你放第一首啦。",
+                            ctx,
+                        ),
+                    }
+                ],
+                target_lanlan=target_lanlan,
+            )
+            notice_submitted = self._submitted(notice_receipt)
+
         return await self.finish(
             data={
                 "status": "submitted",
@@ -257,6 +266,8 @@ class NeteaseMusicPlugin(NekoPluginBase):
                     ctx,
                 ),
                 "song": self._candidate_data(selected),
+                "used_fallback": used_fallback,
+                "notice_submitted": notice_submitted,
             },
             delivery="silent",
         )
@@ -310,40 +321,6 @@ class NeteaseMusicPlugin(NekoPluginBase):
             default=default,
             **params,
         )
-
-    def _candidate_text(
-        self,
-        candidates: list[SongCandidate],
-        ctx: Mapping[str, object],
-    ) -> str:
-        lines = [
-            self._t(
-                "messages.candidates.header",
-                "找到了多个可能的结果，为避免播错，本次没有自动播放：",
-                ctx,
-            )
-        ]
-        for index, candidate in enumerate(candidates, start=1):
-            album = f" · {candidate.album}" if candidate.album else ""
-            lines.append(
-                self._t(
-                    "messages.candidates.item",
-                    "{index}. {name} — {artist}{album}",
-                    ctx,
-                    index=index,
-                    name=candidate.name,
-                    artist=candidate.artist,
-                    album=album,
-                )
-            )
-        lines.append(
-            self._t(
-                "messages.candidates.hint",
-                "请用“歌名＋歌手或版本”再点一次。",
-                ctx,
-            )
-        )
-        return "\n".join(lines)
 
     async def _push_expected_outcome(
         self,
