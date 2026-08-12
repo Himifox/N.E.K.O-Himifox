@@ -120,13 +120,12 @@
     let musicCardMessageId = null;
     let aplayerLoadPromise = null;
     let latestMusicRequestToken = 0;
-    let currentMusicPlaybackContext = { source: '', requestId: null };
+    let currentMusicPlaybackContext = { source: '' };
 
     function setMusicPlaybackContext(options) {
         options = options || {};
         currentMusicPlaybackContext = {
-            source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
-            requestId: options.requestId ?? null
+            source: typeof options.source === 'string' ? options.source.slice(0, 16) : ''
         };
     }
 
@@ -165,7 +164,6 @@
             lifecycleStartedAt: getMusicLifecycleTimestamp(),
             mediaReady: false,
             source: typeof options.source === 'string' ? options.source.slice(0, 16) : '',
-            requestId: options.requestId ?? null,
             url: String(track.url || ''),
             track: {
                 name: String(track.name || '').slice(0, 120),
@@ -193,7 +191,6 @@
                 playback_id: context.playbackId,
                 playback_window_id: MUSIC_COORD_SENDER_ID,
                 playback_started_at: context.lifecycleStartedAt,
-                request_id: context.requestId,
                 source: context.source,
                 reason: state === 'error'
                     ? String(failureReason || 'unknown').slice(0, 32)
@@ -1895,8 +1892,7 @@
         player,
         token,
         expectedUrl,
-        enforceRecommendationLimit,
-        requestId
+        enforceRecommendationLimit
     ) => new Promise((resolve) => {
         const audio = player && player.audio;
         if (!audio) {
@@ -1924,7 +1920,6 @@
             resolve({ ok: ok, reason: reason || '' });
         };
         cancelWait = () => finish(false, 'superseded');
-        cancelWait.requestId = requestId ?? null;
         pendingMusicMediaReadyCancel = cancelWait;
         const isExpectedSource = () => {
             const activeUrl = audio.currentSrc || audio.src || '';
@@ -2196,18 +2191,6 @@
         if (removeDOM) broadcastBarDestroyed(fullTeardown, destroyedPlaybackId);
         currentMusicPlaybackId = null;
         currentMusicOwnerStartedAt = 0;
-    };
-
-    const cancelActiveMusicPlayback = () => {
-        if (localPlayer) {
-            destroyMusicPlayer(true, true, true);
-            return true;
-        }
-        if (mirrorBarLeaderSender) {
-            broadcastBarCtrl('close');
-            return true;
-        }
-        return false;
     };
 
     // --- 查找并替换整个 loadAPlayerLibrary 函数 ---
@@ -2897,8 +2880,7 @@
                 localPlayer,
                 currentToken,
                 trackInfo.url,
-                playbackOptions.source === 'proactive',
-                playbackOptions.requestId
+                playbackOptions.source === 'proactive'
             );
 
             // 执行播放
@@ -3280,35 +3262,12 @@
 
     // --- 暴露接口 ---
     window.destroyMusicPlayer = destroyMusicPlayer;
-    window.cancelActiveMusicPlayback = cancelActiveMusicPlayback;
     window.getMusicPlayerInstance = getMusicPlayerInstance;
     window.isMusicPlaying = isMusicPlaying;
     window.isMusicOccupied = isMusicOccupied;
     window.isMusicCooldown = isInMusicCooldown;
     window.getMusicCurrentTrack = getMusicCurrentTrack;
     window.MusicPluginAPI = MusicPluginAPI;
-    window.cancelPendingMusicMediaReady = (requestId) => {
-        const nextRequestId = Number(requestId);
-        if (!Number.isFinite(nextRequestId) || nextRequestId <= 0) return 'invalid';
-        if (!pendingMusicMediaReadyCancel) {
-            latestMusicRequestToken++;
-            if (!localPlayer && currentPlayingTrack) {
-                updateMusicCard('ended', currentPlayingTrack);
-                destroyMusicPlayer(true, false, false);
-            }
-            return 'no_pending';
-        }
-        const pendingRequestId = Number(pendingMusicMediaReadyCancel.requestId);
-        if (
-            Number.isFinite(pendingRequestId)
-            && Number.isFinite(nextRequestId)
-            && nextRequestId < pendingRequestId
-        ) return 'stale';
-        latestMusicRequestToken++;
-        pendingMusicMediaReadyCancel();
-        return 'cancelled';
-    };
-
     // 竞态拦截辅助：dispatch 流水线中（URL 校验/库加载/init）的占位标记
     window.isMusicPending = () => musicDispatchPendingCount > 0;
     // 跨窗口协调：其他窗口正在播歌（基于 BroadcastChannel 通报）

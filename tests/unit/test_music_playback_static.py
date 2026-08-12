@@ -89,114 +89,6 @@ def test_proactive_request_rechecks_music_state_before_search():
     )
 
 
-def test_user_music_requests_retry_candidates_and_discard_stale_dispatches():
-    source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
-
-    assert "response.type === 'music_play_candidates'" in source
-    assert (
-        "source: 'user'," in source
-    )
-    assert "requestId: response.request_id" in source
-    assert "dispatchResult.canTryNextCandidate !== true" in source
-    assert "_musicCandidateDispatchEpoch" in source
-    assert "_musicCandidateDispatchQueue" in source
-    assert "catch (error)" in source
-    assert "canTryNextCandidate: true" in source
-    assert "没有可用的音乐派发接口" in source
-    assert "if (accepted === 'queued')" in source
-    assert "return 'queued';" in source
-    assert "window._latestMusicCandidateRequestId" in source
-    assert "if (!Number.isFinite(requestId) || requestId <= 0)" in source
-    assert "window._pendingMusicCandidateRequestId" in source
-    assert "requestId === latestRequestId && requestId !== pendingRequestId" in source
-    assert "mediaCancelStatus === 'stale'" in source
-    assert "queuedCancelStatus === 'stale'" in source
-    candidate_dispatch = source.split(
-        "async function dispatchMusicPlayCandidatesResponse", 1
-    )[1].split("function queueMusicPlayCandidatesResponse", 1)[0]
-    immutable_key = candidate_dispatch.index(
-        "var candidateKey = getMusicPlayUrlClaimKey(track);"
-    )
-    claim = candidate_dispatch.index(
-        "var candidateClaimToken = claimMusicPlayUrl(candidateKey);"
-    )
-    dispatch = candidate_dispatch.index("window.dispatchMusicPlayDetailed(track")
-    assert immutable_key < claim < dispatch
-    assert (
-        "releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);"
-        in candidate_dispatch
-    )
-    assert "claim.token === data.token" in source
-    assert "claim.token !== token" in source
-    assert "token: token" in source
-    assert "window.cancelQueuedMusicDispatch(requestId);" in source
-    invalid_guard = source.index("if (!Number.isFinite(requestId) || requestId <= 0)")
-    cancel_call = source.index("window.cancelPendingMusicMediaReady(requestId);")
-    epoch_update = source.index("window._latestMusicCandidateRequestId = requestId;")
-    assert invalid_guard < cancel_call
-    assert cancel_call < epoch_update
-    queued_branch = source.split("if (accepted === 'queued')", 1)[1].split(
-        "dispatchResult = {", 1
-    )[0]
-    assert "response._clientDispatchEpoch !== window._musicCandidateDispatchEpoch" in queued_branch
-    assert "releaseMusicPlayUrlClaim(candidateKey, candidateClaimToken);" in queued_branch
-    assert queued_branch.index("_musicCandidateDispatchEpoch") < queued_branch.index(
-        "return 'queued';"
-    )
-    failure_handler = source.split(
-        "function handleMusicRequestFailureResponse(response)", 1
-    )[1].split("function readNewUserIcebreakerStore", 1)[0]
-    assert "Number(response && response.request_id)" in failure_handler
-    assert "window.cancelPendingMusicMediaReady(requestId);" in failure_handler
-    assert "window.cancelQueuedMusicDispatch(requestId);" in failure_handler
-    assert (
-        failure_handler.index("window.cancelQueuedMusicDispatch(requestId);")
-        < failure_handler.index("window._musicCandidateDispatchEpoch")
-        < failure_handler.index("showMusicRequestFailure(response);")
-    )
-    cancellation_handler = source.split(
-        "function handleMusicRequestCancelledResponse(response)", 1
-    )[1].split("function readNewUserIcebreakerStore", 1)[0]
-    assert "window.cancelPendingMusicMediaReady(requestId);" in cancellation_handler
-    assert "window.cancelQueuedMusicDispatch(requestId);" in cancellation_handler
-    assert "window.cancelActiveMusicPlayback();" in cancellation_handler
-    assert "showMusicRequestFailure" not in cancellation_handler
-    assert "response.type === 'music_request_cancelled'" in source
-
-    player_source = MUSIC_UI_PATH.read_text(encoding="utf-8")
-    active_cancel = player_source.split(
-        "const cancelActiveMusicPlayback = () =>", 1
-    )[1].split("// ---", 1)[0]
-    assert "destroyMusicPlayer(true, true, true);" in active_cancel
-    assert "broadcastBarCtrl('close');" in active_cancel
-    assert "window.cancelActiveMusicPlayback = cancelActiveMusicPlayback;" in player_source
-    started_handler = source.split(
-        "function handleMusicRequestStartedResponse(response)", 1
-    )[1].split("function handleMusicPlayCandidatesResponse(response)", 1)[0]
-    assert "window.cancelPendingMusicMediaReady(requestId);" in started_handler
-    assert "window.cancelQueuedMusicDispatch(requestId);" in started_handler
-    assert "window._pendingMusicCandidateRequestId = requestId;" in started_handler
-    assert "response.type === 'music_request_started'" in source
-
-
-def test_music_request_scope_resets_on_same_character_reconnect():
-    source = APP_WEBSOCKET_PATH.read_text(encoding="utf-8")
-    connect_source = source.split("function connectWebSocket()", 1)[1].split(
-        "mod.connectWebSocket = connectWebSocket", 1
-    )[0]
-
-    assert "function resetMusicCandidateRequestScope(scope, force)" in source
-    assert "if (!force && window._musicCandidateRequestScope === nextScope) return;" in source
-    assert "resetMusicCandidateRequestScope(currentLanlanName, true);" in connect_source
-    idempotent_guard = connect_source.index(
-        "S.socket && S.socket.readyState === WebSocket.OPEN && S.socket.url === wsUrl"
-    )
-    reset_call = connect_source.index(
-        "resetMusicCandidateRequestScope(currentLanlanName, true);"
-    )
-    assert idempotent_guard < reset_call
-
-
 def test_new_track_cancels_pending_media_readiness_wait():
     source = MUSIC_UI_PATH.read_text(encoding="utf-8")
     send_source = source.split(
@@ -213,35 +105,6 @@ def test_new_track_cancels_pending_media_readiness_wait():
     stale_guard = send_source.index("if (currentToken !== latestMusicRequestToken) {")
     assert send_source.index("const currentToken = ++latestMusicRequestToken;") < allowlist_wait
     assert allowlist_wait < stale_guard < send_source.index("isUnsupportedMusicStream")
-    assert "cancelWait.requestId = requestId ?? null;" in source
-    assert "window.cancelPendingMusicMediaReady = (requestId) =>" in source
-    assert "return 'invalid';" in source
-    assert "return 'no_pending';" in source
-    assert "return 'stale';" in source
-    assert "return 'cancelled';" in source
-    assert "nextRequestId < pendingRequestId" in source
-    no_pending_branch = source.split(
-        "if (!pendingMusicMediaReadyCancel) {", 1
-    )[1].split("const pendingRequestId", 1)[0]
-    assert "latestMusicRequestToken++;" in no_pending_branch
-    assert "!localPlayer && currentPlayingTrack" in no_pending_branch
-    assert "updateMusicCard('ended', currentPlayingTrack);" in no_pending_branch
-    assert "destroyMusicPlayer(true, false, false);" in no_pending_branch
-    assert "return 'no_pending';" in no_pending_branch
-    assert "window.cancelPendingMusicMediaReady(requestId);" in APP_WEBSOCKET_PATH.read_text(
-        encoding="utf-8"
-    )
-
-
-def test_new_request_cancels_queued_player_dispatch():
-    dispatch_source = APP_CHAT_PATH.read_text(encoding="utf-8")
-
-    assert "let _queuedMusicDispatchCancel = null;" in dispatch_source
-    assert "cancelQueuedDispatch.requestId = options.requestId ?? null;" in dispatch_source
-    assert "window.cancelQueuedMusicDispatch = function (requestId)" in dispatch_source
-    assert "nextRequestId < pendingRequestId" in dispatch_source
-    assert "_queuedMusicDispatchCancel();" in dispatch_source
-    assert "musicDispatchResult(false, 'superseded', false)" in dispatch_source
 
 
 def test_music_player_reports_confirmed_state_to_backend():
@@ -290,9 +153,6 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert superseded_gate.index("_is_music_playback_state_message") < superseded_gate.index(
         "await websocket.close()"
     )
-    assert 'mgr._music_playback_websockets = music_websockets' in router_source
-    assert 'music_websockets.add(websocket)' in router_source
-    assert 'music_websockets.discard(websocket)' in router_source
 
 
 def test_music_player_rejects_errors_queued_before_the_current_source_lifecycle():
@@ -377,7 +237,7 @@ def test_same_url_replacement_uses_a_fresh_audio_element():
 
     teardown_source = player_source.split(
         "const destroyMusicPlayer =", 1
-    )[1].split("const cancelActiveMusicPlayback", 1)[0]
+    )[1].split("// --- 查找并替换整个 loadAPlayerLibrary 函数 ---", 1)[0]
     revoke_context = teardown_source.index(
         "localPlayer._musicPlaybackReportContext = null;"
     )
