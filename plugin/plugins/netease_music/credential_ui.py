@@ -37,10 +37,12 @@ class CredentialUiMixin:
         }
 
     def _valid_credential_ui_token(self, candidate: object) -> bool:
-        return isinstance(candidate, str) and secrets.compare_digest(
-            candidate,
-            self._credential_ui_token,
-        )
+        if not isinstance(candidate, str):
+            return False
+        try:
+            return secrets.compare_digest(candidate, self._credential_ui_token)
+        except TypeError:
+            return False
 
     async def _invalidate_credential_users(self) -> None:
         invalidator = getattr(self, "_invalidate_credential_requests", None)
