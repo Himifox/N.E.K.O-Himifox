@@ -155,7 +155,12 @@ class CredentialStore:
             if self._key_path.is_file()
             else Fernet.generate_key()
         )
-        encrypted = Fernet(key).encrypt(
+        try:
+            fernet = Fernet(key)
+        except ValueError:
+            key = Fernet.generate_key()
+            fernet = Fernet(key)
+        encrypted = fernet.encrypt(
             json.dumps(cookies, ensure_ascii=False).encode("utf-8")
         )
         self._atomic_write(self._key_path, key)
