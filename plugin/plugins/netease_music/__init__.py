@@ -17,6 +17,7 @@ from plugin.sdk.plugin import (
     tr,
 )
 
+from .credential_ui import CredentialUiMixin
 from .models import PlayRequest, ResolvedMedia, SongCandidate
 from .provider import (
     MediaUnavailableError,
@@ -40,12 +41,15 @@ class _ProviderContext(Protocol):
 
 
 @neko_plugin
-class NeteaseMusicPlugin(NekoPluginBase):
+class NeteaseMusicPlugin(CredentialUiMixin, NekoPluginBase):
     """Search NetEase anonymously and submit validated playback actions."""
 
     def __init__(self, ctx: Any):
         super().__init__(ctx)
-        self._provider_factory = NeteaseMusicProvider
+        self._init_credential_store()
+        self._provider_factory = lambda: NeteaseMusicProvider(
+            cookies=self._netease_cookies
+        )
         # The host calls startup before entries become runnable.  Defaulting
         # closed keeps direct/pre-start invocations fail-safe as well.
         self._closed = True
@@ -54,9 +58,15 @@ class NeteaseMusicPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def startup(self, **_: object):
+        await self._load_netease_cookies()
         self._closed = False
         self._session_generations.clear()
-        return Ok({"status": "ready"})
+        return Ok(
+            {
+                "status": "ready",
+                "cookie_configured": bool(self._netease_cookies.get("MUSIC_U")),
+            }
+        )
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_: object):
