@@ -58,7 +58,11 @@ def normalize_netease_cookies(
         raw = value.strip()
         if not raw or len(raw) > _MAX_COOKIE_INPUT_LENGTH:
             return {}
-        if "=" not in raw and ";" not in raw:
+        first_name, separator, _first_value = raw.partition("=")
+        is_cookie_header = ";" in raw or (
+            bool(separator) and first_name.strip().upper() in _COOKIE_NAMES
+        )
+        if not is_cookie_header:
             raw_cookies["MUSIC_U"] = raw
         else:
             for item in raw.split(";"):
