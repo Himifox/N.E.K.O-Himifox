@@ -34,7 +34,7 @@ from ._parsing import (
     parse_ddg_html,
     parse_ddg_lite_html,
 )
-from ._resilience import SearchCoordinator, request_with_retry
+from ._resilience import SearchCoordinator, request_with_retry, should_skip_fallback
 
 _USER_AGENTS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -284,6 +284,9 @@ class WebSearchPlugin(NekoPluginBase):
             "cache_ttl": number("cache_ttl_seconds", 120.0, 0.0, 3600.0),
             "stale_ttl": number("stale_ttl_seconds", 600.0, 0.0, 86400.0),
             "cache_entries": max(1, min(cache_entries, 1024)),
+            # Keep the complete operation below the host's default 30-second
+            # plugin-entry watchdog, including retries and DDG fallback.
+            "total_timeout": number("total_timeout_seconds", 25.0, 1.0, 25.0),
         }
 
     async def _do_text_search(
@@ -310,10 +313,16 @@ class WebSearchPlugin(NekoPluginBase):
             try:
                 return await _search_ddg_html(client, query, max_results, **kwargs)
             except Exception as e:
+                if should_skip_fallback(e):
+                    raise
                 self.logger.warning("DDG html failed, trying lite: {}", e)
             return await _search_ddg_lite(client, query, max_results, **kwargs)
 
-        return await self._coordinator.run(key, fetch)
+        async def bounded_fetch() -> List[Dict[str, str]]:
+            async with asyncio.timeout(defs["total_timeout"]):
+                return await fetch()
+
+        return await self._coordinator.run(key, bounded_fetch)
 
     @staticmethod
     def _build_summary(query: str, results: List[Dict[str, str]]) -> str:

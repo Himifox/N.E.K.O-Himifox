@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+from plugin.plugins import web_search
 from plugin.plugins.web_search import _resilience as resilience
 from tests.fake_clock import patch_module_clock
 
@@ -22,6 +23,27 @@ def _response(status: int, *, headers: dict[str, str] | None = None) -> httpx.Re
     )
 
 
+class _PluginStub:
+    _is_cn = False
+    _user_agent = "test-agent"
+    logger = type("Logger", (), {"warning": lambda *_args: None})()
+
+    def __init__(self, *, total_timeout: float = 1.0) -> None:
+        self._coordinator = resilience.SearchCoordinator()
+        self._total_timeout = total_timeout
+
+    @staticmethod
+    def _get_client() -> object:
+        return object()
+
+    def _defaults(self) -> dict[str, float | int]:
+        return {
+            "retry_attempts": 2,
+            "retry_base_delay": 0.0,
+            "total_timeout": self._total_timeout,
+        }
+
+
 def test_retry_after_supports_seconds_and_http_dates() -> None:
     now = datetime(2026, 8, 12, 10, 0, 0, tzinfo=timezone.utc)
     assert resilience.retry_after_seconds({"Retry-After": "2.5"}, now=now) == 2.5
@@ -29,6 +51,27 @@ def test_retry_after_supports_seconds_and_http_dates() -> None:
         {"Retry-After": "Wed, 12 Aug 2026 10:00:03 GMT"}, now=now
     ) == 3.0
     assert resilience.retry_after_seconds({"Retry-After": "invalid"}, now=now) is None
+
+
+def test_rate_limit_and_retry_after_skip_endpoint_fallback() -> None:
+    for response in (
+        _response(429),
+        _response(503, headers={"Retry-After": "2"}),
+    ):
+        error = httpx.HTTPStatusError(
+            "upstream cooldown",
+            request=response.request,
+            response=response,
+        )
+        assert resilience.should_skip_fallback(error) is True
+
+    ordinary_response = _response(500)
+    ordinary_error = httpx.HTTPStatusError(
+        "ordinary failure",
+        request=ordinary_response.request,
+        response=ordinary_response,
+    )
+    assert resilience.should_skip_fallback(ordinary_error) is False
 
 
 @pytest.mark.asyncio
@@ -140,3 +183,58 @@ async def test_failure_without_cache_is_not_hidden() -> None:
 
     with pytest.raises(httpx.ConnectTimeout):
         await coordinator.run("key", failing)
+
+
+@pytest.mark.asyncio
+async def test_ddg_rate_limit_does_not_fall_back_to_lite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html_calls = 0
+    lite_calls = 0
+
+    async def html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        nonlocal html_calls
+        html_calls += 1
+        response = _response(429, headers={"Retry-After": "120"})
+        raise httpx.HTTPStatusError(
+            "rate limited",
+            request=response.request,
+            response=response,
+        )
+
+    async def lite(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        nonlocal lite_calls
+        lite_calls += 1
+        return []
+
+    monkeypatch.setattr(web_search, "_search_ddg_html", html)
+    monkeypatch.setattr(web_search, "_search_ddg_lite", lite)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await web_search.WebSearchPlugin._do_text_search(_PluginStub(), "neko", 3, 1.0)
+
+    assert html_calls == 1
+    assert lite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_complete_search_has_one_total_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancelled = asyncio.Event()
+
+    async def slow_html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return []
+
+    monkeypatch.setattr(web_search, "_search_ddg_html", slow_html)
+
+    with pytest.raises(TimeoutError):
+        await web_search.WebSearchPlugin._do_text_search(
+            _PluginStub(total_timeout=0.01), "neko", 3, 15.0
+        )
+
+    assert cancelled.is_set()

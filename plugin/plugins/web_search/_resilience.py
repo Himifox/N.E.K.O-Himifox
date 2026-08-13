@@ -50,6 +50,14 @@ def retry_after_seconds(
         return None
 
 
+def should_skip_fallback(error: BaseException) -> bool:
+    """Return whether another endpoint would violate an upstream cooldown."""
+    if not isinstance(error, httpx.HTTPStatusError):
+        return False
+    response = error.response
+    return response.status_code == 429 or retry_after_seconds(response.headers) is not None
+
+
 async def request_with_retry(
     request: Callable[[], Awaitable[httpx.Response]],
     *,

@@ -28,6 +28,8 @@ enabled = false
 [search]
 max_results = 8
 timeout_seconds = 15
+# Complete retries and fallback before the host's 30-second entry watchdog.
+total_timeout_seconds = 25
 # Absorb repeated/high-burst calls instead of forwarding them to search engines.
 cache_ttl_seconds = 120
 stale_ttl_seconds = 600
