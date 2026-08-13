@@ -10,6 +10,7 @@ web_search 插件的解析层：纯函数、不依赖 SDK 和网络，便于单�
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from typing import Dict, List, Optional
@@ -36,10 +37,9 @@ class SearchBlockedError(RuntimeError):
         self, message: str, *, retry_after_seconds: Optional[float] = None
     ) -> None:
         super().__init__(message)
+        delay = None if retry_after_seconds is None else float(retry_after_seconds)
         self.retry_after_seconds = (
-            None
-            if retry_after_seconds is None
-            else max(0.0, float(retry_after_seconds))
+            max(0.0, delay) if delay is not None and math.isfinite(delay) else None
         )
 
 

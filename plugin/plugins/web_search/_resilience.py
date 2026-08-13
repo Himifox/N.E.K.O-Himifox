@@ -13,6 +13,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import math
 import random
 import time
 from typing import Awaitable, Callable, Dict, Hashable, List, Mapping, Optional
@@ -39,7 +40,8 @@ def retry_after_seconds(
     if not value:
         return None
     try:
-        return max(0.0, float(value.strip()))
+        delay = float(value.strip())
+        return max(0.0, delay) if math.isfinite(delay) else None
     except ValueError:
         pass
     try:
