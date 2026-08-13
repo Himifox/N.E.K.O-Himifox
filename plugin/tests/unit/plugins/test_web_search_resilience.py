@@ -102,6 +102,62 @@ def test_geoip_providers_are_https() -> None:
     assert all(url.startswith("https://") for url, _field in web_search._GEOIP_PROVIDERS)
 
 
+@pytest.mark.asyncio
+async def test_geoip_stalled_provider_does_not_starve_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {web_search._GEOIP_PROVIDERS[1][1]: "US"}
+
+    class _Client:
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, **_kwargs: object) -> _Response:
+            calls.append(url)
+            if url == web_search._GEOIP_PROVIDERS[0][0]:
+                await asyncio.Event().wait()
+            return _Response()
+
+    monkeypatch.setattr(web_search.httpx, "AsyncClient", lambda **_kwargs: _Client())
+    assert await web_search._detect_country(timeout=0.2) == "US"
+    assert calls == [url for url, _field in web_search._GEOIP_PROVIDERS]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["baidu", "duckduckgo"])
+async def test_startup_skips_geoip_for_explicit_backend(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Config:
+        async def dump(self, **_kwargs: object) -> dict[str, dict[str, str]]:
+            return {"search": {"backend": backend}}
+
+    plugin = object.__new__(web_search.WebSearchPlugin)
+    plugin.config = _Config()
+    plugin.logger = type("Logger", (), {"info": lambda *_args: None})()
+
+    async def unexpected_geoip() -> str:
+        pytest.fail("explicit backend must not perform GeoIP detection")
+
+    monkeypatch.setattr(web_search, "_detect_country", unexpected_geoip)
+    await web_search.WebSearchPlugin.startup(plugin)
+    assert plugin._backend == backend
+    assert plugin._country is None
+
+
 def test_duckduckgo_defaults_are_more_conservative_than_baidu() -> None:
     plugin = object.__new__(web_search.WebSearchPlugin)
     plugin._cfg = {}
@@ -372,6 +428,21 @@ def test_repeated_blocks_increase_cooldown_and_respect_server_delay() -> None:
         response=response,
     )
     assert coordinator._cooldown_for_error(state, limited) == 1800
+
+
+def test_block_without_retry_after_uses_configured_cooldown() -> None:
+    coordinator = resilience.SearchCoordinator(
+        cooldown_seconds=10,
+        max_cooldown_seconds=10,
+    )
+    state = resilience._BackendState(asyncio.Lock())
+
+    assert (
+        coordinator._cooldown_for_error(
+            state, web_search.SearchBlockedError("challenge")
+        )
+        == 10
+    )
 
 
 @pytest.mark.asyncio
@@ -647,6 +718,37 @@ async def test_ddg_explicit_no_results_page_returns_empty_results() -> None:
             "rare exact query",
             retry_attempts=1,
         ) == []
+
+
+@pytest.mark.asyncio
+async def test_baidu_explicit_no_results_page_returns_empty_results() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            content=(
+                '<html><div id="content_left"><div class="nors">'
+                "抱歉，没有找到与查询相关的结果"
+                "</div></div></html>"
+            ).encode(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        client.cookies.set("BAIDUID", "test")
+        assert await web_search._search_baidu(
+            client, "rare exact query", retry_attempts=1
+        ) == []
+
+
+@pytest.mark.asyncio
+async def test_baidu_unparseable_200_is_not_a_success() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, content=b"<html></html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        client.cookies.set("BAIDUID", "test")
+        with pytest.raises(web_search.SearchResponseError):
+            await web_search._search_baidu(client, "neko", retry_attempts=1)
 
 
 @pytest.mark.asyncio

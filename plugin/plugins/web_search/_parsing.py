@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Dict, List
+from typing import Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
@@ -30,9 +30,17 @@ _ENCODING_ALIASES = {"gb2312": "gb18030", "gbk": "gb18030"}
 class SearchBlockedError(RuntimeError):
     """搜索引擎返回了反爬验证页，而不是结果页。"""
 
-    def __init__(self, message: str, *, retry_after_seconds: float = 60.0) -> None:
+    is_search_block = True
+
+    def __init__(
+        self, message: str, *, retry_after_seconds: Optional[float] = None
+    ) -> None:
         super().__init__(message)
-        self.retry_after_seconds = max(0.0, float(retry_after_seconds))
+        self.retry_after_seconds = (
+            None
+            if retry_after_seconds is None
+            else max(0.0, float(retry_after_seconds))
+        )
 
 
 class SearchResponseError(RuntimeError):
@@ -142,6 +150,25 @@ def is_ddg_no_results(html: str) -> bool:
     """Detect DuckDuckGo's explicit empty-results container."""
     soup = BeautifulSoup(html, "html.parser")
     return soup.select_one(".no-results, #no-results") is not None
+
+
+def is_baidu_no_results(html: str) -> bool:
+    """Detect Baidu's explicit empty-results response."""
+    soup = BeautifulSoup(html, "html.parser")
+    container = soup.select_one("#content_left")
+    if container is None:
+        return False
+    if container.select_one(".nors") is not None:
+        return True
+    text = sanitize_text(container.get_text(" ", strip=True))
+    return any(
+        marker in text
+        for marker in (
+            "抱歉，没有找到与",
+            "抱歉没有找到与",
+            "没有找到与您查询的",
+        )
+    )
 
 
 def parse_ddg_html(html: str, max_results: int = 8) -> List[Dict[str, str]]:

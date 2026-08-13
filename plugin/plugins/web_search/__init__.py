@@ -29,6 +29,7 @@ from ._parsing import (
     SearchBlockedError,
     SearchResponseError,
     decode_html,
+    is_baidu_no_results,
     is_baidu_blocked,
     is_ddg_blocked,
     is_ddg_no_results,
@@ -72,6 +73,7 @@ def _select_backend(configured: object, country: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 async def _detect_country(timeout: float = 4.0) -> Optional[str]:
+    provider_timeout = timeout / max(1, len(_GEOIP_PROVIDERS))
     try:
         async with asyncio.timeout(timeout):
             async with httpx.AsyncClient(
@@ -82,16 +84,17 @@ async def _detect_country(timeout: float = 4.0) -> Optional[str]:
             ) as client:
                 for url, field in _GEOIP_PROVIDERS:
                     try:
-                        resp = await client.get(
-                            url,
-                            headers={"User-Agent": "NEKO-WebSearch/0.1"},
-                        )
+                        async with asyncio.timeout(provider_timeout):
+                            resp = await client.get(
+                                url,
+                                headers={"User-Agent": "NEKO-WebSearch/0.1"},
+                            )
                         resp.raise_for_status()
                         data = resp.json()
                         country = str(data.get(field) or "").strip().upper()
                         if len(country) == 2 and country.isalpha():
                             return country
-                    except (httpx.HTTPError, ValueError, TypeError):
+                    except (TimeoutError, httpx.HTTPError, ValueError, TypeError):
                         continue
     except Exception:
         pass
@@ -232,7 +235,7 @@ async def _search_baidu(
     if "wappass.baidu.com" in str(resp.url) or is_baidu_blocked(html):
         raise SearchBlockedError("百度返回安全验证页（反爬拦截），请稍后重试")
     results = parse_baidu_html(html, max_results)
-    if not results:
+    if not results and not is_baidu_no_results(html):
         raise SearchResponseError("百度未返回可解析结果")
     return results
 
@@ -276,8 +279,12 @@ class WebSearchPlugin(NekoPluginBase):
         cfg = cfg if isinstance(cfg, dict) else {}
         self._cfg = cfg.get("search") if isinstance(cfg.get("search"), dict) else {}
         defs = self._defaults()
-        self._country = await _detect_country()
         configured_backend = str(self._cfg.get("backend", "auto")).strip().lower()
+        self._country = (
+            None
+            if configured_backend in {"baidu", "duckduckgo"}
+            else await _detect_country()
+        )
         self._backend = _select_backend(configured_backend, self._country)
         self._is_cn = self._backend == "baidu"
         min_interval = (

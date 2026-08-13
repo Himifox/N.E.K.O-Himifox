@@ -164,7 +164,7 @@ class SearchCoordinator:
     ) -> Optional[float]:
         declared = getattr(error, "retry_after_seconds", None)
         server_delay: Optional[float] = None
-        is_block = declared is not None
+        is_block = bool(getattr(error, "is_search_block", False)) or declared is not None
         if isinstance(error, httpx.HTTPStatusError):
             response = error.response
             server_delay = retry_after_seconds(response.headers)

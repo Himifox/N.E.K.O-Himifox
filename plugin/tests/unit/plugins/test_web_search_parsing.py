@@ -184,6 +184,16 @@ def test_baidu_blocked_page_detected_not_silently_empty() -> None:
     assert not p.is_baidu_blocked(_BAIDU_HTML)
 
 
+def test_baidu_explicit_no_results_page_is_detected() -> None:
+    html = (
+        '<div id="content_left"><div class="nors">'
+        "抱歉，没有找到与查询相关的结果"
+        "</div></div>"
+    )
+    assert p.is_baidu_no_results(html)
+    assert not p.is_baidu_no_results("<html><body></body></html>")
+
+
 # ---------------------------------------------------------------------------
 # parse_ddg_html / parse_ddg_lite_html
 # ---------------------------------------------------------------------------
