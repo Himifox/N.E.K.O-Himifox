@@ -27,14 +27,6 @@ _META_CHARSET_RE = re.compile(
 )
 # gb2312/gbk 解码器会在合法页面的少数扩展字符上报错，统一升级到超集 gb18030
 _ENCODING_ALIASES = {"gb2312": "gb18030", "gbk": "gb18030"}
-_DDG_BLOCK_MARKERS = (
-    "anomaly-modal",
-    "duckduckgo.com/anomaly.js",
-    "bots use duckduckgo too",
-    "please complete the following challenge",
-)
-
-
 class SearchBlockedError(RuntimeError):
     """搜索引擎返回了反爬验证页，而不是结果页。"""
 
@@ -128,8 +120,22 @@ def is_ddg_ad_url(url: str) -> bool:
 
 def is_ddg_blocked(html: str) -> bool:
     """Detect known DuckDuckGo challenge pages returned with a 2xx status."""
-    head = html[:20000].lower()
-    return any(marker in head for marker in _DDG_BLOCK_MARKERS)
+    soup = BeautifulSoup(html[:20000], "html.parser")
+    if soup.select_one("form#anomaly-modal") is not None:
+        return True
+
+    for tag, attribute in (("form", "action"), ("script", "src")):
+        for node in soup.find_all(tag):
+            url = str(node.get(attribute, "")).strip()
+            if not url:
+                continue
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if parsed.path == "/anomaly.js" and (
+                not host or host == "duckduckgo.com" or host.endswith(".duckduckgo.com")
+            ):
+                return True
+    return False
 
 
 def parse_ddg_html(html: str, max_results: int = 8) -> List[Dict[str, str]]:

@@ -234,11 +234,10 @@ def test_ddg_ad_filter_only_matches_yjs_wrapper() -> None:
 @pytest.mark.parametrize(
     "html",
     [
-        '<html><form id="anomaly-modal">challenge</form></html>',
-        "<html><form id=anomaly-modal>challenge</form></html>",
+        '<html><form id="anomaly-modal">Please complete the following challenge.</form></html>',
+        "<html><form id=anomaly-modal>Unfortunately, bots use DuckDuckGo too.</form></html>",
+        "<html><form action='//duckduckgo.com/anomaly.js?sv=html'></form></html>",
         "<html><script src='https://duckduckgo.com/anomaly.js'></script></html>",
-        "<html><body>Unfortunately, bots use DuckDuckGo too.</body></html>",
-        "<html><body>Please complete the following challenge to continue.</body></html>",
     ],
 )
 def test_ddg_challenge_pages_are_detected(html: str) -> None:
@@ -247,6 +246,25 @@ def test_ddg_challenge_pages_are_detected(html: str) -> None:
 
 def test_normal_ddg_results_are_not_marked_as_blocked() -> None:
     assert not p.is_ddg_blocked(_DDG_HTML)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Unfortunately, bots use DuckDuckGo too.",
+        "Please complete the following challenge to continue.",
+        "duckduckgo.com/anomaly.js",
+    ],
+)
+def test_ddg_block_text_in_normal_results_does_not_trigger_cooldown(text: str) -> None:
+    html = f"""
+    <html><body><div class="result">
+      <a class="result__a" href="https://example.com">{text}</a>
+      <a class="result__snippet">Debugging {text}</a>
+    </div></body></html>
+    """
+    assert not p.is_ddg_blocked(html)
+    assert p.parse_ddg_html(html, max_results=1)[0]["title"] == text
 
 
 _DDG_LITE_HTML = f"""
