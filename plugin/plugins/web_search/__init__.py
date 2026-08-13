@@ -260,19 +260,23 @@ class WebSearchPlugin(NekoPluginBase):
         cfg = cfg if isinstance(cfg, dict) else {}
         self._cfg = cfg.get("search") if isinstance(cfg.get("search"), dict) else {}
         defs = self._defaults()
-        self._coordinator = SearchCoordinator(
-            ttl_seconds=defs["cache_ttl"],
-            stale_seconds=defs["stale_ttl"],
-            max_entries=defs["cache_entries"],
-            min_interval_seconds=defs["min_interval"],
-            cooldown_seconds=defs["cooldown"],
-            queue_wait_seconds=defs["queue_wait"],
-        )
-
         self._country = await _detect_country()
         configured_backend = str(self._cfg.get("backend", "auto")).strip().lower()
         self._backend = _select_backend(configured_backend, self._country)
         self._is_cn = self._backend == "baidu"
+        min_interval = (
+            defs["ddg_min_interval"]
+            if self._backend == "duckduckgo"
+            else defs["min_interval"]
+        )
+        self._coordinator = SearchCoordinator(
+            ttl_seconds=defs["cache_ttl"],
+            stale_seconds=defs["stale_ttl"],
+            max_entries=defs["cache_entries"],
+            min_interval_seconds=min_interval,
+            cooldown_seconds=defs["cooldown"],
+            queue_wait_seconds=defs["queue_wait"],
+        )
 
         self.logger.info(
             "WebSearch started: country={}, configured_backend={}, backend={}",
@@ -330,8 +334,14 @@ class WebSearchPlugin(NekoPluginBase):
             "stale_ttl": number("stale_ttl_seconds", 600.0, 0.0, 86400.0),
             "cache_entries": max(1, min(cache_entries, 1024)),
             "min_interval": number("min_interval_seconds", 0.75, 0.0, 10.0),
+            "ddg_min_interval": number(
+                "duckduckgo_min_interval_seconds", 3.0, 1.0, 15.0
+            ),
             "cooldown": number("cooldown_seconds", 60.0, 1.0, 3600.0),
             "queue_wait": number("queue_wait_seconds", 2.0, 0.1, 5.0),
+            "ddg_retry_base_delay": number(
+                "duckduckgo_retry_base_delay_seconds", 2.0, 0.5, 5.0
+            ),
             # Keep the complete operation below the host's default 30-second
             # plugin-entry watchdog, including retries and DDG fallback.
             "total_timeout": number("total_timeout_seconds", 25.0, 1.0, 25.0),
@@ -349,11 +359,16 @@ class WebSearchPlugin(NekoPluginBase):
 
         async def fetch() -> List[Dict[str, str]]:
             client = self._get_client()
+            retry_base_delay = (
+                defs["ddg_retry_base_delay"]
+                if backend == "duckduckgo"
+                else defs["retry_base_delay"]
+            )
             kwargs = {
                 "timeout": timeout,
                 "user_agent": self._user_agent,
                 "retry_attempts": defs["retry_attempts"],
-                "retry_base_delay": defs["retry_base_delay"],
+                "retry_base_delay": retry_base_delay,
             }
             if backend == "baidu":
                 return await _search_baidu(client, query, max_results, **kwargs)

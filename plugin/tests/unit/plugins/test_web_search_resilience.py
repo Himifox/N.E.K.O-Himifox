@@ -41,6 +41,7 @@ class _PluginStub:
         return {
             "retry_attempts": 2,
             "retry_base_delay": 0.0,
+            "ddg_retry_base_delay": 0.0,
             "total_timeout": self._total_timeout,
         }
 
@@ -97,6 +98,31 @@ def test_backend_selection_has_safe_fallback(
 def test_geoip_providers_are_https() -> None:
     assert web_search._GEOIP_PROVIDERS
     assert all(url.startswith("https://") for url, _field in web_search._GEOIP_PROVIDERS)
+
+
+def test_duckduckgo_defaults_are_more_conservative_than_baidu() -> None:
+    plugin = object.__new__(web_search.WebSearchPlugin)
+    plugin._cfg = {}
+
+    defaults = plugin._defaults()
+
+    assert defaults["ddg_min_interval"] == 3.0
+    assert defaults["ddg_min_interval"] > defaults["min_interval"]
+    assert defaults["ddg_retry_base_delay"] == 2.0
+    assert defaults["ddg_retry_base_delay"] > defaults["retry_base_delay"]
+
+
+def test_duckduckgo_rate_defaults_are_configurable_and_bounded() -> None:
+    plugin = object.__new__(web_search.WebSearchPlugin)
+    plugin._cfg = {
+        "duckduckgo_min_interval_seconds": 99,
+        "duckduckgo_retry_base_delay_seconds": 0,
+    }
+
+    defaults = plugin._defaults()
+
+    assert defaults["ddg_min_interval"] == 15.0
+    assert defaults["ddg_retry_base_delay"] == 0.5
 
 
 @pytest.mark.asyncio
