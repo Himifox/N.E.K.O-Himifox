@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -307,3 +308,5 @@ class SearchCoordinator:
                 self._waiters.pop(key, None)
                 if not task.done():
                     task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
