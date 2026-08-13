@@ -248,6 +248,11 @@ def test_normal_ddg_results_are_not_marked_as_blocked() -> None:
     assert not p.is_ddg_blocked(_DDG_HTML)
 
 
+def test_ddg_explicit_no_results_container_is_detected() -> None:
+    assert p.is_ddg_no_results('<div class="no-results">No results.</div>')
+    assert not p.is_ddg_no_results("<html><body></body></html>")
+
+
 @pytest.mark.parametrize(
     "text",
     [

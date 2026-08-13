@@ -31,6 +31,7 @@ from ._parsing import (
     decode_html,
     is_baidu_blocked,
     is_ddg_blocked,
+    is_ddg_no_results,
     parse_baidu_html,
     parse_ddg_html,
     parse_ddg_lite_html,
@@ -156,7 +157,7 @@ async def _search_ddg_html(
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     _check_ddg_block(resp, html)
     results = parse_ddg_html(html, max_results)
-    if not results:
+    if not results and not is_ddg_no_results(html):
         raise SearchResponseError("DuckDuckGo HTML 未返回可解析结果")
     return results
 
@@ -187,7 +188,7 @@ async def _search_ddg_lite(
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     _check_ddg_block(resp, html)
     results = parse_ddg_lite_html(html, max_results)
-    if not results:
+    if not results and not is_ddg_no_results(html):
         raise SearchResponseError("DuckDuckGo Lite 未返回可解析结果")
     return results
 
@@ -415,11 +416,19 @@ class WebSearchPlugin(NekoPluginBase):
                 if should_skip_fallback(e):
                     raise
                 self.logger.warning("DDG html failed, trying lite: {}", e)
-            await asyncio.sleep(defs["ddg_fallback_delay"])
+            await asyncio.sleep(
+                max(defs["ddg_fallback_delay"], defs["ddg_min_interval"])
+            )
             return await _search_ddg_lite(client, query, max_results, **kwargs)
 
-        async with asyncio.timeout(defs["total_timeout"]):
-            return await self._coordinator.run(key, fetch)
+        try:
+            async with asyncio.timeout(defs["total_timeout"]):
+                return await self._coordinator.run(key, fetch)
+        except TimeoutError:
+            stale = self._coordinator.stale(key)
+            if stale is not None:
+                return stale
+            raise
 
     @staticmethod
     def _build_summary(query: str, results: List[Dict[str, str]]) -> str:
@@ -438,6 +447,7 @@ class WebSearchPlugin(NekoPluginBase):
                     "重要：query 应保留用户原始语言（如中文问题就用中文搜索），"
                     "不要翻译成英文，这样能获得更准确的本地化结果。",
         llm_result_fields=["summary"],
+        timeout=30.0,
         input_schema={
             "type": "object",
             "properties": {
@@ -503,6 +513,7 @@ class WebSearchPlugin(NekoPluginBase):
         description="搜索并返回适合 AI 阅读的纯文本摘要格式。"
                     "重要：query 应保留用户原始语言，不要翻译。",
         llm_result_fields=["summary"],
+        timeout=30.0,
         input_schema={
             "type": "object",
             "properties": {

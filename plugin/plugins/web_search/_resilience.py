@@ -256,6 +256,10 @@ class SearchCoordinator:
         while len(self._cache) > self.max_entries:
             self._cache.popitem(last=False)
 
+    def stale(self, key: Hashable) -> Optional[SearchResults]:
+        """Return a retained result after a caller-level timeout, if available."""
+        return self._entry(key, fresh=False)
+
     async def run(
         self,
         key: Hashable,

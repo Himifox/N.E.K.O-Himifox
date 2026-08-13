@@ -138,6 +138,12 @@ def is_ddg_blocked(html: str) -> bool:
     return False
 
 
+def is_ddg_no_results(html: str) -> bool:
+    """Detect DuckDuckGo's explicit empty-results container."""
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.select_one(".no-results, #no-results") is not None
+
+
 def parse_ddg_html(html: str, max_results: int = 8) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     results: List[Dict[str, str]] = []

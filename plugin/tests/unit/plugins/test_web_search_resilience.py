@@ -43,6 +43,7 @@ class _PluginStub:
             "retry_base_delay": 0.0,
             "ddg_retry_base_delay": 0.0,
             "ddg_fallback_delay": 0.0,
+            "ddg_min_interval": 0.0,
             "total_timeout": self._total_timeout,
         }
 
@@ -502,6 +503,7 @@ async def test_ddg_endpoint_fallback_waits(
         "retry_base_delay": 0.0,
         "ddg_retry_base_delay": 0.0,
         "ddg_fallback_delay": 3.0,
+        "ddg_min_interval": 5.0,
         "total_timeout": 10.0,
     }
     monkeypatch.setattr(web_search, "_search_ddg_html", html)
@@ -511,7 +513,7 @@ async def test_ddg_endpoint_fallback_waits(
     results = await web_search.WebSearchPlugin._do_text_search(plugin, "neko", 3, 1.0)
 
     assert results[0]["title"] == "ok"
-    assert sleeps == [3.0]
+    assert sleeps == [5.0]
 
 
 @pytest.mark.asyncio
@@ -631,6 +633,23 @@ async def test_ddg_unparseable_200_is_not_a_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ddg_explicit_no_results_page_returns_empty_results() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            content=b'<html><div class="no-results">No results.</div></html>',
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await web_search._search_ddg_lite(
+            client,
+            "rare exact query",
+            retry_attempts=1,
+        ) == []
+
+
+@pytest.mark.asyncio
 async def test_complete_search_has_one_total_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -665,7 +684,7 @@ async def test_total_timeout_includes_coordinator_wait(
     coordinator._loop = asyncio.get_running_loop()
     coordinator._backends["duckduckgo"] = resilience._BackendState(
         asyncio.Lock(),
-        next_allowed=float("inf"),
+        next_allowed=resilience.time.monotonic() + 60.0,
     )
 
     async def html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
@@ -681,3 +700,34 @@ async def test_total_timeout_includes_coordinator_wait(
         await web_search.WebSearchPlugin._do_text_search(plugin, "neko", 3, 15.0)
 
     assert fetch_called is False
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_returns_retained_stale_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = ("duckduckgo", "neko", 3)
+    coordinator = resilience.SearchCoordinator(ttl_seconds=0, stale_seconds=60)
+    coordinator._store(
+        key,
+        [{"title": "stale", "url": "https://example.com", "snippet": ""}],
+    )
+
+    async def slow_html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        await asyncio.Event().wait()
+        return []
+
+    plugin = _PluginStub(total_timeout=0.01)
+    plugin._coordinator = coordinator
+    monkeypatch.setattr(web_search, "_search_ddg_html", slow_html)
+
+    results = await web_search.WebSearchPlugin._do_text_search(plugin, "neko", 3, 15.0)
+
+    assert results[0]["title"] == "stale"
+
+
+def test_search_entries_allow_internal_timeout_to_finish() -> None:
+    search_meta = web_search.WebSearchPlugin.search.__neko_plugin_meta__
+    summary_meta = web_search.WebSearchPlugin.search_summary.__neko_plugin_meta__
+    assert search_meta.timeout == 30.0
+    assert summary_meta.timeout == 30.0
