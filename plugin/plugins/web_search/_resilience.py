@@ -283,18 +283,21 @@ class SearchCoordinator:
         task = self._inflight.get(key)
         if task is None:
             backend = key[0] if isinstance(key, tuple) and key else key
-            task = loop.create_task(self._guarded_fetch(backend, fetch))
+
+            async def fetch_and_cache() -> SearchResults:
+                results = await self._guarded_fetch(backend, fetch)
+                if results:
+                    self._store(key, results)
+                else:
+                    self._cache.pop(key, None)
+                return results
+
+            task = loop.create_task(fetch_and_cache())
             self._inflight[key] = task
 
             def finish(done: asyncio.Task[SearchResults]) -> None:
                 if self._inflight.get(key) is done:
                     self._inflight.pop(key, None)
-                if (
-                    not done.cancelled()
-                    and done.exception() is None
-                    and done.result()
-                ):
-                    self._store(key, done.result())
 
             task.add_done_callback(finish)
 
@@ -313,6 +316,8 @@ class SearchCoordinator:
             else:
                 self._waiters.pop(key, None)
                 if not task.done():
+                    if self._inflight.get(key) is task:
+                        self._inflight.pop(key, None)
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
