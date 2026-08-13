@@ -231,6 +231,23 @@ def test_ddg_ad_filter_only_matches_yjs_wrapper() -> None:
     assert not p.is_ddg_ad_url("https://example.com/duckduckgo.com/y.js")
 
 
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<html><form id="anomaly-modal">challenge</form></html>',
+        "<html><form id=anomaly-modal>challenge</form></html>",
+        "<html><script src='https://duckduckgo.com/anomaly.js'></script></html>",
+        "<html><body>Unfortunately, bots use DuckDuckGo too.</body></html>",
+    ],
+)
+def test_ddg_challenge_pages_are_detected(html: str) -> None:
+    assert p.is_ddg_blocked(html)
+
+
+def test_normal_ddg_results_are_not_marked_as_blocked() -> None:
+    assert not p.is_ddg_blocked(_DDG_HTML)
+
+
 _DDG_LITE_HTML = f"""
 <html><body><table>
   <tr><td><a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa">Result{_REPL} One</a></td></tr>

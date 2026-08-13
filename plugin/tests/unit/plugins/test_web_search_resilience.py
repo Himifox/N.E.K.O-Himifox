@@ -473,15 +473,73 @@ async def test_ddg_202_is_reported_as_blocked() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(202, request=request, content=b"challenge")
+        return httpx.Response(
+            202,
+            request=request,
+            headers={"Retry-After": "1800"},
+            content=b"challenge",
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(web_search.SearchBlockedError):
+        with pytest.raises(web_search.SearchBlockedError) as caught:
             await web_search._search_ddg_html(
                 client,
                 "neko",
                 retry_attempts=3,
             )
+    assert calls == 1
+    assert caught.value.retry_after_seconds == 1800
+
+
+@pytest.mark.asyncio
+async def test_ddg_403_is_reported_as_blocked_without_fallback() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(403, request=request, content=b"forbidden")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(web_search.SearchBlockedError) as caught:
+            await web_search._search_ddg_html(
+                client,
+                "neko",
+                retry_attempts=3,
+            )
+
+    assert calls == 1
+    assert caught.value.retry_after_seconds == 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "content"),
+    [
+        (403, b"forbidden"),
+        (200, b"<html><form id=anomaly-modal>challenge</form></html>"),
+    ],
+)
+async def test_ddg_block_prevents_lite_and_next_business_request(
+    status: int,
+    content: bytes,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, request=request, content=content)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        plugin = _PluginStub()
+        plugin._get_client = lambda: client
+
+        with pytest.raises(web_search.SearchBlockedError):
+            await web_search.WebSearchPlugin._do_text_search(plugin, "first", 3, 1.0)
+        with pytest.raises(resilience.SearchCooldownError):
+            await web_search.WebSearchPlugin._do_text_search(plugin, "second", 3, 1.0)
+
     assert calls == 1
 
 

@@ -30,6 +30,7 @@ from ._parsing import (
     SearchResponseError,
     decode_html,
     is_baidu_blocked,
+    is_ddg_blocked,
     parse_baidu_html,
     parse_ddg_html,
     parse_ddg_lite_html,
@@ -43,7 +44,7 @@ from ._resilience import (
     should_skip_fallback,
 )
 
-_UA = "N.E.K.O-WebSearch/0.1.3 (+https://github.com/Project-N-E-K-O/N.E.K.O)"
+_UA = "N.E.K.O-WebSearch/0.1.4 (+https://github.com/Project-N-E-K-O/N.E.K.O)"
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
@@ -108,14 +109,25 @@ def _ddg_headers(user_agent: str = _UA) -> Dict[str, str]:
     }
 
 
-def _raise_ddg_rate_limit(error: httpx.HTTPStatusError) -> NoReturn:
-    if error.response.status_code != 429:
+def _ddg_retry_after(response: httpx.Response) -> float:
+    return retry_after_seconds(response.headers) or 300.0
+
+
+def _raise_ddg_block(error: httpx.HTTPStatusError) -> NoReturn:
+    if error.response.status_code not in {403, 429}:
         raise error
-    retry_after = retry_after_seconds(error.response.headers) or 300.0
     raise SearchBlockedError(
-        "DuckDuckGo 请求受限（429）；已停止重试并进入冷却",
-        retry_after_seconds=retry_after,
+        f"DuckDuckGo 请求受限（{error.response.status_code}）；已停止重试并进入冷却",
+        retry_after_seconds=_ddg_retry_after(error.response),
     ) from error
+
+
+def _check_ddg_block(resp: httpx.Response, html: str) -> None:
+    if resp.status_code == 202 or is_ddg_blocked(html):
+        raise SearchBlockedError(
+            "DuckDuckGo 返回反自动化验证页；已停止重试并进入冷却",
+            retry_after_seconds=_ddg_retry_after(resp),
+        )
 
 
 async def _search_ddg_html(
@@ -140,13 +152,9 @@ async def _search_ddg_html(
             base_delay=retry_base_delay,
         )
     except httpx.HTTPStatusError as error:
-        _raise_ddg_rate_limit(error)
+        _raise_ddg_block(error)
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
-    if resp.status_code == 202:
-        raise SearchBlockedError(
-            "DuckDuckGo 返回反自动化验证页；已停止重试并进入冷却",
-            retry_after_seconds=300,
-        )
+    _check_ddg_block(resp, html)
     results = parse_ddg_html(html, max_results)
     if not results:
         raise SearchResponseError("DuckDuckGo HTML 未返回可解析结果")
@@ -175,13 +183,9 @@ async def _search_ddg_lite(
             base_delay=retry_base_delay,
         )
     except httpx.HTTPStatusError as error:
-        _raise_ddg_rate_limit(error)
+        _raise_ddg_block(error)
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
-    if resp.status_code == 202:
-        raise SearchBlockedError(
-            "DuckDuckGo 返回反自动化验证页；已停止重试并进入冷却",
-            retry_after_seconds=300,
-        )
+    _check_ddg_block(resp, html)
     results = parse_ddg_lite_html(html, max_results)
     if not results:
         raise SearchResponseError("DuckDuckGo Lite 未返回可解析结果")

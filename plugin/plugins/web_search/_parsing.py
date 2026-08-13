@@ -27,6 +27,12 @@ _META_CHARSET_RE = re.compile(
 )
 # gb2312/gbk 解码器会在合法页面的少数扩展字符上报错，统一升级到超集 gb18030
 _ENCODING_ALIASES = {"gb2312": "gb18030", "gbk": "gb18030"}
+_DDG_BLOCK_MARKERS = (
+    "anomaly-modal",
+    "duckduckgo.com/anomaly.js",
+    "bots use duckduckgo too",
+    "please complete the following challenge",
+)
 
 
 class SearchBlockedError(RuntimeError):
@@ -118,6 +124,12 @@ def is_ddg_ad_url(url: str) -> bool:
     host = (parsed.hostname or "").lower()
     is_ddg_host = host == "duckduckgo.com" or host.endswith(".duckduckgo.com")
     return is_ddg_host and parsed.path == "/y.js"
+
+
+def is_ddg_blocked(html: str) -> bool:
+    """Detect known DuckDuckGo challenge pages returned with a 2xx status."""
+    head = html[:20000].lower()
+    return any(marker in head for marker in _DDG_BLOCK_MARKERS)
 
 
 def parse_ddg_html(html: str, max_results: int = 8) -> List[Dict[str, str]]:
