@@ -152,6 +152,7 @@ class SearchCoordinator:
         self.queue_wait_seconds = max(0.0, float(queue_wait_seconds))
         self._cache: OrderedDict[Hashable, _CacheEntry] = OrderedDict()
         self._inflight: Dict[Hashable, asyncio.Task[SearchResults]] = {}
+        self._waiters: Dict[Hashable, int] = {}
         self._backends: Dict[Hashable, _BackendState] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -269,6 +270,7 @@ class SearchCoordinator:
             # never leak into a different event loop; the plain cache may persist.
             self._loop = loop
             self._inflight.clear()
+            self._waiters.clear()
             self._backends.clear()
 
         task = self._inflight.get(key)
@@ -289,6 +291,7 @@ class SearchCoordinator:
 
             task.add_done_callback(finish)
 
+        self._waiters[key] = self._waiters.get(key, 0) + 1
         try:
             return _copy_results(await asyncio.shield(task))
         except Exception:
@@ -296,3 +299,11 @@ class SearchCoordinator:
             if stale is not None:
                 return stale
             raise
+        finally:
+            remaining = self._waiters.get(key, 1) - 1
+            if remaining > 0:
+                self._waiters[key] = remaining
+            else:
+                self._waiters.pop(key, None)
+                if not task.done():
+                    task.cancel()

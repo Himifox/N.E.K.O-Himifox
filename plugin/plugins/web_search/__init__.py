@@ -292,6 +292,7 @@ class WebSearchPlugin(NekoPluginBase):
         max_cooldown = (
             defs["ddg_max_cooldown"]
             if self._backend == "duckduckgo"
+            # Progressive cooldown is DDG-specific; Baidu keeps a fixed delay.
             else defs["cooldown"]
         )
         self._coordinator = SearchCoordinator(
@@ -417,11 +418,8 @@ class WebSearchPlugin(NekoPluginBase):
             await asyncio.sleep(defs["ddg_fallback_delay"])
             return await _search_ddg_lite(client, query, max_results, **kwargs)
 
-        async def bounded_fetch() -> List[Dict[str, str]]:
-            async with asyncio.timeout(defs["total_timeout"]):
-                return await fetch()
-
-        return await self._coordinator.run(key, bounded_fetch)
+        async with asyncio.timeout(defs["total_timeout"]):
+            return await self._coordinator.run(key, fetch)
 
     @staticmethod
     def _build_summary(query: str, results: List[Dict[str, str]]) -> str:

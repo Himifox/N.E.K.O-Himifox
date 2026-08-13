@@ -229,6 +229,54 @@ async def test_same_query_burst_is_coalesced_and_cached() -> None:
 
 
 @pytest.mark.asyncio
+async def test_last_cancelled_waiter_cancels_upstream_fetch() -> None:
+    coordinator = resilience.SearchCoordinator()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def fetch() -> resilience.SearchResults:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return []
+
+    caller = asyncio.create_task(coordinator.run(("ddg", "neko", 3), fetch))
+    await started.wait()
+    caller.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_shared_fetch_survives_until_last_waiter_leaves() -> None:
+    coordinator = resilience.SearchCoordinator()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch() -> resilience.SearchResults:
+        started.set()
+        await release.wait()
+        return [{"title": "ok", "url": "https://example.com", "snippet": ""}]
+
+    first = asyncio.create_task(coordinator.run(("ddg", "neko", 3), fetch))
+    second = asyncio.create_task(coordinator.run(("ddg", "neko", 3), fetch))
+    await started.wait()
+    await asyncio.sleep(0)
+    first.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert not second.done()
+
+    release.set()
+    assert (await second)[0]["title"] == "ok"
+
+
+@pytest.mark.asyncio
 async def test_different_queries_are_serialized_per_backend() -> None:
     coordinator = resilience.SearchCoordinator(min_interval_seconds=0)
     first_started = asyncio.Event()
@@ -603,3 +651,33 @@ async def test_complete_search_has_one_total_timeout(
         )
 
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_includes_coordinator_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_called = False
+    coordinator = resilience.SearchCoordinator(
+        min_interval_seconds=1.0,
+        queue_wait_seconds=1.0,
+    )
+    coordinator._loop = asyncio.get_running_loop()
+    coordinator._backends["duckduckgo"] = resilience._BackendState(
+        asyncio.Lock(),
+        next_allowed=float("inf"),
+    )
+
+    async def html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        nonlocal fetch_called
+        fetch_called = True
+        return []
+
+    plugin = _PluginStub(total_timeout=0.01)
+    plugin._coordinator = coordinator
+    monkeypatch.setattr(web_search, "_search_ddg_html", html)
+
+    with pytest.raises(TimeoutError):
+        await web_search.WebSearchPlugin._do_text_search(plugin, "neko", 3, 15.0)
+
+    assert fetch_called is False

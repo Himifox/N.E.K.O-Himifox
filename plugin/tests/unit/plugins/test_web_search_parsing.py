@@ -238,6 +238,7 @@ def test_ddg_ad_filter_only_matches_yjs_wrapper() -> None:
         "<html><form id=anomaly-modal>challenge</form></html>",
         "<html><script src='https://duckduckgo.com/anomaly.js'></script></html>",
         "<html><body>Unfortunately, bots use DuckDuckGo too.</body></html>",
+        "<html><body>Please complete the following challenge to continue.</body></html>",
     ],
 )
 def test_ddg_challenge_pages_are_detected(html: str) -> None:
