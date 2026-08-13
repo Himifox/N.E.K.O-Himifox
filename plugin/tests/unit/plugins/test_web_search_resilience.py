@@ -25,6 +25,7 @@ def _response(status: int, *, headers: dict[str, str] | None = None) -> httpx.Re
 
 class _PluginStub:
     _is_cn = False
+    _backend = "duckduckgo"
     _user_agent = "test-agent"
     logger = type("Logger", (), {"warning": lambda *_args: None})()
 
@@ -72,6 +73,30 @@ def test_rate_limit_and_retry_after_skip_endpoint_fallback() -> None:
         response=ordinary_response,
     )
     assert resilience.should_skip_fallback(ordinary_error) is False
+
+
+@pytest.mark.parametrize(
+    ("configured", "country", "expected"),
+    [
+        ("auto", "CN", "baidu"),
+        ("auto", "JP", "duckduckgo"),
+        ("auto", None, "baidu"),
+        ("invalid", None, "baidu"),
+        ("baidu", "JP", "baidu"),
+        ("duckduckgo", "CN", "duckduckgo"),
+    ],
+)
+def test_backend_selection_has_safe_fallback(
+    configured: str,
+    country: str | None,
+    expected: str,
+) -> None:
+    assert web_search._select_backend(configured, country) == expected
+
+
+def test_geoip_providers_are_https() -> None:
+    assert web_search._GEOIP_PROVIDERS
+    assert all(url.startswith("https://") for url, _field in web_search._GEOIP_PROVIDERS)
 
 
 @pytest.mark.asyncio
@@ -155,6 +180,96 @@ async def test_same_query_burst_is_coalesced_and_cached() -> None:
 
 
 @pytest.mark.asyncio
+async def test_different_queries_are_serialized_per_backend() -> None:
+    coordinator = resilience.SearchCoordinator(min_interval_seconds=0)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def first() -> resilience.SearchResults:
+        first_started.set()
+        await release_first.wait()
+        return [{"title": "first", "url": "https://example.com/1", "snippet": ""}]
+
+    async def second() -> resilience.SearchResults:
+        second_started.set()
+        return [{"title": "second", "url": "https://example.com/2", "snippet": ""}]
+
+    first_task = asyncio.create_task(coordinator.run(("ddg", "first"), first))
+    await first_started.wait()
+    second_task = asyncio.create_task(coordinator.run(("ddg", "second"), second))
+    await asyncio.sleep(0)
+    assert not second_started.is_set()
+
+    release_first.set()
+    await asyncio.gather(first_task, second_task)
+    assert second_started.is_set()
+
+
+@pytest.mark.asyncio
+async def test_different_query_queue_wait_is_bounded() -> None:
+    coordinator = resilience.SearchCoordinator(
+        min_interval_seconds=0,
+        queue_wait_seconds=0.01,
+    )
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first() -> resilience.SearchResults:
+        first_started.set()
+        await release_first.wait()
+        return [{"title": "first", "url": "https://example.com/1", "snippet": ""}]
+
+    async def second() -> resilience.SearchResults:
+        return [{"title": "second", "url": "https://example.com/2", "snippet": ""}]
+
+    first_task = asyncio.create_task(coordinator.run(("ddg", "first"), first))
+    await first_started.wait()
+    with pytest.raises(resilience.SearchBusyError):
+        await coordinator.run(("ddg", "second"), second)
+    release_first.set()
+    await first_task
+
+
+@pytest.mark.asyncio
+async def test_block_starts_backend_cooldown() -> None:
+    coordinator = resilience.SearchCoordinator(
+        min_interval_seconds=0,
+        cooldown_seconds=30,
+    )
+    second_calls = 0
+
+    async def blocked() -> resilience.SearchResults:
+        raise web_search.SearchBlockedError("challenge", retry_after_seconds=10)
+
+    async def second() -> resilience.SearchResults:
+        nonlocal second_calls
+        second_calls += 1
+        return []
+
+    with pytest.raises(web_search.SearchBlockedError):
+        await coordinator.run(("ddg", "first"), blocked)
+    with pytest.raises(resilience.SearchCooldownError):
+        await coordinator.run(("ddg", "second"), second)
+    assert second_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_results_are_not_cached() -> None:
+    coordinator = resilience.SearchCoordinator(min_interval_seconds=0)
+    calls = 0
+
+    async def empty() -> resilience.SearchResults:
+        nonlocal calls
+        calls += 1
+        return []
+
+    assert await coordinator.run(("ddg", "empty"), empty) == []
+    assert await coordinator.run(("ddg", "empty"), empty) == []
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_stale_cache_is_used_when_refresh_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -215,6 +330,34 @@ async def test_ddg_rate_limit_does_not_fall_back_to_lite(
 
     assert html_calls == 1
     assert lite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ddg_202_is_reported_as_blocked() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202, request=request, content=b"challenge")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(web_search.SearchBlockedError):
+            await web_search._search_ddg_html(
+                client,
+                "neko",
+                retry_attempts=1,
+            )
+
+
+@pytest.mark.asyncio
+async def test_ddg_unparseable_200_is_not_a_success() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, content=b"<html></html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(web_search.SearchResponseError):
+            await web_search._search_ddg_lite(
+                client,
+                "neko",
+                retry_attempts=1,
+            )
 
 
 @pytest.mark.asyncio

@@ -52,10 +52,27 @@ def retry_after_seconds(
 
 def should_skip_fallback(error: BaseException) -> bool:
     """Return whether another endpoint would violate an upstream cooldown."""
+    if getattr(error, "retry_after_seconds", None) is not None:
+        return True
     if not isinstance(error, httpx.HTTPStatusError):
         return False
     response = error.response
     return response.status_code == 429 or retry_after_seconds(response.headers) is not None
+
+
+class SearchCooldownError(RuntimeError):
+    """The selected search engine is cooling down after an upstream block."""
+
+
+class SearchBusyError(RuntimeError):
+    """The selected search engine already has a different query in flight."""
+
+
+@dataclass
+class _BackendState:
+    lock: asyncio.Lock
+    next_allowed: float = 0.0
+    cooldown_until: float = 0.0
 
 
 async def request_with_retry(
@@ -114,13 +131,74 @@ class SearchCoordinator:
         ttl_seconds: float = 120.0,
         stale_seconds: float = 600.0,
         max_entries: int = 128,
+        min_interval_seconds: float = 0.75,
+        cooldown_seconds: float = 60.0,
+        queue_wait_seconds: float = 2.0,
     ) -> None:
         self.ttl_seconds = max(0.0, float(ttl_seconds))
         self.stale_seconds = max(0.0, float(stale_seconds))
         self.max_entries = max(1, min(int(max_entries), 1024))
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self.queue_wait_seconds = max(0.0, float(queue_wait_seconds))
         self._cache: OrderedDict[Hashable, _CacheEntry] = OrderedDict()
         self._inflight: Dict[Hashable, asyncio.Task[SearchResults]] = {}
+        self._backends: Dict[Hashable, _BackendState] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _cooldown_for_error(self, error: BaseException) -> Optional[float]:
+        declared = getattr(error, "retry_after_seconds", None)
+        if declared is not None:
+            try:
+                return max(self.cooldown_seconds, float(declared))
+            except (TypeError, ValueError):
+                return self.cooldown_seconds
+        if isinstance(error, httpx.HTTPStatusError):
+            response = error.response
+            server_delay = retry_after_seconds(response.headers)
+            if response.status_code == 429 or server_delay is not None:
+                return max(
+                    self.cooldown_seconds,
+                    server_delay or 0.0,
+                )
+        return None
+
+    async def _guarded_fetch(
+        self,
+        backend: Hashable,
+        fetch: Callable[[], Awaitable[SearchResults]],
+    ) -> SearchResults:
+        state = self._backends.setdefault(backend, _BackendState(asyncio.Lock()))
+        try:
+            await asyncio.wait_for(
+                state.lock.acquire(),
+                timeout=self.queue_wait_seconds,
+            )
+        except TimeoutError as error:
+            raise SearchBusyError("search backend is busy; retry shortly") from error
+        try:
+            now = time.monotonic()
+            if now < state.cooldown_until:
+                remaining = state.cooldown_until - now
+                raise SearchCooldownError(
+                    f"search backend cooling down for {remaining:.1f}s"
+                )
+            wait_seconds = state.next_allowed - now
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+            state.next_allowed = time.monotonic() + self.min_interval_seconds
+            try:
+                return await fetch()
+            except Exception as error:
+                cooldown = self._cooldown_for_error(error)
+                if cooldown is not None:
+                    state.cooldown_until = max(
+                        state.cooldown_until,
+                        time.monotonic() + cooldown,
+                    )
+                raise
+        finally:
+            state.lock.release()
 
     def _entry(self, key: Hashable, *, fresh: bool) -> Optional[SearchResults]:
         entry = self._cache.get(key)
@@ -160,16 +238,22 @@ class SearchCoordinator:
             # never leak into a different event loop; the plain cache may persist.
             self._loop = loop
             self._inflight.clear()
+            self._backends.clear()
 
         task = self._inflight.get(key)
         if task is None:
-            task = loop.create_task(fetch())
+            backend = key[0] if isinstance(key, tuple) and key else key
+            task = loop.create_task(self._guarded_fetch(backend, fetch))
             self._inflight[key] = task
 
             def finish(done: asyncio.Task[SearchResults]) -> None:
                 if self._inflight.get(key) is done:
                     self._inflight.pop(key, None)
-                if not done.cancelled() and done.exception() is None:
+                if (
+                    not done.cancelled()
+                    and done.exception() is None
+                    and done.result()
+                ):
                     self._store(key, done.result())
 
             task.add_done_callback(finish)

@@ -32,6 +32,14 @@ _ENCODING_ALIASES = {"gb2312": "gb18030", "gbk": "gb18030"}
 class SearchBlockedError(RuntimeError):
     """搜索引擎返回了反爬验证页，而不是结果页。"""
 
+    def __init__(self, message: str, *, retry_after_seconds: float = 60.0) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(0.0, float(retry_after_seconds))
+
+
+class SearchResponseError(RuntimeError):
+    """A search response could not be interpreted as a usable result page."""
+
 
 def sanitize_text(text: str) -> str:
     """清洗不可信网页文本：去掉控制/格式/私有区/代理区字符与 U+FFFD，压缩空白。"""

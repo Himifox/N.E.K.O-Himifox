@@ -28,13 +28,20 @@ import httpx
 
 from ._parsing import (
     SearchBlockedError,
+    SearchResponseError,
     decode_html,
     is_baidu_blocked,
     parse_baidu_html,
     parse_ddg_html,
     parse_ddg_lite_html,
 )
-from ._resilience import SearchCoordinator, request_with_retry, should_skip_fallback
+from ._resilience import (
+    SearchCoordinator,
+    SearchBusyError,
+    SearchCooldownError,
+    request_with_retry,
+    should_skip_fallback,
+)
 
 _USER_AGENTS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -50,10 +57,20 @@ _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
 _BAIDU_HOME_URL = "https://www.baidu.com/"
 _BAIDU_SEARCH_URL = "https://www.baidu.com/s"
-_GEOIP_URL = "http://ip-api.com/json/?fields=countryCode"
+_GEOIP_PROVIDERS = (
+    ("https://ipwho.is/?fields=success,country_code", "country_code"),
+    ("https://ipapi.co/json/", "country_code"),
+)
 
 # Countries that cannot reliably access DuckDuckGo
 _CN_COUNTRIES = frozenset({"CN"})
+
+
+def _select_backend(configured: object, country: Optional[str]) -> str:
+    backend = str(configured or "auto").strip().lower()
+    if backend in {"baidu", "duckduckgo"}:
+        return backend
+    return "duckduckgo" if country and country not in _CN_COUNTRIES else "baidu"
 
 
 # ---------------------------------------------------------------------------
@@ -62,19 +79,29 @@ _CN_COUNTRIES = frozenset({"CN"})
 
 async def _detect_country(timeout: float = 4.0) -> Optional[str]:
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=False,
-            proxy=None,
-        ) as client:
-            resp = await client.get(
-                _GEOIP_URL,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            data = resp.json()
-            return (data.get("countryCode") or "").upper() or None
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=False,
+                proxy=None,
+                trust_env=False,
+            ) as client:
+                for url, field in _GEOIP_PROVIDERS:
+                    try:
+                        resp = await client.get(
+                            url,
+                            headers={"User-Agent": "NEKO-WebSearch/0.1"},
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                        country = str(data.get(field) or "").strip().upper()
+                        if len(country) == 2 and country.isalpha():
+                            return country
+                    except (httpx.HTTPError, ValueError, TypeError):
+                        continue
     except Exception:
-        return None
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +138,12 @@ async def _search_ddg_html(
         base_delay=retry_base_delay,
     )
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
-    return parse_ddg_html(html, max_results)
+    if resp.status_code == 202:
+        raise SearchBlockedError("DuckDuckGo 返回反自动化验证页，请稍后重试")
+    results = parse_ddg_html(html, max_results)
+    if not results:
+        raise SearchResponseError("DuckDuckGo HTML 未返回可解析结果")
+    return results
 
 
 async def _search_ddg_lite(
@@ -135,7 +167,12 @@ async def _search_ddg_lite(
         base_delay=retry_base_delay,
     )
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
-    return parse_ddg_lite_html(html, max_results)
+    if resp.status_code == 202:
+        raise SearchBlockedError("DuckDuckGo 返回反自动化验证页，请稍后重试")
+    results = parse_ddg_lite_html(html, max_results)
+    if not results:
+        raise SearchResponseError("DuckDuckGo Lite 未返回可解析结果")
+    return results
 
 
 async def _search_baidu(
@@ -176,7 +213,10 @@ async def _search_baidu(
     # 被拦截时会 302 到 wappass.baidu.com 验证码页
     if "wappass.baidu.com" in str(resp.url) or is_baidu_blocked(html):
         raise SearchBlockedError("百度返回安全验证页（反爬拦截），请稍后重试")
-    return parse_baidu_html(html, max_results)
+    results = parse_baidu_html(html, max_results)
+    if not results:
+        raise SearchResponseError("百度未返回可解析结果")
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +233,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._cfg: Dict[str, Any] = {}
         self._country: Optional[str] = None
         self._is_cn: bool = False
+        self._backend: str = "baidu"
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         # Pick one plausible browser identity per plugin session. Rotating on
@@ -223,17 +264,21 @@ class WebSearchPlugin(NekoPluginBase):
             ttl_seconds=defs["cache_ttl"],
             stale_seconds=defs["stale_ttl"],
             max_entries=defs["cache_entries"],
+            min_interval_seconds=defs["min_interval"],
+            cooldown_seconds=defs["cooldown"],
+            queue_wait_seconds=defs["queue_wait"],
         )
 
         self._country = await _detect_country()
-        self._is_cn = self._country in _CN_COUNTRIES if self._country else False
+        configured_backend = str(self._cfg.get("backend", "auto")).strip().lower()
+        self._backend = _select_backend(configured_backend, self._country)
+        self._is_cn = self._backend == "baidu"
 
-        backend = "baidu" if self._is_cn else "duckduckgo"
         self.logger.info(
-            "WebSearch started: country={}, is_cn={}, backend={}",
-            self._country, self._is_cn, backend,
+            "WebSearch started: country={}, configured_backend={}, backend={}",
+            self._country, configured_backend, self._backend,
         )
-        return Ok({"status": "running", "backend": backend, "country": self._country})
+        return Ok({"status": "running", "backend": self._backend, "country": self._country})
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_):
@@ -284,6 +329,9 @@ class WebSearchPlugin(NekoPluginBase):
             "cache_ttl": number("cache_ttl_seconds", 120.0, 0.0, 3600.0),
             "stale_ttl": number("stale_ttl_seconds", 600.0, 0.0, 86400.0),
             "cache_entries": max(1, min(cache_entries, 1024)),
+            "min_interval": number("min_interval_seconds", 0.75, 0.0, 10.0),
+            "cooldown": number("cooldown_seconds", 60.0, 1.0, 3600.0),
+            "queue_wait": number("queue_wait_seconds", 2.0, 0.1, 5.0),
             # Keep the complete operation below the host's default 30-second
             # plugin-entry watchdog, including retries and DDG fallback.
             "total_timeout": number("total_timeout_seconds", 25.0, 1.0, 25.0),
@@ -296,7 +344,7 @@ class WebSearchPlugin(NekoPluginBase):
         timeout: float,
     ) -> List[Dict[str, str]]:
         defs = self._defaults()
-        backend = "baidu" if self._is_cn else "duckduckgo"
+        backend = self._backend
         key = (backend, " ".join(query.casefold().split()), max_results)
 
         async def fetch() -> List[Dict[str, str]]:
@@ -307,7 +355,7 @@ class WebSearchPlugin(NekoPluginBase):
                 "retry_attempts": defs["retry_attempts"],
                 "retry_base_delay": defs["retry_base_delay"],
             }
-            if self._is_cn:
+            if backend == "baidu":
                 return await _search_baidu(client, query, max_results, **kwargs)
 
             try:
@@ -375,12 +423,12 @@ class WebSearchPlugin(NekoPluginBase):
         # 任何输出渠道（logger/stdout）都只记录长度与条数
         self.logger.info(
             "Searching: query_len={} max={} engine={}",
-            len(query), max_r, "baidu" if self._is_cn else "duckduckgo",
+            len(query), max_r, self._backend,
         )
 
         try:
             results = await self._do_text_search(query, max_r, timeout)
-        except SearchBlockedError as e:
+        except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(SdkError(str(e)))
         except Exception as e:
             # 异常文本可能带完整请求 URL（含 wd= 查询词），只回传类型名，
@@ -433,7 +481,7 @@ class WebSearchPlugin(NekoPluginBase):
 
         try:
             results = await self._do_text_search(query, max_r, timeout)
-        except SearchBlockedError as e:
+        except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(SdkError(str(e)))
         except Exception as e:
             self.logger.exception("Search failed (query_len={})", len(query))
