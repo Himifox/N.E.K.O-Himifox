@@ -996,6 +996,16 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
             _runtime_startup_init_completed = True
             _disable_main_storage_limited_mode()
 
+            try:
+                from knowledge.indexer import start_knowledge_indexer
+
+                start_knowledge_indexer(_config_manager.knowledge_dir)
+            except Exception as _knowledge_index_exc:
+                logger.warning(
+                    "Knowledge background indexer was not started: %s",
+                    type(_knowledge_index_exc).__name__,
+                )
+
             # runtime init 完成后再起后台预热：把已改 lazy 的重模块（genai+mcp /
             # translatepy / 功能路由依赖）提前 import 好，用户首次用到时不等。放在
             # 这里而非 on_startup 开头，是为了不在关键启动路径上和 runtime init 抢 GIL。
@@ -1174,6 +1184,12 @@ async def on_shutdown():
     """Clean up resources at server shutdown"""
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
+        try:
+            from knowledge.indexer import stop_knowledge_indexer
+
+            await stop_knowledge_indexer()
+        except Exception as e:
+            logger.debug(f"Knowledge background indexer cleanup failed: {e}")
         cleanup()
         try:
             # join_sync_connector_threads 内部已经 gather 并行 join，直接 await

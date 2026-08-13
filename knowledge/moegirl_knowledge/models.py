@@ -87,6 +87,10 @@ class MoegirlKnowledgeEntry:
 class MoegirlKnowledgeHit:
     entry: MoegirlKnowledgeEntry
     score: float
+    retrieval_modes: tuple[str, ...] = ()
+    lexical_score: float | None = None
+    semantic_score: float | None = None
+    best_chunk_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

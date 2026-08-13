@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
+import time
 import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -33,6 +35,64 @@ from .routing import (
     get_routing_state,
     notify_database_changed,
 )
+from .vector_index import semantic_search
+
+
+_KNOWLEDGE_RRF_K = 60
+
+
+def _rrf_knowledge_hits(
+    lexical: list[MoegirlKnowledgeHit],
+    semantic: list[MoegirlKnowledgeHit],
+    *,
+    limit: int,
+) -> list[MoegirlKnowledgeHit]:
+    """Fuse ranked entry lists without comparing incompatible raw scores."""
+    records: dict[tuple[str, str], dict[str, object]] = {}
+    for rank, hit in enumerate(lexical, start=1):
+        key = (hit.entry.source_tag, hit.entry.title)
+        record = records.setdefault(key, {"entry": hit.entry, "rrf": 0.0})
+        record["rrf"] = float(record["rrf"]) + 1.0 / (_KNOWLEDGE_RRF_K + rank)
+        record["lexical_rank"] = rank
+        record["lexical_score"] = hit.score
+    for rank, hit in enumerate(semantic, start=1):
+        key = (hit.entry.source_tag, hit.entry.title)
+        record = records.setdefault(key, {"entry": hit.entry, "rrf": 0.0})
+        record["rrf"] = float(record["rrf"]) + 1.0 / (_KNOWLEDGE_RRF_K + rank)
+        record["semantic_score"] = hit.semantic_score if hit.semantic_score is not None else hit.score
+        record["best_chunk_index"] = hit.best_chunk_index
+    ordered = sorted(
+        records.values(),
+        key=lambda record: (
+            -float(record["rrf"]),
+            int(record.get("lexical_rank", 1_000_000)),
+            -float(record.get("semantic_score", -1.0)),
+            record["entry"].title,
+            record["entry"].source_tag,
+        ),
+    )
+    results: list[MoegirlKnowledgeHit] = []
+    for record in ordered[:limit]:
+        modes = tuple(
+            mode
+            for mode, present in (
+                ("lexical", "lexical_score" in record),
+                ("semantic", "semantic_score" in record),
+            )
+            if present
+        )
+        results.append(MoegirlKnowledgeHit(
+            entry=record["entry"],
+            score=float(record["rrf"]),
+            retrieval_modes=modes,
+            lexical_score=float(record["lexical_score"])
+            if "lexical_score" in record else None,
+            semantic_score=float(record["semantic_score"])
+            if "semantic_score" in record else None,
+            best_chunk_index=int(record["best_chunk_index"])
+            if record.get("best_chunk_index") is not None else None,
+        ))
+    return results
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +512,46 @@ class KnowledgeService:
     ) -> list[MoegirlKnowledgeHit]:
         return self._retriever(collection_id).search(query, limit=limit)
 
+    async def asearch(
+        self,
+        collection_id: str,
+        query: str,
+        *,
+        limit: int = 3,
+    ) -> list[MoegirlKnowledgeHit]:
+        """Run progressive BM25 + semantic retrieval with BM25 fallback."""
+        started_at = time.perf_counter()
+        limit = min(max(int(limit), 1), 100)
+        candidate_limit = 12
+        lexical_task = asyncio.to_thread(
+            self._retriever(collection_id).search,
+            query,
+            limit=candidate_limit,
+        )
+        semantic_task = semantic_search(
+            self._store(collection_id),
+            query,
+            limit=candidate_limit,
+        )
+        lexical, semantic_result = await asyncio.gather(lexical_task, semantic_task)
+        semantic, semantic_state = semantic_result
+        results = _rrf_knowledge_hits(lexical, semantic, limit=limit)
+        try:
+            from .diagnostics import record_knowledge_query
+
+            record_knowledge_query(
+                collection_id=collection_id,
+                retrieval_mode="hybrid" if semantic else "bm25",
+                embedding_service_state=semantic_state,
+                lexical_candidates=len(lexical),
+                semantic_candidates=len(semantic),
+                fallback_reason="" if semantic_state == "ready" else semantic_state,
+                elapsed_ms=int((time.perf_counter() - started_at) * 1_000),
+            )
+        except Exception:
+            pass
+        return results
+
     def search_page(
         self,
         collection_id: str,
@@ -705,6 +805,26 @@ class KnowledgeService:
         disabled = load_disabled_entries(
             get_catalog_override_path(database_path)
         )
+        chunk_status = store.chunk_status() if store is not None else {
+            "entries_total": 0,
+            "entries_missing_chunks": 0,
+            "chunks_total": 0,
+            "chunks_pending": 0,
+            "chunks_ready": 0,
+            "chunks_stale": 0,
+            "chunks_failed": 0,
+            "indexed_percent": 0.0,
+            "chunks_revision": 0,
+        }
+        try:
+            from utils.local_embedding_runtime import get_local_embedding_status
+
+            embedding_status = get_local_embedding_status()
+            embedding_state = embedding_status.state
+            embedding_model_id = embedding_status.model_id
+        except Exception:
+            embedding_state = "disabled"
+            embedding_model_id = ""
         return {
             "collection_id": collection_id,
             "name": spec.display_name or collection_id,
@@ -714,6 +834,11 @@ class KnowledgeService:
             "disabled_entries": len(disabled),
             "sources": store.count_by_source_tags() if store is not None else (),
             "packs": len(self.list_packs(collection_id)),
+            "retrieval_mode": "hybrid"
+            if chunk_status["chunks_ready"] and embedding_state == "ready" else "bm25",
+            "embedding_service_state": embedding_state,
+            "embedding_model_id": embedding_model_id,
+            **chunk_status,
         }
 
     def list_collections(self) -> tuple[dict, ...]:

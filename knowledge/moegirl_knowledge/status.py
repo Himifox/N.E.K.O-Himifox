@@ -7,6 +7,7 @@ from pathlib import Path
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
 from .source_registry import SOURCES
 from .store import MoegirlKnowledgeStore
+from utils.local_embedding_runtime import get_local_embedding_status
 
 
 def get_public_knowledge_status(config_manager) -> dict:
@@ -18,6 +19,20 @@ def get_public_knowledge_status(config_manager) -> dict:
     entries = store.list_active_entries() if store is not None else ()
     existing_keys = {entry_key(entry) for entry in entries}
     disabled_count = len(disabled & existing_keys)
+    chunk_status = store.chunk_status() if store is not None else {
+        "entries_total": 0,
+        "entries_missing_chunks": 0,
+        "chunks_total": 0,
+        "chunks_pending": 0,
+        "chunks_ready": 0,
+        "chunks_stale": 0,
+        "chunks_failed": 0,
+        "indexed_percent": 0.0,
+    }
+    try:
+        embedding_status = get_local_embedding_status()
+    except Exception:
+        embedding_status = None
     sources = {}
     for source_tag, source in SOURCES.items():
         count = store.count_by_source_tag(source_tag) if store is not None else 0
@@ -43,6 +58,14 @@ def get_public_knowledge_status(config_manager) -> dict:
             "active_entries": len(entries) - disabled_count,
             "disabled_entries": disabled_count,
             "integrity_ok": store.integrity_ok() if store is not None else False,
+            "retrieval_mode": "hybrid"
+            if chunk_status["chunks_ready"]
+            and embedding_status is not None
+            and embedding_status.ready
+            else "bm25",
+            "embedding_service_state": embedding_status.state if embedding_status else "disabled",
+            "embedding_model_id": embedding_status.model_id if embedding_status else "",
+            **chunk_status,
         },
         "sources": sources,
     }

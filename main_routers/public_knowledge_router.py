@@ -9,7 +9,10 @@ import json
 from fastapi import APIRouter, Query, Request
 
 from knowledge.api import open_knowledge
-from knowledge.diagnostics import list_recent_knowledge_routes
+from knowledge.diagnostics import (
+    list_recent_knowledge_queries,
+    list_recent_knowledge_routes,
+)
 from knowledge.moegirl_knowledge.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
@@ -390,7 +393,11 @@ async def remove_public_knowledge_pack(request: Request):
 
 @router.get("/diagnostics/recent")
 async def get_recent_public_knowledge_diagnostics():
-    return {"ok": True, "items": list(list_recent_knowledge_routes())}
+    return {
+        "ok": True,
+        "items": list(list_recent_knowledge_routes()),
+        "queries": list(list_recent_knowledge_queries()),
+    }
 
 
 async def _json_payload(request: Request) -> dict:

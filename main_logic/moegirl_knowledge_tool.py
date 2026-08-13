@@ -114,8 +114,7 @@ async def handle_public_knowledge_call(
         collection_ids = _COLLECTIONS if collection == "all" else (collection,)
         ranked: list[tuple[float, str, object]] = []
         for collection_id in collection_ids:
-            hits = await asyncio.to_thread(
-                service.search,
+            hits = await service.asearch(
                 collection_id,
                 query,
                 limit=limit,

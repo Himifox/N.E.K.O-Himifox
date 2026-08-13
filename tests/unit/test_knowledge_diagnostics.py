@@ -2,13 +2,35 @@ from __future__ import annotations
 
 from knowledge.diagnostics import (
     clear_knowledge_route_diagnostics,
+    list_recent_knowledge_queries,
     list_recent_knowledge_routes,
+    record_knowledge_query,
     record_knowledge_route,
 )
 
 
 def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
     clear_knowledge_route_diagnostics()
+
+
+def test_query_diagnostics_keep_counts_but_not_query_content():
+    clear_knowledge_route_diagnostics()
+    record_knowledge_query(
+        collection_id="meme",
+        retrieval_mode="bm25",
+        embedding_service_state="not_ready",
+        lexical_candidates=4,
+        semantic_candidates=0,
+        fallback_reason="not_ready",
+        elapsed_ms=12,
+    )
+
+    record = list_recent_knowledge_queries()[0]
+    assert record["lexical_candidates"] == 4
+    assert record["semantic_candidates"] == 0
+    assert record["fallback_reason"] == "not_ready"
+    assert "query" not in record
+    assert "vector" not in record
 
     for index in range(25):
         record_knowledge_route(
