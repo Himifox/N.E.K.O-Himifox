@@ -21,6 +21,7 @@ import httpx
 SearchResults = List[Dict[str, str]]
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_NO_RETRY_STATUS = frozenset({429})
 
 
 def _copy_results(results: SearchResults) -> SearchResults:
@@ -73,6 +74,7 @@ class _BackendState:
     lock: asyncio.Lock
     next_allowed: float = 0.0
     cooldown_until: float = 0.0
+    block_count: int = 0
 
 
 async def request_with_retry(
@@ -82,7 +84,7 @@ async def request_with_retry(
     base_delay: float = 0.5,
     max_delay: float = 4.0,
 ) -> httpx.Response:
-    """Run an HTTP request with one bounded transient-failure retry by default."""
+    """Retry bounded transport/5xx failures, but never retry rate limits."""
     attempts = max(1, min(int(max_attempts), 3))
     base = max(0.0, float(base_delay))
     delay_cap = max(base, float(max_delay))
@@ -90,6 +92,8 @@ async def request_with_retry(
     for attempt in range(attempts):
         try:
             response = await request()
+            if response.status_code in _NO_RETRY_STATUS:
+                response.raise_for_status()
             if response.status_code not in _RETRYABLE_STATUS:
                 response.raise_for_status()
                 return response
@@ -133,6 +137,7 @@ class SearchCoordinator:
         max_entries: int = 128,
         min_interval_seconds: float = 0.75,
         cooldown_seconds: float = 60.0,
+        max_cooldown_seconds: float = 3600.0,
         queue_wait_seconds: float = 2.0,
     ) -> None:
         self.ttl_seconds = max(0.0, float(ttl_seconds))
@@ -140,28 +145,46 @@ class SearchCoordinator:
         self.max_entries = max(1, min(int(max_entries), 1024))
         self.min_interval_seconds = max(0.0, float(min_interval_seconds))
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self.max_cooldown_seconds = max(
+            self.cooldown_seconds,
+            float(max_cooldown_seconds),
+        )
         self.queue_wait_seconds = max(0.0, float(queue_wait_seconds))
         self._cache: OrderedDict[Hashable, _CacheEntry] = OrderedDict()
         self._inflight: Dict[Hashable, asyncio.Task[SearchResults]] = {}
         self._backends: Dict[Hashable, _BackendState] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def _cooldown_for_error(self, error: BaseException) -> Optional[float]:
+    def _cooldown_for_error(
+        self,
+        state: _BackendState,
+        error: BaseException,
+    ) -> Optional[float]:
         declared = getattr(error, "retry_after_seconds", None)
-        if declared is not None:
-            try:
-                return max(self.cooldown_seconds, float(declared))
-            except (TypeError, ValueError):
-                return self.cooldown_seconds
+        server_delay: Optional[float] = None
+        is_block = declared is not None
         if isinstance(error, httpx.HTTPStatusError):
             response = error.response
             server_delay = retry_after_seconds(response.headers)
-            if response.status_code == 429 or server_delay is not None:
-                return max(
-                    self.cooldown_seconds,
-                    server_delay or 0.0,
-                )
-        return None
+            is_block = response.status_code == 429 or server_delay is not None
+        if not is_block:
+            return None
+
+        state.block_count += 1
+        exponent = min(state.block_count - 1, 30)
+        progressive = min(
+            self.max_cooldown_seconds,
+            self.cooldown_seconds * (2**exponent),
+        )
+        values = [progressive, server_delay or 0.0]
+        if declared is not None:
+            try:
+                values.append(float(declared))
+            except (TypeError, ValueError):
+                pass
+        # The configured cap applies to our own progressive penalty. A longer
+        # upstream Retry-After must still be respected.
+        return max(values)
 
     async def _guarded_fetch(
         self,
@@ -186,17 +209,25 @@ class SearchCoordinator:
             wait_seconds = state.next_allowed - now
             if wait_seconds > 0:
                 await asyncio.sleep(wait_seconds)
-            state.next_allowed = time.monotonic() + self.min_interval_seconds
             try:
-                return await fetch()
+                results = await fetch()
             except Exception as error:
-                cooldown = self._cooldown_for_error(error)
+                cooldown = self._cooldown_for_error(state, error)
                 if cooldown is not None:
                     state.cooldown_until = max(
                         state.cooldown_until,
                         time.monotonic() + cooldown,
                     )
                 raise
+            else:
+                state.block_count = 0
+                return results
+            finally:
+                # Space requests from completion, including failed attempts.
+                state.next_allowed = max(
+                    state.next_allowed,
+                    time.monotonic() + self.min_interval_seconds,
+                )
         finally:
             state.lock.release()
 

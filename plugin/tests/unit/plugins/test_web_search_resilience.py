@@ -42,6 +42,7 @@ class _PluginStub:
             "retry_attempts": 2,
             "retry_base_delay": 0.0,
             "ddg_retry_base_delay": 0.0,
+            "ddg_fallback_delay": 0.0,
             "total_timeout": self._total_timeout,
         }
 
@@ -110,6 +111,10 @@ def test_duckduckgo_defaults_are_more_conservative_than_baidu() -> None:
     assert defaults["ddg_min_interval"] > defaults["min_interval"]
     assert defaults["ddg_retry_base_delay"] == 2.0
     assert defaults["ddg_retry_base_delay"] > defaults["retry_base_delay"]
+    assert defaults["ddg_fallback_delay"] == defaults["ddg_min_interval"]
+    assert defaults["cooldown"] == 60.0
+    assert defaults["ddg_cooldown"] == 300.0
+    assert defaults["ddg_max_cooldown"] == 3600.0
 
 
 def test_duckduckgo_rate_defaults_are_configurable_and_bounded() -> None:
@@ -117,21 +122,39 @@ def test_duckduckgo_rate_defaults_are_configurable_and_bounded() -> None:
     plugin._cfg = {
         "duckduckgo_min_interval_seconds": 99,
         "duckduckgo_retry_base_delay_seconds": 0,
+        "duckduckgo_fallback_delay_seconds": 99,
+        "cooldown_seconds": 1,
+        "duckduckgo_cooldown_seconds": 1,
+        "duckduckgo_max_cooldown_seconds": 99999,
     }
 
     defaults = plugin._defaults()
 
     assert defaults["ddg_min_interval"] == 15.0
     assert defaults["ddg_retry_base_delay"] == 0.5
+    assert defaults["ddg_fallback_delay"] == 15.0
+    assert defaults["cooldown"] == 1.0
+    assert defaults["ddg_cooldown"] == 60.0
+    assert defaults["ddg_max_cooldown"] == 86400.0
+
+
+def test_duckduckgo_uses_an_honest_fixed_user_agent() -> None:
+    assert web_search._UA.startswith("N.E.K.O-WebSearch/")
+    assert "Mozilla" not in web_search._UA
+    assert "Chrome" not in web_search._UA
+    assert web_search._ddg_headers()["User-Agent"] == web_search._UA
+    assert "Referer" not in web_search._ddg_headers()
 
 
 @pytest.mark.asyncio
-async def test_request_retries_transient_status_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    responses = [_response(429, headers={"Retry-After": "0"}), _response(200)]
+async def test_request_never_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
     sleeps: list[float] = []
 
     async def request() -> httpx.Response:
-        return responses.pop(0)
+        nonlocal calls
+        calls += 1
+        return _response(429, headers={"Retry-After": "0"})
 
     async def sleep(delay: float) -> None:
         sleeps.append(delay)
@@ -139,11 +162,11 @@ async def test_request_retries_transient_status_once(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(resilience.asyncio, "sleep", sleep)
     monkeypatch.setattr(resilience.random, "uniform", lambda _a, _b: 0.0)
 
-    result = await resilience.request_with_retry(request, max_attempts=2)
+    with pytest.raises(httpx.HTTPStatusError):
+        await resilience.request_with_retry(request, max_attempts=3)
 
-    assert result.status_code == 200
-    assert sleeps == [0.0]
-    assert responses == []
+    assert calls == 1
+    assert sleeps == []
 
 
 @pytest.mark.asyncio
@@ -280,6 +303,58 @@ async def test_block_starts_backend_cooldown() -> None:
     assert second_calls == 0
 
 
+def test_repeated_blocks_increase_cooldown_and_respect_server_delay() -> None:
+    coordinator = resilience.SearchCoordinator(
+        cooldown_seconds=300,
+        max_cooldown_seconds=1200,
+    )
+    state = resilience._BackendState(asyncio.Lock())
+
+    challenge = web_search.SearchBlockedError("challenge")
+    assert coordinator._cooldown_for_error(state, challenge) == 300
+    assert coordinator._cooldown_for_error(state, challenge) == 600
+    assert coordinator._cooldown_for_error(state, challenge) == 1200
+    assert coordinator._cooldown_for_error(state, challenge) == 1200
+
+    response = _response(429, headers={"Retry-After": "1800"})
+    limited = httpx.HTTPStatusError(
+        "rate limited",
+        request=response.request,
+        response=response,
+    )
+    assert coordinator._cooldown_for_error(state, limited) == 1800
+
+
+@pytest.mark.asyncio
+async def test_minimum_interval_starts_after_request_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 10.0
+    sleeps: list[float] = []
+    patch_module_clock(monkeypatch, resilience, monotonic=lambda: now)
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        sleeps.append(delay)
+        now += delay
+
+    monkeypatch.setattr(resilience.asyncio, "sleep", sleep)
+    coordinator = resilience.SearchCoordinator(min_interval_seconds=3)
+
+    async def first() -> resilience.SearchResults:
+        nonlocal now
+        now += 5
+        return [{"title": "first", "url": "https://example.com/1", "snippet": ""}]
+
+    async def second() -> resilience.SearchResults:
+        return [{"title": "second", "url": "https://example.com/2", "snippet": ""}]
+
+    await coordinator.run(("ddg", "first"), first)
+    await coordinator.run(("ddg", "second"), second)
+
+    assert sleeps == [3.0]
+
+
 @pytest.mark.asyncio
 async def test_empty_results_are_not_cached() -> None:
     coordinator = resilience.SearchCoordinator(min_interval_seconds=0)
@@ -359,8 +434,45 @@ async def test_ddg_rate_limit_does_not_fall_back_to_lite(
 
 
 @pytest.mark.asyncio
+async def test_ddg_endpoint_fallback_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    async def html(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        raise web_search.SearchResponseError("unparseable")
+
+    async def lite(*_args: object, **_kwargs: object) -> resilience.SearchResults:
+        return [{"title": "ok", "url": "https://example.com", "snippet": ""}]
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    plugin = _PluginStub()
+    plugin._defaults = lambda: {
+        "retry_attempts": 2,
+        "retry_base_delay": 0.0,
+        "ddg_retry_base_delay": 0.0,
+        "ddg_fallback_delay": 3.0,
+        "total_timeout": 10.0,
+    }
+    monkeypatch.setattr(web_search, "_search_ddg_html", html)
+    monkeypatch.setattr(web_search, "_search_ddg_lite", lite)
+    monkeypatch.setattr(web_search.asyncio, "sleep", sleep)
+
+    results = await web_search.WebSearchPlugin._do_text_search(plugin, "neko", 3, 1.0)
+
+    assert results[0]["title"] == "ok"
+    assert sleeps == [3.0]
+
+
+@pytest.mark.asyncio
 async def test_ddg_202_is_reported_as_blocked() -> None:
+    calls = 0
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(202, request=request, content=b"challenge")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -368,8 +480,34 @@ async def test_ddg_202_is_reported_as_blocked() -> None:
             await web_search._search_ddg_html(
                 client,
                 "neko",
-                retry_attempts=1,
+                retry_attempts=3,
             )
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ddg_429_is_reported_as_blocked_without_retry() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            request=request,
+            headers={"Retry-After": "900"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(web_search.SearchBlockedError) as caught:
+            await web_search._search_ddg_html(
+                client,
+                "neko",
+                retry_attempts=3,
+            )
+
+    assert calls == 1
+    assert caught.value.retry_after_seconds == 900
 
 
 @pytest.mark.asyncio

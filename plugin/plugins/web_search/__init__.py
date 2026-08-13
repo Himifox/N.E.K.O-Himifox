@@ -11,8 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NoReturn, Optional
 
 from plugin.sdk.plugin import (
     NekoPluginBase,
@@ -40,18 +39,11 @@ from ._resilience import (
     SearchBusyError,
     SearchCooldownError,
     request_with_retry,
+    retry_after_seconds,
     should_skip_fallback,
 )
 
-_USER_AGENTS = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-)
-_UA = _USER_AGENTS[0]
+_UA = "N.E.K.O-WebSearch/0.1.3 (+https://github.com/Project-N-E-K-O/N.E.K.O)"
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
@@ -113,8 +105,17 @@ def _ddg_headers(user_agent: str = _UA) -> Dict[str, str]:
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://duckduckgo.com/",
     }
+
+
+def _raise_ddg_rate_limit(error: httpx.HTTPStatusError) -> NoReturn:
+    if error.response.status_code != 429:
+        raise error
+    retry_after = retry_after_seconds(error.response.headers) or 300.0
+    raise SearchBlockedError(
+        "DuckDuckGo 请求受限（429）；已停止重试并进入冷却",
+        retry_after_seconds=retry_after,
+    ) from error
 
 
 async def _search_ddg_html(
@@ -127,19 +128,25 @@ async def _search_ddg_html(
     retry_attempts: int = 2,
     retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
-    resp = await request_with_retry(
-        lambda: client.post(
-            _DDG_HTML_URL,
-            data={"q": query, "kl": region},
-            headers=_ddg_headers(user_agent),
-            timeout=timeout,
-        ),
-        max_attempts=retry_attempts,
-        base_delay=retry_base_delay,
-    )
+    try:
+        resp = await request_with_retry(
+            lambda: client.post(
+                _DDG_HTML_URL,
+                data={"q": query, "kl": region},
+                headers=_ddg_headers(user_agent),
+                timeout=timeout,
+            ),
+            max_attempts=retry_attempts,
+            base_delay=retry_base_delay,
+        )
+    except httpx.HTTPStatusError as error:
+        _raise_ddg_rate_limit(error)
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     if resp.status_code == 202:
-        raise SearchBlockedError("DuckDuckGo 返回反自动化验证页，请稍后重试")
+        raise SearchBlockedError(
+            "DuckDuckGo 返回反自动化验证页；已停止重试并进入冷却",
+            retry_after_seconds=300,
+        )
     results = parse_ddg_html(html, max_results)
     if not results:
         raise SearchResponseError("DuckDuckGo HTML 未返回可解析结果")
@@ -156,19 +163,25 @@ async def _search_ddg_lite(
     retry_attempts: int = 2,
     retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
-    resp = await request_with_retry(
-        lambda: client.post(
-            _DDG_LITE_URL,
-            data={"q": query, "kl": region},
-            headers=_ddg_headers(user_agent),
-            timeout=timeout,
-        ),
-        max_attempts=retry_attempts,
-        base_delay=retry_base_delay,
-    )
+    try:
+        resp = await request_with_retry(
+            lambda: client.post(
+                _DDG_LITE_URL,
+                data={"q": query, "kl": region},
+                headers=_ddg_headers(user_agent),
+                timeout=timeout,
+            ),
+            max_attempts=retry_attempts,
+            base_delay=retry_base_delay,
+        )
+    except httpx.HTTPStatusError as error:
+        _raise_ddg_rate_limit(error)
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     if resp.status_code == 202:
-        raise SearchBlockedError("DuckDuckGo 返回反自动化验证页，请稍后重试")
+        raise SearchBlockedError(
+            "DuckDuckGo 返回反自动化验证页；已停止重试并进入冷却",
+            retry_after_seconds=300,
+        )
     results = parse_ddg_lite_html(html, max_results)
     if not results:
         raise SearchResponseError("DuckDuckGo Lite 未返回可解析结果")
@@ -236,9 +249,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._backend: str = "baidu"
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
-        # Pick one plausible browser identity per plugin session. Rotating on
-        # every request while reusing cookies looks less like a real browser.
-        self._user_agent = random.choice(_USER_AGENTS)
+        self._user_agent = _UA
         self._coordinator = SearchCoordinator()
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -269,12 +280,23 @@ class WebSearchPlugin(NekoPluginBase):
             if self._backend == "duckduckgo"
             else defs["min_interval"]
         )
+        cooldown = (
+            defs["ddg_cooldown"]
+            if self._backend == "duckduckgo"
+            else defs["cooldown"]
+        )
+        max_cooldown = (
+            defs["ddg_max_cooldown"]
+            if self._backend == "duckduckgo"
+            else defs["cooldown"]
+        )
         self._coordinator = SearchCoordinator(
             ttl_seconds=defs["cache_ttl"],
             stale_seconds=defs["stale_ttl"],
             max_entries=defs["cache_entries"],
             min_interval_seconds=min_interval,
-            cooldown_seconds=defs["cooldown"],
+            cooldown_seconds=cooldown,
+            max_cooldown_seconds=max_cooldown,
             queue_wait_seconds=defs["queue_wait"],
         )
 
@@ -338,9 +360,18 @@ class WebSearchPlugin(NekoPluginBase):
                 "duckduckgo_min_interval_seconds", 3.0, 1.0, 15.0
             ),
             "cooldown": number("cooldown_seconds", 60.0, 1.0, 3600.0),
+            "ddg_cooldown": number(
+                "duckduckgo_cooldown_seconds", 300.0, 60.0, 3600.0
+            ),
+            "ddg_max_cooldown": number(
+                "duckduckgo_max_cooldown_seconds", 3600.0, 300.0, 86400.0
+            ),
             "queue_wait": number("queue_wait_seconds", 2.0, 0.1, 5.0),
             "ddg_retry_base_delay": number(
                 "duckduckgo_retry_base_delay_seconds", 2.0, 0.5, 5.0
+            ),
+            "ddg_fallback_delay": number(
+                "duckduckgo_fallback_delay_seconds", 3.0, 1.0, 15.0
             ),
             # Keep the complete operation below the host's default 30-second
             # plugin-entry watchdog, including retries and DDG fallback.
@@ -379,6 +410,7 @@ class WebSearchPlugin(NekoPluginBase):
                 if should_skip_fallback(e):
                     raise
                 self.logger.warning("DDG html failed, trying lite: {}", e)
+            await asyncio.sleep(defs["ddg_fallback_delay"])
             return await _search_ddg_lite(client, query, max_results, **kwargs)
 
         async def bounded_fetch() -> List[Dict[str, str]]:
