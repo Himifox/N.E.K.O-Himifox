@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
+from memory.anti_repeat_effects import (
+    AntiRepeatDecision,
+    AntiRepeatEffectStore,
+    RepeatSignature,
+    build_repeat_signature,
+)
+
+
+def _store(tmp_path) -> AntiRepeatEffectStore:
+    store = AntiRepeatEffectStore()
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(tmp_path)
+    store._config_manager = config_manager
+    return store
+
+
+def test_build_repeat_signature_prefers_safe_detector_evidence():
+    signature = build_repeat_signature(
+        "我又想说我会一直陪着你的，请放心。",
+        ["我会一直陪着你", "https://private.example/path"],
+        language="zh-CN",
+    )
+
+    assert signature == RepeatSignature(
+        phrase="我会一直陪着你",
+        normalized_phrase="我会一直陪着你",
+        language="zh-CN",
+    )
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["https://example.test/private", "`secret_code()`", "{{PRIVATE_VALUE}}"],
+)
+def test_build_repeat_signature_rejects_protected_fragments(fragment):
+    assert (
+        build_repeat_signature(
+            f"draft {fragment}",
+            [fragment],
+            language="en",
+        )
+        is None
+    )
+
+
+def test_decision_is_counted_once_even_with_multiple_reasons(tmp_path):
+    store = _store(tmp_path)
+    signature = RepeatSignature("quiet lantern", "quiet lantern", "en")
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25", "unanswered_repeat"),
+            action="regenerate",
+            outcome="blocked_after_regen_bm25",
+            signature=signature,
+            score_before=12.0,
+            score_after=4.0,
+        ),
+        now=1_700_000_000.0,
+    )
+
+    result = store.query_effects("Neko", 30, now=1_700_000_000.0)
+    assert result["totals"]["detected"] == 1
+    assert result["totals"]["regen_triggered"] == 1
+    assert result["totals"]["blocked_delivery"] == 1
+    assert result["reason_counts"] == {
+        "bm25": 1,
+        "literal_similarity": 0,
+        "unanswered_repeat": 1,
+    }
+    assert result["bm25"] == {
+        "pair_count": 1,
+        "average_before": 12.0,
+        "average_after": 4.0,
+        "reduction_ratio": 0.6667,
+    }
+    assert result["patterns"][0]["blocked_count"] == 1
+
+
+def test_unattributed_decision_keeps_aggregate_without_text(tmp_path):
+    store = _store(tmp_path)
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("literal_similarity",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+
+    result = store.query_effects("Neko", 7, now=1_700_000_000.0)
+    assert result["totals"]["unattributed"] == 1
+    assert result["patterns"] == []
+
+
+def test_query_missing_store_does_not_create_character_directory(tmp_path):
+    store = _store(tmp_path)
+    result = store.query_effects("Missing", 30, now=1_700_000_000.0)
+
+    assert result["source_available"] is False
+    assert not (tmp_path / "Missing").exists()
+
+
+def test_storage_contains_fragment_but_not_rejected_draft(tmp_path):
+    store = _store(tmp_path)
+    rejected_draft = "PRIVATE full rejected draft around quiet lantern and more context"
+    signature = build_repeat_signature(
+        rejected_draft,
+        ["quiet lantern"],
+        language="en",
+    )
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="regenerate",
+            outcome="regen_guard_passed",
+            signature=signature,
+        ),
+        now=1_700_000_000.0,
+    )
+
+    payload = (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(
+        encoding="utf-8"
+    )
+    assert "quiet lantern" in payload
+    assert rejected_draft not in payload
+    assert "PRIVATE full rejected draft" not in payload
+    assert json.loads(payload)["schema_version"] == "anti-repeat-effects/v1"
+
+
+def test_query_rejects_unsupported_period(tmp_path):
+    with pytest.raises(ValueError, match="effect days"):
+        _store(tmp_path).query_effects("Neko", 14)
