@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from scripts import natural_expression_candidate_miner as miner
+from utils import natural_expression_candidates as candidate_core
 
 
 def _config(**overrides) -> miner.MiningConfig:
@@ -594,3 +595,46 @@ def test_cli_default_stdout_does_not_print_candidate_text(tmp_path: Path, capsys
     assert return_code == 0
     assert "private synthetic phrase" not in captured.out
     assert "private synthetic phrase" in output_path.read_text(encoding="utf-8")
+
+
+def test_user_review_requires_three_distinct_assistant_messages():
+    one_message = [
+        candidate_core.SourceMessage(
+            "en",
+            "quiet lantern. quiet lantern. quiet lantern",
+            1,
+        )
+    ]
+
+    one_message_report = candidate_core.build_user_review_report(
+        one_message,
+        rules_by_language={},
+    )
+    assert one_message_report["candidates"] == []
+
+    three_messages = [
+        candidate_core.SourceMessage("en", "quiet lantern", source_line)
+        for source_line in range(1, 4)
+    ]
+    report = candidate_core.build_user_review_report(
+        three_messages,
+        rules_by_language={},
+    )
+    candidate = _candidate(report, "quiet lantern")
+
+    assert report["artifact_type"] == "user_review_candidates"
+    assert report["parameters"]["message_count_threshold"] == 3
+    assert report["summary"] == {
+        "assistant_message_count": 3,
+        "candidate_count": 1,
+    }
+    assert candidate["occurrence_count"] == 3
+    assert candidate["message_count"] == 3
+
+
+def test_user_review_rejects_invalid_distinct_message_threshold():
+    with pytest.raises(
+        candidate_core.CandidateMinerError,
+        match="message_count_threshold must be at least 1",
+    ):
+        candidate_core.build_user_review_report([], message_count_threshold=0)
