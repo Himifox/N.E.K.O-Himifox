@@ -13,6 +13,7 @@ from typing import Iterator, Sequence
 
 from knowledge.chunking import (
     CHUNKER_VERSION,
+    EMBEDDING_INPUT_VERSION,
     derive_knowledge_chunks,
     knowledge_embedding_text,
 )
@@ -160,6 +161,26 @@ class MoegirlKnowledgeStore:
             "UPDATE metadata SET value=? WHERE key='schema_version'",
             (str(SCHEMA_VERSION),),
         )
+        input_version_row = connection.execute(
+            "SELECT value FROM metadata WHERE key='embedding_input_version'"
+        ).fetchone()
+        if (
+            input_version_row is None
+            or str(input_version_row["value"]) != str(EMBEDDING_INPUT_VERSION)
+        ):
+            has_derived_chunks = bool(
+                connection.execute(
+                    "SELECT 1 FROM knowledge_chunks LIMIT 1"
+                ).fetchone()
+            )
+            if has_derived_chunks:
+                connection.execute("DELETE FROM knowledge_chunks")
+                self._increment_chunks_revision(connection)
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES "
+                "('embedding_input_version', ?)",
+                (str(EMBEDDING_INPUT_VERSION),),
+            )
         connection.execute(
             "DELETE FROM knowledge_chunks WHERE entry_rowid NOT IN (SELECT rowid FROM entries)"
         )

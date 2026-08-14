@@ -8,6 +8,7 @@ from hashlib import sha256
 
 
 CHUNKER_VERSION = 1
+EMBEDDING_INPUT_VERSION = 2
 TARGET_CHARS = 900
 MAX_CHARS = 1_200
 OVERLAP_CHARS = 120
@@ -162,6 +163,7 @@ def knowledge_embedding_text(entry, *, heading: str, chunk_text: str) -> str:
         _clean(value) for value in entry.terms.get("recognition", ()) if _clean(value)
     )[:500]
     parts = [
+        "Document:",
         f"Title: {_clean(entry.title)[:500]}",
         f"Aliases: {aliases}" if aliases else "",
         f"Recognition: {recognition}" if recognition else "",
@@ -170,3 +172,8 @@ def knowledge_embedding_text(entry, *, heading: str, chunk_text: str) -> str:
         f"Content: {str(chunk_text or '').strip()}",
     ]
     return "\n".join(value for value in parts if value)[:MAX_EMBEDDING_CHARS]
+
+
+def knowledge_query_embedding_text(query: object) -> str:
+    """Build the query-side text for the versioned embedding input contract."""
+    return f"Query: {_clean(query)}"
