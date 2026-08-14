@@ -208,14 +208,48 @@
                                     <option value="100" selected>100</option>
                                 </select>
                             </label>
+                            <label for="memory-insights-effect-days">
+                                <span data-i18n="memory.repetitionInsightsEffectRange">效果统计范围</span>
+                                <select id="memory-insights-effect-days">
+                                    <option value="7" data-i18n="memory.repetitionInsightsDays7">最近 7 天</option>
+                                    <option value="30" data-i18n="memory.repetitionInsightsDays30" selected>最近 30 天</option>
+                                    <option value="90" data-i18n="memory.repetitionInsightsDays90">最近 90 天</option>
+                                </select>
+                            </label>
                         </div>
                         <p class="memory-insights-note" data-i18n="memory.repetitionInsightsPrivacy">分析只读取当前角色的本地 time_indexed.db；结果不包含上下文或用户文本。</p>
                         <div class="memory-insights-actions">
                             <button type="button" id="memory-insights-analyze" class="memory-insights-primary" data-i18n="memory.repetitionInsightsAnalyze">开始分析</button>
                             <button type="button" id="memory-insights-clear" data-i18n="memory.repetitionInsightsClear">清空结果</button>
-                            <button type="button" id="memory-insights-export" data-i18n="memory.repetitionInsightsExport">导出待审阅候选</button>
+                            <button type="button" id="memory-insights-export" data-i18n="memory.repetitionInsightsExport">导出候选</button>
+                            <button type="button" id="memory-insights-reset-effects" class="memory-insights-danger" data-i18n="memory.repetitionInsightsResetEffects">清除效果统计</button>
                         </div>
+                        <p class="memory-insights-feedback-note" data-i18n="memory.repetitionInsightsFeedbackNote">导出仅用于你自行向维护者反馈，不会改变角色之后的回复。</p>
                         <div id="memory-insights-status" class="memory-insights-status" role="status" aria-live="polite" aria-atomic="true"></div>
+                        <div id="memory-insights-effectiveness" class="memory-insights-effectiveness"></div>
+                        <div id="memory-insights-filters" class="memory-insights-filters">
+                            <label for="memory-insights-query">
+                                <span data-i18n="memory.repetitionInsightsSearch">搜索最终残留</span>
+                                <input type="search" id="memory-insights-query" autocomplete="off" data-i18n-placeholder="memory.repetitionInsightsSearchPlaceholder" placeholder="搜索表达或规则 ID">
+                            </label>
+                            <label for="memory-insights-coverage-filter">
+                                <span data-i18n="memory.repetitionInsightsCoverageFilter">规则覆盖</span>
+                                <select id="memory-insights-coverage-filter">
+                                    <option value="all" data-i18n="memory.repetitionInsightsFilterAll">全部</option>
+                                    <option value="covered" data-i18n="memory.repetitionInsightsFilterCovered">已覆盖</option>
+                                    <option value="uncovered" data-i18n="memory.repetitionInsightsFilterUncovered">未覆盖</option>
+                                </select>
+                            </label>
+                            <label for="memory-insights-effect-filter">
+                                <span data-i18n="memory.repetitionInsightsEffectFilter">防复读记录</span>
+                                <select id="memory-insights-effect-filter">
+                                    <option value="all" data-i18n="memory.repetitionInsightsFilterAll">全部</option>
+                                    <option value="processed" data-i18n="memory.repetitionInsightsFilterProcessed">曾处理</option>
+                                    <option value="residual" data-i18n="memory.repetitionInsightsFilterResidual">未匹配处理记录</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div id="memory-insights-visible-count" class="memory-insights-visible-count" aria-live="polite"></div>
                         <div id="memory-insights-results" class="memory-insights-results"></div>
                     </div>
                 </section>
