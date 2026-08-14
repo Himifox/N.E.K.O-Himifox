@@ -2621,6 +2621,13 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     max-height: calc(100vh - var(--memory-floating-panel-top, 148px) - 12px);
 }
 
+#memory-insights-panel {
+    box-sizing: border-box;
+    bottom: auto;
+    width: min(460px, calc(100vw - 24px));
+    max-height: calc(100vh - var(--memory-floating-panel-top, 148px) - 12px);
+}
+
 #memory-guide-panel .memory-aux-panel-body {
     overflow: visible;
 }
@@ -2747,6 +2754,149 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     color: var(--memory-text-secondary);
     font-size: 13px;
     line-height: 20px;
+}
+
+.memory-insights-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.memory-insights-description,
+.memory-insights-note {
+    margin: 0;
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-control);
+    line-height: 1.55;
+}
+
+.memory-insights-target {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--memory-divider);
+    border-radius: var(--memory-radius-control);
+    background: var(--memory-surface-subtle);
+    font-size: var(--memory-font-control);
+}
+
+.memory-insights-target strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--memory-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memory-insights-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.memory-insights-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-control);
+}
+
+.memory-insights-fields select {
+    width: 100%;
+    min-height: 38px;
+    padding: 7px 30px 7px 10px;
+    border: 1px solid var(--memory-border);
+    border-radius: var(--memory-radius-control);
+    background: var(--memory-surface);
+    color: var(--memory-text);
+    font: inherit;
+}
+
+.memory-insights-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.memory-insights-actions button,
+.memory-insights-card button {
+    min-height: 36px;
+    padding: 7px 12px;
+    border: 1px solid var(--memory-border);
+    border-radius: var(--memory-radius-control);
+    background: var(--memory-surface);
+    color: var(--memory-accent-foreground);
+    font-size: var(--memory-font-control);
+    font-weight: var(--memory-font-weight-strong);
+}
+
+.memory-insights-actions .memory-insights-primary {
+    border-color: var(--memory-accent-border);
+    background: var(--memory-primary-gradient);
+    color: var(--memory-on-accent);
+}
+
+.memory-insights-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.memory-insights-status {
+    min-height: 20px;
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-control);
+    line-height: 20px;
+}
+
+.memory-insights-status.is-error {
+    color: var(--memory-danger);
+}
+
+.memory-insights-status.is-success {
+    color: var(--memory-success);
+}
+
+.memory-insights-results {
+    display: grid;
+    gap: 10px;
+}
+
+.memory-insights-card {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--memory-divider);
+    border-radius: var(--memory-radius-row);
+    background: var(--memory-surface-subtle);
+}
+
+.memory-insights-card h4 {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--memory-text);
+    font-size: var(--memory-font-body);
+    line-height: 1.45;
+}
+
+.memory-insights-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-caption);
+}
+
+.memory-insights-card-rules {
+    overflow-wrap: anywhere;
+    color: var(--memory-text-tertiary);
+    font-size: var(--memory-font-caption);
+}
+
+.memory-insights-card button {
+    justify-self: start;
 }
 
 .memory-aux-panel .review-toggle {
@@ -3577,6 +3727,16 @@ body[data-memory-layout="compact"] .editor {
         bottom: auto;
         width: min(320px, calc(100vw - 16px));
         max-height: calc(100vh - var(--memory-floating-panel-top, 148px) - 8px);
+    }
+
+    #memory-insights-panel {
+        bottom: auto;
+        width: min(360px, calc(100vw - 16px));
+        max-height: calc(100vh - var(--memory-floating-panel-top, 148px) - 8px);
+    }
+
+    .memory-insights-fields {
+        grid-template-columns: 1fr;
     }
 
     #memory-role-panel .file-list-title {
