@@ -2792,7 +2792,7 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 
 .memory-insights-fields {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 12px;
 }
 
@@ -2804,7 +2804,9 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     font-size: var(--memory-font-control);
 }
 
-.memory-insights-fields select {
+.memory-insights-fields select,
+.memory-insights-filters select,
+.memory-insights-filters input {
     width: 100%;
     min-height: 38px;
     padding: 7px 30px 7px 10px;
@@ -2816,8 +2818,8 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 }
 
 .memory-insights-actions {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
 }
 
@@ -2834,9 +2836,15 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 }
 
 .memory-insights-actions .memory-insights-primary {
+    grid-column: 1 / -1;
     border-color: var(--memory-accent-border);
     background: var(--memory-primary-gradient);
     color: var(--memory-on-accent);
+}
+
+.memory-insights-actions .memory-insights-danger {
+    border-color: color-mix(in srgb, var(--memory-danger) 45%, var(--memory-border));
+    color: var(--memory-danger);
 }
 
 .memory-insights-actions button:disabled {
@@ -2859,6 +2867,101 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     color: var(--memory-success);
 }
 
+.memory-insights-feedback-note {
+    margin: -2px 0 0;
+    color: var(--memory-text-tertiary);
+    font-size: var(--memory-font-caption);
+    line-height: 1.5;
+}
+
+.memory-insights-effectiveness {
+    display: grid;
+    gap: 10px;
+}
+
+.memory-insights-section-title {
+    margin: 0;
+    color: var(--memory-text);
+    font-size: var(--memory-font-body);
+}
+
+.memory-insights-effect-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.memory-insights-effect-metric {
+    display: grid;
+    gap: 2px;
+    padding: 9px 10px;
+    border: 1px solid var(--memory-divider);
+    border-radius: var(--memory-radius-control);
+    background: var(--memory-surface-subtle);
+}
+
+.memory-insights-effect-metric strong {
+    color: var(--memory-text);
+    font-size: 18px;
+    line-height: 1.2;
+}
+
+.memory-insights-effect-metric span,
+.memory-insights-effect-period,
+.memory-insights-effect-pattern-meta,
+.memory-insights-visible-count {
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-caption);
+}
+
+.memory-insights-effect-patterns {
+    display: grid;
+    gap: 7px;
+}
+
+.memory-insights-effect-pattern {
+    display: grid;
+    gap: 3px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--memory-accent-border);
+    border-radius: 0 var(--memory-radius-control) var(--memory-radius-control) 0;
+    background: var(--memory-surface-subtle);
+}
+
+.memory-insights-effect-pattern strong {
+    overflow-wrap: anywhere;
+    color: var(--memory-text);
+    font-size: var(--memory-font-control);
+}
+
+.memory-insights-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--memory-divider);
+}
+
+.memory-insights-filters label {
+    display: grid;
+    gap: 5px;
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-caption);
+}
+
+.memory-insights-filters label:first-child {
+    grid-column: 1 / -1;
+}
+
+.memory-insights-filters :disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.memory-insights-visible-count {
+    min-height: 18px;
+}
+
 .memory-insights-results {
     display: grid;
     gap: 10px;
@@ -2866,11 +2969,26 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 
 .memory-insights-card {
     display: grid;
-    gap: 8px;
-    padding: 12px;
+    gap: 7px;
+    padding: 11px 12px;
     border: 1px solid var(--memory-divider);
     border-radius: var(--memory-radius-row);
     background: var(--memory-surface-subtle);
+}
+
+.memory-insights-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.memory-insights-card-badges {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 5px;
 }
 
 .memory-insights-card h4 {
@@ -2879,6 +2997,24 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     color: var(--memory-text);
     font-size: var(--memory-font-body);
     line-height: 1.45;
+}
+
+.memory-insights-card-normalized {
+    overflow-wrap: anywhere;
+    color: var(--memory-text-tertiary);
+    font-size: var(--memory-font-caption);
+}
+
+.memory-insights-card-language,
+.memory-insights-card-status {
+    padding: 2px 7px;
+    border: 1px solid var(--memory-divider);
+    border-radius: 999px;
+    background: var(--memory-surface);
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-caption);
+    font-weight: 600;
+    line-height: 1.35;
 }
 
 .memory-insights-card-meta {
@@ -2890,13 +3026,39 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 }
 
 .memory-insights-card-rules {
+    min-width: 0;
+    flex: 1 1 auto;
     overflow-wrap: anywhere;
     color: var(--memory-text-tertiary);
     font-size: var(--memory-font-caption);
 }
 
+.memory-insights-card-effect {
+    padding: 7px 9px;
+    border-radius: var(--memory-radius-control);
+    background: color-mix(in srgb, var(--memory-accent) 8%, transparent);
+    color: var(--memory-text-secondary);
+    font-size: var(--memory-font-caption);
+    line-height: 1.45;
+}
+
+.memory-insights-card-status.is-processed {
+    border-color: var(--memory-accent-border);
+    color: var(--memory-accent-foreground);
+}
+
+.memory-insights-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
 .memory-insights-card button {
-    justify-self: start;
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 4px 10px;
+    font-size: var(--memory-font-caption);
 }
 
 .memory-aux-panel .review-toggle {
@@ -3737,6 +3899,15 @@ body[data-memory-layout="compact"] .editor {
 
     .memory-insights-fields {
         grid-template-columns: 1fr;
+    }
+
+    .memory-insights-actions,
+    .memory-insights-filters {
+        grid-template-columns: 1fr;
+    }
+
+    .memory-insights-filters label:first-child {
+        grid-column: auto;
     }
 
     #memory-role-panel .file-list-title {

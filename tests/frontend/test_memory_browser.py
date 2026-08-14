@@ -388,6 +388,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     seed_memory_file,
 ):
     requests = []
+    effect_reset_requests = []
 
     def handle_insights(route):
         requests.append(_request_json(route))
@@ -410,6 +411,46 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
                     "assistant_message_count": 50,
                     "candidate_count": 2,
                 },
+                "effectiveness": {
+                    "schema_version": "anti-repeat-effects/v1",
+                    "source_available": True,
+                    "period_days": 30,
+                    "totals": {
+                        "detected": 6,
+                        "regen_triggered": 4,
+                        "regen_guard_passed": 3,
+                        "blocked_delivery": 1,
+                    },
+                    "bm25": {
+                        "pair_count": 3,
+                        "reduction_ratio": 0.5,
+                    },
+                    "patterns": [
+                        {
+                            "phrase": "Quiet Lantern",
+                            "normalized_phrase": "quiet lantern",
+                            "language": "en",
+                            "detected_count": 6,
+                            "regen_triggered_count": 4,
+                            "regen_guard_passed_count": 3,
+                            "blocked_count": 1,
+                        }
+                    ],
+                },
+                "associations": [
+                    {
+                        "normalized_phrase": "quiet lantern",
+                        "language": "en",
+                        "effect_normalized_phrase": "quiet lantern",
+                        "association_type": "exact",
+                        "detected_count": 6,
+                        "regen_triggered_count": 4,
+                        "regen_guard_passed_count": 3,
+                        "blocked_count": 1,
+                        "residual_occurrence_count": 5,
+                        "residual_message_count": 4,
+                    }
+                ],
                 "candidates": [
                     {
                         "covered_by_rule_ids": ["EN_001"],
@@ -417,7 +458,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
                         "message_count": 4,
                         "normalized_phrase": "quiet lantern",
                         "occurrence_count": 5,
-                        "phrase": "quiet lantern",
+                        "phrase": "Quiet Lantern",
                         "status": "pending",
                     },
                     {
@@ -433,6 +474,14 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
             },
         )
 
+    def handle_effect_reset(route):
+        effect_reset_requests.append(_request_json(route))
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            json={"success": True, "character_name": "测试猫娘", "cleared": True},
+        )
+
     _install_ready_memory_browser_routes(
         mock_page,
         seed_memory_file,
@@ -440,6 +489,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
         current_catgirl="测试猫娘",
     )
     mock_page.route("**/api/memory/repetition_insights", handle_insights)
+    mock_page.route("**/api/memory/repetition_effects/reset", handle_effect_reset)
     mock_page.goto(f"{running_server}/memory_browser")
     expect(mock_page.locator("#memory-file-list button.cat-btn[aria-current='true']")).to_have_count(
         1,
@@ -450,6 +500,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     assert requests == []
     expect(mock_page.locator("#memory-insights-character")).to_have_text("测试猫娘")
     expect(mock_page.locator("#memory-insights-limit")).to_have_value("100")
+    expect(mock_page.locator("#memory-insights-effect-days")).to_have_value("30")
     expect(mock_page.locator("#memory-insights-results")).not_to_contain_text("quiet lantern")
 
     mock_page.locator("#memory-insights-language").select_option("en")
@@ -461,9 +512,51 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
             "character_name": "测试猫娘",
             "language": "en",
             "assistant_message_limit": 50,
+            "effect_days": 30,
         }
     ]
-    expect(mock_page.locator(".memory-insights-card").first).to_contain_text("EN_001")
+    expect(mock_page.locator(".memory-insights-effect-metric")).to_have_count(4)
+    expect(mock_page.locator(".memory-insights-effect-pattern")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-card-status.is-processed")).to_have_count(1)
+    first_candidate = mock_page.locator(".memory-insights-card").first
+    expect(first_candidate).to_contain_text("EN_001")
+    expect(first_candidate.locator(".memory-insights-card-header")).to_have_count(1)
+    expect(first_candidate.locator(".memory-insights-card-status")).not_to_be_empty()
+    expect(first_candidate.locator(".memory-insights-card-footer")).to_have_count(1)
+    expect(first_candidate.locator("h4")).to_have_text("Quiet Lantern")
+    expect(first_candidate.locator(".memory-insights-card-normalized")).to_contain_text(
+        "quiet lantern"
+    )
+    expect(first_candidate.locator(".memory-insights-card-language")).to_contain_text("en")
+    second_candidate = mock_page.locator(".memory-insights-card").nth(1)
+    expect(second_candidate.locator("h4")).to_have_text("silver morning")
+    expect(second_candidate.locator(".memory-insights-card-normalized")).to_have_count(0)
+    expect(mock_page.locator(".memory-insights-card-normalized")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-feedback-note")).not_to_be_empty()
+
+    mock_page.locator("#memory-insights-effect-filter").select_option("processed")
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-card h4")).to_have_text("Quiet Lantern")
+    mock_page.locator("#memory-insights-effect-filter").select_option("all")
+    mock_page.locator("#memory-insights-coverage-filter").select_option("uncovered")
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-card h4")).to_have_text("silver morning")
+    mock_page.locator("#memory-insights-coverage-filter").select_option("all")
+    mock_page.locator("#memory-insights-query").fill("EN_001")
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
+    expect(mock_page.locator("#memory-insights-visible-count")).not_to_be_empty()
+    mock_page.locator("#memory-insights-query").fill("")
+
+    reset_dialogs = []
+    mock_page.once(
+        "dialog",
+        lambda dialog: (reset_dialogs.append(dialog.message), dialog.accept()),
+    )
+    mock_page.locator("#memory-insights-reset-effects").click()
+    expect(mock_page.locator(".memory-insights-effect-pattern")).to_have_count(0)
+    expect(mock_page.locator(".memory-insights-card-status.is-processed")).to_have_count(0)
+    assert reset_dialogs
+    assert effect_reset_requests == [{"character_name": "测试猫娘"}]
 
     mock_page.locator(".memory-insights-card button").first.click()
     expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
