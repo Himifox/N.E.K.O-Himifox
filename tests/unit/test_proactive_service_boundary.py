@@ -24,6 +24,7 @@ from main_logic.proactive_chat import (
     generation,
     mini_game_invite,
     music_recommendation,
+    preference_recommendation,
     service,
     state,
 )
@@ -42,6 +43,82 @@ _CHARACTER_DATA = (
     None,
     None,
 )
+
+
+@pytest.mark.asyncio
+async def test_music_interest_fixed_dry_run_reaches_followup_fetch_on_n_plus_2(
+    monkeypatch,
+) -> None:
+    role = "Yui-music-interest-dry-run"
+    fetched_keywords: list[str] = []
+
+    async def fake_music_fetch(keyword: str, **_kwargs):
+        fetched_keywords.append(keyword)
+        return {"success": False, "data": []}
+
+    monkeypatch.setattr(generation, "_fetch_music_with_fallback", fake_music_fetch)
+    preference_recommendation.clear_recommendation_feedback_state()
+    try:
+        frozen_before_extraction = preference_recommendation.get_music_interest_snapshot(
+            role,
+            now=1.0,
+        )
+        extracted = preference_recommendation.process_recommendation_feedback(
+            role,
+            {
+                "preference_type": "music_intent",
+                "value": "jazz",
+                "reaction": "positive",
+                "confidence": 0.9,
+                "evidence": "I like jazz",
+            },
+            memory_context="User | I like jazz",
+            master_name="User",
+            now=2.0,
+        )
+        assert extracted.accepted is True
+
+        extraction_phase = {"music_keyword": "personalized", "music_pass": False}
+        service._apply_music_interest_to_phase1(
+            extraction_phase,
+            preference_enabled=True,
+            has_music_task=True,
+            music_interest_snapshot=frozen_before_extraction,
+        )
+        await generation._fetch_phase1_followups(
+            parsed=extraction_phase,
+            has_music_task=True,
+            has_meme_task=False,
+            music_content=None,
+            meme_content=None,
+            proactive_lang="en",
+            lanlan_name=role,
+        )
+
+        next_phase = {"music_keyword": "personalized", "music_pass": False}
+        service._apply_music_interest_to_phase1(
+            next_phase,
+            preference_enabled=True,
+            has_music_task=True,
+            music_interest_snapshot=(
+                preference_recommendation.get_music_interest_snapshot(role, now=3.0)
+            ),
+        )
+        await generation._fetch_phase1_followups(
+            parsed=next_phase,
+            has_music_task=True,
+            has_meme_task=False,
+            music_content=None,
+            meme_content=None,
+            proactive_lang="en",
+            lanlan_name=role,
+        )
+
+        assert extraction_phase["music_keyword"] == "personalized"
+        assert next_phase["music_keyword"] == "jazz"
+        assert fetched_keywords == ["personalized", "jazz"]
+    finally:
+        preference_recommendation.clear_recommendation_feedback_state()
 
 
 def _imported_modules(path: Path) -> set[str]:
