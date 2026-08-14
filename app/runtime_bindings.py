@@ -49,6 +49,7 @@ from __future__ import annotations
 _INSTALLED: dict[str, bool] = {
     "config_runtime": False,
     "user_directives_sink": False,
+    "user_context_plane_sink": False,
     "quota_hooks": False,
 }
 
@@ -163,6 +164,44 @@ def install_runtime_bindings() -> None:
                     # Logger 本身不可用（极早期 import / 配置坏）；同
                     # config_runtime block 的策略——咽掉避免 startup 二次崩，
                     # caller (app/__init__) 已经印过 stderr 面包屑。
+                    pass
+
+    # ---- main_logic.agent_event_bus -> plugin message-plane memory -------
+    # The chat process and plugin control plane are separate processes. Keep
+    # the local fan-out API, but forward user context through the existing
+    # ZeroMQ message-plane ingest endpoint.
+    if not _INSTALLED["user_context_plane_sink"]:
+        try:
+            from main_logic.agent_event_bus import register_user_utterance_sink
+            from plugin.server.messaging.plane_bridge import publish_user_context_event
+
+            register_user_utterance_sink(publish_user_context_event)
+            _INSTALLED["user_context_plane_sink"] = True
+        except Exception as exc:
+            _expected_absent = {
+                "main_logic",
+                "main_logic.agent_event_bus",
+                "plugin",
+                "plugin.server",
+                "plugin.server.messaging",
+                "plugin.server.messaging.plane_bridge",
+                "zmq",
+                "ormsgpack",
+            }
+            _is_expected_absent = (
+                isinstance(exc, ModuleNotFoundError)
+                and getattr(exc, "name", None) in _expected_absent
+            )
+            if not _is_expected_absent:
+                try:
+                    from utils.logger_config import get_module_logger
+
+                    get_module_logger(__name__, "App").warning(
+                        "install_runtime_bindings(user_context_plane_sink) "
+                        "failed unexpectedly",
+                        exc_info=True,
+                    )
+                except Exception:
                     pass
 
     # ---- main_logic.agent_event_bus ← main_logic.quota dropper -----------

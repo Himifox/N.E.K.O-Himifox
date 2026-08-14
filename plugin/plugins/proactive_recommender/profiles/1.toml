@@ -1,0 +1,21 @@
+[recommendation]
+1 = ""
+enabled = true
+shadow_mode = false
+memory_bucket = "default"
+background_llm = true
+daily_limit = 2
+min_interval_minutes = 240
+quiet_start = "23:00"
+quiet_end = "09:00"
+score_threshold = 0.72
+candidate_ttl_hours = 12
+reply_window_minutes = 10
+ignored_window_minutes = 30
+max_consecutive_ignored = 2
+max_idle_seconds = 900
+min_user_silence_minutes = 20
+
+[recommendation.sources]
+web_search = true
+bilibili = true

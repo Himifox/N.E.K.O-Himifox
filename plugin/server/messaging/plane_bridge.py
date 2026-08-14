@@ -178,6 +178,21 @@ def publish_record(*, store: str, record: dict[str, object], topic: str = "all")
     _bridge.enqueue_delta(store=store, topic=topic, payload=record)
 
 
+def publish_user_context_event(bucket_id: str, event: dict[str, object]) -> None:
+    """Forward a main-process user utterance to the plugin message plane."""
+    if not isinstance(bucket_id, str) or not bucket_id:
+        bucket_id = "default"
+    if not isinstance(event, dict):
+        return
+
+    payload = dict(event)
+    payload.setdefault("_ts", time.time())
+    # The bridge normally starts with the plugin server. The main server has
+    # its own process-local bridge instance, so start it lazily on first use.
+    _bridge.start()
+    _bridge.enqueue_delta(store="memory", topic=bucket_id, payload=payload)
+
+
 def publish_snapshot(
     *,
     store: str,

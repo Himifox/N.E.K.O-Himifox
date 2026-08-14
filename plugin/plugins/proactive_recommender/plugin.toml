@@ -2,7 +2,12 @@
 name = "个性化主动推荐"
 description = "基于最近一小时对话中的非敏感兴趣线索，调用已有网页搜索和可选 B 站来源发现候选，经相关性、去重、隐私、活跃状态、安静时段与频率门控后，让 NEKO 自然地发起内容推荐。原始对话不长期保存，默认关闭并使用影子模式。"
 short_description = "Privacy-aware, inspectable recommendations for NEKO's proactive conversations."
-keywords = ["个性化推荐", "主动搭话", "recommendation", "proactive"]
+keywords = [
+    "个性化推荐",
+    "主动搭话",
+    "recommendation",
+    "proactive",
+]
 version = "0.2.0"
 id = "proactive_recommender"
 entry = "plugin.plugins.proactive_recommender:ProactiveRecommenderPlugin"
@@ -19,10 +24,6 @@ supported = ">=0.1.0,<0.3.0"
 default_locale = "zh-CN"
 locales_dir = "i18n"
 
-[plugin_runtime]
-enabled = true
-auto_start = true
-
 [plugin.store]
 enabled = true
 
@@ -34,11 +35,18 @@ id = "main"
 title = "个性化主动推荐"
 entry = "ui/panel.tsx"
 context = "dashboard"
-permissions = ["state:read", "action:call"]
+permissions = [
+    "state:read",
+    "action:call",
+]
+
+[plugin_runtime]
+enabled = true
+auto_start = true
 
 [recommendation]
-enabled = false
-shadow_mode = true
+enabled = true
+shadow_mode = false
 memory_bucket = "default"
 background_llm = true
 daily_limit = 2
@@ -52,7 +60,8 @@ ignored_window_minutes = 30
 max_consecutive_ignored = 2
 max_idle_seconds = 900
 min_user_silence_minutes = 20
+1 = ""
 
 [recommendation.sources]
 web_search = true
-bilibili = false
+bilibili = true
