@@ -488,11 +488,25 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         if source_updates:
             updates["sources"] = source_updates
         try:
-            await self.config.update({"recommendation": updates})
-            await self._load_config()
+            payload = await self.ctx.update_own_config({"recommendation": updates})
+            config_data = payload.get("config") if isinstance(payload, Mapping) else None
+            if isinstance(config_data, Mapping):
+                self._config = RecommendationConfig.from_mapping(config_data)
+            else:
+                await self._load_config()
         except Exception as exc:
             return Err(SdkError(f"settings update failed: {type(exc).__name__}"))
-        return Ok({"updated": True, "config": asdict(self._config)})
+        return Ok(
+            {
+                "updated": True,
+                "persisted": (
+                    payload.get("persisted", True)
+                    if isinstance(payload, Mapping)
+                    else True
+                ),
+                "config": asdict(self._config),
+            }
+        )
 
     @timer_interval(id="recommendation_cycle", seconds=60, auto_start=True)
     async def recommendation_cycle(self, **_: Any):

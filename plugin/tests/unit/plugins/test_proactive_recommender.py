@@ -259,6 +259,10 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert 'props.api.call("update_recommendation_settings"' in panel_source
     assert "Raw conversations" not in panel_source
 
+    plugin_source = (plugin_dir / "__init__.py").read_text(encoding="utf-8")
+    assert "await self.ctx.update_own_config" in plugin_source
+    assert "await self.config.update" not in plugin_source
+
 
 def test_all_locales_expose_the_same_plugin_and_entry_keys() -> None:
     i18n_dir = _REPO_ROOT / "plugin" / "plugins" / "proactive_recommender" / "i18n"
