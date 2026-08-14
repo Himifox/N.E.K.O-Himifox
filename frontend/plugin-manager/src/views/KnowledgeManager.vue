@@ -280,8 +280,12 @@ async function importSelectedPack(event: Event) {
   if (!file) return
   try {
     const pack = JSON.parse(await file.text())
-    await knowledgeApi.importPack(pack)
-    ElMessage.success(t('knowledge.importSuccess'))
+    const response = await knowledgeApi.importPack(pack)
+    ElMessage.info(
+      response.state === 'queued'
+        ? t('knowledge.importQueued')
+        : t('knowledge.importSuccess'),
+    )
     await Promise.all([refreshAll(), loadPacks()])
   } catch { ElMessage.error(t('knowledge.invalidPack')) }
 }

@@ -61,7 +61,7 @@ export default {
     previous: '前へ', next: '次へ', packId: 'パック ID', subscription: '購読元', localImport: 'ローカル導入',
     importPack: 'ナレッジパックを導入', diagnostics: '最近の一致', time: '時刻', collection: 'コレクション', matchMode: '一致方式',
     delivered: 'カード送信', yes: 'はい', no: 'いいえ', terms: '認識語', tags: 'タグ', content: '本文',
-    loadFailed: 'ナレッジデータを読み込めません', operationFailed: 'ナレッジ操作に失敗しました', importSuccess: 'ナレッジパックを導入しました',
+    loadFailed: 'ナレッジデータを読み込めません', operationFailed: 'ナレッジ操作に失敗しました', importSuccess: 'ナレッジパックを導入しました', importQueued: 'ナレッジパックをバックグラウンドで準備中です。完了後に自動で利用可能になります',
     invalidPack: 'ナレッジパックが無効です', removeConfirm: 'ナレッジパック {name} を削除しますか？'
   },
   market: {

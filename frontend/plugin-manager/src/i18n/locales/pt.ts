@@ -61,7 +61,7 @@ export default {
     previous: 'Anterior', next: 'Próxima', packId: 'ID do pacote', subscription: 'Assinatura', localImport: 'Importação local',
     importPack: 'Importar pacote', diagnostics: 'Correspondências recentes', time: 'Hora', collection: 'Coleção', matchMode: 'Modo de correspondência',
     delivered: 'Cartão enviado', yes: 'Sim', no: 'Não', terms: 'Termos', tags: 'Tags', content: 'Conteúdo',
-    loadFailed: 'Falha ao carregar os dados', operationFailed: 'A operação falhou', importSuccess: 'Pacote importado',
+    loadFailed: 'Falha ao carregar os dados', operationFailed: 'A operação falhou', importSuccess: 'Pacote importado', importQueued: 'O pacote está sendo preparado em segundo plano e aparecerá quando estiver pronto',
     invalidPack: 'Pacote inválido', removeConfirm: 'Remover o pacote {name}?'
   },
   market: {

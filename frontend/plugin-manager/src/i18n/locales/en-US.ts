@@ -61,7 +61,7 @@ export default {
     previous: 'Previous', next: 'Next', packId: 'Pack ID', subscription: 'Subscription', localImport: 'Local import',
     importPack: 'Import knowledge pack', diagnostics: 'Recent matches', time: 'Time', collection: 'Collection', matchMode: 'Match mode',
     delivered: 'Card delivered', yes: 'Yes', no: 'No', terms: 'Recognition terms', tags: 'Tags', content: 'Content',
-    loadFailed: 'Failed to load knowledge data', operationFailed: 'Knowledge operation failed', importSuccess: 'Knowledge pack imported',
+    loadFailed: 'Failed to load knowledge data', operationFailed: 'Knowledge operation failed', importSuccess: 'Knowledge pack imported', importQueued: 'Knowledge pack is being prepared quietly and will appear when ready',
     invalidPack: 'Invalid knowledge pack', removeConfirm: 'Remove knowledge pack {name}?'
   },
   market: {

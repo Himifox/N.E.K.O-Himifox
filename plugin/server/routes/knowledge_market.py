@@ -29,6 +29,8 @@ router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
 _TASK_TTL_SECONDS = 60 * 60
+_JOB_POLL_SECONDS = 5.0
+_JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 _ALLOWED_ARTIFACT_HOSTS = {
     "github.com",
     "objects.githubusercontent.com",
@@ -181,6 +183,18 @@ async def _execute_subscription(task_id: str, payload: KnowledgeSubscribeRequest
                 str(result.get("reason") or "install_failed"),
                 "本地知识库拒绝了该知识包",
             )
+        job_id = str(result.get("job_id") or "")
+        if job_id:
+            activated = await _wait_for_pack_job(
+                task,
+                job_id=job_id,
+                collection_id=str(
+                    result.get("collection_id")
+                    or pack_payload.get("collection_id")
+                    or ""
+                ),
+            )
+            result = {**result, "activation": activated}
         task["result"] = result
         task["status"] = "completed"
         task["stage"] = "completed"
@@ -273,6 +287,46 @@ async def _main_request(
     except (httpx.HTTPError, ValueError) as exc:
         raise _KnowledgeTaskError("main_server_unavailable", "Main Server 不可用") from exc
     return payload if isinstance(payload, dict) else {}
+
+
+async def _wait_for_pack_job(
+    task: dict[str, Any],
+    *,
+    job_id: str,
+    collection_id: str,
+) -> dict[str, Any]:
+    """Keep marketplace install pending until the staged pack is truly active."""
+    deadline = time.monotonic() + _JOB_WAIT_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        payload = await _main_request(
+            "GET",
+            "packs/jobs",
+            params={"collection": collection_id},
+        )
+        job = next(
+            (
+                item
+                for item in payload.get("jobs", [])
+                if isinstance(item, dict) and item.get("job_id") == job_id
+            ),
+            None,
+        )
+        if job is None:
+            raise _KnowledgeTaskError("job_not_found", "knowledge job not found")
+        state = str(job.get("state") or "")
+        if state == "active":
+            return job
+        if state in {"cancelled", "failed"}:
+            raise _KnowledgeTaskError(
+                f"job_{state}",
+                "knowledge job did not complete",
+            )
+        percent = max(0.0, min(float(job.get("indexed_percent") or 0.0), 100.0))
+        task["stage"] = "indexing"
+        task["progress"] = 0.8 + percent * 0.0019
+        task["message"] = "Knowledge pack indexing in the background"
+        await asyncio.sleep(_JOB_POLL_SECONDS)
+    raise _KnowledgeTaskError("job_timeout", "knowledge job timed out")
 
 
 async def _report_subscription_best_effort(

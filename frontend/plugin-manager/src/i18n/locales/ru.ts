@@ -61,7 +61,7 @@ export default {
     previous: 'Назад', next: 'Далее', packId: 'ID пакета', subscription: 'Подписка', localImport: 'Локальный импорт',
     importPack: 'Импортировать пакет', diagnostics: 'Последние совпадения', time: 'Время', collection: 'Коллекция', matchMode: 'Режим совпадения',
     delivered: 'Карточка передана', yes: 'Да', no: 'Нет', terms: 'Термины', tags: 'Теги', content: 'Содержимое',
-    loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован',
+    loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован', importQueued: 'Пакет готовится в фоновом режиме и появится после завершения',
     invalidPack: 'Недопустимый пакет', removeConfirm: 'Удалить пакет {name}?'
   },
   market: {

@@ -44,7 +44,23 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
 
     async def fake_main(method, path, **kwargs):
         captured.update(method=method, path=path, **kwargs)
-        return {"ok": True, "pack_id": "fixture-pack", "entries": 1}
+        if path == "packs/jobs":
+            return {
+                "ok": True,
+                "jobs": [{
+                    "job_id": "fixture-job",
+                    "state": "active",
+                    "retrieval_mode": "hybrid",
+                    "indexed_percent": 100.0,
+                }],
+            }
+        return {
+            "ok": True,
+            "job_id": "fixture-job",
+            "pack_id": "fixture-pack",
+            "collection_id": "meme",
+            "state": "queued",
+        }
 
     async def no_report(*_args):
         return None
@@ -66,9 +82,9 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
     await module._execute_subscription("fixture", request)
 
     assert module._tasks["fixture"]["status"] == "completed"
-    assert captured["path"] == "subscriptions/apply"
-    assert captured["json"]["subscription"]["provider"] == "plugin-market"
-    assert captured["json"]["pack"]["pack_id"] == "fixture-pack"
+    assert captured["path"] == "packs/jobs"
+    result = module._tasks["fixture"]["result"]
+    assert result["activation"]["state"] == "active"
 
 
 @pytest.mark.asyncio
@@ -102,3 +118,39 @@ async def test_market_subscription_rejects_hash_mismatch(monkeypatch):
 
     assert module._tasks["mismatch"]["status"] == "failed"
     assert module._tasks["mismatch"]["error_code"] == "artifact_hash_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_market_task_waits_for_staged_pack_activation(monkeypatch):
+    calls = 0
+    task = {"stage": "installing", "progress": 0.75, "message": ""}
+
+    async def fake_main(_method, _path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        state = "embedding" if calls == 1 else "active"
+        return {
+            "ok": True,
+            "jobs": [{
+                "job_id": "fixture-job",
+                "state": state,
+                "indexed_percent": 50.0 if state == "embedding" else 100.0,
+            }],
+        }
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module.asyncio, "sleep", no_sleep)
+
+    result = await module._wait_for_pack_job(
+        task,
+        job_id="fixture-job",
+        collection_id="meme",
+    )
+
+    assert calls == 2
+    assert task["stage"] == "indexing"
+    assert task["progress"] == pytest.approx(0.895)
+    assert result["state"] == "active"

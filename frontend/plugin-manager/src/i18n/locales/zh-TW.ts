@@ -61,7 +61,7 @@ export default {
     previous: '上一頁', next: '下一頁', packId: '資料包 ID', subscription: '訂閱來源', localImport: '本機匯入',
     importPack: '匯入知識包', diagnostics: '最近命中', time: '時間', collection: '知識庫', matchMode: '匹配方式',
     delivered: '已遞卡', yes: '是', no: '否', terms: '識別詞', tags: '標籤', content: '正文',
-    loadFailed: '知識庫資料載入失敗', operationFailed: '知識庫操作失敗', importSuccess: '知識包匯入成功',
+    loadFailed: '知識庫資料載入失敗', operationFailed: '知識庫操作失敗', importSuccess: '知識包匯入成功', importQueued: '知識包正在背景靜默處理，準備完成後會自動載入',
     invalidPack: '知識包格式無效', removeConfirm: '確定移除知識包 {name} 嗎？'
   },
   market: {
