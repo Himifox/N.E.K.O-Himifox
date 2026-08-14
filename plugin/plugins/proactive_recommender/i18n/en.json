@@ -1,0 +1,10 @@
+{
+  "plugin.name": "Personalized Proactive Recommendations",
+  "plugin.description": "Learns non-sensitive content preferences from recent conversations and lets NEKO naturally recommend content after strict safety checks.",
+  "entries.status.name": "Recommendation status",
+  "entries.status.description": "View personalized recommendation status without returning raw user conversations.",
+  "entries.run_once.name": "Run recommendation cycle",
+  "entries.run_once.description": "Run profile update, discovery, and gating now while preserving every safety limit.",
+  "entries.feedback.name": "Recommendation feedback",
+  "entries.feedback.description": "Mark a recommendation as liked, disliked, or ignored."
+}

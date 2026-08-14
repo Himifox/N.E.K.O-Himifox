@@ -1,0 +1,48 @@
+[plugin]
+name = "个性化主动推荐"
+description = "从近期对话中学习非敏感内容偏好，调用已有内容插件发现候选，并在严格门控后让 NEKO 自然地发起推荐话题。"
+short_description = "Privacy-aware personalized recommendations for proactive conversations."
+keywords = ["个性化推荐", "主动搭话", "recommendation", "proactive"]
+version = "0.1.0"
+id = "proactive_recommender"
+entry = "plugin.plugins.proactive_recommender:ProactiveRecommenderPlugin"
+passive = true
+
+[plugin.author]
+name = "N.E.K.O Team"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin_runtime]
+enabled = true
+auto_start = true
+
+[plugin.store]
+enabled = true
+
+[recommendation]
+enabled = false
+shadow_mode = true
+memory_bucket = "default"
+background_llm = true
+daily_limit = 2
+min_interval_minutes = 240
+quiet_start = "23:00"
+quiet_end = "09:00"
+score_threshold = 0.72
+candidate_ttl_hours = 12
+reply_window_minutes = 10
+ignored_window_minutes = 30
+max_consecutive_ignored = 2
+max_idle_seconds = 900
+min_user_silence_minutes = 20
+
+[recommendation.sources]
+web_search = true
+bilibili = false

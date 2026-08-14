@@ -1,0 +1,10 @@
+{
+  "plugin.name": "개인화 능동 추천",
+  "plugin.description": "최근 대화에서 민감하지 않은 콘텐츠 취향을 학습하고 엄격한 안전 확인 후 NEKO가 자연스럽게 추천합니다.",
+  "entries.status.name": "추천 상태",
+  "entries.status.description": "사용자의 원문 대화를 반환하지 않고 개인화 추천 상태를 확인합니다.",
+  "entries.run_once.name": "추천 주기 실행",
+  "entries.run_once.description": "모든 안전 제한을 유지한 채 취향 갱신, 탐색, 게이트를 즉시 실행합니다.",
+  "entries.feedback.name": "추천 피드백",
+  "entries.feedback.description": "추천을 좋아함, 싫어함 또는 무시로 표시합니다."
+}

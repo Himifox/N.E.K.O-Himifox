@@ -1,0 +1,10 @@
+{
+  "plugin.name": "个性化主动推荐",
+  "plugin.description": "从近期对话中学习非敏感内容偏好，并在严格门控后让 NEKO 自然地发起推荐话题。",
+  "entries.status.name": "推荐状态",
+  "entries.status.description": "查看个性化主动推荐状态，不返回用户原始对话。",
+  "entries.run_once.name": "运行一次推荐周期",
+  "entries.run_once.description": "立即执行一次画像、候选发现和门控；仍遵守所有安全限制。",
+  "entries.feedback.name": "推荐反馈",
+  "entries.feedback.description": "将一次推荐标记为喜欢、不喜欢或忽略。"
+}

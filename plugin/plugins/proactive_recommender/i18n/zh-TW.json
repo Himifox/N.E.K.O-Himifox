@@ -1,0 +1,10 @@
+{
+  "plugin.name": "個人化主動推薦",
+  "plugin.description": "從近期對話學習非敏感內容偏好，並在嚴格門控後讓 NEKO 自然地主動推薦話題。",
+  "entries.status.name": "推薦狀態",
+  "entries.status.description": "查看個人化主動推薦狀態，不傳回使用者原始對話。",
+  "entries.run_once.name": "執行一次推薦週期",
+  "entries.run_once.description": "立即執行一次偏好整理、候選探索與門控；仍遵守所有安全限制。",
+  "entries.feedback.name": "推薦回饋",
+  "entries.feedback.description": "將一次推薦標記為喜歡、不喜歡或忽略。"
+}

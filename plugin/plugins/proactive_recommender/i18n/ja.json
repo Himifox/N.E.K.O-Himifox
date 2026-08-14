@@ -1,0 +1,10 @@
+{
+  "plugin.name": "パーソナライズされた能動的レコメンド",
+  "plugin.description": "最近の会話から機密性のない好みを学び、厳格な判定後に NEKO が自然にコンテンツを勧めます。",
+  "entries.status.name": "レコメンド状態",
+  "entries.status.description": "ユーザーの会話原文を返さずに、個人向けレコメンドの状態を表示します。",
+  "entries.run_once.name": "レコメンド周期を実行",
+  "entries.run_once.description": "すべての安全制限を守りながら、好みの更新、探索、判定を今すぐ実行します。",
+  "entries.feedback.name": "レコメンドへの反応",
+  "entries.feedback.description": "レコメンドを好み、好みでない、または無視として記録します。"
+}

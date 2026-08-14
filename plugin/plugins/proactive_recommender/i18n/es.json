@@ -1,0 +1,10 @@
+{
+  "plugin.name": "Recomendaciones proactivas personalizadas",
+  "plugin.description": "Aprende preferencias de contenido no sensibles de conversaciones recientes y permite que NEKO recomiende contenido tras controles estrictos.",
+  "entries.status.name": "Estado de recomendaciones",
+  "entries.status.description": "Muestra el estado de las recomendaciones sin devolver conversaciones originales del usuario.",
+  "entries.run_once.name": "Ejecutar ciclo de recomendación",
+  "entries.run_once.description": "Actualiza el perfil, descubre candidatos y aplica controles sin omitir límites de seguridad.",
+  "entries.feedback.name": "Opinión sobre recomendación",
+  "entries.feedback.description": "Marca una recomendación como aceptada, rechazada o ignorada."
+}
