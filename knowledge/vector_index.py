@@ -31,7 +31,9 @@ from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
 logger = logging.getLogger("N.E.K.O.Knowledge.VectorIndex")
-SEMANTIC_THRESHOLD = 0.30
+# Calibrated with input contract v2 against the local 256d int8 model:
+# Recall@3=80% and unrelated-query rejection=90% on the grounded release set.
+SEMANTIC_THRESHOLD = 0.57
 VECTOR_CANDIDATE_LIMIT = 12
 QUERY_EMBEDDING_TIMEOUT_SECONDS = 1.0
 SLOW_BATCH_SECONDS = 15.0

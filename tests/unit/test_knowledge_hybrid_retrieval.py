@@ -500,7 +500,7 @@ def test_semantic_threshold_rejects_weak_candidates(tmp_path):
     snapshot = VectorIndexSnapshot(
         revision=1,
         model_id="fixture",
-        matrix=np.asarray([[0.29, np.sqrt(1.0 - 0.29**2)]], dtype=np.float32),
+        matrix=np.asarray([[0.56, np.sqrt(1.0 - 0.56**2)]], dtype=np.float32),
         rows=({"entry": _entry("Weak"), "chunk_index": 0},),
     )
 
