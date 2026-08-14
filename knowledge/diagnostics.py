@@ -35,8 +35,20 @@ class KnowledgeQueryDiagnostic:
     elapsed_ms: int
 
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeIndexBatchDiagnostic:
+    timestamp: str
+    selected: int
+    stored: int
+    failed: int
+    stale_writebacks: int
+    elapsed_ms: int
+    state: str
+
+
 _records: deque[KnowledgeRouteDiagnostic] = deque(maxlen=_MAX_RECORDS)
 _query_records: deque[KnowledgeQueryDiagnostic] = deque(maxlen=_MAX_RECORDS)
+_index_batch_records: deque[KnowledgeIndexBatchDiagnostic] = deque(maxlen=_MAX_RECORDS)
 _lock = threading.Lock()
 
 
@@ -99,7 +111,36 @@ def list_recent_knowledge_queries() -> tuple[dict, ...]:
         return tuple(asdict(record) for record in reversed(_query_records))
 
 
+def record_knowledge_index_batch(
+    *,
+    selected: int,
+    stored: int,
+    failed: int,
+    stale_writebacks: int,
+    elapsed_ms: int,
+    state: str,
+) -> None:
+    """Store only aggregate index telemetry, never chunk text or vectors."""
+    record = KnowledgeIndexBatchDiagnostic(
+        timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        selected=max(int(selected), 0),
+        stored=max(int(stored), 0),
+        failed=max(int(failed), 0),
+        stale_writebacks=max(int(stale_writebacks), 0),
+        elapsed_ms=max(int(elapsed_ms), 0),
+        state=str(state or "unknown")[:40],
+    )
+    with _lock:
+        _index_batch_records.append(record)
+
+
+def list_recent_knowledge_index_batches() -> tuple[dict, ...]:
+    with _lock:
+        return tuple(asdict(record) for record in reversed(_index_batch_records))
+
+
 def clear_knowledge_route_diagnostics() -> None:
     with _lock:
         _records.clear()
         _query_records.clear()
+        _index_batch_records.clear()

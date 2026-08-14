@@ -59,7 +59,9 @@ def _rrf_knowledge_hits(
         key = (hit.entry.source_tag, hit.entry.title)
         record = records.setdefault(key, {"entry": hit.entry, "rrf": 0.0})
         record["rrf"] = float(record["rrf"]) + 1.0 / (_KNOWLEDGE_RRF_K + rank)
-        record["semantic_score"] = hit.semantic_score if hit.semantic_score is not None else hit.score
+        record["semantic_score"] = (
+            hit.semantic_score if hit.semantic_score is not None else hit.score
+        )
         record["best_chunk_index"] = hit.best_chunk_index
     ordered = sorted(
         records.values(),
@@ -81,17 +83,22 @@ def _rrf_knowledge_hits(
             )
             if present
         )
-        results.append(MoegirlKnowledgeHit(
-            entry=record["entry"],
-            score=float(record["rrf"]),
-            retrieval_modes=modes,
-            lexical_score=float(record["lexical_score"])
-            if "lexical_score" in record else None,
-            semantic_score=float(record["semantic_score"])
-            if "semantic_score" in record else None,
-            best_chunk_index=int(record["best_chunk_index"])
-            if record.get("best_chunk_index") is not None else None,
-        ))
+        results.append(
+            MoegirlKnowledgeHit(
+                entry=record["entry"],
+                score=float(record["rrf"]),
+                retrieval_modes=modes,
+                lexical_score=float(record["lexical_score"])
+                if "lexical_score" in record
+                else None,
+                semantic_score=float(record["semantic_score"])
+                if "semantic_score" in record
+                else None,
+                best_chunk_index=int(record["best_chunk_index"])
+                if record.get("best_chunk_index") is not None
+                else None,
+            )
+        )
     return results
 
 
@@ -216,14 +223,18 @@ MEME_COLLECTION = CollectionSpec(
         "source:moegirl",
         "source:geng8",
     ),
-    context_hints=(ContextHint(terms=(
-        "是什么梗",
-        "这个梗",
-        "网络梗",
-        "弹幕梗",
-        "玩梗",
-        "接梗",
-    )),),
+    context_hints=(
+        ContextHint(
+            terms=(
+                "是什么梗",
+                "这个梗",
+                "网络梗",
+                "弹幕梗",
+                "玩梗",
+                "接梗",
+            )
+        ),
+    ),
     match_policy=MEME_MATCH_POLICY,
     response_policy=MEME_RESPONSE_POLICY,
 )
@@ -453,7 +464,9 @@ def get_reference_details(
     remaining = max_chars
     for line in entry.content.splitlines():
         candidate = line.strip()
-        if not candidate or not any(candidate.startswith(prefix) for prefix in prefixes):
+        if not candidate or not any(
+            candidate.startswith(prefix) for prefix in prefixes
+        ):
             continue
         if candidate.startswith("- "):
             candidate = candidate[2:].strip()
@@ -571,7 +584,7 @@ class KnowledgeService:
             allowed_source_tags=(source_tag,) if source_tag else None,
             include_disabled=include_disabled,
         )
-        return tuple(hits[offset:offset + limit + 1])
+        return tuple(hits[offset : offset + limit + 1])
 
     def sample_entries(
         self,
@@ -720,19 +733,24 @@ class KnowledgeService:
         ):
             if not self._auto_context_enabled(spec) or spec.response_policy is None:
                 continue
-            route = next((
-                candidate
-                for candidate in spec.material_routes
-                if any(term in normalized for term in candidate.topic_terms)
-                and any(term in normalized for term in candidate.request_terms)
-            ), None)
+            route = next(
+                (
+                    candidate
+                    for candidate in spec.material_routes
+                    if any(term in normalized for term in candidate.topic_terms)
+                    and any(term in normalized for term in candidate.request_terms)
+                ),
+                None,
+            )
             if route is None:
                 continue
             entries = self._sample_entries(
                 spec.collection_id,
                 route.sample_tag,
                 limit=1,
-                allowed_source_tags=self._effective_match_policy(spec).allowed_source_tags,
+                allowed_source_tags=self._effective_match_policy(
+                    spec
+                ).allowed_source_tags,
             )
             if not entries:
                 continue
@@ -802,20 +820,25 @@ class KnowledgeService:
         database_path = self.database_path(collection_id)
         database_exists = database_path.is_file()
         store = self._store(collection_id) if database_exists else None
-        disabled = load_disabled_entries(
-            get_catalog_override_path(database_path)
+        disabled = load_disabled_entries(get_catalog_override_path(database_path))
+        chunk_status = (
+            store.chunk_status()
+            if store is not None
+            else {
+                "entries_total": 0,
+                "entries_missing_chunks": 0,
+                "chunks_total": 0,
+                "chunks_pending": 0,
+                "chunks_ready": 0,
+                "chunks_stale": 0,
+                "chunks_failed": 0,
+                "chunks_failed_retryable_now": 0,
+                "chunks_failed_waiting": 0,
+                "chunks_failed_exhausted": 0,
+                "indexed_percent": 0.0,
+                "chunks_revision": 0,
+            }
         )
-        chunk_status = store.chunk_status() if store is not None else {
-            "entries_total": 0,
-            "entries_missing_chunks": 0,
-            "chunks_total": 0,
-            "chunks_pending": 0,
-            "chunks_ready": 0,
-            "chunks_stale": 0,
-            "chunks_failed": 0,
-            "indexed_percent": 0.0,
-            "chunks_revision": 0,
-        }
         try:
             from utils.local_embedding_runtime import get_local_embedding_status
 
@@ -835,7 +858,8 @@ class KnowledgeService:
             "sources": store.count_by_source_tags() if store is not None else (),
             "packs": len(self.list_packs(collection_id)),
             "retrieval_mode": "hybrid"
-            if chunk_status["chunks_ready"] and embedding_state == "ready" else "bm25",
+            if chunk_status["chunks_ready"] and embedding_state == "ready"
+            else "bm25",
             "embedding_service_state": embedding_state,
             "embedding_model_id": embedding_model_id,
             **chunk_status,
@@ -850,14 +874,16 @@ class KnowledgeService:
                 results.append({"status": status, **payload})
             except Exception as exc:
                 spec = self._spec(collection_id)
-                results.append({
-                    "collection_id": collection_id,
-                    "name": spec.display_name or collection_id,
-                    "status": "degraded",
-                    "integrity_ok": False,
-                    "error_type": type(exc).__name__,
-                    "auto_context": self._auto_context_enabled(spec),
-                })
+                results.append(
+                    {
+                        "collection_id": collection_id,
+                        "name": spec.display_name or collection_id,
+                        "status": "degraded",
+                        "integrity_ok": False,
+                        "error_type": type(exc).__name__,
+                        "auto_context": self._auto_context_enabled(spec),
+                    }
+                )
         return tuple(results)
 
     def set_collection_auto_context(self, collection_id: str, *, enabled: bool) -> None:
@@ -979,10 +1005,14 @@ class KnowledgeService:
             return spec.match_policy
         from .packs import enabled_pack_source_tags
 
-        allowed_sources = tuple(sorted((
-            *(spec.auto_context_source_tags or SOURCES),
-            *enabled_pack_source_tags(self.database_path(spec.collection_id)),
-        )))
+        allowed_sources = tuple(
+            sorted(
+                (
+                    *(spec.auto_context_source_tags or SOURCES),
+                    *enabled_pack_source_tags(self.database_path(spec.collection_id)),
+                )
+            )
+        )
         return replace(spec.match_policy, allowed_source_tags=allowed_sources)
 
     def _render_turn_context(
@@ -1016,10 +1046,12 @@ class KnowledgeService:
             policy.detail_line_prefixes,
             max_chars=420,
         )
-        lines.extend((
-            f"{policy.term_label}: {entry.title}\n",
-            f"{policy.summary_label}: {meaning}\n",
-        ))
+        lines.extend(
+            (
+                f"{policy.term_label}: {entry.title}\n",
+                f"{policy.summary_label}: {meaning}\n",
+            )
+        )
         if classification:
             lines.append(f"{policy.classification_label}: {classification}\n")
         if details:
@@ -1029,9 +1061,11 @@ class KnowledgeService:
             entry.source_tag,
             database_path=self.database_path(match.collection_id),
         )
-        lines.extend((
-            f"Response posture: {posture}\n",
-            f"Source: {source.name}\n",
-            "==========================================================",
-        ))
+        lines.extend(
+            (
+                f"Response posture: {posture}\n",
+                f"Source: {source.name}\n",
+                "==========================================================",
+            )
+        )
         return "".join(lines)

@@ -27,7 +27,8 @@ COLLECTION_DATABASES = {
     "meme": Path("moegirl-knowledge") / "knowledge.db",
     "corpora": Path("corpora") / "knowledge.db",
 }
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_BATCH_SIZE = 4
+EMBEDDING_MICROBATCH_SIZE = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +68,10 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_batch_size,
         default=DEFAULT_BATCH_SIZE,
         metavar="N",
-        help="embedding batch size from 1 to 128 (default: 32)",
+        help=(
+            "total embedding work per round from 1 to 128; ONNX inference is "
+            "split into batches of at most 4 (default: 4)"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -145,7 +149,9 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
         "chunks_ready": 0,
         "chunks_stale": 0,
         "chunks_failed": 0,
-        "chunks_failed_retryable": 0,
+        "chunks_failed_retryable_now": 0,
+        "chunks_failed_waiting": 0,
+        "chunks_failed_exhausted": 0,
         "indexed_percent": 0.0,
         "embedding_model_id": "",
     }
@@ -180,24 +186,37 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
                 )
             }
             chunks_total = sum(counts.values())
-            result.update({
-                "chunks_total": chunks_total,
-                "chunks_pending": counts.get("pending", 0),
-                "chunks_ready": counts.get("ready", 0),
-                "chunks_stale": counts.get("stale", 0),
-                "chunks_failed": counts.get("failed", 0),
-                "indexed_percent": (
-                    round(100.0 * counts.get("ready", 0) / chunks_total, 1)
-                    if chunks_total
-                    else 0.0
-                ),
-            })
-            result["chunks_failed_retryable"] = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM knowledge_chunks "
-                    "WHERE embedding_status='failed' AND next_retry_at<=?",
-                    (int(time.time()),),
-                ).fetchone()[0]
+            result.update(
+                {
+                    "chunks_total": chunks_total,
+                    "chunks_pending": counts.get("pending", 0),
+                    "chunks_ready": counts.get("ready", 0),
+                    "chunks_stale": counts.get("stale", 0),
+                    "chunks_failed": counts.get("failed", 0),
+                    "indexed_percent": (
+                        round(100.0 * counts.get("ready", 0) / chunks_total, 1)
+                        if chunks_total
+                        else 0.0
+                    ),
+                }
+            )
+            now = int(time.time())
+            failed_counts = connection.execute(
+                "SELECT "
+                "SUM(CASE WHEN embedding_attempts<8 AND next_retry_at<=? "
+                "THEN 1 ELSE 0 END) retryable_now, "
+                "SUM(CASE WHEN embedding_attempts<8 AND next_retry_at>? "
+                "THEN 1 ELSE 0 END) waiting, "
+                "SUM(CASE WHEN embedding_attempts>=8 THEN 1 ELSE 0 END) exhausted "
+                "FROM knowledge_chunks WHERE embedding_status='failed'",
+                (now, now),
+            ).fetchone()
+            result.update(
+                {
+                    "chunks_failed_retryable_now": int(failed_counts[0] or 0),
+                    "chunks_failed_waiting": int(failed_counts[1] or 0),
+                    "chunks_failed_exhausted": int(failed_counts[2] or 0),
+                }
             )
             if "entries" in tables:
                 result["entries_missing_chunks"] = int(
@@ -266,7 +285,7 @@ def dry_run_plan(target: CollectionTarget, *, full: bool) -> dict[str, Any]:
         affected_chunks = (
             int(status["chunks_pending"])
             + int(status["chunks_stale"])
-            + int(status["chunks_failed_retryable"])
+            + int(status["chunks_failed_retryable_now"])
         )
         affected_entries = int(status["entries_missing_chunks"])
         if affected_entries:
@@ -297,8 +316,54 @@ def _eligible_chunk_count(status: dict[str, Any]) -> int:
     return (
         int(status["chunks_pending"])
         + int(status["chunks_stale"])
-        + int(status["chunks_failed_retryable"])
+        + int(status["chunks_failed_retryable_now"])
     )
+
+
+def _completion_state(status: dict[str, Any], *, last_batch_state: str = "") -> str:
+    if int(status["chunks_failed_exhausted"]) > 0:
+        return "failed_exhausted"
+    if int(status["chunks_failed"]) > 0:
+        return "retry_scheduled"
+    if int(status["chunks_pending"]) == 0 and int(status["chunks_stale"]) == 0:
+        return "complete"
+    if last_batch_state in {
+        "disabled",
+        "embedding_unavailable",
+        "not_ready",
+    }:
+        return "embedding_unavailable"
+    return "processing_incomplete"
+
+
+async def _run_embedding_work_round(
+    store: Any,
+    *,
+    work_budget: int,
+) -> tuple[int, int, int, int, str]:
+    """Process one bounded round while keeping each ONNX call at four texts."""
+    from knowledge.vector_index import index_embedding_batch
+
+    selected = 0
+    stored = 0
+    failed = 0
+    stale_writebacks = 0
+    last_state = "no_work"
+    while selected < work_budget:
+        result = await index_embedding_batch(
+            store,
+            batch_size=min(EMBEDDING_MICROBATCH_SIZE, work_budget - selected),
+            load_model=True,
+        )
+        last_state = result.state
+        selected += result.selected
+        stored += result.stored
+        failed += result.failed
+        stale_writebacks += result.stale_writebacks
+        if result.selected == 0:
+            break
+        await asyncio.sleep(0)
+    return selected, stored, failed, stale_writebacks, last_state
 
 
 async def rebuild_target(
@@ -309,7 +374,6 @@ async def rebuild_target(
 ) -> tuple[dict[str, Any], bool]:
     """Reconcile chunks and generate all currently eligible embeddings."""
     from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
-    from knowledge.vector_index import index_embedding_batch
     from utils.local_embedding_runtime import get_local_embedding_status
 
     before = inspect_database(target.database_path)
@@ -325,35 +389,52 @@ async def rebuild_target(
     )
 
     embedded_chunks = 0
+    failed_chunks = 0
+    stale_writebacks = 0
+    last_batch_state = "no_work"
     while True:
         eligible_before = _eligible_chunk_count(inspect_database(target.database_path))
         if eligible_before == 0:
             break
-        stored = await index_embedding_batch(
+        (
+            selected,
+            stored,
+            failed,
+            stale,
+            last_batch_state,
+        ) = await _run_embedding_work_round(
             store,
-            batch_size=batch_size,
-            load_model=True,
+            work_budget=batch_size,
         )
         embedded_chunks += stored
+        failed_chunks += failed
+        stale_writebacks += stale
         eligible_after = _eligible_chunk_count(inspect_database(target.database_path))
-        if stored == 0 and eligible_after >= eligible_before:
+        if selected == 0 or (
+            stored == 0 and failed == 0 and eligible_after >= eligible_before
+        ):
             break
         await asyncio.sleep(0)
 
     after = inspect_database(target.database_path)
     embedding_status = get_local_embedding_status()
     eligible_remaining = _eligible_chunk_count(after)
-    complete = eligible_remaining == 0
+    result_state = _completion_state(after, last_batch_state=last_batch_state)
+    complete = result_state == "complete"
     return {
         **after,
         "action": "full" if full else "rebuild",
         "reset_chunks": reset_chunks,
         "backfilled_entries": backfilled_entries,
         "embedded_chunks": embedded_chunks,
+        "failed_chunks_this_run": failed_chunks,
+        "stale_writebacks": stale_writebacks,
         "eligible_chunks_remaining": eligible_remaining,
         "embedding_service_state": embedding_status.state,
         "runtime_model_id": embedding_status.model_id,
         "runtime_dimensions": embedding_status.dimensions,
+        "last_batch_state": last_batch_state,
+        "result_state": result_state,
         "complete": complete,
     }, complete
 
@@ -370,7 +451,10 @@ async def _run(args: argparse.Namespace) -> int:
     }
     if requested_action == "status":
         payload["collections"] = [
-            {"collection_id": target.collection_id, **inspect_database(target.database_path)}
+            {
+                "collection_id": target.collection_id,
+                **inspect_database(target.database_path),
+            }
             for target in targets
         ]
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -378,7 +462,10 @@ async def _run(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         payload["collections"] = [
-            {"collection_id": target.collection_id, **dry_run_plan(target, full=args.full)}
+            {
+                "collection_id": target.collection_id,
+                **dry_run_plan(target, full=args.full),
+            }
             for target in targets
         ]
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -392,14 +479,18 @@ async def _run(args: argparse.Namespace) -> int:
                 full=args.full,
                 batch_size=args.batch_size,
             )
-            payload["collections"].append({
-                "collection_id": target.collection_id,
-                **result,
-            })
+            payload["collections"].append(
+                {
+                    "collection_id": target.collection_id,
+                    **result,
+                }
+            )
             all_complete = all_complete and complete
     finally:
+        from knowledge.vector_index import drain_knowledge_embedding_inference
         from utils.local_embedding_runtime import release_local_embedding_service
 
+        await drain_knowledge_embedding_inference()
         await release_local_embedding_service()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if all_complete else 2

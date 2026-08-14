@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 import pytest
 
 import knowledge.vector_index as vector_index
-from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry, MoegirlKnowledgeHit
+from knowledge.moegirl_knowledge.models import (
+    MoegirlKnowledgeEntry,
+    MoegirlKnowledgeHit,
+)
 from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
 from knowledge.service import KnowledgeService, _rrf_knowledge_hits
 from knowledge.vector_index import VectorIndexSnapshot, _score_snapshot
@@ -36,6 +41,25 @@ def _hit(
         semantic_score=score if semantic else None,
         best_chunk_index=chunk_index,
     )
+
+
+def _set_ready_runtime(monkeypatch, service, *, dimensions: int = 2) -> None:
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_status",
+        lambda: LocalEmbeddingStatus(
+            state="ready",
+            model_id="fixture",
+            dimensions=dimensions,
+        ),
+    )
+    monkeypatch.setattr(vector_index, "get_local_embedding_service", lambda: service)
+
+
+def _fresh_coordinator(monkeypatch):
+    coordinator = vector_index._KnowledgeInferenceCoordinator()
+    monkeypatch.setattr(vector_index, "_INFERENCE_COORDINATOR", coordinator)
+    return coordinator
 
 
 def test_rrf_keeps_lexical_only_order():
@@ -116,6 +140,220 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     assert [hit.entry.title for hit in result] == ["Kept"]
     assert result[0].best_chunk_index == 4
     assert result[0].semantic_score == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_uses_versioned_query_input(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    received: list[str] = []
+
+    class _EmbeddingService:
+        async def embed(self, text):
+            received.append(text)
+            return [1.0, 0.0]
+
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+
+    _hits, state = await vector_index.semantic_search(store, "  用户问题  ")
+
+    assert state == "ready"
+    assert received == ["Query: 用户问题"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_does_not_overlap_background_inference(
+    tmp_path,
+    monkeypatch,
+):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _EmbeddingService:
+        query_calls = 0
+
+        async def embed(self, _text):
+            self.query_calls += 1
+            return [1.0, 0.0]
+
+        async def embed_batch(self, _texts):
+            started.set()
+            await release.wait()
+            return [[1.0, 0.0]]
+
+    service = _EmbeddingService()
+    coordinator = _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, service)
+    background = asyncio.create_task(
+        coordinator.run_background(service, ["Document:\nContent: test"])
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    hits, state = await vector_index.semantic_search(store, "question")
+
+    assert hits == []
+    assert state == "inference_busy"
+    assert service.query_calls == 0
+    release.set()
+    await background
+
+
+@pytest.mark.asyncio
+async def test_query_soft_timeout_tracks_native_work_and_prevents_stacking(
+    tmp_path,
+    monkeypatch,
+):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _EmbeddingService:
+        calls = 0
+        cancelled = False
+
+        async def embed(self, _text):
+            self.calls += 1
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return [1.0, 0.0]
+
+    service = _EmbeddingService()
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, service)
+    monkeypatch.setattr(vector_index, "QUERY_EMBEDDING_TIMEOUT_SECONDS", 0.01)
+
+    hits, state = await vector_index.semantic_search(store, "first")
+    assert hits == []
+    assert state == "query_timeout"
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    hits, state = await vector_index.semantic_search(store, "second")
+    assert hits == []
+    assert state == "inference_busy"
+    assert service.calls == 1
+    assert service.cancelled is False
+
+    release.set()
+    await vector_index.drain_knowledge_embedding_inference()
+    await asyncio.sleep(0)
+    _hits, state = await vector_index.semantic_search(store, "third")
+    assert state == "ready"
+    assert service.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
+    tmp_path, monkeypatch
+):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    for index in range(12):
+        store.upsert(_entry(f"Entry {index}"))
+
+    class _EmbeddingService:
+        batch_sizes: list[int] = []
+
+        async def embed_batch(self, texts):
+            self.batch_sizes.append(len(texts))
+            return [[1.0, 0.0] for _text in texts]
+
+    service = _EmbeddingService()
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, service)
+
+    default_result = await vector_index.index_embedding_batch(store)
+    capped_result = await vector_index.index_embedding_batch(store, batch_size=128)
+
+    assert default_result.selected == 4
+    assert default_result.stored == 4
+    assert capped_result.selected == 8
+    assert capped_result.stored == 8
+    assert service.batch_sizes == [4, 8]
+
+
+@pytest.mark.asyncio
+async def test_slow_embedding_batch_is_stored_without_failure(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Slow but valid"))
+
+    class _EmbeddingService:
+        async def embed_batch(self, texts):
+            return [[1.0, 0.0] for _text in texts]
+
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+    monkeypatch.setattr(vector_index, "SLOW_BATCH_SECONDS", -1.0)
+
+    result = await vector_index.index_embedding_batch(store)
+    status = store.chunk_status()
+
+    assert result.state == "slow_batch"
+    assert result.selected == result.stored == 1
+    assert result.failed == 0
+    assert status["chunks_ready"] == 1
+    assert status["chunks_failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_exception_marks_selected_chunks_failed(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Broken inference"))
+
+    class _EmbeddingService:
+        async def embed_batch(self, _texts):
+            raise RuntimeError("native inference failed")
+
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+
+    result = await vector_index.index_embedding_batch(store)
+    status = store.chunk_status()
+
+    assert result.state == "failed"
+    assert result.selected == result.failed == 1
+    assert result.stored == 0
+    assert status["chunks_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_result_reports_stale_writeback(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Changing entry"))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _EmbeddingService:
+        async def embed_batch(self, texts):
+            started.set()
+            await release.wait()
+            return [[1.0, 0.0] for _text in texts]
+
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+    task = asyncio.create_task(vector_index.index_embedding_batch(store))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    updated = _entry("Changing entry")
+    updated = MoegirlKnowledgeEntry(
+        title=updated.title,
+        terms=updated.terms,
+        tags=updated.tags,
+        summary=updated.summary,
+        content="New content invalidates the in-flight chunk.",
+    )
+    store.upsert(updated)
+    release.set()
+
+    result = await task
+
+    assert result.state == "ready"
+    assert result.selected == 1
+    assert result.stored == 0
+    assert result.failed == 0
+    assert result.stale_writebacks == 1
 
 
 @pytest.mark.asyncio
@@ -216,13 +454,16 @@ def test_invalid_query_vector_is_safely_ignored(tmp_path):
         rows=({"entry": _entry("Target"), "chunk_index": 0},),
     )
 
-    assert _score_snapshot(
-        snapshot,
-        [float("nan"), 0.0],
-        database_path=tmp_path / "knowledge.db",
-        limit=3,
-        allowed_source_tags=None,
-    ) == []
+    assert (
+        _score_snapshot(
+            snapshot,
+            [float("nan"), 0.0],
+            database_path=tmp_path / "knowledge.db",
+            limit=3,
+            allowed_source_tags=None,
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -263,17 +504,23 @@ def test_semantic_threshold_rejects_weak_candidates(tmp_path):
         rows=({"entry": _entry("Weak"), "chunk_index": 0},),
     )
 
-    assert _score_snapshot(
-        snapshot,
-        [1.0, 0.0],
-        database_path=tmp_path / "knowledge.db",
-        limit=3,
-        allowed_source_tags=None,
-    ) == []
-    assert _score_snapshot(
-        snapshot,
-        [1.0],
-        database_path=tmp_path / "knowledge.db",
-        limit=3,
-        allowed_source_tags=None,
-    ) == []
+    assert (
+        _score_snapshot(
+            snapshot,
+            [1.0, 0.0],
+            database_path=tmp_path / "knowledge.db",
+            limit=3,
+            allowed_source_tags=None,
+        )
+        == []
+    )
+    assert (
+        _score_snapshot(
+            snapshot,
+            [1.0],
+            database_path=tmp_path / "knowledge.db",
+            limit=3,
+            allowed_source_tags=None,
+        )
+        == []
+    )

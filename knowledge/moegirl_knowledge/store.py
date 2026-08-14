@@ -22,6 +22,7 @@ from .models import MoegirlKnowledgeEntry, UpsertResult
 
 
 SCHEMA_VERSION = 6
+MAX_EMBEDDING_ATTEMPTS = 8
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
 _INITIALIZE_LOCK = threading.Lock()
 
@@ -69,7 +70,9 @@ class MoegirlKnowledgeStore:
             if writable:
                 connection.commit()
         except sqlite3.DatabaseError as exc:
-            raise KnowledgeStoreError(f"knowledge database is unavailable: {exc}") from exc
+            raise KnowledgeStoreError(
+                f"knowledge database is unavailable: {exc}"
+            ) from exc
         finally:
             if "connection" in locals():
                 connection.close()
@@ -84,7 +87,8 @@ class MoegirlKnowledgeStore:
 
     def _initialize(self, connection: sqlite3.Connection) -> None:
         columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(entries)").fetchall()
         }
         if columns and "terms" not in columns:
             self._migrate_legacy_entries(connection)
@@ -164,14 +168,11 @@ class MoegirlKnowledgeStore:
         input_version_row = connection.execute(
             "SELECT value FROM metadata WHERE key='embedding_input_version'"
         ).fetchone()
-        if (
-            input_version_row is None
-            or str(input_version_row["value"]) != str(EMBEDDING_INPUT_VERSION)
+        if input_version_row is None or str(input_version_row["value"]) != str(
+            EMBEDDING_INPUT_VERSION
         ):
             has_derived_chunks = bool(
-                connection.execute(
-                    "SELECT 1 FROM knowledge_chunks LIMIT 1"
-                ).fetchone()
+                connection.execute("SELECT 1 FROM knowledge_chunks LIMIT 1").fetchone()
             )
             if has_derived_chunks:
                 connection.execute("DELETE FROM knowledge_chunks")
@@ -199,8 +200,14 @@ class MoegirlKnowledgeStore:
             if not source:
                 continue
             tags = [f"source:{source}", *(tag for tag in tags if tag != source)]
-            connection.execute("UPDATE entries SET tags=? WHERE rowid=?", (_values_json(tags), row["rowid"]))
-            connection.execute("UPDATE entries_fts SET tags=? WHERE entry_rowid=?", (" ".join(tags), row["rowid"]))
+            connection.execute(
+                "UPDATE entries SET tags=? WHERE rowid=?",
+                (_values_json(tags), row["rowid"]),
+            )
+            connection.execute(
+                "UPDATE entries_fts SET tags=? WHERE entry_rowid=?",
+                (" ".join(tags), row["rowid"]),
+            )
             changed = True
         if changed:
             MoegirlKnowledgeStore._increment_entries_revision(connection)
@@ -212,7 +219,9 @@ class MoegirlKnowledgeStore:
         replaces its source slice from the original export, removing historical
         tag-as-alias pollution.
         """
-        backup = self.database_path.with_suffix(self.database_path.suffix + ".legacy.bak")
+        backup = self.database_path.with_suffix(
+            self.database_path.suffix + ".legacy.bak"
+        )
         if self.database_path.exists() and not backup.exists():
             connection.commit()
             shutil.copy2(self.database_path, backup)
@@ -224,13 +233,18 @@ class MoegirlKnowledgeStore:
         )
         for row in rows:
             tags = _json_values(row["tags"])
-            aliases = () if "source:geng-guide" in tags else _json_values(row["aliases"])
+            aliases = (
+                () if "source:geng-guide" in tags else _json_values(row["aliases"])
+            )
             terms = {"alias": list(aliases), "recognition": []}
             connection.execute(
                 "INSERT INTO entries(title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?)",
                 (
-                    row["title"], json.dumps(terms, ensure_ascii=False),
-                    json.dumps(tags, ensure_ascii=False), row["summary"], row["content"],
+                    row["title"],
+                    json.dumps(terms, ensure_ascii=False),
+                    json.dumps(tags, ensure_ascii=False),
+                    row["summary"],
+                    row["content"],
                 ),
             )
         connection.execute("DROP TABLE entries_legacy")
@@ -244,18 +258,26 @@ class MoegirlKnowledgeStore:
             self._notify_routing_changed()
         return result
 
-    def upsert_many(self, entries: Sequence[MoegirlKnowledgeEntry]) -> tuple[UpsertResult, ...]:
+    def upsert_many(
+        self, entries: Sequence[MoegirlKnowledgeEntry]
+    ) -> tuple[UpsertResult, ...]:
         with self._connection(writable=True) as connection:
-            results = tuple(self._upsert_with_connection(connection, entry) for entry in entries)
+            results = tuple(
+                self._upsert_with_connection(connection, entry) for entry in entries
+            )
             if any(not result.unchanged for result in results):
                 self._increment_entries_revision(connection)
         if any(not result.unchanged for result in results):
             self._notify_routing_changed()
         return results
 
-    def replace_source(self, source_tag: str, entries: Sequence[MoegirlKnowledgeEntry]) -> tuple[UpsertResult, ...]:
+    def replace_source(
+        self, source_tag: str, entries: Sequence[MoegirlKnowledgeEntry]
+    ) -> tuple[UpsertResult, ...]:
         """Atomically replace a fixed bundled/imported source namespace."""
-        if not source_tag.startswith("source:") or any(entry.source_tag != source_tag for entry in entries):
+        if not source_tag.startswith("source:") or any(
+            entry.source_tag != source_tag for entry in entries
+        ):
             raise ValueError("entries must all belong to the requested source")
         with self._connection(writable=True) as connection:
             existing_rows = connection.execute(
@@ -286,7 +308,9 @@ class MoegirlKnowledgeStore:
             results = tuple(
                 self._upsert_with_connection(connection, entry) for entry in entries
             )
-            changed = bool(removed_rowids) or any(not result.unchanged for result in results)
+            changed = bool(removed_rowids) or any(
+                not result.unchanged for result in results
+            )
             if changed:
                 self._increment_entries_revision(connection)
         if changed:
@@ -305,7 +329,9 @@ class MoegirlKnowledgeStore:
     def _entry_key(entry: MoegirlKnowledgeEntry) -> str:
         return f"{entry.source_tag}:{entry.title}"
 
-    def _upsert_with_connection(self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry) -> UpsertResult:
+    def _upsert_with_connection(
+        self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry
+    ) -> UpsertResult:
         rows = connection.execute(
             "SELECT rowid, * FROM entries WHERE title = ? AND EXISTS (SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?)",
             (entry.title, entry.source_tag),
@@ -317,17 +343,31 @@ class MoegirlKnowledgeStore:
             rowid = rows[0]["rowid"]
             connection.execute(
                 "UPDATE entries SET terms=?, tags=?, summary=?, content=? WHERE rowid=?",
-                (_terms_json(entry), _values_json(entry.tags), entry.summary, entry.content, rowid),
+                (
+                    _terms_json(entry),
+                    _values_json(entry.tags),
+                    entry.summary,
+                    entry.content,
+                    rowid,
+                ),
             )
             self._replace_fts(connection, rowid, entry)
             self._reconcile_chunks(connection, rowid, entry)
             return UpsertResult(self._entry_key(entry), updated=True)
         return self._insert_with_connection(connection, entry)
 
-    def _insert_with_connection(self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry) -> UpsertResult:
+    def _insert_with_connection(
+        self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry
+    ) -> UpsertResult:
         cursor = connection.execute(
             "INSERT INTO entries(title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?)",
-            (entry.title, _terms_json(entry), _values_json(entry.tags), entry.summary, entry.content),
+            (
+                entry.title,
+                _terms_json(entry),
+                _values_json(entry.tags),
+                entry.summary,
+                entry.content,
+            ),
         )
         rowid = int(cursor.lastrowid)
         self._replace_fts(connection, rowid, entry)
@@ -335,11 +375,20 @@ class MoegirlKnowledgeStore:
         return UpsertResult(self._entry_key(entry), created=True)
 
     @staticmethod
-    def _replace_fts(connection: sqlite3.Connection, rowid: int, entry: MoegirlKnowledgeEntry) -> None:
+    def _replace_fts(
+        connection: sqlite3.Connection, rowid: int, entry: MoegirlKnowledgeEntry
+    ) -> None:
         connection.execute("DELETE FROM entries_fts WHERE entry_rowid = ?", (rowid,))
         connection.execute(
             "INSERT INTO entries_fts(entry_rowid, title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?, ?)",
-            (rowid, entry.title, _terms_search_text(entry), " ".join(entry.tags), entry.summary, entry.content),
+            (
+                rowid,
+                entry.title,
+                _terms_search_text(entry),
+                " ".join(entry.tags),
+                entry.summary,
+                entry.content,
+            ),
         )
 
     @classmethod
@@ -399,28 +448,40 @@ class MoegirlKnowledgeStore:
 
     @staticmethod
     def _increment_entries_revision(connection: sqlite3.Connection) -> None:
-        connection.execute("INSERT OR IGNORE INTO metadata(key, value) VALUES ('entries_revision', '0')")
-        connection.execute("UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'entries_revision'")
+        connection.execute(
+            "INSERT OR IGNORE INTO metadata(key, value) VALUES ('entries_revision', '0')"
+        )
+        connection.execute(
+            "UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'entries_revision'"
+        )
 
     @staticmethod
     def _increment_chunks_revision(connection: sqlite3.Connection) -> None:
-        connection.execute("INSERT OR IGNORE INTO metadata(key, value) VALUES ('chunks_revision', '0')")
-        connection.execute("UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'chunks_revision'")
+        connection.execute(
+            "INSERT OR IGNORE INTO metadata(key, value) VALUES ('chunks_revision', '0')"
+        )
+        connection.execute(
+            "UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'chunks_revision'"
+        )
 
     def count(self) -> int:
         try:
             with self._connection() as connection:
-                return int(connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0])
+                return int(
+                    connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+                )
         except KnowledgeStoreError:
             return 0
 
     def count_by_source_tag(self, source_tag: str) -> int:
         try:
             with self._connection() as connection:
-                return int(connection.execute(
-                    "SELECT COUNT(*) FROM entries WHERE EXISTS (SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?)",
-                    (source_tag,),
-                ).fetchone()[0])
+                return int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM entries WHERE EXISTS (SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?)",
+                        (source_tag,),
+                    ).fetchone()[0]
+                )
         except KnowledgeStoreError:
             return 0
 
@@ -434,17 +495,22 @@ class MoegirlKnowledgeStore:
                     "WHERE tag.value LIKE 'source:%' "
                     "GROUP BY tag.value ORDER BY tag.value"
                 ).fetchall()
-                return tuple({
-                    "tag": str(row["source_tag"]),
-                    "entries": int(row["entry_count"]),
-                } for row in rows)
+                return tuple(
+                    {
+                        "tag": str(row["source_tag"]),
+                        "entries": int(row["entry_count"]),
+                    }
+                    for row in rows
+                )
         except KnowledgeStoreError:
             return ()
 
     def entries_revision(self) -> int:
         try:
             with self._connection() as connection:
-                row = connection.execute("SELECT value FROM metadata WHERE key = 'entries_revision'").fetchone()
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'entries_revision'"
+                ).fetchone()
                 return int(row["value"]) if row else 0
         except (KnowledgeStoreError, TypeError, ValueError):
             return 0
@@ -490,25 +556,61 @@ class MoegirlKnowledgeStore:
                         "GROUP BY embedding_status"
                     ).fetchall()
                 }
-                missing = int(connection.execute(
-                    "SELECT COUNT(*) FROM entries WHERE NOT EXISTS ("
-                    "SELECT 1 FROM knowledge_chunks WHERE entry_rowid=entries.rowid)"
-                ).fetchone()[0])
+                missing = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM entries WHERE NOT EXISTS ("
+                        "SELECT 1 FROM knowledge_chunks WHERE entry_rowid=entries.rowid)"
+                    ).fetchone()[0]
+                )
                 revision_row = connection.execute(
                     "SELECT value FROM metadata WHERE key='chunks_revision'"
                 ).fetchone()
+                now = int(time.time())
+                failed_retryable_now = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_status='failed' AND embedding_attempts<? "
+                        "AND next_retry_at<=?",
+                        (MAX_EMBEDDING_ATTEMPTS, now),
+                    ).fetchone()[0]
+                )
+                failed_waiting = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_status='failed' AND embedding_attempts<? "
+                        "AND next_retry_at>?",
+                        (MAX_EMBEDDING_ATTEMPTS, now),
+                    ).fetchone()[0]
+                )
+                failed_exhausted = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_status='failed' AND embedding_attempts>=?",
+                        (MAX_EMBEDDING_ATTEMPTS,),
+                    ).fetchone()[0]
+                )
                 chunks_total = sum(counts.values())
                 return {
-                    "entries_total": int(connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]),
+                    "entries_total": int(
+                        connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+                    ),
                     "entries_missing_chunks": missing,
                     "chunks_total": chunks_total,
                     "chunks_pending": counts.get("pending", 0),
                     "chunks_ready": counts.get("ready", 0),
                     "chunks_stale": counts.get("stale", 0),
                     "chunks_failed": counts.get("failed", 0),
-                    "indexed_percent": round(100.0 * counts.get("ready", 0) / chunks_total, 1)
-                    if chunks_total else 0.0,
-                    "chunks_revision": int(revision_row["value"]) if revision_row else 0,
+                    "chunks_failed_retryable_now": failed_retryable_now,
+                    "chunks_failed_waiting": failed_waiting,
+                    "chunks_failed_exhausted": failed_exhausted,
+                    "indexed_percent": round(
+                        100.0 * counts.get("ready", 0) / chunks_total, 1
+                    )
+                    if chunks_total
+                    else 0.0,
+                    "chunks_revision": int(revision_row["value"])
+                    if revision_row
+                    else 0,
                 }
         except KnowledgeStoreError:
             return {
@@ -519,6 +621,9 @@ class MoegirlKnowledgeStore:
                 "chunks_ready": 0,
                 "chunks_stale": 0,
                 "chunks_failed": 0,
+                "chunks_failed_retryable_now": 0,
+                "chunks_failed_waiting": 0,
+                "chunks_failed_exhausted": 0,
                 "indexed_percent": 0.0,
                 "chunks_revision": 0,
             }
@@ -549,7 +654,9 @@ class MoegirlKnowledgeStore:
         include_failed: bool = True,
     ) -> tuple[dict[str, object], ...]:
         limit = min(max(int(limit), 1), 128)
-        statuses = ("pending", "stale", "failed") if include_failed else ("pending", "stale")
+        statuses = (
+            ("pending", "stale", "failed") if include_failed else ("pending", "stale")
+        )
         placeholders = ",".join("?" for _ in statuses)
         now = int(time.time())
         try:
@@ -560,8 +667,10 @@ class MoegirlKnowledgeStore:
                     "ON entries.rowid=knowledge_chunks.entry_rowid "
                     f"WHERE knowledge_chunks.embedding_status IN ({placeholders}) "
                     "AND knowledge_chunks.next_retry_at<=? "
+                    "AND (knowledge_chunks.embedding_status<>'failed' "
+                    "OR knowledge_chunks.embedding_attempts<?) "
                     "ORDER BY knowledge_chunks.entry_rowid, knowledge_chunks.chunk_index LIMIT ?",
-                    (*statuses, now, limit),
+                    (*statuses, now, MAX_EMBEDDING_ATTEMPTS, limit),
                 ).fetchall()
                 result: list[dict[str, object]] = []
                 for row in rows:
@@ -569,16 +678,18 @@ class MoegirlKnowledgeStore:
                         entry = _entry_from_row(row)
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-                    result.append({
-                        "chunk_id": str(row["chunk_id"]),
-                        "content_hash": str(row["content_hash"]),
-                        "text": knowledge_embedding_text(
-                            entry,
-                            heading=str(row["heading"]),
-                            chunk_text=str(row["chunk_text"]),
-                        ),
-                        "model_id": model_id,
-                    })
+                    result.append(
+                        {
+                            "chunk_id": str(row["chunk_id"]),
+                            "content_hash": str(row["content_hash"]),
+                            "text": knowledge_embedding_text(
+                                entry,
+                                heading=str(row["heading"]),
+                                chunk_text=str(row["chunk_text"]),
+                            ),
+                            "model_id": model_id,
+                        }
+                    )
                 return tuple(result)
         except KnowledgeStoreError:
             return ()
@@ -592,7 +703,13 @@ class MoegirlKnowledgeStore:
         dimensions: int,
         embedding: bytes,
     ) -> bool:
-        if not chunk_id or not content_hash or not model_id or dimensions <= 0 or not embedding:
+        if (
+            not chunk_id
+            or not content_hash
+            or not model_id
+            or dimensions <= 0
+            or not embedding
+        ):
             return False
         with self._connection(writable=True) as connection:
             cursor = connection.execute(
@@ -621,12 +738,21 @@ class MoegirlKnowledgeStore:
             ).fetchone()
             if row is None:
                 return False
-            attempts = min(int(row["embedding_attempts"]) + 1, 8)
+            attempts = min(
+                int(row["embedding_attempts"]) + 1,
+                MAX_EMBEDDING_ATTEMPTS,
+            )
             retry_at = int(time.time()) + min(3_600, 10 * (2 ** (attempts - 1)))
             connection.execute(
                 "UPDATE knowledge_chunks SET embedding_status='failed', embedding_attempts=?, "
                 "next_retry_at=?, last_error_code=? WHERE chunk_id=? AND content_hash=?",
-                (attempts, retry_at, str(error_code or "embedding_failed")[:80], chunk_id, content_hash),
+                (
+                    attempts,
+                    retry_at,
+                    str(error_code or "embedding_failed")[:80],
+                    chunk_id,
+                    content_hash,
+                ),
             )
             return True
 
@@ -646,7 +772,9 @@ class MoegirlKnowledgeStore:
                 self._increment_chunks_revision(connection)
             return changed
 
-    def load_ready_chunks(self, *, model_id: str) -> tuple[int, tuple[dict[str, object], ...]]:
+    def load_ready_chunks(
+        self, *, model_id: str
+    ) -> tuple[int, tuple[dict[str, object], ...]]:
         if not model_id:
             return self.chunks_revision(), ()
         try:
@@ -669,14 +797,16 @@ class MoegirlKnowledgeStore:
                         entry = _entry_from_row(row)
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-                    result.append({
-                        "chunk_id": str(row["chunk_id"]),
-                        "chunk_index": int(row["chunk_index"]),
-                        "content_hash": str(row["content_hash"]),
-                        "dimensions": int(row["embedding_dimensions"] or 0),
-                        "embedding": bytes(row["embedding"] or b""),
-                        "entry": entry,
-                    })
+                    result.append(
+                        {
+                            "chunk_id": str(row["chunk_id"]),
+                            "chunk_index": int(row["chunk_index"]),
+                            "content_hash": str(row["content_hash"]),
+                            "dimensions": int(row["embedding_dimensions"] or 0),
+                            "embedding": bytes(row["embedding"] or b""),
+                            "entry": entry,
+                        }
+                    )
                 return revision, tuple(result)
         except (KnowledgeStoreError, TypeError, ValueError):
             return 0, ()
@@ -704,14 +834,18 @@ class MoegirlKnowledgeStore:
     def integrity_ok(self) -> bool:
         try:
             with self._connection() as connection:
-                return connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                return (
+                    connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                )
         except KnowledgeStoreError:
             return False
 
     def list_active_entries(self) -> tuple[MoegirlKnowledgeEntry, ...]:
         try:
             with self._connection() as connection:
-                rows = connection.execute("SELECT rowid, * FROM entries ORDER BY rowid").fetchall()
+                rows = connection.execute(
+                    "SELECT rowid, * FROM entries ORDER BY rowid"
+                ).fetchall()
                 return tuple(_entry_from_row(row) for row in rows)
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
@@ -832,7 +966,9 @@ class MoegirlKnowledgeStore:
 
 
 def _terms_json(entry: MoegirlKnowledgeEntry) -> str:
-    return json.dumps({role: list(entry.terms[role]) for role in entry.terms}, ensure_ascii=False)
+    return json.dumps(
+        {role: list(entry.terms[role]) for role in entry.terms}, ensure_ascii=False
+    )
 
 
 def _values_json(values: Sequence[str]) -> str:
@@ -845,14 +981,21 @@ def _terms_search_text(entry: MoegirlKnowledgeEntry) -> str:
 
 def _json_values(value: str) -> tuple[str, ...]:
     raw = json.loads(value or "[]")
-    return tuple(item for item in raw if isinstance(item, str)) if isinstance(raw, list) else ()
+    return (
+        tuple(item for item in raw if isinstance(item, str))
+        if isinstance(raw, list)
+        else ()
+    )
 
 
 def _entry_from_row(row: sqlite3.Row) -> MoegirlKnowledgeEntry:
     raw_terms = json.loads(row["terms"])
     return MoegirlKnowledgeEntry(
-        title=row["title"], terms=raw_terms if isinstance(raw_terms, dict) else {},
-        tags=_json_values(row["tags"]), summary=row["summary"], content=row["content"],
+        title=row["title"],
+        terms=raw_terms if isinstance(raw_terms, dict) else {},
+        tags=_json_values(row["tags"]),
+        summary=row["summary"],
+        content=row["content"],
     )
 
 

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Request
 
 from knowledge.api import open_knowledge
 from knowledge.diagnostics import (
+    list_recent_knowledge_index_batches,
     list_recent_knowledge_queries,
     list_recent_knowledge_routes,
 )
@@ -397,6 +398,7 @@ async def get_recent_public_knowledge_diagnostics():
         "ok": True,
         "items": list(list_recent_knowledge_routes()),
         "queries": list(list_recent_knowledge_queries()),
+        "index_batches": list(list_recent_knowledge_index_batches()),
     }
 
 

@@ -13,7 +13,7 @@ logger = logging.getLogger("N.E.K.O.Knowledge.Indexer")
 STARTUP_DELAY_SECONDS = 45.0
 BACKLOG_DELAY_SECONDS = 10.0
 IDLE_DELAY_SECONDS = 60.0
-EMBEDDING_BATCH_SIZE = 32
+EMBEDDING_BATCH_SIZE = 4
 MAX_CHUNKS_PER_ROUND = 64
 
 _STATE_LOCK = threading.Lock()
@@ -52,6 +52,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     """Backfill chunks, then infer vectors outside every SQLite transaction."""
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
 
+    from .diagnostics import record_knowledge_index_batch
     from .moegirl_knowledge.store import MoegirlKnowledgeStore
     from .service import BUILTIN_COLLECTIONS, KnowledgeService
     from .vector_index import index_embedding_batch
@@ -99,15 +100,31 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     if remaining <= 0:
                         break
                     batch_size = min(EMBEDDING_BATCH_SIZE, remaining)
-                    stored = await index_embedding_batch(
+                    result = await index_embedding_batch(
                         store,
                         batch_size=batch_size,
                         load_model=True,
                     )
-                    # A batch invocation can inspect/infer at most batch_size chunks.
-                    remaining -= batch_size
-                    pass_progress = pass_progress or stored > 0
-                    backlog = backlog or stored >= batch_size
+                    record_knowledge_index_batch(
+                        selected=result.selected,
+                        stored=result.stored,
+                        failed=result.failed,
+                        stale_writebacks=result.stale_writebacks,
+                        elapsed_ms=result.elapsed_ms,
+                        state=result.state,
+                    )
+                    # Only chunks actually selected consume the round budget. A
+                    # busy query or unavailable model leaves them pending.
+                    remaining -= result.selected
+                    pass_progress = pass_progress or result.stored > 0
+                    backlog = backlog or result.selected >= batch_size
+                    if result.state in {
+                        "inference_busy",
+                        "embedding_unavailable",
+                        "not_ready",
+                        "disabled",
+                    }:
+                        break
                     await asyncio.sleep(0)
                 if not pass_progress:
                     break
@@ -119,7 +136,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                 int(status.get("entries_missing_chunks", 0)) > 0
                 or int(status.get("chunks_pending", 0)) > 0
                 or int(status.get("chunks_stale", 0)) > 0
-                or int(status.get("chunks_failed", 0)) > 0
+                or int(status.get("chunks_failed_retryable_now", 0)) > 0
                 for status in statuses
             )
 
@@ -196,11 +213,11 @@ async def stop_knowledge_indexer() -> None:
 
     # This model instance belongs to main_server's knowledge runtime.  The
     # separately running memory-server process has its own lifecycle.
-    if task is None:
-        return
     try:
+        from .vector_index import drain_knowledge_embedding_inference
         from utils.local_embedding_runtime import release_local_embedding_service
 
+        await drain_knowledge_embedding_inference()
         await release_local_embedding_service()
     except Exception as exc:
         logger.debug("Knowledge embedding runtime cleanup failed: %s", exc)

@@ -107,12 +107,12 @@ def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
             "embedding_model_id='old-contract', embedding_dimensions=2, embedding=?",
             (b"\x00\x00\x00\x00",),
         )
-        connection.execute(
-            "DELETE FROM metadata WHERE key='embedding_input_version'"
+        connection.execute("DELETE FROM metadata WHERE key='embedding_input_version'")
+        old_revision = int(
+            connection.execute(
+                "SELECT value FROM metadata WHERE key='chunks_revision'"
+            ).fetchone()[0]
         )
-        old_revision = int(connection.execute(
-            "SELECT value FROM metadata WHERE key='chunks_revision'"
-        ).fetchone()[0])
 
     # Force a fresh database-open initialization, as an existing v6 database
     # from before the input contract version key would experience on upgrade.
@@ -122,18 +122,22 @@ def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
     assert reopened.count() == 1
     assert reopened.query_fts('"answer"', limit=1)
     with reopened._connection() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM knowledge_chunks"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
+            == 0
+        )
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='embedding_input_version'"
         ).fetchone()[0] == str(EMBEDDING_INPUT_VERSION)
-        assert int(connection.execute(
-            "SELECT value FROM metadata WHERE key='chunks_revision'"
-        ).fetchone()[0]) == old_revision + 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM entries_fts"
-        ).fetchone()[0] == 1
+        assert (
+            int(
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key='chunks_revision'"
+                ).fetchone()[0]
+            )
+            == old_revision + 1
+        )
+        assert connection.execute("SELECT COUNT(*) FROM entries_fts").fetchone()[0] == 1
 
     assert reopened.chunk_status()["entries_missing_chunks"] == 1
 
@@ -174,7 +178,9 @@ def test_content_update_reuses_unchanged_chunks_and_deletes_orphans(tmp_path):
     store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="# A\n\n" + "a" * 1_100 + "\n\n# B\n\n" + "b" * 1_100))
     with store._connection(writable=True) as connection:
-        rows = connection.execute("SELECT chunk_id FROM knowledge_chunks ORDER BY chunk_index").fetchall()
+        rows = connection.execute(
+            "SELECT chunk_id FROM knowledge_chunks ORDER BY chunk_index"
+        ).fetchall()
         connection.execute(
             "UPDATE knowledge_chunks SET embedding_status='ready', embedding_model_id='fixture', "
             "embedding_dimensions=2, embedding=?",
@@ -182,7 +188,14 @@ def test_content_update_reuses_unchanged_chunks_and_deletes_orphans(tmp_path):
         )
     original_ids = {row["chunk_id"] for row in rows}
 
-    store.upsert(_entry(content="# New\n\nnew\n\n# A\n\n" + "a" * 1_100 + "\n\n# B\n\n" + "b" * 1_100))
+    store.upsert(
+        _entry(
+            content="# New\n\nnew\n\n# A\n\n"
+            + "a" * 1_100
+            + "\n\n# B\n\n"
+            + "b" * 1_100
+        )
+    )
     with store._connection() as connection:
         updated = connection.execute("SELECT * FROM knowledge_chunks").fetchall()
     reused = [row for row in updated if row["chunk_id"] in original_ids]
@@ -191,7 +204,10 @@ def test_content_update_reuses_unchanged_chunks_and_deletes_orphans(tmp_path):
 
     store.replace_source("source:test", ())
     with store._connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
+            == 0
+        )
 
 
 def test_source_deletion_invalidates_ready_vector_cache_revision(tmp_path):
@@ -211,13 +227,16 @@ def test_embedding_result_cannot_overwrite_a_changed_chunk(tmp_path):
 
     store.upsert(_entry(content="new text"))
 
-    assert store.store_chunk_embedding(
-        chunk_id=str(pending["chunk_id"]),
-        content_hash=str(pending["content_hash"]),
-        model_id="fixture",
-        dimensions=2,
-        embedding=b"\x00\x00\x00\x00",
-    ) is False
+    assert (
+        store.store_chunk_embedding(
+            chunk_id=str(pending["chunk_id"]),
+            content_hash=str(pending["content_hash"]),
+            model_id="fixture",
+            dimensions=2,
+            embedding=b"\x00\x00\x00\x00",
+        )
+        is False
+    )
     assert store.chunk_status()["chunks_ready"] == 0
 
 
@@ -237,6 +256,50 @@ def test_model_change_marks_only_other_ready_vectors_stale(tmp_path):
     status = store.chunk_status()
     assert status["chunks_ready"] == 0
     assert status["chunks_stale"] == 1
+
+
+def test_exhausted_embedding_failure_is_not_retried_forever(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(content="failure boundary"))
+    pending = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "UPDATE knowledge_chunks SET embedding_status='failed', "
+            "embedding_attempts=8, next_retry_at=0 WHERE chunk_id=?",
+            (pending["chunk_id"],),
+        )
+
+    assert store.pending_embedding_chunks(model_id="fixture", limit=1) == ()
+    status = store.chunk_status()
+    assert status["chunks_failed"] == 1
+    assert status["chunks_failed_retryable_now"] == 0
+    assert status["chunks_failed_waiting"] == 0
+    assert status["chunks_failed_exhausted"] == 1
+
+
+def test_failed_embedding_status_distinguishes_ready_and_waiting_retries(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))
+    with store._connection(writable=True) as connection:
+        rows = connection.execute(
+            "SELECT chunk_id FROM knowledge_chunks ORDER BY chunk_index"
+        ).fetchall()
+        assert len(rows) >= 2
+        connection.execute(
+            "UPDATE knowledge_chunks SET embedding_status='failed', "
+            "embedding_attempts=1, next_retry_at=0 WHERE chunk_id=?",
+            (rows[0]["chunk_id"],),
+        )
+        connection.execute(
+            "UPDATE knowledge_chunks SET embedding_status='failed', "
+            "embedding_attempts=2, next_retry_at=32503680000 WHERE chunk_id=?",
+            (rows[1]["chunk_id"],),
+        )
+
+    status = store.chunk_status()
+    assert status["chunks_failed_retryable_now"] == 1
+    assert status["chunks_failed_waiting"] == 1
+    assert status["chunks_failed_exhausted"] == 0
 
 
 def test_source_replacement_reuses_unchanged_vectors(tmp_path):

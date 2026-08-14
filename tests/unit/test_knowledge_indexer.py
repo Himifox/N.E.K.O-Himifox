@@ -14,6 +14,7 @@ async def test_indexer_lifecycle_is_idempotent_and_wakeable(
 ) -> None:
     started = asyncio.Event()
     awakened = asyncio.Event()
+    cleanup_order: list[str] = []
 
     async def fake_run(_root, wake_event: asyncio.Event) -> None:
         started.set()
@@ -22,12 +23,19 @@ async def test_indexer_lifecycle_is_idempotent_and_wakeable(
         await asyncio.Event().wait()
 
     async def fake_release() -> None:
-        return None
+        cleanup_order.append("release")
+
+    async def fake_drain() -> None:
+        cleanup_order.append("drain")
 
     monkeypatch.setattr(indexer, "_run_indexer", fake_run)
     monkeypatch.setattr(
         "utils.local_embedding_runtime.release_local_embedding_service",
         fake_release,
+    )
+    monkeypatch.setattr(
+        "knowledge.vector_index.drain_knowledge_embedding_inference",
+        fake_drain,
     )
 
     assert indexer.start_knowledge_indexer(tmp_path) is True
@@ -37,9 +45,10 @@ async def test_indexer_lifecycle_is_idempotent_and_wakeable(
     indexer.notify_knowledge_index_changed()
     await asyncio.wait_for(awakened.wait(), timeout=1.0)
     await indexer.stop_knowledge_indexer()
+    assert cleanup_order == ["drain", "release"]
 
 
 def test_indexer_work_limits_are_bounded() -> None:
     assert indexer.STARTUP_DELAY_SECONDS == 45.0
-    assert 1 <= indexer.EMBEDDING_BATCH_SIZE <= 32
+    assert indexer.EMBEDDING_BATCH_SIZE == 4
     assert indexer.EMBEDDING_BATCH_SIZE <= indexer.MAX_CHUNKS_PER_ROUND <= 64

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from knowledge.diagnostics import (
     clear_knowledge_route_diagnostics,
+    list_recent_knowledge_index_batches,
     list_recent_knowledge_queries,
     list_recent_knowledge_routes,
+    record_knowledge_index_batch,
     record_knowledge_query,
     record_knowledge_route,
 )
@@ -11,6 +13,23 @@ from knowledge.diagnostics import (
 
 def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
     clear_knowledge_route_diagnostics()
+    for index in range(25):
+        record_knowledge_route(
+            collection_id="meme",
+            entry_title=f"entry-{index}",
+            source_tag="source:fixture",
+            match_mode="strong",
+            card_delivered=True,
+            result="hit",
+        )
+
+    records = list_recent_knowledge_routes()
+    assert len(records) == 20
+    assert records[0]["entry_title"] == "entry-24"
+    assert records[-1]["entry_title"] == "entry-5"
+    assert "user_text" not in records[0]
+    assert "card" not in records[0]
+    assert "response" not in records[0]
 
 
 def test_query_diagnostics_keep_counts_but_not_query_content():
@@ -32,22 +51,22 @@ def test_query_diagnostics_keep_counts_but_not_query_content():
     assert "query" not in record
     assert "vector" not in record
 
-    for index in range(25):
-        record_knowledge_route(
-            collection_id="meme",
-            entry_title=f"entry-{index}",
-            source_tag="source:fixture",
-            match_mode="strong",
-            card_delivered=True,
-            result="hit",
-        )
 
-    records = list_recent_knowledge_routes()
-    assert len(records) == 20
-    assert records[0]["entry_title"] == "entry-24"
-    assert records[-1]["entry_title"] == "entry-5"
-    assert "user_text" not in records[0]
-    assert "card" not in records[0]
-    assert "response" not in records[0]
-
+def test_index_batch_diagnostics_are_content_free():
     clear_knowledge_route_diagnostics()
+    record_knowledge_index_batch(
+        selected=4,
+        stored=3,
+        failed=0,
+        stale_writebacks=1,
+        elapsed_ms=16_500,
+        state="slow_batch",
+    )
+
+    record = list_recent_knowledge_index_batches()[0]
+    assert record["state"] == "slow_batch"
+    assert record["selected"] == 4
+    assert record["stored"] == 3
+    assert record["stale_writebacks"] == 1
+    assert "text" not in record
+    assert "embedding" not in record
