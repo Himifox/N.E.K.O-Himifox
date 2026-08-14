@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import importlib.util
+import json
 import sys
 import threading
 import tracemalloc
@@ -128,6 +129,77 @@ def _create_manager(timeindex_module, tmp_path, rows, *, indexed=True):
 
 def _flatten(batches):
     return [row for batch in batches for row in batch]
+
+
+def _stored_message(role, content):
+    return json.dumps(
+        {"type": role, "data": {"content": content}},
+        ensure_ascii=False,
+    )
+
+
+def test_latest_assistant_texts_are_bounded_filtered_and_chronological(
+    timeindex_module,
+    tmp_path,
+):
+    timestamp = "2026-01-01 00:00:00.000000"
+    rows = [
+        {
+            "session_id": "1",
+            "message": _stored_message("human", "user secret"),
+            "timestamp": timestamp,
+        },
+        {
+            "session_id": "2",
+            "message": _stored_message("ai", "oldest answer"),
+            "timestamp": timestamp,
+        },
+        {"session_id": "3", "message": "not-json", "timestamp": timestamp},
+        {
+            "session_id": "4",
+            "message": _stored_message(
+                "ai",
+                [
+                    {"type": "image", "url": "private"},
+                    {"type": "text", "text": "middle answer"},
+                ],
+            ),
+            "timestamp": timestamp,
+        },
+        {
+            "session_id": "5",
+            "message": _stored_message("system", "system secret"),
+            "timestamp": timestamp,
+        },
+        {
+            "session_id": "6",
+            "message": _stored_message("ai", "latest answer"),
+            "timestamp": timestamp,
+        },
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 2, batch_size=2)
+    finally:
+        engine.dispose()
+
+    assert result.source_available is True
+    assert result.messages == ["middle answer", "latest answer"]
+    assert result.skipped_row_count == 1
+
+
+def test_latest_assistant_texts_missing_source_does_not_create_engine(
+    timeindex_module,
+):
+    manager = timeindex_module.TimeIndexedMemory.__new__(
+        timeindex_module.TimeIndexedMemory
+    )
+    manager.engines = {}
+    manager._ensure_engine_exists = lambda _name, readonly=False: False
+
+    result = manager.retrieve_latest_assistant_texts("missing", 100)
+
+    assert result == timeindex_module.LatestAssistantTexts([], False, 0)
 
 
 def test_batches_preserve_order_limit_and_legacy_list_api(timeindex_module, tmp_path):
