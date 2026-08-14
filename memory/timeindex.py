@@ -21,8 +21,10 @@ from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
 from collections.abc import AsyncIterator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 import asyncio
+import json
 import os
 import unicodedata
 
@@ -40,6 +42,50 @@ FACT_NEAR_DUP_ARBITRATE_OVERLAP = 0.25
 # （那边超时 60s），而投递发生在**已经提交完** fact 之后的请求路径上——为一
 # 次无关的后台仲裁把请求拖住一分钟不值得。等不到就放掉：这是尽力而为的旁路。
 FACT_NEAR_DUP_ENQUEUE_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class LatestAssistantTexts:
+    """Bounded text-only assistant history returned by a read-only query."""
+
+    messages: list[str]
+    source_available: bool
+    skipped_row_count: int = 0
+
+
+def _assistant_text_from_stored_message(message_raw: object) -> str | None:
+    """Return assistant text from one LangChain history cell, if present."""
+    if isinstance(message_raw, (bytes, bytearray)):
+        try:
+            message_raw = message_raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(message_raw, str):
+        try:
+            message_raw = json.loads(message_raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(message_raw, dict) or message_raw.get("type") != "ai":
+        return None
+    data = message_raw.get("data")
+    if not isinstance(data, dict):
+        return None
+    content = data.get("content")
+    if isinstance(content, str):
+        text_content = content.strip()
+        return text_content or None
+    if not isinstance(content, list):
+        return None
+
+    text_parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text_value = block.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            text_parts.append(text_value.strip())
+    joined = "\n".join(text_parts).strip()
+    return joined or None
 
 
 def _next_readonly_batch(
@@ -595,6 +641,90 @@ class TimeIndexedMemory:
     async def aretrieve_original_by_timeframe(self, lanlan_name, start_time, end_time, limit_rows: int | None = None):
         return await asyncio.to_thread(
             self.retrieve_original_by_timeframe, lanlan_name, start_time, end_time, limit_rows
+        )
+
+    def retrieve_latest_assistant_texts(
+        self,
+        lanlan_name: str,
+        limit: int,
+        *,
+        batch_size: int = 256,
+    ) -> LatestAssistantTexts:
+        """Read the latest text-bearing assistant messages without writing.
+
+        SQLite rows are scanned newest-first so a bounded UI request does not
+        materialize the whole history. The returned messages are reversed back
+        into chronological order before analysis.
+        """
+        if limit < 1:
+            raise ValueError("limit must be greater than zero")
+        if batch_size < 1:
+            raise ValueError("batch_size must be greater than zero")
+        try:
+            if not self._ensure_engine_exists(lanlan_name, readonly=True):
+                return LatestAssistantTexts([], False)
+        except MaintenanceModeError:
+            return LatestAssistantTexts([], False)
+
+        table_name = self._validate_table_name(TIME_ORIGINAL_TABLE_NAME)
+        cursor: tuple[object, int] | None = None
+        messages: list[str] = []
+        skipped_row_count = 0
+
+        while len(messages) < limit:
+            sql = (
+                f"SELECT timestamp, rowid, message FROM {table_name} "
+                "WHERE 1=1"
+            )
+            params: dict[str, object] = {"page_size": batch_size}
+            if cursor is not None:
+                sql += (
+                    " AND (timestamp < :cursor_timestamp "
+                    "OR (timestamp = :cursor_timestamp AND rowid < :cursor_rowid))"
+                )
+                params["cursor_timestamp"], params["cursor_rowid"] = cursor
+            sql += " ORDER BY timestamp DESC, rowid DESC LIMIT :page_size"
+
+            try:
+                with self.engines[lanlan_name].connect() as conn:
+                    rows = conn.execute(text(sql), params).fetchall()
+            except Exception as exc:
+                logger.warning(
+                    "[TimeIndexedMemory] latest assistant history read failed for %s: %s",
+                    lanlan_name,
+                    type(exc).__name__,
+                )
+                raise RuntimeError("latest assistant history read failed") from exc
+
+            if not rows:
+                break
+            for row in rows:
+                assistant_text = _assistant_text_from_stored_message(row[2])
+                if assistant_text is None:
+                    skipped_row_count += 1
+                    continue
+                messages.append(assistant_text)
+                if len(messages) >= limit:
+                    break
+            cursor = (rows[-1][0], int(rows[-1][1]))
+            if len(rows) < batch_size:
+                break
+
+        messages.reverse()
+        return LatestAssistantTexts(messages, True, skipped_row_count)
+
+    async def aretrieve_latest_assistant_texts(
+        self,
+        lanlan_name: str,
+        limit: int,
+        *,
+        batch_size: int = 256,
+    ) -> LatestAssistantTexts:
+        return await asyncio.to_thread(
+            self.retrieve_latest_assistant_texts,
+            lanlan_name,
+            limit,
+            batch_size=batch_size,
         )
 
     def _fetch_original_timeframe_page(

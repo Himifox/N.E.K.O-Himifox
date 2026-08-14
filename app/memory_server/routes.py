@@ -58,6 +58,12 @@ from utils.cloudsave_runtime import MaintenanceModeError, assert_cloudsave_writa
 from memory.external_markdown_import import MAX_ENTRIES, MAX_ENTRY_CHARS
 from memory.outbox import OP_PERSIST_PROMPT_LOCALE
 from memory.persona.fusion import ExternalMemoryImportTooLargeError
+from utils.natural_expression_candidates import (
+    CandidateMinerError,
+    SourceMessage,
+    build_user_review_report,
+    normalize_language,
+)
 
 from . import gates, locale_state, outbox_infra, post_turn, review, runtime
 from ._shared import logger, validate_lanlan_name
@@ -73,6 +79,73 @@ class HistoryRequest(BaseModel):
 
 class PromptLocalePreferenceRequest(BaseModel):
     language: str
+
+
+class RepetitionInsightsRequest(BaseModel):
+    language: Literal["en", "es", "pt", "ru", "ja", "ko", "zh-CN", "zh-TW"]
+    assistant_message_limit: int = Field(default=100, ge=3, le=100)
+
+
+@app.post("/internal/memory/{lanlan_name}/repetition_insights")
+async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
+    """Analyze persisted assistant text without models, writes, or egress."""
+    lanlan_name = validate_lanlan_name(lanlan_name)
+    if runtime.time_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="memory_server not fully initialized",
+        )
+
+    try:
+        language = normalize_language(req.language)
+        history = await runtime.time_manager.aretrieve_latest_assistant_texts(
+            lanlan_name,
+            req.assistant_message_limit,
+        )
+        source_messages = [
+            SourceMessage(language, content, source_line)
+            for source_line, content in enumerate(history.messages, start=1)
+        ]
+        report = await asyncio.to_thread(
+            build_user_review_report,
+            source_messages,
+        )
+    except CandidateMinerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning(
+            "[RepetitionInsights] analysis unavailable for %s: %s",
+            lanlan_name,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="local memory analysis unavailable",
+        ) from exc
+
+    parameters = dict(report["parameters"])
+    parameters["assistant_message_limit"] = req.assistant_message_limit
+    summary = dict(report["summary"])
+    summary["source_available"] = history.source_available
+    logger.info(
+        "[RepetitionInsights] character=%s language=%s limit=%s messages=%s candidates=%s skipped=%s",
+        lanlan_name,
+        language,
+        req.assistant_message_limit,
+        summary["assistant_message_count"],
+        summary["candidate_count"],
+        history.skipped_row_count,
+    )
+    return {
+        "success": True,
+        "schema_version": report["schema_version"],
+        "artifact_type": report["artifact_type"],
+        "character_name": lanlan_name,
+        "language": language,
+        "parameters": parameters,
+        "summary": summary,
+        "candidates": report["candidates"],
+    }
 
 
 def _activate_request_language(language: str | None) -> str:
