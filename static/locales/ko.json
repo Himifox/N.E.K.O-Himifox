@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "로그를 패키징하지 못했습니다. 다시 시도하세요.",
         "exportLogsWriteError": "선택한 위치에 저장할 수 없습니다. 다른 위치를 선택하세요.",
         "memorySettings": "설정",
-        "repetitionInsights": "반복 표현 분석",
+        "repetitionInsights": "반복 분석",
         "repetitionInsightsTitle": "반복 표현 분석",
         "repetitionInsightsDescription": "분석을 시작한 경우에만 저장된 어시스턴트 메시지를 로컬에서 확인하며 모델 호출이나 규칙 변경은 하지 않습니다.",
         "repetitionInsightsCharacter": "분석 캐릭터",

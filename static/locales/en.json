@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "Could not package logs. Try again.",
         "exportLogsWriteError": "Could not save to that location. Choose another location and try again.",
         "memorySettings": "Settings",
-        "repetitionInsights": "Expression insights",
+        "repetitionInsights": "Repetitions",
         "repetitionInsightsTitle": "Repeated-expression insights",
         "repetitionInsightsDescription": "Only after you start an analysis, locally inspect saved assistant messages without calling a model or changing rules.",
         "repetitionInsightsCharacter": "Character",

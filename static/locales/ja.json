@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "ログをパッケージできませんでした。もう一度お試しください。",
         "exportLogsWriteError": "選択した場所に保存できませんでした。別の場所を選んでください。",
         "memorySettings": "設定",
-        "repetitionInsights": "反復表現の分析",
+        "repetitionInsights": "反復分析",
         "repetitionInsightsTitle": "反復表現の分析",
         "repetitionInsightsDescription": "分析を開始した場合にのみ、保存済みのアシスタントメッセージをローカルで確認します。モデルの呼び出しやルールの変更は行いません。",
         "repetitionInsightsCharacter": "対象キャラクター",

@@ -630,6 +630,16 @@ def test_user_review_requires_three_distinct_assistant_messages():
     }
     assert candidate["occurrence_count"] == 3
     assert candidate["message_count"] == 3
+    assert candidate["status"] == "pending"
+    assert set(candidate) == {
+        "covered_by_rule_ids",
+        "language",
+        "message_count",
+        "normalized_phrase",
+        "occurrence_count",
+        "phrase",
+        "status",
+    }
 
 
 def test_user_review_rejects_invalid_distinct_message_threshold():

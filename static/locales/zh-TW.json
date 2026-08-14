@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "日誌打包失敗，請重試",
         "exportLogsWriteError": "無法儲存到所選位置，請更換位置後重試",
         "memorySettings": "記憶設定",
-        "repetitionInsights": "重複表達洞察",
+        "repetitionInsights": "重複洞察",
         "repetitionInsightsTitle": "重複表達洞察",
         "repetitionInsightsDescription": "僅在你開始分析後，本機檢查已儲存的助手訊息；不會呼叫模型或修改規則。",
         "repetitionInsightsCharacter": "分析角色",
