@@ -3117,10 +3117,24 @@ Avalie somente uma atitude expressa após a entrega sobre uma recomendação Web
 }
 
 _UNIFIED_P1_FEEDBACK_FORMAT = {
-    lang: """Optional feedback output (omit it when there is no new evidence):
+    lang: """Optional preference output (omit it when there is no new evidence). Output exactly one of these objects:
 [RECOMMENDATION_FEEDBACK]
-{"receipt_id":"rec-001","reaction":"not_interested","confidence":0.91,"evidence":"这种游戏我没兴趣"}"""
+{"receipt_id":"rec-001","reaction":"not_interested","confidence":0.91,"evidence":"这种游戏我没兴趣"}
+or
+[RECOMMENDATION_FEEDBACK]
+{"preference_type":"music_intent","value":"jazz","reaction":"positive","confidence":0.92,"evidence":"最近挺喜欢爵士"}"""
     for lang in ("zh", "zh-TW", "en", "ja", "ko", "ru", "es", "pt")
+}
+
+_UNIFIED_P1_MUSIC_INTEREST_INSTRUCTION = {
+    "zh": """另一种互斥输出是明确音乐兴趣：仅当最新用户原话明确说喜欢或不喜欢某种音乐/某位歌手时，仍使用[RECOMMENDATION_FEEDBACK]。preference_type只能是music_intent或music_artist；reaction只能是positive或not_interested。music_intent的value只能是pop、rock、electronic、hip_hop、jazz、classical、lofi、soundtrack；music_artist的value必须逐字出现在evidence中。“这首”“这种”“这个歌手”等指代不明的表达一律忽略。Web反馈与音乐兴趣同时有效时只输出Web反馈。""",
+    "zh-TW": """另一種互斥輸出是明確音樂興趣：僅當最新使用者原話明確表示喜歡或不喜歡某種音樂／某位歌手時，仍使用[RECOMMENDATION_FEEDBACK]。preference_type只能是music_intent或music_artist；reaction只能是positive或not_interested。music_intent的value只能是pop、rock、electronic、hip_hop、jazz、classical、lofi、soundtrack；music_artist的value必須逐字出現在evidence中。「這首」「這種」「這個歌手」等指代不明的表達一律忽略。Web回饋與音樂興趣同時有效時只輸出Web回饋。""",
+    "en": """A mutually exclusive alternative is an explicit Music interest. Only when the latest user line clearly likes or dislikes a music kind or a named artist, still use [RECOMMENDATION_FEEDBACK]. preference_type must be music_intent or music_artist; reaction must be positive or not_interested. A music_intent value must be pop, rock, electronic, hip_hop, jazz, classical, lofi, or soundtrack. A music_artist value must appear verbatim in evidence. Ignore ambiguous references such as “this song”, “this kind”, or “this artist”. If both Web feedback and Music interest are valid, output only the Web feedback.""",
+    "ja": """相互排他的な別形式として、明示的な音楽の好みを出力できます。最新のユーザー行で音楽の種類または実名のアーティストへの好悪が明確な場合だけ、同じ[RECOMMENDATION_FEEDBACK]を使用してください。preference_typeはmusic_intentまたはmusic_artist、reactionはpositiveまたはnot_interestedのみです。music_intentのvalueはpop、rock、electronic、hip_hop、jazz、classical、lofi、soundtrackのいずれかです。music_artistのvalueはevidence内に原文どおり存在する必要があります。「この曲」「こういうの」「この歌手」のような曖昧な指示は無視してください。Webフィードバックと音楽の好みが同時に有効ならWebだけを出力してください。""",
+    "ko": """상호 배타적인 대안으로 명확한 음악 취향을 출력할 수 있습니다. 최신 사용자 줄에서 음악 종류나 이름이 명시된 아티스트에 대한 호불호가 분명할 때만 같은 [RECOMMENDATION_FEEDBACK]을 사용하세요. preference_type은 music_intent 또는 music_artist, reaction은 positive 또는 not_interested만 허용됩니다. music_intent의 value는 pop, rock, electronic, hip_hop, jazz, classical, lofi, soundtrack 중 하나여야 합니다. music_artist의 value는 evidence에 원문 그대로 있어야 합니다. ‘이 노래’, ‘이런 것’, ‘이 가수’ 같은 모호한 지칭은 무시하세요. Web 피드백과 음악 취향이 모두 유효하면 Web 피드백만 출력하세요.""",
+    "ru": """Взаимоисключающая альтернатива — явный музыкальный интерес. Используйте тот же [RECOMMENDATION_FEEDBACK] только если в последней строке пользователя явно выражено отношение к виду музыки или названному исполнителю. preference_type: только music_intent или music_artist; reaction: только positive или not_interested. value для music_intent: pop, rock, electronic, hip_hop, jazz, classical, lofi или soundtrack. value для music_artist должно дословно присутствовать в evidence. Игнорируйте неоднозначные ссылки вроде «эта песня», «такое» или «этот исполнитель». Если одновременно допустимы Web-отзыв и музыкальный интерес, выводите только Web-отзыв.""",
+    "es": """Una alternativa mutuamente excluyente es un interés musical explícito. Usa el mismo [RECOMMENDATION_FEEDBACK] solo cuando la última línea del usuario indique claramente gusto o rechazo por un tipo de música o un artista nombrado. preference_type debe ser music_intent o music_artist; reaction debe ser positive o not_interested. El value de music_intent debe ser pop, rock, electronic, hip_hop, jazz, classical, lofi o soundtrack. El value de music_artist debe aparecer literalmente en evidence. Ignora referencias ambiguas como «esta canción», «este tipo» o «este artista». Si son válidos tanto el feedback Web como el interés musical, devuelve solo el feedback Web.""",
+    "pt": """Uma alternativa mutuamente exclusiva é um interesse musical explícito. Use o mesmo [RECOMMENDATION_FEEDBACK] somente quando a última linha do usuário expressar claramente gosto ou rejeição por um tipo de música ou um artista nomeado. preference_type deve ser music_intent ou music_artist; reaction deve ser positive ou not_interested. O value de music_intent deve ser pop, rock, electronic, hip_hop, jazz, classical, lofi ou soundtrack. O value de music_artist deve aparecer literalmente em evidence. Ignore referências ambíguas como “esta música”, “esse tipo” ou “este artista”. Se o feedback Web e o interesse musical forem válidos, produza apenas o feedback Web.""",
 }
 
 
@@ -3191,12 +3205,14 @@ def build_unified_phase1_prompt(
         parts.append(_get(_UNIFIED_P1_MEME_SECTION))
         format_parts.append(fmt["meme"])
 
-    if feedback_enabled and feedback_receipts:
+    if feedback_enabled:
         parts.append(
             _get(_UNIFIED_P1_FEEDBACK_SECTION).format(
                 master_name=master_name,
-                receipts=feedback_receipts,
+                receipts=feedback_receipts or "[]",
             )
+            + "\n"
+            + _get(_UNIFIED_P1_MUSIC_INTEREST_INSTRUCTION)
         )
         format_parts.append(_get(_UNIFIED_P1_FEEDBACK_FORMAT))
 

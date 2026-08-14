@@ -1,4 +1,4 @@
-# 基于现有 Web 链路的普通聊天推荐 Demo
+# 基于现有 Web/Music 链路的普通聊天推荐 Demo
 
 ## 1. 验证目标与结论边界
 
@@ -15,7 +15,7 @@
   -> 再下一次资源 Phase 1 的 Web 候选池发生变化
 ```
 
-它不代表生产推荐系统已经完成，也不证明 Music/Meme 的实际资源已个性化。Music/Meme 仍只在 Phase 1 前参与搜索任务名额分配，实际资源继续在 Phase 1 后按原链路抓取并使用原素材衰减。
+它不代表生产推荐系统已经完成。Web 反馈只改变 Web 候选主题概率；明确 Music 兴趣只改变后续泛化 Music 请求的搜索关键词。Meme 仍只在 Phase 1 前参与搜索任务名额分配，实际资源继续在 Phase 1 后按原链路抓取并使用原素材衰减。
 
 明确不包含：统一媒体排序、crawler 新主题字段、候选 ID 契约或硬校验、长期画像、持久化偏好、前端按钮、行为埋点、数据库、新 LLM 调用，以及新的媒体重复时间。
 
@@ -81,7 +81,7 @@ fashion_lifestyle, pets_animals
 {"receipt_id":"rec-001","reaction":"not_interested","confidence":0.91,"evidence":"这种游戏我没兴趣"}
 ```
 
-固定 reaction 为 `positive`、`not_interested`、`quality_issue`、`source_distrust`、`temporary_skip`、`unclear`。解析器只消费这四个字段；模型附加的主题、通道、用户标签或未知字段不能决定状态。没有回执时不注入反馈任务，不产生新调用或线程。原始反馈段和 evidence 在既有 Phase 1 日志中统一脱敏。
+固定 reaction 为 `positive`、`not_interested`、`quality_issue`、`source_distrust`、`temporary_skip`、`unclear`。解析器继续只返回同一个反馈对象；本地处理器根据 `receipt_id` 或固定的 `preference_type` 决定状态类型。功能开启时反馈任务随现有资源 Phase 1 注入，即使没有 Web 回执也可提取明确 Music 兴趣；不会产生新调用或线程。原始反馈段和 evidence 在既有 Phase 1 日志中统一脱敏。
 
 ## 5. 本地短期规则
 
@@ -94,6 +94,21 @@ fashion_lifestyle, pets_animals
 - `unclear`：不形成任何状态。
 
 主题分数只作用于 Web 候选。空主题候选保留现有来源权重和顺序；负修正通过有限指数权重降低概率，不会把主题概率变成零。15% 探索保留，但候选先经过 `_should_skip_source()` 和角色来源抑制，所以探索不能绕过硬约束。Music/Meme 搜索任务是中性候选，不读取 `topic.*`。
+
+## 5.1 明确 Music 兴趣
+
+Music 兴趣与 Web 反馈复用同一个可选输出段，不新增解析标签：
+
+```text
+[RECOMMENDATION_FEEDBACK]
+{"preference_type":"music_intent","value":"jazz","reaction":"positive","confidence":0.92,"evidence":"最近挺喜欢爵士"}
+```
+
+第一版只接受 `music_intent` 与 `music_artist`。音乐意图固定为 `pop`、`rock`、`electronic`、`hip_hop`、`jazz`、`classical`、`lofi`、`soundtrack`；歌手值必须逐字出现在最新用户原话中。`reaction` 只接受 `positive` 与 `not_interested`，`confidence` 必须不低于 0.6。“这首”“这种”“这个歌手”等无法可靠确定目标的表达不形成状态。
+
+Music 兴趣按角色在进程内最多保存 6 项，有效 5 小时，相同 `preference_type + value` 的新表达覆盖旧表达。正向兴趣只在 Phase 1 输出为空或 `personalized` 时替换后续搜索关键词；点歌、歌单、`source:liked`、`source:daily` 和当前明确关键词保持原样。负向兴趣只取消同目标的正向兜底，不在抓取后过滤歌曲。`topic.music_culture` 仍表示 Web 音乐文化内容，不与实际听歌兴趣混用。
+
+实现会在资源 Phase 1 前冻结 Music 兴趣快照，在同一次调用返回后再处理新的明确兴趣。因此新状态不会反写本轮后置搜歌，只能影响再下一次泛化 Music 任务。当前实现把兴趣值转换成公开搜索词，不改变网易云账号个性化候选的内部排序。
 
 ## 6. 生效时序
 
@@ -133,8 +148,9 @@ $env:NEKO_PROACTIVE_PREFERENCE_DEMO_ENABLED='1'
 5. 让不同 `resource_key` 的游戏链接 B 实际发送，再回复“还是不想看游戏”。
 6. 再触发一次资源 Phase 1；确认该轮先按旧状态选候选，再提取第二条证据并形成 5 小时负修正。
 7. 再触发一次资源 Phase 1；确认游戏进入 Top K 的概率和候选占比下降，同时现有硬去重、来源抑制和探索约束仍成立。
-8. 验证 Music/Meme 仍按原后置抓取和素材衰减工作，不把结果描述为主题个性化。
-9. 关闭功能并重启，确认提示词、解析后处理、回执和 Web 加权全部不启用。
+8. 用户明确回复“最近挺喜欢爵士”，触发下一次资源 Phase 1 提取 Music 兴趣；确认该轮仍使用冻结前的旧状态，再下一次泛化 Music 任务才把 `personalized` 改为 `jazz` 搜索。点歌、歌单、liked/daily 来源保持原行为。
+9. 验证 Meme 仍按原后置抓取和素材衰减工作；Music 只改变泛化搜索词，不描述为曲风分类或账号候选重排。
+10. 关闭功能并重启，确认提示词、解析后处理、回执、Web 加权和 Music 兴趣全部不启用。
 
 ## 8. 自动测试范围
 
@@ -142,6 +158,6 @@ $env:NEKO_PROACTIVE_PREFERENCE_DEMO_ENABLED='1'
 
 ## 9. 验收表述
 
-> Demo证明普通聊天反馈能够在不新增LLM调用的情况下，经过两次后续资源Phase 1，改变Web候选池的主题概率和候选组成。
+> Demo 证明普通聊天反馈能够在不新增 LLM 调用的情况下，经过两次后续资源 Phase 1，改变 Web 候选池的主题概率和候选组成；明确音乐兴趣也能改变后续泛化 Music 请求的搜索关键词和实际候选组成。
 
-不得扩写为 Music/Meme 实际内容已个性化，也不得声称最终 LLM 文本受到候选 ID 硬约束。
+不得扩写为歌曲已被准确分类、网易云账号候选已按本地兴趣重排、Meme 实际内容已个性化，也不得声称最终 LLM 文本受到候选 ID 硬约束。

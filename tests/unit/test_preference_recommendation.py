@@ -11,16 +11,19 @@ from main_logic.proactive_chat.delivery import (
 )
 from main_logic.proactive_chat.preference_recommendation import (
     CHANNEL_NAMES,
+    MUSIC_INTENTS,
     PRIMARY_TOPICS,
     calculate_pool_probabilities,
     classify_candidate,
     clear_recommendation_feedback_state,
     format_feedback_receipts,
+    get_music_interest_snapshot,
     get_pending_receipts,
     get_source_suppressions,
     get_topic_scores,
     process_recommendation_feedback,
     register_recommendation_receipt,
+    resolve_music_interest_keyword,
     run_demo,
     select_preference_candidates,
 )
@@ -438,6 +441,288 @@ async def test_feedback_extraction_reuses_the_single_phase1_call(monkeypatch):
     )
     assert calls == 1
     assert result["recommendation_feedback"]["reaction"] == "unclear"
+
+
+def _music_feedback(
+    role,
+    *,
+    preference_type,
+    value,
+    reaction,
+    evidence,
+    memory,
+    now,
+    confidence=0.9,
+):
+    return process_recommendation_feedback(
+        role,
+        {
+            "preference_type": preference_type,
+            "value": value,
+            "reaction": reaction,
+            "confidence": confidence,
+            "evidence": evidence,
+        },
+        memory_context=memory,
+        master_name="User",
+        now=now,
+    )
+
+
+def test_explicit_music_intent_is_role_local_and_expires_after_five_hours():
+    result = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="最近挺喜欢爵士",
+        memory="User | 最近挺喜欢爵士",
+        now=10.0,
+    )
+    assert result.accepted is True
+    assert result.scope == "music"
+    assert len(MUSIC_INTENTS) == 8
+    assert [item.value for item in get_music_interest_snapshot("Neko", now=10.0)] == ["jazz"]
+    assert get_music_interest_snapshot("Other", now=10.0) == ()
+    assert get_music_interest_snapshot("Neko", now=10.0 + 5 * 3600 + 0.1) == ()
+
+
+def test_music_intent_requires_matching_latest_user_evidence():
+    mismatched = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="我喜欢摇滚",
+        memory="User | 我喜欢摇滚",
+        now=1.0,
+    )
+    stale = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="我喜欢爵士",
+        memory="User | 我喜欢爵士\nUser | 今天天气不错",
+        now=2.0,
+    )
+    assert mismatched.accepted is False
+    assert stale.accepted is False
+    assert get_music_interest_snapshot("Neko", now=2.0) == ()
+
+
+@pytest.mark.parametrize(
+    ("value", "evidence"),
+    (
+        ("electronic", "Me gusta la música electrónica"),
+        ("classical", "Gosto de música clássica"),
+        ("soundtrack", "Me gusta la banda sonora"),
+    ),
+)
+def test_music_intent_validation_supports_localized_prompt_evidence(value, evidence):
+    result = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value=value,
+        reaction="positive",
+        evidence=evidence,
+        memory=f"User | {evidence}",
+        now=1.0,
+    )
+    assert result.accepted is True
+
+
+def test_music_interest_rejects_non_finite_confidence():
+    result = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="I like jazz",
+        memory="User | I like jazz",
+        now=1.0,
+        confidence=float("nan"),
+    )
+    assert result.accepted is False
+
+
+def test_music_artist_must_appear_verbatim_and_deictic_feedback_is_rejected():
+    accepted = _music_feedback(
+        "Neko",
+        preference_type="music_artist",
+        value="周杰伦",
+        reaction="positive",
+        evidence="我挺喜欢周杰伦的歌",
+        memory="User | 我挺喜欢周杰伦的歌",
+        now=1.0,
+    )
+    rejected = _music_feedback(
+        "Neko",
+        preference_type="music_artist",
+        value="林俊杰",
+        reaction="not_interested",
+        evidence="这个歌手不行",
+        memory="User | 这个歌手不行",
+        now=2.0,
+    )
+    assert accepted.accepted is True
+    assert rejected.accepted is False
+    assert [item.value for item in get_music_interest_snapshot("Neko", now=2.0)] == ["周杰伦"]
+
+
+def test_music_interest_dedupes_one_line_but_accepts_a_repeated_occurrence():
+    kwargs = {
+        "preference_type": "music_intent",
+        "value": "jazz",
+        "reaction": "positive",
+        "evidence": "I like jazz",
+    }
+    first = _music_feedback("Neko", memory="User | I like jazz", now=1.0, **kwargs)
+    duplicate = _music_feedback("Neko", memory="User | I like jazz", now=2.0, **kwargs)
+    repeated = _music_feedback(
+        "Neko",
+        memory="User | I like jazz\nUser | I like jazz",
+        now=3.0,
+        **kwargs,
+    )
+    assert first.accepted is True
+    assert duplicate.accepted is False
+    assert repeated.accepted is True
+
+
+def test_music_interest_state_is_bounded_to_six_latest_items():
+    for index, intent in enumerate(MUSIC_INTENTS):
+        alias = {
+            "pop": "pop", "rock": "rock", "electronic": "electronic",
+            "hip_hop": "hip hop", "jazz": "jazz", "classical": "classical",
+            "lofi": "lofi", "soundtrack": "soundtrack",
+        }[intent]
+        assert _music_feedback(
+            "Neko",
+            preference_type="music_intent",
+            value=intent,
+            reaction="positive",
+            evidence=f"I like {alias}",
+            memory=f"User | I like {alias}",
+            now=float(index + 1),
+        ).accepted
+    snapshot = get_music_interest_snapshot("Neko", now=9.0)
+    assert len(snapshot) == 6
+    assert [item.value for item in snapshot[:2]] == ["soundtrack", "lofi"]
+
+
+@pytest.mark.parametrize(
+    "directive",
+    (
+        "song:晴天|周杰伦",
+        "source:liked",
+        "source:daily",
+        "playlist:夜间循环",
+        "classical music",
+    ),
+)
+def test_explicit_music_requests_override_stored_interest(directive):
+    _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="我喜欢爵士",
+        memory="User | 我喜欢爵士",
+        now=1.0,
+    )
+    snapshot = get_music_interest_snapshot("Neko", now=2.0)
+    assert resolve_music_interest_keyword(directive, snapshot) == directive
+
+
+def test_music_interest_uses_frozen_snapshot_and_changes_only_later_generic_search():
+    before_extraction = get_music_interest_snapshot("Neko", now=1.0)
+    result = _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="我喜欢爵士",
+        memory="User | 我喜欢爵士",
+        now=2.0,
+    )
+    assert result.accepted is True
+    assert resolve_music_interest_keyword("personalized", before_extraction) == "personalized"
+    after_extraction = get_music_interest_snapshot("Neko", now=3.0)
+    assert resolve_music_interest_keyword("personalized", after_extraction) == "jazz"
+    assert resolve_music_interest_keyword("", after_extraction) == "jazz"
+
+
+def test_negative_music_interest_cancels_the_same_positive_fallback():
+    _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="positive",
+        evidence="我喜欢爵士",
+        memory="User | 我喜欢爵士",
+        now=1.0,
+    )
+    _music_feedback(
+        "Neko",
+        preference_type="music_intent",
+        value="jazz",
+        reaction="not_interested",
+        evidence="我不喜欢爵士",
+        memory="User | 我喜欢爵士\nUser | 我不喜欢爵士",
+        now=2.0,
+    )
+    snapshot = get_music_interest_snapshot("Neko", now=3.0)
+    assert snapshot[0].reaction == "not_interested"
+    assert resolve_music_interest_keyword("personalized", snapshot) == "personalized"
+
+
+def test_music_interest_reuses_existing_feedback_prompt_in_every_language():
+    for language in ("zh", "zh-TW", "en", "ja", "ko", "ru", "es", "pt"):
+        prompt = build_unified_phase1_prompt(
+            language,
+            merged_content="1. Example",
+            memory_context="User | I like jazz",
+            master_name="User",
+            feedback_enabled=True,
+            feedback_receipts="",
+        )
+        assert "[RECOMMENDATION_FEEDBACK]" in prompt
+        assert "music_intent" in prompt
+        assert "music_artist" in prompt
+        assert "[MUSIC_INTEREST]" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_music_interest_extraction_adds_no_phase1_call(monkeypatch):
+    calls = 0
+
+    async def fake_llm_call(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return (
+            "[MUSIC] personalized\n[RECOMMENDATION_FEEDBACK]\n"
+            '{"preference_type":"music_intent","value":"jazz",'
+            '"reaction":"positive","confidence":0.9,"evidence":"I like jazz"}'
+        )
+
+    monkeypatch.setattr(generation, "_llm_call_with_retry", fake_llm_call)
+    result = await generation._run_unified_phase1(
+        model_config=generation.ProactiveModelConfig("model", None, "key", None),
+        proactive_lang="en",
+        lanlan_name="Neko",
+        master_name="User",
+        merged_web_content="",
+        memory_context="User | I like jazz",
+        recent_chats_section="",
+        has_music_task=True,
+        has_meme_task=False,
+        feedback_enabled=True,
+        feedback_receipts="[]",
+    )
+    assert calls == 1
+    assert result["music_keyword"] == "personalized"
+    assert result["recommendation_feedback"]["preference_type"] == "music_intent"
 
 
 def test_fixed_demo_closes_the_delayed_web_loop_without_new_llm_work():

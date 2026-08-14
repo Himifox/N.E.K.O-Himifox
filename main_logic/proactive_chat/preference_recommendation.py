@@ -1,7 +1,8 @@
-"""Process-local Web recommendation feedback demo for proactive chat.
+"""Process-local recommendation preference demo for proactive chat.
 
 The feature reuses the existing Phase 1 call and source-history identity.  It
-does not build a durable profile and never changes music or meme resources.
+does not build a durable profile.  Web receipts adjust Web candidate topics;
+explicit Music interests may adjust only a later generic Music search.
 """
 
 from __future__ import annotations
@@ -49,6 +50,49 @@ REACTIONS = (
     "temporary_skip",
     "unclear",
 )
+MUSIC_PREFERENCE_TYPES = ("music_intent", "music_artist")
+MUSIC_INTENTS = (
+    "pop",
+    "rock",
+    "electronic",
+    "hip_hop",
+    "jazz",
+    "classical",
+    "lofi",
+    "soundtrack",
+)
+
+_MUSIC_INTENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "pop": ("pop", "流行", "流行音乐", "流行音樂", "ポップ", "팝", "поп"),
+    "rock": ("rock", "摇滚", "搖滾", "ロック", "록", "рок"),
+    "electronic": (
+        "electronic", "edm", "电子音乐", "電子音樂", "电子", "電子",
+        "エレクトロニック", "일렉트로닉", "электронная музыка",
+        "música electrónica", "música eletrônica",
+    ),
+    "hip_hop": ("hip hop", "hip-hop", "hiphop", "嘻哈", "ヒップホップ", "힙합", "хип-хоп"),
+    "jazz": ("jazz", "爵士", "爵士乐", "爵士樂", "ジャズ", "재즈", "джаз"),
+    "classical": (
+        "classical", "古典", "古典音乐", "古典音樂", "クラシック", "클래식",
+        "классическая музыка", "música clásica", "música clássica",
+    ),
+    "lofi": ("lofi", "lo-fi", "low-fi", "低保真", "ローファイ", "로파이"),
+    "soundtrack": (
+        "soundtrack", "ost", "原声", "原聲", "配乐", "配樂",
+        "サウンドトラック", "사운드트랙", "саундтрек", "banda sonora",
+        "trilha sonora",
+    ),
+}
+_MUSIC_INTENT_SEARCH_TERMS = {
+    "pop": "pop",
+    "rock": "rock",
+    "electronic": "electronic music",
+    "hip_hop": "hip hop",
+    "jazz": "jazz",
+    "classical": "classical music",
+    "lofi": "lofi",
+    "soundtrack": "soundtrack",
+}
 
 _RECEIPT_TTL_SECONDS = 2 * 3600
 _TOPIC_EVIDENCE_TTL_SECONDS = 2 * 3600
@@ -57,6 +101,9 @@ _SOURCE_SUPPRESSION_TTL_SECONDS = 5 * 3600
 _MAX_RECEIPTS_PER_ROLE = 10
 _MAX_TOPIC_EVIDENCE_PER_ROLE = 64
 _MAX_EVIDENCE_CHARS = 100
+_MUSIC_INTEREST_TTL_SECONDS = 5 * 3600
+_MAX_MUSIC_INTERESTS_PER_ROLE = 6
+_MAX_ARTIST_CHARS = 64
 
 
 _TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -196,6 +243,18 @@ class FeedbackProcessResult:
     accepted: bool
     reaction: str | None = None
     state_changed: bool = False
+    scope: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MusicInterest:
+    preference_type: str
+    value: str
+    reaction: str
+    confidence: float
+    evidence_id: str
+    updated_at: float
+    expires_at: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +269,8 @@ _topic_evidence: dict[str, deque[TopicEvidence]] = {}
 _topic_corrections: dict[str, dict[str, TopicCorrection]] = {}
 _source_suppressions: dict[str, dict[str, float]] = {}
 _processed_feedback: set[tuple[str, str, str, str]] = set()
+_music_interests: dict[str, dict[tuple[str, str], MusicInterest]] = {}
+_processed_music_interests: set[tuple[str, str, str, str, str]] = set()
 
 
 def _normalized(value: Any) -> str:
@@ -360,6 +421,146 @@ def _find_new_evidence_id(
     return match
 
 
+def _latest_user_evidence_id(
+    evidence: str,
+    *,
+    memory_context: str,
+    master_name: str,
+) -> str | None:
+    """Return an occurrence-aware ID only when evidence is in the latest user line."""
+    lines = _user_history_lines(memory_context, master_name)
+    if not lines or evidence.casefold() not in lines[-1].casefold():
+        return None
+    fingerprint = _line_fingerprint(lines[-1])
+    occurrence = sum(_line_fingerprint(line) == fingerprint for line in lines)
+    return f"{fingerprint}:{occurrence}"
+
+
+def _active_music_interests(
+    role: str,
+    now: float,
+) -> dict[tuple[str, str], MusicInterest]:
+    active = {
+        key: interest
+        for key, interest in _music_interests.get(role, {}).items()
+        if interest.expires_at >= now
+    }
+    if active:
+        _music_interests[role] = active
+    else:
+        _music_interests.pop(role, None)
+    return active
+
+
+def get_music_interest_snapshot(
+    role: str,
+    *,
+    now: float | None = None,
+) -> tuple[MusicInterest, ...]:
+    """Return active role-local Music interests newest first."""
+    timestamp = time.time() if now is None else now
+    return tuple(sorted(
+        _active_music_interests(role, timestamp).values(),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    ))
+
+
+def _music_intent_matches_evidence(intent: str, evidence: str) -> bool:
+    folded = evidence.casefold()
+    return any(_keyword_hit(folded, alias) for alias in _MUSIC_INTENT_ALIASES[intent])
+
+
+def _process_music_interest_feedback(
+    role: str,
+    raw: Mapping[str, Any],
+    *,
+    memory_context: str,
+    master_name: str,
+    now: float,
+) -> FeedbackProcessResult:
+    preference_type = _normalized(raw.get("preference_type")).casefold()
+    reaction = _normalized(raw.get("reaction")).casefold()
+    value = _normalized(raw.get("value"))
+    evidence = _normalized(raw.get("evidence"))
+    if (
+        not role
+        or preference_type not in MUSIC_PREFERENCE_TYPES
+        or reaction not in {"positive", "not_interested"}
+        or not value
+        or not 1 <= len(evidence) <= _MAX_EVIDENCE_CHARS
+    ):
+        return FeedbackProcessResult(False)
+    try:
+        confidence = float(raw.get("confidence", 0.0))
+    except (TypeError, ValueError, OverflowError):
+        return FeedbackProcessResult(False)
+    if not math.isfinite(confidence) or confidence < 0.6 or confidence > 1.0:
+        return FeedbackProcessResult(False)
+
+    if preference_type == "music_intent":
+        value = value.casefold()
+        if value not in MUSIC_INTENTS or not _music_intent_matches_evidence(value, evidence):
+            return FeedbackProcessResult(False)
+    elif len(value) > _MAX_ARTIST_CHARS or value.casefold() not in evidence.casefold():
+        return FeedbackProcessResult(False)
+
+    evidence_id = _latest_user_evidence_id(
+        evidence,
+        memory_context=memory_context,
+        master_name=master_name,
+    )
+    if evidence_id is None:
+        return FeedbackProcessResult(False)
+    dedupe_key = (role, evidence_id, preference_type, value.casefold(), reaction)
+    if dedupe_key in _processed_music_interests:
+        return FeedbackProcessResult(False)
+    _processed_music_interests.add(dedupe_key)
+
+    interest = MusicInterest(
+        preference_type=preference_type,
+        value=value,
+        reaction=reaction,
+        confidence=confidence,
+        evidence_id=evidence_id,
+        updated_at=now,
+        expires_at=now + _MUSIC_INTEREST_TTL_SECONDS,
+    )
+    active = _active_music_interests(role, now)
+    active[(preference_type, value.casefold())] = interest
+    newest = sorted(
+        active.values(),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )[:_MAX_MUSIC_INTERESTS_PER_ROLE]
+    _music_interests[role] = {
+        (item.preference_type, item.value.casefold()): item for item in newest
+    }
+    return FeedbackProcessResult(True, reaction, True, "music")
+
+
+def resolve_music_interest_keyword(
+    raw_keyword: Any,
+    interests: Sequence[MusicInterest],
+) -> str:
+    """Use the latest positive interest only for a generic Music request."""
+    keyword = _normalized(raw_keyword)
+    from main_logic.music_requests import parse_music_request
+
+    request = parse_music_request(keyword)
+    if request.strict or request.keyword:
+        return keyword
+    latest_positive = next(
+        (interest for interest in interests if interest.reaction == "positive"),
+        None,
+    )
+    if latest_positive is None:
+        return keyword
+    if latest_positive.preference_type == "music_artist":
+        return latest_positive.value
+    return _MUSIC_INTENT_SEARCH_TERMS.get(latest_positive.value, keyword)
+
+
 def _remove_receipt(role: str, receipt_id: str) -> None:
     remaining = deque(
         (item for item in _receipts.get(role, ()) if item.receipt_id != receipt_id),
@@ -437,10 +638,20 @@ def process_recommendation_feedback(
     master_name: str,
     now: float | None = None,
 ) -> FeedbackProcessResult:
-    """Validate one Phase 1 feedback object and update only receipt-derived state."""
+    """Validate one Web receipt feedback or explicit Music interest object."""
     if not isinstance(raw, Mapping):
         return FeedbackProcessResult(False)
     timestamp = time.time() if now is None else now
+    if not _normalized(raw.get("receipt_id")) and _normalized(
+        raw.get("preference_type")
+    ).casefold() in MUSIC_PREFERENCE_TYPES:
+        return _process_music_interest_feedback(
+            role,
+            raw,
+            memory_context=memory_context,
+            master_name=master_name,
+            now=timestamp,
+        )
     receipt_id = str(raw.get("receipt_id", ""))
     reaction = str(raw.get("reaction", ""))
     receipt = next(
@@ -490,7 +701,7 @@ def process_recommendation_feedback(
         )
         changed = True
     # quality_issue, temporary_skip and unclear deliberately create no state.
-    return FeedbackProcessResult(True, reaction, changed)
+    return FeedbackProcessResult(True, reaction, changed, "web")
 
 
 def get_topic_scores(role: str, *, now: float | None = None) -> dict[str, float]:
@@ -538,6 +749,8 @@ def clear_recommendation_feedback_state() -> None:
     _topic_corrections.clear()
     _source_suppressions.clear()
     _processed_feedback.clear()
+    _music_interests.clear()
+    _processed_music_interests.clear()
 
 
 def _candidate_pool(item: Mapping[str, Any], topic: CandidateTopic) -> str:

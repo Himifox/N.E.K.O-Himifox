@@ -117,8 +117,10 @@ from main_logic.proactive_chat.music_recommendation import (
 )
 from main_logic.proactive_chat.preference_recommendation import (
     format_feedback_receipts,
+    get_music_interest_snapshot,
     get_topic_scores,
     process_recommendation_feedback,
+    resolve_music_interest_keyword,
 )
 from main_logic.proactive_chat.state import (
     _enter_proactive_phase2,
@@ -1333,6 +1335,11 @@ async def handle_proactive_chat(
             if PROACTIVE_PREFERENCE_DEMO_ENABLED
             else {}
         )
+        music_interest_snapshot = (
+            get_music_interest_snapshot(lanlan_name)
+            if PROACTIVE_PREFERENCE_DEMO_ENABLED
+            else ()
+        )
 
         # Phase 1 preempt check：memory_server new_dialog 是 phase1 里首次大 await
         # （httpx timeout 5s）。用户在这期间打断只能等超时才有下一次 check，
@@ -1740,8 +1747,8 @@ async def handle_proactive_chat(
             has_music_task=has_music_task,
             has_meme_task=has_meme_task,
             log=logger,
-            feedback_enabled=bool(feedback_receipts),
-            feedback_receipts=feedback_receipts,
+            feedback_enabled=PROACTIVE_PREFERENCE_DEMO_ENABLED,
+            feedback_receipts=feedback_receipts or "[]",
         )
 
         if PROACTIVE_PREFERENCE_DEMO_ENABLED:
@@ -1753,13 +1760,16 @@ async def handle_proactive_chat(
             )
             logger.debug(
                 "[%s] recommendation feedback demo: parsed=%s accepted=%s "
-                "reaction=%s state_changed=%s active_topic_corrections=%d",
+                "scope=%s reaction=%s state_changed=%s "
+                "active_topic_corrections=%d active_music_interests=%d",
                 lanlan_name,
                 bool(unified_parsed.get("recommendation_feedback")),
                 feedback_result.accepted,
+                feedback_result.scope,
                 feedback_result.reaction,
                 feedback_result.state_changed,
                 len(get_topic_scores(lanlan_name)),
+                len(get_music_interest_snapshot(lanlan_name)),
             )
 
         # ============================================================
@@ -1819,6 +1829,15 @@ async def handle_proactive_chat(
         needs_phase1_followups = (
             has_music_task and not unified_parsed.get("music_pass")
         ) or (has_meme_task and not unified_parsed.get("meme_pass"))
+        if (
+            PROACTIVE_PREFERENCE_DEMO_ENABLED
+            and has_music_task
+            and not unified_parsed.get("music_pass")
+        ):
+            unified_parsed["music_keyword"] = resolve_music_interest_keyword(
+                unified_parsed.get("music_keyword"),
+                music_interest_snapshot,
+            )
         if needs_phase1_followups:
             # Phase 1 preempt check：unified LLM 刚回，music/meme 后置 fetch 前再瞄
             if mgr.state.is_proactive_preempted():
