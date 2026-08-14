@@ -260,8 +260,22 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert "Raw conversations" not in panel_source
 
     plugin_source = (plugin_dir / "__init__.py").read_text(encoding="utf-8")
+    assert "await self.ctx.get_own_effective_config" in plugin_source
     assert "await self.ctx.update_own_config" in plugin_source
     assert "await self.config.update" not in plugin_source
+
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        for node in node.body
+        if isinstance(node, ast.AsyncFunctionDef)
+    }
+    status_decorators = ast.unparse(functions["recommendation_status"])
+    update_decorators = ast.unparse(functions["update_recommendation_settings"])
+    assert "@ui.action" in status_decorators
+    assert "id='recommendation_status'" in status_decorators
+    assert "@ui.action" not in update_decorators
 
 
 def test_all_locales_expose_the_same_plugin_and_entry_keys() -> None:

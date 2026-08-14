@@ -50,7 +50,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         self._cycle_lock = threading.Lock()
 
     async def _load_config(self) -> None:
-        raw = await self.config.dump(timeout=5.0)
+        payload = await self.ctx.get_own_effective_config(timeout=5.0)
+        raw = payload.get("config") if isinstance(payload, Mapping) else payload
         self._config = RecommendationConfig.from_mapping(
             raw if isinstance(raw, Mapping) else {}
         )
@@ -417,16 +418,9 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     @ui.context(id="dashboard", title=tr("panel.title", default="个性化主动推荐"))
     async def dashboard_context(self) -> dict[str, Any]:
+        await self._load_config()
         return self._dashboard_state()
 
-    @ui.action(
-        id="update_recommendation_settings",
-        label=tr("actions.updateSettings.label", default="保存推荐设置"),
-        tone="success",
-        group="config",
-        order=10,
-        refresh_context=True,
-    )
     @plugin_entry(
         id="update_recommendation_settings",
         name=tr("entries.updateSettings.name", default="更新推荐设置"),
@@ -521,6 +515,14 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         finally:
             self._cycle_lock.release()
 
+    @ui.action(
+        id="update_recommendation_settings",
+        label=tr("actions.updateSettings.label", default="保存推荐设置"),
+        tone="success",
+        group="config",
+        order=10,
+        refresh_context=True,
+    )
     @plugin_entry(
         id="recommendation_status",
         name=tr("entries.status.name", default="推荐状态"),
@@ -529,7 +531,11 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             default="查看个性化主动推荐状态，不返回用户原始对话。",
         ),
     )
-    async def recommendation_status(self, **_: Any):
+    async def recommendation_status(self, **kwargs: Any):
+        # Keep the UI action on the long-lived status entry so a hot-reloaded
+        # plugin remains callable while the parent registry still has old metadata.
+        if kwargs:
+            return await self.update_recommendation_settings(**kwargs)
         snapshot = self._state.snapshot()
         interests = active_interests(snapshot.get("profile"), include_trial=True)
         return Ok(
