@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -158,7 +159,7 @@ def test_management_search_can_show_and_restore_a_disabled_entry(monkeypatch, tm
     assert enabled["items"][0]["disabled"] is False
 
 
-def test_subscription_handoff_verifies_hash_and_installs_pack(monkeypatch, tmp_path):
+def test_subscription_handoff_verifies_hash_and_stages_pack(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     pack = {
         "schema_version": 1,
@@ -198,10 +199,25 @@ def test_subscription_handoff_verifies_hash_and_installs_pack(monkeypatch, tmp_p
         "/api/public-knowledge/packs",
         params={"collection": "meme"},
     ).json()
+    jobs = client.get(
+        "/api/public-knowledge/packs/jobs",
+        params={"collection": "meme"},
+    ).json()
 
     assert response["ok"] is True
+    assert response["entries_total"] == 1
     assert response["entries"] == 1
-    assert packs["packs"][0]["subscription"]["remote_id"] == (
+    assert response["collection"] == "meme"
+    assert response["source_tag"] == "source:community.market-fixture"
+    assert response["state"] == "queued"
+    assert packs["packs"] == []
+    assert jobs["jobs"][0]["pack_id"] == "market-fixture"
+    subscription = json.loads(
+        (tmp_path / ".staging" / response["job_id"] / "subscription.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert subscription["remote_id"] == (
         "knowledge/market-fixture"
     )
 
@@ -253,6 +269,22 @@ def test_subscription_size_limit_applies_to_pack_not_small_envelope(
     ).json()
 
     assert response["ok"] is True
+
+
+def test_oversized_pack_request_is_rejected_before_json_decode(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, "MAX_PACK_BYTES", 16)
+    monkeypatch.setattr(module, "_PACK_ENVELOPE_OVERHEAD_BYTES", 0)
+
+    response = client.post(
+        "/api/public-knowledge/packs/import",
+        content=b"{" + b"x" * 64,
+        headers={"content-type": "application/json"},
+    ).json()
+
+    assert response == {"ok": False, "reason": "pack_too_large"}
 
 
 def test_unknown_collection_management_requests_do_not_raise(monkeypatch, tmp_path):

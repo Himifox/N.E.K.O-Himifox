@@ -816,6 +816,8 @@ class KnowledgeService:
         return count
 
     def get_status(self, collection_id: str) -> dict:
+        from .pack_jobs import MAX_READY_VECTOR_CHUNKS
+
         spec = self._spec(collection_id)
         database_path = self.database_path(collection_id)
         database_exists = database_path.is_file()
@@ -848,6 +850,11 @@ class KnowledgeService:
         except Exception:
             embedding_state = "disabled"
             embedding_model_id = ""
+        pack_jobs = self.list_pack_jobs(collection_id)
+        pending_pack_jobs = sum(
+            job.get("state") not in {"active", "cancelled", "failed"}
+            for job in pack_jobs
+        )
         return {
             "collection_id": collection_id,
             "name": spec.display_name or collection_id,
@@ -862,6 +869,8 @@ class KnowledgeService:
             else "bm25",
             "embedding_service_state": embedding_state,
             "embedding_model_id": embedding_model_id,
+            "pack_jobs_pending": pending_pack_jobs,
+            "vector_budget_chunks": MAX_READY_VECTOR_CHUNKS,
             **chunk_status,
         }
 
@@ -907,6 +916,32 @@ class KnowledgeService:
         )
         self.refresh_routing_index(background=True)
         return result
+
+    def stage_pack(self, pack, *, subscription=None):
+        """Queue a user pack without exposing partially indexed entries."""
+        from .pack_jobs import stage_pack
+
+        self._spec(pack.collection_id)
+        return stage_pack(
+            self,
+            pack,
+            subscription=subscription,
+        )
+
+    def collection_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._collections))
+
+    def list_pack_jobs(self, collection_id: str = "") -> tuple[dict, ...]:
+        from .pack_jobs import list_pack_jobs
+
+        if collection_id:
+            self._spec(collection_id)
+        return list_pack_jobs(self.knowledge_root, collection_id=collection_id)
+
+    def cancel_pack_job(self, job_id: str) -> bool:
+        from .pack_jobs import cancel_pack_job
+
+        return cancel_pack_job(self.knowledge_root, job_id)
 
     def count_entries(self, collection_id: str, *, source_tag: str = "") -> int:
         store = self._store(collection_id)

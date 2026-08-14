@@ -505,6 +505,40 @@ class MoegirlKnowledgeStore:
         except KnowledgeStoreError:
             return ()
 
+    def community_usage(self, *, source_tag: str = "") -> dict[str, int]:
+        """Count user-pack source data without materializing entry text."""
+        source_match = "= ?" if source_tag else "LIKE 'source:community.%'"
+        parameters = (source_tag,) if source_tag else ()
+        try:
+            with self._connection() as connection:
+                entry_row = connection.execute(
+                    "SELECT COUNT(*) entries_total, "
+                    "COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0) content_bytes "
+                    "FROM entries WHERE EXISTS (SELECT 1 FROM json_each(entries.tags) tag "
+                    f"WHERE tag.value {source_match})",
+                    parameters,
+                ).fetchone()
+                chunks_total = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks JOIN entries "
+                        "ON entries.rowid=knowledge_chunks.entry_rowid WHERE EXISTS "
+                        "(SELECT 1 FROM json_each(entries.tags) tag "
+                        f"WHERE tag.value {source_match})",
+                        parameters,
+                    ).fetchone()[0]
+                )
+                return {
+                    "entries_total": int(entry_row["entries_total"]),
+                    "chunks_total": chunks_total,
+                    "content_bytes": int(entry_row["content_bytes"]),
+                }
+        except KnowledgeStoreError:
+            return {
+                "entries_total": 0,
+                "chunks_total": 0,
+                "content_bytes": 0,
+            }
+
     def entries_revision(self) -> int:
         try:
             with self._connection() as connection:
@@ -723,6 +757,62 @@ class MoegirlKnowledgeStore:
                 self._increment_chunks_revision(connection)
             return changed
 
+    def store_chunk_embeddings(
+        self,
+        records: Sequence[dict[str, object]],
+    ) -> int:
+        """Import validated, content-addressed vectors in one short transaction."""
+        changed = 0
+        with self._connection(writable=True) as connection:
+            for record in records:
+                chunk_id = str(record.get("chunk_id") or "")
+                content_hash = str(record.get("content_hash") or "")
+                model_id = str(record.get("model_id") or "")
+                dimensions = int(record.get("dimensions") or 0)
+                embedding = record.get("embedding")
+                if (
+                    not chunk_id
+                    or not content_hash
+                    or not model_id
+                    or dimensions <= 0
+                    or not isinstance(embedding, bytes)
+                    or len(embedding) != dimensions * 2
+                ):
+                    continue
+                cursor = connection.execute(
+                    "UPDATE knowledge_chunks SET embedding_model_id=?, "
+                    "embedding_dimensions=?, embedding=?, embedding_status='ready', "
+                    "embedding_attempts=0, next_retry_at=0, last_error_code='' "
+                    "WHERE chunk_id=? AND content_hash=?",
+                    (model_id, dimensions, embedding, chunk_id, content_hash),
+                )
+                changed += int(cursor.rowcount) == 1
+            if changed:
+                self._increment_chunks_revision(connection)
+        return changed
+
+    def ready_embedding_records(self) -> tuple[dict[str, object], ...]:
+        """Return compact vectors for staging activation; never includes text."""
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT chunk_id, content_hash, embedding_model_id, "
+                    "embedding_dimensions, embedding FROM knowledge_chunks "
+                    "WHERE embedding_status='ready'"
+                ).fetchall()
+                return tuple(
+                    {
+                        "chunk_id": str(row["chunk_id"]),
+                        "content_hash": str(row["content_hash"]),
+                        "model_id": str(row["embedding_model_id"] or ""),
+                        "dimensions": int(row["embedding_dimensions"] or 0),
+                        "embedding": bytes(row["embedding"] or b""),
+                    }
+                    for row in rows
+                )
+        except KnowledgeStoreError:
+            return ()
+
     def mark_chunk_embedding_failed(
         self,
         *,
@@ -810,6 +900,65 @@ class MoegirlKnowledgeStore:
                 return revision, tuple(result)
         except (KnowledgeStoreError, TypeError, ValueError):
             return 0, ()
+
+    def load_ready_chunk_vectors(
+        self,
+        *,
+        model_id: str,
+        limit: int,
+    ) -> tuple[int, tuple[dict[str, object], ...], bool]:
+        """Load compact vector rows without duplicating entry text per chunk."""
+        if not model_id or limit <= 0:
+            return self.chunks_revision(), (), False
+        limit = max(int(limit), 1)
+        try:
+            with self._connection() as connection:
+                revision_row = connection.execute(
+                    "SELECT value FROM metadata WHERE key='chunks_revision'"
+                ).fetchone()
+                rows = connection.execute(
+                    "SELECT entry_rowid, chunk_index, embedding_dimensions, embedding "
+                    "FROM knowledge_chunks WHERE embedding_status='ready' "
+                    "AND embedding_model_id=? ORDER BY entry_rowid, chunk_index LIMIT ?",
+                    (model_id, limit + 1),
+                ).fetchall()
+                truncated = len(rows) > limit
+                return (
+                    int(revision_row["value"]) if revision_row else 0,
+                    tuple(
+                        {
+                            "entry_rowid": int(row["entry_rowid"]),
+                            "chunk_index": int(row["chunk_index"]),
+                            "dimensions": int(row["embedding_dimensions"] or 0),
+                            "embedding": bytes(row["embedding"] or b""),
+                        }
+                        for row in rows[:limit]
+                    ),
+                    truncated,
+                )
+        except (KnowledgeStoreError, TypeError, ValueError):
+            return 0, (), False
+
+    def load_entries_by_rowids(
+        self,
+        rowids: Sequence[int],
+    ) -> dict[int, MoegirlKnowledgeEntry]:
+        unique = tuple(dict.fromkeys(int(rowid) for rowid in rowids if int(rowid) > 0))
+        if not unique:
+            return {}
+        placeholders = ",".join("?" for _ in unique)
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    f"SELECT rowid, * FROM entries WHERE rowid IN ({placeholders})",
+                    unique,
+                ).fetchall()
+                return {
+                    int(row["rowid"]): _entry_from_row(row)
+                    for row in rows
+                }
+        except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
+            return {}
 
     def load_routing_entries(self) -> tuple[int, tuple[MoegirlKnowledgeEntry, ...]]:
         """Read one collection revision and its routeable cards in one transaction."""

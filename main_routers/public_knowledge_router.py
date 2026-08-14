@@ -272,17 +272,25 @@ async def list_public_knowledge_packs(
     return {"ok": True, "collection": collection, "packs": list(packs)}
 
 
+@router.get("/packs/jobs")
+async def list_public_knowledge_pack_jobs(
+    collection: str = Query(default="", max_length=64),
+):
+    try:
+        jobs = await asyncio.to_thread(_service().list_pack_jobs, collection)
+    except ValueError:
+        return {"ok": False, "reason": "unknown_collection"}
+    return {"ok": True, "collection": collection, "jobs": list(jobs)}
+
+
 @router.post("/packs/import")
 async def import_public_knowledge_pack(request: Request):
-    raw = await request.body()
-    if len(raw) > MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES:
+    payload, too_large = await _bounded_json_payload(
+        request,
+        max_bytes=MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES,
+    )
+    if too_large:
         return {"ok": False, "reason": "pack_too_large"}
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
     rejected = _validate_mutation(request, payload)
     if rejected is not None:
         return rejected
@@ -291,30 +299,27 @@ async def import_public_knowledge_pack(request: Request):
         if len(canonical_pack_bytes(pack_payload)) > MAX_PACK_BYTES:
             return {"ok": False, "reason": "pack_too_large"}
         pack = validate_pack(pack_payload)
-        result = await asyncio.to_thread(_service().install_pack, pack)
+        result = await asyncio.to_thread(_service().stage_pack, pack)
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
         "ok": True,
-        "pack_id": result.pack_id,
-        "collection": result.collection_id,
-        "source_tag": result.source_tag,
-        "entries": result.entries,
+        "collection": result["collection_id"],
+        "source_tag": pack.source_tag,
+        "entries": result["entries_total"],
+        **result,
     }
 
 
 @router.post("/subscriptions/apply")
 async def apply_public_knowledge_subscription(request: Request):
     """Install provider-verified data without coupling to a market protocol."""
-    raw = await request.body()
-    if len(raw) > MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES:
+    payload, too_large = await _bounded_json_payload(
+        request,
+        max_bytes=MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES,
+    )
+    if too_large:
         return {"ok": False, "reason": "pack_too_large"}
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
     rejected = _validate_mutation(request, payload)
     if rejected is not None:
         return rejected
@@ -331,7 +336,7 @@ async def apply_public_knowledge_subscription(request: Request):
             return {"ok": False, "reason": "artifact_hash_mismatch"}
         pack = validate_pack(pack_payload)
         result = await asyncio.to_thread(
-            _service().install_pack,
+            _service().stage_pack,
             pack,
             subscription=subscription.to_dict(),
         )
@@ -342,10 +347,24 @@ async def apply_public_knowledge_subscription(request: Request):
         "protocol_version": SUBSCRIPTION_PROTOCOL_VERSION,
         "provider": subscription.provider,
         "remote_id": subscription.remote_id,
-        "pack_id": result.pack_id,
-        "collection": result.collection_id,
-        "entries": result.entries,
+        "collection": result["collection_id"],
+        "source_tag": pack.source_tag,
+        "entries": result["entries_total"],
+        **result,
     }
+
+
+@router.post("/packs/jobs/cancel")
+async def cancel_public_knowledge_pack_job(request: Request):
+    payload = await _json_payload(request)
+    rejected = _validate_mutation(request, payload)
+    if rejected is not None:
+        return rejected
+    job_id = str(payload.get("job_id") or "").strip()
+    if not job_id:
+        return {"ok": False, "reason": "invalid_request"}
+    cancelled = await asyncio.to_thread(_service().cancel_pack_job, job_id)
+    return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
 
 
 @router.post("/packs/auto-context")
@@ -408,3 +427,26 @@ async def _json_payload(request: Request) -> dict:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+async def _bounded_json_payload(
+    request: Request,
+    *,
+    max_bytes: int,
+) -> tuple[dict, bool]:
+    """Decode a local request without buffering an oversized upload."""
+    try:
+        if int(request.headers.get("content-length", "0")) > max_bytes:
+            return {}, True
+    except ValueError:
+        pass
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > max_bytes:
+            return {}, True
+        raw.extend(chunk)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}, False
+    return (payload if isinstance(payload, dict) else {}), False

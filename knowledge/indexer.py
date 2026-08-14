@@ -11,10 +11,13 @@ from pathlib import Path
 logger = logging.getLogger("N.E.K.O.Knowledge.Indexer")
 
 STARTUP_DELAY_SECONDS = 45.0
-BACKLOG_DELAY_SECONDS = 10.0
+BACKLOG_DELAY_SECONDS = 30.0
 IDLE_DELAY_SECONDS = 60.0
 EMBEDDING_BATCH_SIZE = 4
-MAX_CHUNKS_PER_ROUND = 64
+MAX_CHUNKS_PER_ROUND = 8
+_BLOCKED_STATES = frozenset(
+    ("inference_busy", "embedding_unavailable", "not_ready", "disabled")
+)
 
 _STATE_LOCK = threading.Lock()
 _TASK: asyncio.Task[None] | None = None
@@ -54,6 +57,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
 
     from .diagnostics import record_knowledge_index_batch
     from .moegirl_knowledge.store import MoegirlKnowledgeStore
+    from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
     from .service import BUILTIN_COLLECTIONS, KnowledgeService
     from .vector_index import index_embedding_batch
 
@@ -70,39 +74,62 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
         backlog = False
         try:
             remaining = MAX_CHUNKS_PER_ROUND
+            embedding_activity = False
+            # Derive at most one legacy entry per round. This is deterministic
+            # SQLite work and does not load the ONNX model.
             for store in stores:
-                if remaining < 32:
-                    break
-                while remaining >= 32:
-                    # One entry creates at most 32 chunks. SQLite work is short and
-                    # inference never runs in this worker thread or transaction.
-                    before = await asyncio.to_thread(store.chunk_status)
-                    derived_entries = await asyncio.to_thread(
-                        _backfill_store,
-                        store,
-                        limit=1,
-                    )
-                    if derived_entries == 0:
-                        break
-                    after = await asyncio.to_thread(store.chunk_status)
-                    derived_chunks = max(
-                        int(after.get("chunks_total", 0))
-                        - int(before.get("chunks_total", 0)),
-                        0,
-                    )
-                    remaining = max(remaining - derived_chunks, 0)
+                derived_entries = await asyncio.to_thread(
+                    _backfill_store,
+                    store,
+                    limit=1,
+                )
+                if derived_entries:
                     backlog = True
                     await asyncio.sleep(0)
+                    break
 
-            while stores and remaining > 0:
-                pass_progress = False
+            statuses = await asyncio.gather(
+                *(asyncio.to_thread(store.chunk_status) for store in stores)
+            )
+            ready_vectors = sum(int(status.get("chunks_ready", 0)) for status in statuses)
+            blocked = False
+            job_touched = False
+            while remaining > 0:
+                job_result = await process_pack_jobs(
+                    service,
+                    batch_size=min(EMBEDDING_BATCH_SIZE, remaining),
+                    ready_vector_chunks=ready_vectors,
+                )
+                job_state = str(job_result.get("state") or "")
+                selected = int(job_result.get("selected", 0))
+                embedding_activity = embedding_activity or selected > 0
+                remaining = max(remaining - selected, 0)
+                job_touched = job_touched or job_state != "no_work"
+                blocked = blocked or job_state in _BLOCKED_STATES
+                if selected == 0 or job_state not in {"ready", "slow_batch"}:
+                    break
+                await asyncio.sleep(0)
+
+            pending_jobs = any(
+                job.get("state") not in {"active", "cancelled", "failed"}
+                for job in service.list_pack_jobs()
+            )
+            backlog = backlog or (pending_jobs and not blocked)
+
+            if (
+                not job_touched
+                and not pending_jobs
+                and ready_vectors < MAX_READY_VECTOR_CHUNKS
+            ):
                 for store in stores:
                     if remaining <= 0:
                         break
-                    batch_size = min(EMBEDDING_BATCH_SIZE, remaining)
+                    available = MAX_READY_VECTOR_CHUNKS - ready_vectors
+                    if available <= 0:
+                        break
                     result = await index_embedding_batch(
                         store,
-                        batch_size=batch_size,
+                        batch_size=min(EMBEDDING_BATCH_SIZE, remaining, available),
                         load_model=True,
                     )
                     record_knowledge_index_batch(
@@ -113,34 +140,27 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                         elapsed_ms=result.elapsed_ms,
                         state=result.state,
                     )
-                    # Only chunks actually selected consume the round budget. A
-                    # busy query or unavailable model leaves them pending.
                     remaining -= result.selected
-                    pass_progress = pass_progress or result.stored > 0
-                    backlog = backlog or result.selected >= batch_size
-                    if result.state in {
-                        "inference_busy",
-                        "embedding_unavailable",
-                        "not_ready",
-                        "disabled",
-                    }:
+                    embedding_activity = embedding_activity or result.selected > 0
+                    ready_vectors += result.stored
+                    backlog = backlog or result.selected > 0
+                    if result.state in _BLOCKED_STATES:
+                        blocked = True
+                        backlog = False
                         break
-                    await asyncio.sleep(0)
-                if not pass_progress:
-                    break
+                    if result.stored:
+                        await asyncio.sleep(0)
 
             statuses = await asyncio.gather(
                 *(asyncio.to_thread(store.chunk_status) for store in stores)
             )
-            backlog = backlog or any(
-                int(status.get("entries_missing_chunks", 0)) > 0
-                or int(status.get("chunks_pending", 0)) > 0
-                or int(status.get("chunks_stale", 0)) > 0
-                or int(status.get("chunks_failed_retryable_now", 0)) > 0
-                for status in statuses
-            )
+            if ready_vectors >= MAX_READY_VECTOR_CHUNKS:
+                backlog = False
 
-            if stores and not memory_delta_reported:
+            if not stores and not pending_jobs:
+                backlog = False
+
+            if embedding_activity and not memory_delta_reported:
                 current_rss = _rss_bytes()
                 if memory_baseline is not None and current_rss is not None:
                     logger.info(
@@ -148,6 +168,16 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                         (current_rss - memory_baseline) / (1024 * 1024),
                     )
                 memory_delta_reported = True
+
+            if any(
+                int(status.get("entries_missing_chunks", 0)) > 0
+                or int(status.get("chunks_pending", 0)) > 0
+                or int(status.get("chunks_stale", 0)) > 0
+                or int(status.get("chunks_failed_retryable_now", 0)) > 0
+                for status in statuses
+            ) and ready_vectors < MAX_READY_VECTOR_CHUNKS:
+                if not blocked and not pending_jobs:
+                    backlog = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:

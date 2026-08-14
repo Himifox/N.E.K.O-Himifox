@@ -50,5 +50,6 @@ async def test_indexer_lifecycle_is_idempotent_and_wakeable(
 
 def test_indexer_work_limits_are_bounded() -> None:
     assert indexer.STARTUP_DELAY_SECONDS == 45.0
+    assert indexer.BACKLOG_DELAY_SECONDS == 30.0
     assert indexer.EMBEDDING_BATCH_SIZE == 4
-    assert indexer.EMBEDDING_BATCH_SIZE <= indexer.MAX_CHUNKS_PER_ROUND <= 64
+    assert indexer.MAX_CHUNKS_PER_ROUND == 8

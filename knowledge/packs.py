@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 from utils.file_utils import atomic_write_json
 
 from ._mutation_lock import mutation_lock
+from .chunking import derive_knowledge_chunks
 from .moegirl_knowledge.filters import sanitize_external_text
 from .moegirl_knowledge.models import MoegirlKnowledgeEntry
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
@@ -18,7 +20,9 @@ from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 PACK_SCHEMA_VERSION = 1
 MAX_PACK_BYTES = 10 * 1024 * 1024
-MAX_PACK_ENTRIES = 10_000
+MAX_PACK_ENTRIES = 5_000
+MAX_PACK_PROJECTED_CHUNKS = 5_000
+MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024
 _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
 
@@ -49,6 +53,15 @@ class PackInstallResult:
     collection_id: str
     source_tag: str
     entries: int
+    retrieval_mode: str = "bm25"
+
+
+@dataclass(frozen=True, slots=True)
+class PackPreflight:
+    entries: int
+    projected_chunks: int
+    content_bytes: int
+    estimated_working_bytes: int
 
 
 def get_pack_registry_path(database_path: str | Path) -> Path:
@@ -102,13 +115,48 @@ def validate_pack(payload: object) -> KnowledgePack:
             raise ValueError("knowledge pack contains duplicate titles")
         seen_titles.add(normalized_title)
         entries.append(entry)
-    return KnowledgePack(
+    pack = KnowledgePack(
         schema_version=PACK_SCHEMA_VERSION,
         pack_id=pack_id,
         collection_id=collection_id,
         source=source,
         entries=tuple(entries),
     )
+    preflight_pack(pack)
+    return pack
+
+
+def preflight_pack(pack: KnowledgePack) -> PackPreflight:
+    """Bound user-controlled work before it reaches SQLite or ONNX."""
+    projected_chunks = 0
+    content_bytes = 0
+    for entry in pack.entries:
+        projected_chunks += len(
+            derive_knowledge_chunks(
+                entry,
+                entry_key=f"{entry.source_tag}:{entry.title}",
+            )
+        )
+        if projected_chunks > MAX_PACK_PROJECTED_CHUNKS:
+            raise ValueError("knowledge pack would create too many chunks")
+        content_bytes += len(entry.content.encode("utf-8"))
+    # Allow room for the staging database, WAL/rollback work and float16 vectors.
+    estimated = max(content_bytes * 2 + projected_chunks * 1024, 1)
+    return PackPreflight(
+        entries=len(pack.entries),
+        projected_chunks=projected_chunks,
+        content_bytes=content_bytes,
+        estimated_working_bytes=estimated,
+    )
+
+
+def ensure_install_capacity(root: str | Path, preflight: PackPreflight) -> None:
+    root_path = Path(root)
+    probe = root_path if root_path.exists() else root_path.parent
+    free = int(shutil.disk_usage(probe).free)
+    required = max(MIN_INSTALL_FREE_BYTES, preflight.estimated_working_bytes * 2)
+    if free < required:
+        raise ValueError("not enough free disk space for knowledge pack staging")
 
 
 def install_pack(
@@ -116,8 +164,12 @@ def install_pack(
     pack: KnowledgePack,
     *,
     subscription: dict[str, str] | None = None,
+    prepared_embeddings: tuple[dict[str, object], ...] = (),
+    retrieval_mode: str = "bm25",
 ) -> PackInstallResult:
     """Replace one community source and its metadata with rollback on failure."""
+    if retrieval_mode not in {"hybrid", "mixed", "bm25"}:
+        raise ValueError("unsupported knowledge pack retrieval mode")
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
@@ -141,9 +193,12 @@ def install_pack(
             old_registry,
             pack,
             subscription=subscription,
+            retrieval_mode=retrieval_mode,
         )
-        store.replace_source(pack.source_tag, pack.entries)
         try:
+            store.replace_source(pack.source_tag, pack.entries)
+            if prepared_embeddings:
+                store.store_chunk_embeddings(prepared_embeddings)
             atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
         except Exception:
             store.replace_source(pack.source_tag, old_entries)
@@ -153,6 +208,7 @@ def install_pack(
         collection_id=pack.collection_id,
         source_tag=pack.source_tag,
         entries=len(pack.entries),
+        retrieval_mode=retrieval_mode,
     )
 
 
@@ -310,6 +366,7 @@ def _registry_with_pack(
     pack: KnowledgePack,
     *,
     subscription: dict[str, str] | None = None,
+    retrieval_mode: str = "bm25",
 ) -> dict[str, Any]:
     packs = dict(registry.get("packs", {}))
     previous = packs.get(pack.pack_id, {})
@@ -328,6 +385,7 @@ def _registry_with_pack(
         "entries": len(pack.entries),
         "auto_context": auto_context,
         "subscription": subscription if subscription is not None else previous_subscription,
+        "retrieval_mode": retrieval_mode,
     }
     return {"schema_version": 1, "packs": packs}
 

@@ -105,6 +105,9 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     kept = _entry("Kept", source="source:allowed")
     disabled = _entry("Disabled", source="source:allowed")
     wrong_source = _entry("Wrong source", source="source:other")
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    for entry in (kept, disabled, wrong_source):
+        store.upsert(entry)
     snapshot = VectorIndexSnapshot(
         revision=1,
         model_id="fixture",
@@ -117,12 +120,8 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
             ],
             dtype=np.float32,
         ),
-        rows=(
-            {"entry": kept, "chunk_index": 4},
-            {"entry": kept, "chunk_index": 1},
-            {"entry": disabled, "chunk_index": 0},
-            {"entry": wrong_source, "chunk_index": 0},
-        ),
+        entry_rowids=np.asarray([1, 1, 2, 3], dtype=np.int64),
+        chunk_indices=np.asarray([4, 1, 0, 0], dtype=np.int32),
     )
     monkeypatch.setattr(
         "knowledge.vector_index.load_disabled_entries",
@@ -132,7 +131,7 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     result = _score_snapshot(
         snapshot,
         [1.0, 0.0],
-        database_path=tmp_path / "knowledge.db",
+        store=store,
         limit=12,
         allowed_source_tags=("source:allowed",),
     )
@@ -276,6 +275,23 @@ async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
 
 
 @pytest.mark.asyncio
+async def test_embedding_batch_does_not_touch_runtime_without_pending_work(
+    tmp_path,
+    monkeypatch,
+):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_service",
+        lambda: pytest.fail("completed indexes must not load the ONNX runtime"),
+    )
+
+    result = await vector_index.index_embedding_batch(store, load_model=True)
+
+    assert result.state == "no_work"
+
+
+@pytest.mark.asyncio
 async def test_slow_embedding_batch_is_stored_without_failure(tmp_path, monkeypatch):
     store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Slow but valid"))
@@ -357,7 +373,7 @@ async def test_embedding_result_reports_stale_writeback(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("semantic_state", ["disabled", "not_ready"])
+@pytest.mark.parametrize("semantic_state", ["disabled"])
 async def test_asearch_falls_back_to_bm25_for_embedding_failures(
     tmp_path,
     monkeypatch,
@@ -377,6 +393,41 @@ async def test_asearch_falls_back_to_bm25_for_embedding_failures(
         vector_index,
         "get_local_embedding_service",
         lambda: pytest.fail("an unavailable model must not be queried"),
+    )
+
+    result = await service.asearch("meme", "Fallback target", limit=3)
+
+    assert [hit.entry.title for hit in result] == ["Fallback target"]
+
+
+@pytest.mark.asyncio
+async def test_asearch_soft_loads_not_ready_model_then_falls_back(tmp_path, monkeypatch):
+    database_path = tmp_path / "knowledge.db"
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(_entry("Fallback target"))
+    chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
+    store.store_chunk_embedding(
+        chunk_id=str(chunk["chunk_id"]),
+        content_hash=str(chunk["content_hash"]),
+        model_id="fixture",
+        dimensions=2,
+        embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
+    )
+    service = KnowledgeService.for_collection("meme", database_path)
+
+    class _NotReadyService:
+        async def request_load(self):
+            return False
+
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_status",
+        lambda: LocalEmbeddingStatus(state="not_ready"),
+    )
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_service",
+        lambda: _NotReadyService(),
     )
 
     result = await service.asearch("meme", "Fallback target", limit=3)
@@ -447,18 +498,31 @@ async def test_asearch_falls_back_to_bm25_when_embedding_raises(tmp_path, monkey
 
 
 def test_invalid_query_vector_is_safely_ignored(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Target"))
     snapshot = VectorIndexSnapshot(
         revision=1,
         model_id="fixture",
         matrix=np.asarray([[1.0, 0.0]], dtype=np.float32),
-        rows=({"entry": _entry("Target"), "chunk_index": 0},),
+        entry_rowids=np.asarray([1], dtype=np.int64),
+        chunk_indices=np.asarray([0], dtype=np.int32),
     )
 
     assert (
         _score_snapshot(
             snapshot,
             [float("nan"), 0.0],
-            database_path=tmp_path / "knowledge.db",
+            store=store,
+            limit=3,
+            allowed_source_tags=None,
+        )
+        == []
+    )
+    assert (
+        _score_snapshot(
+            snapshot,
+            [1.0],
+            store=store,
             limit=3,
             allowed_source_tags=None,
         )
@@ -497,30 +561,80 @@ async def test_non_numeric_embedding_response_falls_back_to_bm25(tmp_path, monke
 
 
 def test_semantic_threshold_rejects_weak_candidates(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Weak"))
     snapshot = VectorIndexSnapshot(
         revision=1,
         model_id="fixture",
         matrix=np.asarray([[0.56, np.sqrt(1.0 - 0.56**2)]], dtype=np.float32),
-        rows=({"entry": _entry("Weak"), "chunk_index": 0},),
+        entry_rowids=np.asarray([1], dtype=np.int64),
+        chunk_indices=np.asarray([0], dtype=np.int32),
     )
 
     assert (
         _score_snapshot(
             snapshot,
             [1.0, 0.0],
-            database_path=tmp_path / "knowledge.db",
+            store=store,
             limit=3,
             allowed_source_tags=None,
         )
         == []
     )
-    assert (
-        _score_snapshot(
-            snapshot,
-            [1.0],
-            database_path=tmp_path / "knowledge.db",
-            limit=3,
-            allowed_source_tags=None,
-        )
-        == []
+
+
+def test_vector_snapshot_is_compact_and_reused(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Compact"))
+    chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
+    store.store_chunk_embedding(
+        chunk_id=str(chunk["chunk_id"]),
+        content_hash=str(chunk["content_hash"]),
+        model_id="fixture",
+        dimensions=2,
+        embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
     )
+    status = LocalEmbeddingStatus(state="ready", model_id="fixture", dimensions=2)
+    calls = 0
+    original = store.load_ready_chunk_vectors
+
+    def _load(*, model_id, limit):
+        nonlocal calls
+        calls += 1
+        return original(model_id=model_id, limit=limit)
+
+    monkeypatch.setattr(store, "load_ready_chunk_vectors", _load)
+    vector_index._CACHE.clear()
+
+    first = vector_index._load_snapshot(store, status)
+    second = vector_index._load_snapshot(store, status)
+
+    assert first is second
+    assert calls == 1
+    assert first.matrix.shape == (1, 2)
+    assert first.entry_rowids.tolist() == [1]
+
+
+def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Oversized"))
+    chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
+    store.store_chunk_embedding(
+        chunk_id=str(chunk["chunk_id"]),
+        content_hash=str(chunk["content_hash"]),
+        model_id="fixture",
+        dimensions=2,
+        embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
+    )
+    vector_index._CACHE.clear()
+    monkeypatch.setattr(vector_index, "MAX_VECTOR_SNAPSHOT_BYTES", 1)
+
+    with pytest.raises(MemoryError):
+        vector_index._load_snapshot(
+            store,
+            LocalEmbeddingStatus(
+                state="ready",
+                model_id="fixture",
+                dimensions=2,
+            ),
+        )

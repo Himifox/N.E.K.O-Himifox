@@ -39,6 +39,8 @@ QUERY_EMBEDDING_TIMEOUT_SECONDS = 1.0
 SLOW_BATCH_SECONDS = 15.0
 DEFAULT_EMBEDDING_MICROBATCH_SIZE = 4
 MAX_EMBEDDING_MICROBATCH_SIZE = 8
+MAX_VECTOR_SNAPSHOT_BYTES = 32 * 1024 * 1024
+MAX_VECTOR_SNAPSHOT_CHUNKS = 10_000
 
 _T = TypeVar("_T")
 
@@ -113,6 +115,23 @@ class _KnowledgeInferenceCoordinator:
         except Exception:
             return None, "query_embedding_failed"
 
+    async def ensure_loaded(
+        self,
+        service: LocalEmbeddingService,
+        *,
+        timeout: float,
+    ) -> str:
+        task = self._start(service.request_load, kind="load")
+        if task is None:
+            return "inference_busy"
+        done, _pending = await asyncio.wait({task}, timeout=timeout)
+        if not done:
+            return "model_load_timeout"
+        try:
+            return "ready" if bool(task.result()) else "not_ready"
+        except Exception:
+            return "embedding_unavailable"
+
     async def run_background(
         self,
         service: LocalEmbeddingService,
@@ -158,7 +177,8 @@ class VectorIndexSnapshot:
     revision: int
     model_id: str
     matrix: np.ndarray
-    rows: tuple[dict[str, object], ...]
+    entry_rowids: np.ndarray
+    chunk_indices: np.ndarray
     database_identity: tuple[int, int, int, int] | tuple[()] = ()
 
 
@@ -181,7 +201,7 @@ def _database_identity(path: Path) -> tuple[int, int, int, int] | tuple[()]:
 def _load_snapshot(
     store: MoegirlKnowledgeStore, status: LocalEmbeddingStatus
 ) -> VectorIndexSnapshot:
-    revision, rows = store.load_ready_chunks(model_id=status.model_id)
+    revision = store.chunks_revision()
     key = _cache_key(store.database_path)
     identity = _database_identity(store.database_path)
     with _CACHE_LOCK:
@@ -194,7 +214,13 @@ def _load_snapshot(
         ):
             return cached
 
-    valid_rows: list[dict[str, object]] = []
+    revision, rows, truncated = store.load_ready_chunk_vectors(
+        model_id=status.model_id,
+        limit=MAX_VECTOR_SNAPSHOT_CHUNKS,
+    )
+
+    entry_rowids: list[int] = []
+    chunk_indices: list[int] = []
     vectors: list[np.ndarray] = []
     for row in rows:
         dimensions = int(row.get("dimensions") or 0)
@@ -210,7 +236,8 @@ def _load_snapshot(
         if norm <= 0 or not np.isfinite(vector).all():
             continue
         vectors.append(vector / norm)
-        valid_rows.append(row)
+        entry_rowids.append(int(row["entry_rowid"]))
+        chunk_indices.append(int(row["chunk_index"]))
     matrix = (
         np.stack(vectors).astype(np.float32, copy=False)
         if vectors
@@ -220,9 +247,12 @@ def _load_snapshot(
         revision,
         status.model_id,
         matrix,
-        tuple(valid_rows),
+        np.asarray(entry_rowids, dtype=np.int64),
+        np.asarray(chunk_indices, dtype=np.int32),
         identity,
     )
+    if truncated or matrix.nbytes > MAX_VECTOR_SNAPSHOT_BYTES:
+        raise MemoryError("knowledge vector snapshot exceeds the local budget")
     with _CACHE_LOCK:
         _CACHE[key] = snapshot
     return snapshot
@@ -232,7 +262,7 @@ def _score_snapshot(
     snapshot: VectorIndexSnapshot,
     query_vector: list[float],
     *,
-    database_path: Path,
+    store: MoegirlKnowledgeStore,
     limit: int,
     allowed_source_tags: tuple[str, ...] | None,
 ) -> list[MoegirlKnowledgeHit]:
@@ -245,14 +275,26 @@ def _score_snapshot(
     if norm <= 0:
         return []
     scores = snapshot.matrix @ (query / norm)
-    disabled = load_disabled_entries(get_catalog_override_path(database_path))
+    candidate_count = min(
+        len(scores),
+        max(int(limit) * 8, 64),
+    )
+    if candidate_count < len(scores):
+        candidate_indices = np.argpartition(scores, -candidate_count)[-candidate_count:]
+        candidate_indices = candidate_indices[np.argsort(-scores[candidate_indices])]
+    else:
+        candidate_indices = np.argsort(-scores)
+    rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
+    entries = store.load_entries_by_rowids(rowids)
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
     best: dict[tuple[str, str], MoegirlKnowledgeHit] = {}
-    for index in np.argsort(-scores):
+    for index in candidate_indices:
         score = float(scores[index])
         if score < SEMANTIC_THRESHOLD:
             break
-        row = snapshot.rows[int(index)]
-        entry = row["entry"]
+        entry = entries.get(int(snapshot.entry_rowids[int(index)]))
+        if entry is None:
+            continue
         if entry_key(entry) in disabled:
             continue
         if (
@@ -266,7 +308,7 @@ def _score_snapshot(
             score=score,
             retrieval_modes=("semantic",),
             semantic_score=score,
-            best_chunk_index=int(row["chunk_index"]),
+            best_chunk_index=int(snapshot.chunk_indices[int(index)]),
         )
         previous = best.get(key)
         if previous is None or score > float(previous.semantic_score or 0.0):
@@ -294,9 +336,23 @@ async def semantic_search(
         status = get_local_embedding_status()
     except Exception:
         return [], "status_unavailable"
+    if status.state == "disabled":
+        return [], "disabled"
+    if status.state == "not_ready":
+        chunk_status = await asyncio.to_thread(store.chunk_status)
+        if int(chunk_status.get("chunks_ready", 0)) == 0:
+            return [], "index_not_ready"
+    service = get_local_embedding_service()
+    if status.state == "not_ready":
+        load_state = await _INFERENCE_COORDINATOR.ensure_loaded(
+            service,
+            timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+        )
+        if load_state != "ready":
+            return [], load_state
+        status = get_local_embedding_status()
     if not status.ready:
         return [], status.state
-    service = get_local_embedding_service()
     vector, query_state = await _INFERENCE_COORDINATOR.run_query(
         service,
         knowledge_query_embedding_text(query),
@@ -312,7 +368,7 @@ async def semantic_search(
             _score_snapshot,
             snapshot,
             vector,
-            database_path=store.database_path,
+            store=store,
             limit=limit,
             allowed_source_tags=allowed_source_tags,
         )
@@ -328,6 +384,17 @@ async def index_embedding_batch(
     load_model: bool = False,
 ) -> EmbeddingBatchResult:
     safe_batch_size = max(1, min(int(batch_size), MAX_EMBEDDING_MICROBATCH_SIZE))
+    work = store.chunk_status()
+    if not any(
+        int(work.get(key, 0)) > 0
+        for key in (
+            "entries_missing_chunks",
+            "chunks_pending",
+            "chunks_stale",
+            "chunks_failed_retryable_now",
+        )
+    ):
+        return EmbeddingBatchResult(state="no_work")
     try:
         service = get_local_embedding_service()
     except Exception:
