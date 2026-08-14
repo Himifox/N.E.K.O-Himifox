@@ -16,6 +16,7 @@ def default_state() -> dict[str, Any]:
         "processed_message_ids": [],
         "candidates": [],
         "history": [],
+        "last_run": {},
         "last_discovery_at": 0.0,
         "last_user_message_at": 0.0,
     }

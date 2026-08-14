@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -7,6 +8,56 @@ from typing import Any, Mapping
 def _section(raw: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     value = raw.get(name)
     return value if isinstance(value, Mapping) else {}
+
+
+_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def normalize_settings_update(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the small, user-editable settings surface used by Hosted UI."""
+    output: dict[str, Any] = {}
+    bool_fields = {
+        "enabled",
+        "shadow_mode",
+        "background_llm",
+        "web_search",
+        "bilibili",
+    }
+    int_ranges = {
+        "daily_limit": (0, 20),
+        "min_interval_minutes": (0, 1440),
+        "min_user_silence_minutes": (0, 1440),
+        "max_idle_seconds": (0, 86400),
+    }
+    for key in bool_fields:
+        if key in raw:
+            if not isinstance(raw[key], bool):
+                raise ValueError(f"{key} must be a boolean")
+            output[key] = raw[key]
+    for key, (minimum, maximum) in int_ranges.items():
+        if key in raw:
+            if isinstance(raw[key], bool):
+                raise ValueError(f"{key} must be an integer")
+            value = int(raw[key])
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{key} must be between {minimum} and {maximum}")
+            output[key] = value
+    if "score_threshold" in raw:
+        if isinstance(raw["score_threshold"], bool):
+            raise ValueError("score_threshold must be a number")
+        threshold = float(raw["score_threshold"])
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("score_threshold must be between 0 and 1")
+        output["score_threshold"] = threshold
+    for key in ("quiet_start", "quiet_end"):
+        if key in raw:
+            value = str(raw[key])
+            if not _TIME_PATTERN.fullmatch(value):
+                raise ValueError(f"{key} must use HH:MM in 24-hour time")
+            output[key] = value
+    if not output:
+        raise ValueError("no valid settings supplied")
+    return output
 
 
 @dataclass(frozen=True, slots=True)

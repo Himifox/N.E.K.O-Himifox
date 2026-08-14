@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Mapping
 
@@ -17,9 +18,10 @@ from plugin.sdk.plugin import (
     plugin_entry,
     timer_interval,
     tr,
+    ui,
 )
 
-from .config import RecommendationConfig
+from .config import RecommendationConfig, normalize_settings_update
 from .feedback import apply_feedback_to_profile, settle_history
 from .gate import evaluate_gate
 from .llm_gateway import BackgroundLlm
@@ -341,12 +343,156 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         await self._update_profile(messages, now)
         discovered = await self._discover(now, force=force_discovery)
         delivery = await self._deliver(now)
-        return {
+        result = {
             "enabled": True,
             "messages_processed": len(messages),
             "discovered": discovered,
             "delivery": delivery,
         }
+
+        def remember_run(state: dict[str, Any]) -> None:
+            state["last_run"] = {**result, "timestamp": now}
+
+        await self._state.update(remember_run)
+        return result
+
+    def _dashboard_state(self) -> dict[str, Any]:
+        snapshot = self._state.snapshot()
+        interests = active_interests(snapshot.get("profile"), include_trial=True)
+        candidates = [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "source": item.get("source"),
+                "score": item.get("score"),
+                "matched_interests": item.get("matched_interests", []),
+                "discovered_at": item.get("discovered_at"),
+            }
+            for item in snapshot.get("candidates", [])[:12]
+            if isinstance(item, Mapping)
+        ]
+        today = datetime.now().astimezone().date().isoformat()
+        history = [
+            dict(item)
+            for item in snapshot.get("history", [])[-12:]
+            if isinstance(item, Mapping)
+        ]
+        all_history = [
+            item
+            for item in snapshot.get("history", [])
+            if isinstance(item, Mapping)
+        ]
+        return {
+            "ready": self._ready,
+            "store_enabled": bool(self.store.enabled),
+            "config": asdict(self._config),
+            "interests": [
+                {
+                    "name": item.get("name"),
+                    "weight": item.get("weight"),
+                    "status": item.get("status"),
+                    "evidence_count": item.get("evidence_count", 0),
+                    "negative_count": item.get("negative_count", 0),
+                }
+                for item in interests[:12]
+            ],
+            "candidates": candidates,
+            "history": history,
+            "last_run": snapshot.get("last_run", {}),
+            "metrics": {
+                "interest_count": len(interests),
+                "candidate_count": len(snapshot.get("candidates", [])),
+                "today_live_count": sum(
+                    1
+                    for item in all_history
+                    if item.get("local_date") == today and item.get("mode") == "live"
+                ),
+            },
+            "privacy": {
+                "memory_window_minutes": 60,
+                "raw_conversations_persisted": False,
+                "sensitive_inference": False,
+            },
+        }
+
+    @ui.context(id="dashboard", title=tr("panel.title", default="个性化主动推荐"))
+    async def dashboard_context(self) -> dict[str, Any]:
+        return self._dashboard_state()
+
+    @ui.action(
+        id="update_recommendation_settings",
+        label=tr("actions.updateSettings.label", default="保存推荐设置"),
+        tone="success",
+        group="config",
+        order=10,
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="update_recommendation_settings",
+        name=tr("entries.updateSettings.name", default="更新推荐设置"),
+        description=tr(
+            "entries.updateSettings.description",
+            default="更新 Hosted UI 中公开的推荐开关、来源和频率门控。",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "shadow_mode": {"type": "boolean"},
+                "background_llm": {"type": "boolean"},
+                "web_search": {"type": "boolean"},
+                "bilibili": {"type": "boolean"},
+                "daily_limit": {"type": "integer", "minimum": 0, "maximum": 20},
+                "min_interval_minutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1440,
+                },
+                "min_user_silence_minutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1440,
+                },
+                "max_idle_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 86400,
+                },
+                "score_threshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "quiet_start": {
+                    "type": "string",
+                    "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+                },
+                "quiet_end": {
+                    "type": "string",
+                    "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+                },
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def update_recommendation_settings(self, **kwargs: Any):
+        try:
+            updates = normalize_settings_update(kwargs)
+        except (TypeError, ValueError) as exc:
+            return Err(SdkError(str(exc)))
+        source_updates = {
+            key: updates.pop(key)
+            for key in ("web_search", "bilibili")
+            if key in updates
+        }
+        if source_updates:
+            updates["sources"] = source_updates
+        try:
+            await self.config.update({"recommendation": updates})
+            await self._load_config()
+        except Exception as exc:
+            return Err(SdkError(f"settings update failed: {type(exc).__name__}"))
+        return Ok({"updated": True, "config": asdict(self._config)})
 
     @timer_interval(id="recommendation_cycle", seconds=60, auto_start=True)
     async def recommendation_cycle(self, **_: Any):
@@ -389,6 +535,14 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             }
         )
 
+    @ui.action(
+        id="recommendation_run_once",
+        label=tr("actions.runOnce.label", default="立即检查一次"),
+        tone="primary",
+        group="runtime",
+        order=20,
+        refresh_context=True,
+    )
     @plugin_entry(
         id="recommendation_run_once",
         name=tr("entries.run_once.name", default="运行一次推荐周期"),

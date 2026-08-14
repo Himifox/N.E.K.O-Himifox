@@ -1,0 +1,387 @@
+import {
+  Alert,
+  Button,
+  ButtonGroup,
+  Card,
+  Columns,
+  EmptyState,
+  Field,
+  Inline,
+  Input,
+  List,
+  NumberInput,
+  Page,
+  RefreshButton,
+  Stack,
+  StatCard,
+  StatusBadge,
+  Switch,
+  Tabs,
+  Text,
+  Tip,
+  useEffect,
+  useForm,
+  useState,
+  useToast,
+} from "@neko/plugin-ui"
+import type { HostedAction, PluginSurfaceProps } from "@neko/plugin-ui"
+
+type RecommendationConfig = {
+  enabled?: boolean
+  shadow_mode?: boolean
+  background_llm?: boolean
+  daily_limit?: number
+  min_interval_minutes?: number
+  quiet_start?: string
+  quiet_end?: string
+  score_threshold?: number
+  max_idle_seconds?: number
+  min_user_silence_minutes?: number
+  web_search?: boolean
+  bilibili?: boolean
+}
+
+type Interest = {
+  name?: string
+  weight?: number
+  status?: string
+  evidence_count?: number
+  negative_count?: number
+}
+
+type Candidate = {
+  id?: string
+  title?: string
+  source?: string
+  score?: number
+  matched_interests?: string[]
+}
+
+type HistoryItem = Candidate & {
+  candidate_id?: string
+  timestamp?: number
+  mode?: string
+  outcome?: string
+}
+
+type DashboardState = {
+  ready?: boolean
+  store_enabled?: boolean
+  config?: RecommendationConfig
+  interests?: Interest[]
+  candidates?: Candidate[]
+  history?: HistoryItem[]
+  last_run?: {
+    timestamp?: number
+    messages_processed?: number
+    discovered?: number
+    delivery?: { reason?: string; mode?: string; submitted?: boolean }
+  }
+  metrics?: {
+    interest_count?: number
+    candidate_count?: number
+    today_live_count?: number
+  }
+}
+
+const defaultForm = {
+  enabled: false,
+  shadow_mode: true,
+  background_llm: true,
+  web_search: true,
+  bilibili: false,
+  daily_limit: 2,
+  min_interval_minutes: 240,
+  min_user_silence_minutes: 20,
+  max_idle_seconds: 900,
+  score_threshold: 0.72,
+  quiet_start: "23:00",
+  quiet_end: "09:00",
+}
+
+type FormValues = typeof defaultForm
+
+function actionById(actions: HostedAction[], id: string): HostedAction | undefined {
+  return actions.find((action) => action.id === id || action.entry_id === id)
+}
+
+function formatScore(value?: number): string {
+  return typeof value === "number" ? `${Math.round(value * 100)}%` : "-"
+}
+
+function formatTimestamp(value: number | undefined, locale: string): string {
+  if (!value) return "-"
+  return new Date(value * 1000).toLocaleString(locale, {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<DashboardState>) {
+  const { t } = props
+  const safeState = props.state || {}
+  const config = safeState.config || {}
+  const interests = Array.isArray(safeState.interests) ? safeState.interests : []
+  const candidates = Array.isArray(safeState.candidates) ? safeState.candidates : []
+  const history = Array.isArray(safeState.history) ? safeState.history : []
+  const metrics = safeState.metrics || {}
+  const lastRun = safeState.last_run || {}
+  const updateAction = actionById(props.actions || [], "update_recommendation_settings")
+  const runAction = actionById(props.actions || [], "recommendation_run_once")
+  const form = useForm<FormValues>(defaultForm)
+  const toast = useToast()
+  const [saving, setSaving] = useState(false)
+  const [running, setRunning] = useState(false)
+
+  useEffect(() => {
+    form.setValues({
+      enabled: !!config.enabled,
+      shadow_mode: config.shadow_mode !== false,
+      background_llm: config.background_llm !== false,
+      web_search: config.web_search !== false,
+      bilibili: !!config.bilibili,
+      daily_limit: Number(config.daily_limit ?? 2),
+      min_interval_minutes: Number(config.min_interval_minutes ?? 240),
+      min_user_silence_minutes: Number(config.min_user_silence_minutes ?? 20),
+      max_idle_seconds: Number(config.max_idle_seconds ?? 900),
+      score_threshold: Number(config.score_threshold ?? 0.72),
+      quiet_start: String(config.quiet_start || "23:00"),
+      quiet_end: String(config.quiet_end || "09:00"),
+    })
+  }, [
+    config.enabled,
+    config.shadow_mode,
+    config.background_llm,
+    config.web_search,
+    config.bilibili,
+    config.daily_limit,
+    config.min_interval_minutes,
+    config.min_user_silence_minutes,
+    config.max_idle_seconds,
+    config.score_threshold,
+    config.quiet_start,
+    config.quiet_end,
+  ])
+
+  async function saveSettings() {
+    if (!updateAction || saving) return
+    setSaving(true)
+    try {
+      await props.api.call("update_recommendation_settings", { ...form.values })
+      await props.api.refresh()
+      toast.success(t("panel.saved"))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runOnce() {
+    if (!runAction || running) return
+    setRunning(true)
+    try {
+      await props.api.call("recommendation_run_once", {})
+      await props.api.refresh()
+      toast.success(t("panel.runCompleted"))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const modeTone = !config.enabled ? "warning" : config.shadow_mode ? "info" : "success"
+  const modeLabel = !config.enabled
+    ? t("panel.mode.disabled")
+    : config.shadow_mode
+      ? t("panel.mode.shadow")
+      : t("panel.mode.live")
+  const deliveryReason = String(lastRun.delivery?.reason || "never_run")
+  const reasonKey = {
+    never_run: "panel.reason.never",
+    no_eligible_candidate: "panel.reason.noCandidate",
+    shadow_mode: "panel.reason.shadow",
+    submitted: "panel.reason.submitted",
+    rejected: "panel.reason.rejected",
+    global_proactive_disabled: "panel.reason.globalDisabled",
+    quiet_hours: "panel.reason.quiet",
+    private_foreground: "panel.reason.private",
+    user_away: "panel.reason.away",
+    recent_user_activity: "panel.reason.recent",
+    daily_limit: "panel.reason.daily",
+    minimum_interval: "panel.reason.interval",
+    ignored_streak: "panel.reason.cooldown",
+  }[deliveryReason] || "panel.reason.blocked"
+
+  return (
+    <Page title={t("panel.title")} subtitle={t("panel.subtitle")}>
+      <Inline justify="space-between" align="center">
+        <StatusBadge tone={modeTone} label={modeLabel} />
+        <ButtonGroup>
+          <RefreshButton label={t("panel.refresh")} />
+          <Button tone="primary" disabled={!runAction || running || !config.enabled} onClick={runOnce}>
+            {running ? t("panel.running") : t("panel.runOnce")}
+          </Button>
+        </ButtonGroup>
+      </Inline>
+
+      {!config.enabled ? (
+        <Alert tone="warning">{t("panel.alert.disabled")}</Alert>
+      ) : config.shadow_mode ? (
+        <Alert tone="info">{t("panel.alert.shadow")}</Alert>
+      ) : (
+        <Alert tone="success">{t("panel.alert.live")}</Alert>
+      )}
+
+      <Columns cols={4} minColumnWidth={150} fluid>
+        <StatCard label={t("panel.stats.mode")} value={modeLabel} />
+        <StatCard label={t("panel.stats.interests")} value={metrics.interest_count || 0} />
+        <StatCard label={t("panel.stats.candidates")} value={metrics.candidate_count || 0} />
+        <StatCard label={t("panel.stats.today")} value={metrics.today_live_count || 0} />
+      </Columns>
+
+      <Card title={t("panel.lastRun.title")}>
+        <Columns cols={4} minColumnWidth={150} fluid>
+          <StatCard label={t("panel.lastRun.result")} value={t(reasonKey)} />
+          <StatCard label={t("panel.lastRun.messages")} value={lastRun.messages_processed || 0} />
+          <StatCard label={t("panel.lastRun.discovered")} value={lastRun.discovered || 0} />
+          <StatCard label={t("panel.lastRun.time")} value={formatTimestamp(lastRun.timestamp, props.locale)} />
+        </Columns>
+      </Card>
+
+      <Card title={t("panel.inspection.title")}>
+        <Tabs
+          id="recommendation-inspection"
+          items={[
+            {
+              id: "interests",
+              label: t("panel.inspection.interests"),
+              content: interests.length ? (
+                <List
+                  items={interests}
+                  render={(item) => (
+                    <Inline justify="space-between">
+                      <span>{item.name || "-"}</span>
+                      <StatusBadge tone={item.status === "active" ? "success" : "info"} label={formatScore(item.weight)} />
+                    </Inline>
+                  )}
+                />
+              ) : <EmptyState title={t("panel.empty.interests")} />,
+            },
+            {
+              id: "candidates",
+              label: t("panel.inspection.candidates"),
+              content: candidates.length ? (
+                <List
+                  items={candidates}
+                  render={(item) => (
+                    <Stack gap={6}>
+                      <Inline justify="space-between">
+                        <span>{item.title || "-"}</span>
+                        <StatusBadge tone="primary" label={formatScore(item.score)} />
+                      </Inline>
+                      <Text>{`${item.source || "-"} · ${(item.matched_interests || []).join(" / ") || "-"}`}</Text>
+                    </Stack>
+                  )}
+                />
+              ) : <EmptyState title={t("panel.empty.candidates")} />,
+            },
+            {
+              id: "history",
+              label: t("panel.inspection.history"),
+              content: history.length ? (
+                <List
+                  items={[...history].reverse()}
+                  render={(item) => (
+                    <Stack gap={6}>
+                      <Inline justify="space-between">
+                        <span>{item.title || item.candidate_id || "-"}</span>
+                        <StatusBadge tone={item.outcome === "engaged" ? "success" : item.outcome === "rejected" ? "danger" : "info"} label={item.outcome || item.mode || "-"} />
+                      </Inline>
+                      <Text>{formatTimestamp(item.timestamp, props.locale)}</Text>
+                    </Stack>
+                  )}
+                />
+              ) : <EmptyState title={t("panel.empty.history")} />,
+            },
+          ]}
+        />
+      </Card>
+
+      <Columns cols={2} minColumnWidth={300} fluid>
+        <Card title={t("panel.config.behavior")}>
+          <Stack>
+            <Switch checked={form.values.enabled} label={t("panel.fields.enabled")} onChange={(value) => form.setField("enabled", value)} />
+            <Switch checked={form.values.shadow_mode} label={t("panel.fields.shadow")} onChange={(value) => form.setField("shadow_mode", value)} />
+            <Switch checked={form.values.background_llm} label={t("panel.fields.llm")} onChange={(value) => form.setField("background_llm", value)} />
+            <Field label={t("panel.fields.sources")} help={t("panel.fields.sourcesHelp")}>
+              <Stack gap={8}>
+                <Switch checked={form.values.web_search} label={t("panel.fields.web")} onChange={(value) => form.setField("web_search", value)} />
+                <Switch checked={form.values.bilibili} label={t("panel.fields.bilibili")} onChange={(value) => form.setField("bilibili", value)} />
+              </Stack>
+            </Field>
+            <Tip>{t("panel.config.safeTip")}</Tip>
+          </Stack>
+        </Card>
+
+        <Card title={t("panel.config.gates")}>
+          <Stack>
+            <Columns cols={2} minColumnWidth={130} fluid>
+              <Field label={t("panel.fields.dailyLimit")}>
+                <NumberInput value={form.values.daily_limit} min={0} max={20} onChange={(value) => form.setField("daily_limit", Number(value))} />
+              </Field>
+              <Field label={t("panel.fields.interval")}>
+                <NumberInput value={form.values.min_interval_minutes} min={0} max={1440} onChange={(value) => form.setField("min_interval_minutes", Number(value))} />
+              </Field>
+              <Field label={t("panel.fields.silence")}>
+                <NumberInput value={form.values.min_user_silence_minutes} min={0} max={1440} onChange={(value) => form.setField("min_user_silence_minutes", Number(value))} />
+              </Field>
+              <Field label={t("panel.fields.idle")}>
+                <NumberInput value={form.values.max_idle_seconds} min={0} max={86400} onChange={(value) => form.setField("max_idle_seconds", Number(value))} />
+              </Field>
+              <Field label={t("panel.fields.threshold")}>
+                <NumberInput value={form.values.score_threshold} min={0} max={1} step={0.01} onChange={(value) => form.setField("score_threshold", Number(value))} />
+              </Field>
+            </Columns>
+            <Columns cols={2} minColumnWidth={130} fluid>
+              <Field label={t("panel.fields.quietStart")}>
+                <Input value={form.values.quiet_start} placeholder="23:00" onChange={(value) => form.setField("quiet_start", value)} />
+              </Field>
+              <Field label={t("panel.fields.quietEnd")}>
+                <Input value={form.values.quiet_end} placeholder="09:00" onChange={(value) => form.setField("quiet_end", value)} />
+              </Field>
+            </Columns>
+            <Button tone="success" disabled={!updateAction || saving} onClick={saveSettings}>
+              {saving ? t("panel.saving") : t("panel.save")}
+            </Button>
+          </Stack>
+        </Card>
+      </Columns>
+
+      <Columns cols={2} minColumnWidth={300} fluid>
+        <Card title={t("panel.data.title")}>
+          <List
+            items={[
+              t("panel.data.recentConversation"),
+              t("panel.data.profile"),
+              t("panel.data.search"),
+              t("panel.data.activity"),
+              t("panel.data.feedback"),
+            ]}
+            render={(item, index) => <span>{`${index + 1}. ${item}`}</span>}
+          />
+        </Card>
+        <Card title={t("panel.privacy.title")}>
+          <Stack>
+            <Alert tone="success">{t("panel.privacy.raw")}</Alert>
+            <span>{t("panel.privacy.excluded")}</span>
+            <span>{t("panel.privacy.boundary")}</span>
+          </Stack>
+        </Card>
+      </Columns>
+    </Page>
+  )
+}

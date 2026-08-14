@@ -11,11 +11,13 @@
 
 ## 启用
 
-插件默认 `enabled = false` 且 `shadow_mode = true`。先在插件配置中把
-`recommendation.enabled` 改为 `true`，观察 `recommendation_status` 的候选和 shadow
-历史；确认效果后再把 `shadow_mode` 改为 `false`。
+插件默认 `enabled = false` 且 `shadow_mode = true`。打开插件的“个性化主动推荐”
+Hosted UI 控制台即可调整开关、内容来源、相关性阈值、安静时段和频率门控；建议先
+开启插件但保留影子模式，观察候选与拦截原因，确认效果后再切换为正式运行。
 
 B 站来源默认关闭。只有在 `bilibili_danmaku` 插件可用时，才应开启
 `recommendation.sources.bilibili`。
 
-状态保存在插件自己的 PluginStore 中；状态接口不会返回用户原始对话。
+控制台会明确展示插件实际使用与明确不使用的信息，并显示最近一次检查为何放行或
+拦截。状态保存在插件自己的 PluginStore 中；控制台和状态接口都不会返回用户原始
+对话。

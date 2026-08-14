@@ -26,7 +26,10 @@ for _name, _path in (
         _module.__path__ = [str(_path)]  # type: ignore[attr-defined]
         sys.modules[_name] = _module
 
-from plugin.plugins.proactive_recommender.config import RecommendationConfig
+from plugin.plugins.proactive_recommender.config import (
+    RecommendationConfig,
+    normalize_settings_update,
+)
 from plugin.plugins.proactive_recommender.feedback import (
     apply_feedback_to_profile,
     settle_history,
@@ -51,6 +54,36 @@ def test_config_is_safe_by_default() -> None:
     assert config.enabled is False
     assert config.shadow_mode is True
     assert config.bilibili is False
+
+
+def test_hosted_ui_settings_are_strictly_validated() -> None:
+    assert normalize_settings_update(
+        {
+            "enabled": True,
+            "quiet_start": "23:00",
+            "score_threshold": 0.8,
+            "daily_limit": 3,
+            "unknown": "ignored",
+        }
+    ) == {
+        "enabled": True,
+        "daily_limit": 3,
+        "score_threshold": 0.8,
+        "quiet_start": "23:00",
+    }
+    for invalid in (
+        {"enabled": "false"},
+        {"quiet_end": "9:00"},
+        {"score_threshold": 1.1},
+        {"daily_limit": 21},
+        {"unknown": True},
+    ):
+        try:
+            normalize_settings_update(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted invalid settings: {invalid}")
 
 
 def test_memory_message_is_deduplicatable_without_persisting_extra_fields() -> None:
@@ -200,6 +233,11 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert manifest["plugin"]["passive"] is True
     assert manifest["plugin_runtime"] == {"enabled": True, "auto_start": True}
     assert manifest["plugin"]["store"]["enabled"] is True
+    assert manifest["plugin"]["ui"]["enabled"] is True
+    panel = manifest["plugin"]["ui"]["panel"][0]
+    assert panel["entry"] == "ui/panel.tsx"
+    assert panel["context"] == "dashboard"
+    assert panel["permissions"] == ["state:read", "action:call"]
 
     tree = ast.parse((plugin_dir / "__init__.py").read_text(encoding="utf-8"))
     push_calls = [
@@ -214,6 +252,12 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert ast.literal_eval(keywords["visibility"]) == []
     assert ast.literal_eval(keywords["ai_behavior"]) == "respond"
     assert ast.literal_eval(keywords["coalesce_key"]) == "proactive_recommender:content"
+
+    panel_source = (plugin_dir / "ui" / "panel.tsx").read_text(encoding="utf-8")
+    assert 'from "@neko/plugin-ui"' in panel_source
+    assert "export default function ProactiveRecommenderPanel" in panel_source
+    assert 'props.api.call("update_recommendation_settings"' in panel_source
+    assert "Raw conversations" not in panel_source
 
 
 def test_all_locales_expose_the_same_plugin_and_entry_keys() -> None:
