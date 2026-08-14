@@ -62,9 +62,15 @@
     let memoryRoleHoverCloseTimer = 0;
     let memoryRolePanelInitialized = false;
     let memoryRoleListRequestId = 0;
-    const MEMORY_AUXILIARY_PANEL_NAMES = ['settings', 'guide', 'import'];
+    const MEMORY_AUXILIARY_PANEL_NAMES = ['settings', 'guide', 'import', 'insights'];
     let activeMemoryAuxiliaryPanel = '';
     let memoryAuxiliaryPanelOpener = null;
+    let repetitionInsightsReport = null;
+    let repetitionInsightsBusy = false;
+    let repetitionInsightsRequestId = 0;
+    let repetitionInsightsStatus = null;
+    let repetitionInsightsLanguageTouched = false;
+    const repetitionInsightsIgnored = new Set();
     let memoryExportLogsBusy = false;
     let memoryExportLogsStatusTimer = 0;
     const MEMORY_EXPORT_LOGS_SUCCESS_MS = 2600;
@@ -919,6 +925,333 @@
         return document.getElementById('memory-' + name + '-panel');
     }
 
+    function repetitionInsightLanguageFromLocale() {
+        const raw = String(
+            (window.i18n && window.i18n.language)
+            || document.documentElement.lang
+            || 'en'
+        ).replace('_', '-').toLowerCase();
+        if (raw === 'zh-tw' || raw === 'zh-hant') return 'zh-TW';
+        if (raw === 'zh' || raw === 'zh-cn' || raw === 'zh-hans') return 'zh-CN';
+        const base = raw.split('-')[0];
+        return ['en', 'es', 'pt', 'ru', 'ja', 'ko'].includes(base) ? base : 'en';
+    }
+
+    function repetitionInsightCandidateKey(candidate) {
+        return String(candidate.language || '') + '\u0000' + String(candidate.normalized_phrase || '');
+    }
+
+    function setRepetitionInsightsStatus(key, fallback, kind, options) {
+        repetitionInsightsStatus = key
+            ? { key: key, fallback: fallback, kind: kind || '', options: options || {} }
+            : null;
+        refreshRepetitionInsightsStatus();
+    }
+
+    function refreshRepetitionInsightsStatus() {
+        const status = document.getElementById('memory-insights-status');
+        if (!status) return;
+        status.textContent = repetitionInsightsStatus
+            ? translate(
+                repetitionInsightsStatus.key,
+                repetitionInsightsStatus.fallback,
+                repetitionInsightsStatus.options
+            )
+            : '';
+        status.className = 'memory-insights-status'
+            + (repetitionInsightsStatus && repetitionInsightsStatus.kind
+                ? ' is-' + repetitionInsightsStatus.kind
+                : '');
+    }
+
+    function syncRepetitionInsightsControls() {
+        const character = document.getElementById('memory-insights-character');
+        if (character) {
+            character.textContent = currentCatName || translate(
+                'memory.repetitionInsightsNoCharacter',
+                'No character selected'
+            );
+            character.title = currentCatName || '';
+        }
+        const analyze = document.getElementById('memory-insights-analyze');
+        const clear = document.getElementById('memory-insights-clear');
+        const exportButton = document.getElementById('memory-insights-export');
+        if (analyze) analyze.disabled = repetitionInsightsBusy || !currentCatName;
+        if (clear) clear.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
+        if (exportButton) exportButton.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
+    }
+
+    function setRepetitionInsightsBusy(busy) {
+        repetitionInsightsBusy = !!busy;
+        syncRepetitionInsightsControls();
+    }
+
+    function appendRepetitionInsightsEmptyState(container, key, fallback) {
+        const empty = document.createElement('p');
+        empty.className = 'memory-insights-description';
+        empty.textContent = translate(key, fallback);
+        container.appendChild(empty);
+    }
+
+    function visibleRepetitionInsightCandidates() {
+        if (!repetitionInsightsReport || !Array.isArray(repetitionInsightsReport.candidates)) {
+            return [];
+        }
+        return repetitionInsightsReport.candidates.filter(function (candidate) {
+            return candidate
+                && candidate.status === 'pending'
+                && !repetitionInsightsIgnored.has(repetitionInsightCandidateKey(candidate));
+        });
+    }
+
+    function renderRepetitionInsightsResults() {
+        const results = document.getElementById('memory-insights-results');
+        if (!results) return;
+        results.textContent = '';
+        if (!repetitionInsightsReport) return;
+
+        const summary = repetitionInsightsReport.summary || {};
+        if (summary.source_available === false) {
+            appendRepetitionInsightsEmptyState(
+                results,
+                'memory.repetitionInsightsNoSource',
+                'No persisted assistant history is available for this character.'
+            );
+            return;
+        }
+        if (Number(summary.assistant_message_count || 0) < 3) {
+            appendRepetitionInsightsEmptyState(
+                results,
+                'memory.repetitionInsightsInsufficient',
+                'At least three persisted assistant messages are required.'
+            );
+            return;
+        }
+
+        const visibleCandidates = visibleRepetitionInsightCandidates();
+        if (!visibleCandidates.length) {
+            appendRepetitionInsightsEmptyState(
+                results,
+                repetitionInsightsIgnored.size
+                    ? 'memory.repetitionInsightsAllIgnored'
+                    : 'memory.repetitionInsightsNoCandidates',
+                repetitionInsightsIgnored.size
+                    ? 'All candidates in this result have been ignored.'
+                    : 'No repeated-expression candidates were found.'
+            );
+            return;
+        }
+
+        visibleCandidates.forEach(function (candidate) {
+            const card = document.createElement('article');
+            card.className = 'memory-insights-card';
+            const phrase = document.createElement('h4');
+            phrase.textContent = String(candidate.phrase || '');
+
+            const meta = document.createElement('div');
+            meta.className = 'memory-insights-card-meta';
+            const occurrences = document.createElement('span');
+            occurrences.textContent = translate(
+                'memory.repetitionInsightsOccurrences',
+                '{{count}} occurrences',
+                { count: Number(candidate.occurrence_count || 0) }
+            );
+            const messages = document.createElement('span');
+            messages.textContent = translate(
+                'memory.repetitionInsightsMessages',
+                '{{count}} messages',
+                { count: Number(candidate.message_count || 0) }
+            );
+            const pending = document.createElement('span');
+            pending.textContent = translate('memory.repetitionInsightsPending', 'Pending review');
+            meta.append(occurrences, messages, pending);
+
+            const coveredBy = Array.isArray(candidate.covered_by_rule_ids)
+                ? candidate.covered_by_rule_ids.filter(Boolean)
+                : [];
+            const rules = document.createElement('div');
+            rules.className = 'memory-insights-card-rules';
+            rules.textContent = coveredBy.length
+                ? translate(
+                    'memory.repetitionInsightsCoveredBy',
+                    'Covered by rules: {{rules}}',
+                    { rules: coveredBy.join(', ') }
+                )
+                : translate(
+                    'memory.repetitionInsightsNotCovered',
+                    'Not covered by a current rule'
+                );
+
+            const ignore = document.createElement('button');
+            ignore.type = 'button';
+            ignore.textContent = translate(
+                'memory.repetitionInsightsIgnore',
+                'Ignore for this result'
+            );
+            ignore.addEventListener('click', function () {
+                repetitionInsightsIgnored.add(repetitionInsightCandidateKey(candidate));
+                renderRepetitionInsightsResults();
+            });
+            card.append(phrase, meta, rules, ignore);
+            results.appendChild(card);
+        });
+    }
+
+    function resetRepetitionInsightsState() {
+        repetitionInsightsRequestId++;
+        repetitionInsightsReport = null;
+        repetitionInsightsIgnored.clear();
+        repetitionInsightsStatus = null;
+        setRepetitionInsightsBusy(false);
+        refreshRepetitionInsightsStatus();
+        renderRepetitionInsightsResults();
+        syncRepetitionInsightsControls();
+    }
+
+    async function analyzeRepetitionInsights() {
+        if (!currentCatName || repetitionInsightsBusy) return;
+        const languageSelect = document.getElementById('memory-insights-language');
+        const limitSelect = document.getElementById('memory-insights-limit');
+        if (!languageSelect || !limitSelect) return;
+
+        const targetCharacter = currentCatName;
+        const requestId = ++repetitionInsightsRequestId;
+        repetitionInsightsReport = null;
+        repetitionInsightsIgnored.clear();
+        renderRepetitionInsightsResults();
+        setRepetitionInsightsBusy(true);
+        setRepetitionInsightsStatus(
+            'memory.repetitionInsightsLoading',
+            'Analyzing persisted assistant messages locally...'
+        );
+        try {
+            const response = await fetch('/api/memory/repetition_insights', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    character_name: targetCharacter,
+                    language: languageSelect.value,
+                    assistant_message_limit: Number(limitSelect.value)
+                })
+            });
+            const report = await response.json();
+            if (requestId !== repetitionInsightsRequestId || currentCatName !== targetCharacter) return;
+            if (!response.ok || !report || !Array.isArray(report.candidates)) {
+                throw new Error('local analysis unavailable');
+            }
+            repetitionInsightsReport = report;
+            renderRepetitionInsightsResults();
+            const summary = report.summary || {};
+            if (summary.source_available === false) {
+                setRepetitionInsightsStatus(
+                    'memory.repetitionInsightsNoSource',
+                    'No persisted assistant history is available for this character.'
+                );
+            } else if (Number(summary.assistant_message_count || 0) < 3) {
+                setRepetitionInsightsStatus(
+                    'memory.repetitionInsightsInsufficient',
+                    'At least three persisted assistant messages are required.'
+                );
+            } else {
+                setRepetitionInsightsStatus(
+                    'memory.repetitionInsightsFound',
+                    'Found {{count}} candidates for review.',
+                    '',
+                    { count: Number(summary.candidate_count || 0) }
+                );
+            }
+        } catch (error) {
+            if (requestId !== repetitionInsightsRequestId) return;
+            repetitionInsightsReport = null;
+            renderRepetitionInsightsResults();
+            setRepetitionInsightsStatus(
+                'memory.repetitionInsightsError',
+                'Local analysis is unavailable. Please try again.',
+                'error'
+            );
+        } finally {
+            if (requestId === repetitionInsightsRequestId) setRepetitionInsightsBusy(false);
+        }
+    }
+
+    function sortRepetitionInsightsJson(value) {
+        if (Array.isArray(value)) return value.map(sortRepetitionInsightsJson);
+        if (!value || typeof value !== 'object') return value;
+        return Object.keys(value).sort().reduce(function (sorted, key) {
+            sorted[key] = sortRepetitionInsightsJson(value[key]);
+            return sorted;
+        }, {});
+    }
+
+    function exportRepetitionInsights() {
+        const candidates = visibleRepetitionInsightCandidates();
+        if (!repetitionInsightsReport || !candidates.length) {
+            setRepetitionInsightsStatus(
+                'memory.repetitionInsightsExportEmpty',
+                'There are no pending candidates to export.'
+            );
+            return;
+        }
+        if (!window.confirm(translate(
+            'memory.repetitionInsightsExportWarning',
+            'Candidate phrases may contain private wording. Review the exported file before sharing it.'
+        ))) return;
+
+        const summary = Object.assign({}, repetitionInsightsReport.summary || {}, {
+            candidate_count: candidates.length
+        });
+        const artifact = {
+            artifact_type: repetitionInsightsReport.artifact_type,
+            candidates: candidates,
+            character_name: repetitionInsightsReport.character_name,
+            language: repetitionInsightsReport.language,
+            parameters: repetitionInsightsReport.parameters,
+            schema_version: repetitionInsightsReport.schema_version,
+            summary: summary
+        };
+        const serialized = JSON.stringify(sortRepetitionInsightsJson(artifact), null, 2) + '\n';
+        const blob = new Blob([serialized], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const safeCharacter = String(currentCatName || 'character')
+            .normalize('NFKC')
+            .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+            .replace(/\s+/g, '-')
+            .slice(0, 48) || 'character';
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'natural-expression-candidates-'
+            + safeCharacter + '-' + String(repetitionInsightsReport.language || 'unknown') + '.json';
+        link.hidden = true;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+        setRepetitionInsightsStatus(
+            'memory.repetitionInsightsExported',
+            'Pending candidates exported.',
+            'success'
+        );
+    }
+
+    function initRepetitionInsights() {
+        const language = document.getElementById('memory-insights-language');
+        const limit = document.getElementById('memory-insights-limit');
+        const analyze = document.getElementById('memory-insights-analyze');
+        const clear = document.getElementById('memory-insights-clear');
+        const exportButton = document.getElementById('memory-insights-export');
+        if (!language || !limit || !analyze || !clear || !exportButton) return;
+        language.value = repetitionInsightLanguageFromLocale();
+        language.addEventListener('change', function () {
+            repetitionInsightsLanguageTouched = true;
+            resetRepetitionInsightsState();
+        });
+        limit.addEventListener('change', resetRepetitionInsightsState);
+        analyze.addEventListener('click', analyzeRepetitionInsights);
+        clear.addEventListener('click', resetRepetitionInsightsState);
+        exportButton.addEventListener('click', exportRepetitionInsights);
+        syncRepetitionInsightsControls();
+    }
+
     function getMemoryAuxiliaryTrigger(name) {
         return document.getElementById('memory-' + name + '-trigger');
     }
@@ -997,6 +1330,7 @@
         activeMemoryAuxiliaryPanel = name;
         memoryAuxiliaryPanelOpener = opener || trigger;
         document.body.classList.add('memory-aux-panel-open');
+        if (name === 'insights') syncRepetitionInsightsControls();
         panel.focus({ preventScroll: true });
     }
 
@@ -1860,6 +2194,7 @@
         currentCatName = '';
         chatData = [];
         memoryFileRequestId++;
+        resetRepetitionInsightsState();
 
         const list = document.getElementById('memory-file-list');
         if (list) {
@@ -3305,7 +3640,13 @@
         currentMemoryFile = filename;
         currentMemoryFingerprint = null;
         currentMemoryIdentityToken = null;
+        const previousCatName = currentCatName;
         currentCatName = catName || (li ? li.getAttribute('data-catname') : '');
+        if (previousCatName !== currentCatName) {
+            resetRepetitionInsightsState();
+        } else {
+            syncRepetitionInsightsControls();
+        }
         setMemoryDirty(false);
         dismissSaveStatus(true);
         updateExternalImportButton();
@@ -3726,6 +4067,7 @@
         initMemoryLayoutMode();
         initMemoryRolePanel();
         initMemoryUnsavedSwitchDialog();
+        initRepetitionInsights();
         initMemoryAuxiliaryPanels();
         const chatEditor = document.getElementById('memory-chat-edit');
         if (chatEditor) {
@@ -3744,6 +4086,7 @@
                     const response = await fetch('/api/characters/current_catgirl');
                     const current = await response.json();
                     currentCatName = current.current_catgirl || '';
+                    syncRepetitionInsightsControls();
                 } catch (error) {
                     console.warn('[MemoryBrowser] Failed to resolve external-memory target:', error);
                 }
@@ -3786,6 +4129,13 @@
                 syncTutorialResetCascader();
                 syncExternalMemoryFormatDropdown();
                 syncMemoryRoleTriggerLabel();
+                if (!repetitionInsightsLanguageTouched && !repetitionInsightsReport) {
+                    const insightsLanguage = document.getElementById('memory-insights-language');
+                    if (insightsLanguage) insightsLanguage.value = repetitionInsightLanguageFromLocale();
+                }
+                refreshRepetitionInsightsStatus();
+                renderRepetitionInsightsResults();
+                syncRepetitionInsightsControls();
             });
         }
         window.addEventListener('localechange', function () {
@@ -3794,6 +4144,13 @@
             syncExternalMemoryFormatDropdown();
             syncMemoryRoleTriggerLabel();
             syncMemoryRoleSourceCopies();
+            if (!repetitionInsightsLanguageTouched && !repetitionInsightsReport) {
+                const insightsLanguage = document.getElementById('memory-insights-language');
+                if (insightsLanguage) insightsLanguage.value = repetitionInsightLanguageFromLocale();
+            }
+            refreshRepetitionInsightsStatus();
+            renderRepetitionInsightsResults();
+            syncRepetitionInsightsControls();
         });
 
         const externalFiles = document.getElementById('external-memory-files');

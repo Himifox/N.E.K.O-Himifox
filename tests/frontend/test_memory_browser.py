@@ -379,6 +379,153 @@ def test_memory_browser_page_load(mock_page: Page, running_server: str, seed_mem
     for locale_file in sorted(locale_dir.glob("*.json")):
         memory_locale = json.loads(locale_file.read_text(encoding="utf-8"))["memory"]
         assert "applicationDataLocation" not in memory_locale
+
+
+@pytest.mark.frontend
+def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
+    mock_page: Page,
+    running_server: str,
+    seed_memory_file,
+):
+    requests = []
+
+    def handle_insights(route):
+        requests.append(_request_json(route))
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            json={
+                "success": True,
+                "schema_version": "natural-expression-candidates/v1",
+                "artifact_type": "user_review_candidates",
+                "character_name": "测试猫娘",
+                "language": "en",
+                "parameters": {
+                    "assistant_message_limit": 50,
+                    "occurrence_threshold": 3,
+                    "message_count_threshold": 3,
+                },
+                "summary": {
+                    "source_available": True,
+                    "assistant_message_count": 50,
+                    "candidate_count": 2,
+                },
+                "candidates": [
+                    {
+                        "covered_by_rule_ids": ["EN_001"],
+                        "language": "en",
+                        "message_count": 4,
+                        "normalized_phrase": "quiet lantern",
+                        "occurrence_count": 5,
+                        "phrase": "quiet lantern",
+                        "status": "pending",
+                    },
+                    {
+                        "covered_by_rule_ids": [],
+                        "language": "en",
+                        "message_count": 3,
+                        "normalized_phrase": "silver morning",
+                        "occurrence_count": 3,
+                        "phrase": "silver morning",
+                        "status": "pending",
+                    },
+                ],
+            },
+        )
+
+    _install_ready_memory_browser_routes(
+        mock_page,
+        seed_memory_file,
+        recent_files=["recent_测试猫娘.json", "recent_备用猫娘.json"],
+        current_catgirl="测试猫娘",
+    )
+    mock_page.route("**/api/memory/repetition_insights", handle_insights)
+    mock_page.goto(f"{running_server}/memory_browser")
+    expect(mock_page.locator("#memory-file-list button.cat-btn[aria-current='true']")).to_have_count(
+        1,
+        timeout=10000,
+    )
+
+    _open_auxiliary_panel(mock_page, "insights")
+    assert requests == []
+    expect(mock_page.locator("#memory-insights-character")).to_have_text("测试猫娘")
+    expect(mock_page.locator("#memory-insights-limit")).to_have_value("100")
+    expect(mock_page.locator("#memory-insights-results")).not_to_contain_text("quiet lantern")
+
+    mock_page.locator("#memory-insights-language").select_option("en")
+    mock_page.locator("#memory-insights-limit").select_option("50")
+    mock_page.locator("#memory-insights-analyze").click()
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(2)
+    assert requests == [
+        {
+            "character_name": "测试猫娘",
+            "language": "en",
+            "assistant_message_limit": 50,
+        }
+    ]
+    expect(mock_page.locator(".memory-insights-card").first).to_contain_text("EN_001")
+
+    mock_page.locator(".memory-insights-card button").first.click()
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
+    expect(mock_page.locator("#memory-insights-results")).not_to_contain_text("quiet lantern")
+
+    dialog_messages = []
+    mock_page.once(
+        "dialog",
+        lambda dialog: (dialog_messages.append(dialog.message), dialog.accept()),
+    )
+    with mock_page.expect_download() as download_info:
+        mock_page.locator("#memory-insights-export").click()
+    download = download_info.value
+    exported = json.loads(Path(download.path()).read_text(encoding="utf-8"))
+    assert dialog_messages
+    assert download.suggested_filename == (
+        "natural-expression-candidates-测试猫娘-en.json"
+    )
+    assert [item["phrase"] for item in exported["candidates"]] == ["silver morning"]
+    assert exported["summary"]["candidate_count"] == 1
+    assert "user text" not in json.dumps(exported)
+
+    close_button = mock_page.locator(
+        "#memory-insights-panel [data-memory-panel-close]"
+    )
+    close_button.click()
+    _open_auxiliary_panel(mock_page, "insights")
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
+    mock_page.locator("#memory-insights-clear").click()
+    expect(mock_page.locator("#memory-insights-results")).to_be_empty()
+    mock_page.locator("#memory-insights-analyze").click()
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(2)
+    close_button.click()
+
+    mock_page.locator("#memory-file-list button.cat-btn", has_text="备用猫娘").click()
+    expect(mock_page.locator("#memory-insights-character")).to_have_text("备用猫娘")
+    _open_auxiliary_panel(mock_page, "insights")
+    expect(mock_page.locator(".memory-insights-card")).to_have_count(0)
+    assert len(requests) == 2
+
+    mock_page.set_viewport_size({"width": 768, "height": 720})
+    geometry = mock_page.evaluate(
+        """
+        () => {
+            const panel = document.getElementById('memory-insights-panel');
+            const fields = panel.querySelector('.memory-insights-fields');
+            const rect = panel.getBoundingClientRect();
+            return {
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                columns: getComputedStyle(fields).gridTemplateColumns,
+            };
+        }
+        """
+    )
+    assert geometry["left"] >= 0
+    assert geometry["right"] <= 768
+    assert geometry["top"] >= 0
+    assert geometry["bottom"] <= 720
+    assert " " not in geometry["columns"].strip()
     expect(mock_page.locator("#tutorial-reset-select option[value='current_personality']")).to_have_count(1)
     expect(mock_page.locator("#home-tutorial-reset-controls")).to_have_count(0)
     expect(mock_page.locator(".tutorial-day-reset-menu")).to_have_count(0)
