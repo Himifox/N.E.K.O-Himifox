@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "Não foi possível empacotar os logs. Tente novamente.",
         "exportLogsWriteError": "Não foi possível salvar no local escolhido. Selecione outro local.",
         "memorySettings": "Configurações",
-        "repetitionInsights": "Análise de expressões",
+        "repetitionInsights": "Repetições",
         "repetitionInsightsTitle": "Expressões repetidas",
         "repetitionInsightsDescription": "Somente ao iniciar a análise, as mensagens salvas do assistente são verificadas localmente, sem chamar modelos nem alterar regras.",
         "repetitionInsightsCharacter": "Personagem",

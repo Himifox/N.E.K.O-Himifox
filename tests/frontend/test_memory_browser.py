@@ -1085,14 +1085,14 @@ def test_memory_browser_header_actions_fit_all_localized_labels_without_clipping
     _open_auxiliary_panel(mock_page, "settings")
 
     expected_labels = {
-        "en": ["Guide", "Export logs", "Settings"],
-        "es": ["Guía", "Exportar logs", "Configuración"],
-        "ja": ["ガイド", "ログ出力", "設定"],
-        "ko": ["가이드", "로그 내보내기", "설정"],
-        "pt": ["Guia", "Exportar logs", "Configurações"],
-        "ru": ["Справка", "Экспорт логов", "Настройки"],
-        "zh-CN": ["新手引导", "导出日志", "记忆设置"],
-        "zh-TW": ["新手引導", "匯出日誌", "記憶設定"],
+        "en": ["Guide", "Repetitions", "Export logs", "Settings"],
+        "es": ["Guía", "Repeticiones", "Exportar logs", "Configuración"],
+        "ja": ["ガイド", "反復分析", "ログ出力", "設定"],
+        "ko": ["가이드", "반복 분석", "로그 내보내기", "설정"],
+        "pt": ["Guia", "Repetições", "Exportar logs", "Configurações"],
+        "ru": ["Справка", "Повторы", "Экспорт логов", "Настройки"],
+        "zh-CN": ["新手引导", "重复洞察", "导出日志", "记忆设置"],
+        "zh-TW": ["新手引導", "重複洞察", "匯出日誌", "記憶設定"],
     }
     geometry_by_locale = {}
     for locale in expected_labels:
@@ -1130,7 +1130,7 @@ def test_memory_browser_header_actions_fit_all_localized_labels_without_clipping
                 return {
                     labels: buttons.map(button => button.textContent.trim()),
                     equalWidths:
-                        widths.length === 3
+                        widths.length === 4
                         && widths.every(width => width === widths[0]),
                     labelsFit: buttons.every(button => {
                         const label = button.querySelector('span');
@@ -1565,12 +1565,12 @@ def test_memory_browser_auxiliary_panels_use_existing_icon_assets(
     mock_page.goto(f"{running_server}/memory_browser")
 
     close_buttons = mock_page.locator("[data-memory-panel-close]")
-    expect(close_buttons).to_have_count(3)
+    expect(close_buttons).to_have_count(4)
     expect(
         close_buttons.locator(
             "img[src='/static/icons/close_button.png'][alt=''][aria-hidden='true']"
         )
-    ).to_have_count(3)
+    ).to_have_count(4)
 
     setting_help = mock_page.locator(".memory-setting-help")
     expect(setting_help).to_have_count(3)

@@ -1803,7 +1803,7 @@
         "exportLogsPackageError": "Не удалось упаковать журналы. Повторите попытку.",
         "exportLogsWriteError": "Не удалось сохранить в выбранное место. Выберите другое место.",
         "memorySettings": "Настройки",
-        "repetitionInsights": "Анализ выражений",
+        "repetitionInsights": "Повторы",
         "repetitionInsightsTitle": "Повторяющиеся выражения",
         "repetitionInsightsDescription": "Только после запуска анализа сохранённые сообщения ассистента проверяются локально, без вызова моделей и изменения правил.",
         "repetitionInsightsCharacter": "Персонаж",
