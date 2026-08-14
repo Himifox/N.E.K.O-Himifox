@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import json
 import sqlite3
 import sys
@@ -119,6 +120,27 @@ def test_status_is_read_only_and_does_not_migrate_v5(tmp_path: Path) -> None:
     assert "knowledge_chunks" not in tables
 
 
+def test_status_lists_staging_jobs_without_opening_their_database(tmp_path: Path) -> None:
+    job_dir = tmp_path / ".staging" / "fixture-job"
+    job_dir.mkdir(parents=True)
+    (job_dir / "state.json").write_text(
+        json.dumps({
+            "job_id": "fixture-job",
+            "collection_id": "meme",
+            "state": "embedding",
+            "created_at": 1,
+        }),
+        encoding="utf-8",
+    )
+    staging_database = job_dir / "knowledge.db"
+
+    jobs = MODULE.inspect_pack_jobs(tmp_path, collection="meme")
+
+    assert jobs[0]["state"] == "embedding"
+    assert not staging_database.exists()
+    assert MODULE.inspect_pack_jobs(tmp_path, collection="corpora") == []
+
+
 def test_full_dry_run_counts_derived_chunks_without_writing(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     _write_v5_database(database)
@@ -153,6 +175,62 @@ def test_default_batch_size_is_safe_microbatch() -> None:
 
     assert MODULE.DEFAULT_BATCH_SIZE == 4
     assert args.batch_size == 4
+
+
+def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> None:
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "pack_id": "preflight-fixture",
+            "collection_id": "meme",
+            "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
+            "entries": [{
+                "title": "Fixture",
+                "terms": {"alias": [], "recognition": []},
+                "tags": [],
+                "summary": "",
+                "content": "Fixture body",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    args = MODULE._build_parser().parse_args([
+        "--preflight-pack",
+        str(pack_path),
+        "--knowledge-root",
+        str(tmp_path),
+    ])
+
+    result = asyncio.run(MODULE._run(args))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["projected_chunks"] == 1
+    assert not (tmp_path / ".staging").exists()
+
+
+def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> None:
+    job_dir = tmp_path / ".staging" / "cancel-fixture"
+    job_dir.mkdir(parents=True)
+    (job_dir / "state.json").write_text(
+        json.dumps({"job_id": "cancel-fixture", "state": "queued"}),
+        encoding="utf-8",
+    )
+    (job_dir / "pack.json").write_text("{}", encoding="utf-8")
+    args = MODULE._build_parser().parse_args([
+        "--cancel-job",
+        "cancel-fixture",
+        "--knowledge-root",
+        str(tmp_path),
+    ])
+
+    result = asyncio.run(MODULE._run(args))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["ok"] is True
+    assert not (job_dir / "pack.json").exists()
 
 
 def test_status_splits_failed_retry_boundaries(tmp_path: Path) -> None:

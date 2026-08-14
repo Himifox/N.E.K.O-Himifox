@@ -57,6 +57,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="discard all derived chunks and rebuild them from source entries",
     )
+    action.add_argument(
+        "--preflight-pack",
+        type=Path,
+        metavar="PATH",
+        help="validate one pack and report bounded work without installing it",
+    )
+    action.add_argument(
+        "--cancel-job",
+        metavar="JOB_ID",
+        help="cancel one staged import job and remove its staged payload",
+    )
     parser.add_argument(
         "--collection",
         choices=("meme", "corpora", "all"),
@@ -229,6 +240,28 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
     except sqlite3.DatabaseError as exc:
         result["error_type"] = type(exc).__name__
     return result
+
+
+def inspect_pack_jobs(root: Path, *, collection: str) -> list[dict[str, Any]]:
+    """Read persistent job metadata without opening or migrating staging databases."""
+    jobs_root = root / ".staging"
+    if not jobs_root.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for path in jobs_root.glob("*/state.json"):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        if collection != "all" and item.get("collection_id") != collection:
+            continue
+        items.append(item)
+    return sorted(
+        items,
+        key=lambda item: (-int(item.get("created_at") or 0), str(item.get("job_id") or "")),
+    )
 
 
 def _count_derived_chunks(database_path: Path) -> tuple[int, int]:
@@ -442,13 +475,51 @@ async def rebuild_target(
 async def _run(args: argparse.Namespace) -> int:
     root = (args.knowledge_root or _default_knowledge_root()).expanduser().resolve()
     targets = _targets(root, args.collection)
-    requested_action = "full" if args.full else "rebuild" if args.rebuild else "status"
+    requested_action = (
+        "preflight"
+        if args.preflight_pack
+        else "cancel_job"
+        if args.cancel_job
+        else "full"
+        if args.full
+        else "rebuild"
+        if args.rebuild
+        else "status"
+    )
     payload: dict[str, Any] = {
         "action": requested_action,
         "knowledge_root": str(root),
         "embedding_backend": "local_shared_runtime",
         "collections": [],
     }
+    if requested_action == "preflight":
+        from knowledge.packs import ensure_install_capacity, load_pack, preflight_pack
+
+        try:
+            pack = load_pack(args.preflight_pack)
+            preflight = preflight_pack(pack)
+            ensure_install_capacity(root, preflight)
+        except (OSError, ValueError) as exc:
+            payload.update({"ok": False, "error_type": type(exc).__name__})
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 2
+        payload.update({
+            "ok": True,
+            "pack_id": pack.pack_id,
+            "collection_id": pack.collection_id,
+            "entries_total": preflight.entries,
+            "projected_chunks": preflight.projected_chunks,
+            "estimated_working_bytes": preflight.estimated_working_bytes,
+        })
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    if requested_action == "cancel_job":
+        from knowledge.pack_jobs import cancel_pack_job
+
+        cancelled = cancel_pack_job(root, args.cancel_job)
+        payload.update({"ok": cancelled, "job_id": args.cancel_job})
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if cancelled else 2
     if requested_action == "status":
         payload["collections"] = [
             {
@@ -457,6 +528,7 @@ async def _run(args: argparse.Namespace) -> int:
             }
             for target in targets
         ]
+        payload["pack_jobs"] = inspect_pack_jobs(root, collection=args.collection)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
