@@ -358,6 +358,47 @@ def test_partially_covered_candidate_is_annotated_but_not_excluded():
     assert candidate["occurrence_count"] == 4
 
 
+def test_coverage_work_is_cached_across_candidates(monkeypatch):
+    text = "quiet lantern silver morning"
+    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
+    rules = {"en": [{"id": "EN_CACHE", "find": r"\bquiet lantern\b"}]}
+    original_compile = candidate_core.re.compile
+    original_protected_spans = candidate_core._runtime_protected_spans
+    calls = {"compile": 0, "finditer": 0, "protected": 0}
+
+    class CountingPattern:
+        def __init__(self, pattern):
+            self.pattern = pattern
+
+        def finditer(self, text):
+            calls["finditer"] += 1
+            return self.pattern.finditer(text)
+
+    def counting_compile(pattern, flags=0):
+        calls["compile"] += 1
+        return CountingPattern(original_compile(pattern, flags))
+
+    def counting_protected_spans(text):
+        calls["protected"] += 1
+        return original_protected_spans(text)
+
+    monkeypatch.setattr(candidate_core.re, "compile", counting_compile)
+    monkeypatch.setattr(
+        candidate_core, "_runtime_protected_spans", counting_protected_spans
+    )
+
+    report = miner.build_report(
+        messages,
+        input_record_count=3,
+        config=_config(word_ngram_min=2, word_ngram_max=2),
+        rules_by_language=rules,
+    )
+
+    assert len(report["candidates"]) == 3
+    # Candidate extraction scans each source message; coverage adds one shared scan.
+    assert calls == {"compile": 1, "finditer": 1, "protected": 4}
+
+
 def test_word_coverage_uses_original_sentence_delimiters():
     text = "Он смотрел. Словно само время замерло"
     messages = [miner.SourceMessage("ru", text, index) for index in range(1, 4)]
