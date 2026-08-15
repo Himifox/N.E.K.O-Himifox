@@ -91,12 +91,11 @@ _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
 
 def _strip_legacy_proactive_action_note(content: str) -> str:
     """Remove one recognized history-only note from a legacy assistant record."""
-    visible, separator, final_line = content.rpartition("\n")
-    if not separator:
-        return content
-    note = final_line.strip()
+    trimmed = content.rstrip()
+    visible, separator, final_line = trimmed.rpartition("\n")
+    note = final_line.strip() if separator else trimmed
     if any(pattern.fullmatch(note) for pattern in _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS):
-        return visible.rstrip()
+        return visible.rstrip() if separator else ""
     return content
 
 
