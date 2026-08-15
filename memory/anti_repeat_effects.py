@@ -225,7 +225,7 @@ def _empty_bucket() -> dict[str, Any]:
 def _as_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

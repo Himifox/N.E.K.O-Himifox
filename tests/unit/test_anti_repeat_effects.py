@@ -246,6 +246,22 @@ def test_query_sanitizes_invalid_persisted_effect_values(tmp_path):
     json.dumps(result, allow_nan=False)
 
 
+def test_query_sanitizes_overflowing_counter_without_resetting_other_history(tmp_path):
+    effect_dir = tmp_path / "Neko"
+    effect_dir.mkdir()
+    (effect_dir / "anti_repeat_effects.json").write_text(
+        '{"version":1,"schema_version":"anti-repeat-effects/v1",'
+        '"started_at":1700000000,"daily_buckets":{"2023-11-14":{'
+        '"counters":{"detected":1e400,"regen_triggered":2}}}}',
+        encoding="utf-8",
+    )
+
+    result = _store(tmp_path).query_effects("Neko", 30, now=1_700_000_000.0)
+
+    assert result["totals"]["detected"] == 0
+    assert result["totals"]["regen_triggered"] == 2
+
+
 def test_storage_contains_fragment_but_not_rejected_draft(tmp_path):
     store = _store(tmp_path)
     rejected_draft = "PRIVATE full rejected draft around quiet lantern and more context"
