@@ -1182,7 +1182,7 @@
             summary,
             totals.regen_guard_passed,
             'memory.repetitionInsightsPassed',
-            'Rewrites that reduced repetition'
+            'Rewrites that passed the checks'
         );
         if (reductionPercent !== null) {
             appendRepetitionEffectMetric(
@@ -1322,7 +1322,7 @@
                 const passedMarker = '__NEKO_PASSED__';
                 const localizedEffect = translate(
                     'memory.repetitionInsightsResidualEffect',
-                    'Past handling: detected {{detected}} · effective rewrites {{passed}}',
+                    'Past handling: detected {{detected}} · rewrites passed {{passed}}',
                     Object.assign({}, totals, {
                         detected: detectedMarker,
                         passed: passedMarker
