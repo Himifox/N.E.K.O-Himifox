@@ -259,20 +259,20 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
 
 def _inline_code_spans(
     text: str,
-    fenced_spans: Sequence[tuple[int, int]],
+    block_spans: Sequence[tuple[int, int]],
 ) -> list[tuple[int, int]]:
-    """Return same-line backtick spans outside fenced blocks."""
+    """Return same-line backtick spans outside block code."""
     spans: list[tuple[int, int]] = []
     index = 0
-    fence_index = 0
+    block_index = 0
     while index < len(text):
-        while fence_index < len(fenced_spans) and fenced_spans[fence_index][1] <= index:
-            fence_index += 1
+        while block_index < len(block_spans) and block_spans[block_index][1] <= index:
+            block_index += 1
         if (
-            fence_index < len(fenced_spans)
-            and fenced_spans[fence_index][0] <= index < fenced_spans[fence_index][1]
+            block_index < len(block_spans)
+            and block_spans[block_index][0] <= index < block_spans[block_index][1]
         ):
-            index = fenced_spans[fence_index][1]
+            index = block_spans[block_index][1]
             continue
         if text[index] != "`":
             index += 1
@@ -291,6 +291,26 @@ def _inline_code_spans(
     return spans
 
 
+def _indented_code_spans(text: str) -> list[tuple[int, int]]:
+    """Return Markdown code lines indented by at least four columns."""
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        line_end = offset + len(line)
+        indent_columns = 0
+        for character in line:
+            if character == " ":
+                indent_columns += 1
+            elif character == "\t":
+                indent_columns += 4 - (indent_columns % 4)
+            else:
+                break
+        if indent_columns >= 4 and line.strip():
+            spans.append((offset, line_end))
+        offset = line_end
+    return spans
+
+
 def _protected_spans(text: str) -> list[tuple[int, int]]:
     """Return merged spans for code, URLs, and obvious template placeholders."""
     spans = _runtime_protected_spans(text)
@@ -299,9 +319,10 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
-    """Mirror the runtime filter's fenced-code, inline-code, and URL spans."""
+    """Return fenced, indented, inline-code, and URL spans."""
     fenced = _fenced_code_spans(text)
-    spans = fenced + _inline_code_spans(text, fenced)
+    block_code = _merge_spans(fenced + _indented_code_spans(text))
+    spans = block_code + _inline_code_spans(text, block_code)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
     return _merge_spans(spans)
 

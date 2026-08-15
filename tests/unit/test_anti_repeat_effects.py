@@ -64,6 +64,7 @@ def test_build_repeat_signature_rejects_protected_fragments(fragment):
         ("run `secret_code()` now", "`secret_code"),
         ("```python\nsecret_key = 1", "secret_key"),
         ("~~~python\nsecret_key = 1\n~~~", "secret_key"),
+        ("intro\n\n    secret_key = value\noutro", "secret_key"),
     ],
 )
 def test_build_repeat_signature_rejects_fragments_tokenized_from_protected_spans(
