@@ -312,6 +312,22 @@ def test_code_urls_and_template_noise_are_protected():
     assert "hidden phrase" not in normalized
 
 
+def test_indented_markdown_code_is_protected():
+    text = "visible phrase\n\n    secret_key = value"
+    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
+
+    report = miner.build_report(
+        messages,
+        input_record_count=3,
+        config=_config(),
+        rules_by_language={},
+    )
+
+    normalized = {candidate["normalized_phrase"] for candidate in report["candidates"]}
+    assert "visible phrase" in normalized
+    assert all("secret_key" not in phrase for phrase in normalized)
+
+
 def test_threshold_filters_below_minimum_occurrence_count():
     messages = [
         miner.SourceMessage("en", "quiet lantern", 1),
