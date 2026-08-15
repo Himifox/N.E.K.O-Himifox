@@ -1046,9 +1046,7 @@
         if (clear) clear.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
         if (exportButton) exportButton.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
         if (resetEffects) {
-            const effects = repetitionInsightsReport && repetitionInsightsReport.effectiveness;
-            resetEffects.disabled = repetitionInsightsBusy || !currentCatName
-                || !effects || effects.source_available === false;
+            resetEffects.disabled = repetitionInsightsBusy || !currentCatName;
         }
         filterIds.forEach(function (id) {
             const control = document.getElementById(id);
