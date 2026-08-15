@@ -44,7 +44,14 @@ def test_build_repeat_signature_prefers_safe_detector_evidence():
 
 @pytest.mark.parametrize(
     "fragment",
-    ["https://example.test/private", "`secret_code()`", "{{PRIVATE_VALUE}}"],
+    [
+        "https://example.test/private",
+        "intranet.example/private",
+        "10.0.0.1/private",
+        "localhost:8080/private",
+        "`secret_code()`",
+        "{{PRIVATE_VALUE}}",
+    ],
 )
 def test_build_repeat_signature_rejects_protected_fragments(fragment):
     assert (
@@ -61,6 +68,8 @@ def test_build_repeat_signature_rejects_protected_fragments(fragment):
     ("draft", "tokenized_fragment"),
     [
         ("visit https://secret.example/private now", "//secret"),
+        ("visit intranet.example/private now", "example/private"),
+        ("visit intranet.example/private now", "intranet"),
         ("run `secret_code()` now", "`secret_code"),
         ("```python\nsecret_key = 1", "secret_key"),
         ("~~~python\nsecret_key = 1\n~~~", "secret_key"),

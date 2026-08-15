@@ -294,6 +294,7 @@ def test_korean_word_candidates_stop_at_the_occurrence_cap(monkeypatch):
 def test_code_urls_and_template_noise_are_protected():
     text = (
         "`hidden phrase` https://example.test/hidden-phrase\n"
+        "intranet.example/private-path\n"
         "```text\nhidden phrase\n```\n"
         "{{hidden phrase}} <HIDDEN_PHRASE>\n"
         "visible phrase"
@@ -310,6 +311,8 @@ def test_code_urls_and_template_noise_are_protected():
     normalized = {candidate["normalized_phrase"] for candidate in report["candidates"]}
     assert "visible phrase" in normalized
     assert "hidden phrase" not in normalized
+    assert all("intranet" not in phrase for phrase in normalized)
+    assert all("example" not in phrase for phrase in normalized)
 
 
 def test_indented_markdown_code_is_protected():

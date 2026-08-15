@@ -77,7 +77,14 @@ _LANGUAGE_ALIASES = {
 }
 _WHITESPACE_LANGUAGES = frozenset({"en", "es", "pt", "ru"})
 _TEXT_BOUNDARY_RE = re.compile(r"[\r\n.!?。！？；;:：,，、]+")
-_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>()]+", re.IGNORECASE)
+_URL_RE = re.compile(
+    r"(?:https?://|www\.)[^\s<>()]+|"
+    r"(?<![\w-])(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
+    r"(?::\d{1,5})?(?:/[^\s<>()]*)?|"
+    r"(?<![\w-])localhost(?:(?::\d{1,5})(?:/[^\s<>()]*)?|/[^\s<>()]*)",
+    re.IGNORECASE,
+)
 _TEMPLATE_RE = re.compile(
     r"\{\{[^{}\r\n]*\}\}|\$\{[^{}\r\n]*\}|<%[^%\r\n]*%>|"
     r"<[^<>\r\n]{1,80}>|\[[A-Z][A-Z0-9_-]{1,63}\]"
