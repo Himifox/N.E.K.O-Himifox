@@ -58,6 +58,38 @@ def test_build_repeat_signature_rejects_protected_fragments(fragment):
 
 
 @pytest.mark.parametrize(
+    ("draft", "tokenized_fragment"),
+    [
+        ("visit https://secret.example/private now", "//secret"),
+        ("run `secret_code()` now", "`secret_code"),
+    ],
+)
+def test_build_repeat_signature_rejects_fragments_tokenized_from_protected_spans(
+    draft,
+    tokenized_fragment,
+):
+    assert (
+        build_repeat_signature(
+            draft,
+            [tokenized_fragment],
+            language="en",
+        )
+        is None
+    )
+
+
+def test_build_repeat_signature_keeps_same_fragment_when_it_also_appears_in_prose():
+    signature = build_repeat_signature(
+        "run `secret_code()` then discuss secret_code in prose",
+        ["secret_code"],
+        language="en",
+    )
+
+    assert signature is not None
+    assert signature.normalized_phrase == "secret_code"
+
+
+@pytest.mark.parametrize(
     ("language", "draft"),
     [
         ("en", "quiet lantern"),

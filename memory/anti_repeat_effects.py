@@ -90,6 +90,25 @@ def _safe_fragment(value: str) -> str:
     return fragment
 
 
+def _without_protected_text(value: str) -> str:
+    spans = sorted(
+        (match.start(), match.end())
+        for pattern in (_URL_RE, _PROTECTED_RE)
+        for match in pattern.finditer(value)
+    )
+    chunks: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        if end <= cursor:
+            continue
+        if start > cursor:
+            chunks.append(value[cursor:start])
+        chunks.append(" ")
+        cursor = end
+    chunks.append(value[cursor:])
+    return "".join(chunks)
+
+
 @dataclass(frozen=True, slots=True)
 class RepeatSignature:
     phrase: str
@@ -138,6 +157,9 @@ def build_repeat_signature(
 
     draft_normalized = unicodedata.normalize("NFKC", draft_text or "")
     full_draft_phrase = _normalized_phrase(draft_normalized)
+    unprotected_draft_phrase = _normalized_phrase(
+        _without_protected_text(draft_normalized)
+    )
     candidates: list[str] = []
     fallback = _safe_fragment(fallback_fragment)
     if fallback:
@@ -153,7 +175,11 @@ def build_repeat_signature(
             candidates.append(term)
     for phrase in candidates:
         normalized = _normalized_phrase(phrase)
-        if len(normalized) < 2 or normalized == full_draft_phrase:
+        if (
+            len(normalized) < 2
+            or normalized == full_draft_phrase
+            or normalized not in unprotected_draft_phrase
+        ):
             continue
         return RepeatSignature(phrase, normalized, normalized_language)
     return None
