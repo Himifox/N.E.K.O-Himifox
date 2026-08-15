@@ -2959,36 +2959,9 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 }
 
 .memory-insights-effect-metric span,
-.memory-insights-effect-period,
-.memory-insights-effect-pattern-meta,
 .memory-insights-visible-count {
     color: var(--memory-text-secondary);
     font-size: var(--memory-font-caption);
-}
-
-.memory-insights-effect-patterns {
-    display: grid;
-    gap: 7px;
-}
-
-.memory-insights-effect-patterns[hidden],
-.memory-insights-effect-period[hidden] {
-    display: none;
-}
-
-.memory-insights-effect-pattern {
-    display: grid;
-    gap: 3px;
-    padding: 8px 10px;
-    border-left: 3px solid var(--memory-accent-border);
-    border-radius: 0 var(--memory-radius-control) var(--memory-radius-control) 0;
-    background: var(--memory-surface-subtle);
-}
-
-.memory-insights-effect-pattern strong {
-    overflow-wrap: anywhere;
-    color: var(--memory-text);
-    font-size: var(--memory-font-control);
 }
 
 .memory-insights-filters {
@@ -3048,35 +3021,12 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     gap: 5px;
 }
 
-.memory-insights-card-badges .memory-insights-card-status[hidden],
-.memory-insights-card-badges .memory-insights-card-language[hidden] {
-    display: none;
-}
-
 .memory-insights-card h4 {
     margin: 0;
     overflow-wrap: anywhere;
     color: var(--memory-text);
     font-size: var(--memory-font-body);
     line-height: 1.45;
-}
-
-.memory-insights-card-normalized {
-    overflow-wrap: anywhere;
-    color: var(--memory-text-tertiary);
-    font-size: var(--memory-font-caption);
-}
-
-.memory-insights-card-language,
-.memory-insights-card-status {
-    padding: 2px 7px;
-    border: 1px solid var(--memory-divider);
-    border-radius: 999px;
-    background: var(--memory-surface);
-    color: var(--memory-text-secondary);
-    font-size: var(--memory-font-caption);
-    font-weight: 600;
-    line-height: 1.35;
 }
 
 .memory-insights-card-meta {
@@ -3147,11 +3097,6 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 .memory-insights-card-effect-value.is-passed {
     background: var(--memory-success-soft);
     color: var(--memory-success);
-}
-
-.memory-insights-card-status.is-processed {
-    border-color: var(--memory-accent-border);
-    color: var(--memory-accent-foreground);
 }
 
 .memory-insights-card-footer {

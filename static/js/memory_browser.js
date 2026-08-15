@@ -71,7 +71,6 @@
     let repetitionInsightsStatus = null;
     let repetitionInsightsLanguageTouched = false;
     const repetitionInsightsIgnored = new Set();
-    const REPETITION_INSIGHTS_PATTERN_RENDER_LIMIT = 50;
     let memoryExportLogsBusy = false;
     let memoryExportLogsStatusTimer = 0;
     const MEMORY_EXPORT_LOGS_SUCCESS_MS = 2600;
@@ -942,18 +941,6 @@
         return String(candidate.language || '') + '\u0000' + String(candidate.normalized_phrase || '');
     }
 
-    function repetitionInsightLanguageLabel(language) {
-        const value = String(language || '');
-        const select = document.getElementById('memory-insights-language');
-        if (!select) return value;
-        const option = Array.from(select.options).find(function (item) {
-            return item.value === value;
-        });
-        if (!option) return value;
-        const label = String(option.textContent || value).trim();
-        return label === value ? value : label + ' (' + value + ')';
-    }
-
     function repetitionInsightAssociations(candidate) {
         if (!repetitionInsightsReport || !Array.isArray(repetitionInsightsReport.associations)) {
             return [];
@@ -1051,6 +1038,10 @@
             'memory-insights-coverage-filter',
             'memory-insights-effect-filter'
         ];
+        const scopeIds = [
+            'memory-insights-language',
+            'memory-insights-limit'
+        ];
         if (analyze) analyze.disabled = repetitionInsightsBusy || !currentCatName;
         if (clear) clear.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
         if (exportButton) exportButton.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
@@ -1062,6 +1053,10 @@
         filterIds.forEach(function (id) {
             const control = document.getElementById(id);
             if (control) control.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
+        });
+        scopeIds.forEach(function (id) {
+            const control = document.getElementById(id);
+            if (control) control.disabled = repetitionInsightsBusy;
         });
     }
 
@@ -1205,53 +1200,6 @@
             );
         }
         container.appendChild(summary);
-
-        const patterns = Array.isArray(effects.patterns) ? effects.patterns : [];
-        if (!patterns.length) return;
-        const patternTitle = document.createElement('h4');
-        patternTitle.className = 'memory-insights-section-title';
-        patternTitle.textContent = translate(
-            'memory.repetitionInsightsProcessedPatterns',
-            'Repeated fragments handled at runtime'
-        );
-        const list = document.createElement('div');
-        list.className = 'memory-insights-effect-patterns';
-        // Candidate cards already show the useful per-phrase totals. Avoid a duplicate list.
-        patternTitle.hidden = true;
-        list.hidden = true;
-        patterns.slice(0, REPETITION_INSIGHTS_PATTERN_RENDER_LIMIT).forEach(function (pattern) {
-            const item = document.createElement('div');
-            item.className = 'memory-insights-effect-pattern';
-            const phrase = document.createElement('strong');
-            phrase.textContent = String(pattern.phrase || pattern.normalized_phrase || '');
-            const meta = document.createElement('span');
-            meta.className = 'memory-insights-effect-pattern-meta';
-            meta.textContent = translate(
-                'memory.repetitionInsightsProcessedPatternMeta',
-                'Detected {{detected}} · effective rewrites {{passed}}',
-                {
-                    detected: Number(pattern.detected_count || 0),
-                    passed: Number(pattern.regen_guard_passed_count || 0)
-                }
-            );
-            item.append(phrase, meta);
-            list.appendChild(item);
-        });
-        container.append(patternTitle, list);
-        if (patterns.length > REPETITION_INSIGHTS_PATTERN_RENDER_LIMIT) {
-            const limited = document.createElement('div');
-            limited.className = 'memory-insights-effect-period';
-            limited.hidden = true;
-            limited.textContent = translate(
-                'memory.repetitionInsightsPatternLimit',
-                'Showing the first {{shown}} of {{total}} fragments.',
-                {
-                    shown: REPETITION_INSIGHTS_PATTERN_RENDER_LIMIT,
-                    total: patterns.length
-                }
-            );
-            container.appendChild(limited);
-        }
     }
 
     function renderRepetitionInsightsResults() {
@@ -1321,7 +1269,6 @@
             card.className = 'memory-insights-card';
             const phrase = document.createElement('h4');
             const phraseText = String(candidate.phrase || '');
-            const normalizedText = String(candidate.normalized_phrase || '');
             phrase.textContent = phraseText;
 
             const header = document.createElement('div');
@@ -1329,28 +1276,8 @@
             const badges = document.createElement('div');
             badges.className = 'memory-insights-card-badges';
 
-            let normalized = null;
-            if (normalizedText && normalizedText !== phraseText) {
-                normalized = document.createElement('div');
-                normalized.className = 'memory-insights-card-normalized';
-                normalized.hidden = true;
-                normalized.textContent = translate(
-                    'memory.repetitionInsightsNormalizedPhrase',
-                    'Normalized: {{phrase}}',
-                    { phrase: normalizedText }
-                );
-            }
-
             const meta = document.createElement('div');
             meta.className = 'memory-insights-card-meta';
-            const language = document.createElement('span');
-            language.className = 'memory-insights-card-language';
-            language.hidden = true;
-            language.textContent = translate(
-                'memory.repetitionInsightsCandidateLanguage',
-                'Language: {{language}}',
-                { language: repetitionInsightLanguageLabel(candidate.language) }
-            );
             const occurrences = document.createElement('span');
             occurrences.className = 'memory-insights-card-meta-item is-occurrences';
             occurrences.textContent = translate(
@@ -1365,20 +1292,7 @@
                 '{{count}} messages',
                 { count: Number(candidate.message_count || 0) }
             );
-            const pending = document.createElement('span');
-            pending.className = 'memory-insights-card-status';
-            pending.hidden = true;
             const associations = repetitionInsightAssociations(candidate);
-            if (associations.length) {
-                pending.classList.add('is-processed');
-                pending.textContent = translate(
-                    'memory.repetitionInsightsProcessed',
-                    'Previously handled'
-                );
-            } else {
-                pending.textContent = translate('memory.repetitionInsightsPending', 'Pending');
-            }
-            badges.append(language, pending);
             header.append(phrase, badges);
             meta.append(occurrences, messages);
 
@@ -1451,7 +1365,6 @@
             footer.appendChild(rules);
 
             card.appendChild(header);
-            if (normalized) card.appendChild(normalized);
             card.appendChild(meta);
             if (effectSummary) card.appendChild(effectSummary);
             card.appendChild(footer);
@@ -1488,8 +1401,7 @@
         if (!currentCatName || repetitionInsightsBusy) return;
         const languageSelect = document.getElementById('memory-insights-language');
         const limitSelect = document.getElementById('memory-insights-limit');
-        const effectDaysSelect = document.getElementById('memory-insights-effect-days');
-        if (!languageSelect || !limitSelect || !effectDaysSelect) return;
+        if (!languageSelect || !limitSelect) return;
 
         const targetCharacter = currentCatName;
         const requestId = ++repetitionInsightsRequestId;
@@ -1506,8 +1418,7 @@
                 body: JSON.stringify({
                     character_name: targetCharacter,
                     language: languageSelect.value,
-                    assistant_message_limit: Number(limitSelect.value),
-                    effect_days: Number(effectDaysSelect.value)
+                    assistant_message_limit: Number(limitSelect.value)
                 })
             });
             const report = await response.json();
@@ -1665,7 +1576,6 @@
         const character = document.getElementById('memory-insights-character-select');
         const language = document.getElementById('memory-insights-language');
         const limit = document.getElementById('memory-insights-limit');
-        const effectDays = document.getElementById('memory-insights-effect-days');
         const analyze = document.getElementById('memory-insights-analyze');
         const clear = document.getElementById('memory-insights-clear');
         const exportButton = document.getElementById('memory-insights-export');
@@ -1673,7 +1583,7 @@
         const query = document.getElementById('memory-insights-query');
         const coverage = document.getElementById('memory-insights-coverage-filter');
         const effectFilter = document.getElementById('memory-insights-effect-filter');
-        if (!character || !language || !limit || !effectDays || !analyze || !clear
+        if (!character || !language || !limit || !analyze || !clear
             || !exportButton || !resetEffects || !query || !coverage || !effectFilter) return;
         character.addEventListener('change', function () {
             const option = character.options[character.selectedIndex];

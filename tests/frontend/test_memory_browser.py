@@ -500,7 +500,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     assert requests == []
     expect(mock_page.locator("#memory-insights-character")).to_have_text("测试猫娘")
     expect(mock_page.locator("#memory-insights-limit")).to_have_value("100")
-    expect(mock_page.locator("#memory-insights-effect-days")).to_have_value("30")
+    expect(mock_page.locator("#memory-insights-effect-days")).to_have_count(0)
     expect(mock_page.locator("#memory-insights-results")).not_to_contain_text("quiet lantern")
 
     mock_page.locator("#memory-insights-language").select_option("en")
@@ -512,27 +512,52 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
             "character_name": "测试猫娘",
             "language": "en",
             "assistant_message_limit": 50,
-            "effect_days": 30,
         }
     ]
     expect(mock_page.locator(".memory-insights-effect-metric")).to_have_count(4)
-    expect(mock_page.locator(".memory-insights-effect-pattern")).to_have_count(1)
-    expect(mock_page.locator(".memory-insights-card-status.is-processed")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-effect-pattern")).to_have_count(0)
+    expect(mock_page.locator(".memory-insights-card-status")).to_have_count(0)
     first_candidate = mock_page.locator(".memory-insights-card").first
     expect(first_candidate).to_contain_text("EN_001")
     expect(first_candidate.locator(".memory-insights-card-header")).to_have_count(1)
-    expect(first_candidate.locator(".memory-insights-card-status")).not_to_be_empty()
     expect(first_candidate.locator(".memory-insights-card-footer")).to_have_count(1)
     expect(first_candidate.locator("h4")).to_have_text("Quiet Lantern")
-    expect(first_candidate.locator(".memory-insights-card-normalized")).to_contain_text(
-        "quiet lantern"
-    )
-    expect(first_candidate.locator(".memory-insights-card-language")).to_contain_text("en")
     second_candidate = mock_page.locator(".memory-insights-card").nth(1)
     expect(second_candidate.locator("h4")).to_have_text("silver morning")
     expect(second_candidate.locator(".memory-insights-card-normalized")).to_have_count(0)
-    expect(mock_page.locator(".memory-insights-card-normalized")).to_have_count(1)
+    expect(mock_page.locator(".memory-insights-card-normalized")).to_have_count(0)
     expect(mock_page.locator(".memory-insights-feedback-note")).not_to_be_empty()
+
+    mock_page.evaluate(
+        """
+        () => {
+            const originalFetch = window.fetch.bind(window);
+            window.fetch = (...args) => {
+                if (!String(args[0]).includes('/api/memory/repetition_insights')) {
+                    return originalFetch(...args);
+                }
+                return new Promise((resolve, reject) => {
+                    window.__releaseRepetitionInsightsFetch = () => {
+                        window.fetch = originalFetch;
+                        originalFetch(...args).then(resolve, reject);
+                        delete window.__releaseRepetitionInsightsFetch;
+                    };
+                });
+            };
+        }
+        """
+    )
+    mock_page.locator("#memory-insights-limit").select_option("100")
+    expect(mock_page.locator("#memory-insights-language")).to_be_disabled()
+    expect(mock_page.locator("#memory-insights-limit")).to_be_disabled()
+    mock_page.evaluate("window.__releaseRepetitionInsightsFetch()")
+    expect(mock_page.locator("#memory-insights-language")).to_be_enabled()
+    expect(mock_page.locator("#memory-insights-limit")).to_be_enabled()
+    assert requests[-1] == {
+        "character_name": "测试猫娘",
+        "language": "en",
+        "assistant_message_limit": 100,
+    }
 
     mock_page.locator("#memory-insights-effect-filter").select_option("processed")
     expect(mock_page.locator(".memory-insights-card")).to_have_count(1)
@@ -595,7 +620,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     expect(mock_page.locator("#memory-insights-character")).to_have_text("备用猫娘")
     _open_auxiliary_panel(mock_page, "insights")
     expect(mock_page.locator(".memory-insights-card")).to_have_count(0)
-    assert len(requests) == 2
+    assert len(requests) == 3
 
     mock_page.set_viewport_size({"width": 768, "height": 720})
     geometry = mock_page.evaluate(
