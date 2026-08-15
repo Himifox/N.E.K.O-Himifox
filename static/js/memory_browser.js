@@ -1183,17 +1183,19 @@
             'memory.repetitionInsightsPassed',
             'Rewrites that reduced repetition'
         );
-        appendRepetitionEffectMetric(
-            summary,
-            0,
-            'memory.repetitionInsightsReduction',
-            'Average repetition reduction across {{count}} comparable rewrites',
-            {
-                displayValue: reductionPercent === null ? '—' : reductionPercent + '%',
-                highlight: true,
-                translationOptions: { count: comparableRewrites }
-            }
-        );
+        if (reductionPercent !== null) {
+            appendRepetitionEffectMetric(
+                summary,
+                0,
+                'memory.repetitionInsightsReduction',
+                'Average repetition reduction across {{count}} comparable rewrites',
+                {
+                    displayValue: reductionPercent + '%',
+                    highlight: true,
+                    translationOptions: { count: comparableRewrites }
+                }
+            );
+        }
         container.appendChild(summary);
 
         const patterns = Array.isArray(effects.patterns) ? effects.patterns : [];
@@ -1377,17 +1379,13 @@
                 : [];
             const rules = document.createElement('div');
             rules.className = 'memory-insights-card-rules';
-            rules.textContent = coveredBy.length
-                ? translate(
+            if (coveredBy.length) {
+                rules.textContent = translate(
                     'memory.repetitionInsightsCoveredBy',
                     'Covered by rules: {{rules}}',
                     { rules: coveredBy.join(', ') }
-                )
-                : translate(
-                    'memory.repetitionInsightsNotCovered',
-                    'Not covered by a current rule'
                 );
-            rules.hidden = coveredBy.length === 0;
+            }
 
             let effectSummary = null;
             if (associations.length) {
