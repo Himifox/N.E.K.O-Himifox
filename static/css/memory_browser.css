@@ -2958,6 +2958,15 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     font-size: 22px;
 }
 
+.memory-insights-effect-metric.is-warning {
+    border-color: color-mix(in srgb, var(--memory-warning) 45%, var(--memory-border));
+    background: color-mix(in srgb, var(--memory-warning) 10%, var(--memory-surface));
+}
+
+.memory-insights-effect-metric.is-warning strong {
+    color: var(--memory-warning);
+}
+
 .memory-insights-effect-metric span,
 .memory-insights-visible-count {
     color: var(--memory-text-secondary);

@@ -1847,6 +1847,7 @@
         "repetitionInsightsDetected": "Repetitions detected",
         "repetitionInsightsPassed": "Rewrites passed",
         "repetitionInsightsReduction": "Average repetition reduction ({{count}} comparable rewrites)",
+        "repetitionInsightsIncrease": "Average repetition increase ({{count}} comparable rewrites)",
         "repetitionInsightsVisibleCount": "Showing {{visible}} of {{total}} final residual fragments",
         "repetitionInsightsNoFilterMatches": "No final residual fragments match the current filters.",
         "repetitionInsightsResidualEffect": "Past handling: detected {{detected}} · rewrites passed {{passed}}",

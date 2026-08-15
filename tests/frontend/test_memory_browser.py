@@ -423,7 +423,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
                     },
                     "bm25": {
                         "pair_count": 3,
-                        "reduction_ratio": 0.5,
+                        "reduction_ratio": -0.5,
                     },
                     "patterns": [
                         {
@@ -532,6 +532,10 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
         }
     ]
     expect(mock_page.locator(".memory-insights-effect-metric")).to_have_count(4)
+    increase_metric = mock_page.locator(".memory-insights-effect-metric").nth(3)
+    expect(increase_metric).to_have_class(re.compile(r"\bis-warning\b"))
+    expect(increase_metric.locator("strong")).to_have_text("50%")
+    expect(increase_metric.locator("span")).to_have_text("平均上升（3 次）")
     expect(mock_page.locator(".memory-insights-effect-pattern")).to_have_count(0)
     expect(mock_page.locator(".memory-insights-card-status")).to_have_count(0)
     first_candidate = mock_page.locator(".memory-insights-card").first
