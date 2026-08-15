@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "일치하는 처리 기록 없음",
         "repetitionInsightsEffectivenessTitle": "최근 답변 {{count}}개의 반복 방지 처리",
         "repetitionInsightsNoEffects": "이 답변들과 연결된 반복 방지 기록이 없습니다.",
+        "repetitionInsightsEffectsUnavailable": "반복 방지 기록을 읽지 못했습니다. 다시 확인해 주세요.",
         "repetitionInsightsRemaining": "최종 답변에 남은 반복 표현",
         "repetitionInsightsDetected": "반복 감지",
         "repetitionInsightsRegenerated": "재생성 실행",

@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "未处理",
         "repetitionInsightsEffectivenessTitle": "最近 {{count}} 条回复的防复读",
         "repetitionInsightsNoEffects": "这些回复没有可关联的防复读记录。",
+        "repetitionInsightsEffectsUnavailable": "防复读记录读取失败，请重新检查。",
         "repetitionInsightsRemaining": "回复仍重复",
         "repetitionInsightsDetected": "发现重复",
         "repetitionInsightsRegenerated": "尝试重写",

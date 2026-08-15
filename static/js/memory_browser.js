@@ -1148,6 +1148,14 @@
             { count: scopeLimit }
         );
         container.appendChild(title);
+        if (effects.query_failed === true) {
+            appendRepetitionInsightsEmptyState(
+                container,
+                'memory.repetitionInsightsEffectsUnavailable',
+                'Anti-repeat records could not be read. Try checking again.'
+            );
+            return;
+        }
         if (effects.source_available === false) {
             appendRepetitionInsightsEmptyState(
                 container,

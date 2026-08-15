@@ -544,7 +544,10 @@ async def repetition_insights(request: RepetitionInsightsRequest):
                 )
             if isinstance(queried_effects, dict):
                 effects = queried_effects
+            else:
+                effects["query_failed"] = True
         except Exception as exc:
+            effects["query_failed"] = True
             logger.warning(
                 "Local anti-repeat effects unavailable for %s: %s",
                 character_name,

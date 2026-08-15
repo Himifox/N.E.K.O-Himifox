@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "No matching handling record",
         "repetitionInsightsEffectivenessTitle": "Anti-repeat handling in the latest {{count}} replies",
         "repetitionInsightsNoEffects": "No linked anti-repeat records are available for these replies.",
+        "repetitionInsightsEffectsUnavailable": "Anti-repeat records could not be read. Try checking again.",
         "repetitionInsightsRemaining": "Repeated expressions in final replies",
         "repetitionInsightsDetected": "Repetitions detected",
         "repetitionInsightsRegenerated": "Regenerations triggered",

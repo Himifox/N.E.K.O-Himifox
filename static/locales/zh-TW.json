@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "未匹配處理記錄",
         "repetitionInsightsEffectivenessTitle": "最近 {{count}} 則回覆的防重複處理",
         "repetitionInsightsNoEffects": "這些回覆沒有可關聯的防重複記錄。",
+        "repetitionInsightsEffectsUnavailable": "防重複記錄讀取失敗，請重新檢查。",
         "repetitionInsightsRemaining": "最終回覆中的重複說法",
         "repetitionInsightsDetected": "防重複發現",
         "repetitionInsightsRegenerated": "觸發重新生成",
