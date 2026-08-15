@@ -241,6 +241,64 @@ def test_response_query_prunes_expired_records_and_persists_snapshot(tmp_path):
     assert payload["response_buckets"] == {}
 
 
+def test_response_cap_evicts_undelivered_before_delivered(tmp_path, monkeypatch):
+    monkeypatch.setattr(anti_repeat_effects, "MAX_RESPONSE_BUCKETS", 2)
+    store = _store(tmp_path)
+    _record_delivered_response(store, "delivered", 1_700_000_000.0)
+
+    for offset, response_id in enumerate(("blocked-old", "blocked-new"), start=1):
+        store.record_decision(
+            "Neko",
+            AntiRepeatDecision(
+                source="proactive",
+                reasons=("bm25",),
+                action="block",
+                outcome="blocked_initial",
+                response_id=response_id,
+            ),
+            now=1_700_000_000.0 + offset,
+        )
+
+    result = store.query_effects_for_responses(
+        "Neko",
+        ["delivered"],
+        100,
+        now=1_700_000_003.0,
+    )
+
+    assert result["linked_message_count"] == 1
+    assert len(store._cache["Neko"]["response_buckets"]) == 2
+
+
+def test_response_load_cap_preserves_delivered_bucket(monkeypatch):
+    monkeypatch.setattr(anti_repeat_effects, "MAX_RESPONSE_BUCKETS", 2)
+    bucket = {"counters": {"detected": 1}}
+    payload = {
+        "version": 1,
+        "response_buckets": {
+            "delivered": {
+                "created_at": 1.0,
+                "delivered_at": 1.0,
+                "bucket": bucket,
+            },
+            "blocked-old": {
+                "created_at": 2.0,
+                "delivered_at": 0.0,
+                "bucket": bucket,
+            },
+            "blocked-new": {
+                "created_at": 3.0,
+                "delivered_at": 0.0,
+                "bucket": bucket,
+            },
+        },
+    }
+
+    normalized = AntiRepeatEffectStore._normalize_payload(payload, now=3.0)
+
+    assert set(normalized["response_buckets"]) == {"delivered", "blocked-new"}
+
+
 def test_evict_fences_old_snapshot_before_reusing_character_name(tmp_path):
     store = _store(tmp_path)
     old_snapshot = store.stage_decision(
