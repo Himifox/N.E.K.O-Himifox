@@ -1296,12 +1296,14 @@
                 { language: repetitionInsightLanguageLabel(candidate.language) }
             );
             const occurrences = document.createElement('span');
+            occurrences.className = 'memory-insights-card-meta-item is-occurrences';
             occurrences.textContent = translate(
                 'memory.repetitionInsightsOccurrences',
                 '{{count}} occurrences',
                 { count: Number(candidate.occurrence_count || 0) }
             );
             const messages = document.createElement('span');
+            messages.className = 'memory-insights-card-meta-item is-messages';
             messages.textContent = translate(
                 'memory.repetitionInsightsMessages',
                 '{{count}} messages',
@@ -1352,15 +1354,36 @@
                 }, { detected: 0, regenerated: 0, passed: 0, blocked: 0 });
                 effectSummary = document.createElement('div');
                 effectSummary.className = 'memory-insights-card-effect';
-                effectSummary.textContent = translate(
+                const detectedMarker = '__NEKO_DETECTED__';
+                const passedMarker = '__NEKO_PASSED__';
+                const localizedEffect = translate(
                     'memory.repetitionInsightsResidualEffect',
                     'Past handling: detected {{detected}} · effective rewrites {{passed}}',
-                    totals
+                    Object.assign({}, totals, {
+                        detected: detectedMarker,
+                        passed: passedMarker
+                    })
                 );
+                localizedEffect.split(/(__NEKO_DETECTED__|__NEKO_PASSED__)/).forEach(function (part) {
+                    if (!part) return;
+                    if (part === detectedMarker || part === passedMarker) {
+                        const value = document.createElement('strong');
+                        value.className = part === detectedMarker
+                            ? 'memory-insights-card-effect-value is-detected'
+                            : 'memory-insights-card-effect-value is-passed';
+                        value.textContent = String(
+                            part === detectedMarker ? totals.detected : totals.passed
+                        );
+                        effectSummary.appendChild(value);
+                        return;
+                    }
+                    effectSummary.appendChild(document.createTextNode(part));
+                });
             }
 
             const ignore = document.createElement('button');
             ignore.type = 'button';
+            ignore.className = 'memory-insights-card-ignore';
             ignore.textContent = translate(
                 'memory.repetitionInsightsIgnore',
                 'Hide from this result'
