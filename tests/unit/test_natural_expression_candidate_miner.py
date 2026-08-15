@@ -740,6 +740,8 @@ def test_user_review_requires_three_distinct_assistant_messages():
     assert report["summary"] == {
         "assistant_message_count": 3,
         "candidate_count": 1,
+        "returned_candidate_count": 1,
+        "candidates_truncated": False,
     }
     assert candidate["occurrence_count"] == 3
     assert candidate["message_count"] == 3
@@ -822,7 +824,12 @@ def test_user_review_caps_candidates_before_returning_them_to_the_browser(monkey
     report = candidate_core.build_user_review_report([], rules_by_language={})
 
     assert report["candidates"] == candidates[:2]
-    assert report["summary"]["candidate_count"] == 2
+    assert report["summary"] == {
+        "assistant_message_count": 0,
+        "candidate_count": 3,
+        "returned_candidate_count": 2,
+        "candidates_truncated": True,
+    }
     assert report["parameters"]["candidate_output_limit"] == 2
 
 

@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "該当ルール：{{rules}}",
         "repetitionInsightsIgnore": "この結果から隠す",
         "repetitionInsightsFound": "反復断片の候補が {{count}} 件見つかりました。",
+        "repetitionInsightsFoundTruncated": "反復断片の候補が {{count}} 件見つかりました。上位 {{shown}} 件を表示します。",
         "repetitionInsightsError": "ローカル分析を利用できません。もう一度お試しください。",
         "repetitionInsightsExportWarning": "このファイルは任意のメンテナー向け報告用で、個人的な文言を含む可能性があります。書き出しても今後の返信は変わりません。共有前に確認してください。",
         "repetitionInsightsExportEmpty": "書き出せる候補はありません。",

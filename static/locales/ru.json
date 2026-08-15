@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "Покрыто правилами: {{rules}}",
         "repetitionInsightsIgnore": "Скрыть из этого результата",
         "repetitionInsightsFound": "Найдено повторяющихся фрагментов: {{count}}.",
+        "repetitionInsightsFoundTruncated": "Найдено повторяющихся фрагментов: {{count}}; показаны первые {{shown}}.",
         "repetitionInsightsError": "Локальный анализ недоступен. Повторите попытку.",
         "repetitionInsightsExportWarning": "Этот необязательный файл обратной связи может содержать личный текст. Экспорт не изменит будущие ответы; проверьте файл перед публикацией.",
         "repetitionInsightsExportEmpty": "Нет кандидатов для экспорта.",

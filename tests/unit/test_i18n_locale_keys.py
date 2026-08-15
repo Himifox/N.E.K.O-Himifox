@@ -41,6 +41,7 @@ REQUIRED_KEYS = (
     "memory.repetitionInsightsCoveredBy",
     "memory.repetitionInsightsIgnore",
     "memory.repetitionInsightsFound",
+    "memory.repetitionInsightsFoundTruncated",
     "memory.repetitionInsightsError",
     "memory.repetitionInsightsExportWarning",
     "memory.repetitionInsightsExportEmpty",

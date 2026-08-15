@@ -807,7 +807,8 @@ def build_user_review_report(
         message_count_threshold=message_count_threshold,
         max_occurrences=USER_REVIEW_MAX_OCCURRENCES,
     )
-    candidates = maintainer_report["candidates"][:USER_REVIEW_MAX_CANDIDATES]
+    all_candidates = maintainer_report["candidates"]
+    candidates = all_candidates[:USER_REVIEW_MAX_CANDIDATES]
     parameters = dict(maintainer_report["parameters"])
     parameters["message_count_threshold"] = message_count_threshold
     parameters["input_character_limit"] = USER_REVIEW_MAX_INPUT_CHARACTERS
@@ -821,7 +822,9 @@ def build_user_review_report(
         "schema_version": SCHEMA_VERSION,
         "summary": {
             "assistant_message_count": len(messages),
-            "candidate_count": len(candidates),
+            "candidate_count": len(all_candidates),
+            "returned_candidate_count": len(candidates),
+            "candidates_truncated": len(candidates) < len(all_candidates),
         },
     }
 

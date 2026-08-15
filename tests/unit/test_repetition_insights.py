@@ -96,6 +96,8 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
     assert result["summary"] == {
         "assistant_message_count": 3,
         "candidate_count": 1,
+        "returned_candidate_count": 1,
+        "candidates_truncated": False,
         "source_available": True,
     }
     assert result["parameters"]["assistant_message_limit"] == 25
