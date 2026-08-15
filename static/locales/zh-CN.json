@@ -1811,7 +1811,7 @@
         "repetitionInsightsLanguage": "语言",
         "repetitionInsightsLanguageHelp": "请选择回复实际使用的语言（不会自动识别）。",
         "repetitionInsightsRange": "回复范围",
-        "repetitionInsightsPrivacy": "仅在本机读取助手回复；不读取用户消息、不调用模型、不修改规则。",
+        "repetitionInsightsPrivacy": "仅分析本机已保存的助手回复；用户消息不会进入分析结果，不调用模型、不修改规则。",
         "repetitionInsightsAnalyze": "检查",
         "repetitionInsightsClear": "清空结果",
         "repetitionInsightsExport": "导出",
