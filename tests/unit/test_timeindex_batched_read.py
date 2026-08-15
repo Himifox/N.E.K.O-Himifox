@@ -285,6 +285,56 @@ def test_latest_assistant_texts_exclude_history_only_action_note(
     assert result.messages == [visible]
 
 
+def test_latest_assistant_texts_exclude_legacy_history_only_action_notes(
+    timeindex_module,
+    tmp_path,
+):
+    rows = [
+        {
+            "session_id": "1",
+            "message": _stored_message(
+                "ai", 'Visible reply\n[Played for Alice: "Song" by Artist]'
+            ),
+            "timestamp": "2026-01-01 00:00:00.000000",
+        },
+        {
+            "session_id": "2",
+            "message": _stored_message(
+                "ai", "另一条回复\n[给小明分享了《文章》（来自 网站）]"
+            ),
+            "timestamp": "2026-01-02 00:00:00.000000",
+        },
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 2)
+    finally:
+        engine.dispose()
+
+    assert result.messages == ["Visible reply", "另一条回复"]
+
+
+def test_latest_assistant_texts_preserve_non_template_bracketed_tail(
+    timeindex_module,
+    tmp_path,
+):
+    content = 'Visible reply\n[Played for effect, not metadata]'
+    rows = [
+        {
+            "session_id": "1",
+            "message": _stored_message("ai", content),
+            "timestamp": None,
+        }
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 1)
+    finally:
+        engine.dispose()
+
+    assert result.messages == [content]
+
+
 def test_latest_assistant_texts_missing_source_does_not_create_engine(
     timeindex_module,
 ):

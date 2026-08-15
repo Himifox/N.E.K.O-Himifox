@@ -26,6 +26,7 @@ from datetime import datetime
 import asyncio
 import json
 import os
+import re
 import unicodedata
 
 logger = get_module_logger(__name__, "Memory")
@@ -56,6 +57,47 @@ class LatestAssistantTexts:
 
 _ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
 _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY = "anti_repeat_visible_text_length"
+
+_LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r'\[给[^\r\n]+放了《[^\r\n]+》— [^\r\n]+\]',
+        r'\[給[^\r\n]+放了《[^\r\n]+》— [^\r\n]+\]',
+        r'\[Played for [^\r\n]+: "[^\r\n]+" by [^\r\n]+\]',
+        r"\[[^\r\n]+に再生した曲：『[^\r\n]+』— [^\r\n]+\]",
+        r"\[[^\r\n]+에게 재생한 곡: 《[^\r\n]+》 — [^\r\n]+\]",
+        r"\[Для [^\r\n]+: «[^\r\n]+» — [^\r\n]+\]",
+        r'\[Reprodujo para [^\r\n]+: "[^\r\n]+" de [^\r\n]+\]',
+        r'\[Tocou para [^\r\n]+: "[^\r\n]+" de [^\r\n]+\]',
+        r"\[给[^\r\n]+分享了表情包：《[^\r\n]+》（来自 [^\r\n]+）\]",
+        r"\[給[^\r\n]+分享了梗圖：《[^\r\n]+》（來自 [^\r\n]+）\]",
+        r'\[Sent [^\r\n]+ a meme: "[^\r\n]+" \(from [^\r\n]+\)\]',
+        r"\[[^\r\n]+に送ったスタンプ：『[^\r\n]+』（[^\r\n]+ より）\]",
+        r"\[[^\r\n]+에게 보낸 짤: 《[^\r\n]+》 \([^\r\n]+ 출처\)\]",
+        r"\[Отправлено для [^\r\n]+: «[^\r\n]+» \(из [^\r\n]+\)\]",
+        r'\[Envió a [^\r\n]+ un meme: "[^\r\n]+" \(de [^\r\n]+\)\]',
+        r'\[Enviou a [^\r\n]+ um meme: "[^\r\n]+" \(de [^\r\n]+\)\]',
+        r"\[给[^\r\n]+分享了《[^\r\n]+》（来自 [^\r\n]+）\]",
+        r"\[給[^\r\n]+分享了《[^\r\n]+》（來自 [^\r\n]+）\]",
+        r'\[Shared with [^\r\n]+: "[^\r\n]+" \(from [^\r\n]+\)\]',
+        r"\[[^\r\n]+にシェアした内容：『[^\r\n]+』（[^\r\n]+ より）\]",
+        r"\[[^\r\n]+에게 공유한 내용: 《[^\r\n]+》 \([^\r\n]+ 출처\)\]",
+        r"\[Поделено для [^\r\n]+: «[^\r\n]+» \(из [^\r\n]+\)\]",
+        r'\[Compartió con [^\r\n]+: "[^\r\n]+" \(de [^\r\n]+\)\]',
+        r'\[Compartilhou com [^\r\n]+: "[^\r\n]+" \(de [^\r\n]+\)\]',
+    )
+)
+
+
+def _strip_legacy_proactive_action_note(content: str) -> str:
+    """Remove one recognized history-only note from a legacy assistant record."""
+    visible, separator, final_line = content.rpartition("\n")
+    if not separator:
+        return content
+    note = final_line.strip()
+    if any(pattern.fullmatch(note) for pattern in _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS):
+        return visible.rstrip()
+    return content
 
 
 def _assistant_record_from_stored_message(
@@ -99,6 +141,8 @@ def _assistant_record_from_stored_message(
             if visible_text_length > len(content):
                 return None
             content = content[:visible_text_length]
+        else:
+            content = _strip_legacy_proactive_action_note(content)
         text_content = content.strip()
         return (text_content, response_id) if text_content else None
     if not isinstance(content, list):
