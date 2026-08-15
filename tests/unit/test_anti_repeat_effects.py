@@ -154,6 +154,63 @@ def test_query_missing_store_does_not_create_character_directory(tmp_path):
     assert not (tmp_path / "Missing").exists()
 
 
+def test_query_sanitizes_non_finite_persisted_effect_values(tmp_path):
+    effect_dir = tmp_path / "Neko"
+    effect_dir.mkdir()
+    (effect_dir / "anti_repeat_effects.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "schema_version": "anti-repeat-effects/v1",
+                "started_at": "inf",
+                "daily_buckets": {
+                    "2023-11-14": {
+                        "counters": {"detected": 1},
+                        "bm25": {
+                            "before_sum": "nan",
+                            "after_sum": "inf",
+                            "pair_count": 1,
+                        },
+                        "patterns": {
+                            "pattern": {
+                                "phrase": "quiet lantern",
+                                "normalized_phrase": "quiet lantern",
+                                "language": "en",
+                                "detected_count": 1,
+                                "last_seen_at": "-inf",
+                            }
+                        },
+                    }
+                },
+                "response_buckets": {
+                    "response": {
+                        "created_at": "inf",
+                        "delivered_at": "nan",
+                        "bucket": {},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _store(tmp_path).query_effects(
+        "Neko",
+        30,
+        now=1_700_000_000.0,
+    )
+
+    assert result["started_at"] == 1_700_000_000.0
+    assert result["bm25"] == {
+        "pair_count": 1,
+        "average_before": 0.0,
+        "average_after": 0.0,
+        "reduction_ratio": 0.0,
+    }
+    assert result["patterns"][0]["last_seen_at"] == 0.0
+    json.dumps(result, allow_nan=False)
+
+
 def test_storage_contains_fragment_but_not_rejected_draft(tmp_path):
     store = _store(tmp_path)
     rejected_draft = "PRIVATE full rejected draft around quiet lantern and more context"

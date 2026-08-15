@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import heapq
 import json
+import math
 import os
 import re
 import threading
@@ -203,9 +204,10 @@ def _as_int(value: Any) -> int:
 
 def _as_float(value: Any) -> float:
     try:
-        return max(0.0, float(value or 0.0))
+        normalized = float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+    return max(0.0, normalized) if math.isfinite(normalized) else 0.0
 
 
 def _response_retention_key(response: Any) -> tuple[bool, float]:
@@ -478,10 +480,7 @@ class AntiRepeatEffectStore:
         if not isinstance(raw, dict) or raw.get("version") != 1:
             return _default_payload(now)
         payload = _default_payload(now)
-        try:
-            payload["started_at"] = float(raw.get("started_at") or now)
-        except (TypeError, ValueError):
-            pass
+        payload["started_at"] = _as_float(raw.get("started_at")) or now
         buckets = raw.get("daily_buckets")
         if isinstance(buckets, dict):
             payload["daily_buckets"] = {
