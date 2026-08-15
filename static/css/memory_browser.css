@@ -2804,6 +2804,10 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     font-size: var(--memory-font-control);
 }
 
+.memory-insights-fields label[hidden] {
+    display: none;
+}
+
 .memory-insights-field-help {
     color: var(--memory-text-tertiary);
     font-size: var(--memory-font-caption);
