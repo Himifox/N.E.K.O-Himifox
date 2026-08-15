@@ -68,33 +68,6 @@ def test_sql_history_discards_unapproved_and_non_string_metadata():
     }
 
 
-def test_cross_server_history_carries_only_anti_repeat_response_id():
-    from main_logic.cross_server import (
-        _assistant_history_item,
-        merge_unsynced_tail_assistants,
-    )
-    from utils.llm_client import convert_to_messages
-
-    history = [
-        _assistant_history_item("older", {"anti_repeat_response_id": "old"}),
-        _assistant_history_item(
-            "latest",
-            {
-                "anti_repeat_response_id": "response-1",
-                "private_note": "must not persist",
-            },
-        ),
-    ]
-    merge_unsynced_tail_assistants(history, 0)
-
-    messages = convert_to_messages(history)
-    assert len(messages) == 1
-    assert messages[0].content == [{"type": "text", "text": "latest"}]
-    assert messages[0].additional_kwargs == {
-        "anti_repeat_response_id": "response-1",
-    }
-
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_internal_repetition_insights_returns_review_only_candidates():

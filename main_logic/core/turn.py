@@ -1384,7 +1384,6 @@ class TurnMixin:
         turn_id: str | None = None,
         *,
         metadata: dict | None = None,
-        memory_metadata: dict | None = None,
         request_id: Any = _REQUEST_ID_UNSET,
         track_ai_turn: bool = True,
         cache_for_new_session: bool = True,
@@ -1473,11 +1472,7 @@ class TurnMixin:
             if remember_voice_echo:
                 self._remember_recent_ai_voice_echo(text_clean)
         published_at = time.time()
-        sync_message = message
-        if memory_metadata:
-            sync_message = dict(message)
-            sync_message["_memory_metadata"] = dict(memory_metadata)
-        self.sync_message_queue.put({"type": "json", "data": sync_message})
+        self.sync_message_queue.put({"type": "json", "data": message})
         if on_published is not None:
             on_published(published_at)
         if cache_for_new_session and hasattr(self, 'is_preparing_new_session') and self.is_preparing_new_session:
