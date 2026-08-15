@@ -564,21 +564,26 @@ class AntiRepeatEffectStore:
             datetime.fromtimestamp(now, timezone.utc).date()
             - timedelta(days=RETENTION_DAYS - 1)
         ).isoformat()
+        current_day = _utc_day(now)
         buckets = payload.get("daily_buckets", {})
         for day in list(buckets):
-            if day < cutoff:
+            if day < cutoff or day > current_day:
                 del buckets[day]
                 changed = True
         response_buckets = payload.get("response_buckets", {})
         cutoff_timestamp = now - RETENTION_DAYS * 24 * 60 * 60
         for response_key, response in list(response_buckets.items()):
-            if (
-                not isinstance(response, dict)
-                or max(
+            retention_timestamp = (
+                max(
                     _as_float(response.get("created_at")),
                     _as_float(response.get("delivered_at")),
                 )
-                < cutoff_timestamp
+                if isinstance(response, dict)
+                else 0.0
+            )
+            if (
+                retention_timestamp < cutoff_timestamp
+                or retention_timestamp > now
             ):
                 del response_buckets[response_key]
                 changed = True
