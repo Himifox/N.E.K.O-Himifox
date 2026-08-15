@@ -1847,6 +1847,7 @@
         "repetitionInsightsDetected": "反復を検出",
         "repetitionInsightsPassed": "書き直し通過",
         "repetitionInsightsReduction": "反復度の平均低下（比較可能な書き直し{{count}}回）",
+        "repetitionInsightsIncrease": "反復度の平均上昇（比較可能な書き直し{{count}}回）",
         "repetitionInsightsVisibleCount": "最終残存表現 {{total}}件中{{visible}}件を表示",
         "repetitionInsightsNoFilterMatches": "現在のフィルターに一致する最終残存表現はありません。",
         "repetitionInsightsResidualEffect": "過去の処理：検出 {{detected}} · 書き直し通過 {{passed}}",

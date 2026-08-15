@@ -1110,6 +1110,7 @@
         const metric = document.createElement('div');
         metric.className = 'memory-insights-effect-metric';
         if (settings.highlight) metric.classList.add('is-highlight');
+        if (settings.warning) metric.classList.add('is-warning');
         const number = document.createElement('strong');
         number.textContent = settings.displayValue === undefined
             ? String(Number(value || 0))
@@ -1164,6 +1165,7 @@
         const reductionPercent = comparableRewrites > 0
             ? Math.round(Number(bm25.reduction_ratio || 0) * 100)
             : null;
+        const repetitionIncreased = reductionPercent !== null && reductionPercent < 0;
         const summary = document.createElement('div');
         summary.className = 'memory-insights-effect-summary';
         appendRepetitionEffectMetric(
@@ -1188,11 +1190,16 @@
             appendRepetitionEffectMetric(
                 summary,
                 0,
-                'memory.repetitionInsightsReduction',
-                'Average repetition reduction across {{count}} comparable rewrites',
+                repetitionIncreased
+                    ? 'memory.repetitionInsightsIncrease'
+                    : 'memory.repetitionInsightsReduction',
+                repetitionIncreased
+                    ? 'Average repetition increase across {{count}} comparable rewrites'
+                    : 'Average repetition reduction across {{count}} comparable rewrites',
                 {
-                    displayValue: reductionPercent + '%',
+                    displayValue: Math.abs(reductionPercent) + '%',
                     highlight: true,
+                    warning: repetitionIncreased,
                     translationOptions: { count: comparableRewrites }
                 }
             );

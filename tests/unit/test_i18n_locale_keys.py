@@ -59,6 +59,8 @@ REQUIRED_KEYS = (
     "memory.repetitionInsightsNoEffects",
     "memory.repetitionInsightsDetected",
     "memory.repetitionInsightsPassed",
+    "memory.repetitionInsightsReduction",
+    "memory.repetitionInsightsIncrease",
     "memory.repetitionInsightsVisibleCount",
     "memory.repetitionInsightsNoFilterMatches",
     "memory.repetitionInsightsResidualEffect",

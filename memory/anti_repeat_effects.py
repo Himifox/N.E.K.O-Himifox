@@ -438,9 +438,7 @@ def _summarize_effect_buckets(buckets: Iterable[dict[str, Any]]) -> dict[str, An
 
     average_before = before_sum / pair_count if pair_count else 0.0
     average_after = after_sum / pair_count if pair_count else 0.0
-    reduction_ratio = (
-        max(0.0, min(1.0, 1.0 - after_sum / before_sum)) if before_sum > 0 else 0.0
-    )
+    reduction_ratio = 1.0 - after_sum / before_sum if before_sum > 0 else 0.0
     patterns = sorted(
         patterns_by_key.values(),
         key=lambda item: (

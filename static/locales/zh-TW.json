@@ -1847,6 +1847,7 @@
         "repetitionInsightsDetected": "防重複發現",
         "repetitionInsightsPassed": "改寫通過",
         "repetitionInsightsReduction": "重複程度平均下降（比較 {{count}} 次改寫）",
+        "repetitionInsightsIncrease": "重複程度平均上升（比較 {{count}} 次改寫）",
         "repetitionInsightsVisibleCount": "正在顯示 {{visible}} / {{total}} 個最終殘留片段",
         "repetitionInsightsNoFilterMatches": "沒有符合目前篩選條件的最終殘留片段。",
         "repetitionInsightsResidualEffect": "過去的處理情況：發現 {{detected}} 次 · 改寫通過 {{passed}} 次",

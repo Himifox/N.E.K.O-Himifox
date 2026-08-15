@@ -164,6 +164,31 @@ def test_decision_is_counted_once_even_with_multiple_reasons(tmp_path):
     assert result["patterns"][0]["blocked_count"] == 1
 
 
+def test_bm25_summary_preserves_increased_repetition_ratio(tmp_path):
+    store = _store(tmp_path)
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="regular_prompt",
+            reasons=("bm25",),
+            action="regenerate",
+            outcome="blocked_after_regen_bm25",
+            score_before=9.0,
+            score_after=15.0,
+        ),
+        now=1_700_000_000.0,
+    )
+
+    result = store.query_effects("Neko", 30, now=1_700_000_000.0)
+
+    assert result["bm25"] == {
+        "pair_count": 1,
+        "average_before": 9.0,
+        "average_after": 15.0,
+        "reduction_ratio": -0.6667,
+    }
+
+
 def test_unattributed_decision_keeps_aggregate_without_text(tmp_path):
     store = _store(tmp_path)
     store.record_decision(

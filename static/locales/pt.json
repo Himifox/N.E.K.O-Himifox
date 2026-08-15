@@ -1847,6 +1847,7 @@
         "repetitionInsightsDetected": "Repetições detectadas",
         "repetitionInsightsPassed": "Reescritas aprovadas",
         "repetitionInsightsReduction": "Redução média de repetições ({{count}} reescritas comparáveis)",
+        "repetitionInsightsIncrease": "Aumento médio de repetições ({{count}} reescritas comparáveis)",
         "repetitionInsightsVisibleCount": "Mostrando {{visible}} de {{total}} resíduos finais",
         "repetitionInsightsNoFilterMatches": "Nenhum resíduo final corresponde aos filtros atuais.",
         "repetitionInsightsResidualEffect": "Histórico: detectado {{detected}} · reescritas aprovadas {{passed}}",

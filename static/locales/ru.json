@@ -1847,6 +1847,7 @@
         "repetitionInsightsDetected": "Обнаружено повторов",
         "repetitionInsightsPassed": "Прошли проверку",
         "repetitionInsightsReduction": "Среднее снижение повторяемости ({{count}} сопоставимых переформулировок)",
+        "repetitionInsightsIncrease": "Средний рост повторяемости ({{count}} сопоставимых переформулировок)",
         "repetitionInsightsVisibleCount": "Показано {{visible}} из {{total}} итоговых повторов",
         "repetitionInsightsNoFilterMatches": "Нет итоговых повторов, соответствующих текущим фильтрам.",
         "repetitionInsightsResidualEffect": "История обработки: обнаружено {{detected}} · проверку прошли {{passed}}",
