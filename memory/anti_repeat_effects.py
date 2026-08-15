@@ -30,7 +30,10 @@ from typing import Any, Iterable, Optional
 from utils.config_manager import get_config_manager
 from utils.file_utils import atomic_write_json
 from utils.logger_config import get_module_logger
-from utils.natural_expression_candidates import normalize_language
+from utils.natural_expression_candidates import (
+    _runtime_protected_spans,
+    normalize_language,
+)
 
 logger = get_module_logger(__name__, "Memory")
 
@@ -91,11 +94,9 @@ def _safe_fragment(value: str) -> str:
 
 
 def _without_protected_text(value: str) -> str:
-    spans = sorted(
-        (match.start(), match.end())
-        for pattern in (_URL_RE, _PROTECTED_RE)
-        for match in pattern.finditer(value)
-    )
+    spans = _runtime_protected_spans(value)
+    spans.extend(match.span() for match in _PROTECTED_RE.finditer(value))
+    spans.sort()
     chunks: list[str] = []
     cursor = 0
     for start, end in spans:
