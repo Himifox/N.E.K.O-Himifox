@@ -404,6 +404,51 @@ def test_response_query_prunes_expired_records_and_persists_snapshot(tmp_path):
     assert payload["response_buckets"] == {}
 
 
+def test_query_prunes_future_dated_effect_records_and_persists_snapshot(tmp_path):
+    store = _store(tmp_path)
+    timestamp = 1_700_000_000.0
+    future_timestamp = timestamp + 365 * 24 * 60 * 60
+    current_day = anti_repeat_effects._utc_day(timestamp)
+    future_day = anti_repeat_effects._utc_day(future_timestamp)
+    current_response_key = anti_repeat_effects._response_key("current-response")
+    future_response_key = anti_repeat_effects._response_key("future-response")
+    effect_dir = tmp_path / "Neko"
+    effect_dir.mkdir()
+    (effect_dir / "anti_repeat_effects.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "daily_buckets": {
+                    current_day: {"counters": {"detected": 1}},
+                    future_day: {"counters": {"detected": 99}},
+                },
+                "response_buckets": {
+                    current_response_key: {
+                        "created_at": timestamp,
+                        "delivered_at": timestamp,
+                        "bucket": {"counters": {"detected": 1}},
+                    },
+                    future_response_key: {
+                        "created_at": future_timestamp,
+                        "delivered_at": future_timestamp,
+                        "bucket": {"counters": {"detected": 99}},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = store.query_effects("Neko", 30, now=timestamp)
+    persisted = json.loads(
+        (effect_dir / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+
+    assert result["totals"]["detected"] == 1
+    assert set(persisted["daily_buckets"]) == {current_day}
+    assert set(persisted["response_buckets"]) == {current_response_key}
+
+
 def test_response_cap_evicts_undelivered_before_delivered(tmp_path, monkeypatch):
     monkeypatch.setattr(anti_repeat_effects, "MAX_RESPONSE_BUCKETS", 2)
     store = _store(tmp_path)
