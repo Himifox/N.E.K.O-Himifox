@@ -182,10 +182,11 @@
                     </div>
                     <div class="memory-aux-panel-body memory-insights-body">
                         <p class="memory-insights-description" data-i18n="memory.repetitionInsightsDescription" hidden>检查角色已经发出的回复，找出反复出现的说法，并对照防复读记录查看处理情况。所有分析只在本机进行。</p>
-                        <div class="memory-insights-target">
+                        <label class="memory-insights-target" for="memory-insights-character-select">
                             <span data-i18n="memory.repetitionInsightsCharacter">分析角色</span>
-                            <strong id="memory-insights-character" data-i18n="memory.repetitionInsightsNoCharacter">尚未选择角色</strong>
-                        </div>
+                            <select id="memory-insights-character-select"></select>
+                            <strong id="memory-insights-character" data-i18n="memory.repetitionInsightsNoCharacter" hidden>尚未选择角色</strong>
+                        </label>
                         <div class="memory-insights-fields">
                             <label for="memory-insights-language">
                                 <span data-i18n="memory.repetitionInsightsLanguage">回复内容语言</span>
