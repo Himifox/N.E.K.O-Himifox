@@ -726,6 +726,33 @@ def test_maintainer_report_keeps_occurrence_only_compatibility():
     assert _candidate(report, "quiet lantern")["message_count"] == 1
 
 
+def test_report_can_bound_retained_occurrences():
+    messages = [candidate_core.SourceMessage("zh-CN", "安静灯笼安静灯笼", 1)]
+
+    with pytest.raises(
+        candidate_core.CandidateMinerError,
+        match="assistant history exceeds local analysis limit",
+    ):
+        candidate_core.build_report(
+            messages,
+            input_record_count=1,
+            config=_config(),
+            rules_by_language={},
+            max_occurrences=2,
+        )
+
+
+def test_user_review_rejects_oversized_history_before_mining(monkeypatch):
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_INPUT_CHARACTERS", 8)
+    messages = [candidate_core.SourceMessage("en", "quiet lantern", 1)]
+
+    with pytest.raises(
+        candidate_core.CandidateMinerError,
+        match="assistant history exceeds local analysis limit",
+    ):
+        candidate_core.build_user_review_report(messages, rules_by_language={})
+
+
 def test_user_review_rejects_invalid_distinct_message_threshold():
     with pytest.raises(
         candidate_core.CandidateMinerError,
