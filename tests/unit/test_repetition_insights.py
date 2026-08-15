@@ -264,6 +264,39 @@ def test_repetition_effect_associations_are_exact_or_safe_containment_only():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("language", ["en", "es", "pt", "ru"])
+def test_word_language_associations_require_contiguous_token_boundaries(language):
+    from main_routers import memory_router
+
+    candidates = [
+        {
+            "normalized_phrase": "he said",
+            "language": language,
+            "occurrence_count": 3,
+            "message_count": 3,
+        }
+    ]
+    patterns = [
+        {
+            "normalized_phrase": "she said",
+            "language": language,
+            "detected_count": 99,
+        },
+        {
+            "normalized_phrase": "well he said today",
+            "language": language,
+            "detected_count": 2,
+        },
+    ]
+
+    result = memory_router._associate_repetition_effects(candidates, patterns)
+
+    assert len(result) == 1
+    assert result[0]["effect_normalized_phrase"] == "well he said today"
+    assert result[0]["association_type"] == "contained"
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_public_repetition_insights_keeps_residuals_when_effect_query_fails():
     from main_routers import memory_router

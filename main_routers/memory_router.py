@@ -149,6 +149,20 @@ def _repetition_association_language(language: str) -> str:
     return "zh-CN" if language in {"zh", "zh-CN"} else language
 
 
+def _phrases_contain_each_other(language: str, left: str, right: str) -> bool:
+    if language not in {"en", "es", "pt", "ru"}:
+        return left in right or right in left
+
+    left_tokens = left.split()
+    right_tokens = right.split()
+    shorter, longer = sorted((left_tokens, right_tokens), key=len)
+    width = len(shorter)
+    return any(
+        longer[start : start + width] == shorter
+        for start in range(len(longer) - width + 1)
+    )
+
+
 def _associate_repetition_effects(
     candidates: list,
     patterns: list,
@@ -181,7 +195,11 @@ def _associate_repetition_effects(
             elif (
                 _is_safe_containment_phrase(language, candidate_phrase)
                 and _is_safe_containment_phrase(language, effect_phrase)
-                and (candidate_phrase in effect_phrase or effect_phrase in candidate_phrase)
+                and _phrases_contain_each_other(
+                    association_language,
+                    candidate_phrase,
+                    effect_phrase,
+                )
             ):
                 association_type = "contained"
             if association_type is None:
