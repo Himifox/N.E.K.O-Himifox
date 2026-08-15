@@ -3161,6 +3161,10 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     gap: 12px;
 }
 
+.memory-insights-card-footer[hidden] {
+    display: none;
+}
+
 .memory-insights-card button {
     flex: 0 0 auto;
     min-height: 30px;
