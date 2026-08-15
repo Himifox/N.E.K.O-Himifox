@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -205,6 +206,14 @@ def _as_float(value: Any) -> float:
         return max(0.0, float(value or 0.0))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _response_retention_key(response: Any) -> tuple[bool, float]:
+    if not isinstance(response, dict):
+        return False, 0.0
+    created_at = _as_float(response.get("created_at"))
+    delivered_at = _as_float(response.get("delivered_at"))
+    return delivered_at > 0, max(created_at, delivered_at)
 
 
 def _normalize_bucket(raw: Any) -> dict[str, Any]:
@@ -483,13 +492,17 @@ class AntiRepeatEffectStore:
         response_buckets = raw.get("response_buckets")
         if isinstance(response_buckets, dict):
             normalized_response_buckets: dict[str, dict[str, Any]] = {}
-            for response_key, raw_response in list(response_buckets.items())[
-                -MAX_RESPONSE_BUCKETS:
-            ]:
-                if not isinstance(response_key, str) or not isinstance(
-                    raw_response, dict
-                ):
-                    continue
+            retained_responses = heapq.nlargest(
+                MAX_RESPONSE_BUCKETS,
+                (
+                    (response_key, raw_response)
+                    for response_key, raw_response in response_buckets.items()
+                    if isinstance(response_key, str)
+                    and isinstance(raw_response, dict)
+                ),
+                key=lambda item: _response_retention_key(item[1]),
+            )
+            for response_key, raw_response in retained_responses:
                 normalized_response_buckets[response_key] = {
                     "created_at": _as_float(raw_response.get("created_at")),
                     "delivered_at": _as_float(raw_response.get("delivered_at")),
@@ -546,10 +559,7 @@ class AntiRepeatEffectStore:
         if len(response_buckets) > MAX_RESPONSE_BUCKETS:
             oldest = sorted(
                 response_buckets,
-                key=lambda key: max(
-                    _as_float(response_buckets[key].get("created_at")),
-                    _as_float(response_buckets[key].get("delivered_at")),
-                ),
+                key=lambda key: _response_retention_key(response_buckets[key]),
             )
             for response_key in oldest[: len(response_buckets) - MAX_RESPONSE_BUCKETS]:
                 del response_buckets[response_key]
