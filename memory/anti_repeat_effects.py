@@ -812,6 +812,19 @@ class AntiRepeatEffectStore:
             staged = self._stage_unlocked(name)
         self._flush_snapshot(*staged)
 
+    def evict_character(self, name: str) -> None:
+        """Forget one identity and fence snapshots staged before its removal."""
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            with self._get_write_lock(name):
+                fence = max(
+                    self._staged_seq.get(name, 0),
+                    self._written_seq.get(name, 0),
+                )
+                self._cache.pop(name, None)
+                self._staged_seq[name] = fence
+                self._written_seq[name] = fence
+
 
 _GLOBAL_STORE: Optional[AntiRepeatEffectStore] = None
 _GLOBAL_LOCK = threading.Lock()
@@ -824,6 +837,15 @@ def get_anti_repeat_effect_store() -> AntiRepeatEffectStore:
             if _GLOBAL_STORE is None:
                 _GLOBAL_STORE = AntiRepeatEffectStore()
     return _GLOBAL_STORE
+
+
+def evict_cached_anti_repeat_effects(*character_names: str) -> None:
+    """Evict loaded identities without creating the global store."""
+    store = _GLOBAL_STORE
+    if store is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        store.evict_character(character_name)
 
 
 def record_anti_repeat_decision(

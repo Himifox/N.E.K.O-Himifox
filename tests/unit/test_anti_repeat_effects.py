@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+import memory.anti_repeat_effects as anti_repeat_effects
 from memory.anti_repeat_effects import (
     AntiRepeatDecision,
     AntiRepeatEffectStore,
     RepeatSignature,
     build_repeat_signature,
+)
+from utils.character_memory import (
+    delete_character_memory_storage,
+    rename_character_memory_storage,
 )
 
 
@@ -196,3 +202,68 @@ def test_response_query_prunes_expired_records_and_persists_snapshot(tmp_path):
     assert result["source_available"] is False
     assert result["linked_message_count"] == 0
     assert payload["response_buckets"] == {}
+
+
+def test_evict_fences_old_snapshot_before_reusing_character_name(tmp_path):
+    store = _store(tmp_path)
+    old_snapshot = store.stage_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+
+    store.evict_character("Neko")
+    store._flush_snapshot(*old_snapshot)
+    assert not (tmp_path / "Neko").exists()
+
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("literal_similarity",),
+            action="regenerate",
+            outcome="regen_guard_passed",
+        ),
+        now=1_700_000_001.0,
+    )
+    result = store.query_effects("Neko", 30, now=1_700_000_001.0)
+    assert result["totals"]["detected"] == 1
+    assert result["reason_counts"]["bm25"] == 0
+
+
+def test_character_storage_rename_and_delete_evict_effect_cache(
+    tmp_path, monkeypatch
+):
+    config_manager = SimpleNamespace(
+        memory_dir=str(tmp_path),
+        project_memory_dir=None,
+    )
+    store = _store(tmp_path)
+    monkeypatch.setattr(anti_repeat_effects, "_GLOBAL_STORE", store)
+    store.record_decision(
+        "Old",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+    store.query_effects("New", 30, now=1_700_000_000.0)
+
+    rename_character_memory_storage(config_manager, "Old", "New")
+    assert "Old" not in store._cache
+    assert "New" not in store._cache
+    assert (tmp_path / "New" / "anti_repeat_effects.json").exists()
+
+    store.query_effects("New", 30, now=1_700_000_000.0)
+    assert "New" in store._cache
+    delete_character_memory_storage(config_manager, "New")
+    assert "New" not in store._cache
+    assert not (tmp_path / "New").exists()
