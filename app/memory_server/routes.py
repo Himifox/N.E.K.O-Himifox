@@ -95,7 +95,7 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
         allow_dots=True,
         max_units=PROFILE_NAME_MAX_UNITS,
     )
-    if name_validation.code is not None:
+    if name_validation.code not in {None, "reserved_route_name"}:
         raise HTTPException(status_code=400, detail="Invalid lanlan_name")
     lanlan_name = name_validation.normalized
     if runtime.time_manager is None:
