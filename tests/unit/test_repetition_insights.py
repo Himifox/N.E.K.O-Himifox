@@ -145,7 +145,7 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
         query_effects=MagicMock(return_value=_empty_effects())
     )
     config = SimpleNamespace(
-        aload_characters=AsyncMock(return_value={"猫娘": {"test_char": {}}})
+        aload_characters=AsyncMock(return_value={"猫娘": {"legacy.name": {}}})
     )
 
     with (
@@ -163,7 +163,7 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
     ):
         result = await memory_router.repetition_insights(
             memory_router.RepetitionInsightsRequest(
-                character_name="test_char",
+                character_name="legacy.name",
                 language="zh-CN",
                 assistant_message_limit=50,
             )
@@ -180,8 +180,8 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
     }
     assert call.kwargs["timeout"] == 30.0
     assert call.args[0].startswith("http://127.0.0.1:")
-    assert call.args[0].endswith("/test_char/repetition_insights")
-    effect_store.query_effects.assert_called_once_with("test_char", 30)
+    assert call.args[0].endswith("/legacy.name/repetition_insights")
+    effect_store.query_effects.assert_called_once_with("legacy.name", 30)
 
 
 @pytest.mark.unit
@@ -331,15 +331,34 @@ async def test_reset_repetition_effects_clears_only_selected_character():
         patch.object(memory_router, "character_memory_exists", return_value=True),
     ):
         result = await memory_router.reset_repetition_effects(
-            memory_router.RepetitionEffectsResetRequest(character_name="test_char")
+            memory_router.RepetitionEffectsResetRequest(character_name="legacy.name")
         )
 
     assert result == {
         "success": True,
-        "character_name": "test_char",
+        "character_name": "legacy.name",
         "cleared": True,
     }
-    effect_store.clear_effects.assert_called_once_with("test_char")
+    effect_store.clear_effects.assert_called_once_with("legacy.name")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repetition_endpoints_still_reject_dot_traversal_names():
+    from main_routers import memory_router
+
+    insights = await memory_router.repetition_insights(
+        memory_router.RepetitionInsightsRequest(
+            character_name="../escape",
+            language="en",
+        )
+    )
+    reset = await memory_router.reset_repetition_effects(
+        memory_router.RepetitionEffectsResetRequest(character_name="../escape")
+    )
+
+    assert insights.status_code == 422
+    assert reset.status_code == 422
 
 
 @pytest.mark.unit
