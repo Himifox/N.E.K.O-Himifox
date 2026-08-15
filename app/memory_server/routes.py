@@ -145,6 +145,9 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
         "parameters": parameters,
         "summary": summary,
         "candidates": report["candidates"],
+        # Internal-only join keys. The public router removes these before the
+        # browser response, so runtime IDs never become UI/export data.
+        "_anti_repeat_response_ids": list(getattr(history, "response_ids", [])),
     }
 
 

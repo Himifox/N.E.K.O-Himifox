@@ -1138,6 +1138,7 @@ async def _guard_phase2_output(
                     language=proactive_lang,
                     fallback_fragment=literal_match.common_fragment,
                 ),
+                response_id=str(proactive_sid),
             ),
         )
         active_logger.info(
@@ -1271,6 +1272,7 @@ async def _guard_phase2_output(
                     signature=repeat_signature,
                     score_before=bm25_total if bm25_total > 0 else None,
                     score_after=score_after,
+                    response_id=str(proactive_sid),
                 ),
             )
 

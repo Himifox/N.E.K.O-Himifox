@@ -451,6 +451,7 @@ async def _deliver_break_reminder_via_llm(
                     action="regenerate",
                     outcome=outcome,
                     signature=repeat_signature,
+                    response_id=str(proactive_sid),
                 ),
             )
 
