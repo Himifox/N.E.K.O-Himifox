@@ -135,6 +135,7 @@ def build_repeat_signature(
         return None
 
     draft_normalized = unicodedata.normalize("NFKC", draft_text or "")
+    full_draft_phrase = _normalized_phrase(draft_normalized)
     candidates: list[str] = []
     fallback = _safe_fragment(fallback_fragment)
     if fallback:
@@ -150,7 +151,7 @@ def build_repeat_signature(
             candidates.append(term)
     for phrase in candidates:
         normalized = _normalized_phrase(phrase)
-        if len(normalized) < 2:
+        if len(normalized) < 2 or normalized == full_draft_phrase:
             continue
         return RepeatSignature(phrase, normalized, normalized_language)
     return None

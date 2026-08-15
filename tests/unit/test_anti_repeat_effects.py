@@ -56,6 +56,43 @@ def test_build_repeat_signature_rejects_protected_fragments(fragment):
     )
 
 
+@pytest.mark.parametrize(
+    ("language", "draft"),
+    [
+        ("en", "quiet lantern"),
+        ("zh-CN", "真的好想你"),
+    ],
+)
+def test_build_repeat_signature_never_retains_a_complete_short_draft(
+    language,
+    draft,
+):
+    assert (
+        build_repeat_signature(
+            draft,
+            [draft],
+            language=language,
+            fallback_fragment=draft,
+        )
+        is None
+    )
+
+
+def test_build_repeat_signature_skips_full_fallback_but_keeps_shorter_evidence():
+    signature = build_repeat_signature(
+        "quiet lantern again",
+        ["quiet lantern"],
+        language="en",
+        fallback_fragment="quiet lantern again",
+    )
+
+    assert signature == RepeatSignature(
+        phrase="quiet lantern",
+        normalized_phrase="quiet lantern",
+        language="en",
+    )
+
+
 def test_decision_is_counted_once_even_with_multiple_reasons(tmp_path):
     store = _store(tmp_path)
     signature = RepeatSignature("quiet lantern", "quiet lantern", "en")
