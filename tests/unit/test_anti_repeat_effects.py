@@ -240,6 +240,34 @@ def test_storage_contains_fragment_but_not_rejected_draft(tmp_path):
     assert json.loads(payload)["schema_version"] == "anti-repeat-effects/v1"
 
 
+def test_clear_effects_propagates_write_failure_and_restores_cached_history(
+    tmp_path,
+    monkeypatch,
+):
+    store = _store(tmp_path)
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+    monkeypatch.setattr(
+        anti_repeat_effects,
+        "atomic_write_json",
+        MagicMock(side_effect=OSError("disk full")),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        store.clear_effects("Neko")
+
+    result = store.query_effects("Neko", 30, now=1_700_000_000.0)
+    assert result["totals"]["detected"] == 1
+
+
 def test_query_rejects_unsupported_period(tmp_path):
     with pytest.raises(ValueError, match="effect days"):
         _store(tmp_path).query_effects("Neko", 14)

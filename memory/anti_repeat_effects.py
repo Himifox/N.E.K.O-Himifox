@@ -571,7 +571,14 @@ class AntiRepeatEffectStore:
         payload = json.loads(json.dumps(self._cache[name], ensure_ascii=False))
         return name, payload, seq
 
-    def _flush_snapshot(self, name: str, payload: dict[str, Any], seq: int) -> None:
+    def _flush_snapshot(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        seq: int,
+        *,
+        raise_on_error: bool = False,
+    ) -> None:
         with self._get_write_lock(name):
             if seq <= self._written_seq.get(name, 0):
                 return
@@ -588,6 +595,8 @@ class AntiRepeatEffectStore:
                     name,
                     type(exc).__name__,
                 )
+                if raise_on_error:
+                    raise
                 return
             self._written_seq[name] = seq
 
@@ -818,9 +827,14 @@ class AntiRepeatEffectStore:
         timestamp = time.time()
         name = _resolve_name(name)
         with self._get_lock(name):
+            previous = self._load_unlocked(name, timestamp)
             self._cache[name] = _default_payload(timestamp)
             staged = self._stage_unlocked(name)
-        self._flush_snapshot(*staged)
+            try:
+                self._flush_snapshot(*staged, raise_on_error=True)
+            except Exception:
+                self._cache[name] = previous
+                raise
 
     def evict_character(self, name: str) -> None:
         """Forget one identity and fence snapshots staged before its removal."""
