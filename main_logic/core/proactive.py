@@ -521,17 +521,23 @@ class ProactiveMixin:
                 # 也不进 TTS。空 full_text + 非空 note 的场景目前不会发生
                 # （proactive 不允许空文本），但写法上仍然兜底拼接。
                 history_text = full_text
+                additional_kwargs = {
+                    "anti_repeat_response_id": str(commit_sid),
+                }
                 if action_note:
                     note = action_note.strip()
                     if note:
                         history_text = f"{full_text}\n{note}" if full_text else note
+                        # Persist only the visible character count, never a
+                        # second copy of either the reply or the hidden note.
+                        additional_kwargs["anti_repeat_visible_text_length"] = str(
+                            len(full_text)
+                        )
                 response_id = str(commit_sid)
                 self.session._conversation_history.append(
                     AIMessage(
                         content=history_text,
-                        additional_kwargs={
-                            "anti_repeat_response_id": response_id,
-                        },
+                        additional_kwargs=additional_kwargs,
                     )
                 )
                 try:

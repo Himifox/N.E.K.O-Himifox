@@ -23,7 +23,10 @@ if TYPE_CHECKING:
 from .messages import BaseMessage
 
 
-_PERSISTED_ADDITIONAL_KWARGS = ("anti_repeat_response_id",)
+_PERSISTED_ADDITIONAL_KWARGS = (
+    "anti_repeat_response_id",
+    "anti_repeat_visible_text_length",
+)
 
 
 def _persisted_additional_kwargs(message: BaseMessage) -> dict[str, str]:
