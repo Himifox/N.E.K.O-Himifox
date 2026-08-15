@@ -3055,9 +3055,27 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 .memory-insights-card-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 12px;
+    gap: 6px;
     color: var(--memory-text-secondary);
     font-size: var(--memory-font-caption);
+}
+
+.memory-insights-card-meta-item {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 1px 8px;
+    border: 1px solid var(--memory-accent-border);
+    border-radius: var(--memory-radius-pill);
+    background: var(--memory-accent-soft);
+    color: var(--memory-accent-foreground);
+    font-weight: var(--memory-font-weight-strong);
+}
+
+.memory-insights-card-meta-item.is-messages {
+    border-color: color-mix(in srgb, var(--memory-accent-border) 52%, transparent);
+    background: color-mix(in srgb, var(--memory-accent-soft) 62%, transparent);
+    color: var(--memory-text-secondary);
 }
 
 .memory-insights-card-rules {
@@ -3070,11 +3088,38 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 
 .memory-insights-card-effect {
     padding: 7px 9px;
+    border: 1px solid color-mix(in srgb, var(--memory-accent-border) 38%, transparent);
+    border-left: 3px solid var(--memory-accent-border);
     border-radius: var(--memory-radius-control);
-    background: color-mix(in srgb, var(--memory-accent) 8%, transparent);
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--memory-warning) 7%, var(--memory-surface)),
+        color-mix(in srgb, var(--memory-success) 7%, var(--memory-surface))
+    );
     color: var(--memory-text-secondary);
     font-size: var(--memory-font-caption);
     line-height: 1.45;
+}
+
+.memory-insights-card-effect-value {
+    display: inline-block;
+    min-width: 19px;
+    margin: 0 2px;
+    padding: 0 5px;
+    border-radius: var(--memory-radius-pill);
+    text-align: center;
+    font-size: var(--memory-font-control);
+    font-weight: var(--memory-font-weight-strong);
+}
+
+.memory-insights-card-effect-value.is-detected {
+    background: color-mix(in srgb, var(--memory-warning) 14%, transparent);
+    color: var(--memory-warning);
+}
+
+.memory-insights-card-effect-value.is-passed {
+    background: var(--memory-success-soft);
+    color: var(--memory-success);
 }
 
 .memory-insights-card-status.is-processed {
@@ -3099,6 +3144,19 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 .memory-insights-card-header .memory-insights-card-badges button {
     min-height: 28px;
     padding: 3px 9px;
+}
+
+.memory-insights-card-header .memory-insights-card-ignore {
+    border-color: color-mix(in srgb, var(--memory-accent-border) 62%, transparent);
+    border-radius: var(--memory-radius-pill);
+    background: var(--memory-accent-soft);
+    color: var(--memory-accent-foreground);
+    font-weight: var(--memory-font-weight-strong);
+}
+
+.memory-insights-card-header .memory-insights-card-ignore:hover {
+    border-color: var(--memory-accent-border);
+    background: var(--memory-accent-soft-hover);
 }
 
 .memory-aux-panel .review-toggle {
