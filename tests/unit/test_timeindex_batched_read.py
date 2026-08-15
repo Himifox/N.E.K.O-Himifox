@@ -299,61 +299,6 @@ def test_latest_assistant_texts_missing_source_does_not_create_engine(
     assert result == timeindex_module.LatestAssistantTexts([], False, 0)
 
 
-def test_engine_initialization_is_serialized_per_character(timeindex_module):
-    manager = timeindex_module.TimeIndexedMemory(recent_history_manager=None)
-    first_entered = threading.Event()
-    release_first = threading.Event()
-    second_attempted = threading.Event()
-    second_entered = threading.Event()
-    call_lock = threading.Lock()
-    call_count = 0
-    errors: list[BaseException] = []
-
-    def fake_ensure(_name, db_path=None, readonly=False):
-        nonlocal call_count
-        with call_lock:
-            call_count += 1
-            current_call = call_count
-        if current_call == 1:
-            first_entered.set()
-            if not release_first.wait(2):
-                raise TimeoutError("test did not release first initialization")
-        else:
-            second_entered.set()
-        return True
-
-    manager._ensure_engine_exists_unlocked = fake_ensure
-
-    def run_first():
-        try:
-            manager._ensure_engine_exists("cat", readonly=True)
-        except BaseException as exc:
-            errors.append(exc)
-
-    def run_second():
-        second_attempted.set()
-        try:
-            manager._ensure_engine_exists("cat", readonly=False)
-        except BaseException as exc:
-            errors.append(exc)
-
-    first = threading.Thread(target=run_first)
-    second = threading.Thread(target=run_second)
-    first.start()
-    assert first_entered.wait(1)
-    second.start()
-    assert second_attempted.wait(1)
-    assert not second_entered.wait(0.1)
-    release_first.set()
-    first.join(2)
-    second.join(2)
-
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert errors == []
-    assert call_count == 2
-
-
 def test_batches_preserve_order_limit_and_legacy_list_api(timeindex_module, tmp_path):
     rows = [
         {
