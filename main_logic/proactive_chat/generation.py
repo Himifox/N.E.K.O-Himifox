@@ -108,6 +108,24 @@ def _merge_regen_avoid_terms(*term_groups: Any) -> list[str]:
     return list(dict.fromkeys(interleaved))[:ANTI_REPEAT_INJECT_TOP_K]
 
 
+def _score_regenerated_draft(
+    anti_repeat_corpus: Any,
+    lanlan_name: str,
+    text: str,
+    *,
+    exempt: bool,
+) -> float | None:
+    """Return a measured BM25 score, never a synthetic zero for skipped work."""
+    if exempt or anti_repeat_corpus is None:
+        return None
+    try:
+        total, _ = anti_repeat_corpus.score_draft(lanlan_name, text)
+        return float(total)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("[AntiRepeat] proactive regen score skipped: %s", exc)
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class ProactiveModelConfig:
     """Resolved conversation and optional vision model settings for one turn."""
@@ -1431,17 +1449,16 @@ async def _guard_phase2_output(
             )
         )
 
-        if regen_exempt_text_dedup or anti_repeat_corpus is None:
-            regen_total = 0.0
-        else:
-            try:
-                regen_total, _ = anti_repeat_corpus.score_draft(
-                    lanlan_name,
-                    cleaned,
-                )
-            except Exception:
-                regen_total = 0.0
-        if regen_total >= ANTI_REPEAT_DROP_THRESHOLD:
+        regen_total = _score_regenerated_draft(
+            anti_repeat_corpus,
+            lanlan_name,
+            cleaned,
+            exempt=regen_exempt_text_dedup,
+        )
+        if (
+            regen_total is not None
+            and regen_total >= ANTI_REPEAT_DROP_THRESHOLD
+        ):
             record_regen_effect(
                 "blocked_after_regen_bm25",
                 score_after=regen_total,
