@@ -8,6 +8,8 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from utils.llm_client import AIMessage, SQLChatMessageHistory
+
 
 def _empty_effects(days: int = 30) -> dict:
     return {
@@ -18,6 +20,25 @@ def _empty_effects(days: int = 30) -> dict:
         "reason_counts": {},
         "bm25": {},
         "patterns": [],
+    }
+
+
+def test_sql_history_preserves_anti_repeat_response_id():
+    history = SQLChatMessageHistory.__new__(SQLChatMessageHistory)
+
+    serialized = history._serialize(
+        AIMessage(
+            content="synthetic reply",
+            additional_kwargs={"anti_repeat_response_id": "response-1"},
+        )
+    )
+
+    assert json.loads(serialized) == {
+        "type": "ai",
+        "data": {
+            "content": "synthetic reply",
+            "additional_kwargs": {"anti_repeat_response_id": "response-1"},
+        },
     }
 
 

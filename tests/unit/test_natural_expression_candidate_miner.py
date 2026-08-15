@@ -3,13 +3,37 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts import natural_expression_candidate_miner as miner
 from utils import natural_expression_candidates as candidate_core
+
+
+def test_compatibility_script_runs_directly_without_pythonpath(tmp_path: Path):
+    script = (
+        Path(__file__).parents[2] / "scripts" / "natural_expression_candidate_miner.py"
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage: natural_expression_candidate_miner.py" in result.stdout
+    assert "--input INPUT" in result.stdout
 
 
 def _config(**overrides) -> miner.MiningConfig:

@@ -29,7 +29,7 @@ class SQLChatMessageHistory:
 
         id          INTEGER PRIMARY KEY AUTOINCREMENT
         session_id  TEXT
-        message     TEXT   -- JSON-serialized {"type": ..., "data": {"content": ...}}
+        message     TEXT   -- JSON-serialized {"type": ..., "data": {...}}
     """
 
     _engine_cache: dict = {}
@@ -56,7 +56,10 @@ class SQLChatMessageHistory:
 
     def _serialize(self, message: Any) -> str:
         if isinstance(message, BaseMessage):
-            return _json.dumps({"type": message.type, "data": {"content": message.content}}, ensure_ascii=False)
+            data = {"content": message.content}
+            if message.additional_kwargs:
+                data["additional_kwargs"] = dict(message.additional_kwargs)
+            return _json.dumps({"type": message.type, "data": data}, ensure_ascii=False)
         if isinstance(message, dict):
             return _json.dumps(message, ensure_ascii=False)
         return _json.dumps({"type": "system", "data": {"content": str(message)}}, ensure_ascii=False)

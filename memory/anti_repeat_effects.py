@@ -588,88 +588,7 @@ class AntiRepeatEffectStore:
             payload = self._load_unlocked(name, now)
             self._prune(payload, now)
             bucket = payload["daily_buckets"].setdefault(_utc_day(now), _empty_bucket())
-            counters = bucket.setdefault("counters", _empty_counters())
-            counters["detected"] = int(counters.get("detected", 0)) + 1
-            if decision.action == "regenerate":
-                counters["regen_triggered"] = (
-                    int(counters.get("regen_triggered", 0)) + 1
-                )
-            if decision.outcome == "regen_guard_passed":
-                counters["regen_guard_passed"] = (
-                    int(counters.get("regen_guard_passed", 0)) + 1
-                )
-            if decision.outcome in _BLOCKED_OUTCOMES:
-                counters["blocked_delivery"] = (
-                    int(counters.get("blocked_delivery", 0)) + 1
-                )
-            if decision.outcome == "break_reminder_suppressed":
-                counters["break_reminder_suppressed"] = (
-                    int(counters.get("break_reminder_suppressed", 0)) + 1
-                )
-            if decision.outcome == "abandoned_user_interaction":
-                counters["abandoned_user_interaction"] = (
-                    int(counters.get("abandoned_user_interaction", 0)) + 1
-                )
-
-            reason_counts = bucket.setdefault("reason_counts", {})
-            for reason in dict.fromkeys(decision.reasons):
-                reason_counts[reason] = int(reason_counts.get(reason, 0)) + 1
-
-            bm25 = bucket.setdefault("bm25", {})
-            if (
-                decision.score_before is not None
-                and decision.score_after is not None
-                and decision.score_before > 0
-            ):
-                bm25["before_sum"] = float(bm25.get("before_sum", 0.0)) + float(
-                    decision.score_before
-                )
-                bm25["after_sum"] = float(bm25.get("after_sum", 0.0)) + max(
-                    0.0, float(decision.score_after)
-                )
-                bm25["pair_count"] = int(bm25.get("pair_count", 0)) + 1
-
-            signature = decision.signature
-            patterns = bucket.setdefault("patterns", {})
-            if signature is None:
-                counters["unattributed"] = int(counters.get("unattributed", 0)) + 1
-            else:
-                pattern_id = hashlib.sha256(
-                    f"{signature.language}\0{signature.normalized_phrase}".encode(
-                        "utf-8"
-                    )
-                ).hexdigest()[:16]
-                pattern = patterns.get(pattern_id)
-                if pattern is None and len(patterns) >= MAX_PATTERNS_PER_DAY:
-                    counters["unattributed"] = int(counters.get("unattributed", 0)) + 1
-                else:
-                    if pattern is None:
-                        pattern = {
-                            "phrase": signature.phrase,
-                            "normalized_phrase": signature.normalized_phrase,
-                            "language": signature.language,
-                            "reasons": {},
-                            "detected_count": 0,
-                            "regen_triggered_count": 0,
-                            "regen_guard_passed_count": 0,
-                            "blocked_count": 0,
-                            "last_seen_at": now,
-                        }
-                        patterns[pattern_id] = pattern
-                    pattern["detected_count"] += 1
-                    if decision.action == "regenerate":
-                        pattern["regen_triggered_count"] += 1
-                    if decision.outcome == "regen_guard_passed":
-                        pattern["regen_guard_passed_count"] += 1
-                    if decision.outcome in _BLOCKED_OUTCOMES:
-                        pattern["blocked_count"] += 1
-                    pattern["last_seen_at"] = max(
-                        float(pattern.get("last_seen_at", 0.0)), now
-                    )
-                    for reason in dict.fromkeys(decision.reasons):
-                        pattern["reasons"][reason] = (
-                            int(pattern["reasons"].get(reason, 0)) + 1
-                        )
+            _apply_decision_to_bucket(bucket, decision, now)
 
             if decision.response_id:
                 response_buckets = payload.setdefault("response_buckets", {})
@@ -817,90 +736,14 @@ class AntiRepeatEffectStore:
                 if cutoff <= day <= _utc_day(timestamp) and isinstance(bucket, dict)
             ]
 
-        totals = _empty_counters()
-        reason_totals = {reason: 0 for reason in sorted(_VALID_REASONS)}
-        before_sum = after_sum = 0.0
-        pair_count = 0
-        patterns_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-        for bucket in buckets:
-            for key, value in bucket.get("counters", {}).items():
-                if key in totals:
-                    totals[key] += _as_int(value)
-            for key, value in bucket.get("reason_counts", {}).items():
-                if key in reason_totals:
-                    reason_totals[key] += _as_int(value)
-            bm25 = bucket.get("bm25", {})
-            before_sum += _as_float(bm25.get("before_sum"))
-            after_sum += _as_float(bm25.get("after_sum"))
-            pair_count += _as_int(bm25.get("pair_count"))
-            for pattern in bucket.get("patterns", {}).values():
-                if not isinstance(pattern, dict):
-                    continue
-                key = (
-                    str(pattern.get("language", "")),
-                    str(pattern.get("normalized_phrase", "")),
-                )
-                if not all(key):
-                    continue
-                merged = patterns_by_key.setdefault(
-                    key,
-                    {
-                        "phrase": str(pattern.get("phrase", "")),
-                        "normalized_phrase": key[1],
-                        "language": key[0],
-                        "reasons": {},
-                        "detected_count": 0,
-                        "regen_triggered_count": 0,
-                        "regen_guard_passed_count": 0,
-                        "blocked_count": 0,
-                        "last_seen_at": 0.0,
-                    },
-                )
-                for field in (
-                    "detected_count",
-                    "regen_triggered_count",
-                    "regen_guard_passed_count",
-                    "blocked_count",
-                ):
-                    merged[field] += _as_int(pattern.get(field))
-                merged["last_seen_at"] = max(
-                    merged["last_seen_at"],
-                    _as_float(pattern.get("last_seen_at")),
-                )
-                for reason, count in pattern.get("reasons", {}).items():
-                    if reason in _VALID_REASONS:
-                        merged["reasons"][reason] = int(
-                            merged["reasons"].get(reason, 0)
-                        ) + _as_int(count)
-
-        average_before = before_sum / pair_count if pair_count else 0.0
-        average_after = after_sum / pair_count if pair_count else 0.0
-        reduction_ratio = (
-            max(0.0, min(1.0, 1.0 - after_sum / before_sum)) if before_sum > 0 else 0.0
-        )
-        patterns = sorted(
-            patterns_by_key.values(),
-            key=lambda item: (
-                -item["blocked_count"],
-                -item["detected_count"],
-                item["normalized_phrase"],
-            ),
-        )
-        return {
+        result = {
             "schema_version": SCHEMA_VERSION,
             "source_available": source_available,
             "started_at": float(payload.get("started_at", timestamp)),
             "period_days": days,
-            "totals": totals,
-            "reason_counts": reason_totals,
-            "bm25": {
-                "pair_count": pair_count,
-                "average_before": round(average_before, 4),
-                "average_after": round(average_after, 4),
-                "reduction_ratio": round(reduction_ratio, 4),
-            },
-            "patterns": patterns,
         }
+        result.update(_summarize_effect_buckets(buckets))
+        return result
 
     def query_effects_for_responses(
         self,
