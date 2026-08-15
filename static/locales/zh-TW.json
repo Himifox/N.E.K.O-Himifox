@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "已被規則涵蓋：{{rules}}",
         "repetitionInsightsIgnore": "從本次結果隱藏",
         "repetitionInsightsFound": "發現 {{count}} 個重複片段候選。",
+        "repetitionInsightsFoundTruncated": "發現 {{count}} 個重複片段候選，僅顯示前 {{shown}} 個。",
         "repetitionInsightsError": "本機分析暫時無法使用，請重試。",
         "repetitionInsightsExportWarning": "此檔案僅供你自行向維護者回饋，可能包含私人措辭；匯出不會改變角色之後的回覆，分享前請先檢查。",
         "repetitionInsightsExportEmpty": "沒有可匯出的候選。",

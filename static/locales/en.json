@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "Covered by rules: {{rules}}",
         "repetitionInsightsIgnore": "Hide from this result",
         "repetitionInsightsFound": "Found {{count}} repeated fragments.",
+        "repetitionInsightsFoundTruncated": "Found {{count}} repeated fragments; showing the top {{shown}}.",
         "repetitionInsightsError": "Local analysis is unavailable. Please try again.",
         "repetitionInsightsExportWarning": "This optional feedback file may contain private wording. Exporting it will not change future replies. Review it before sharing.",
         "repetitionInsightsExportEmpty": "There are no candidates to export.",

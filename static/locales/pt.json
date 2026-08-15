@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "Coberto pelas regras: {{rules}}",
         "repetitionInsightsIgnore": "Ocultar deste resultado",
         "repetitionInsightsFound": "Foram encontrados {{count}} fragmentos repetidos.",
+        "repetitionInsightsFoundTruncated": "Foram encontrados {{count}} fragmentos repetidos; mostrando os {{shown}} primeiros.",
         "repetitionInsightsError": "A análise local não está disponível. Tente novamente.",
         "repetitionInsightsExportWarning": "Este arquivo opcional de feedback pode conter texto privado. Exportá-lo não altera respostas futuras; revise-o antes de compartilhar.",
         "repetitionInsightsExportEmpty": "Não há candidatos para exportar.",

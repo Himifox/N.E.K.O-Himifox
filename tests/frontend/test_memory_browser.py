@@ -409,7 +409,9 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
                 "summary": {
                     "source_available": True,
                     "assistant_message_count": 50,
-                    "candidate_count": 2,
+                    "candidate_count": 3,
+                    "returned_candidate_count": 2,
+                    "candidates_truncated": True,
                 },
                 "effectiveness": {
                     "schema_version": "anti-repeat-effects/v1",
@@ -524,6 +526,9 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     mock_page.locator("#memory-insights-limit").select_option("50")
     mock_page.locator("#memory-insights-analyze").click()
     expect(mock_page.locator(".memory-insights-card")).to_have_count(2)
+    expect(mock_page.locator("#memory-insights-status")).to_have_text(
+        "找到 3 个重复说法，仅显示前 2 个。"
+    )
     assert requests == [
         {
             "character_name": "测试猫娘",
@@ -623,7 +628,14 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
         "natural-expression-candidates-测试猫娘-en.json"
     )
     assert [item["phrase"] for item in exported["candidates"]] == ["silver morning"]
-    assert exported["summary"]["candidate_count"] == 1
+    assert exported["summary"] == {
+        "assistant_message_count": 50,
+        "candidate_count": 3,
+        "candidates_truncated": True,
+        "exported_candidate_count": 1,
+        "returned_candidate_count": 2,
+        "source_available": True,
+    }
     assert "user text" not in json.dumps(exported)
 
     close_button = mock_page.locator(

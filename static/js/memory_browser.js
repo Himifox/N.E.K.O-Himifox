@@ -1446,11 +1446,19 @@
                     'At least three persisted assistant messages are required.'
                 );
             } else {
+                const candidatesTruncated = summary.candidates_truncated === true;
                 setRepetitionInsightsStatus(
-                    'memory.repetitionInsightsFound',
-                    'Found {{count}} repeated fragments.',
+                    candidatesTruncated
+                        ? 'memory.repetitionInsightsFoundTruncated'
+                        : 'memory.repetitionInsightsFound',
+                    candidatesTruncated
+                        ? 'Found {{count}} repeated fragments; showing the top {{shown}}.'
+                        : 'Found {{count}} repeated fragments.',
                     '',
-                    { count: Number(summary.candidate_count || 0) }
+                    {
+                        count: Number(summary.candidate_count || 0),
+                        shown: Number(summary.returned_candidate_count || report.candidates.length)
+                    }
                 );
             }
         } catch (error) {
@@ -1542,7 +1550,7 @@
         ))) return;
 
         const summary = Object.assign({}, repetitionInsightsReport.summary || {}, {
-            candidate_count: candidates.length
+            exported_candidate_count: candidates.length
         });
         const artifact = {
             artifact_type: repetitionInsightsReport.artifact_type,

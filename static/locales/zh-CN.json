@@ -1826,6 +1826,7 @@
         "repetitionInsightsCoveredBy": "规则：{{rules}}",
         "repetitionInsightsIgnore": "隐藏",
         "repetitionInsightsFound": "找到 {{count}} 个重复说法。",
+        "repetitionInsightsFoundTruncated": "找到 {{count}} 个重复说法，仅显示前 {{shown}} 个。",
         "repetitionInsightsError": "暂时无法检查本地回复，请重试。",
         "repetitionInsightsExportWarning": "导出的文件可能包含你的私人措辞。它只用于查看或反馈，不会改变角色以后的回复；分享前请先检查。",
         "repetitionInsightsExportEmpty": "没有需要导出的说法。",
