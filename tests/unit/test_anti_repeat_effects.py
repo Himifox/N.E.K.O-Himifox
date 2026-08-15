@@ -143,3 +143,56 @@ def test_storage_contains_fragment_but_not_rejected_draft(tmp_path):
 def test_query_rejects_unsupported_period(tmp_path):
     with pytest.raises(ValueError, match="effect days"):
         _store(tmp_path).query_effects("Neko", 14)
+
+
+def _record_delivered_response(store, response_id, timestamp):
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="regenerate",
+            outcome="regen_guard_passed",
+            response_id=response_id,
+        ),
+        now=timestamp,
+    )
+    staged = store.stage_response_delivered("Neko", response_id, now=timestamp)
+    store._flush_snapshot(*staged)
+
+
+def test_response_query_availability_requires_a_link_in_requested_slice(tmp_path):
+    store = _store(tmp_path)
+    timestamp = 1_700_000_000.0
+    _record_delivered_response(store, "outside-slice", timestamp)
+
+    result = store.query_effects_for_responses(
+        "Neko",
+        ["requested-response"],
+        25,
+        now=timestamp,
+    )
+
+    assert result["source_available"] is False
+    assert result["linked_message_count"] == 0
+    assert result["totals"]["detected"] == 0
+
+
+def test_response_query_prunes_expired_records_and_persists_snapshot(tmp_path):
+    store = _store(tmp_path)
+    timestamp = 1_700_000_000.0
+    _record_delivered_response(store, "expired-response", timestamp)
+
+    result = store.query_effects_for_responses(
+        "Neko",
+        ["expired-response"],
+        100,
+        now=timestamp + 121 * 24 * 60 * 60,
+    )
+
+    payload = json.loads(
+        (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    assert result["source_available"] is False
+    assert result["linked_message_count"] == 0
+    assert payload["response_buckets"] == {}
