@@ -655,9 +655,12 @@ def build_report(
     input_record_count: int,
     config: MiningConfig,
     rules_by_language: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
+    message_count_threshold: int = 1,
 ) -> dict[str, object]:
     """Build a deterministic, review-only candidate report."""
     config.validate()
+    if message_count_threshold < 1:
+        raise CandidateMinerError("message_count_threshold must be at least 1")
     current_rules = (
         load_current_rules() if rules_by_language is None else rules_by_language
     )
@@ -681,6 +684,8 @@ def build_report(
     match_cache: dict[tuple[str, str, int], tuple[tuple[int, int], ...]] = {}
     for (language, normalized), candidate_stats in stats.items():
         if candidate_stats.occurrence_count < config.threshold:
+            continue
+        if len(candidate_stats.source_lines) < message_count_threshold:
             continue
         covered_by, all_occurrences_covered = _coverage_result(
             language,
@@ -759,12 +764,9 @@ def build_user_review_report(
         input_record_count=len(messages),
         config=config,
         rules_by_language=rules_by_language,
+        message_count_threshold=message_count_threshold,
     )
-    candidates = [
-        candidate
-        for candidate in maintainer_report["candidates"]
-        if candidate["message_count"] >= message_count_threshold
-    ]
+    candidates = maintainer_report["candidates"]
     parameters = dict(maintainer_report["parameters"])
     parameters["message_count_threshold"] = message_count_threshold
 

@@ -42,6 +42,26 @@ def test_sql_history_preserves_anti_repeat_response_id():
     }
 
 
+def test_sql_history_discards_unapproved_and_non_string_metadata():
+    history = SQLChatMessageHistory.__new__(SQLChatMessageHistory)
+
+    serialized = history._serialize(
+        AIMessage(
+            content="synthetic reply",
+            additional_kwargs={
+                "anti_repeat_response_id": object(),
+                "provider_payload": object(),
+                "private_note": "must not persist",
+            },
+        )
+    )
+
+    assert json.loads(serialized) == {
+        "type": "ai",
+        "data": {"content": "synthetic reply"},
+    }
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_internal_repetition_insights_returns_review_only_candidates():

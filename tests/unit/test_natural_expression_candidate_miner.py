@@ -707,6 +707,25 @@ def test_user_review_requires_three_distinct_assistant_messages():
     }
 
 
+def test_maintainer_report_keeps_occurrence_only_compatibility():
+    messages = [
+        candidate_core.SourceMessage(
+            "en",
+            "quiet lantern. quiet lantern. quiet lantern",
+            1,
+        )
+    ]
+
+    report = candidate_core.build_report(
+        messages,
+        input_record_count=1,
+        config=_config(),
+        rules_by_language={},
+    )
+
+    assert _candidate(report, "quiet lantern")["message_count"] == 1
+
+
 def test_user_review_rejects_invalid_distinct_message_threshold():
     with pytest.raises(
         candidate_core.CandidateMinerError,
