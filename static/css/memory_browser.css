@@ -2790,6 +2790,33 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     white-space: nowrap;
 }
 
+.memory-insights-target strong[hidden] {
+    display: none;
+}
+
+.memory-insights-target select {
+    min-width: 0;
+    width: min(220px, 68%);
+    min-height: 34px;
+    padding: 5px 30px 5px 9px;
+    border: 1px solid var(--memory-border);
+    border-radius: var(--memory-radius-control);
+    background: var(--memory-surface);
+    color: var(--memory-text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.memory-insights-target select:focus-visible {
+    outline: 2px solid var(--memory-accent-border);
+    outline-offset: 1px;
+}
+
+.memory-insights-target select:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
 .memory-insights-fields {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

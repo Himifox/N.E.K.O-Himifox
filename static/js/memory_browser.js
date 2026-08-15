@@ -987,6 +987,51 @@
                 : '');
     }
 
+    function repetitionInsightCharacterEntries() {
+        return Array.from(document.querySelectorAll('#memory-file-list .cat-btn[data-filename]'))
+            .map(function (button) {
+                return {
+                    name: String(button.dataset.catname || '').trim(),
+                    filename: String(button.dataset.filename || '').trim()
+                };
+            })
+            .filter(function (entry) { return entry.name && entry.filename; });
+    }
+
+    function syncRepetitionInsightsCharacterSelect() {
+        const select = document.getElementById('memory-insights-character-select');
+        if (!select) return;
+        const entries = repetitionInsightCharacterEntries();
+        if (currentCatName && !entries.some(function (entry) { return entry.name === currentCatName; })) {
+            entries.unshift({ name: currentCatName, filename: '' });
+        }
+        const noCharacterLabel = translate(
+            'memory.repetitionInsightsNoCharacter',
+            'No character selected'
+        );
+        const signature = JSON.stringify({ entries: entries, noCharacterLabel: noCharacterLabel });
+        if (select.dataset.entries !== signature) {
+            select.textContent = '';
+            if (!currentCatName) {
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = noCharacterLabel;
+                placeholder.disabled = true;
+                select.appendChild(placeholder);
+            }
+            entries.forEach(function (entry) {
+                const option = document.createElement('option');
+                option.value = entry.name;
+                option.dataset.filename = entry.filename;
+                option.textContent = entry.name;
+                select.appendChild(option);
+            });
+            select.dataset.entries = signature;
+        }
+        select.value = currentCatName || '';
+        select.disabled = repetitionInsightsBusy || !!window._memoryImportInProgress || !entries.length;
+    }
+
     function syncRepetitionInsightsControls() {
         const character = document.getElementById('memory-insights-character');
         if (character) {
@@ -996,6 +1041,7 @@
             );
             character.title = currentCatName || '';
         }
+        syncRepetitionInsightsCharacterSelect();
         const analyze = document.getElementById('memory-insights-analyze');
         const clear = document.getElementById('memory-insights-clear');
         const exportButton = document.getElementById('memory-insights-export');
@@ -1610,6 +1656,7 @@
     }
 
     function initRepetitionInsights() {
+        const character = document.getElementById('memory-insights-character-select');
         const language = document.getElementById('memory-insights-language');
         const limit = document.getElementById('memory-insights-limit');
         const effectDays = document.getElementById('memory-insights-effect-days');
@@ -1620,8 +1667,20 @@
         const query = document.getElementById('memory-insights-query');
         const coverage = document.getElementById('memory-insights-coverage-filter');
         const effectFilter = document.getElementById('memory-insights-effect-filter');
-        if (!language || !limit || !effectDays || !analyze || !clear
+        if (!character || !language || !limit || !effectDays || !analyze || !clear
             || !exportButton || !resetEffects || !query || !coverage || !effectFilter) return;
+        character.addEventListener('change', function () {
+            const option = character.options[character.selectedIndex];
+            const filename = option ? String(option.dataset.filename || '') : '';
+            const button = filename ? findMemoryRoleButton(filename) : null;
+            const listItem = button ? button.closest('li') : null;
+            if (!button || !listItem || character.value === currentCatName) {
+                syncRepetitionInsightsControls();
+                return;
+            }
+            requestMemoryFileSelection(filename, listItem, character.value);
+            syncRepetitionInsightsControls();
+        });
         language.value = repetitionInsightLanguageFromLocale();
         language.addEventListener('change', function () {
             repetitionInsightsLanguageTouched = true;
@@ -3065,6 +3124,8 @@
             }
         } catch (e) {
             ul.innerHTML = `<li style="color:#e74c3c; padding: 8px;">${window.t ? window.t('memory.loadFailed') : '加载失败'}</li>`;
+        } finally {
+            syncRepetitionInsightsCharacterSelect();
         }
     }
 
