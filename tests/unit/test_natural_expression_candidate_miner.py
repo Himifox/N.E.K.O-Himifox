@@ -259,6 +259,38 @@ def test_korean_single_token_is_not_double_counted_across_strategies():
     assert below_threshold["candidates"] == []
 
 
+def test_korean_word_candidates_stop_at_the_occurrence_cap(monkeypatch):
+    generated = 0
+    original_word_candidates = candidate_core._word_candidates
+
+    def counted_word_candidates(*args, **kwargs):
+        nonlocal generated
+        for candidate in original_word_candidates(*args, **kwargs):
+            generated += 1
+            yield candidate
+
+    monkeypatch.setattr(candidate_core, "_word_candidates", counted_word_candidates)
+    message = candidate_core.SourceMessage(
+        "ko",
+        " ".join(["조용한"] * 20),
+        1,
+    )
+
+    with pytest.raises(
+        candidate_core.CandidateMinerError,
+        match="assistant history exceeds local analysis limit",
+    ):
+        candidate_core.build_report(
+            [message],
+            input_record_count=1,
+            config=_config(),
+            rules_by_language={},
+            max_occurrences=3,
+        )
+
+    assert generated == 4
+
+
 def test_code_urls_and_template_noise_are_protected():
     text = (
         "`hidden phrase` https://example.test/hidden-phrase\n"
