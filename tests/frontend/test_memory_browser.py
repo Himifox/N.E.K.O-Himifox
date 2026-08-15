@@ -498,15 +498,19 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
 
     _open_auxiliary_panel(mock_page, "insights")
     assert requests == []
+    expect(mock_page.locator(".memory-insights-description")).to_be_visible()
     expect(mock_page.locator(".memory-insights-description")).to_have_text(
         "检查已发送回复中的重复说法及防复读效果。"
     )
+    expect(mock_page.locator(".memory-insights-field-help")).to_be_visible()
     expect(mock_page.locator(".memory-insights-field-help")).to_have_text(
         "请选择回复实际使用的语言（不会自动识别）。"
     )
+    expect(mock_page.locator(".memory-insights-note")).to_be_visible()
     expect(mock_page.locator(".memory-insights-note")).to_have_text(
         "仅在本机读取助手回复；不读取用户消息、不调用模型、不修改规则。"
     )
+    expect(mock_page.locator(".memory-insights-feedback-note")).to_be_visible()
     expect(mock_page.locator(".memory-insights-feedback-note")).to_have_text(
         "导出只保存待检查说法，不会改变后续回复。"
     )
