@@ -154,7 +154,7 @@ def test_query_missing_store_does_not_create_character_directory(tmp_path):
     assert not (tmp_path / "Missing").exists()
 
 
-def test_query_sanitizes_non_finite_persisted_effect_values(tmp_path):
+def test_query_sanitizes_invalid_persisted_effect_values(tmp_path):
     effect_dir = tmp_path / "Neko"
     effect_dir.mkdir()
     (effect_dir / "anti_repeat_effects.json").write_text(
@@ -184,7 +184,7 @@ def test_query_sanitizes_non_finite_persisted_effect_values(tmp_path):
                 },
                 "response_buckets": {
                     "response": {
-                        "created_at": "inf",
+                        "created_at": 10**400,
                         "delivered_at": "nan",
                         "bucket": {},
                     }
