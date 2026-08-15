@@ -110,6 +110,35 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_internal_repetition_insights_accepts_full_profile_name_length():
+    from app.memory_server import routes
+
+    character_name = "a" * 60
+    history = SimpleNamespace(
+        messages=[],
+        source_available=True,
+        skipped_row_count=0,
+    )
+    time_manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
+    )
+
+    with patch.object(routes.runtime, "time_manager", time_manager):
+        result = await routes.repetition_insights(
+            character_name,
+            routes.RepetitionInsightsRequest(language="en"),
+        )
+
+    assert result["success"] is True
+    assert result["character_name"] == character_name
+    time_manager.aretrieve_latest_assistant_texts.assert_awaited_once_with(
+        character_name,
+        100,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_internal_repetition_insights_requires_initialized_time_manager():
     from app.memory_server import routes
 

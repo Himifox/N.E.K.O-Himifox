@@ -67,6 +67,7 @@ from utils.natural_expression_candidates import (
 
 from . import gates, locale_state, outbox_infra, post_turn, review, runtime
 from ._shared import logger, validate_lanlan_name
+from utils.character_name import PROFILE_NAME_MAX_UNITS, validate_character_name
 from .rows import _has_human_messages
 from .runtime import app
 
@@ -89,7 +90,14 @@ class RepetitionInsightsRequest(BaseModel):
 @app.post("/internal/memory/{lanlan_name}/repetition_insights")
 async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
     """Analyze persisted assistant text without models, writes, or egress."""
-    lanlan_name = validate_lanlan_name(lanlan_name)
+    name_validation = validate_character_name(
+        lanlan_name,
+        allow_dots=True,
+        max_units=PROFILE_NAME_MAX_UNITS,
+    )
+    if name_validation.code is not None:
+        raise HTTPException(status_code=400, detail="Invalid lanlan_name")
+    lanlan_name = name_validation.normalized
     if runtime.time_manager is None:
         raise HTTPException(
             status_code=503,
