@@ -144,6 +144,11 @@ def _is_safe_containment_phrase(language: str, phrase: str) -> bool:
     return len(phrase) >= 4 and len(phrase.split()) >= 2
 
 
+def _repetition_association_language(language: str) -> str:
+    """Use one comparison key for legacy Simplified Chinese effect records."""
+    return "zh-CN" if language in {"zh", "zh-CN"} else language
+
+
 def _associate_repetition_effects(
     candidates: list,
     patterns: list,
@@ -156,8 +161,16 @@ def _associate_repetition_effects(
         candidate_phrase = candidate.get("normalized_phrase")
         if not isinstance(language, str) or not isinstance(candidate_phrase, str):
             continue
+        association_language = _repetition_association_language(language)
         for pattern in patterns:
-            if not isinstance(pattern, dict) or pattern.get("language") != language:
+            if not isinstance(pattern, dict):
+                continue
+            pattern_language = pattern.get("language")
+            if (
+                not isinstance(pattern_language, str)
+                or _repetition_association_language(pattern_language)
+                != association_language
+            ):
                 continue
             effect_phrase = pattern.get("normalized_phrase")
             if not isinstance(effect_phrase, str):
