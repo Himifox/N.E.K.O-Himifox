@@ -518,7 +518,8 @@ class AntiRepeatEffectStore:
         return self._cache[name]
 
     @staticmethod
-    def _prune(payload: dict[str, Any], now: float) -> None:
+    def _prune(payload: dict[str, Any], now: float) -> bool:
+        changed = False
         cutoff = (
             datetime.fromtimestamp(now, timezone.utc).date()
             - timedelta(days=RETENTION_DAYS - 1)
@@ -527,6 +528,7 @@ class AntiRepeatEffectStore:
         for day in list(buckets):
             if day < cutoff:
                 del buckets[day]
+                changed = True
         response_buckets = payload.get("response_buckets", {})
         cutoff_timestamp = now - RETENTION_DAYS * 24 * 60 * 60
         for response_key, response in list(response_buckets.items()):
@@ -539,6 +541,7 @@ class AntiRepeatEffectStore:
                 < cutoff_timestamp
             ):
                 del response_buckets[response_key]
+                changed = True
         if len(response_buckets) > MAX_RESPONSE_BUCKETS:
             oldest = sorted(
                 response_buckets,
@@ -549,6 +552,8 @@ class AntiRepeatEffectStore:
             )
             for response_key in oldest[: len(response_buckets) - MAX_RESPONSE_BUCKETS]:
                 del response_buckets[response_key]
+                changed = True
+        return changed
 
     def _stage_unlocked(self, name: str) -> tuple[str, dict[str, Any], int]:
         seq = self._staged_seq.get(name, 0) + 1
@@ -726,6 +731,7 @@ class AntiRepeatEffectStore:
         )
         with self._get_lock(name):
             payload = self._load_unlocked(name, timestamp)
+            staged = self._stage_unlocked(name) if self._prune(payload, timestamp) else None
             cutoff = (
                 datetime.fromtimestamp(timestamp, timezone.utc).date()
                 - timedelta(days=days - 1)
@@ -735,6 +741,9 @@ class AntiRepeatEffectStore:
                 for day, bucket in payload.get("daily_buckets", {}).items()
                 if cutoff <= day <= _utc_day(timestamp) and isinstance(bucket, dict)
             ]
+
+        if staged is not None:
+            self._flush_snapshot(*staged)
 
         result = {
             "schema_version": SCHEMA_VERSION,
@@ -765,20 +774,24 @@ class AntiRepeatEffectStore:
         }
         with self._get_lock(name):
             payload = self._load_unlocked(name, timestamp)
+            staged = self._stage_unlocked(name) if self._prune(payload, timestamp) else None
             response_buckets = payload.get("response_buckets", {})
-            source_available = bool(response_buckets)
             linked = [
                 response_buckets[key]
                 for key in keys
                 if isinstance(response_buckets.get(key), dict)
                 and _as_float(response_buckets[key].get("delivered_at")) > 0
             ]
+            source_available = bool(linked)
             buckets = [
                 response["bucket"]
                 for response in linked
                 if isinstance(response.get("bucket"), dict)
             ]
             started_at = float(payload.get("started_at", timestamp))
+
+        if staged is not None:
+            self._flush_snapshot(*staged)
 
         result = {
             "schema_version": SCHEMA_VERSION,
