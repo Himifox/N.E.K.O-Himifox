@@ -1091,7 +1091,7 @@ def test_memory_browser_header_actions_fit_all_localized_labels_without_clipping
         "ko": ["가이드", "반복 분석", "로그 내보내기", "설정"],
         "pt": ["Guia", "Repetições", "Exportar logs", "Configurações"],
         "ru": ["Справка", "Повторы", "Экспорт логов", "Настройки"],
-        "zh-CN": ["新手引导", "重复洞察", "导出日志", "记忆设置"],
+        "zh-CN": ["新手引导", "重复表达", "导出日志", "记忆设置"],
         "zh-TW": ["新手引導", "重複洞察", "匯出日誌", "記憶設定"],
     }
     geometry_by_locale = {}
