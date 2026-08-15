@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "Sem registro correspondente",
         "repetitionInsightsEffectivenessTitle": "Tratamento antirrepetição nas últimas {{count}} respostas",
         "repetitionInsightsNoEffects": "Estas respostas não têm registros antirrepetição associados.",
+        "repetitionInsightsEffectsUnavailable": "Não foi possível ler os registros antirrepetição. Tente verificar novamente.",
         "repetitionInsightsRemaining": "Expressões repetidas nas respostas finais",
         "repetitionInsightsDetected": "Repetições detectadas",
         "repetitionInsightsRegenerated": "Regenerações acionadas",

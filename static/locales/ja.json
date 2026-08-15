@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "一致する処理履歴なし",
         "repetitionInsightsEffectivenessTitle": "最近の{{count}}件の返信に対する重複防止処理",
         "repetitionInsightsNoEffects": "これらの返信に関連付けられた重複防止記録はありません。",
+        "repetitionInsightsEffectsUnavailable": "重複防止記録を読み込めませんでした。もう一度確認してください。",
         "repetitionInsightsRemaining": "最終返信に残る反復表現",
         "repetitionInsightsDetected": "反復を検出",
         "repetitionInsightsRegenerated": "再生成を実行",

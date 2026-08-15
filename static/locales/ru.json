@@ -1850,6 +1850,7 @@
         "repetitionInsightsFilterResidual": "Нет совпадающей записи",
         "repetitionInsightsEffectivenessTitle": "Защита от повторов в последних {{count}} ответах",
         "repetitionInsightsNoEffects": "Для этих ответов нет связанных записей защиты от повторов.",
+        "repetitionInsightsEffectsUnavailable": "Не удалось прочитать записи защиты от повторов. Повторите проверку.",
         "repetitionInsightsRemaining": "Повторяющиеся выражения в итоговых ответах",
         "repetitionInsightsDetected": "Обнаружено повторов",
         "repetitionInsightsRegenerated": "Запущено перегенераций",
