@@ -35,6 +35,7 @@ logger = get_module_logger(__name__, "Memory")
 SCHEMA_VERSION = "anti-repeat-effects/v1"
 RETENTION_DAYS = 120
 MAX_PATTERNS_PER_DAY = 64
+MAX_RESPONSE_BUCKETS = 512
 MAX_PHRASE_CHARS = 48
 _DEFAULT_KEY = "default"
 _BLOCKED_OUTCOMES = frozenset(
@@ -103,6 +104,7 @@ class AntiRepeatDecision:
     signature: RepeatSignature | None = None
     score_before: float | None = None
     score_after: float | None = None
+    response_id: str | None = None
 
     def validate(self) -> None:
         if self.source not in _VALID_SOURCES:
@@ -115,6 +117,8 @@ class AntiRepeatDecision:
             reason not in _VALID_REASONS for reason in self.reasons
         ):
             raise ValueError("unsupported anti-repeat decision reason")
+        if self.response_id is not None and not (0 < len(self.response_id) <= 128):
+            raise ValueError("invalid anti-repeat response ID")
 
 
 def build_repeat_signature(
@@ -158,7 +162,12 @@ def _default_payload(now: float) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "started_at": now,
         "daily_buckets": {},
+        "response_buckets": {},
     }
+
+
+def _response_key(response_id: str) -> str:
+    return hashlib.sha256(response_id.encode("utf-8")).hexdigest()[:24]
 
 
 def _empty_counters() -> dict[str, int]:
@@ -253,6 +262,167 @@ def _normalize_bucket(raw: Any) -> dict[str, Any]:
     return bucket
 
 
+def _apply_decision_to_bucket(
+    bucket: dict[str, Any],
+    decision: AntiRepeatDecision,
+    now: float,
+) -> None:
+    """Apply one decision to a response-scoped aggregate bucket."""
+    counters = bucket.setdefault("counters", _empty_counters())
+    counters["detected"] = int(counters.get("detected", 0)) + 1
+    if decision.action == "regenerate":
+        counters["regen_triggered"] = int(counters.get("regen_triggered", 0)) + 1
+    if decision.outcome == "regen_guard_passed":
+        counters["regen_guard_passed"] = int(counters.get("regen_guard_passed", 0)) + 1
+    if decision.outcome in _BLOCKED_OUTCOMES:
+        counters["blocked_delivery"] = int(counters.get("blocked_delivery", 0)) + 1
+    if decision.outcome == "break_reminder_suppressed":
+        counters["break_reminder_suppressed"] = (
+            int(counters.get("break_reminder_suppressed", 0)) + 1
+        )
+    if decision.outcome == "abandoned_user_interaction":
+        counters["abandoned_user_interaction"] = (
+            int(counters.get("abandoned_user_interaction", 0)) + 1
+        )
+
+    reason_counts = bucket.setdefault("reason_counts", {})
+    for reason in dict.fromkeys(decision.reasons):
+        reason_counts[reason] = int(reason_counts.get(reason, 0)) + 1
+
+    bm25 = bucket.setdefault("bm25", {})
+    if (
+        decision.score_before is not None
+        and decision.score_after is not None
+        and decision.score_before > 0
+    ):
+        bm25["before_sum"] = float(bm25.get("before_sum", 0.0)) + float(
+            decision.score_before
+        )
+        bm25["after_sum"] = float(bm25.get("after_sum", 0.0)) + max(
+            0.0, float(decision.score_after)
+        )
+        bm25["pair_count"] = int(bm25.get("pair_count", 0)) + 1
+
+    signature = decision.signature
+    patterns = bucket.setdefault("patterns", {})
+    if signature is None:
+        counters["unattributed"] = int(counters.get("unattributed", 0)) + 1
+        return
+    pattern_id = hashlib.sha256(
+        f"{signature.language}\0{signature.normalized_phrase}".encode("utf-8")
+    ).hexdigest()[:16]
+    pattern = patterns.get(pattern_id)
+    if pattern is None and len(patterns) >= MAX_PATTERNS_PER_DAY:
+        counters["unattributed"] = int(counters.get("unattributed", 0)) + 1
+        return
+    if pattern is None:
+        pattern = {
+            "phrase": signature.phrase,
+            "normalized_phrase": signature.normalized_phrase,
+            "language": signature.language,
+            "reasons": {},
+            "detected_count": 0,
+            "regen_triggered_count": 0,
+            "regen_guard_passed_count": 0,
+            "blocked_count": 0,
+            "last_seen_at": now,
+        }
+        patterns[pattern_id] = pattern
+    pattern["detected_count"] += 1
+    if decision.action == "regenerate":
+        pattern["regen_triggered_count"] += 1
+    if decision.outcome == "regen_guard_passed":
+        pattern["regen_guard_passed_count"] += 1
+    if decision.outcome in _BLOCKED_OUTCOMES:
+        pattern["blocked_count"] += 1
+    pattern["last_seen_at"] = max(float(pattern.get("last_seen_at", 0.0)), now)
+    for reason in dict.fromkeys(decision.reasons):
+        pattern["reasons"][reason] = int(pattern["reasons"].get(reason, 0)) + 1
+
+
+def _summarize_effect_buckets(buckets: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    totals = _empty_counters()
+    reason_totals = {reason: 0 for reason in sorted(_VALID_REASONS)}
+    before_sum = after_sum = 0.0
+    pair_count = 0
+    patterns_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for bucket in buckets:
+        for key, value in bucket.get("counters", {}).items():
+            if key in totals:
+                totals[key] += _as_int(value)
+        for key, value in bucket.get("reason_counts", {}).items():
+            if key in reason_totals:
+                reason_totals[key] += _as_int(value)
+        bm25 = bucket.get("bm25", {})
+        before_sum += _as_float(bm25.get("before_sum"))
+        after_sum += _as_float(bm25.get("after_sum"))
+        pair_count += _as_int(bm25.get("pair_count"))
+        for pattern in bucket.get("patterns", {}).values():
+            if not isinstance(pattern, dict):
+                continue
+            key = (
+                str(pattern.get("language", "")),
+                str(pattern.get("normalized_phrase", "")),
+            )
+            if not all(key):
+                continue
+            merged = patterns_by_key.setdefault(
+                key,
+                {
+                    "phrase": str(pattern.get("phrase", "")),
+                    "normalized_phrase": key[1],
+                    "language": key[0],
+                    "reasons": {},
+                    "detected_count": 0,
+                    "regen_triggered_count": 0,
+                    "regen_guard_passed_count": 0,
+                    "blocked_count": 0,
+                    "last_seen_at": 0.0,
+                },
+            )
+            for field in (
+                "detected_count",
+                "regen_triggered_count",
+                "regen_guard_passed_count",
+                "blocked_count",
+            ):
+                merged[field] += _as_int(pattern.get(field))
+            merged["last_seen_at"] = max(
+                merged["last_seen_at"],
+                _as_float(pattern.get("last_seen_at")),
+            )
+            for reason, count in pattern.get("reasons", {}).items():
+                if reason in _VALID_REASONS:
+                    merged["reasons"][reason] = int(
+                        merged["reasons"].get(reason, 0)
+                    ) + _as_int(count)
+
+    average_before = before_sum / pair_count if pair_count else 0.0
+    average_after = after_sum / pair_count if pair_count else 0.0
+    reduction_ratio = (
+        max(0.0, min(1.0, 1.0 - after_sum / before_sum)) if before_sum > 0 else 0.0
+    )
+    patterns = sorted(
+        patterns_by_key.values(),
+        key=lambda item: (
+            -item["blocked_count"],
+            -item["detected_count"],
+            item["normalized_phrase"],
+        ),
+    )
+    return {
+        "totals": totals,
+        "reason_counts": reason_totals,
+        "bm25": {
+            "pair_count": pair_count,
+            "average_before": round(average_before, 4),
+            "average_after": round(average_after, 4),
+            "reduction_ratio": round(reduction_ratio, 4),
+        },
+        "patterns": patterns,
+    }
+
+
 class AntiRepeatEffectStore:
     """Thread-safe daily aggregate store with ordered atomic snapshots."""
 
@@ -309,6 +479,22 @@ class AntiRepeatEffectStore:
                 for day, bucket in buckets.items()
                 if isinstance(day, str) and isinstance(bucket, dict)
             }
+        response_buckets = raw.get("response_buckets")
+        if isinstance(response_buckets, dict):
+            normalized_response_buckets: dict[str, dict[str, Any]] = {}
+            for response_key, raw_response in list(response_buckets.items())[
+                -MAX_RESPONSE_BUCKETS:
+            ]:
+                if not isinstance(response_key, str) or not isinstance(
+                    raw_response, dict
+                ):
+                    continue
+                normalized_response_buckets[response_key] = {
+                    "created_at": _as_float(raw_response.get("created_at")),
+                    "delivered_at": _as_float(raw_response.get("delivered_at")),
+                    "bucket": _normalize_bucket(raw_response.get("bucket")),
+                }
+            payload["response_buckets"] = normalized_response_buckets
         return payload
 
     def _read_payload_from_disk(self, name: str, now: float) -> dict[str, Any]:
@@ -341,6 +527,28 @@ class AntiRepeatEffectStore:
         for day in list(buckets):
             if day < cutoff:
                 del buckets[day]
+        response_buckets = payload.get("response_buckets", {})
+        cutoff_timestamp = now - RETENTION_DAYS * 24 * 60 * 60
+        for response_key, response in list(response_buckets.items()):
+            if (
+                not isinstance(response, dict)
+                or max(
+                    _as_float(response.get("created_at")),
+                    _as_float(response.get("delivered_at")),
+                )
+                < cutoff_timestamp
+            ):
+                del response_buckets[response_key]
+        if len(response_buckets) > MAX_RESPONSE_BUCKETS:
+            oldest = sorted(
+                response_buckets,
+                key=lambda key: max(
+                    _as_float(response_buckets[key].get("created_at")),
+                    _as_float(response_buckets[key].get("delivered_at")),
+                ),
+            )
+            for response_key in oldest[: len(response_buckets) - MAX_RESPONSE_BUCKETS]:
+                del response_buckets[response_key]
 
     def _stage_unlocked(self, name: str) -> tuple[str, dict[str, Any], int]:
         seq = self._staged_seq.get(name, 0) + 1
@@ -463,6 +671,23 @@ class AntiRepeatEffectStore:
                             int(pattern["reasons"].get(reason, 0)) + 1
                         )
 
+            if decision.response_id:
+                response_buckets = payload.setdefault("response_buckets", {})
+                response_bucket = response_buckets.setdefault(
+                    _response_key(decision.response_id),
+                    {
+                        "created_at": now,
+                        "delivered_at": 0.0,
+                        "bucket": _empty_bucket(),
+                    },
+                )
+                response_bucket["created_at"] = min(
+                    _as_float(response_bucket.get("created_at")) or now,
+                    now,
+                )
+                _apply_decision_to_bucket(response_bucket["bucket"], decision, now)
+                self._prune(payload, now)
+
             self._cache[name] = payload
             return self._stage_unlocked(name)
 
@@ -475,6 +700,30 @@ class AntiRepeatEffectStore:
     ) -> tuple[str, dict[str, Any], int]:
         timestamp = time.time() if now is None else float(now)
         return self._apply_decision(name, decision, timestamp)
+
+    def stage_response_delivered(
+        self,
+        name: str,
+        response_id: str,
+        *,
+        now: float | None = None,
+    ) -> tuple[str, dict[str, Any], int] | None:
+        """Mark a response-scoped aggregate as belonging to persisted output."""
+        if not isinstance(response_id, str) or not (0 < len(response_id) <= 128):
+            return None
+        timestamp = time.time() if now is None else float(now)
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            payload = self._load_unlocked(name, timestamp)
+            response = payload.get("response_buckets", {}).get(
+                _response_key(response_id)
+            )
+            if not isinstance(response, dict):
+                return None
+            response["delivered_at"] = timestamp
+            self._prune(payload, timestamp)
+            self._cache[name] = payload
+            return self._stage_unlocked(name)
 
     def stage_soft_hint(
         self,
@@ -653,6 +902,52 @@ class AntiRepeatEffectStore:
             "patterns": patterns,
         }
 
+    def query_effects_for_responses(
+        self,
+        name: str,
+        response_ids: Iterable[str],
+        assistant_message_limit: int,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate delivered effects linked to a bounded assistant history slice."""
+        if assistant_message_limit < 1:
+            raise ValueError("assistant message limit must be greater than zero")
+        timestamp = time.time() if now is None else float(now)
+        name = _resolve_name(name)
+        keys = {
+            _response_key(response_id)
+            for response_id in response_ids
+            if isinstance(response_id, str) and 0 < len(response_id) <= 128
+        }
+        with self._get_lock(name):
+            payload = self._load_unlocked(name, timestamp)
+            response_buckets = payload.get("response_buckets", {})
+            source_available = bool(response_buckets)
+            linked = [
+                response_buckets[key]
+                for key in keys
+                if isinstance(response_buckets.get(key), dict)
+                and _as_float(response_buckets[key].get("delivered_at")) > 0
+            ]
+            buckets = [
+                response["bucket"]
+                for response in linked
+                if isinstance(response.get("bucket"), dict)
+            ]
+            started_at = float(payload.get("started_at", timestamp))
+
+        result = {
+            "schema_version": SCHEMA_VERSION,
+            "source_available": source_available,
+            "started_at": started_at,
+            "scope_type": "assistant_messages",
+            "assistant_message_limit": assistant_message_limit,
+            "linked_message_count": len(linked),
+        }
+        result.update(_summarize_effect_buckets(buckets))
+        return result
+
     def clear_effects(self, name: str) -> None:
         timestamp = time.time()
         name = _resolve_name(name)
@@ -686,6 +981,28 @@ def record_anti_repeat_decision(
     except Exception as exc:
         logger.debug(
             "[AntiRepeatEffects] decision record skipped: %s",
+            type(exc).__name__,
+        )
+
+
+def mark_anti_repeat_response_delivered(
+    character_name: str,
+    response_id: str,
+    *,
+    now: float | None = None,
+) -> None:
+    """Best-effort link from one delivered reply to its aggregate decisions."""
+    try:
+        store = get_anti_repeat_effect_store()
+        staged = store.stage_response_delivered(
+            character_name,
+            response_id,
+            now=now,
+        )
+        store.flush_staged_detached(staged)
+    except Exception as exc:
+        logger.debug(
+            "[AntiRepeatEffects] delivered response link skipped: %s",
             type(exc).__name__,
         )
 

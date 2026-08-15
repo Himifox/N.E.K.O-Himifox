@@ -21,7 +21,7 @@ from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
 from collections.abc import AsyncIterator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import asyncio
 import json
@@ -51,10 +51,16 @@ class LatestAssistantTexts:
     messages: list[str]
     source_available: bool
     skipped_row_count: int = 0
+    response_ids: list[str] = field(default_factory=list)
 
 
-def _assistant_text_from_stored_message(message_raw: object) -> str | None:
-    """Return assistant text from one LangChain history cell, if present."""
+_ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
+
+
+def _assistant_record_from_stored_message(
+    message_raw: object,
+) -> tuple[str, str | None] | None:
+    """Return assistant text plus its optional local anti-repeat response ID."""
     if isinstance(message_raw, (bytes, bytearray)):
         try:
             message_raw = message_raw.decode("utf-8")
@@ -70,10 +76,20 @@ def _assistant_text_from_stored_message(message_raw: object) -> str | None:
     data = message_raw.get("data")
     if not isinstance(data, dict):
         return None
+
+    response_id = None
+    additional_kwargs = data.get("additional_kwargs")
+    if isinstance(additional_kwargs, dict):
+        raw_response_id = additional_kwargs.get(_ANTI_REPEAT_RESPONSE_ID_KEY)
+        if isinstance(raw_response_id, str):
+            normalized_response_id = raw_response_id.strip()
+            if 0 < len(normalized_response_id) <= 128:
+                response_id = normalized_response_id
+
     content = data.get("content")
     if isinstance(content, str):
         text_content = content.strip()
-        return text_content or None
+        return (text_content, response_id) if text_content else None
     if not isinstance(content, list):
         return None
 
@@ -85,7 +101,13 @@ def _assistant_text_from_stored_message(message_raw: object) -> str | None:
         if isinstance(text_value, str) and text_value.strip():
             text_parts.append(text_value.strip())
     joined = "\n".join(text_parts).strip()
-    return joined or None
+    return (joined, response_id) if joined else None
+
+
+def _assistant_text_from_stored_message(message_raw: object) -> str | None:
+    """Return assistant text from one LangChain history cell, if present."""
+    record = _assistant_record_from_stored_message(message_raw)
+    return record[0] if record is not None else None
 
 
 def _next_readonly_batch(
@@ -668,10 +690,10 @@ class TimeIndexedMemory:
 
         table_name = self._validate_table_name(TIME_ORIGINAL_TABLE_NAME)
         cursor: tuple[object, int] | None = None
-        messages: list[str] = []
+        records: list[tuple[str, str | None]] = []
         skipped_row_count = 0
 
-        while len(messages) < limit:
+        while len(records) < limit:
             sql = (
                 f"SELECT timestamp, rowid, message FROM {table_name} "
                 "WHERE 1=1"
@@ -699,19 +721,24 @@ class TimeIndexedMemory:
             if not rows:
                 break
             for row in rows:
-                assistant_text = _assistant_text_from_stored_message(row[2])
-                if assistant_text is None:
+                assistant_record = _assistant_record_from_stored_message(row[2])
+                if assistant_record is None:
                     skipped_row_count += 1
                     continue
-                messages.append(assistant_text)
-                if len(messages) >= limit:
+                records.append(assistant_record)
+                if len(records) >= limit:
                     break
             cursor = (rows[-1][0], int(rows[-1][1]))
             if len(rows) < batch_size:
                 break
 
-        messages.reverse()
-        return LatestAssistantTexts(messages, True, skipped_row_count)
+        records.reverse()
+        return LatestAssistantTexts(
+            [message for message, _response_id in records],
+            True,
+            skipped_row_count,
+            [response_id for _message, response_id in records if response_id],
+        )
 
     async def aretrieve_latest_assistant_texts(
         self,

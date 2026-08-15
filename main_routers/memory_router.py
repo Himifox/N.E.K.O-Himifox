@@ -84,6 +84,8 @@ class RepetitionInsightsRequest(BaseModel):
     character_name: str
     language: str
     assistant_message_limit: int = Field(default=100, ge=3, le=100)
+    # Kept only for compatibility with older clients. Message-scoped reports
+    # no longer use this value.
     effect_days: Literal[7, 30, 90] = 30
 
 
@@ -120,6 +122,19 @@ def _empty_repetition_effects(days: int) -> dict:
         },
         "patterns": [],
     }
+
+
+def _empty_message_scoped_repetition_effects(limit: int) -> dict:
+    effects = _empty_repetition_effects(30)
+    effects.pop("period_days", None)
+    effects.update(
+        {
+            "scope_type": "assistant_messages",
+            "assistant_message_limit": limit,
+            "linked_message_count": 0,
+        }
+    )
+    return effects
 
 
 def _is_safe_containment_phrase(language: str, phrase: str) -> bool:
@@ -501,15 +516,32 @@ async def repetition_insights(request: RepetitionInsightsRequest):
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("invalid local memory analysis response")
-        effects = _empty_repetition_effects(request.effect_days)
+        response_ids = payload.pop("_anti_repeat_response_ids", None)
+        message_scoped = isinstance(response_ids, list)
+        effects = (
+            _empty_message_scoped_repetition_effects(
+                request.assistant_message_limit
+            )
+            if message_scoped
+            else _empty_repetition_effects(request.effect_days)
+        )
         try:
             from memory.anti_repeat_effects import get_anti_repeat_effect_store
 
-            queried_effects = await asyncio.to_thread(
-                get_anti_repeat_effect_store().query_effects,
-                character_name,
-                request.effect_days,
-            )
+            effect_store = get_anti_repeat_effect_store()
+            if message_scoped:
+                queried_effects = await asyncio.to_thread(
+                    effect_store.query_effects_for_responses,
+                    character_name,
+                    response_ids,
+                    request.assistant_message_limit,
+                )
+            else:
+                queried_effects = await asyncio.to_thread(
+                    effect_store.query_effects,
+                    character_name,
+                    request.effect_days,
+                )
             if isinstance(queried_effects, dict):
                 effects = queried_effects
         except Exception as exc:

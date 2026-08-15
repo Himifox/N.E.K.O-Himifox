@@ -181,14 +181,14 @@
                         </button>
                     </div>
                     <div class="memory-aux-panel-body memory-insights-body">
-                        <p class="memory-insights-description" data-i18n="memory.repetitionInsightsDescription">仅在你点击分析后，本地检查已保存的助手消息；不会调用模型或修改规则。</p>
+                        <p class="memory-insights-description" data-i18n="memory.repetitionInsightsDescription" hidden>检查角色已经发出的回复，找出反复出现的说法，并对照防复读记录查看处理情况。所有分析只在本机进行。</p>
                         <div class="memory-insights-target">
                             <span data-i18n="memory.repetitionInsightsCharacter">分析角色</span>
                             <strong id="memory-insights-character" data-i18n="memory.repetitionInsightsNoCharacter">尚未选择角色</strong>
                         </div>
                         <div class="memory-insights-fields">
                             <label for="memory-insights-language">
-                                <span data-i18n="memory.repetitionInsightsLanguage">分析语言</span>
+                                <span data-i18n="memory.repetitionInsightsLanguage">回复内容语言</span>
                                 <select id="memory-insights-language">
                                     <option value="en">English</option>
                                     <option value="es">Español</option>
@@ -199,17 +199,18 @@
                                     <option value="zh-CN">简体中文</option>
                                     <option value="zh-TW">繁體中文</option>
                                 </select>
+                                <small class="memory-insights-field-help" data-i18n="memory.repetitionInsightsLanguageHelp" hidden>请选择这些历史回复实际使用的语言。这里不会自动判断语言，选错会产生不准确的结果。</small>
                             </label>
                             <label for="memory-insights-limit">
-                                <span data-i18n="memory.repetitionInsightsRange">助手消息范围</span>
+                                <span data-i18n="memory.repetitionInsightsRange">检查最近多少条回复</span>
                                 <select id="memory-insights-limit">
                                     <option value="25">25</option>
                                     <option value="50">50</option>
                                     <option value="100" selected>100</option>
                                 </select>
                             </label>
-                            <label for="memory-insights-effect-days">
-                                <span data-i18n="memory.repetitionInsightsEffectRange">效果统计范围</span>
+                            <label for="memory-insights-effect-days" hidden>
+                                <span data-i18n="memory.repetitionInsightsEffectRange">查看多久内的处理记录</span>
                                 <select id="memory-insights-effect-days">
                                     <option value="7" data-i18n="memory.repetitionInsightsDays7">最近 7 天</option>
                                     <option value="30" data-i18n="memory.repetitionInsightsDays30" selected>最近 30 天</option>
@@ -217,20 +218,20 @@
                                 </select>
                             </label>
                         </div>
-                        <p class="memory-insights-note" data-i18n="memory.repetitionInsightsPrivacy">分析只读取当前角色的本地 time_indexed.db；结果不包含上下文或用户文本。</p>
+                        <p class="memory-insights-note" data-i18n="memory.repetitionInsightsPrivacy" hidden>只读取当前角色已保存在本机的回复；不读取用户消息，不调用模型，也不会自动修改规则。</p>
                         <div class="memory-insights-actions">
                             <button type="button" id="memory-insights-analyze" class="memory-insights-primary" data-i18n="memory.repetitionInsightsAnalyze">开始分析</button>
                             <button type="button" id="memory-insights-clear" data-i18n="memory.repetitionInsightsClear">清空结果</button>
-                            <button type="button" id="memory-insights-export" data-i18n="memory.repetitionInsightsExport">导出候选</button>
-                            <button type="button" id="memory-insights-reset-effects" class="memory-insights-danger" data-i18n="memory.repetitionInsightsResetEffects">清除效果统计</button>
+                            <button type="button" id="memory-insights-export" data-i18n="memory.repetitionInsightsExport">导出待检查项</button>
+                            <button type="button" id="memory-insights-reset-effects" class="memory-insights-danger" data-i18n="memory.repetitionInsightsResetEffects">清空防复读统计</button>
                         </div>
-                        <p class="memory-insights-feedback-note" data-i18n="memory.repetitionInsightsFeedbackNote">导出仅用于你自行向维护者反馈，不会改变角色之后的回复。</p>
+                        <p class="memory-insights-feedback-note" data-i18n="memory.repetitionInsightsFeedbackNote" hidden>导出仅用于你自行向维护者反馈，不会改变角色之后的回复。</p>
                         <div id="memory-insights-status" class="memory-insights-status" role="status" aria-live="polite" aria-atomic="true"></div>
                         <div id="memory-insights-effectiveness" class="memory-insights-effectiveness"></div>
                         <div id="memory-insights-filters" class="memory-insights-filters">
                             <label for="memory-insights-query">
-                                <span data-i18n="memory.repetitionInsightsSearch">搜索最终残留</span>
-                                <input type="search" id="memory-insights-query" autocomplete="off" data-i18n-placeholder="memory.repetitionInsightsSearchPlaceholder" placeholder="搜索表达或规则 ID">
+                                <span data-i18n="memory.repetitionInsightsSearch">搜索重复说法</span>
+                                <input type="search" id="memory-insights-query" autocomplete="off" data-i18n-placeholder="memory.repetitionInsightsSearchPlaceholder" placeholder="搜索说法或规则编号">
                             </label>
                             <label for="memory-insights-coverage-filter">
                                 <span data-i18n="memory.repetitionInsightsCoverageFilter">规则覆盖</span>
@@ -241,11 +242,11 @@
                                 </select>
                             </label>
                             <label for="memory-insights-effect-filter">
-                                <span data-i18n="memory.repetitionInsightsEffectFilter">防复读记录</span>
+                                <span data-i18n="memory.repetitionInsightsEffectFilter">是否有处理记录</span>
                                 <select id="memory-insights-effect-filter">
                                     <option value="all" data-i18n="memory.repetitionInsightsFilterAll">全部</option>
-                                    <option value="processed" data-i18n="memory.repetitionInsightsFilterProcessed">曾处理</option>
-                                    <option value="residual" data-i18n="memory.repetitionInsightsFilterResidual">未匹配处理记录</option>
+                                    <option value="processed" data-i18n="memory.repetitionInsightsFilterProcessed">有处理记录</option>
+                                    <option value="residual" data-i18n="memory.repetitionInsightsFilterResidual">没有处理记录</option>
                                 </select>
                             </label>
                         </div>
