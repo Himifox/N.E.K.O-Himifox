@@ -314,6 +314,38 @@ def test_latest_assistant_texts_exclude_legacy_history_only_action_notes(
     assert result.messages == ["Visible reply", "另一条回复"]
 
 
+@pytest.mark.parametrize(
+    ("content", "expected_messages"),
+    [
+        ('[Played for Alice: "Song" by Artist]', []),
+        (
+            'Visible reply\n[Played for Alice: "Song" by Artist]\n',
+            ["Visible reply"],
+        ),
+    ],
+)
+def test_latest_assistant_texts_exclude_legacy_action_note_boundaries(
+    timeindex_module,
+    tmp_path,
+    content,
+    expected_messages,
+):
+    rows = [
+        {
+            "session_id": "1",
+            "message": _stored_message("ai", content),
+            "timestamp": None,
+        }
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 1)
+    finally:
+        engine.dispose()
+
+    assert result.messages == expected_messages
+
+
 def test_latest_assistant_texts_preserve_non_template_bracketed_tail(
     timeindex_module,
     tmp_path,
