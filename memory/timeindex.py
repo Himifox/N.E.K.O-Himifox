@@ -26,7 +26,6 @@ from datetime import datetime
 import asyncio
 import json
 import os
-import threading
 import unicodedata
 
 logger = get_module_logger(__name__, "Memory")
@@ -280,8 +279,6 @@ class TimeIndexedMemory:
         self.db_paths = {} # 存储 {lanlan_name: db_path}
         self._engine_readonly_flags = {}  # 存储 {lanlan_name: bool}
         self._writable_bootstrapped = set()  # 存储已完成可写初始化的角色
-        self._engine_locks: dict[str, threading.RLock] = {}
-        self._engine_locks_guard = threading.Lock()
         self.recent_history_manager = recent_history_manager
         # 懒加载：不在构造器里同步初始化每角色 engine，首次访问时按需创建
         # （MaintenanceModeError 在 _ensure_engine_exists 内部按需处理）
@@ -336,23 +333,6 @@ class TimeIndexedMemory:
             return left == right
 
     def _ensure_engine_exists(
-        self,
-        lanlan_name: str,
-        db_path: str | None = None,
-        readonly: bool = False,
-    ) -> bool:
-        with self._get_engine_lock(lanlan_name):
-            return self._ensure_engine_exists_unlocked(
-                lanlan_name,
-                db_path=db_path,
-                readonly=readonly,
-            )
-
-    def _get_engine_lock(self, lanlan_name: str) -> threading.RLock:
-        with self._engine_locks_guard:
-            return self._engine_locks.setdefault(lanlan_name, threading.RLock())
-
-    def _ensure_engine_exists_unlocked(
         self,
         lanlan_name: str,
         db_path: str | None = None,
@@ -491,10 +471,6 @@ class TimeIndexedMemory:
 
     def dispose_engine(self, lanlan_name: str):
         """Dispose the given character's database engine resources, meow~"""
-        with self._get_engine_lock(lanlan_name):
-            self._dispose_engine_unlocked(lanlan_name)
-
-    def _dispose_engine_unlocked(self, lanlan_name: str):
         db_path = self.db_paths.pop(lanlan_name, None)
         engine = self.engines.pop(lanlan_name, None)
         self._engine_readonly_flags.pop(lanlan_name, None)
