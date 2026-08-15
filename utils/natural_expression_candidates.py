@@ -550,17 +550,17 @@ def _message_candidates(
         # Korean prose is normally space-delimited, but repeated compounds and
         # onomatopoeia often are not. Keep both families, but do not count an
         # identical single-token occurrence once in each strategy.
-        word_candidates = list(_word_candidates(message.content, config))
-        overlapping_word_counts = Counter(
-            (
-                candidate.normalized,
-                candidate.coverage_text,
-                candidate.start,
-                candidate.end,
+        overlapping_word_candidates = set()
+        for candidate in _word_candidates(message.content, config):
+            overlapping_word_candidates.add(
+                (
+                    candidate.normalized,
+                    candidate.coverage_text,
+                    candidate.start,
+                    candidate.end,
+                )
             )
-            for candidate in word_candidates
-        )
-        yield from word_candidates
+            yield candidate
         for candidate in _character_candidates(message.content, config, _is_hangul):
             overlap_key = (
                 candidate.normalized,
@@ -568,8 +568,7 @@ def _message_candidates(
                 candidate.start,
                 candidate.end,
             )
-            if overlapping_word_counts[overlap_key]:
-                overlapping_word_counts[overlap_key] -= 1
+            if overlap_key in overlapping_word_candidates:
                 continue
             yield candidate
         return
