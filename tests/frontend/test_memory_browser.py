@@ -498,6 +498,10 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
 
     _open_auxiliary_panel(mock_page, "insights")
     assert requests == []
+    expect(mock_page.locator(".memory-insights-description")).to_be_visible()
+    expect(mock_page.locator(".memory-insights-field-help")).to_be_visible()
+    expect(mock_page.locator(".memory-insights-note")).to_be_visible()
+    expect(mock_page.locator(".memory-insights-feedback-note")).to_be_visible()
     expect(mock_page.locator("#memory-insights-character")).to_have_text("测试猫娘")
     expect(mock_page.locator("#memory-insights-limit")).to_have_value("100")
     expect(mock_page.locator("#memory-insights-effect-days")).to_have_count(0)

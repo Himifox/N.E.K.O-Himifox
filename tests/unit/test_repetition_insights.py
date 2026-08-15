@@ -231,8 +231,13 @@ def test_repetition_effect_associations_are_exact_or_safe_containment_only():
         },
         {
             "normalized_phrase": "今天好久不见呀",
-            "language": "zh-CN",
+            "language": "zh",
             "detected_count": 2,
+        },
+        {
+            "normalized_phrase": "好久不见",
+            "language": "zh-TW",
+            "detected_count": 100,
         },
         {
             "normalized_phrase": "hello their",
