@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -266,6 +267,32 @@ def test_clear_effects_propagates_write_failure_and_restores_cached_history(
 
     result = store.query_effects("Neko", 30, now=1_700_000_000.0)
     assert result["totals"]["detected"] == 1
+
+
+def test_effect_write_fence_runs_before_sidecar_mutation(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    write = MagicMock()
+    monkeypatch.setattr(anti_repeat_effects, "atomic_write_json", write)
+
+    @contextmanager
+    def reject_write(*args, **kwargs):
+        raise RuntimeError("maintenance")
+        yield
+
+    from utils import cloudsave_runtime
+
+    monkeypatch.setattr(cloudsave_runtime, "cloudsave_writable_transaction", reject_write)
+
+    with pytest.raises(RuntimeError, match="maintenance"):
+        store._flush_snapshot(
+            "Neko",
+            {"version": 1},
+            1,
+            raise_on_error=True,
+        )
+
+    write.assert_not_called()
+    assert not (tmp_path / "Neko").exists()
 
 
 def test_query_rejects_unsupported_period(tmp_path):
