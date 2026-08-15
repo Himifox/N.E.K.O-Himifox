@@ -31,6 +31,7 @@ from utils.config_manager import get_config_manager
 from utils.file_utils import atomic_write_json
 from utils.logger_config import get_module_logger
 from utils.natural_expression_candidates import (
+    _URL_RE,
     _runtime_protected_spans,
     normalize_language,
 )
@@ -60,7 +61,6 @@ _VALID_OUTCOMES = _BLOCKED_OUTCOMES | {
     "regen_guard_passed",
     "abandoned_user_interaction",
 }
-_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _PROTECTED_RE = re.compile(
     r"```[\s\S]*?```|`[^`\r\n]+`|\{\{[^{}\r\n]*\}\}|"
     r"\$\{[^{}\r\n]*\}|<%[^%\r\n]*%>|\[[A-Z][A-Z0-9_-]{1,63}\]"
