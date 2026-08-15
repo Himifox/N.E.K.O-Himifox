@@ -49,6 +49,8 @@ DEFAULT_WORD_NGRAM_MAX = 5
 DEFAULT_CJK_NGRAM_MIN = 4
 DEFAULT_CJK_NGRAM_MAX = 8
 DEFAULT_MIN_LENGTH = 4
+USER_REVIEW_MAX_INPUT_CHARACTERS = 128 * 1024
+USER_REVIEW_MAX_OCCURRENCES = 100_000
 
 _LANGUAGE_ALIASES = {
     "en": "en",
@@ -656,18 +658,30 @@ def build_report(
     config: MiningConfig,
     rules_by_language: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     message_count_threshold: int = 1,
+    max_occurrences: int | None = None,
 ) -> dict[str, object]:
     """Build a deterministic, review-only candidate report."""
     config.validate()
     if message_count_threshold < 1:
         raise CandidateMinerError("message_count_threshold must be at least 1")
+    if max_occurrences is not None and max_occurrences < 1:
+        raise CandidateMinerError("max_occurrences must be at least 1")
     current_rules = (
         load_current_rules() if rules_by_language is None else rules_by_language
     )
     stats: dict[tuple[str, str], _CandidateStats] = {}
+    retained_occurrence_count = 0
 
     for message in messages:
         for occurrence in _message_candidates(message, config):
+            retained_occurrence_count += 1
+            if (
+                max_occurrences is not None
+                and retained_occurrence_count > max_occurrences
+            ):
+                raise CandidateMinerError(
+                    "assistant history exceeds local analysis limit"
+                )
             key = (message.language, occurrence.normalized)
             candidate_stats = stats.get(key)
             if candidate_stats is None:
@@ -757,6 +771,11 @@ def build_user_review_report(
     """
     if message_count_threshold < 1:
         raise CandidateMinerError("message_count_threshold must be at least 1")
+    if (
+        sum(len(message.content) for message in messages)
+        > USER_REVIEW_MAX_INPUT_CHARACTERS
+    ):
+        raise CandidateMinerError("assistant history exceeds local analysis limit")
 
     config = MiningConfig(threshold=DEFAULT_THRESHOLD)
     maintainer_report = build_report(
@@ -765,10 +784,13 @@ def build_user_review_report(
         config=config,
         rules_by_language=rules_by_language,
         message_count_threshold=message_count_threshold,
+        max_occurrences=USER_REVIEW_MAX_OCCURRENCES,
     )
     candidates = maintainer_report["candidates"]
     parameters = dict(maintainer_report["parameters"])
     parameters["message_count_threshold"] = message_count_threshold
+    parameters["input_character_limit"] = USER_REVIEW_MAX_INPUT_CHARACTERS
+    parameters["occurrence_retention_limit"] = USER_REVIEW_MAX_OCCURRENCES
 
     return {
         "artifact_type": USER_REVIEW_ARTIFACT_TYPE,
