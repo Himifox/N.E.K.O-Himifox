@@ -579,26 +579,32 @@ class AntiRepeatEffectStore:
         *,
         raise_on_error: bool = False,
     ) -> None:
-        with self._get_write_lock(name):
-            if seq <= self._written_seq.get(name, 0):
-                return
-            try:
-                atomic_write_json(
-                    self._write_file_path(name),
-                    payload,
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[AntiRepeatEffects] save failed for %s: %s",
-                    name,
-                    type(exc).__name__,
-                )
-                if raise_on_error:
-                    raise
-                return
-            self._written_seq[name] = seq
+        try:
+            from utils.cloudsave_runtime import cloudsave_writable_transaction
+
+            with cloudsave_writable_transaction(
+                self._config_manager,
+                operation="save",
+                target=f"memory/{name}/anti_repeat_effects.json",
+            ):
+                with self._get_write_lock(name):
+                    if seq <= self._written_seq.get(name, 0):
+                        return
+                    atomic_write_json(
+                        self._write_file_path(name),
+                        payload,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    self._written_seq[name] = seq
+        except Exception as exc:
+            logger.warning(
+                "[AntiRepeatEffects] save failed for %s: %s",
+                name,
+                type(exc).__name__,
+            )
+            if raise_on_error:
+                raise
 
     def _apply_decision(
         self,
