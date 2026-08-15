@@ -153,6 +153,30 @@ from main_logic.mirror_meta import (
 
 _USER_IMAGE_INPUT_TYPES = frozenset({"screen", "camera", "avatar_drop_image", "user_image"})
 AVATAR_DROP_SOURCE = "avatar-drop"
+_ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
+
+
+def _anti_repeat_history_kwargs(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    response_id = raw.get(_ANTI_REPEAT_RESPONSE_ID_KEY)
+    if not isinstance(response_id, str):
+        return {}
+    response_id = response_id.strip()
+    if not (0 < len(response_id) <= 128):
+        return {}
+    return {_ANTI_REPEAT_RESPONSE_ID_KEY: response_id}
+
+
+def _assistant_history_item(
+    text: str,
+    additional_kwargs: object = None,
+) -> dict:
+    item = {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}
+    persisted_kwargs = _anti_repeat_history_kwargs(additional_kwargs)
+    if persisted_kwargs:
+        item["additional_kwargs"] = persisted_kwargs
+    return item
 
 
 def merge_unsynced_tail_assistants(chat_history, last_synced_index):
@@ -189,7 +213,10 @@ def merge_unsynced_tail_assistants(chat_history, last_synced_index):
         return 0
 
     # 只保留最后一条主动搭话，丢弃之前的冗余内容，避免持久记忆膨胀
-    merged = {'role': 'assistant', 'content': [{'type': 'text', 'text': parts[-1]}]}
+    merged = _assistant_history_item(
+        parts[-1],
+        tail[-1].get("additional_kwargs") if isinstance(tail[-1], dict) else None,
+    )
     removed = consecutive - 1
     chat_history[first_idx:] = [merged]
     logger.info(f"[cleanup] 精简了 {consecutive} 条未同步的连续主动搭话消息，仅保留最后一条")
@@ -882,6 +909,7 @@ async def run_sync_connector(
     user_input_sources: set[str] = set()
     text_output_cache = ''  # lanlan的当前消息
     text_output_request_id = None
+    text_output_memory_metadata: dict[str, str] = {}
     current_turn = 'user'
     had_user_input_this_turn = False  # 当前 turn 是否有用户输入（False = 主动搭话）
     current_turn_start_index = 0
@@ -904,7 +932,11 @@ async def run_sync_connector(
                 try:
                     if message["type"] == "json":
                         # Forward to monitor if enabled (fail-soft: monitor 不在直接跳过)
-                        await _try_send_json(sync_slot, message["data"])
+                        public_message_data = message["data"]
+                        if "_memory_metadata" in public_message_data:
+                            public_message_data = dict(public_message_data)
+                            public_message_data.pop("_memory_metadata", None)
+                        await _try_send_json(sync_slot, public_message_data)
 
                         # Only treat assistant turn when it's a gemini_response
                         if message["data"].get("type") == "gemini_response":
@@ -922,6 +954,9 @@ async def run_sync_connector(
                                     user_input_cache = ''
                                 current_turn = 'assistant'
                                 text_output_request_id = message["data"].get("request_id")
+                                text_output_memory_metadata = _anti_repeat_history_kwargs(
+                                    message["data"].get("_memory_metadata")
+                                )
                                 current_turn_start_index = len(chat_history)
                                 text_output_cache = datetime.now().strftime('[%Y%m%d %a %H:%M] ')
 
@@ -1005,11 +1040,13 @@ async def run_sync_connector(
                                         {'type': 'text', 'text': "网络错误，您已断开连接！"}]})
                                 text_output_cache = ''
                                 text_output_request_id = None
+                                text_output_memory_metadata = {}
                             
                             elif message["data"] == "response_discarded_clear":
                                 logger.debug(f"[{lanlan_name}] 收到 response_discarded_clear，清空当前输出缓存")
                                 text_output_cache = ''
                                 text_output_request_id = None
+                                text_output_memory_metadata = {}
                             
                             if message["data"] == "renew session":
                                 # 检查是否正在关闭
@@ -1026,10 +1063,13 @@ async def run_sync_connector(
                                 current_turn = 'user'
                                 text_output_cache = normalize_text(text_output_cache)
                                 if len(text_output_cache) > 0:
-                                    chat_history.append(
-                                            {'role': 'assistant', 'content': [{'type': 'text', 'text': text_output_cache}]})
+                                    chat_history.append(_assistant_history_item(
+                                        text_output_cache,
+                                        text_output_memory_metadata,
+                                    ))
                                 text_output_cache = ''
                                 text_output_request_id = None
+                                text_output_memory_metadata = {}
                                 current_turn_start_index = len(chat_history)
                                 # 合并未同步的连续主动搭话消息
                                 merge_unsynced_tail_assistants(chat_history, last_synced_index)
@@ -1115,6 +1155,7 @@ async def run_sync_connector(
                                     if was_assistant_turn:
                                         text_output_cache = ''
                                         text_output_request_id = None
+                                        text_output_memory_metadata = {}
                                         current_turn = 'user'
                                         current_turn_start_index = len(chat_history)
                                         had_user_input_this_turn = False
@@ -1124,10 +1165,13 @@ async def run_sync_connector(
                                 current_turn = 'user'
                                 text_output_cache = normalize_text(text_output_cache)
                                 if len(text_output_cache) > 0:
-                                    chat_history.append(
-                                        {'role': 'assistant', 'content': [{'type': 'text', 'text': text_output_cache}]})
+                                    chat_history.append(_assistant_history_item(
+                                        text_output_cache,
+                                        text_output_memory_metadata,
+                                    ))
                                 text_output_cache = ''
                                 text_output_request_id = None
+                                text_output_memory_metadata = {}
                                 # kind == 'avatar_interaction' 才进入隔离路径，其它情况按
                                 # proactive / normal 处理。
                                 # meta 由 core 端 turn end 原子打标；avatar 互动若被用户
@@ -1341,10 +1385,13 @@ async def run_sync_connector(
                                 current_turn = 'user'
                                 text_output_cache = normalize_text(text_output_cache)
                                 if len(text_output_cache) > 0:
-                                    chat_history.append(
-                                        {'role': 'assistant', 'content': [{'type': 'text', 'text': text_output_cache}]})
+                                    chat_history.append(_assistant_history_item(
+                                        text_output_cache,
+                                        text_output_memory_metadata,
+                                    ))
                                 text_output_cache = ''
                                 text_output_request_id = None
+                                text_output_memory_metadata = {}
                                 current_turn_start_index = len(chat_history)
                                 # 合并未同步的连续主动搭话消息
                                 merge_unsynced_tail_assistants(chat_history, last_synced_index)
@@ -1478,6 +1525,7 @@ async def run_sync_connector(
                         user_input_sources.clear()
                         text_output_cache = ''
                         text_output_request_id = None
+                        text_output_memory_metadata = {}
                         current_turn = 'user'
                         had_user_input_this_turn = False
                         current_turn_start_index = 0
