@@ -582,24 +582,31 @@ def _coverage_result(
     language: str,
     occurrences: Sequence[_CandidateOccurrence],
     rules_by_language: Mapping[str, Sequence[Mapping[str, object]]],
+    *,
+    compiled_rules_cache: dict[str, tuple[tuple[str, re.Pattern[str]], ...]],
+    protected_cache: dict[str, list[tuple[int, int]]],
+    match_cache: dict[tuple[str, str, int], tuple[tuple[int, int], ...]],
 ) -> tuple[list[str], bool]:
-    compiled_rules: list[tuple[str, re.Pattern[str]]] = []
-    protected_cache: dict[str, list[tuple[int, int]]] = {}
-    match_cache: dict[tuple[str, int], tuple[tuple[int, int], ...]] = {}
     covered: set[str] = set()
-    for rule in rules_by_language.get(_coverage_language(language), ()):
-        rule_id = rule.get("id")
-        pattern = rule.get("find")
-        flags = rule.get("flags", 0)
-        if not isinstance(rule_id, str) or not isinstance(pattern, str):
-            continue
-        try:
-            compiled = re.compile(pattern, int(flags))
-        except (re.error, TypeError, ValueError) as exc:
-            raise CandidateMinerError(
-                f"existing rule {rule_id} has an invalid pattern"
-            ) from exc
-        compiled_rules.append((rule_id, compiled))
+    coverage_language = _coverage_language(language)
+    compiled_rules = compiled_rules_cache.get(coverage_language)
+    if compiled_rules is None:
+        pending_rules: list[tuple[str, re.Pattern[str]]] = []
+        for rule in rules_by_language.get(coverage_language, ()):
+            rule_id = rule.get("id")
+            pattern = rule.get("find")
+            flags = rule.get("flags", 0)
+            if not isinstance(rule_id, str) or not isinstance(pattern, str):
+                continue
+            try:
+                compiled = re.compile(pattern, int(flags))
+            except (re.error, TypeError, ValueError) as exc:
+                raise CandidateMinerError(
+                    f"existing rule {rule_id} has an invalid pattern"
+                ) from exc
+            pending_rules.append((rule_id, compiled))
+        compiled_rules = tuple(pending_rules)
+        compiled_rules_cache[coverage_language] = compiled_rules
 
     all_occurrences_covered = bool(occurrences)
     for occurrence in occurrences:
@@ -609,7 +616,7 @@ def _coverage_result(
             protected = _runtime_protected_spans(occurrence.coverage_text)
             protected_cache[occurrence.coverage_text] = protected
         for rule_index, (rule_id, compiled) in enumerate(compiled_rules):
-            cache_key = (occurrence.coverage_text, rule_index)
+            cache_key = (coverage_language, occurrence.coverage_text, rule_index)
             match_spans = match_cache.get(cache_key)
             if match_spans is None:
                 match_spans = tuple(
@@ -669,6 +676,9 @@ def build_report(
             candidate_stats.occurrences.append(occurrence)
 
     candidates: list[dict[str, object]] = []
+    compiled_rules_cache: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {}
+    protected_cache: dict[str, list[tuple[int, int]]] = {}
+    match_cache: dict[tuple[str, str, int], tuple[tuple[int, int], ...]] = {}
     for (language, normalized), candidate_stats in stats.items():
         if candidate_stats.occurrence_count < config.threshold:
             continue
@@ -676,6 +686,9 @@ def build_report(
             language,
             candidate_stats.occurrences,
             current_rules,
+            compiled_rules_cache=compiled_rules_cache,
+            protected_cache=protected_cache,
+            match_cache=match_cache,
         )
         if config.exclude_covered and all_occurrences_covered:
             continue
