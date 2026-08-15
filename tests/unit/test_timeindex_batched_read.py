@@ -93,27 +93,31 @@ def timeindex_module():
                 sys.modules[name] = old_module
 
 
-def _create_manager(timeindex_module, tmp_path, rows, *, indexed=True):
+def _create_manager(
+    timeindex_module,
+    tmp_path,
+    rows,
+    *,
+    indexed=True,
+    include_timestamp=True,
+):
     engine = create_engine(f"sqlite:///{tmp_path / 'time-index.db'}")
     with engine.begin() as conn:
+        timestamp_column = ", timestamp DATETIME" if include_timestamp else ""
         conn.execute(
             text(
                 f"CREATE TABLE {_TABLE} ("
-                "session_id TEXT, message TEXT, timestamp DATETIME)"
+                f"session_id TEXT, message TEXT{timestamp_column})"
             )
         )
-        if indexed:
+        if indexed and include_timestamp:
             conn.execute(
                 text(f"CREATE INDEX idx_{_TABLE}_timestamp ON {_TABLE}(timestamp)")
             )
         if rows:
-            conn.execute(
-                text(
-                    f"INSERT INTO {_TABLE}(session_id, message, timestamp) "
-                    "VALUES (:session_id, :message, :timestamp)"
-                ),
-                rows,
-            )
+            columns = "session_id, message, timestamp" if include_timestamp else "session_id, message"
+            values = ":session_id, :message, :timestamp" if include_timestamp else ":session_id, :message"
+            conn.execute(text(f"INSERT INTO {_TABLE}({columns}) VALUES ({values})"), rows)
 
     manager = timeindex_module.TimeIndexedMemory.__new__(
         timeindex_module.TimeIndexedMemory
@@ -227,6 +231,58 @@ def test_latest_assistant_texts_include_null_timestamps_across_pages(
         "older answer",
         "newest answer",
     ]
+
+
+def test_latest_assistant_texts_support_legacy_schema_without_timestamp(
+    timeindex_module,
+    tmp_path,
+):
+    rows = [
+        {"session_id": "1", "message": _stored_message("ai", "old")},
+        {"session_id": "2", "message": _stored_message("human", "skip")},
+        {"session_id": "3", "message": _stored_message("ai", "new")},
+    ]
+    manager, engine = _create_manager(
+        timeindex_module,
+        tmp_path,
+        rows,
+        indexed=False,
+        include_timestamp=False,
+    )
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 2, batch_size=1)
+    finally:
+        engine.dispose()
+
+    assert result.messages == ["old", "new"]
+    assert result.source_available is True
+
+
+def test_latest_assistant_texts_exclude_history_only_action_note(
+    timeindex_module,
+    tmp_path,
+):
+    visible = "给你放首歌～"
+    stored = json.dumps(
+        {
+            "type": "ai",
+            "data": {
+                "content": f"{visible}\n[给小明放了《稻香》— 周杰伦]",
+                "additional_kwargs": {
+                    "anti_repeat_visible_text_length": str(len(visible))
+                },
+            },
+        },
+        ensure_ascii=False,
+    )
+    rows = [{"session_id": "1", "message": stored, "timestamp": None}]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 1)
+    finally:
+        engine.dispose()
+
+    assert result.messages == [visible]
 
 
 def test_latest_assistant_texts_missing_source_does_not_create_engine(

@@ -23,13 +23,16 @@ def _empty_effects(days: int = 30) -> dict:
     }
 
 
-def test_sql_history_preserves_anti_repeat_response_id():
+def test_sql_history_preserves_anti_repeat_link_metadata():
     history = SQLChatMessageHistory.__new__(SQLChatMessageHistory)
 
     serialized = history._serialize(
         AIMessage(
             content="synthetic reply",
-            additional_kwargs={"anti_repeat_response_id": "response-1"},
+            additional_kwargs={
+                "anti_repeat_response_id": "response-1",
+                "anti_repeat_visible_text_length": "15",
+            },
         )
     )
 
@@ -37,7 +40,10 @@ def test_sql_history_preserves_anti_repeat_response_id():
         "type": "ai",
         "data": {
             "content": "synthetic reply",
-            "additional_kwargs": {"anti_repeat_response_id": "response-1"},
+            "additional_kwargs": {
+                "anti_repeat_response_id": "response-1",
+                "anti_repeat_visible_text_length": "15",
+            },
         },
     }
 

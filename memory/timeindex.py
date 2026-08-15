@@ -55,6 +55,7 @@ class LatestAssistantTexts:
 
 
 _ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
+_ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY = "anti_repeat_visible_text_length"
 
 
 def _assistant_record_from_stored_message(
@@ -78,6 +79,7 @@ def _assistant_record_from_stored_message(
         return None
 
     response_id = None
+    visible_text_length = None
     additional_kwargs = data.get("additional_kwargs")
     if isinstance(additional_kwargs, dict):
         raw_response_id = additional_kwargs.get(_ANTI_REPEAT_RESPONSE_ID_KEY)
@@ -85,9 +87,18 @@ def _assistant_record_from_stored_message(
             normalized_response_id = raw_response_id.strip()
             if 0 < len(normalized_response_id) <= 128:
                 response_id = normalized_response_id
+        raw_visible_length = additional_kwargs.get(
+            _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY
+        )
+        if isinstance(raw_visible_length, str) and raw_visible_length.isdigit():
+            visible_text_length = int(raw_visible_length)
 
     content = data.get("content")
     if isinstance(content, str):
+        if visible_text_length is not None:
+            if visible_text_length > len(content):
+                return None
+            content = content[:visible_text_length]
         text_content = content.strip()
         return (text_content, response_id) if text_content else None
     if not isinstance(content, list):
@@ -689,19 +700,36 @@ class TimeIndexedMemory:
             return LatestAssistantTexts([], False)
 
         table_name = self._validate_table_name(TIME_ORIGINAL_TABLE_NAME)
+        try:
+            with self.engines[lanlan_name].connect() as conn:
+                columns = conn.execute(
+                    text(f"PRAGMA table_info({table_name})")
+                ).fetchall()
+        except Exception as exc:
+            logger.warning(
+                "[TimeIndexedMemory] latest assistant schema read failed for %s: %s",
+                lanlan_name,
+                type(exc).__name__,
+            )
+            raise RuntimeError("latest assistant history read failed") from exc
+        has_timestamp = any(str(row[1]).lower() == "timestamp" for row in columns)
+
         cursor: tuple[object, int] | None = None
         records: list[tuple[str, str | None]] = []
         skipped_row_count = 0
 
         while len(records) < limit:
+            timestamp_expression = "timestamp" if has_timestamp else "NULL"
             sql = (
-                f"SELECT timestamp, rowid, message FROM {table_name} "
+                f"SELECT {timestamp_expression}, rowid, message FROM {table_name} "
                 "WHERE 1=1"
             )
             params: dict[str, object] = {"page_size": batch_size}
             if cursor is not None:
                 cursor_timestamp, cursor_rowid = cursor
-                if cursor_timestamp is None:
+                if not has_timestamp:
+                    sql += " AND rowid < :cursor_rowid"
+                elif cursor_timestamp is None:
                     sql += " AND timestamp IS NULL AND rowid < :cursor_rowid"
                 else:
                     sql += (
@@ -710,7 +738,10 @@ class TimeIndexedMemory:
                     )
                     params["cursor_timestamp"] = cursor_timestamp
                 params["cursor_rowid"] = cursor_rowid
-            sql += " ORDER BY timestamp DESC NULLS LAST, rowid DESC LIMIT :page_size"
+            if has_timestamp:
+                sql += " ORDER BY timestamp DESC NULLS LAST, rowid DESC LIMIT :page_size"
+            else:
+                sql += " ORDER BY rowid DESC LIMIT :page_size"
 
             try:
                 with self.engines[lanlan_name].connect() as conn:
