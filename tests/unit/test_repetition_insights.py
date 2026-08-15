@@ -264,13 +264,26 @@ def test_repetition_effect_associations_are_exact_or_safe_containment_only():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("language", ["en", "es", "pt", "ru"])
-def test_word_language_associations_require_contiguous_token_boundaries(language):
+@pytest.mark.parametrize(
+    ("language", "candidate_phrase", "rejected_phrase", "contained_phrase"),
+    [
+        ("en", "he said", "she said", "well he said today"),
+        ("es", "la casa", "mala casa", "visité la casa hoy"),
+        ("pt", "a casa", "na casa", "vi a casa hoje"),
+        ("ru", "он сказал", "слон сказал", "вчера он сказал правду"),
+    ],
+)
+def test_word_language_associations_require_contiguous_token_boundaries(
+    language,
+    candidate_phrase,
+    rejected_phrase,
+    contained_phrase,
+):
     from main_routers import memory_router
 
     candidates = [
         {
-            "normalized_phrase": "he said",
+            "normalized_phrase": candidate_phrase,
             "language": language,
             "occurrence_count": 3,
             "message_count": 3,
@@ -278,12 +291,12 @@ def test_word_language_associations_require_contiguous_token_boundaries(language
     ]
     patterns = [
         {
-            "normalized_phrase": "she said",
+            "normalized_phrase": rejected_phrase,
             "language": language,
             "detected_count": 99,
         },
         {
-            "normalized_phrase": "well he said today",
+            "normalized_phrase": contained_phrase,
             "language": language,
             "detected_count": 2,
         },
@@ -292,8 +305,52 @@ def test_word_language_associations_require_contiguous_token_boundaries(language
     result = memory_router._associate_repetition_effects(candidates, patterns)
 
     assert len(result) == 1
-    assert result[0]["effect_normalized_phrase"] == "well he said today"
+    assert result[0]["effect_normalized_phrase"] == contained_phrase
     assert result[0]["association_type"] == "contained"
+
+
+@pytest.mark.unit
+def test_korean_associations_use_word_boundaries_without_losing_character_ngrams():
+    from main_routers import memory_router
+
+    candidates = [
+        {
+            "normalized_phrase": "나는 정말",
+            "language": "ko",
+            "occurrence_count": 3,
+            "message_count": 3,
+        },
+        {
+            "normalized_phrase": "두근두근",
+            "language": "ko",
+            "occurrence_count": 4,
+            "message_count": 3,
+        },
+    ]
+    patterns = [
+        {
+            "normalized_phrase": "신나는 정말",
+            "language": "ko",
+            "detected_count": 99,
+        },
+        {
+            "normalized_phrase": "어제 나는 정말 웃었어",
+            "language": "ko",
+            "detected_count": 2,
+        },
+        {
+            "normalized_phrase": "오늘도 두근두근 설레",
+            "language": "ko",
+            "detected_count": 3,
+        },
+    ]
+
+    result = memory_router._associate_repetition_effects(candidates, patterns)
+
+    assert [item["effect_normalized_phrase"] for item in result] == [
+        "어제 나는 정말 웃었어",
+        "오늘도 두근두근 설레",
+    ]
 
 
 @pytest.mark.unit
