@@ -785,6 +785,31 @@ def test_user_review_rejects_oversized_history_before_mining(monkeypatch):
         candidate_core.build_user_review_report(messages, rules_by_language={})
 
 
+def test_user_review_caps_candidates_before_returning_them_to_the_browser(monkeypatch):
+    candidates = [
+        {
+            "normalized_phrase": f"candidate {index}",
+            "status": "pending",
+        }
+        for index in range(3)
+    ]
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_CANDIDATES", 2)
+    monkeypatch.setattr(
+        candidate_core,
+        "build_report",
+        lambda *args, **kwargs: {
+            "candidates": candidates,
+            "parameters": {},
+        },
+    )
+
+    report = candidate_core.build_user_review_report([], rules_by_language={})
+
+    assert report["candidates"] == candidates[:2]
+    assert report["summary"]["candidate_count"] == 2
+    assert report["parameters"]["candidate_output_limit"] == 2
+
+
 def test_user_review_rejects_invalid_distinct_message_threshold():
     with pytest.raises(
         candidate_core.CandidateMinerError,

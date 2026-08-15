@@ -51,6 +51,7 @@ DEFAULT_CJK_NGRAM_MAX = 8
 DEFAULT_MIN_LENGTH = 4
 USER_REVIEW_MAX_INPUT_CHARACTERS = 128 * 1024
 USER_REVIEW_MAX_OCCURRENCES = 100_000
+USER_REVIEW_MAX_CANDIDATES = 200
 
 _LANGUAGE_ALIASES = {
     "en": "en",
@@ -785,11 +786,12 @@ def build_user_review_report(
         message_count_threshold=message_count_threshold,
         max_occurrences=USER_REVIEW_MAX_OCCURRENCES,
     )
-    candidates = maintainer_report["candidates"]
+    candidates = maintainer_report["candidates"][:USER_REVIEW_MAX_CANDIDATES]
     parameters = dict(maintainer_report["parameters"])
     parameters["message_count_threshold"] = message_count_threshold
     parameters["input_character_limit"] = USER_REVIEW_MAX_INPUT_CHARACTERS
     parameters["occurrence_retention_limit"] = USER_REVIEW_MAX_OCCURRENCES
+    parameters["candidate_output_limit"] = USER_REVIEW_MAX_CANDIDATES
 
     return {
         "artifact_type": USER_REVIEW_ARTIFACT_TYPE,
