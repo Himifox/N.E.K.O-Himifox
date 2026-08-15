@@ -144,6 +144,17 @@ def _is_safe_containment_phrase(language: str, phrase: str) -> bool:
     return len(phrase) >= 4 and len(phrase.split()) >= 2
 
 
+def _is_runtime_detector_signature(language: str, phrase: str, reasons: object) -> bool:
+    if not isinstance(reasons, dict) or not any(
+        int(reasons.get(reason, 0)) > 0 for reason in ("bm25", "unanswered_repeat")
+    ):
+        return False
+    compact = re.sub(r"\s+", "", phrase)
+    if language in {"ja", "ko", "zh-CN", "zh-TW"}:
+        return len(compact) in {2, 3}
+    return len(phrase) >= 2 and len(phrase.split()) == 1
+
+
 def _repetition_association_language(language: str) -> str:
     """Use one comparison key for legacy Simplified Chinese effect records."""
     return "zh-CN" if language in {"zh", "zh-CN"} else language
@@ -197,7 +208,14 @@ def _associate_repetition_effects(
                 association_type = "exact"
             elif (
                 _is_safe_containment_phrase(language, candidate_phrase)
-                and _is_safe_containment_phrase(language, effect_phrase)
+                and (
+                    _is_safe_containment_phrase(language, effect_phrase)
+                    or _is_runtime_detector_signature(
+                        language,
+                        effect_phrase,
+                        pattern.get("reasons"),
+                    )
+                )
                 and _phrases_contain_each_other(
                     association_language,
                     candidate_phrase,

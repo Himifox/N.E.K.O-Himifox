@@ -339,6 +339,45 @@ def test_word_language_associations_require_contiguous_token_boundaries(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("language", "candidate_phrase", "effect_phrase"),
+    [
+        ("en", "quiet lantern", "quiet"),
+        ("zh-CN", "一直陪着", "陪着"),
+    ],
+)
+def test_associations_accept_actual_runtime_detector_signature_sizes(
+    language,
+    candidate_phrase,
+    effect_phrase,
+):
+    from main_routers import memory_router
+
+    candidates = [
+        {
+            "normalized_phrase": candidate_phrase,
+            "language": language,
+            "occurrence_count": 3,
+            "message_count": 3,
+        }
+    ]
+    patterns = [
+        {
+            "normalized_phrase": effect_phrase,
+            "language": language,
+            "reasons": {"bm25": 1},
+            "detected_count": 1,
+        }
+    ]
+
+    result = memory_router._associate_repetition_effects(candidates, patterns)
+
+    assert len(result) == 1
+    assert result[0]["effect_normalized_phrase"] == effect_phrase
+    assert result[0]["association_type"] == "contained"
+
+
+@pytest.mark.unit
 def test_korean_associations_use_word_boundaries_without_losing_character_ngrams():
     from main_routers import memory_router
 
