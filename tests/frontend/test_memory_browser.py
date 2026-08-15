@@ -508,7 +508,7 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     )
     expect(mock_page.locator(".memory-insights-note")).to_be_visible()
     expect(mock_page.locator(".memory-insights-note")).to_have_text(
-        "仅在本机读取助手回复；不读取用户消息、不调用模型、不修改规则。"
+        "仅分析本机已保存的助手回复；用户消息不会进入分析结果，不调用模型、不修改规则。"
     )
     expect(mock_page.locator(".memory-insights-feedback-note")).to_be_visible()
     expect(mock_page.locator(".memory-insights-feedback-note")).to_have_text(
