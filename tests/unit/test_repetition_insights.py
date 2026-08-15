@@ -112,10 +112,10 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_internal_repetition_insights_accepts_full_profile_name_length():
+@pytest.mark.parametrize("character_name", ["a" * 60, "chat"])
+async def test_internal_repetition_insights_accepts_existing_query_names(character_name):
     from app.memory_server import routes
 
-    character_name = "a" * 60
     history = SimpleNamespace(
         messages=[],
         source_available=True,
@@ -156,7 +156,10 @@ async def test_internal_repetition_insights_requires_initialized_time_manager():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_public_repetition_insights_validates_and_forwards_local_request():
+@pytest.mark.parametrize("character_name", ["legacy.name", "chat"])
+async def test_public_repetition_insights_validates_and_forwards_local_request(
+    character_name,
+):
     from main_routers import memory_router
     from memory import anti_repeat_effects
     from utils import config_manager, internal_http_client
@@ -176,7 +179,7 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
         query_effects=MagicMock(return_value=_empty_effects())
     )
     config = SimpleNamespace(
-        aload_characters=AsyncMock(return_value={"猫娘": {"legacy.name": {}}})
+        aload_characters=AsyncMock(return_value={"猫娘": {character_name: {}}})
     )
 
     with (
@@ -194,7 +197,7 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
     ):
         result = await memory_router.repetition_insights(
             memory_router.RepetitionInsightsRequest(
-                character_name="legacy.name",
+                character_name=character_name,
                 language="zh-CN",
                 assistant_message_limit=50,
             )
@@ -211,8 +214,8 @@ async def test_public_repetition_insights_validates_and_forwards_local_request()
     }
     assert call.kwargs["timeout"] == 30.0
     assert call.args[0].startswith("http://127.0.0.1:")
-    assert call.args[0].endswith("/legacy.name/repetition_insights")
-    effect_store.query_effects.assert_called_once_with("legacy.name", 30)
+    assert call.args[0].endswith(f"/{character_name}/repetition_insights")
+    effect_store.query_effects.assert_called_once_with(character_name, 30)
 
 
 @pytest.mark.unit
@@ -473,7 +476,8 @@ async def test_public_repetition_insights_keeps_residuals_when_effect_query_fail
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_reset_repetition_effects_clears_only_selected_character():
+@pytest.mark.parametrize("character_name", ["legacy.name", "chat"])
+async def test_reset_repetition_effects_clears_only_selected_character(character_name):
     from main_routers import memory_router
     from memory import anti_repeat_effects
     from utils import config_manager
@@ -491,15 +495,15 @@ async def test_reset_repetition_effects_clears_only_selected_character():
         patch.object(memory_router, "character_memory_exists", return_value=True),
     ):
         result = await memory_router.reset_repetition_effects(
-            memory_router.RepetitionEffectsResetRequest(character_name="legacy.name")
+            memory_router.RepetitionEffectsResetRequest(character_name=character_name)
         )
 
     assert result == {
         "success": True,
-        "character_name": "legacy.name",
+        "character_name": character_name,
         "cleared": True,
     }
-    effect_store.clear_effects.assert_called_once_with("legacy.name")
+    effect_store.clear_effects.assert_called_once_with(character_name)
 
 
 @pytest.mark.unit

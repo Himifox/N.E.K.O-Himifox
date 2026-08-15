@@ -516,7 +516,7 @@ logger = get_module_logger(__name__, "Main")
 async def repetition_insights(request: RepetitionInsightsRequest):
     """Run an explicit, local-only review of persisted assistant text."""
     validation = validate_character_name(request.character_name, allow_dots=True)
-    if not validation.ok:
+    if not validation.ok and validation.code != "reserved_route_name":
         return JSONResponse(
             {"success": False, "error": "invalid character name"},
             status_code=422,
@@ -629,7 +629,7 @@ async def repetition_insights(request: RepetitionInsightsRequest):
 async def reset_repetition_effects(request: RepetitionEffectsResetRequest):
     """Clear only local anti-repeat aggregates for one existing character."""
     validation = validate_character_name(request.character_name, allow_dots=True)
-    if not validation.ok:
+    if not validation.ok and validation.code != "reserved_route_name":
         return JSONResponse(
             {"success": False, "error": "invalid character name"},
             status_code=422,
