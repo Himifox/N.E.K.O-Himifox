@@ -150,11 +150,14 @@ def _repetition_association_language(language: str) -> str:
 
 
 def _phrases_contain_each_other(language: str, left: str, right: str) -> bool:
-    if language not in {"en", "es", "pt", "ru"}:
-        return left in right or right in left
-
     left_tokens = left.split()
     right_tokens = right.split()
+    use_token_boundaries = language in {"en", "es", "pt", "ru"} or (
+        language == "ko" and len(left_tokens) > 1 and len(right_tokens) > 1
+    )
+    if not use_token_boundaries:
+        return left in right or right in left
+
     shorter, longer = sorted((left_tokens, right_tokens), key=len)
     width = len(shorter)
     return any(
