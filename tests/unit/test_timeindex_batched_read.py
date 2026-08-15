@@ -188,6 +188,47 @@ def test_latest_assistant_texts_are_bounded_filtered_and_chronological(
     assert result.skipped_row_count == 1
 
 
+def test_latest_assistant_texts_include_null_timestamps_across_pages(
+    timeindex_module,
+    tmp_path,
+):
+    rows = [
+        {
+            "session_id": "new",
+            "message": _stored_message("ai", "newest answer"),
+            "timestamp": "2026-01-02 00:00:00.000000",
+        },
+        {
+            "session_id": "old",
+            "message": _stored_message("ai", "older answer"),
+            "timestamp": "2026-01-01 00:00:00.000000",
+        },
+        {
+            "session_id": "legacy-a",
+            "message": _stored_message("ai", "legacy answer a"),
+            "timestamp": None,
+        },
+        {
+            "session_id": "legacy-b",
+            "message": _stored_message("ai", "legacy answer b"),
+            "timestamp": None,
+        },
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 4, batch_size=1)
+    finally:
+        engine.dispose()
+
+    assert result.source_available is True
+    assert result.messages == [
+        "legacy answer a",
+        "legacy answer b",
+        "older answer",
+        "newest answer",
+    ]
+
+
 def test_latest_assistant_texts_missing_source_does_not_create_engine(
     timeindex_module,
 ):

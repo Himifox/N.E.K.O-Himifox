@@ -700,12 +700,17 @@ class TimeIndexedMemory:
             )
             params: dict[str, object] = {"page_size": batch_size}
             if cursor is not None:
-                sql += (
-                    " AND (timestamp < :cursor_timestamp "
-                    "OR (timestamp = :cursor_timestamp AND rowid < :cursor_rowid))"
-                )
-                params["cursor_timestamp"], params["cursor_rowid"] = cursor
-            sql += " ORDER BY timestamp DESC, rowid DESC LIMIT :page_size"
+                cursor_timestamp, cursor_rowid = cursor
+                if cursor_timestamp is None:
+                    sql += " AND timestamp IS NULL AND rowid < :cursor_rowid"
+                else:
+                    sql += (
+                        " AND (timestamp IS NULL OR timestamp < :cursor_timestamp "
+                        "OR (timestamp = :cursor_timestamp AND rowid < :cursor_rowid))"
+                    )
+                    params["cursor_timestamp"] = cursor_timestamp
+                params["cursor_rowid"] = cursor_rowid
+            sql += " ORDER BY timestamp DESC NULLS LAST, rowid DESC LIMIT :page_size"
 
             try:
                 with self.engines[lanlan_name].connect() as conn:
