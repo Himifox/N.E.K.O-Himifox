@@ -1402,9 +1402,11 @@
     }
 
     function refreshRepetitionInsightsAfterRangeChange() {
-        const hadReport = Boolean(repetitionInsightsReport);
+        if (repetitionInsightsReport) {
+            analyzeRepetitionInsights();
+            return;
+        }
         resetRepetitionInsightsState();
-        if (hadReport) analyzeRepetitionInsights();
     }
 
     async function analyzeRepetitionInsights() {
@@ -1416,9 +1418,6 @@
 
         const targetCharacter = currentCatName;
         const requestId = ++repetitionInsightsRequestId;
-        repetitionInsightsReport = null;
-        repetitionInsightsIgnored.clear();
-        renderRepetitionInsightsResults();
         setRepetitionInsightsBusy(true);
         setRepetitionInsightsStatus(
             'memory.repetitionInsightsLoading',
@@ -1442,6 +1441,7 @@
                 throw new Error('local analysis unavailable');
             }
             repetitionInsightsReport = report;
+            repetitionInsightsIgnored.clear();
             renderRepetitionInsightsResults();
             const summary = report.summary || {};
             if (summary.source_available === false) {
@@ -1464,8 +1464,6 @@
             }
         } catch (error) {
             if (requestId !== repetitionInsightsRequestId) return;
-            repetitionInsightsReport = null;
-            renderRepetitionInsightsResults();
             setRepetitionInsightsStatus(
                 'memory.repetitionInsightsError',
                 'Local analysis is unavailable. Please try again.',
