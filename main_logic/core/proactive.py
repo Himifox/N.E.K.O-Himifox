@@ -498,9 +498,6 @@ class ProactiveMixin:
                 full_text,
                 is_first_chunk=True,
                 turn_id=commit_sid,
-                memory_metadata={
-                    "anti_repeat_response_id": str(commit_sid),
-                },
                 expected_speech_id=expected_speech_id,
                 expected_user_engagement_time=expected_user_engagement_time,
                 on_published=publication_times.append,

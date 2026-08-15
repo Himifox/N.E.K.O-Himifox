@@ -61,11 +61,6 @@ _ROLE_CLS: dict[str, type[BaseMessage]] = {
     "system": SystemMessage,
 }
 
-_WIRE_ADDITIONAL_KWARGS = frozenset({
-    "anti_repeat_response_id",
-    "anti_repeat_visible_text_length",
-})
-
 def messages_to_dict(messages: list) -> list[dict]:
     """Serialize message objects to the on-disk format.
 
@@ -114,20 +109,7 @@ def messages_from_dict(dicts: list[dict]) -> list[BaseMessage]:
             ))
         elif "role" in d and "content" in d:
             cls = _ROLE_CLS.get(d["role"], HumanMessage)
-            raw_kwargs = d.get("additional_kwargs")
-            additional_kwargs = {
-                key: value
-                for key, value in (
-                    raw_kwargs.items() if isinstance(raw_kwargs, dict) else ()
-                )
-                if key in _WIRE_ADDITIONAL_KWARGS
-                and isinstance(value, str)
-                and value
-            }
-            result.append(cls(
-                content=d["content"],
-                additional_kwargs=additional_kwargs,
-            ))
+            result.append(cls(content=d["content"]))
         else:
             result.append(HumanMessage(content=str(d)))
     return result

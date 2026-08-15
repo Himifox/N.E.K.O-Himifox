@@ -531,9 +531,6 @@ async def test_finish_proactive_delivery_appends_action_note_to_history():
     sent_text = mgr.send_lanlan_response.call_args.args[0]
     assert sent_text == "给你放首歌～"
     assert note not in sent_text
-    assert mgr.send_lanlan_response.call_args.kwargs["memory_metadata"] == {
-        "anti_repeat_response_id": "s",
-    }
 
 
 @pytest.mark.asyncio
