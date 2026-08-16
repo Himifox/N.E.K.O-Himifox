@@ -281,6 +281,53 @@ def test_query_sanitizes_invalid_persisted_effect_values(tmp_path):
     json.dumps(result, allow_nan=False)
 
 
+def test_query_derives_normalized_phrase_from_sanitized_phrase(tmp_path):
+    effect_dir = tmp_path / "Neko"
+    effect_dir.mkdir()
+    (effect_dir / "anti_repeat_effects.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "schema_version": "anti-repeat-effects/v1",
+                "started_at": 1_700_000_000.0,
+                "daily_buckets": {
+                    "2023-11-14": {
+                        "patterns": {
+                            "tampered": {
+                                "phrase": "quiet lantern",
+                                "normalized_phrase": "https://private.example/path",
+                                "language": "en",
+                                "detected_count": 1,
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _store(tmp_path).query_effects(
+        "Neko",
+        30,
+        now=1_700_000_000.0,
+    )
+
+    assert result["patterns"] == [
+        {
+            "phrase": "quiet lantern",
+            "normalized_phrase": "quiet lantern",
+            "language": "en",
+            "reasons": {},
+            "detected_count": 1,
+            "regen_triggered_count": 0,
+            "regen_guard_passed_count": 0,
+            "blocked_count": 0,
+            "last_seen_at": 0.0,
+        }
+    ]
+
+
 def test_query_sanitizes_overflowing_counter_without_resetting_other_history(tmp_path):
     effect_dir = tmp_path / "Neko"
     effect_dir.mkdir()

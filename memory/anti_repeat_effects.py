@@ -272,9 +272,7 @@ def _normalize_bucket(raw: Any) -> dict[str, Any]:
             if not isinstance(pattern_id, str) or not isinstance(raw_pattern, dict):
                 continue
             phrase = _safe_fragment(str(raw_pattern.get("phrase", "")))
-            normalized = _normalized_phrase(
-                str(raw_pattern.get("normalized_phrase", ""))
-            )
+            normalized = _normalized_phrase(phrase)
             language = str(raw_pattern.get("language", ""))
             if not phrase or not normalized or not language:
                 continue
