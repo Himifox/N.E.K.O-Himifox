@@ -51,6 +51,7 @@ def test_build_repeat_signature_prefers_safe_detector_evidence():
         "localhost:8080/private",
         "`secret_code()`",
         "{{PRIVATE_VALUE}}",
+        "<secret_key>",
     ],
 )
 def test_build_repeat_signature_rejects_protected_fragments(fragment):
@@ -71,6 +72,7 @@ def test_build_repeat_signature_rejects_protected_fragments(fragment):
         ("visit intranet.example/private now", "example/private"),
         ("visit intranet.example/private now", "intranet"),
         ("run `secret_code()` now", "`secret_code"),
+        ("do not expose <secret_key> now", "secret_key"),
         ("```python\nsecret_key = 1", "secret_key"),
         ("~~~python\nsecret_key = 1\n~~~", "secret_key"),
         ("intro\n\n    secret_key = value\noutro", "secret_key"),
