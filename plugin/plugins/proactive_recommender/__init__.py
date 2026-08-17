@@ -60,6 +60,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         self._llm = BackgroundLlm(self.logger)
         self._ready = False
         self._stopping = threading.Event()
+        self._initialization_lock = threading.Lock()
         self._cycle_lock = threading.Lock()
         self._compat_server: OpenBiliClawCompatibilityServer | None = None
 
@@ -72,27 +73,58 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             raw if isinstance(raw, Mapping) else {}
         )
 
+    async def _ensure_ready(self) -> bool:
+        """Initialize once even if an older host skips lifecycle.startup."""
+        if self._ready:
+            return True
+        if self._stopping.is_set():
+            return False
+        if not self._initialization_lock.acquire(blocking=False):
+            return False
+        try:
+            if self._ready:
+                return True
+            if self._stopping.is_set():
+                return False
+            # The effective-config read refreshes SDK runtime helpers in the
+            # child process. Settings still come from the base layer below so
+            # the Hosted UI and runtime use the same editable values.
+            await self.ctx.get_own_config(timeout=5.0)
+            await self._load_config()
+            if not self.store.enabled:
+                raise RuntimeError(
+                    "PluginStore must be enabled for proactive_recommender"
+                )
+            await self._state.load()
+            if self._stopping.is_set():
+                return False
+            self._ready = True
+            await self._sync_compat_server()
+            await self._sync_openbiliclaw_profile(time.time(), force=True)
+            self.logger.info(
+                "proactive recommender ready (enabled={}, shadow={}, "
+                "openbiliclaw={})",
+                self._config.enabled,
+                self._config.shadow_mode,
+                self._compat_server.running if self._compat_server else False,
+            )
+            return True
+        except Exception:
+            self._ready = False
+            raise
+        finally:
+            self._initialization_lock.release()
+
     @lifecycle(id="startup")
     async def startup(self, **_: Any):
         self._stopping.clear()
-        if not self.store.enabled:
-            return Err(
-                SdkError("PluginStore must be enabled for proactive_recommender")
-            )
-        await self._load_config()
-        await self._state.load()
-        self._ready = True
-        await self._sync_compat_server()
-        await self._sync_openbiliclaw_profile(time.time(), force=True)
-        self.logger.info(
-            "proactive recommender ready (enabled={}, shadow={}, openbiliclaw={})",
-            self._config.enabled,
-            self._config.shadow_mode,
-            self._compat_server.running if self._compat_server else False,
-        )
+        try:
+            ready = await self._ensure_ready()
+        except Exception as exc:
+            return Err(SdkError(f"plugin initialization failed: {type(exc).__name__}"))
         return Ok(
             {
-                "ready": True,
+                "ready": ready,
                 "openbiliclaw": self._compatibility_state(),
             }
         )
@@ -773,7 +805,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     @ui.context(id="dashboard", title=tr("panel.title", default="个性化主动推荐"))
     async def dashboard_context(self) -> dict[str, Any]:
-        await self._load_config()
+        await self._ensure_ready()
         return self._dashboard_state()
 
     @ui.action(
@@ -844,6 +876,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         },
     )
     async def update_recommendation_settings(self, **kwargs: Any):
+        await self._ensure_ready()
         try:
             updates = normalize_settings_update(kwargs)
         except (TypeError, ValueError) as exc:
@@ -910,6 +943,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         try:
             if self._stopping.is_set():
                 return Ok({"skipped": "plugin_stopping"})
+            if not await self._ensure_ready():
+                return Ok({"skipped": "plugin_initializing"})
             return Ok(await self._run_cycle())
         except Exception as exc:
             self.logger.exception("recommendation cycle failed")
@@ -926,6 +961,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         ),
     )
     async def recommendation_status(self, **kwargs: Any):
+        await self._ensure_ready()
         snapshot = self._state.snapshot()
         interests = active_interests(snapshot.get("profile"), include_trial=True)
         return Ok(
@@ -966,6 +1002,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         if not self._cycle_lock.acquire(blocking=False):
             return Ok({"skipped": "cycle_running"})
         try:
+            if not await self._ensure_ready():
+                return Ok({"skipped": "plugin_initializing"})
             return Ok(await self._run_cycle(force_discovery=True))
         finally:
             self._cycle_lock.release()

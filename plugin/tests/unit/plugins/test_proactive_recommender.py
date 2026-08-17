@@ -489,6 +489,17 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert "id='recommendation_status'" in status_decorators
     assert "@ui.action" in update_decorators
     assert "id='update_recommendation_settings'" in update_decorators
+    for entry_name in (
+        "dashboard_context",
+        "recommendation_cycle",
+        "recommendation_run_once",
+    ):
+        assert "await self._ensure_ready()" in ast.unparse(functions[entry_name])
+    initialization = functions["_ensure_ready"]
+    initialization_source = ast.unparse(initialization)
+    assert initialization_source.index("await self.ctx.get_own_config") < (
+        initialization_source.index("if not self.store.enabled")
+    )
 
 
 def test_all_locales_expose_the_same_plugin_and_entry_keys() -> None:
