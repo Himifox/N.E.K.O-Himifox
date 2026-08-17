@@ -5,7 +5,7 @@
 1. 从本机 OpenBiliClaw 完整后端 `127.0.0.1:8420` 读取已经基于跨平台浏览行为生成的最终推荐，不复制 Cookie、页面快照或原始浏览记录。
 2. 从 NEKO 现有 `bus.memory` 读取最近一小时的新用户消息，提炼非敏感本地兴趣；也可调用 `web_search:search` 和 `bilibili_danmaku:bili_search` 补充候选。
 3. 将所有候选统一进行相关性排序、去重、隐私前台、离开状态、安静时段、每日上限和最短间隔门控。
-4. 通过 `proactive_controller:get_state` 尊重主动搭话总开关和 `off` 模式；控制器不可用时回退到共享偏好，读取失败则停止交接。原生视频、新闻等来源开关不控制本插件，用户可以关闭它们避免重复推荐，本插件的来源由 Hosted UI 独立管理。
+4. 直接读取主服务 `/api/proactive/mode`，尊重主动搭话总开关和 `off` 模式；不要求启动 `proactive_controller`，读取失败时停止交接。原生视频、新闻等来源开关不控制本插件，用户可以关闭它们避免重复推荐，本插件的来源由 Hosted UI 独立管理。
 5. 将最佳候选的标题、主题和推荐理由通过不可见的 `push_message(visibility=[], ai_behavior="respond")` 交给当前 NEKO 主角色模型，由猫娘结合当前对话、记忆和人设决定保持沉默或自然搭话；候选 URL 和封面不进入模型提示词。
 
 Hosted 面板中的“我的画像”直接同步 OpenBiliClaw 的 `GET /api/profile-summary`，展示其性格画像、核心特质、兴趣领域和当前阶段。原先从 NEKO 最近聊天提炼的轻量兴趣仍只作为插件内部的补充排序信号，不再作为面板中的主画像。

@@ -468,7 +468,9 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert "await self.ctx.get_own_base_config" in plugin_source
     assert "await self.ctx.update_own_config" in plugin_source
     assert "await self.config.update" not in plugin_source
-    assert '"proactive_controller:get_state"' in plugin_source
+    assert "fetch_main_proactive_policy" in plugin_source
+    assert '"source": "main_api"' in plugin_source
+    assert "utils.preferences" not in plugin_source
     assert "proactiveVideoChatEnabled" not in plugin_source
     assert 'ai_behavior="blind"' not in plugin_source
     assert 'ai_behavior="read"' not in plugin_source

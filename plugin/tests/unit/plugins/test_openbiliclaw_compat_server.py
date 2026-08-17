@@ -33,6 +33,9 @@ from plugin.plugins.proactive_recommender.openbiliclaw_compat import (
 from plugin.plugins.proactive_recommender.openbiliclaw_recommendations import (
     fetch_openbiliclaw_recommendations,
 )
+from plugin.plugins.proactive_recommender.proactive_policy import (
+    fetch_main_proactive_policy,
+)
 
 
 def _free_port() -> int:
@@ -195,5 +198,32 @@ async def test_recommendation_client_reads_official_openbiliclaw_contract() -> N
         assert result.error == ""
         assert result.candidates[0]["source"] == "openbiliclaw:youtube"
         assert result.candidates[0]["openbiliclaw_id"] == "7"
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_proactive_policy_reads_authoritative_main_service_contract() -> None:
+    async def proactive_mode(_: Any) -> web.Response:
+        return web.json_response(
+            {
+                "success": True,
+                "mode": "custom",
+                "settings": {"proactiveChatEnabled": True},
+            }
+        )
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_get("/api/proactive/mode", proactive_mode)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        result = await fetch_main_proactive_policy(port=port)
+        assert result.error == ""
+        assert result.mode == "custom"
+        assert result.settings == {"proactiveChatEnabled": True}
+        assert result.endpoint.endswith("/api/proactive/mode")
     finally:
         await runner.cleanup()

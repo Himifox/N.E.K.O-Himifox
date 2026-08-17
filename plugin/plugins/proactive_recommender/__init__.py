@@ -19,7 +19,6 @@ from plugin.sdk.plugin import (
     timer_interval,
     tr,
     ui,
-    unwrap_or,
 )
 
 from .config import RecommendationConfig, normalize_settings_update
@@ -38,6 +37,7 @@ from .profile import (
     heuristic_updates,
     message_from_memory_record,
 )
+from .proactive_policy import fetch_main_proactive_policy
 from .prompting import (
     build_neko_handoff_prompt,
     canonical_candidate_url,
@@ -490,43 +490,21 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         return len(ranked)
 
     async def _proactive_policy(self) -> dict[str, Any]:
-        try:
-            payload = unwrap_or(
-                await self.plugins.call_entry(
-                    "proactive_controller:get_state", {}, timeout=5.0
-                ),
-                {},
-            )
-            if isinstance(payload, Mapping) and isinstance(
-                payload.get("settings"), Mapping
-            ):
-                return {
-                    "mode": str(payload.get("mode") or "custom"),
-                    "settings": dict(payload["settings"]),
-                    "source": "proactive_controller",
-                }
-        except Exception as exc:
-            self.logger.debug(
-                "proactive controller unavailable: {}", type(exc).__name__
-            )
-        try:
-            from utils.preferences import load_global_conversation_settings
-
-            settings = await asyncio.to_thread(load_global_conversation_settings)
+        result = await fetch_main_proactive_policy()
+        if not result.error:
             return {
-                "mode": "custom",
-                "settings": dict(settings) if isinstance(settings, Mapping) else {},
-                "source": "preferences",
+                "mode": result.mode,
+                "settings": result.settings,
+                "source": "main_api",
             }
-        except Exception as exc:
-            self.logger.warning(
-                "global proactive setting unavailable: {}", type(exc).__name__
-            )
-            return {
-                "mode": "unavailable",
-                "settings": {"proactiveChatEnabled": False},
-                "source": "fail_closed",
-            }
+        self.logger.warning(
+            "main proactive policy unavailable: {}", result.error
+        )
+        return {
+            "mode": "unavailable",
+            "settings": {"proactiveChatEnabled": False},
+            "source": "fail_closed",
+        }
 
     async def _deliver(self, now: float) -> dict[str, Any]:
         if self._stopping.is_set():
