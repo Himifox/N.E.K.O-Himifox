@@ -22,12 +22,14 @@ def normalize_settings_update(raw: Mapping[str, Any]) -> dict[str, Any]:
         "background_llm",
         "web_search",
         "bilibili",
+        "openbiliclaw_enabled",
     }
     int_ranges = {
         "daily_limit": (0, 20),
         "min_interval_minutes": (0, 1440),
         "min_user_silence_minutes": (0, 1440),
         "max_idle_seconds": (0, 86400),
+        "openbiliclaw_port": (1024, 65535),
     }
     for key in bool_fields:
         if key in raw:
@@ -79,12 +81,16 @@ class RecommendationConfig:
     web_search: bool = True
     bilibili: bool = False
     background_llm: bool = True
+    openbiliclaw_enabled: bool = False
+    openbiliclaw_host: str = "127.0.0.1"
+    openbiliclaw_port: int = 8421
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "RecommendationConfig":
         root = raw if isinstance(raw, Mapping) else {}
         rec = _section(root, "recommendation")
         sources = _section(rec, "sources")
+        compat = _section(root, "openbiliclaw")
         return cls(
             enabled=bool(rec.get("enabled", False)),
             shadow_mode=bool(rec.get("shadow_mode", True)),
@@ -105,4 +111,9 @@ class RecommendationConfig:
             web_search=bool(sources.get("web_search", True)),
             bilibili=bool(sources.get("bilibili", False)),
             background_llm=bool(rec.get("background_llm", True)),
+            openbiliclaw_enabled=bool(compat.get("enabled", False)),
+            # The compatibility ingress is deliberately loopback-only. This is
+            # a browser-extension bridge, not a LAN API.
+            openbiliclaw_host="127.0.0.1",
+            openbiliclaw_port=min(65535, max(1024, int(compat.get("port", 8421)))),
         )

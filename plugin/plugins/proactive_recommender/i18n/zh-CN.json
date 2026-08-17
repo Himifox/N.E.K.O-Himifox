@@ -1,6 +1,6 @@
 {
-  "plugin.name": "个性化主动推荐",
-  "plugin.description": "基于最近一小时对话中的非敏感兴趣线索，调用已有网页搜索和可选 B 站来源发现候选，经相关性、去重、隐私、活跃状态、安静时段与频率门控后，让 NEKO 自然地发起内容推荐。原始对话不长期保存，默认关闭并使用影子模式。",
+  "plugin.name": "OpenBiliClaw 个性化推荐兼容层",
+  "plugin.description": "接收 OpenBiliClaw 扩展主动上报的跨平台行为，并与 NEKO 最近对话共同提炼非敏感兴趣画像；Cookie、完整网址与原始事件不落盘，再通过现有搜索插件和安全门控发起推荐。",
   "entries.status.name": "推荐状态",
   "entries.status.description": "查看个性化主动推荐状态，不返回用户原始对话。",
   "entries.run_once.name": "运行一次推荐周期",
@@ -82,5 +82,20 @@
   "panel.reason.daily": "已达每日上限",
   "panel.reason.interval": "距离上次推荐太近",
   "panel.reason.cooldown": "连续忽略后的冷却期",
-  "panel.reason.blocked": "被安全门控拦截"
+  "panel.reason.blocked": "被安全门控拦截",
+  "panel.bridge.title": "OpenBiliClaw 浏览器桥",
+  "panel.bridge.running": "正在接收行为信号",
+  "panel.bridge.disabled": "桥接已关闭",
+  "panel.bridge.failed": "桥接启动失败",
+  "panel.bridge.events": "已接收事件",
+  "panel.bridge.clients": "扩展连接",
+  "panel.bridge.lastEvent": "最后事件",
+  "panel.bridge.cookies": "Cookie 策略",
+  "panel.bridge.cookiesOff": "拒绝并不保存",
+  "panel.bridge.empty": "还没有收到平台行为；在 OpenBiliClaw 扩展中把后端地址设为上方地址。",
+  "panel.bridge.config": "浏览器扩展兼容入口",
+  "panel.bridge.configHelp": "只监听本机 127.0.0.1。修改端口后，也要在 OpenBiliClaw 扩展里填写相同端口。",
+  "panel.bridge.enable": "启用 OpenBiliClaw 行为事件桥",
+  "panel.data.browserEvents": "OpenBiliClaw 扩展主动上报的点击、搜索、停留、点赞、收藏等事件；只保留事件指纹、平台计数和提炼后的兴趣词。",
+  "panel.privacy.browser": "不保存 Cookie、完整 URL、页面快照、原始标题或原始平台事件；兼容层不执行 OpenBiliClaw 的账号抓取任务。"
 }

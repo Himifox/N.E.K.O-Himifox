@@ -1,6 +1,6 @@
 {
-  "plugin.name": "개인화 능동 추천",
-  "plugin.description": "최근 한 시간의 대화에서 비민감 관심 신호를 사용하고 기존 웹 검색 및 선택적 Bilibili 소스로 후보를 찾습니다. 관련성, 중복 제거, 개인정보, 활동 상태, 방해 금지 시간과 빈도 게이트를 통과한 콘텐츠만 NEKO에 전달합니다. 원문 대화는 장기 저장하지 않으며 기본값은 비활성 및 섀도 모드입니다.",
+  "plugin.name": "OpenBiliClaw Recommendation Bridge",
+  "plugin.description": "Combines OpenBiliClaw browser behavior with recent NEKO conversations without persisting cookies, full URLs, or raw platform events.",
   "entries.status.name": "추천 상태",
   "entries.status.description": "사용자의 원문 대화를 반환하지 않고 개인화 추천 상태를 확인합니다.",
   "entries.run_once.name": "추천 주기 실행",
@@ -82,5 +82,20 @@
   "panel.reason.daily": "Daily limit reached",
   "panel.reason.interval": "Too soon since the last recommendation",
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
-  "panel.reason.blocked": "Blocked by a safety gate"
+  "panel.reason.blocked": "Blocked by a safety gate",
+  "panel.bridge.title": "OpenBiliClaw browser bridge",
+  "panel.bridge.running": "Receiving behavior signals",
+  "panel.bridge.disabled": "Bridge disabled",
+  "panel.bridge.failed": "Bridge failed to start",
+  "panel.bridge.events": "Events received",
+  "panel.bridge.clients": "Extension clients",
+  "panel.bridge.lastEvent": "Last event",
+  "panel.bridge.cookies": "Cookie policy",
+  "panel.bridge.cookiesOff": "Rejected and not stored",
+  "panel.bridge.empty": "No platform behavior yet. Point the OpenBiliClaw extension at the endpoint above.",
+  "panel.bridge.config": "Browser-extension compatibility ingress",
+  "panel.bridge.configHelp": "Listens on 127.0.0.1 only. Set the same port in the OpenBiliClaw extension.",
+  "panel.bridge.enable": "Enable OpenBiliClaw behavior bridge",
+  "panel.data.browserEvents": "Clicks, searches, dwell, likes, and favorites reported by the OpenBiliClaw extension; only fingerprints, platform counts, and extracted interests are retained.",
+  "panel.privacy.browser": "Cookies, full URLs, DOM snapshots, raw titles, and raw platform events are not stored; OpenBiliClaw account-scraping tasks are not implemented."
 }

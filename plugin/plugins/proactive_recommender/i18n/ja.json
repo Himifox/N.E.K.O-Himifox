@@ -1,6 +1,6 @@
 {
-  "plugin.name": "パーソナライズされた能動的レコメンド",
-  "plugin.description": "直近1時間の会話から非機密の興味シグナルを使い、既存のWeb検索と任意のBilibiliソースで候補を発見します。関連性、重複排除、プライバシー、活動状態、静かな時間帯、頻度のゲートを通過した場合のみNEKOに渡します。会話原文は長期保存せず、既定では無効かつシャドーモードです。",
+  "plugin.name": "OpenBiliClaw Recommendation Bridge",
+  "plugin.description": "Combines OpenBiliClaw browser behavior with recent NEKO conversations without persisting cookies, full URLs, or raw platform events.",
   "entries.status.name": "レコメンド状態",
   "entries.status.description": "ユーザーの会話原文を返さずに、個人向けレコメンドの状態を表示します。",
   "entries.run_once.name": "レコメンド周期を実行",
@@ -82,5 +82,20 @@
   "panel.reason.daily": "Daily limit reached",
   "panel.reason.interval": "Too soon since the last recommendation",
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
-  "panel.reason.blocked": "Blocked by a safety gate"
+  "panel.reason.blocked": "Blocked by a safety gate",
+  "panel.bridge.title": "OpenBiliClaw browser bridge",
+  "panel.bridge.running": "Receiving behavior signals",
+  "panel.bridge.disabled": "Bridge disabled",
+  "panel.bridge.failed": "Bridge failed to start",
+  "panel.bridge.events": "Events received",
+  "panel.bridge.clients": "Extension clients",
+  "panel.bridge.lastEvent": "Last event",
+  "panel.bridge.cookies": "Cookie policy",
+  "panel.bridge.cookiesOff": "Rejected and not stored",
+  "panel.bridge.empty": "No platform behavior yet. Point the OpenBiliClaw extension at the endpoint above.",
+  "panel.bridge.config": "Browser-extension compatibility ingress",
+  "panel.bridge.configHelp": "Listens on 127.0.0.1 only. Set the same port in the OpenBiliClaw extension.",
+  "panel.bridge.enable": "Enable OpenBiliClaw behavior bridge",
+  "panel.data.browserEvents": "Clicks, searches, dwell, likes, and favorites reported by the OpenBiliClaw extension; only fingerprints, platform counts, and extracted interests are retained.",
+  "panel.privacy.browser": "Cookies, full URLs, DOM snapshots, raw titles, and raw platform events are not stored; OpenBiliClaw account-scraping tasks are not implemented."
 }

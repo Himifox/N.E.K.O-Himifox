@@ -1,14 +1,14 @@
 [plugin]
-name = "个性化主动推荐"
-description = "基于最近一小时对话中的非敏感兴趣线索，调用已有网页搜索和可选 B 站来源发现候选，经相关性、去重、隐私、活跃状态、安静时段与频率门控后，让 NEKO 自然地发起内容推荐。原始对话不长期保存，默认关闭并使用影子模式。"
-short_description = "Privacy-aware, inspectable recommendations for NEKO's proactive conversations."
+name = "OpenBiliClaw 个性化推荐兼容层"
+description = "在插件进程内提供 OpenBiliClaw 浏览器扩展兼容接口，把扩展主动上报的跨平台浏览行为与 NEKO 最近对话共同压缩为非敏感兴趣画像，再调用现有搜索插件发现候选并通过隐私、活跃状态、安静时段和频率门控发起推荐。Cookie 与原始平台事件不会落盘。"
+short_description = "OpenBiliClaw browser signals and NEKO conversations, joined by a privacy-aware recommendation plugin."
 keywords = [
     "个性化推荐",
     "主动搭话",
     "recommendation",
     "proactive",
 ]
-version = "0.2.0"
+version = "0.3.0"
 id = "proactive_recommender"
 entry = "plugin.plugins.proactive_recommender:ProactiveRecommenderPlugin"
 passive = true
@@ -32,7 +32,7 @@ enabled = true
 
 [[plugin.ui.panel]]
 id = "main"
-title = "个性化主动推荐"
+title = "OpenBiliClaw 个性化推荐兼容层"
 entry = "ui/panel.tsx"
 context = "dashboard"
 permissions = [
@@ -43,6 +43,10 @@ permissions = [
 [plugin_runtime]
 enabled = true
 auto_start = true
+
+[openbiliclaw]
+enabled = true
+port = 8421
 
 [recommendation]
 enabled = true
@@ -60,7 +64,6 @@ ignored_window_minutes = 30
 max_consecutive_ignored = 2
 max_idle_seconds = 900
 min_user_silence_minutes = 20
-1 = ""
 
 [recommendation.sources]
 web_search = true

@@ -25,6 +25,10 @@ from .config import RecommendationConfig, normalize_settings_update
 from .feedback import apply_feedback_to_profile, settle_history
 from .gate import evaluate_gate
 from .llm_gateway import BackgroundLlm
+from .openbiliclaw_compat import (
+    OpenBiliClawCompatibilityServer,
+    apply_behavior_event_batch,
+)
 from .profile import (
     active_interests,
     apply_profile_updates,
@@ -48,6 +52,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         self._llm = BackgroundLlm(self.logger)
         self._ready = False
         self._cycle_lock = threading.Lock()
+        self._compat_server: OpenBiliClawCompatibilityServer | None = None
 
     async def _load_config(self) -> None:
         payload = await self.ctx.get_own_effective_config(timeout=5.0)
@@ -65,17 +70,108 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         await self._load_config()
         await self._state.load()
         self._ready = True
+        await self._sync_compat_server()
         self.logger.info(
-            "proactive recommender ready (enabled={}, shadow={})",
+            "proactive recommender ready (enabled={}, shadow={}, openbiliclaw={})",
             self._config.enabled,
             self._config.shadow_mode,
+            self._compat_server.running if self._compat_server else False,
         )
-        return Ok({"ready": True})
+        return Ok(
+            {
+                "ready": True,
+                "openbiliclaw": self._compatibility_state(),
+            }
+        )
+
+    @lifecycle(id="shutdown")
+    async def shutdown(self, **_: Any):
+        if self._compat_server is not None:
+            await self._compat_server.stop()
+            self._compat_server = None
+        self._ready = False
+        return Ok({"ready": False})
 
     @lifecycle(id="config_change")
     async def config_change(self, **_: Any):
         await self._load_config()
+        await self._sync_compat_server()
         return Ok({"reloaded": True})
+
+    async def _sync_compat_server(self) -> None:
+        desired = (
+            self._config.openbiliclaw_host,
+            self._config.openbiliclaw_port,
+        )
+        current = self._compat_server
+        if not self._config.openbiliclaw_enabled:
+            if current is not None:
+                await current.stop()
+                self._compat_server = None
+            return
+        if current is not None and (current.host, current.port) == desired and current.running:
+            return
+        if current is not None:
+            await current.stop()
+        server = OpenBiliClawCompatibilityServer(
+            host=desired[0],
+            port=desired[1],
+            on_events=self._ingest_platform_events,
+            status_provider=self._openbiliclaw_runtime_status,
+            logger=self.logger,
+        )
+        self._compat_server = server
+        try:
+            await server.start()
+        except Exception as exc:
+            self.logger.warning(
+                "OpenBiliClaw compatibility server failed on {}:{}: {}",
+                desired[0],
+                desired[1],
+                type(exc).__name__,
+            )
+
+    def _compatibility_state(self) -> dict[str, Any]:
+        if self._compat_server is not None:
+            return self._compat_server.snapshot()
+        return {
+            "enabled": self._config.openbiliclaw_enabled,
+            "running": False,
+            "host": self._config.openbiliclaw_host,
+            "port": self._config.openbiliclaw_port,
+            "endpoint": (
+                f"http://{self._config.openbiliclaw_host}:"
+                f"{self._config.openbiliclaw_port}"
+            ),
+            "connected_clients": 0,
+            "started_at": 0.0,
+            "last_error": "",
+            "cookie_ingest": False,
+            "compatibility_level": "behavior-events",
+        }
+
+    def _openbiliclaw_runtime_status(self) -> dict[str, Any]:
+        snapshot = self._state.snapshot()
+        platform_events = snapshot.get("platform_events", {})
+        return {
+            "initialized": True,
+            "recommendation_count": len(snapshot.get("candidates", [])),
+            "pending_signal_events": 0,
+            "unread_count": 0,
+            "neko_compatibility": True,
+            "behavior_events_accepted": int(platform_events.get("accepted", 0)),
+        }
+
+    async def _ingest_platform_events(
+        self, events: list[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+
+        def mutate(state: dict[str, Any]) -> None:
+            result.update(apply_behavior_event_batch(state, events, now=time.time()))
+
+        await self._state.update(mutate)
+        return result
 
     async def _new_messages(self) -> list[dict[str, Any]]:
         records = await self.bus.memory.get(
@@ -383,6 +479,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             for item in snapshot.get("history", [])
             if isinstance(item, Mapping)
         ]
+        platform_events = snapshot.get("platform_events", {})
         return {
             "ready": self._ready,
             "store_enabled": bool(self.store.enabled),
@@ -400,6 +497,16 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "candidates": candidates,
             "history": history,
             "last_run": snapshot.get("last_run", {}),
+            "openbiliclaw": {
+                **self._compatibility_state(),
+                "events": {
+                    "accepted": int(platform_events.get("accepted", 0)),
+                    "duplicate": int(platform_events.get("duplicate", 0)),
+                    "rejected": int(platform_events.get("rejected", 0)),
+                    "by_platform": dict(platform_events.get("by_platform", {})),
+                    "last_event_at": float(platform_events.get("last_event_at", 0.0)),
+                },
+            },
             "metrics": {
                 "interest_count": len(interests),
                 "candidate_count": len(snapshot.get("candidates", [])),
@@ -408,11 +515,14 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                     for item in all_history
                     if item.get("local_date") == today and item.get("mode") == "live"
                 ),
+                "platform_event_count": int(platform_events.get("accepted", 0)),
             },
             "privacy": {
                 "memory_window_minutes": 60,
                 "raw_conversations_persisted": False,
                 "sensitive_inference": False,
+                "browser_cookies_persisted": False,
+                "raw_platform_events_persisted": False,
             },
         }
 
@@ -436,6 +546,12 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                 "background_llm": {"type": "boolean"},
                 "web_search": {"type": "boolean"},
                 "bilibili": {"type": "boolean"},
+                "openbiliclaw_enabled": {"type": "boolean"},
+                "openbiliclaw_port": {
+                    "type": "integer",
+                    "minimum": 1024,
+                    "maximum": 65535,
+                },
                 "daily_limit": {"type": "integer", "minimum": 0, "maximum": 20},
                 "min_interval_minutes": {
                     "type": "integer",
@@ -481,13 +597,22 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         }
         if source_updates:
             updates["sources"] = source_updates
+        compat_updates = {}
+        if "openbiliclaw_enabled" in updates:
+            compat_updates["enabled"] = updates.pop("openbiliclaw_enabled")
+        if "openbiliclaw_port" in updates:
+            compat_updates["port"] = updates.pop("openbiliclaw_port")
         try:
-            payload = await self.ctx.update_own_config({"recommendation": updates})
+            config_patch: dict[str, Any] = {"recommendation": updates}
+            if compat_updates:
+                config_patch["openbiliclaw"] = compat_updates
+            payload = await self.ctx.update_own_config(config_patch)
             config_data = payload.get("config") if isinstance(payload, Mapping) else None
             if isinstance(config_data, Mapping):
                 self._config = RecommendationConfig.from_mapping(config_data)
             else:
                 await self._load_config()
+            await self._sync_compat_server()
         except Exception as exc:
             return Err(SdkError(f"settings update failed: {type(exc).__name__}"))
         return Ok(
@@ -551,6 +676,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                     for item in interests[:12]
                 ],
                 "candidate_count": len(snapshot.get("candidates", [])),
+                "openbiliclaw": self._dashboard_state().get("openbiliclaw", {}),
                 "history": snapshot.get("history", [])[-10:],
             }
         )

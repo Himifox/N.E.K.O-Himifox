@@ -1,5 +1,8 @@
+[openbiliclaw]
+enabled = true
+port = 8421
+
 [recommendation]
-1 = ""
 enabled = true
 shadow_mode = false
 memory_bucket = "default"

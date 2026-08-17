@@ -1,6 +1,6 @@
 {
-  "plugin.name": "Recomendações proativas personalizadas",
-  "plugin.description": "Usa sinais de interesse não sensíveis da última hora de conversa, encontra candidatos por pesquisa web existente e fontes opcionais do Bilibili e aplica controles de relevância, duplicação, privacidade, atividade, horário silencioso e frequência antes de entregar conteúdo ao NEKO. Não armazena conversas originais a longo prazo; vem desativado e em modo sombra.",
+  "plugin.name": "OpenBiliClaw Recommendation Bridge",
+  "plugin.description": "Combines OpenBiliClaw browser behavior with recent NEKO conversations without persisting cookies, full URLs, or raw platform events.",
   "entries.status.name": "Estado das recomendações",
   "entries.status.description": "Mostra o estado das recomendações sem devolver conversas originais do usuário.",
   "entries.run_once.name": "Executar ciclo de recomendação",
@@ -82,5 +82,20 @@
   "panel.reason.daily": "Daily limit reached",
   "panel.reason.interval": "Too soon since the last recommendation",
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
-  "panel.reason.blocked": "Blocked by a safety gate"
+  "panel.reason.blocked": "Blocked by a safety gate",
+  "panel.bridge.title": "OpenBiliClaw browser bridge",
+  "panel.bridge.running": "Receiving behavior signals",
+  "panel.bridge.disabled": "Bridge disabled",
+  "panel.bridge.failed": "Bridge failed to start",
+  "panel.bridge.events": "Events received",
+  "panel.bridge.clients": "Extension clients",
+  "panel.bridge.lastEvent": "Last event",
+  "panel.bridge.cookies": "Cookie policy",
+  "panel.bridge.cookiesOff": "Rejected and not stored",
+  "panel.bridge.empty": "No platform behavior yet. Point the OpenBiliClaw extension at the endpoint above.",
+  "panel.bridge.config": "Browser-extension compatibility ingress",
+  "panel.bridge.configHelp": "Listens on 127.0.0.1 only. Set the same port in the OpenBiliClaw extension.",
+  "panel.bridge.enable": "Enable OpenBiliClaw behavior bridge",
+  "panel.data.browserEvents": "Clicks, searches, dwell, likes, and favorites reported by the OpenBiliClaw extension; only fingerprints, platform counts, and extracted interests are retained.",
+  "panel.privacy.browser": "Cookies, full URLs, DOM snapshots, raw titles, and raw platform events are not stored; OpenBiliClaw account-scraping tasks are not implemented."
 }

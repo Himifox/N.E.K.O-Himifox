@@ -19,6 +19,14 @@ def default_state() -> dict[str, Any]:
         "last_run": {},
         "last_discovery_at": 0.0,
         "last_user_message_at": 0.0,
+        "processed_platform_event_ids": [],
+        "platform_events": {
+            "accepted": 0,
+            "duplicate": 0,
+            "rejected": 0,
+            "by_platform": {},
+            "last_event_at": 0.0,
+        },
     }
 
 

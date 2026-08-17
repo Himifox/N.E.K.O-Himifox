@@ -42,6 +42,13 @@ from plugin.plugins.proactive_recommender.profile import (
     message_from_memory_record,
 )
 from plugin.plugins.proactive_recommender.prompting import build_delivery_prompt
+from plugin.plugins.proactive_recommender.openbiliclaw_compat import (
+    apply_behavior_event_batch,
+    behavior_event_updates,
+    event_fingerprint,
+    infer_platform,
+    normalize_timestamp,
+)
 from plugin.plugins.proactive_recommender.ranking import rank_candidates
 from plugin.plugins.proactive_recommender.sources import (
     normalize_bilibili_results,
@@ -54,6 +61,7 @@ def test_config_is_safe_by_default() -> None:
     assert config.enabled is False
     assert config.shadow_mode is True
     assert config.bilibili is False
+    assert config.openbiliclaw_enabled is False
 
 
 def test_hosted_ui_settings_are_strictly_validated() -> None:
@@ -63,11 +71,15 @@ def test_hosted_ui_settings_are_strictly_validated() -> None:
             "quiet_start": "23:00",
             "score_threshold": 0.8,
             "daily_limit": 3,
+            "openbiliclaw_enabled": True,
+            "openbiliclaw_port": 8421,
             "unknown": "ignored",
         }
     ) == {
         "enabled": True,
         "daily_limit": 3,
+        "openbiliclaw_enabled": True,
+        "openbiliclaw_port": 8421,
         "score_threshold": 0.8,
         "quiet_start": "23:00",
     }
@@ -76,6 +88,7 @@ def test_hosted_ui_settings_are_strictly_validated() -> None:
         {"quiet_end": "9:00"},
         {"score_threshold": 1.1},
         {"daily_limit": 21},
+        {"openbiliclaw_port": 80},
         {"unknown": True},
     ):
         try:
@@ -122,6 +135,40 @@ def test_profile_merges_positive_and_negative_evidence() -> None:
         item["polarity"] == "negative"
         for item in heuristic_updates([{"text": "不要推荐剧透内容"}])
     )
+
+
+def test_openbiliclaw_events_become_deduplicatable_non_sensitive_updates() -> None:
+    event = {
+        "event_id": "producer-1",
+        "type": "favorite",
+        "url": "https://www.bilibili.com/video/BV1xx",
+        "title": "Rust 异步编程教程",
+        "timestamp": 1_765_000_000_000,
+        "source_platform": "bilibili",
+        "metadata": {"tags": ["Rust", "编程"], "content_id": "BV1xx"},
+    }
+    assert event_fingerprint(event) == event_fingerprint(event)
+    assert infer_platform("", event["url"]) == "bilibili"
+    assert normalize_timestamp(event["timestamp"], now=1_765_000_100.0) == 1_765_000_000.0
+    updates = behavior_event_updates([event])
+    assert any(item["topic"] == "rust" and item["polarity"] == "positive" for item in updates)
+
+    sensitive = behavior_event_updates(
+        [{**event, "event_id": "producer-2", "title": "我的身份证和Rust", "metadata": {}}]
+    )
+    assert all("身份证" not in item["topic"] for item in sensitive)
+
+    state: dict[str, object] = {"profile": {"interests": []}}
+    first = apply_behavior_event_batch(state, [event], now=1_765_000_100.0)
+    second = apply_behavior_event_batch(state, [event], now=1_765_000_200.0)
+    assert first == {"accepted": 1, "duplicates": 0, "rejected": []}
+    assert second == {"accepted": 1, "duplicates": 1, "rejected": []}
+    assert state["platform_events"]["accepted"] == 1  # type: ignore[index]
+    assert state["platform_events"]["by_platform"] == {"bilibili": 1}  # type: ignore[index]
+    serialized = json.dumps(state, ensure_ascii=False)
+    assert "SESSDATA" not in serialized
+    assert event["url"] not in serialized
+    assert event["title"] not in serialized
 
 
 def test_sources_are_normalized_to_stable_candidates() -> None:
@@ -230,6 +277,7 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     plugin_dir = _REPO_ROOT / "plugin" / "plugins" / "proactive_recommender"
     manifest = tomllib.loads((plugin_dir / "plugin.toml").read_text(encoding="utf-8"))
     assert manifest["plugin"]["id"] == "proactive_recommender"
+    assert manifest["plugin"]["version"] == "0.3.0"
     assert manifest["plugin"]["passive"] is True
     assert manifest["plugin_runtime"] == {"enabled": True, "auto_start": True}
     assert manifest["plugin"]["store"]["enabled"] is True
@@ -238,6 +286,7 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert panel["entry"] == "ui/panel.tsx"
     assert panel["context"] == "dashboard"
     assert panel["permissions"] == ["state:read", "action:call"]
+    assert manifest["openbiliclaw"] == {"enabled": True, "port": 8421}
 
     tree = ast.parse((plugin_dir / "__init__.py").read_text(encoding="utf-8"))
     push_calls = [
@@ -257,6 +306,7 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert 'from "@neko/plugin-ui"' in panel_source
     assert "export default function ProactiveRecommenderPanel" in panel_source
     assert 'props.api.call("update_recommendation_settings"' in panel_source
+    assert 't("panel.bridge.title")' in panel_source
     assert "Raw conversations" not in panel_source
 
     plugin_source = (plugin_dir / "__init__.py").read_text(encoding="utf-8")

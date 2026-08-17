@@ -1,6 +1,6 @@
 {
-  "plugin.name": "個人化主動推薦",
-  "plugin.description": "使用最近一小時對話中的非敏感興趣線索，透過既有網頁搜尋與可選 B 站來源尋找候選；內容只有通過相關性、去重、隱私、活動狀態、安靜時段及頻率門控後才會交給 NEKO。原始對話不會長期儲存，預設關閉並使用影子模式。",
+  "plugin.name": "OpenBiliClaw 個人化推薦相容層",
+  "plugin.description": "接收 OpenBiliClaw 擴充功能主動上報的跨平台行為，並與 NEKO 最近對話共同提煉非敏感興趣；Cookie、完整網址與原始事件不落盤。",
   "entries.status.name": "推薦狀態",
   "entries.status.description": "查看個人化主動推薦狀態，不傳回使用者原始對話。",
   "entries.run_once.name": "執行一次推薦週期",
@@ -82,5 +82,20 @@
   "panel.reason.daily": "Daily limit reached",
   "panel.reason.interval": "Too soon since the last recommendation",
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
-  "panel.reason.blocked": "Blocked by a safety gate"
+  "panel.reason.blocked": "Blocked by a safety gate",
+  "panel.bridge.title": "OpenBiliClaw 瀏覽器橋接",
+  "panel.bridge.running": "正在接收行為訊號",
+  "panel.bridge.disabled": "橋接已關閉",
+  "panel.bridge.failed": "橋接啟動失敗",
+  "panel.bridge.events": "已接收事件",
+  "panel.bridge.clients": "擴充功能連線",
+  "panel.bridge.lastEvent": "最後事件",
+  "panel.bridge.cookies": "Cookie 政策",
+  "panel.bridge.cookiesOff": "拒絕且不保存",
+  "panel.bridge.empty": "尚未收到平台行為；請在 OpenBiliClaw 擴充功能中使用上方後端位址。",
+  "panel.bridge.config": "瀏覽器擴充功能相容入口",
+  "panel.bridge.configHelp": "只監聽本機 127.0.0.1；擴充功能必須使用相同連接埠。",
+  "panel.bridge.enable": "啟用 OpenBiliClaw 行為事件橋",
+  "panel.data.browserEvents": "OpenBiliClaw 擴充功能主動上報的點擊、搜尋、停留、按讚與收藏等事件；只保留事件指紋、平台計數及提煉後的興趣詞。",
+  "panel.privacy.browser": "不保存 Cookie、完整 URL、頁面快照、原始標題或原始平台事件；相容層不執行 OpenBiliClaw 的帳號擷取任務。"
 }
