@@ -4410,6 +4410,32 @@ function rearmStartupGreetingWithoutManager(reason, detail = {}) {
     return rearmDetail;
 }
 
+function waitForActiveAutostartPromptClosed() {
+    const selector = '.modal-overlay-autostart-retention';
+    if (!document.querySelector(selector)) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = function () {
+            if (done) return;
+            done = true;
+            window.removeEventListener('neko:decision-prompt-closed', onPromptClosed);
+            resolve();
+        };
+        const onPromptClosed = function (event) {
+            const detail = event && event.detail ? event.detail : {};
+            if (detail.skin === 'autostart-retention') {
+                finish();
+            }
+        };
+        window.addEventListener('neko:decision-prompt-closed', onPromptClosed);
+        if (!document.querySelector(selector)) {
+            finish();
+        }
+    });
+}
+
 async function destroyUniversalTutorialManagerInstance(reason = 'destroy') {
     const manager = window.universalTutorialManager;
     if (!manager) return;
@@ -4438,7 +4464,9 @@ function bindUniversalTutorialManagerResizeRetry() {
         rearmStartupGreetingWithoutManager('tutorial-manager-resize-init', {
             viewportWidth: window.innerWidth
         });
-        initUniversalTutorialManager().then(function (initialized) {
+        waitForActiveAutostartPromptClosed().then(function () {
+            return initUniversalTutorialManager();
+        }).then(function (initialized) {
             if (initialized !== false) {
                 window.__universalTutorialManagerInitialized = true;
             }

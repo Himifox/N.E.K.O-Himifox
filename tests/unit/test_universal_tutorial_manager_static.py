@@ -538,10 +538,21 @@ def test_universal_tutorial_manager_rearms_startup_greeting_before_resize_init()
         1,
     )[1].split("\n    });", 1)[0]
     rearm_call = "rearmStartupGreetingWithoutManager('tutorial-manager-resize-init'"
+    wait_call = "waitForActiveAutostartPromptClosed().then(function () {"
     assert rearm_call in resize_block
-    assert resize_block.index(rearm_call) < resize_block.index(
-        "initUniversalTutorialManager().then(function (initialized) {"
+    assert wait_call in resize_block
+    assert resize_block.index(rearm_call) < resize_block.index(wait_call)
+    assert resize_block.index(wait_call) < resize_block.index(
+        "return initUniversalTutorialManager();"
     )
+
+    wait_block = source.split("function waitForActiveAutostartPromptClosed()", 1)[1].split(
+        "\n}",
+        1,
+    )[0]
+    assert "'.modal-overlay-autostart-retention'" in wait_block
+    assert "window.addEventListener('neko:decision-prompt-closed', onPromptClosed);" in wait_block
+    assert "detail.skin === 'autostart-retention'" in wait_block
 
 
 def test_universal_tutorial_manager_resets_and_delays_startup_greeting_release():

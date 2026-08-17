@@ -156,6 +156,18 @@ _AUTOSTART_ELIGIBLE_FETCH_JS = """
             },
         });
     }
+    if (requestUrl === '/api/autostart-prompt/decision') {
+        return jsonResponse({
+            ok: true,
+            state: {
+                status: 'deferred',
+                never_remind: false,
+                deferred_until: Date.now() + 1000,
+                autostart_enabled: false,
+                can_never_remind: false,
+            },
+        });
+    }
 """
 
 
@@ -593,6 +605,18 @@ def test_autostart_prompt_waits_for_tutorial_release_and_teardown(
                     },
                 });
             }
+            if (requestUrl === '/api/autostart-prompt/decision') {
+                return jsonResponse({
+                    ok: true,
+                    state: {
+                        status: 'deferred',
+                        never_remind: false,
+                        deferred_until: Date.now() + 1000,
+                        autostart_enabled: false,
+                        can_never_remind: false,
+                    },
+                });
+            }
         """,
     )
 
@@ -649,13 +673,7 @@ def test_autostart_prompt_waits_for_tutorial_release_and_teardown(
         if entry["url"] == "/api/autostart-prompt/shown"
     ]
     assert len(shown_requests) == 1
-    mock_page.evaluate(
-        """
-        () => window.dispatchEvent(new CustomEvent('neko:startup-greeting-release', {
-            detail: { released: false, reason: 'test-cleanup' },
-        }))
-        """
-    )
+    mock_page.locator(".modal-dialog-autostart-retention .modal-btn").first.click()
     expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
 
 
@@ -809,10 +827,12 @@ def test_autostart_prompt_on_shown_closes_and_releases_token_when_tutorial_start
         if entry["url"] == "/api/autostart-prompt/shown"
     ]
     assert len(shown_requests) == 1
+    mock_page.locator(".modal-dialog-autostart-retention .modal-btn").first.click()
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
 
 
 @pytest.mark.frontend
-def test_autostart_prompt_closes_open_prompt_when_tutorial_rearms(
+def test_autostart_prompt_stays_open_until_user_decides_when_tutorial_rearms(
     mock_page: Page,
 ):
     _bootstrap_home_runtime_page(
@@ -858,6 +878,10 @@ def test_autostart_prompt_closes_open_prompt_when_tutorial_rearms(
         """
     )
 
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(1)
+    assert mock_page.evaluate("() => window.__audioStops") == 0
+
+    mock_page.locator(".modal-dialog-autostart-retention .modal-btn").first.click()
     expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
     assert mock_page.evaluate("() => window.__audioStops") == 1
 
