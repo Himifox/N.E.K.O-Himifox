@@ -381,6 +381,10 @@ def test_handoff_prompt_omits_url_and_keeps_main_model_decision_contract() -> No
     assert "Do not include or invent any URL" in prompt
     assert "Do not offer to provide a link later" in prompt
     assert "do not ask whether the user wants one" in prompt
+    assert "no verified usable link" in prompt
+    assert "Do not invite the user to watch, open, or click it" in prompt
+    assert "saved, stored, searched for, found, retrieved" in prompt
+    assert "invite the user to discuss the supplied topic instead" in prompt
     assert "remain silent" in prompt
     assert "current persona" in prompt
     assert "untrusted reference data" in prompt
