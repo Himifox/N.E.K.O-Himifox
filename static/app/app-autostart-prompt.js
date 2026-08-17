@@ -671,8 +671,11 @@
         // Register first so a release emitted while another startup gate is
         // pending cannot be missed.
         const tutorialStartupBarrier = waitForTutorialStartupBarrier();
-        await waitForAutostartPromptPrerequisites();
-        await tutorialStartupBarrier;
+        try {
+            await waitForAutostartPromptPrerequisites();
+        } finally {
+            await tutorialStartupBarrier;
+        }
     }
 
     function startForegroundTrackingGate() {
@@ -910,6 +913,9 @@
                 closeOnEscape: false,
                 onShown: function () {
                     stopPromptVoice();
+                    if (isTutorialBusy()) {
+                        return;
+                    }
                     promptVoice = startAutostartPromptVoice();
                     return postShownAck(promptToken);
                 },
