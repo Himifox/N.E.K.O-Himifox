@@ -696,7 +696,7 @@ def test_autostart_prompt_waits_for_tutorial_when_prerequisite_rejects(
 
 
 @pytest.mark.frontend
-def test_autostart_prompt_on_shown_skips_effects_when_tutorial_starts(
+def test_autostart_prompt_waits_for_pending_tutorial_start(
     mock_page: Page,
 ):
     _bootstrap_home_runtime_page(
@@ -704,7 +704,45 @@ def test_autostart_prompt_on_shown_skips_effects_when_tutorial_starts(
         include_autostart_prompt=True,
         setup_js=_AUTOSTART_ELIGIBLE_SETUP_JS + """
             window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
+            window.__promptCalls = 0;
+            window.universalTutorialManager.pendingTutorialStartSource = 'manual';
+            window.showDecisionPrompt = async function() {
+                window.__promptCalls += 1;
+                return null;
+            };
+        """,
+        fetch_js=_AUTOSTART_ELIGIBLE_FETCH_JS,
+    )
+
+    mock_page.wait_for_function(
+        """
+        () => window.__requestLog.some(
+            (entry) => entry.url === '/api/autostart-prompt/heartbeat'
+        )
+        """
+    )
+    mock_page.wait_for_timeout(350)
+    assert mock_page.evaluate("() => window.__promptCalls") == 0
+
+    mock_page.evaluate(
+        "() => { window.universalTutorialManager.pendingTutorialStartSource = null; }"
+    )
+    mock_page.wait_for_function("() => window.__promptCalls === 1", timeout=5000)
+
+
+@pytest.mark.frontend
+def test_autostart_prompt_on_shown_closes_when_tutorial_starts(
+    mock_page: Page,
+):
+    _bootstrap_home_runtime_page(
+        mock_page,
+        include_common_dialogs=True,
+        include_autostart_prompt=True,
+        setup_js=_AUTOSTART_ELIGIBLE_SETUP_JS + """
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
             window.__audioStarts = 0;
+            window.__autostartPromptOpened = 0;
+            window.__autostartPromptClosed = 0;
             window.i18next = { language: 'en' };
             window.Audio = function() {
                 this.pause = function() {};
@@ -714,36 +752,33 @@ def test_autostart_prompt_on_shown_skips_effects_when_tutorial_starts(
                 };
                 this.currentTime = 0;
             };
-            window.showDecisionPrompt = function(config) {
-                window.__capturedAutostartPrompt = config;
-                return new Promise((resolve) => {
-                    window.__resolveAutostartPrompt = resolve;
-                });
-            };
+            window.addEventListener('neko:decision-prompt-opened', function(event) {
+                if (event.detail && event.detail.skin === 'autostart-retention') {
+                    window.__autostartPromptOpened += 1;
+                    window.isInTutorial = true;
+                    window.universalTutorialManager.isTutorialRunning = true;
+                }
+            });
+            window.addEventListener('neko:decision-prompt-closed', function(event) {
+                if (event.detail && event.detail.skin === 'autostart-retention') {
+                    window.__autostartPromptClosed += 1;
+                }
+            });
         """,
         fetch_js=_AUTOSTART_ELIGIBLE_FETCH_JS,
     )
 
     mock_page.wait_for_function(
-        "() => !!window.__capturedAutostartPrompt",
+        "() => window.__autostartPromptOpened === 1",
         timeout=5000,
     )
-    mock_page.evaluate(
-        """
-        async () => {
-            window.isInTutorial = true;
-            window.universalTutorialManager.isTutorialRunning = true;
-            await window.__capturedAutostartPrompt.onShown();
-        }
-        """
-    )
-
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
+    assert mock_page.evaluate("() => window.__autostartPromptClosed") == 1
     assert mock_page.evaluate("() => window.__audioStarts") == 0
     assert not any(
         entry["url"] == "/api/autostart-prompt/shown"
         for entry in mock_page.evaluate("() => window.__requestLog")
     )
-    mock_page.evaluate("() => window.__resolveAutostartPrompt(null)")
 
 
 @pytest.mark.frontend

@@ -586,6 +586,7 @@
             || !!(manager && (
                 manager.isTutorialRunning
                 || manager.activeAvatarFloatingGuideRound
+                || manager.pendingTutorialStartSource
                 || manager._pendingI18nStart
                 || manager._teardownPromise
             ))
@@ -911,9 +912,12 @@
                 dismissValue: null,
                 closeOnClickOutside: false,
                 closeOnEscape: false,
-                onShown: function () {
+                onShown: function (modal) {
                     stopPromptVoice();
                     if (isTutorialBusy()) {
+                        if (modal && typeof modal.close === 'function') {
+                            modal.close(null);
+                        }
                         return;
                     }
                     promptVoice = startAutostartPromptVoice();
