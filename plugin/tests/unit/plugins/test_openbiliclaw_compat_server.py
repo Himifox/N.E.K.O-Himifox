@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import socket
 import sys
+import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
@@ -131,6 +133,36 @@ async def test_event_endpoint_rejects_malformed_batches() -> None:
             assert (await response.json())["accepted"] == 0
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_honors_short_timeout_when_server_thread_is_stuck() -> None:
+    async def on_events(_: list[Mapping[str, Any]]) -> dict[str, Any]:
+        return {"accepted": 0, "rejected": []}
+
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait, daemon=True)
+    thread.start()
+    server = OpenBiliClawCompatibilityServer(
+        host="127.0.0.1",
+        port=_free_port(),
+        on_events=on_events,
+        status_provider=dict,
+        logger=None,
+    )
+    server._thread = thread
+
+    started_at = time.monotonic()
+    try:
+        assert await server.stop(timeout=0.05) is False
+        assert time.monotonic() - started_at < 0.3
+        assert server._thread is thread
+    finally:
+        release.set()
+        thread.join(timeout=1.0)
+
+    assert await server.stop(timeout=0.05) is True
+    assert server._thread is None
 
 
 @pytest.mark.asyncio

@@ -343,16 +343,24 @@ class OpenBiliClawCompatibilityServer:
             self._loop = None
             self.running = False
 
-    async def stop(self) -> None:
+    async def stop(self, *, timeout: float = 5.0) -> bool:
         loop = self._loop
         stop_event = self._stop_event
         if loop is not None and stop_event is not None and loop.is_running():
             loop.call_soon_threadsafe(stop_event.set)
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            await asyncio.to_thread(thread.join, 5.0)
-        self._thread = None
-        self.running = False
+            await asyncio.to_thread(thread.join, max(0.0, float(timeout)))
+        stopped = thread is None or not thread.is_alive()
+        if stopped:
+            self._thread = None
+            self.running = False
+        elif self._logger is not None:
+            self._logger.warning(
+                "OpenBiliClaw compatibility server did not stop within {:.3f}s",
+                timeout,
+            )
+        return stopped
 
     async def _ping(self, _: Any) -> Any:
         from aiohttp import web

@@ -51,12 +51,15 @@ from .state import StateRepository
 class ProactiveRecommenderPlugin(NekoPluginBase):
     """Personalized proactive content recommendations, entirely plugin-side."""
 
+    _COMPAT_SHUTDOWN_TIMEOUT_SECONDS = 0.5
+
     def __init__(self, ctx: Any) -> None:
         super().__init__(ctx)
         self._config = RecommendationConfig()
         self._state = StateRepository(self.store)
         self._llm = BackgroundLlm(self.logger)
         self._ready = False
+        self._stopping = threading.Event()
         self._cycle_lock = threading.Lock()
         self._compat_server: OpenBiliClawCompatibilityServer | None = None
 
@@ -71,6 +74,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def startup(self, **_: Any):
+        self._stopping.clear()
         if not self.store.enabled:
             return Err(
                 SdkError("PluginStore must be enabled for proactive_recommender")
@@ -95,19 +99,49 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_: Any):
-        if self._compat_server is not None:
-            await self._compat_server.stop()
-            self._compat_server = None
+        started_at = time.monotonic()
+        self._stopping.set()
         self._ready = False
-        return Ok({"ready": False})
+        cycle_active = self._cycle_lock.locked()
+        compat_server = self._compat_server
+        self._compat_server = None
+        compat_stopped = True
+        if compat_server is not None:
+            compat_started_at = time.monotonic()
+            compat_stopped = await compat_server.stop(
+                timeout=self._COMPAT_SHUTDOWN_TIMEOUT_SECONDS
+            )
+            self.logger.info(
+                "proactive recommender compatibility shutdown "
+                "(stopped={}, elapsed={:.3f}s)",
+                compat_stopped,
+                time.monotonic() - compat_started_at,
+            )
+        self.logger.info(
+            "proactive recommender shutdown complete "
+            "(cycle_active={}, elapsed={:.3f}s)",
+            cycle_active,
+            time.monotonic() - started_at,
+        )
+        return Ok(
+            {
+                "ready": False,
+                "cycle_active": cycle_active,
+                "compat_server_stopped": compat_stopped,
+            }
+        )
 
     @lifecycle(id="config_change")
     async def config_change(self, **_: Any):
+        if self._stopping.is_set():
+            return Ok({"reloaded": False, "reason": "plugin_stopping"})
         await self._load_config()
         await self._sync_compat_server()
         return Ok({"reloaded": True})
 
     async def _sync_compat_server(self) -> None:
+        if self._stopping.is_set():
+            return
         desired = (
             self._config.openbiliclaw_host,
             self._config.openbiliclaw_port,
@@ -495,6 +529,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             }
 
     async def _deliver(self, now: float) -> dict[str, Any]:
+        if self._stopping.is_set():
+            return {"submitted": False, "reason": "plugin_stopping"}
         snapshot = self._state.snapshot()
         ttl = self._config.candidate_ttl_hours * 3600
         candidates = [
@@ -545,6 +581,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         submitted = False
         reason = "shadow_mode"
         if mode == "live":
+            if self._stopping.is_set():
+                return {"submitted": False, "reason": "plugin_stopping"}
             handoff_prompt = build_neko_handoff_prompt(candidate)
             if not handoff_prompt:
                 return {
@@ -628,16 +666,28 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         }
 
     async def _run_cycle(self, *, force_discovery: bool = False) -> dict[str, Any]:
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         if not self._ready:
-            await self.startup()
+            return {"enabled": False, "reason": "plugin_not_ready"}
         if not self._config.enabled:
             return {"enabled": False, "reason": "plugin_disabled"}
         now = time.time()
         messages = await self._new_messages()
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         await self._update_profile(messages, now)
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         await self._sync_openbiliclaw_profile(now)
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         imported = await self._sync_openbiliclaw_recommendations(now)
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         discovered = imported + await self._discover(now, force=force_discovery)
+        if self._stopping.is_set():
+            return {"enabled": False, "reason": "plugin_stopping"}
         delivery = await self._deliver(now)
         result = {
             "enabled": True,
@@ -874,10 +924,14 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     @timer_interval(id="recommendation_cycle", seconds=60, auto_start=True)
     async def recommendation_cycle(self, **_: Any):
+        if self._stopping.is_set():
+            return Ok({"skipped": "plugin_stopping"})
         # Timer callbacks can overlap when a network source is slow.
         if not self._cycle_lock.acquire(blocking=False):
             return Ok({"skipped": "cycle_running"})
         try:
+            if self._stopping.is_set():
+                return Ok({"skipped": "plugin_stopping"})
             return Ok(await self._run_cycle())
         except Exception as exc:
             self.logger.exception("recommendation cycle failed")
