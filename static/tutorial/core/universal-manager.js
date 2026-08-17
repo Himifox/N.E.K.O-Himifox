@@ -4390,6 +4390,26 @@ function dispatchStartupGreetingReleaseWithoutManager(reason, detail = {}) {
     return releaseDetail;
 }
 
+function rearmStartupGreetingWithoutManager(reason, detail = {}) {
+    window.isNekoHomeTutorialPending = true;
+    const rearmDetail = Object.assign({
+        released: false,
+        page: 'unknown',
+        reason: reason || 'tutorial-manager-initializing',
+        timestamp: Date.now()
+    }, detail || {});
+    try {
+        window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;
+        delete window.__NEKO_STARTUP_GREETING_RELEASED__;
+        window.dispatchEvent(new CustomEvent(STARTUP_GREETING_RELEASE_EVENT, {
+            detail: rearmDetail
+        }));
+    } catch (error) {
+        console.warn('[Tutorial] 无管理器启动问候重新上锁失败:', error);
+    }
+    return rearmDetail;
+}
+
 async function destroyUniversalTutorialManagerInstance(reason = 'destroy') {
     const manager = window.universalTutorialManager;
     if (!manager) return;
@@ -4415,6 +4435,9 @@ function bindUniversalTutorialManagerResizeRetry() {
         window.removeEventListener('resize', retryUniversalTutorialManagerInit);
         window.__universalTutorialManagerResizeRetryBound = false;
         if (window.__universalTutorialManagerInitialized) return;
+        rearmStartupGreetingWithoutManager('tutorial-manager-resize-init', {
+            viewportWidth: window.innerWidth
+        });
         initUniversalTutorialManager().then(function (initialized) {
             if (initialized !== false) {
                 window.__universalTutorialManagerInitialized = true;

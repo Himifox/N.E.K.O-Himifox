@@ -873,7 +873,6 @@
 
     async function showPrompt(promptToken) {
         state.promptOpen = true;
-        state.lastPromptTokenSeen = promptToken;
         let promptVoice = null;
         const buttons = [
             {
@@ -920,6 +919,7 @@
                         }
                         return;
                     }
+                    state.lastPromptTokenSeen = promptToken;
                     promptVoice = startAutostartPromptVoice();
                     return postShownAck(promptToken);
                 },

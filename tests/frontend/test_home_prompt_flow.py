@@ -731,7 +731,7 @@ def test_autostart_prompt_waits_for_pending_tutorial_start(
 
 
 @pytest.mark.frontend
-def test_autostart_prompt_on_shown_closes_when_tutorial_starts(
+def test_autostart_prompt_on_shown_closes_and_releases_token_when_tutorial_starts(
     mock_page: Page,
 ):
     _bootstrap_home_runtime_page(
@@ -755,8 +755,10 @@ def test_autostart_prompt_on_shown_closes_when_tutorial_starts(
             window.addEventListener('neko:decision-prompt-opened', function(event) {
                 if (event.detail && event.detail.skin === 'autostart-retention') {
                     window.__autostartPromptOpened += 1;
-                    window.isInTutorial = true;
-                    window.universalTutorialManager.isTutorialRunning = true;
+                    if (window.__autostartPromptOpened === 1) {
+                        window.isInTutorial = true;
+                        window.universalTutorialManager.isTutorialRunning = true;
+                    }
                 }
             });
             window.addEventListener('neko:decision-prompt-closed', function(event) {
@@ -779,6 +781,26 @@ def test_autostart_prompt_on_shown_closes_when_tutorial_starts(
         entry["url"] == "/api/autostart-prompt/shown"
         for entry in mock_page.evaluate("() => window.__requestLog")
     )
+
+    mock_page.evaluate(
+        """
+        () => {
+            window.isInTutorial = false;
+            window.universalTutorialManager.isTutorialRunning = false;
+            window.dispatchEvent(new CustomEvent('neko:user-content-sent'));
+        }
+        """
+    )
+    mock_page.wait_for_function(
+        "() => window.__autostartPromptOpened === 2",
+        timeout=5000,
+    )
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(1)
+    shown_requests = [
+        entry for entry in mock_page.evaluate("() => window.__requestLog")
+        if entry["url"] == "/api/autostart-prompt/shown"
+    ]
+    assert len(shown_requests) == 1
 
 
 @pytest.mark.frontend
