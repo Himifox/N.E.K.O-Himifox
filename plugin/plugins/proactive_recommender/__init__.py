@@ -174,7 +174,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         return result
 
     async def _new_messages(self) -> list[dict[str, Any]]:
-        records = await self.bus.memory.get(
+        records = await asyncio.to_thread(
+            self.bus.memory.get,
             bucket_id=self._config.memory_bucket,
             limit=100,
             timeout=5.0,
