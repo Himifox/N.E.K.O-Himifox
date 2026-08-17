@@ -78,12 +78,18 @@ type DashboardState = {
     timestamp?: number
     messages_processed?: number
     discovered?: number
-    delivery?: { reason?: string; mode?: string; submitted?: boolean }
+    delivery?: {
+      reason?: string
+      mode?: string
+      submitted?: boolean
+      candidate_title?: string
+      candidate_source?: string
+    }
   }
   metrics?: {
     interest_count?: number
     candidate_count?: number
-    today_live_count?: number
+    today_handoff_count?: number
     platform_event_count?: number
   }
   openbiliclaw?: {
@@ -266,7 +272,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
     never_run: "panel.reason.never",
     no_eligible_candidate: "panel.reason.noCandidate",
     shadow_mode: "panel.reason.shadow",
-    submitted: "panel.reason.submitted",
+    handoff_submitted: "panel.reason.submitted",
     rejected: "panel.reason.rejected",
     global_proactive_disabled: "panel.reason.globalDisabled",
     quiet_hours: "panel.reason.quiet",
@@ -285,7 +291,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
           <StatusBadge tone={modeTone} label={modeLabel} />
         </Inline>
         <ButtonGroup>
-          <RefreshButton label={t("panel.refresh")} />
+          <RefreshButton label={t("panel.refresh")} tone="default" />
           <Button tone="primary" disabled={!runAction || running || !config.enabled} onClick={runOnce}>
             {running ? t("panel.running") : t("panel.runOnce")}
           </Button>
@@ -304,7 +310,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
         <StatCard label={t("panel.stats.mode")} value={modeLabel} />
         <StatCard label={t("panel.stats.interests")} value={metrics.interest_count || 0} />
         <StatCard label={t("panel.stats.candidates")} value={metrics.candidate_count || 0} />
-        <StatCard label={t("panel.stats.today")} value={metrics.today_live_count || 0} />
+        <StatCard label={t("panel.stats.today")} value={metrics.today_handoff_count || 0} />
       </Columns>
 
       <Card title={t("panel.bridge.title")}>
@@ -320,19 +326,24 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
             <StatCard label={t("panel.bridge.events")} value={platformEvents.accepted || 0} />
             <StatCard label={t("panel.bridge.lastSync")} value={formatTimestamp(recommendationSync.last_sync_at, props.locale)} />
           </Columns>
-          {platformSummary ? <Tip>{platformSummary}</Tip> : <Tip>{t("panel.bridge.empty")}</Tip>}
+          {platformSummary ? <Tip>{platformSummary}</Tip> : <Text>{t("panel.bridge.empty")}</Text>}
           {recommendationSync.last_error ? <Alert tone="danger">{String(recommendationSync.last_error)}</Alert> : null}
           {compatibility.last_error ? <Alert tone="danger">{String(compatibility.last_error)}</Alert> : null}
         </Stack>
       </Card>
 
       <Card title={t("panel.lastRun.title")}>
-        <Columns cols={4} minColumnWidth={150} fluid>
-          <StatCard label={t("panel.lastRun.result")} value={t(reasonKey)} />
-          <StatCard label={t("panel.lastRun.messages")} value={lastRun.messages_processed || 0} />
-          <StatCard label={t("panel.lastRun.discovered")} value={lastRun.discovered || 0} />
-          <StatCard label={t("panel.lastRun.time")} value={formatTimestamp(lastRun.timestamp, props.locale)} />
-        </Columns>
+        <Stack>
+          <Columns cols={4} minColumnWidth={150} fluid>
+            <StatCard label={t("panel.lastRun.result")} value={t(reasonKey)} />
+            <StatCard label={t("panel.lastRun.messages")} value={lastRun.messages_processed || 0} />
+            <StatCard label={t("panel.lastRun.discovered")} value={lastRun.discovered || 0} />
+            <StatCard label={t("panel.lastRun.time")} value={formatTimestamp(lastRun.timestamp, props.locale)} />
+          </Columns>
+          {lastRun.delivery?.candidate_title ? (
+            <Tip>{`${lastRun.delivery.candidate_title} · ${lastRun.delivery.candidate_source || "-"}`}</Tip>
+          ) : null}
+        </Stack>
       </Card>
 
       <Card title={t("panel.inspection.title")}>
@@ -382,7 +393,16 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
                     <Stack gap={6}>
                       <Inline justify="space-between">
                         <span>{item.title || item.candidate_id || "-"}</span>
-                        <StatusBadge tone={item.outcome === "engaged" ? "success" : item.outcome === "rejected" ? "danger" : "info"} label={item.outcome || item.mode || "-"} />
+                        <StatusBadge
+                          tone={item.outcome === "engaged" ? "success" : item.outcome === "rejected" ? "danger" : "info"}
+                          label={
+                            item.outcome === "handoff_submitted"
+                              ? t("panel.reason.submitted")
+                              : item.outcome === "shadow"
+                                ? t("panel.reason.shadow")
+                                : item.outcome || item.mode || "-"
+                          }
+                        />
                       </Inline>
                       <Text>{formatTimestamp(item.timestamp, props.locale)}</Text>
                     </Stack>

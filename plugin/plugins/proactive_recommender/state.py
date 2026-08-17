@@ -17,6 +17,7 @@ def default_state() -> dict[str, Any]:
         "candidates": [],
         "history": [],
         "last_run": {},
+        "last_handoff": {},
         "last_discovery_at": 0.0,
         "last_user_message_at": 0.0,
         "processed_platform_event_ids": [],

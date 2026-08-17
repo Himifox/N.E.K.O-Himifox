@@ -1,7 +1,7 @@
 [plugin]
 name = "OpenBiliClaw 个性化推荐兼容层"
-description = "连接本机 OpenBiliClaw 后端，导入其根据跨平台浏览、点赞、收藏和反馈生成的个性化推荐；内容经过净化后复用 NEKO 的隐私、活跃状态、安静时段和频率门控，由猫娘按自身人设主动搭话。兼容层仍可接收浏览器行为信号，但不会读取或保存 Cookie，也不会持久化原始平台事件。"
-short_description = "Turns OpenBiliClaw recommendations into privacy-gated, in-character proactive NEKO conversations."
+description = "连接本机 OpenBiliClaw 后端，导入其根据跨平台浏览、点赞、收藏和反馈生成的个性化推荐；内容经过净化、排序和频率门控后隐藏交给当前猫娘，由猫娘结合对话、记忆与人设决定保持沉默或主动搭话。兼容层不会读取或保存 Cookie，也不会持久化原始平台事件。"
+short_description = "Privately hands OpenBiliClaw recommendations to the current NEKO character to decide whether to speak."
 keywords = [
     "个性化推荐",
     "主动搭话",

@@ -19,6 +19,7 @@ from plugin.sdk.plugin import (
     timer_interval,
     tr,
     ui,
+    unwrap_or,
 )
 
 from .config import RecommendationConfig, normalize_settings_update
@@ -37,8 +38,7 @@ from .profile import (
     message_from_memory_record,
 )
 from .prompting import (
-    build_delivery_context,
-    build_delivery_message,
+    build_neko_handoff_prompt,
     canonical_candidate_url,
 )
 from .ranking import rank_candidates, was_previously_delivered
@@ -408,17 +408,44 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         await self._state.update(mutate)
         return len(ranked)
 
-    async def _global_proactive_enabled(self) -> bool:
+    async def _proactive_policy(self) -> dict[str, Any]:
+        try:
+            payload = unwrap_or(
+                await self.plugins.call_entry(
+                    "proactive_controller:get_state", {}, timeout=5.0
+                ),
+                {},
+            )
+            if isinstance(payload, Mapping) and isinstance(
+                payload.get("settings"), Mapping
+            ):
+                return {
+                    "mode": str(payload.get("mode") or "custom"),
+                    "settings": dict(payload["settings"]),
+                    "source": "proactive_controller",
+                }
+        except Exception as exc:
+            self.logger.debug(
+                "proactive controller unavailable: {}", type(exc).__name__
+            )
         try:
             from utils.preferences import load_global_conversation_settings
 
             settings = await asyncio.to_thread(load_global_conversation_settings)
-            return bool(settings.get("proactiveChatEnabled", True))
+            return {
+                "mode": "custom",
+                "settings": dict(settings) if isinstance(settings, Mapping) else {},
+                "source": "preferences",
+            }
         except Exception as exc:
             self.logger.warning(
                 "global proactive setting unavailable: {}", type(exc).__name__
             )
-            return False
+            return {
+                "mode": "unavailable",
+                "settings": {"proactiveChatEnabled": False},
+                "source": "fail_closed",
+            }
 
     async def _deliver(self, now: float) -> dict[str, Any]:
         snapshot = self._state.snapshot()
@@ -440,7 +467,13 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         if not eligible:
             return {"submitted": False, "reason": "no_eligible_candidate"}
 
-        proactive_enabled = await self._global_proactive_enabled()
+        proactive_policy = await self._proactive_policy()
+        proactive_settings = proactive_policy.get("settings", {})
+        proactive_enabled = (
+            proactive_policy.get("mode") != "off"
+            and isinstance(proactive_settings, Mapping)
+            and bool(proactive_settings.get("proactiveChatEnabled", True))
+        )
         privacy_state, idle_seconds = "unavailable", None
         try:
             activity = await get_os_activity_snapshot("proactive_recommender")
@@ -465,11 +498,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         submitted = False
         reason = "shadow_mode"
         if mode == "live":
-            generated_copy = ""
-            if self._config.background_llm:
-                generated_copy = await self._llm.compose_delivery_copy(candidate)
-            delivery_message = build_delivery_message(candidate, generated_copy)
-            if not delivery_message:
+            handoff_prompt = build_neko_handoff_prompt(candidate)
+            if not handoff_prompt:
                 return {
                     "submitted": False,
                     "reason": "invalid_candidate_content",
@@ -478,38 +508,39 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                 }
             receipt = self.push_message(
                 source="proactive_recommender",
-                visibility=["chat"],
-                ai_behavior="blind",
-                parts=[{"type": "text", "text": delivery_message}],
+                visibility=[],
+                ai_behavior="respond",
+                parts=[{"type": "text", "text": handoff_prompt}],
                 priority=3,
-                coalesce_key="proactive_recommender:content",
+                coalesce_key=f"proactive_recommender:{candidate.get('id')}",
             )
             submitted = (
                 bool(receipt.get("submitted"))
                 if isinstance(receipt, Mapping)
                 else False
             )
-            reason = (
-                "submitted" if submitted else str(receipt.get("reason", "rejected"))
+            receipt_reason = (
+                str(receipt.get("reason", "rejected"))
+                if isinstance(receipt, Mapping)
+                else "rejected"
             )
-            if submitted:
-                self.push_message(
-                    source="proactive_recommender",
-                    visibility=[],
-                    ai_behavior="read",
-                    parts=[
-                        {
-                            "type": "text",
-                            "text": build_delivery_context(
-                                candidate, delivery_message
-                            ),
-                        }
-                    ],
-                    priority=3,
-                    coalesce_key="proactive_recommender:content-context",
-                )
+            reason = (
+                "handoff_submitted"
+                if submitted
+                else receipt_reason
+            )
 
         def mutate(state: dict[str, Any]) -> None:
+            state["last_handoff"] = {
+                "candidate_id": candidate.get("id"),
+                "title": candidate.get("title"),
+                "source": candidate.get("source"),
+                "timestamp": now,
+                "mode": mode,
+                "submitted": submitted,
+                "reason": reason,
+                "policy_source": proactive_policy.get("source"),
+            }
             if mode == "shadow" or submitted:
                 state["candidates"] = [
                     item
@@ -532,7 +563,9 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                         .isoformat(),
                         "mode": mode,
                         "submitted": submitted,
-                        "outcome": "shadow" if mode == "shadow" else "pending",
+                        "outcome": (
+                            "shadow" if mode == "shadow" else "handoff_submitted"
+                        ),
                     }
                 )
                 state["history"] = state["history"][-200:]
@@ -542,6 +575,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "submitted": submitted,
             "reason": reason,
             "candidate_id": candidate.get("id"),
+            "candidate_title": candidate.get("title"),
+            "candidate_source": candidate.get("source"),
             "mode": mode,
         }
 
@@ -616,6 +651,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "candidates": candidates,
             "history": history,
             "last_run": snapshot.get("last_run", {}),
+            "last_handoff": snapshot.get("last_handoff", {}),
             "openbiliclaw": {
                 **self._compatibility_state(),
                 "events": {
@@ -630,10 +666,12 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "metrics": {
                 "interest_count": len(interests),
                 "candidate_count": len(snapshot.get("candidates", [])),
-                "today_live_count": sum(
+                "today_handoff_count": sum(
                     1
                     for item in all_history
-                    if item.get("local_date") == today and item.get("mode") == "live"
+                    if item.get("local_date") == today
+                    and item.get("mode") == "live"
+                    and item.get("submitted")
                 ),
                 "platform_event_count": int(platform_events.get("accepted", 0)),
             },

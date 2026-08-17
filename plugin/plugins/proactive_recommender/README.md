@@ -1,16 +1,18 @@
 # OpenBiliClaw 个性化推荐兼容层
 
-这个插件在插件进程内完成两条个性化信号链路，不要求浏览器扩展直接访问 NEKO 本体：
+这个插件是 OpenBiliClaw 与 NEKO 之间的纯插件推荐调度层，不要求修改 NEKO 本体：
 
-1. 从 NEKO 现有 `bus.memory` 读取最近一小时的用户消息。
-2. 在 `127.0.0.1:8421` 提供 OpenBiliClaw 扩展兼容接口，接收扩展主动上报的跨平台行为事件。
-3. 把两类信号压缩成轻量、可检查的非敏感兴趣词。
-4. 调用已有 `web_search:search`，也可选调用 `bilibili_danmaku:bili_search` 发现候选。
-5. 经过相关性、去重、全局主动聊天开关、隐私前台、离开状态、安静时段和频率门控后，通过隐藏的 `push_message(..., ai_behavior="respond")` 让 NEKO 自然开口。
+1. 从本机 OpenBiliClaw 完整后端 `127.0.0.1:8420` 读取已经基于跨平台浏览行为生成的最终推荐，不复制 Cookie、页面快照或原始浏览记录。
+2. 从 NEKO 现有 `bus.memory` 读取最近一小时的新用户消息，提炼非敏感本地兴趣；也可调用 `web_search:search` 和 `bilibili_danmaku:bili_search` 补充候选。
+3. 将所有候选统一进行相关性排序、去重、隐私前台、离开状态、安静时段、每日上限和最短间隔门控。
+4. 通过 `proactive_controller:get_state` 尊重主动搭话总开关和 `off` 模式；控制器不可用时回退到共享偏好，读取失败则停止交接。原生视频、新闻等来源开关不控制本插件，用户可以关闭它们避免重复推荐，本插件的来源由 Hosted UI 独立管理。
+5. 将最佳候选通过不可见的 `push_message(visibility=[], ai_behavior="respond")` 交给当前 NEKO 主角色模型，由猫娘结合当前对话、记忆和人设决定保持沉默或自然搭话。
+
+插件只把“主消息服务已经接受候选”记录为 `handoff_submitted`，不会把它伪装成猫娘已经说出推荐，也不会把猫娘保持沉默误判为用户忽略。正式反馈仅来自显式的 `recommendation_feedback` 调用。
 
 ## 浏览器扩展兼容范围
 
-当前实现的是“行为事件兼容层”，支持 OpenBiliClaw 扩展后台所需的：
+主要推荐链路直接读取完整 OpenBiliClaw 后端的 `GET /api/recommendations`。此外，插件仍在 `127.0.0.1:8421` 提供可选的旧版行为事件兼容入口，支持：
 
 - `GET /api/ping`
 - `GET /api/health`
@@ -19,7 +21,7 @@
 - `POST /api/events`
 - 通知、认知更新和 delight 的空队列/确认接口
 
-这不是 OpenBiliClaw 完整后端的复制品。扩展的账号抓取任务队列、初始化流程、内容池与弹窗推荐列表不在当前兼容范围内。
+这不是 OpenBiliClaw 完整后端的复制品。账号抓取、初始化、内容池和浏览器弹窗推荐仍由 OpenBiliClaw 自己负责。
 
 ## 隐私边界
 
@@ -31,8 +33,8 @@
 
 ## 使用
 
-1. 在 Hosted UI 中启用“OpenBiliClaw 行为事件桥”。
-2. 在 OpenBiliClaw 浏览器扩展里把后端设为 `127.0.0.1`、端口设为 `8421`；如果在 Hosted UI 修改了端口，两边保持一致。`8421` 刻意避开完整 OpenBiliClaw 后端默认使用的 `8420`。
-3. 先使用影子模式观察兴趣和候选，确认后再切换正式运行。
+1. 启动完整 OpenBiliClaw 后端，并让浏览器扩展连接其默认地址 `127.0.0.1:8420`。
+2. 在 Hosted UI 中启用“OpenBiliClaw 推荐接入”，后端端口保持 `8420`；只有旧扩展需要直接上报行为事件时才使用可选的 `8421` 入口。
+3. 先使用影子模式观察兴趣和候选，确认后再切换正式运行。正式运行只表示候选会交给猫娘，猫娘仍可以决定不说。
 
 候选搜索仍依赖已安装的搜索插件；启用 B 站搜索前，需要 `bilibili_danmaku` 插件提供 `bili_search` 能力。
