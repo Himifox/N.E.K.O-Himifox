@@ -28,14 +28,19 @@ def rank_candidates(
         haystack = f"{item.get('title', '')} {item.get('snippet', '')}".lower()
         lexical = 0.0
         negative_penalty = 0.0
-        matched: list[str] = []
+        matched = [
+            str(value)
+            for value in item.get("matched_interests", [])
+            if str(value).strip()
+        ][:4]
         for interest in interest_list:
             name = str(interest.get("name") or "").lower()
             weight = float(interest.get("weight", 0.0))
             if name and name in haystack:
                 if weight > 0:
                     lexical = max(lexical, min(1.0, 0.55 + weight * 0.45))
-                    matched.append(name)
+                    if name not in matched:
+                        matched.append(name)
                 else:
                     negative_penalty = max(negative_penalty, min(1.0, abs(weight)))
         llm_relevance = float(item.get("llm_relevance", 0.0))

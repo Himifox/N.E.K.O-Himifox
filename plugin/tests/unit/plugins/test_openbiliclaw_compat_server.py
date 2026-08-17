@@ -9,6 +9,7 @@ from typing import Any
 
 import aiohttp
 import pytest
+from aiohttp import web
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 for _name, _path in (
@@ -26,6 +27,9 @@ for _name, _path in (
 
 from plugin.plugins.proactive_recommender.openbiliclaw_compat import (
     OpenBiliClawCompatibilityServer,
+)
+from plugin.plugins.proactive_recommender.openbiliclaw_recommendations import (
+    fetch_openbiliclaw_recommendations,
 )
 
 
@@ -127,3 +131,37 @@ async def test_event_endpoint_rejects_malformed_batches() -> None:
             assert (await response.json())["accepted"] == 0
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_recommendation_client_reads_official_openbiliclaw_contract() -> None:
+    async def recommendations(_: Any) -> web.Response:
+        return web.json_response(
+            {
+                "items": [
+                    {
+                        "id": 7,
+                        "item_key": "youtube:abc",
+                        "title": "A careful systems design talk",
+                        "expression": "It connects several topics you follow.",
+                        "topic_label": "systems design",
+                        "content_url": "https://www.youtube.com/watch?v=abc",
+                        "source_platform": "youtube",
+                    }
+                ]
+            }
+        )
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_get("/api/recommendations", recommendations)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        result = await fetch_openbiliclaw_recommendations(port=port)
+        assert result.error == ""
+        assert result.candidates[0]["source"] == "openbiliclaw:youtube"
+        assert result.candidates[0]["openbiliclaw_id"] == "7"
+    finally:
+        await runner.cleanup()

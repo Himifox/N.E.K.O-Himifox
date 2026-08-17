@@ -41,6 +41,7 @@ type RecommendationConfig = {
   bilibili?: boolean
   openbiliclaw_enabled?: boolean
   openbiliclaw_port?: number
+  openbiliclaw_backend_port?: number
 }
 
 type Interest = {
@@ -89,6 +90,7 @@ type DashboardState = {
     enabled?: boolean
     running?: boolean
     endpoint?: string
+    backend_endpoint?: string
     connected_clients?: number
     last_error?: string
     cookie_ingest?: boolean
@@ -99,6 +101,13 @@ type DashboardState = {
       rejected?: number
       by_platform?: Record<string, number>
       last_event_at?: number
+    }
+    recommendations?: {
+      last_sync_at?: number
+      last_error?: string
+      last_fetched?: number
+      total_imported?: number
+      endpoint?: string
     }
   }
 }
@@ -111,6 +120,7 @@ const defaultForm = {
   bilibili: false,
   openbiliclaw_enabled: false,
   openbiliclaw_port: 8421,
+  openbiliclaw_backend_port: 8420,
   daily_limit: 2,
   min_interval_minutes: 240,
   min_user_silence_minutes: 20,
@@ -151,6 +161,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
   const lastRun = safeState.last_run || {}
   const compatibility = safeState.openbiliclaw || {}
   const platformEvents = compatibility.events || {}
+  const recommendationSync = compatibility.recommendations || {}
   const updateAction = actionById(props.actions || [], "update_recommendation_settings")
   const runAction = actionById(props.actions || [], "recommendation_run_once")
   const form = useForm<FormValues>(defaultForm)
@@ -167,6 +178,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
       bilibili: !!config.bilibili,
       openbiliclaw_enabled: !!config.openbiliclaw_enabled,
       openbiliclaw_port: Number(config.openbiliclaw_port ?? 8421),
+      openbiliclaw_backend_port: Number(config.openbiliclaw_backend_port ?? 8420),
       daily_limit: Number(config.daily_limit ?? 2),
       min_interval_minutes: Number(config.min_interval_minutes ?? 240),
       min_user_silence_minutes: Number(config.min_user_silence_minutes ?? 20),
@@ -183,6 +195,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
     config.bilibili,
     config.openbiliclaw_enabled,
     config.openbiliclaw_port,
+    config.openbiliclaw_backend_port,
     config.daily_limit,
     config.min_interval_minutes,
     config.min_user_silence_minutes,
@@ -227,12 +240,24 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
       ? t("panel.mode.shadow")
       : t("panel.mode.live")
   const deliveryReason = String(lastRun.delivery?.reason || "never_run")
-  const bridgeTone = !compatibility.enabled ? "warning" : compatibility.running ? "success" : "danger"
+  const bridgeTone = !compatibility.enabled
+    ? "warning"
+    : recommendationSync.last_error
+      ? "danger"
+      : recommendationSync.last_sync_at
+        ? "success"
+        : compatibility.running
+          ? "info"
+          : "danger"
   const bridgeLabel = !compatibility.enabled
     ? t("panel.bridge.disabled")
-    : compatibility.running
-      ? t("panel.bridge.running")
-      : t("panel.bridge.failed")
+    : recommendationSync.last_error
+      ? t("panel.bridge.syncFailed")
+      : recommendationSync.last_sync_at
+        ? t("panel.bridge.running")
+        : compatibility.running
+          ? t("panel.bridge.waiting")
+          : t("panel.bridge.failed")
   const platformSummary = Object.entries(platformEvents.by_platform || {})
     .sort((left, right) => right[1] - left[1])
     .map(([platform, count]) => `${platform} ${count}`)
@@ -287,14 +312,16 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
           <Inline align="center">
             <StatusBadge tone={bridgeTone} label={bridgeLabel} />
           </Inline>
-          <Text>{String(compatibility.endpoint || "http://127.0.0.1:8421")}</Text>
+          <Text>{`${t("panel.bridge.backend")}: ${String(compatibility.backend_endpoint || "http://127.0.0.1:8420")}`}</Text>
+          <Text>{`${t("panel.bridge.ingress")}: ${String(compatibility.endpoint || "http://127.0.0.1:8421")}`}</Text>
           <Columns cols={4} minColumnWidth={150} fluid>
+            <StatCard label={t("panel.bridge.fetched")} value={recommendationSync.last_fetched || 0} />
+            <StatCard label={t("panel.bridge.imported")} value={recommendationSync.total_imported || 0} />
             <StatCard label={t("panel.bridge.events")} value={platformEvents.accepted || 0} />
-            <StatCard label={t("panel.bridge.clients")} value={compatibility.connected_clients || 0} />
-            <StatCard label={t("panel.bridge.lastEvent")} value={formatTimestamp(platformEvents.last_event_at, props.locale)} />
-            <StatCard label={t("panel.bridge.cookies")} value={t("panel.bridge.cookiesOff")} />
+            <StatCard label={t("panel.bridge.lastSync")} value={formatTimestamp(recommendationSync.last_sync_at, props.locale)} />
           </Columns>
           {platformSummary ? <Tip>{platformSummary}</Tip> : <Tip>{t("panel.bridge.empty")}</Tip>}
+          {recommendationSync.last_error ? <Alert tone="danger">{String(recommendationSync.last_error)}</Alert> : null}
           {compatibility.last_error ? <Alert tone="danger">{String(compatibility.last_error)}</Alert> : null}
         </Stack>
       </Card>
@@ -379,11 +406,12 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
                 <Switch checked={form.values.bilibili} label={t("panel.fields.bilibili")} onChange={(value) => form.setField("bilibili", value)} />
               </Stack>
             </Field>
-            <Field label={t("panel.bridge.config")} help={t("panel.bridge.configHelp")}>
-              <Stack gap={8}>
-                <Switch checked={form.values.openbiliclaw_enabled} label={t("panel.bridge.enable")} onChange={(value) => form.setField("openbiliclaw_enabled", value)} />
-                <NumberInput value={form.values.openbiliclaw_port} min={1024} max={65535} onChange={(value) => form.setField("openbiliclaw_port", Number(value))} />
-              </Stack>
+            <Switch checked={form.values.openbiliclaw_enabled} label={t("panel.bridge.enable")} onChange={(value) => form.setField("openbiliclaw_enabled", value)} />
+            <Field label={t("panel.bridge.backendPort")} help={t("panel.bridge.backendPortHelp")}>
+              <NumberInput value={form.values.openbiliclaw_backend_port} min={1024} max={65535} onChange={(value) => form.setField("openbiliclaw_backend_port", Number(value))} />
+            </Field>
+            <Field label={t("panel.bridge.ingressPort")} help={t("panel.bridge.ingressPortHelp")}>
+              <NumberInput value={form.values.openbiliclaw_port} min={1024} max={65535} onChange={(value) => form.setField("openbiliclaw_port", Number(value))} />
             </Field>
             <Tip>{t("panel.config.safeTip")}</Tip>
           </Stack>

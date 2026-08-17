@@ -29,6 +29,7 @@ from .openbiliclaw_compat import (
     OpenBiliClawCompatibilityServer,
     apply_behavior_event_batch,
 )
+from .openbiliclaw_recommendations import fetch_openbiliclaw_recommendations
 from .profile import (
     active_interests,
     apply_profile_updates,
@@ -133,26 +134,32 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
 
     def _compatibility_state(self) -> dict[str, Any]:
         if self._compat_server is not None:
-            return self._compat_server.snapshot()
-        return {
-            "enabled": self._config.openbiliclaw_enabled,
-            "running": False,
-            "host": self._config.openbiliclaw_host,
-            "port": self._config.openbiliclaw_port,
-            "endpoint": (
-                f"http://{self._config.openbiliclaw_host}:"
-                f"{self._config.openbiliclaw_port}"
-            ),
-            "connected_clients": 0,
-            "started_at": 0.0,
-            "last_error": "",
-            "cookie_ingest": False,
-            "compatibility_level": "behavior-events",
-        }
+            status = self._compat_server.snapshot()
+        else:
+            status = {
+                "enabled": self._config.openbiliclaw_enabled,
+                "running": False,
+                "host": self._config.openbiliclaw_host,
+                "port": self._config.openbiliclaw_port,
+                "endpoint": (
+                    f"http://{self._config.openbiliclaw_host}:"
+                    f"{self._config.openbiliclaw_port}"
+                ),
+                "connected_clients": 0,
+                "started_at": 0.0,
+                "last_error": "",
+                "cookie_ingest": False,
+            }
+        status["compatibility_level"] = "behavior-events+recommendation-pull"
+        status["backend_endpoint"] = (
+            f"http://127.0.0.1:{self._config.openbiliclaw_backend_port}"
+        )
+        return status
 
     def _openbiliclaw_runtime_status(self) -> dict[str, Any]:
         snapshot = self._state.snapshot()
         platform_events = snapshot.get("platform_events", {})
+        recommendation_sync = snapshot.get("openbiliclaw_recommendations", {})
         return {
             "initialized": True,
             "recommendation_count": len(snapshot.get("candidates", [])),
@@ -160,6 +167,12 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "unread_count": 0,
             "neko_compatibility": True,
             "behavior_events_accepted": int(platform_events.get("accepted", 0)),
+            "recommendations_fetched": int(
+                recommendation_sync.get("last_fetched", 0)
+            ),
+            "recommendation_sync_error": str(
+                recommendation_sync.get("last_error", "")
+            ),
         }
 
     async def _ingest_platform_events(
@@ -190,6 +203,70 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             if message is not None and message["id"] not in processed:
                 output.append(message)
         return output
+
+    async def _sync_openbiliclaw_recommendations(self, now: float) -> int:
+        if not self._config.openbiliclaw_enabled:
+            return 0
+        result = await fetch_openbiliclaw_recommendations(
+            port=self._config.openbiliclaw_backend_port
+        )
+        snapshot = self._state.snapshot()
+        interests = active_interests(snapshot.get("profile"), include_trial=True)
+        ranked = rank_candidates(
+            result.candidates, interests, snapshot.get("history", [])
+        )
+        delivered_ids = {
+            str(item.get("candidate_id"))
+            for item in snapshot.get("history", [])
+            if isinstance(item, Mapping)
+        }
+        existing_ids = {
+            str(item.get("id"))
+            for item in snapshot.get("candidates", [])
+            if isinstance(item, Mapping)
+        }
+        new_items = [
+            item
+            for item in ranked
+            if str(item.get("id")) not in delivered_ids
+            and str(item.get("id")) not in existing_ids
+        ]
+
+        def mutate(state: dict[str, Any]) -> None:
+            status = state.setdefault("openbiliclaw_recommendations", {})
+            status["last_sync_at"] = now
+            status["last_error"] = result.error
+            status["last_fetched"] = len(result.candidates)
+            status["endpoint"] = result.endpoint
+            status["total_imported"] = int(status.get("total_imported", 0)) + len(
+                new_items
+            )
+            if result.error:
+                return
+            existing = {
+                str(item.get("id")): dict(item)
+                for item in state.get("candidates", [])
+                if isinstance(item, Mapping)
+            }
+            existing.update(
+                {
+                    str(item["id"]): item
+                    for item in ranked
+                    if str(item["id"]) not in delivered_ids
+                }
+            )
+            state["candidates"] = sorted(
+                existing.values(),
+                key=lambda item: float(item.get("score", 0.0)),
+                reverse=True,
+            )[:50]
+
+        await self._state.update(mutate)
+        if result.error:
+            self.logger.debug(
+                "OpenBiliClaw recommendation sync unavailable: {}", result.error
+            )
+        return len(new_items)
 
     async def _update_profile(self, messages: list[dict[str, Any]], now: float) -> None:
         if not messages:
@@ -439,7 +516,8 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         now = time.time()
         messages = await self._new_messages()
         await self._update_profile(messages, now)
-        discovered = await self._discover(now, force=force_discovery)
+        imported = await self._sync_openbiliclaw_recommendations(now)
+        discovered = imported + await self._discover(now, force=force_discovery)
         delivery = await self._deliver(now)
         result = {
             "enabled": True,
@@ -481,6 +559,9 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             if isinstance(item, Mapping)
         ]
         platform_events = snapshot.get("platform_events", {})
+        openbiliclaw_recommendations = snapshot.get(
+            "openbiliclaw_recommendations", {}
+        )
         return {
             "ready": self._ready,
             "store_enabled": bool(self.store.enabled),
@@ -507,6 +588,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                     "by_platform": dict(platform_events.get("by_platform", {})),
                     "last_event_at": float(platform_events.get("last_event_at", 0.0)),
                 },
+                "recommendations": dict(openbiliclaw_recommendations),
             },
             "metrics": {
                 "interest_count": len(interests),
@@ -549,6 +631,11 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                 "bilibili": {"type": "boolean"},
                 "openbiliclaw_enabled": {"type": "boolean"},
                 "openbiliclaw_port": {
+                    "type": "integer",
+                    "minimum": 1024,
+                    "maximum": 65535,
+                },
+                "openbiliclaw_backend_port": {
                     "type": "integer",
                     "minimum": 1024,
                     "maximum": 65535,
@@ -596,6 +683,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "openbiliclaw_enabled",
             "openbiliclaw_host",
             "openbiliclaw_port",
+            "openbiliclaw_backend_port",
         ):
             recommendation_patch.pop(key, None)
         current_sources = {
@@ -617,6 +705,10 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             )
         if "openbiliclaw_port" in recommendation_patch:
             compat_updates["port"] = recommendation_patch.pop("openbiliclaw_port")
+        if "openbiliclaw_backend_port" in recommendation_patch:
+            compat_updates["backend_port"] = recommendation_patch.pop(
+                "openbiliclaw_backend_port"
+            )
         try:
             config_patch: dict[str, Any] = {"recommendation": recommendation_patch}
             if compat_updates:

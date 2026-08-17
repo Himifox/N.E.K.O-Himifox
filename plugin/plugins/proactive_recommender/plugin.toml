@@ -1,14 +1,14 @@
 [plugin]
 name = "OpenBiliClaw 个性化推荐兼容层"
-description = "在插件进程内提供 OpenBiliClaw 浏览器扩展兼容接口，把扩展主动上报的跨平台浏览行为与 NEKO 最近对话共同压缩为非敏感兴趣画像，再调用现有搜索插件发现候选并通过隐私、活跃状态、安静时段和频率门控发起推荐。Cookie 与原始平台事件不会落盘。"
-short_description = "OpenBiliClaw browser signals and NEKO conversations, joined by a privacy-aware recommendation plugin."
+description = "连接本机 OpenBiliClaw 后端，导入其根据跨平台浏览、点赞、收藏和反馈生成的个性化推荐；内容经过净化后复用 NEKO 的隐私、活跃状态、安静时段和频率门控，由猫娘按自身人设主动搭话。兼容层仍可接收浏览器行为信号，但不会读取或保存 Cookie，也不会持久化原始平台事件。"
+short_description = "Turns OpenBiliClaw recommendations into privacy-gated, in-character proactive NEKO conversations."
 keywords = [
     "个性化推荐",
     "主动搭话",
     "recommendation",
     "proactive",
 ]
-version = "0.3.0"
+version = "0.4.0"
 id = "proactive_recommender"
 entry = "plugin.plugins.proactive_recommender:ProactiveRecommenderPlugin"
 passive = true
@@ -47,6 +47,7 @@ auto_start = true
 [openbiliclaw]
 enabled = true
 port = 8421
+backend_port = 8420
 
 [recommendation]
 enabled = true

@@ -27,6 +27,12 @@ def default_state() -> dict[str, Any]:
             "by_platform": {},
             "last_event_at": 0.0,
         },
+        "openbiliclaw_recommendations": {
+            "last_sync_at": 0.0,
+            "last_error": "",
+            "last_fetched": 0,
+            "total_imported": 0,
+        },
     }
 
 

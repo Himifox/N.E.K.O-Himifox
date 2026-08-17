@@ -30,6 +30,7 @@ def normalize_settings_update(raw: Mapping[str, Any]) -> dict[str, Any]:
         "min_user_silence_minutes": (0, 1440),
         "max_idle_seconds": (0, 86400),
         "openbiliclaw_port": (1024, 65535),
+        "openbiliclaw_backend_port": (1024, 65535),
     }
     for key in bool_fields:
         if key in raw:
@@ -84,6 +85,7 @@ class RecommendationConfig:
     openbiliclaw_enabled: bool = False
     openbiliclaw_host: str = "127.0.0.1"
     openbiliclaw_port: int = 8421
+    openbiliclaw_backend_port: int = 8420
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "RecommendationConfig":
@@ -116,4 +118,7 @@ class RecommendationConfig:
             # a browser-extension bridge, not a LAN API.
             openbiliclaw_host="127.0.0.1",
             openbiliclaw_port=min(65535, max(1024, int(compat.get("port", 8421)))),
+            openbiliclaw_backend_port=min(
+                65535, max(1024, int(compat.get("backend_port", 8420)))
+            ),
         )

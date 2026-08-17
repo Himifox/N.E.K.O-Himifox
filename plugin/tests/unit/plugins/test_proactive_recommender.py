@@ -49,6 +49,9 @@ from plugin.plugins.proactive_recommender.openbiliclaw_compat import (
     infer_platform,
     normalize_timestamp,
 )
+from plugin.plugins.proactive_recommender.openbiliclaw_recommendations import (
+    normalize_openbiliclaw_recommendations,
+)
 from plugin.plugins.proactive_recommender.ranking import rank_candidates
 from plugin.plugins.proactive_recommender.sources import (
     normalize_bilibili_results,
@@ -62,6 +65,7 @@ def test_config_is_safe_by_default() -> None:
     assert config.shadow_mode is True
     assert config.bilibili is False
     assert config.openbiliclaw_enabled is False
+    assert config.openbiliclaw_backend_port == 8420
 
 
 def test_hosted_ui_settings_are_strictly_validated() -> None:
@@ -73,6 +77,7 @@ def test_hosted_ui_settings_are_strictly_validated() -> None:
             "daily_limit": 3,
             "openbiliclaw_enabled": True,
             "openbiliclaw_port": 8421,
+            "openbiliclaw_backend_port": 8420,
             "unknown": "ignored",
         }
     ) == {
@@ -80,6 +85,7 @@ def test_hosted_ui_settings_are_strictly_validated() -> None:
         "daily_limit": 3,
         "openbiliclaw_enabled": True,
         "openbiliclaw_port": 8421,
+        "openbiliclaw_backend_port": 8420,
         "score_threshold": 0.8,
         "quiet_start": "23:00",
     }
@@ -89,6 +95,7 @@ def test_hosted_ui_settings_are_strictly_validated() -> None:
         {"score_threshold": 1.1},
         {"daily_limit": 21},
         {"openbiliclaw_port": 80},
+        {"openbiliclaw_backend_port": 80},
         {"unknown": True},
     ):
         try:
@@ -191,6 +198,31 @@ def test_sources_are_normalized_to_stable_candidates() -> None:
     assert len(web[0]["id"]) == 24
 
 
+def test_openbiliclaw_recommendations_become_rankable_neko_candidates() -> None:
+    candidates = normalize_openbiliclaw_recommendations(
+        {
+            "items": [
+                {
+                    "id": 42,
+                    "item_key": "bilibili:BV1test",
+                    "bvid": "BV1test",
+                    "title": "Rust 异步运行时源码分析",
+                    "expression": "你最近持续关注异步系统，这篇拆解会很对胃口。",
+                    "topic_label": "Rust 异步",
+                    "source_platform": "bilibili",
+                }
+            ]
+        },
+        now=100.0,
+    )
+    assert len(candidates) == 1
+    assert candidates[0]["url"] == "https://www.bilibili.com/video/BV1test"
+    assert candidates[0]["source"] == "openbiliclaw:bilibili"
+    ranked = rank_candidates(candidates, [], [])
+    assert ranked[0]["score"] >= 0.72
+    assert ranked[0]["matched_interests"] == ["Rust 异步"]
+
+
 def test_ranking_prefers_relevant_and_novel_content() -> None:
     candidates = [
         {
@@ -277,7 +309,7 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     plugin_dir = _REPO_ROOT / "plugin" / "plugins" / "proactive_recommender"
     manifest = tomllib.loads((plugin_dir / "plugin.toml").read_text(encoding="utf-8"))
     assert manifest["plugin"]["id"] == "proactive_recommender"
-    assert manifest["plugin"]["version"] == "0.3.0"
+    assert manifest["plugin"]["version"] == "0.4.0"
     assert manifest["plugin"]["passive"] is True
     assert manifest["plugin_runtime"] == {"enabled": True, "auto_start": True}
     assert manifest["plugin"]["store"]["enabled"] is True
@@ -286,7 +318,11 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert panel["entry"] == "ui/panel.tsx"
     assert panel["context"] == "dashboard"
     assert panel["permissions"] == ["state:read", "action:call"]
-    assert manifest["openbiliclaw"] == {"enabled": True, "port": 8421}
+    assert manifest["openbiliclaw"] == {
+        "enabled": True,
+        "port": 8421,
+        "backend_port": 8420,
+    }
 
     tree = ast.parse((plugin_dir / "__init__.py").read_text(encoding="utf-8"))
     push_calls = [
