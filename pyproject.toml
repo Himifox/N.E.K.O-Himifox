@@ -9,6 +9,9 @@ description = "N.E.K.O. Desktop"
 readme = "README.MD"
 requires-python = "==3.11.*"
 dependencies = [
+  # Built into the main-server runtime (not a user plugin or MCP channel).
+  # Pin the host-neutral Core contract until it lands in a tagged release.
+  "openbiliclaw @ git+https://github.com/Himifox/OpenBiliClaw.git@78986d00f120615afe606f583365aaf0191c53a4",
   "fastapi~=0.115.9",
   "websockets~=15.0.1",
   "soxr~=0.5.0",
@@ -99,6 +102,9 @@ dependencies = [
 path = "config/application.py"
 pattern = '''^APP_VERSION\s*=\s*["'](?P<version>[^"']+)["']'''
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project.scripts]
 neko-plugin = "plugin.neko_plugin_cli.cli:main"
 
@@ -166,6 +172,10 @@ rapidocr-pillow = { path = "./deps/rapidocr_pillow" }
 [tool.uv]
 override-dependencies = [
     "python3-xlib ; sys_platform == 'never'",
+    # OpenBiliClaw declares the upstream distribution, while N.E.K.O already
+    # pins the compatible dev fork above. Both install the same ``bilibili_api``
+    # package, so never install the upstream wheel beside the host-provided fork.
+    "bilibili-api-python ; sys_platform == 'never'",
 ]
 
 [dependency-groups]

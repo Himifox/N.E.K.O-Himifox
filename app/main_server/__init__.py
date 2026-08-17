@@ -1103,6 +1103,9 @@ async def release_storage_startup_barrier(
         raise
     _disable_main_storage_limited_mode()
     _start_neko_servers_integration_workers()
+    from app.openbiliclaw_runtime import start_openbiliclaw_runtime
+
+    await start_openbiliclaw_runtime(_config_manager)
     return {
         "ok": True,
         "initialized": bool(initialized),
@@ -1190,6 +1193,9 @@ async def on_startup():
 
         await _ensure_main_server_runtime_initialized(reason="startup")
         _start_neko_servers_integration_workers()
+        from app.openbiliclaw_runtime import start_openbiliclaw_runtime
+
+        await start_openbiliclaw_runtime(_config_manager)
 
 
 @app.on_event("shutdown")
@@ -1197,6 +1203,9 @@ async def on_shutdown():
     """Clean up resources at server shutdown"""
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
+        from app.openbiliclaw_runtime import stop_openbiliclaw_runtime
+
+        await stop_openbiliclaw_runtime()
         cleanup()
         try:
             # join_sync_connector_threads 内部已经 gather 并行 join，直接 await

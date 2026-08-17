@@ -188,6 +188,7 @@ from main_routers.live2d_router import router as live2d_router  # noqa
 from main_routers.memory_router import router as memory_router  # noqa
 from main_routers.mmd_router import router as mmd_router  # noqa
 from main_routers.music_router import router as music_router  # noqa
+from main_routers.openbiliclaw_router import router as openbiliclaw_router  # noqa
 from main_routers.pages_router import router as pages_router  # noqa
 from main_routers.pngtuber_router import router as pngtuber_router  # noqa
 from main_routers.storage_location_router import router as storage_location_router  # noqa
@@ -508,6 +509,7 @@ app.include_router(icebreaker_router)
 app.include_router(game_router)
 app.include_router(card_assist_router)
 app.include_router(capture_router)
+app.include_router(openbiliclaw_router)
 app.include_router(card_drop_router)  # Must precede the pages fallback router.
 app.include_router(community_oauth_router)
 app.include_router(community_oauth_callback_router)  # Exact /oauth/callback before pages.

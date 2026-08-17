@@ -243,14 +243,17 @@ function apiSidebar(lang: 'en' | 'zh-CN' | 'ja') {
 function modulesSidebar(lang: 'en' | 'zh-CN' | 'ja') {
   const t = {
     en: {
+      obc: 'OpenBiliClaw Runtime',
       group: 'Core Modules', overview: 'Overview', core: 'LLMSessionManager',
       rt: 'Realtime Client', off: 'Offline Client', tts: 'TTS Client', cfg: 'Config Manager',
     },
     'zh-CN': {
+      obc: 'OpenBiliClaw 内建运行时',
       group: '核心模块', overview: '概览', core: 'LLMSessionManager',
       rt: '实时客户端', off: '离线客户端', tts: 'TTS 客户端', cfg: '配置管理器',
     },
     ja: {
+      obc: 'OpenBiliClaw 組み込みランタイム',
       group: 'コアモジュール', overview: '概要', core: 'LLMSessionManager',
       rt: 'リアルタイムクライアント', off: 'オフラインクライアント', tts: 'TTS クライアント', cfg: '設定マネージャー',
     },
@@ -266,6 +269,7 @@ function modulesSidebar(lang: 'en' | 'zh-CN' | 'ja') {
         { text: t.off, link: `${p}/modules/omni-offline` },
         { text: t.tts, link: `${p}/modules/tts-client` },
         { text: t.cfg, link: `${p}/modules/config-manager` },
+        { text: t.obc, link: `${p}/modules/openbiliclaw-runtime` },
       ],
     },
   ]
