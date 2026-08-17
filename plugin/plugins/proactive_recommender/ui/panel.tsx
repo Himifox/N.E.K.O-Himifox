@@ -44,12 +44,24 @@ type RecommendationConfig = {
   openbiliclaw_backend_port?: number
 }
 
-type Interest = {
-  name?: string
+type ProfilePreference = {
+  domain?: string
   weight?: number
-  status?: string
-  evidence_count?: number
-  negative_count?: number
+  specifics?: Array<{ name?: string; weight?: number }>
+}
+
+type OpenBiliClawProfile = {
+  initialized?: boolean
+  personality_portrait?: string
+  current_phase?: string
+  core_traits?: string[]
+  deep_needs?: string[]
+  values?: string[]
+  motivational_drivers?: string[]
+  cognitive_style?: string[]
+  mbti?: { type?: string; confidence?: number }
+  likes?: ProfilePreference[]
+  dislikes?: ProfilePreference[]
 }
 
 type Candidate = {
@@ -71,7 +83,6 @@ type DashboardState = {
   ready?: boolean
   store_enabled?: boolean
   config?: RecommendationConfig
-  interests?: Interest[]
   candidates?: Candidate[]
   history?: HistoryItem[]
   last_run?: {
@@ -87,7 +98,8 @@ type DashboardState = {
     }
   }
   metrics?: {
-    interest_count?: number
+    profile_domain_count?: number
+    local_interest_count?: number
     candidate_count?: number
     today_handoff_count?: number
     platform_event_count?: number
@@ -114,6 +126,12 @@ type DashboardState = {
       last_fetched?: number
       total_imported?: number
       endpoint?: string
+    }
+    profile?: {
+      last_sync_at?: number
+      last_error?: string
+      endpoint?: string
+      data?: OpenBiliClawProfile
     }
   }
 }
@@ -160,7 +178,6 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
   const { t } = props
   const safeState = props.state || {}
   const config = safeState.config || {}
-  const interests = Array.isArray(safeState.interests) ? safeState.interests : []
   const candidates = Array.isArray(safeState.candidates) ? safeState.candidates : []
   const history = Array.isArray(safeState.history) ? safeState.history : []
   const metrics = safeState.metrics || {}
@@ -168,6 +185,11 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
   const compatibility = safeState.openbiliclaw || {}
   const platformEvents = compatibility.events || {}
   const recommendationSync = compatibility.recommendations || {}
+  const profileSync = compatibility.profile || {}
+  const profile = profileSync.data || {}
+  const profileLikes = Array.isArray(profile.likes) ? profile.likes : []
+  const coreTraits = Array.isArray(profile.core_traits) ? profile.core_traits : []
+  const deepNeeds = Array.isArray(profile.deep_needs) ? profile.deep_needs : []
   const updateAction = actionById(props.actions || [], "update_recommendation_settings")
   const runAction = actionById(props.actions || [], "recommendation_run_once")
   const form = useForm<FormValues>(defaultForm)
@@ -308,7 +330,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
 
       <Columns cols={4} minColumnWidth={150} fluid>
         <StatCard label={t("panel.stats.mode")} value={modeLabel} />
-        <StatCard label={t("panel.stats.interests")} value={metrics.interest_count || 0} />
+        <StatCard label={t("panel.stats.profileDomains")} value={metrics.profile_domain_count || 0} />
         <StatCard label={t("panel.stats.candidates")} value={metrics.candidate_count || 0} />
         <StatCard label={t("panel.stats.today")} value={metrics.today_handoff_count || 0} />
       </Columns>
@@ -328,6 +350,7 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
           </Columns>
           {platformSummary ? <Tip>{platformSummary}</Tip> : <Text>{t("panel.bridge.empty")}</Text>}
           {recommendationSync.last_error ? <Alert tone="danger">{String(recommendationSync.last_error)}</Alert> : null}
+          {profileSync.last_error ? <Alert tone="danger">{`${t("panel.profile.syncFailed")}: ${String(profileSync.last_error)}`}</Alert> : null}
           {compatibility.last_error ? <Alert tone="danger">{String(compatibility.last_error)}</Alert> : null}
         </Stack>
       </Card>
@@ -351,19 +374,65 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
           id="recommendation-inspection"
           items={[
             {
-              id: "interests",
-              label: t("panel.inspection.interests"),
-              content: interests.length ? (
-                <List
-                  items={interests}
-                  render={(item) => (
-                    <Inline justify="space-between">
-                      <span>{item.name || "-"}</span>
-                      <StatusBadge tone={item.status === "active" ? "success" : "info"} label={formatScore(item.weight)} />
-                    </Inline>
-                  )}
-                />
-              ) : <EmptyState title={t("panel.empty.interests")} />,
+              id: "profile",
+              label: t("panel.inspection.profile"),
+              content: profile.initialized ? (
+                <Stack>
+                  <Alert tone="success">{t("panel.profile.synced")}</Alert>
+                  <Columns cols={3} minColumnWidth={150} fluid>
+                    <StatCard label={t("panel.profile.mbti")} value={profile.mbti?.type || "-"} />
+                    <StatCard label={t("panel.profile.domains")} value={profileLikes.length} />
+                    <StatCard label={t("panel.profile.traits")} value={coreTraits.length} />
+                  </Columns>
+                  {profile.personality_portrait ? (
+                    <Stack gap={6}>
+                      <Text>{t("panel.profile.portrait")}</Text>
+                      <Tip>{profile.personality_portrait}</Tip>
+                    </Stack>
+                  ) : null}
+                  {coreTraits.length ? (
+                    <Stack gap={6}>
+                      <Text>{t("panel.profile.coreTraits")}</Text>
+                      <Text>{coreTraits.join(" · ")}</Text>
+                    </Stack>
+                  ) : null}
+                  {profileLikes.length ? (
+                    <Stack gap={6}>
+                      <Text>{t("panel.profile.likes")}</Text>
+                      <List
+                        items={profileLikes}
+                        render={(item) => (
+                          <Stack gap={6}>
+                            <Inline justify="space-between">
+                              <span>{item.domain || "-"}</span>
+                              <StatusBadge tone="success" label={formatScore(item.weight)} />
+                            </Inline>
+                            <Text>{(item.specifics || []).map((specific) => specific.name).filter(Boolean).join(" / ") || "-"}</Text>
+                          </Stack>
+                        )}
+                      />
+                    </Stack>
+                  ) : null}
+                  {profile.current_phase ? (
+                    <Stack gap={6}>
+                      <Text>{t("panel.profile.currentPhase")}</Text>
+                      <Tip>{profile.current_phase}</Tip>
+                    </Stack>
+                  ) : null}
+                  {deepNeeds.length ? (
+                    <Stack gap={6}>
+                      <Text>{t("panel.profile.deepNeeds")}</Text>
+                      <List items={deepNeeds} render={(item) => <span>{item}</span>} />
+                    </Stack>
+                  ) : null}
+                  <Text>{`${t("panel.profile.lastSync")}: ${formatTimestamp(profileSync.last_sync_at, props.locale)}`}</Text>
+                </Stack>
+              ) : (
+                <Stack>
+                  <EmptyState title={t("panel.empty.profile")} />
+                  <Text>{t("panel.profile.emptyHelp")}</Text>
+                </Stack>
+              ),
             },
             {
               id: "candidates",

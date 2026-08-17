@@ -34,6 +34,12 @@ def default_state() -> dict[str, Any]:
             "last_fetched": 0,
             "total_imported": 0,
         },
+        "openbiliclaw_profile": {
+            "last_sync_at": 0.0,
+            "last_error": "",
+            "endpoint": "",
+            "data": {},
+        },
     }
 
 

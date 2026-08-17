@@ -55,6 +55,9 @@ from plugin.plugins.proactive_recommender.openbiliclaw_compat import (
 from plugin.plugins.proactive_recommender.openbiliclaw_recommendations import (
     normalize_openbiliclaw_recommendations,
 )
+from plugin.plugins.proactive_recommender.openbiliclaw_profile import (
+    normalize_openbiliclaw_profile,
+)
 from plugin.plugins.proactive_recommender.ranking import (
     rank_candidates,
     was_previously_delivered,
@@ -246,6 +249,34 @@ def test_openbiliclaw_recommendations_become_rankable_neko_candidates() -> None:
     assert ranked[0]["matched_interests"] == ["Rust 异步"]
 
 
+def test_openbiliclaw_profile_is_bounded_for_the_hosted_panel() -> None:
+    profile = normalize_openbiliclaw_profile(
+        {
+            "initialized": True,
+            "personality_portrait": "认真又爱玩",
+            "core_traits": ["较真", "审美敏感"],
+            "mbti": {"type": "INFP", "confidence": 2},
+            "likes": [
+                {
+                    "domain": "科技",
+                    "weight": 0.9,
+                    "specifics": [
+                        {"name": f"主题 {index}", "weight": 0.8}
+                        for index in range(20)
+                    ],
+                }
+            ],
+            "favorite_up_users": ["not copied into NEKO"],
+        }
+    )
+    assert profile["initialized"] is True
+    assert profile["personality_portrait"] == "认真又爱玩"
+    assert profile["mbti"] == {"type": "INFP", "confidence": 1.0}
+    assert profile["likes"][0]["domain"] == "科技"
+    assert len(profile["likes"][0]["specifics"]) == 8
+    assert "favorite_up_users" not in profile
+
+
 def test_ranking_prefers_relevant_and_novel_content() -> None:
     candidates = [
         {
@@ -348,6 +379,8 @@ def test_handoff_prompt_omits_url_and_keeps_main_model_decision_contract() -> No
     assert candidate["url"] not in prompt
     assert '"url"' not in prompt
     assert "Do not include or invent any URL" in prompt
+    assert "Do not offer to provide a link later" in prompt
+    assert "do not ask whether the user wants one" in prompt
     assert "remain silent" in prompt
     assert "current persona" in prompt
     assert "untrusted reference data" in prompt

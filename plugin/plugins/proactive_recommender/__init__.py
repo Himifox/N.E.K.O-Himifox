@@ -30,6 +30,7 @@ from .openbiliclaw_compat import (
     OpenBiliClawCompatibilityServer,
     apply_behavior_event_batch,
 )
+from .openbiliclaw_profile import fetch_openbiliclaw_profile
 from .openbiliclaw_recommendations import fetch_openbiliclaw_recommendations
 from .profile import (
     active_interests,
@@ -78,6 +79,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         await self._state.load()
         self._ready = True
         await self._sync_compat_server()
+        await self._sync_openbiliclaw_profile(time.time(), force=True)
         self.logger.info(
             "proactive recommender ready (enabled={}, shadow={}, openbiliclaw={})",
             self._config.enabled,
@@ -166,6 +168,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         snapshot = self._state.snapshot()
         platform_events = snapshot.get("platform_events", {})
         recommendation_sync = snapshot.get("openbiliclaw_recommendations", {})
+        profile_sync = snapshot.get("openbiliclaw_profile", {})
         return {
             "initialized": True,
             "recommendation_count": len(snapshot.get("candidates", [])),
@@ -179,6 +182,12 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             "recommendation_sync_error": str(
                 recommendation_sync.get("last_error", "")
             ),
+            "profile_initialized": bool(
+                profile_sync.get("data", {}).get("initialized", False)
+                if isinstance(profile_sync.get("data"), Mapping)
+                else False
+            ),
+            "profile_sync_error": str(profile_sync.get("last_error", "")),
         }
 
     async def _ingest_platform_events(
@@ -193,12 +202,20 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         return result
 
     async def _new_messages(self) -> list[dict[str, Any]]:
-        records = await asyncio.to_thread(
-            self.bus.memory.get,
-            bucket_id=self._config.memory_bucket,
-            limit=100,
-            timeout=5.0,
-        )
+        try:
+            records = await asyncio.to_thread(
+                self.bus.memory.get,
+                bucket_id=self._config.memory_bucket,
+                limit=100,
+                timeout=5.0,
+            )
+        except Exception as exc:
+            # Browser-derived OpenBiliClaw recommendations remain useful when
+            # the optional NEKO conversation-context channel is unavailable.
+            self.logger.debug(
+                "local conversation context unavailable: {}", type(exc).__name__
+            )
+            return []
         snapshot = self._state.snapshot()
         processed = set(
             str(value) for value in snapshot.get("processed_message_ids", [])
@@ -273,6 +290,36 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                 "OpenBiliClaw recommendation sync unavailable: {}", result.error
             )
         return len(new_items)
+
+    async def _sync_openbiliclaw_profile(
+        self, now: float, *, force: bool = False
+    ) -> None:
+        if not self._config.openbiliclaw_enabled:
+            return
+        cached = self._state.snapshot().get("openbiliclaw_profile", {})
+        if (
+            not force
+            and isinstance(cached, Mapping)
+            and now - float(cached.get("last_sync_at", 0.0)) < 300
+        ):
+            return
+        result = await fetch_openbiliclaw_profile(
+            port=self._config.openbiliclaw_backend_port
+        )
+
+        def mutate(state: dict[str, Any]) -> None:
+            status = state.setdefault("openbiliclaw_profile", {})
+            status["last_sync_at"] = now
+            status["last_error"] = result.error
+            status["endpoint"] = result.endpoint
+            if not result.error:
+                status["data"] = result.profile
+
+        await self._state.update(mutate)
+        if result.error:
+            self.logger.debug(
+                "OpenBiliClaw profile sync unavailable: {}", result.error
+            )
 
     async def _update_profile(self, messages: list[dict[str, Any]], now: float) -> None:
         if not messages:
@@ -588,6 +635,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         now = time.time()
         messages = await self._new_messages()
         await self._update_profile(messages, now)
+        await self._sync_openbiliclaw_profile(now)
         imported = await self._sync_openbiliclaw_recommendations(now)
         discovered = imported + await self._discover(now, force=force_discovery)
         delivery = await self._deliver(now)
@@ -634,6 +682,15 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         openbiliclaw_recommendations = snapshot.get(
             "openbiliclaw_recommendations", {}
         )
+        openbiliclaw_profile = snapshot.get("openbiliclaw_profile", {})
+        profile_data = (
+            openbiliclaw_profile.get("data", {})
+            if isinstance(openbiliclaw_profile, Mapping)
+            else {}
+        )
+        profile_likes = (
+            profile_data.get("likes", []) if isinstance(profile_data, Mapping) else []
+        )
         return {
             "ready": self._ready,
             "store_enabled": bool(self.store.enabled),
@@ -662,9 +719,11 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                     "last_event_at": float(platform_events.get("last_event_at", 0.0)),
                 },
                 "recommendations": dict(openbiliclaw_recommendations),
+                "profile": dict(openbiliclaw_profile),
             },
             "metrics": {
-                "interest_count": len(interests),
+                "profile_domain_count": len(profile_likes),
+                "local_interest_count": len(interests),
                 "candidate_count": len(snapshot.get("candidates", [])),
                 "today_handoff_count": sum(
                     1

@@ -1,6 +1,6 @@
 {
   "plugin.name": "OpenBiliClaw 個人化推薦相容層",
-  "plugin.description": "從本機 OpenBiliClaw 匯入跨平台瀏覽資料產生的推薦，結合 NEKO 本機興趣與頻率控制後私下交給目前角色，由角色決定是否開口。",
+  "plugin.description": "同步 OpenBiliClaw 的「我的畫像」與瀏覽器個人化推薦，經過 NEKO 的節奏與安全門控後私下交給目前角色，由角色決定是否開口。",
   "entries.status.name": "推薦狀態",
   "entries.status.description": "查看個人化主動推薦狀態，不傳回使用者原始對話。",
   "entries.run_once.name": "執行一次推薦週期",
@@ -49,7 +49,7 @@
   "panel.fields.quietEnd": "Quiet hours end",
   "panel.data.title": "Information the plugin actually uses",
   "panel.data.recentConversation": "New user messages from the last hour, used to extract non-sensitive interest signals.",
-  "panel.data.profile": "Interest terms, positive and negative evidence, weights, and recommendation feedback, forming a small decaying profile.",
+  "panel.data.profile": "OpenBiliClaw 的「我的畫像」摘要，用來解釋瀏覽器推薦；NEKO 最近聊天興趣只保留為內部補充排序訊號。",
   "panel.data.search": "Titles, snippets, links, and sources returned by existing search plugins, used to build the candidate pool.",
   "panel.data.activity": "System privacy state, idle time, quiet hours, and the global proactive-chat switch, used to decide whether now is a good time.",
   "panel.data.feedback": "Only explicit like, dislike, or ignore feedback changes weights; character silence is never treated as user rejection.",
@@ -108,5 +108,20 @@
   "panel.bridge.ingressPort": "選用行為入口連接埠",
   "panel.bridge.ingressPortHelp": "預設 8421；只接收行為事件，不產生完整推薦。",
   "panel.data.browserEvents": "OpenBiliClaw 完整後端基於跨平台瀏覽行為產生的最終推薦，包括標題、連結、平台、推薦理由與主題標籤。",
-  "panel.privacy.browser": "NEKO 只保存淨化後的推薦候選、穩定 ID 與統計；Cookie、頁面快照及原始平台事件仍由 OpenBiliClaw 自行管理。"
+  "panel.privacy.browser": "NEKO 只保存淨化後的推薦候選、穩定 ID 與統計；Cookie、頁面快照及原始平台事件仍由 OpenBiliClaw 自行管理。",
+  "panel.stats.profileDomains": "畫像領域",
+  "panel.inspection.profile": "我的畫像",
+  "panel.empty.profile": "OpenBiliClaw 尚未提供畫像",
+  "panel.profile.synced": "此處直接顯示 OpenBiliClaw 的「我的畫像」，不是 NEKO 本機聊天線索。",
+  "panel.profile.syncFailed": "畫像同步失敗",
+  "panel.profile.mbti": "MBTI",
+  "panel.profile.domains": "興趣領域",
+  "panel.profile.traits": "核心特質",
+  "panel.profile.portrait": "性格畫像",
+  "panel.profile.coreTraits": "核心特質",
+  "panel.profile.likes": "偏好領域",
+  "panel.profile.currentPhase": "目前階段",
+  "panel.profile.deepNeeds": "深層需求",
+  "panel.profile.lastSync": "畫像同步時間",
+  "panel.profile.emptyHelp": "請啟動 8420 連接埠的 OpenBiliClaw，讓瀏覽器擴充功能先形成「我的畫像」，再執行一次推薦檢查。"
 }

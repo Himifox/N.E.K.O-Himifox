@@ -80,8 +80,9 @@ def build_neko_handoff_prompt(candidate: Mapping[str, Any]) -> str:
         "the recommendation concise. Never reveal plugins, tracking, profiles, scores, or "
         "internal scheduling. Never claim you opened, watched, or verified the content. "
         "Do not include or invent any URL, hyperlink, Markdown link, video cover, link "
-        "placeholder, or directions for finding the item; mention only the supplied title "
-        "and topic when speaking.\n"
+        "placeholder, or directions for finding the item. Do not offer to provide a link "
+        "later and do not ask whether the user wants one, even if an earlier memory contains "
+        "a URL. Mention only the supplied title and topic when speaking.\n"
         f"BEGIN_UNTRUSTED_RECOMMENDATION_DATA\n{serialized}\n"
         "END_UNTRUSTED_RECOMMENDATION_DATA"
     )

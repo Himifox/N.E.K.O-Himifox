@@ -1,6 +1,6 @@
 {
   "plugin.name": "OpenBiliClaw Recommendation Bridge",
-  "plugin.description": "Imports recommendations generated from local cross-platform browsing data, enriches them with NEKO's local interests and pacing, then privately hands candidates to the current character to decide whether to speak.",
+  "plugin.description": "Syncs OpenBiliClaw's My Profile and browser-personalized recommendations, applies NEKO's pacing and safety gates, then privately lets the current character decide whether to speak.",
   "entries.status.name": "Estado de recomendaciones",
   "entries.status.description": "Muestra el estado de las recomendaciones sin devolver conversaciones originales del usuario.",
   "entries.run_once.name": "Ejecutar ciclo de recomendación",
@@ -49,7 +49,7 @@
   "panel.fields.quietEnd": "Quiet hours end",
   "panel.data.title": "Information the plugin actually uses",
   "panel.data.recentConversation": "New user messages from the last hour, used to extract non-sensitive interest signals.",
-  "panel.data.profile": "Interest terms, positive and negative evidence, weights, and recommendation feedback, forming a small decaying profile.",
+  "panel.data.profile": "OpenBiliClaw's My Profile summary explains browser-derived recommendations; NEKO's recent-chat interests remain an internal supplemental ranking signal.",
   "panel.data.search": "Titles, snippets, links, and sources returned by existing search plugins, used to build the candidate pool.",
   "panel.data.activity": "System privacy state, idle time, quiet hours, and the global proactive-chat switch, used to decide whether now is a good time.",
   "panel.data.feedback": "Only explicit like, dislike, or ignore feedback changes weights; character silence is never treated as user rejection.",
@@ -108,5 +108,20 @@
   "panel.bridge.ingressPort": "Optional behavior-ingress port",
   "panel.bridge.ingressPortHelp": "Defaults to 8421. It only accepts behavior events and does not generate complete recommendations.",
   "panel.data.browserEvents": "Final recommendations generated from cross-platform browsing behavior by the full OpenBiliClaw backend, including title, link, platform, recommendation reason, and topic label.",
-  "panel.privacy.browser": "NEKO stores only sanitized recommendation candidates, stable IDs, and statistics. OpenBiliClaw continues to manage cookies, page snapshots, and raw platform events."
+  "panel.privacy.browser": "NEKO stores only sanitized recommendation candidates, stable IDs, and statistics. OpenBiliClaw continues to manage cookies, page snapshots, and raw platform events.",
+  "panel.stats.profileDomains": "Profile domains",
+  "panel.inspection.profile": "My Profile",
+  "panel.empty.profile": "OpenBiliClaw has not provided a profile yet",
+  "panel.profile.synced": "This view comes from OpenBiliClaw's My Profile, not from NEKO's local chat clues.",
+  "panel.profile.syncFailed": "Profile sync failed",
+  "panel.profile.mbti": "MBTI",
+  "panel.profile.domains": "Interest domains",
+  "panel.profile.traits": "Core traits",
+  "panel.profile.portrait": "Personality portrait",
+  "panel.profile.coreTraits": "Core traits",
+  "panel.profile.likes": "Preferred domains",
+  "panel.profile.currentPhase": "Current phase",
+  "panel.profile.deepNeeds": "Deep needs",
+  "panel.profile.lastSync": "Profile synced at",
+  "panel.profile.emptyHelp": "Start OpenBiliClaw on port 8420, let its browser extension build My Profile, then run a recommendation check."
 }

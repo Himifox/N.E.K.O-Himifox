@@ -1,6 +1,6 @@
 {
   "plugin.name": "OpenBiliClaw 个性化推荐兼容层",
-  "plugin.description": "从本机 OpenBiliClaw 导入基于跨平台浏览数据生成的推荐，结合 NEKO 本地兴趣排序与频控后隐藏交给当前猫娘，由猫娘决定是否主动搭话；不复制 Cookie 或原始浏览事件。",
+  "plugin.description": "同步 OpenBiliClaw 的“我的画像”和浏览器个性化推荐，经过 NEKO 的节奏与安全门控后隐藏交给当前猫娘，由猫娘决定是否主动搭话；不复制 Cookie 或原始浏览事件。",
   "entries.status.name": "推荐状态",
   "entries.status.description": "查看个性化主动推荐状态，不返回用户原始对话。",
   "entries.run_once.name": "运行一次推荐周期",
@@ -49,7 +49,7 @@
   "panel.fields.quietEnd": "安静时段结束",
   "panel.data.title": "插件实际使用的信息",
   "panel.data.recentConversation": "最近一小时内的新用户消息，用来提炼非敏感兴趣线索。",
-  "panel.data.profile": "兴趣词、正负证据、权重和推荐反馈，用来形成可衰减的轻量画像。",
+  "panel.data.profile": "OpenBiliClaw 的“我的画像”摘要，用来解释浏览器推荐；NEKO 最近聊天兴趣只保留为内部补充排序信号。",
   "panel.data.search": "现有搜索插件返回的标题、摘要、链接和来源，用来建立候选池。",
   "panel.data.activity": "系统隐私状态、空闲时长、安静时段和全局主动搭话开关，用来决定现在是否适合打扰。",
   "panel.data.feedback": "仅使用明确提交的喜欢、不喜欢或忽略反馈调整权重；不会把猫娘保持沉默误判为用户忽略。",
@@ -108,5 +108,20 @@
   "panel.bridge.ingressPort": "可选行为入口端口",
   "panel.bridge.ingressPortHelp": "默认 8421；只接收行为事件，不生成完整推荐。",
   "panel.data.browserEvents": "OpenBiliClaw 完整后端基于跨平台浏览行为生成的最终推荐，包括标题、链接、平台、推荐理由和主题标签。",
-  "panel.privacy.browser": "NEKO 只保存净化后的推荐候选、稳定 ID 和统计；Cookie、页面快照及原始平台事件仍由 OpenBiliClaw 自己管理。"
+  "panel.privacy.browser": "NEKO 只保存净化后的推荐候选、稳定 ID 和统计；Cookie、页面快照及原始平台事件仍由 OpenBiliClaw 自己管理。",
+  "panel.stats.profileDomains": "画像领域",
+  "panel.inspection.profile": "我的画像",
+  "panel.empty.profile": "OpenBiliClaw 尚未提供画像",
+  "panel.profile.synced": "这里直接展示 OpenBiliClaw 的“我的画像”，不是 NEKO 本地聊天线索。",
+  "panel.profile.syncFailed": "画像同步失败",
+  "panel.profile.mbti": "MBTI",
+  "panel.profile.domains": "兴趣领域",
+  "panel.profile.traits": "核心特质",
+  "panel.profile.portrait": "性格画像",
+  "panel.profile.coreTraits": "核心特质",
+  "panel.profile.likes": "偏好领域",
+  "panel.profile.currentPhase": "当前阶段",
+  "panel.profile.deepNeeds": "深层需求",
+  "panel.profile.lastSync": "画像同步时间",
+  "panel.profile.emptyHelp": "请启动 8420 端口的 OpenBiliClaw，让浏览器扩展先形成“我的画像”，再执行一次推荐检查。"
 }
