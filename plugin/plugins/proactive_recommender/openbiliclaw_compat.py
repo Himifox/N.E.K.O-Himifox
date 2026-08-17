@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
+import threading
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
@@ -224,6 +226,9 @@ class OpenBiliClawCompatibilityServer:
         self._logger = logger
         self._runner: Any = None
         self._clients: set[Any] = set()
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event: asyncio.Event | None = None
         self.running = False
         self.started_at = 0.0
         self.last_error = ""
@@ -245,10 +250,37 @@ class OpenBiliClawCompatibilityServer:
     async def start(self) -> None:
         if self.running:
             return
+        ready = threading.Event()
+        self.last_error = ""
+        self._thread = threading.Thread(
+            target=self._thread_main,
+            args=(ready,),
+            name=f"openbiliclaw-compat-{self.port}",
+            daemon=True,
+        )
+        self._thread.start()
+        started = await asyncio.to_thread(ready.wait, 5.0)
+        if not started:
+            self.last_error = "startup_timeout"
+            await self.stop()
+            raise RuntimeError(self.last_error)
+        if not self.running:
+            raise RuntimeError(self.last_error or "startup_failed")
+
+    def _thread_main(self, ready: threading.Event) -> None:
+        try:
+            asyncio.run(self._serve(ready))
+        except Exception as exc:
+            if not self.last_error:
+                self.last_error = f"{type(exc).__name__}: {exc}"[:240]
+            ready.set()
+
+    async def _serve(self, ready: threading.Event) -> None:
         try:
             from aiohttp import web
         except ImportError as exc:
             self.last_error = "aiohttp_not_installed"
+            ready.set()
             raise RuntimeError(self.last_error) from exc
 
         @web.middleware
@@ -278,30 +310,48 @@ class OpenBiliClawCompatibilityServer:
         app.router.add_post("/api/sources/dy/cookie", self._reject_douyin_cookie)
         app.router.add_route("OPTIONS", "/{path:.*}", self._options)
 
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
+        self._loop = asyncio.get_running_loop()
+        self._stop_event = asyncio.Event()
+        runner = web.AppRunner(app)
+        self._runner = runner
+        await runner.setup()
         try:
-            site = web.TCPSite(self._runner, self.host, self.port)
+            site = web.TCPSite(runner, self.host, self.port)
             await site.start()
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"[:240]
-            await self._runner.cleanup()
+            await runner.cleanup()
             self._runner = None
+            ready.set()
             raise
         self.running = True
         self.started_at = time.time()
         self.last_error = ""
+        ready.set()
+        try:
+            await self._stop_event.wait()
+        finally:
+            for client in tuple(self._clients):
+                try:
+                    await client.close(code=1001, message=b"plugin stopping")
+                except Exception:
+                    pass
+            self._clients.clear()
+            await runner.cleanup()
+            self._runner = None
+            self._stop_event = None
+            self._loop = None
+            self.running = False
 
     async def stop(self) -> None:
-        for client in tuple(self._clients):
-            try:
-                await client.close(code=1001, message=b"plugin stopping")
-            except Exception:
-                pass
-        self._clients.clear()
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
+        loop = self._loop
+        stop_event = self._stop_event
+        if loop is not None and stop_event is not None and loop.is_running():
+            loop.call_soon_threadsafe(stop_event.set)
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            await asyncio.to_thread(thread.join, 5.0)
+        self._thread = None
         self.running = False
 
     async def _ping(self, _: Any) -> Any:

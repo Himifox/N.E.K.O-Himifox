@@ -590,20 +590,34 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             updates = normalize_settings_update(kwargs)
         except (TypeError, ValueError) as exc:
             return Err(SdkError(str(exc)))
+        recommendation_patch = asdict(self._config)
+        for key in (
+            "openbiliclaw_enabled",
+            "openbiliclaw_host",
+            "openbiliclaw_port",
+        ):
+            recommendation_patch.pop(key, None)
+        current_sources = {
+            "web_search": recommendation_patch.pop("web_search"),
+            "bilibili": recommendation_patch.pop("bilibili"),
+        }
         source_updates = {
             key: updates.pop(key)
             for key in ("web_search", "bilibili")
             if key in updates
         }
-        if source_updates:
-            updates["sources"] = source_updates
+        current_sources.update(source_updates)
+        recommendation_patch.update(updates)
+        recommendation_patch["sources"] = current_sources
         compat_updates = {}
-        if "openbiliclaw_enabled" in updates:
-            compat_updates["enabled"] = updates.pop("openbiliclaw_enabled")
-        if "openbiliclaw_port" in updates:
-            compat_updates["port"] = updates.pop("openbiliclaw_port")
+        if "openbiliclaw_enabled" in recommendation_patch:
+            compat_updates["enabled"] = recommendation_patch.pop(
+                "openbiliclaw_enabled"
+            )
+        if "openbiliclaw_port" in recommendation_patch:
+            compat_updates["port"] = recommendation_patch.pop("openbiliclaw_port")
         try:
-            config_patch: dict[str, Any] = {"recommendation": updates}
+            config_patch: dict[str, Any] = {"recommendation": recommendation_patch}
             if compat_updates:
                 config_patch["openbiliclaw"] = compat_updates
             payload = await self.ctx.update_own_config(config_patch)
