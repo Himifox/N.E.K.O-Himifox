@@ -36,8 +36,12 @@ from .profile import (
     heuristic_updates,
     message_from_memory_record,
 )
-from .prompting import build_delivery_prompt
-from .ranking import rank_candidates
+from .prompting import (
+    build_delivery_context,
+    build_delivery_message,
+    canonical_candidate_url,
+)
+from .ranking import rank_candidates, was_previously_delivered
 from .sources import discover_from_plugins
 from .state import StateRepository
 
@@ -56,7 +60,9 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         self._compat_server: OpenBiliClawCompatibilityServer | None = None
 
     async def _load_config(self) -> None:
-        payload = await self.ctx.get_own_effective_config(timeout=5.0)
+        # Hosted UI writes the plugin's base config. Reading that same layer
+        # avoids an older active profile masking a just-saved value.
+        payload = await self.ctx.get_own_base_config(timeout=5.0)
         raw = payload.get("config") if isinstance(payload, Mapping) else payload
         self._config = RecommendationConfig.from_mapping(
             raw if isinstance(raw, Mapping) else {}
@@ -427,6 +433,9 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             item
             for item in candidates
             if float(item.get("score", 0.0)) >= self._config.score_threshold
+            and str(item.get("title") or "").strip()
+            and canonical_candidate_url(item)
+            and not was_previously_delivered(item, snapshot.get("history", []))
         ]
         if not eligible:
             return {"submitted": False, "reason": "no_eligible_candidate"}
@@ -456,11 +465,22 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         submitted = False
         reason = "shadow_mode"
         if mode == "live":
+            generated_copy = ""
+            if self._config.background_llm:
+                generated_copy = await self._llm.compose_delivery_copy(candidate)
+            delivery_message = build_delivery_message(candidate, generated_copy)
+            if not delivery_message:
+                return {
+                    "submitted": False,
+                    "reason": "invalid_candidate_content",
+                    "candidate_id": candidate.get("id"),
+                    "mode": mode,
+                }
             receipt = self.push_message(
                 source="proactive_recommender",
-                visibility=[],
-                ai_behavior="respond",
-                parts=[{"type": "text", "text": build_delivery_prompt(candidate)}],
+                visibility=["chat"],
+                ai_behavior="blind",
+                parts=[{"type": "text", "text": delivery_message}],
                 priority=3,
                 coalesce_key="proactive_recommender:content",
             )
@@ -472,6 +492,22 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             reason = (
                 "submitted" if submitted else str(receipt.get("reason", "rejected"))
             )
+            if submitted:
+                self.push_message(
+                    source="proactive_recommender",
+                    visibility=[],
+                    ai_behavior="read",
+                    parts=[
+                        {
+                            "type": "text",
+                            "text": build_delivery_context(
+                                candidate, delivery_message
+                            ),
+                        }
+                    ],
+                    priority=3,
+                    coalesce_key="proactive_recommender:content-context",
+                )
 
         def mutate(state: dict[str, Any]) -> None:
             if mode == "shadow" or submitted:
@@ -485,6 +521,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
                     {
                         "candidate_id": candidate.get("id"),
                         "title": candidate.get("title"),
+                        "url": canonical_candidate_url(candidate),
                         "source": candidate.get("source"),
                         "matched_interests": candidate.get("matched_interests", []),
                         "score": candidate.get("score"),
@@ -614,6 +651,14 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         await self._load_config()
         return self._dashboard_state()
 
+    @ui.action(
+        id="update_recommendation_settings",
+        label=tr("actions.updateSettings.label", default="保存推荐设置"),
+        tone="success",
+        group="config",
+        order=10,
+        refresh_context=True,
+    )
     @plugin_entry(
         id="update_recommendation_settings",
         name=tr("entries.updateSettings.name", default="更新推荐设置"),
@@ -714,11 +759,7 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
             if compat_updates:
                 config_patch["openbiliclaw"] = compat_updates
             payload = await self.ctx.update_own_config(config_patch)
-            config_data = payload.get("config") if isinstance(payload, Mapping) else None
-            if isinstance(config_data, Mapping):
-                self._config = RecommendationConfig.from_mapping(config_data)
-            else:
-                await self._load_config()
+            await self._load_config()
             await self._sync_compat_server()
         except Exception as exc:
             return Err(SdkError(f"settings update failed: {type(exc).__name__}"))
@@ -747,14 +788,6 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         finally:
             self._cycle_lock.release()
 
-    @ui.action(
-        id="update_recommendation_settings",
-        label=tr("actions.updateSettings.label", default="保存推荐设置"),
-        tone="success",
-        group="config",
-        order=10,
-        refresh_context=True,
-    )
     @plugin_entry(
         id="recommendation_status",
         name=tr("entries.status.name", default="推荐状态"),
@@ -764,10 +797,6 @@ class ProactiveRecommenderPlugin(NekoPluginBase):
         ),
     )
     async def recommendation_status(self, **kwargs: Any):
-        # Keep the UI action on the long-lived status entry so a hot-reloaded
-        # plugin remains callable while the parent registry still has old metadata.
-        if kwargs:
-            return await self.update_recommendation_settings(**kwargs)
         snapshot = self._state.snapshot()
         interests = active_interests(snapshot.get("profile"), include_trial=True)
         return Ok(

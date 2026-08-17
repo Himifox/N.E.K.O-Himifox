@@ -15,6 +15,25 @@ def _similarity(left: str, right: str) -> float:
     return len(a & b) / max(1, len(a | b))
 
 
+def was_previously_delivered(
+    candidate: Mapping[str, Any],
+    history: Iterable[Mapping[str, Any]],
+) -> bool:
+    """Match prior deliveries by stable ID, URL, or normalized title."""
+    candidate_id = str(candidate.get("id") or "").strip()
+    candidate_url = str(candidate.get("url") or "").strip()
+    candidate_title = " ".join(str(candidate.get("title") or "").lower().split())
+    for item in history:
+        if candidate_id and candidate_id == str(item.get("candidate_id") or "").strip():
+            return True
+        if candidate_url and candidate_url == str(item.get("url") or "").strip():
+            return True
+        history_title = " ".join(str(item.get("title") or "").lower().split())
+        if candidate_title and candidate_title == history_title:
+            return True
+    return False
+
+
 def rank_candidates(
     candidates: Iterable[Mapping[str, Any]],
     interests: Iterable[Mapping[str, Any]],
