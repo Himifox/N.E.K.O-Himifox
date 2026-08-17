@@ -529,6 +529,9 @@ def test_universal_tutorial_manager_rearms_startup_greeting_before_resize_init()
     assert "window.isNekoHomeTutorialPending = true;" in rearm_block
     assert "window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;" in rearm_block
     assert "delete window.__NEKO_STARTUP_GREETING_RELEASED__;" in rearm_block
+    assert "released: false," in rearm_block
+    assert "window.dispatchEvent(new CustomEvent(STARTUP_GREETING_RELEASE_EVENT" in rearm_block
+    assert "detail: rearmDetail" in rearm_block
 
     resize_block = source.split(
         "window.addEventListener('resize', function retryUniversalTutorialManagerInit() {",

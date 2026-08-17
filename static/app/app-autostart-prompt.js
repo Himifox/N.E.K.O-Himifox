@@ -46,6 +46,7 @@
         requestInFlight: false,
         pendingHeartbeatAfterFlight: false,
         promptOpen: false,
+        activePromptClose: null,
         lastPromptTokenSeen: null,
         pendingForegroundMs: 0,
         foregroundStartedAt: null,
@@ -919,11 +920,17 @@
                         }
                         return;
                     }
+                    state.activePromptClose = modal && typeof modal.close === 'function'
+                        ? modal.close
+                        : null;
                     state.lastPromptTokenSeen = promptToken;
                     promptVoice = startAutostartPromptVoice();
                     return postShownAck(promptToken);
                 },
-                onResolve: stopPromptVoice,
+                onResolve: function () {
+                    state.activePromptClose = null;
+                    stopPromptVoice();
+                },
                 buttons: buttons
             });
 
@@ -940,6 +947,7 @@
             }
         } finally {
             stopPromptVoice();
+            state.activePromptClose = null;
             state.promptOpen = false;
         }
     }
@@ -968,6 +976,15 @@
         document.addEventListener('visibilitychange', syncForegroundWindow);
         window.addEventListener('focus', syncForegroundWindow);
         window.addEventListener('blur', syncForegroundWindow);
+        window.addEventListener('neko:startup-greeting-release', function (event) {
+            const detail = event && event.detail ? event.detail : {};
+            if (detail.released !== false || typeof state.activePromptClose !== 'function') {
+                return;
+            }
+            const closePrompt = state.activePromptClose;
+            state.activePromptClose = null;
+            closePrompt(null);
+        });
         document.addEventListener('pointerdown', function (event) {
             if (state.promptOpen) {
                 return;

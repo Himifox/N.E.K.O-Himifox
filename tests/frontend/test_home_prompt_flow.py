@@ -649,6 +649,14 @@ def test_autostart_prompt_waits_for_tutorial_release_and_teardown(
         if entry["url"] == "/api/autostart-prompt/shown"
     ]
     assert len(shown_requests) == 1
+    mock_page.evaluate(
+        """
+        () => window.dispatchEvent(new CustomEvent('neko:startup-greeting-release', {
+            detail: { released: false, reason: 'test-cleanup' },
+        }))
+        """
+    )
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
 
 
 @pytest.mark.frontend
@@ -801,6 +809,57 @@ def test_autostart_prompt_on_shown_closes_and_releases_token_when_tutorial_start
         if entry["url"] == "/api/autostart-prompt/shown"
     ]
     assert len(shown_requests) == 1
+
+
+@pytest.mark.frontend
+def test_autostart_prompt_closes_open_prompt_when_tutorial_rearms(
+    mock_page: Page,
+):
+    _bootstrap_home_runtime_page(
+        mock_page,
+        include_common_dialogs=True,
+        include_autostart_prompt=True,
+        setup_js=_AUTOSTART_ELIGIBLE_SETUP_JS + """
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
+            window.__audioStops = 0;
+            window.i18next = { language: 'en' };
+            window.Audio = function() {
+                this.currentTime = 0;
+                this.play = function() {
+                    return Promise.resolve();
+                };
+                this.pause = function() {
+                    window.__audioStops += 1;
+                };
+            };
+        """,
+        fetch_js=_AUTOSTART_ELIGIBLE_FETCH_JS,
+    )
+
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(1, timeout=5000)
+    mock_page.wait_for_function(
+        """
+        () => window.__requestLog.some(
+            (entry) => entry.url === '/api/autostart-prompt/shown'
+        )
+        """,
+        timeout=5000,
+    )
+
+    mock_page.evaluate(
+        """
+        () => {
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;
+            window.isNekoHomeTutorialPending = true;
+            window.dispatchEvent(new CustomEvent('neko:startup-greeting-release', {
+                detail: { released: false, reason: 'tutorial-manager-resize-init' },
+            }));
+        }
+        """
+    )
+
+    expect(mock_page.locator(".modal-overlay-autostart-retention")).to_have_count(0, timeout=5000)
+    assert mock_page.evaluate("() => window.__audioStops") == 1
 
 
 @pytest.mark.frontend
