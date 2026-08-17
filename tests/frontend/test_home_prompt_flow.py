@@ -195,6 +195,11 @@ def _bootstrap_home_runtime_page(
     script_names.append("app/app-prompt-shared.js")
     script_names.append("tutorial/core/home-tutorial-runtime.js")
     if include_autostart_prompt or include_autostart_provider:
+        setup_js = setup_js + """
+            if (typeof window.__NEKO_TUTORIAL_STARTUP_SETTLED__ !== 'boolean') {
+                window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
+            }
+        """
         script_names.append("app/app-autostart-prompt.js")
     _bootstrap_page(
         mock_page,
@@ -447,6 +452,137 @@ def test_autostart_prompt_offers_never_after_backend_allows_it(
 
     assert autostart_decisions
     assert autostart_decisions[-1]["body"]["decision"] == "never"
+
+
+@pytest.mark.frontend
+def test_autostart_prompt_waits_for_tutorial_release_and_teardown(
+    mock_page: Page,
+):
+    _bootstrap_home_runtime_page(
+        mock_page,
+        include_common_dialogs=True,
+        include_autostart_prompt=True,
+        setup_js="""
+            window.__requestLog = [];
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = false;
+            window.isNekoHomeTutorialPending = true;
+            window.nekoAutostartProvider = {
+                getStatus: async function() {
+                    return {
+                        ok: true,
+                        supported: true,
+                        enabled: false,
+                        authoritative: true,
+                        provider: 'backend',
+                    };
+                },
+                enable: async function() {
+                    throw new Error('enable should not be called');
+                },
+            };
+        """,
+        fetch_js="""
+            window.__requestLog.push({
+                url: requestUrl,
+                method: method,
+                body: body,
+            });
+
+            if (requestUrl === '/api/autostart-prompt/state') {
+                return jsonResponse({
+                    state: {
+                        status: 'observing',
+                        never_remind: false,
+                        deferred_until: 0,
+                        autostart_enabled: false,
+                        can_never_remind: false,
+                    },
+                });
+            }
+            if (requestUrl === '/api/autostart-prompt/heartbeat') {
+                return jsonResponse({
+                    ok: true,
+                    should_prompt: true,
+                    prompt_reason: 'usage_timeout',
+                    prompt_token: 'tutorial-race-token',
+                    state: {
+                        status: 'observing',
+                        never_remind: false,
+                        deferred_until: 0,
+                        autostart_enabled: false,
+                        can_never_remind: false,
+                    },
+                });
+            }
+            if (requestUrl === '/api/autostart-prompt/shown') {
+                return jsonResponse({
+                    ok: true,
+                    already_acknowledged: false,
+                    state: {
+                        status: 'prompted',
+                        never_remind: false,
+                        deferred_until: 0,
+                        autostart_enabled: false,
+                        can_never_remind: false,
+                    },
+                });
+            }
+        """,
+    )
+
+    mock_page.wait_for_function(
+        """
+        () => window.__requestLog.some(
+            (entry) => entry.url === '/api/autostart-prompt/heartbeat'
+        )
+        """
+    )
+    expect(mock_page.locator(".modal-dialog-autostart-retention")).to_have_count(0)
+    assert not any(
+        entry["url"] == "/api/autostart-prompt/shown"
+        for entry in mock_page.evaluate("() => window.__requestLog")
+    )
+
+    mock_page.evaluate(
+        """
+        () => {
+            window.isNekoHomeTutorialPending = false;
+            window.isInTutorial = false;
+            window.universalTutorialManager.isTutorialRunning = false;
+            window.universalTutorialManager.activeAvatarFloatingGuideRound = null;
+            let resolveTeardown;
+            const teardownPromise = new Promise((resolve) => {
+                resolveTeardown = resolve;
+            });
+            window.universalTutorialManager._teardownPromise = teardownPromise;
+            window.__finishTutorialTeardown = function() {
+                resolveTeardown();
+                teardownPromise.finally(() => {
+                    window.universalTutorialManager._teardownPromise = null;
+                });
+            };
+            window.__NEKO_TUTORIAL_STARTUP_SETTLED__ = true;
+            window.dispatchEvent(new CustomEvent('neko:startup-greeting-release', {
+                detail: { released: true, reason: 'tutorial-completed' },
+            }));
+        }
+        """
+    )
+
+    mock_page.wait_for_timeout(350)
+    expect(mock_page.locator(".modal-dialog-autostart-retention")).to_have_count(0)
+    assert not any(
+        entry["url"] == "/api/autostart-prompt/shown"
+        for entry in mock_page.evaluate("() => window.__requestLog")
+    )
+
+    mock_page.evaluate("() => window.__finishTutorialTeardown()")
+    expect(mock_page.locator(".modal-dialog-autostart-retention")).to_have_count(1, timeout=5000)
+    shown_requests = [
+        entry for entry in mock_page.evaluate("() => window.__requestLog")
+        if entry["url"] == "/api/autostart-prompt/shown"
+    ]
+    assert len(shown_requests) == 1
 
 
 @pytest.mark.frontend
