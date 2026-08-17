@@ -84,6 +84,7 @@
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
   "panel.reason.blocked": "Blocked by a safety gate",
   "panel.bridge.title": "OpenBiliClaw 推薦連線",
+  "panel.bridge.downloadExtension": "安裝 OpenBiliClaw 瀏覽器擴充功能",
   "panel.bridge.running": "推薦後端已同步",
   "panel.bridge.waiting": "等待推薦同步",
   "panel.bridge.syncFailed": "推薦後端同步失敗",

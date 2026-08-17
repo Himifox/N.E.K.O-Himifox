@@ -462,6 +462,9 @@ def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
     assert "export default function ProactiveRecommenderPanel" in panel_source
     assert 'props.api.call("update_recommendation_settings"' in panel_source
     assert 't("panel.bridge.title")' in panel_source
+    assert "chromewebstore.google.com/detail/openbiliclaw/" in panel_source
+    assert "neko-hosted-surface-open-external" in panel_source
+    assert 't("panel.bridge.downloadExtension")' in panel_source
     assert "Raw conversations" not in panel_source
 
     plugin_source = (plugin_dir / "__init__.py").read_text(encoding="utf-8")

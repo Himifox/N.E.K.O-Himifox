@@ -84,6 +84,7 @@
   "panel.reason.cooldown": "连续忽略后的冷却期",
   "panel.reason.blocked": "被安全门控拦截",
   "panel.bridge.title": "OpenBiliClaw 推荐连接",
+  "panel.bridge.downloadExtension": "安装 OpenBiliClaw 浏览器插件",
   "panel.bridge.running": "推荐后端已同步",
   "panel.bridge.waiting": "等待推荐同步",
   "panel.bridge.syncFailed": "推荐后端同步失败",

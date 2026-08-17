@@ -26,6 +26,20 @@ import {
 } from "@neko/plugin-ui"
 import type { HostedAction, PluginSurfaceProps } from "@neko/plugin-ui"
 
+const OPENBILICLAW_EXTENSION_URL =
+  "https://chromewebstore.google.com/detail/openbiliclaw/cdfjfkdjjhdaccbldipkjhpibnfbiamg"
+
+function openExternalUrl(url: string): void {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      { type: "neko-hosted-surface-open-external", payload: { url } },
+      "*",
+    )
+    return
+  }
+  window.open(url, "_blank", "noopener,noreferrer")
+}
+
 type RecommendationConfig = {
   enabled?: boolean
   shadow_mode?: boolean
@@ -337,9 +351,16 @@ export default function ProactiveRecommenderPanel(props: PluginSurfaceProps<Dash
 
       <Card title={t("panel.bridge.title")}>
         <Stack>
-          <Inline align="center">
-            <StatusBadge tone={bridgeTone} label={bridgeLabel} />
-          </Inline>
+          <Columns cols={2} minColumnWidth={220} fluid>
+            <Inline align="center">
+              <StatusBadge tone={bridgeTone} label={bridgeLabel} />
+            </Inline>
+            <ButtonGroup>
+              <Button tone="default" onClick={() => openExternalUrl(OPENBILICLAW_EXTENSION_URL)}>
+                {t("panel.bridge.downloadExtension")}
+              </Button>
+            </ButtonGroup>
+          </Columns>
           <Text>{`${t("panel.bridge.backend")}: ${String(compatibility.backend_endpoint || "http://127.0.0.1:8420")}`}</Text>
           <Text>{`${t("panel.bridge.ingress")}: ${String(compatibility.endpoint || "http://127.0.0.1:8421")}`}</Text>
           <Columns cols={4} minColumnWidth={150} fluid>

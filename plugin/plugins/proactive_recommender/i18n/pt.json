@@ -84,6 +84,7 @@
   "panel.reason.cooldown": "Cooldown after consecutive ignores",
   "panel.reason.blocked": "Blocked by a safety gate",
   "panel.bridge.title": "OpenBiliClaw recommendation connection",
+  "panel.bridge.downloadExtension": "Instalar a extensão de navegador OpenBiliClaw",
   "panel.bridge.running": "Recommendation backend synced",
   "panel.bridge.waiting": "Waiting for recommendation sync",
   "panel.bridge.syncFailed": "Recommendation sync failed",
