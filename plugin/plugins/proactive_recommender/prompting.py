@@ -50,8 +50,7 @@ def sanitize_delivery_copy(value: object) -> str:
 
 def build_neko_handoff_prompt(candidate: Mapping[str, Any]) -> str:
     """Build hidden, untrusted candidate context for the main character model."""
-    url = canonical_candidate_url(candidate)
-    if not url:
+    if not canonical_candidate_url(candidate):
         return ""
     title = sanitize_delivery_copy(candidate.get("title"))[:240]
     if not title:
@@ -69,7 +68,6 @@ def build_neko_handoff_prompt(candidate: Mapping[str, Any]) -> str:
             for value in interests[:4]
             if sanitize_delivery_copy(value)
         ],
-        "url": url,
     }
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return (
@@ -80,9 +78,10 @@ def build_neko_handoff_prompt(candidate: Mapping[str, Any]) -> str:
         "If now is not appropriate, remain silent and emit no PASS marker, placeholder, or "
         "explanation. If it is appropriate, speak naturally in your current persona and keep "
         "the recommendation concise. Never reveal plugins, tracking, profiles, scores, or "
-        "internal scheduling. Never claim you opened, watched, or verified the content. If "
-        "you mention this item, copy the candidate's url field verbatim exactly once; do not "
-        "invent, shorten, or replace it.\n"
+        "internal scheduling. Never claim you opened, watched, or verified the content. "
+        "Do not include or invent any URL, hyperlink, Markdown link, video cover, link "
+        "placeholder, or directions for finding the item; mention only the supplied title "
+        "and topic when speaking.\n"
         f"BEGIN_UNTRUSTED_RECOMMENDATION_DATA\n{serialized}\n"
         "END_UNTRUSTED_RECOMMENDATION_DATA"
     )

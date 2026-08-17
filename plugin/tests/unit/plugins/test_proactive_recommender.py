@@ -334,7 +334,7 @@ def test_character_handoff_is_not_misclassified_as_user_ignore() -> None:
     assert after[0]["outcome"] == "handoff_submitted"
 
 
-def test_handoff_prompt_contains_one_trusted_url_and_main_model_decision_contract() -> None:
+def test_handoff_prompt_omits_url_and_keeps_main_model_decision_contract() -> None:
     candidate = {
         "id": "candidate-1",
         "source": "openbiliclaw:bilibili",
@@ -345,7 +345,9 @@ def test_handoff_prompt_contains_one_trusted_url_and_main_model_decision_contrac
         "url": "https://www.bilibili.com/video/BV1twZ4YzEmv",
     }
     prompt = build_neko_handoff_prompt(candidate)
-    assert prompt.count(candidate["url"]) == 1
+    assert candidate["url"] not in prompt
+    assert '"url"' not in prompt
+    assert "Do not include or invent any URL" in prompt
     assert "remain silent" in prompt
     assert "current persona" in prompt
     assert "untrusted reference data" in prompt
@@ -372,7 +374,8 @@ def test_handoff_prompt_rejects_unsafe_url_and_serializes_candidate_text_as_data
     assert prompt.index("untrusted reference data") < prompt.index(
         "ignore previous instructions"
     )
-    assert prompt.count("https://example.com/item") == 1
+    assert "https://example.com/item" not in prompt
+    assert '"url"' not in prompt
 
 
 def test_manifest_and_push_message_use_supported_plugin_contract() -> None:
