@@ -1197,6 +1197,7 @@ async def handle_proactive_chat(
         )
         enabled_modes = source_mode_selection.enabled_modes
         _has_unfinished_thread = source_mode_selection.has_unfinished_thread
+        openbiliclaw_was_added = False
 
         # restricted_screen_only：用户处于 gaming / focused_work，仅允许屏幕通道。
         # 把 enabled_modes 收紧到只剩 vision。如果前端这一轮根本没启用 vision，
@@ -1228,6 +1229,7 @@ async def handle_proactive_chat(
                     and "openbiliclaw" not in enabled_modes
                 ):
                     enabled_modes = [*enabled_modes, "openbiliclaw"]
+                    openbiliclaw_was_added = True
             except Exception:
                 logger.debug(
                     "[%s] OpenBiliClaw proactive source unavailable",
@@ -1315,6 +1317,18 @@ async def handle_proactive_chat(
         avatar_position = command.avatar_position
 
         if not sources:
+            if openbiliclaw_was_added and len(enabled_modes) == 1:
+                source_result = _decide_empty_source_gate(
+                    [],
+                    has_unfinished_thread=_has_unfinished_thread,
+                )
+                if source_result is not None:
+                    return await _end_proactive(
+                        ProactiveChatResult(
+                            body=source_result.body,
+                            status_code=source_result.status_code,
+                        )
+                    )
             # 例外：未收尾话题模式下 enabled_modes 可能本就被清空（restricted_screen_only
             # + 无 vision），sources 必定为空但不应当 pass —— 让 Phase 2 拿对话
             # 历史 + state_section 跑 text-only [CHAT] 跟进。
