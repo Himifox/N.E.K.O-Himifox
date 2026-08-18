@@ -164,7 +164,7 @@ class NekoManagedLLMProvider:
             raise RuntimeError("N.E.K.O conversation model is not configured")
 
         from config.providers import focus_extra_body
-        from openbiliclaw.llm.base import LLMResponse
+        from openbiliclaw.llm.base import LLMProviderError, LLMResponse
         from utils.llm_client import (
             AIMessage,
             HumanMessage,
@@ -197,7 +197,10 @@ class NekoManagedLLMProvider:
             factory_kwargs["extra_body"] = focus_extra_body(current_model)
 
         invoke_kwargs: dict[str, Any] = {}
-        if json_mode and provider_type != "anthropic":
+        if json_mode and str(provider_type or "").lower() not in {
+            "anthropic",
+            "claude",
+        }:
             invoke_kwargs["response_format"] = {"type": "json_object"}
 
         try:
@@ -216,7 +219,7 @@ class NekoManagedLLMProvider:
         except Exception:
             # Upstream SDK errors are not allowed to carry a live credential
             # across the Core boundary or into its persisted diagnostics.
-            raise RuntimeError("N.E.K.O-managed model call failed") from None
+            raise LLMProviderError("N.E.K.O-managed model call failed") from None
 
         raw_usage = getattr(response, "response_metadata", {}).get("token_usage", {})
         usage = _normalize_llm_usage(raw_usage)

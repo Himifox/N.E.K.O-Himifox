@@ -175,7 +175,9 @@ async def test_managed_provider_error_does_not_expose_api_key(
     from utils import llm_client
 
     monkeypatch.setattr(llm_client, "create_chat_llm_async", _factory)
-    with pytest.raises(RuntimeError) as caught:
+    from openbiliclaw.llm.base import LLMProviderError
+
+    with pytest.raises(LLMProviderError) as caught:
         await openbiliclaw_runtime.NekoManagedLLMProvider(manager).complete(
             [{"role": "user", "content": "hello"}]
         )
