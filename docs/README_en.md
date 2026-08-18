@@ -26,6 +26,7 @@ This file is a concise repository overview. The [developer documentation](https:
 - **Agents:** browser and computer automation, task-state transport, external Agent adapters, and runtime tool services.
 - **Plugins:** SDK contracts, built-in plugins, hosted surfaces, lifecycle hooks, routing, and packaging gates.
 - **Frontends:** static/Jinja pages, one React chat implementation, and a Vue plugin manager. Browser `/` and Electron routes such as `/chat` and `/subtitle` are separate runtime contexts.
+- **Built-in OpenBiliClaw:** the browser extension remains the cross-platform collector while N.E.K.O hosts Core, owns model credentials and routing, and remains the only user-visible speaker. Structured previews join the existing proactive Phase 1/2 flow without requiring the plugin system or MCP. See [OpenBiliClaw Runtime](modules/openbiliclaw-runtime.md).
 
 An implementation being present does not guarantee equal support for every provider, platform, distribution, or optional integration.
 

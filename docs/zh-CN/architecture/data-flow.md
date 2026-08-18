@@ -78,6 +78,24 @@
 
 路由通过 `main_routers/shared_state.py` 的 getter 获取长生命周期 manager。Agent 控制端点是主服务器代理；浏览器无需直接访问 48915 端口。
 
+## OpenBiliClaw 内建推荐流
+
+```text
+浏览器扩展 → 127.0.0.1:8420 → 内建 OpenBiliClawCore → 画像 / 评估 / 推荐池
+                                      │
+                                      └─ NekoManagedLLMProvider
+                                         → 当前 conversation 模型路由
+
+主动聊天 → 无模型 preview（最多 3 条）→ 现有 Phase 1（固定 1 个候选槽位）
+        → 现有 Phase 2（NEKO 人设 / 记忆 / 语言）→ 唯一用户可见台词
+        → 文本成功提交且选中该链接 → record_recommendation_delivery
+```
+
+OpenBiliClaw 的后台画像与内容评估可以产生独立模型请求，但模型路由、凭据和总 Token
+统计由 NEKO 管理。`core.chat()` 不进入正常或主动聊天链。预览不消费候选；任何
+`[PASS]`、抢占、发送失败、空池或降级都不会确认展示。完整 OpenBiliClaw 画像不会进入
+Phase 1/2 prompt，内容向量库与 NEKO 角色记忆向量库也继续独立。
+
 ## Agent 事件流
 
 ```text

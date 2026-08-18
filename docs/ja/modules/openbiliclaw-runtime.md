@@ -22,12 +22,45 @@
 
 ## モデル境界
 
-アダプターは N.E.K.O が解決した conversation model 設定をメモリ上の Core route
-へ投影します。API key を OpenBiliClaw の `config.toml` に複製しません。custom
-および Qwen-compatible endpoint は OpenAI-compatible adapter を使用します。
+`NekoManagedLLMProvider` は OpenBiliClaw の各 background call で N.E.K.O の現在の
+conversation model snapshot を読み、既存の `create_chat_llm_async()` 経路で実行します。
+model／route の変更は Core の再起動なしで次回 call から有効です。API key は
+N.E.K.O の解決済み設定と call 中の memory にだけ存在し、OpenBiliClaw の
+`config.toml` には書きません。call は `openbiliclaw` usage category に記録され、
+output budget、JSON、timeout、cancel、usage mapping を扱います。temperature は
+N.E.K.O の既存方針どおり強制しません。
+
+「model の統一」は route、credential、最終 speaker の所有権を統一する意味で、
+system 全体の model request が 1 回だけという意味ではありません。OpenBiliClaw は
+profile analysis、candidate evaluation、recommendation copy の background work に
+同じ managed route を引き続き利用できます。
 
 content embedding は OpenBiliClaw 側で独立して設定します。N.E.K.O の character
 memory vector とは schema と意味が異なるため、同じ store を共有しません。
+
+## 単一 speaker と recommendation handoff
+
+```text
+OpenBiliClaw background → N.E.K.O-managed model route → structured pool
+N.E.K.O proactive chat → preview（LLM なし・非消費）→ 既存 Phase 1
+                      → 既存 Phase 2（唯一の表示台詞）
+                      → delivery 成功 → shown を確認
+```
+
+- healthy Core から 1 round 最大 3 件を preview します。preview は source refresh、
+  LLM call、表示履歴 write を行いません。
+- 既存 Phase 1 の total budget に OpenBiliClaw 用 1 slot を予約し、他 source は
+  round-robin を継続します。二つ目の Phase 1 は追加しません。
+- 最終台詞は N.E.K.O の persona、memory、language を使う既存 Phase 2 だけが生成します。
+  normal／proactive chat と tool chain は `core.chat()` を呼びません。
+- `[PASS]`、user takeover、delivery failure、degraded Core、empty pool、timeout では
+  candidate を消費せず、他の proactive source も止めません。
+- prompt には bounded candidate fields だけを渡し、OpenBiliClaw の full profile は
+  注入しません。
+
+browser extension は引き続き platform behavior と browser session を収集する「手足」です。
+N.E.K.O plugin system と MCP は不要ですが、extension 自体の install／設定は必要です。
+N.E.K.O 停止中は event を保持し、復旧後 `127.0.0.1:8420` へ再送します。
 
 ## 状態と復旧
 

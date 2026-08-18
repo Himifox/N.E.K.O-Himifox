@@ -43,6 +43,12 @@
 </tr>
 </table>
 
+本分支内建 OpenBiliClaw 内容发现运行时：浏览器扩展继续负责跨平台行为采集和浏览器
+会话，NEKO 直接托管 Core，并统一管理模型路由、API Key 与最终猫娘表达。
+OpenBiliClaw 的结构化推荐进入主动聊天现有 Phase 1，最终仍只由 NEKO Phase 2
+说给用户听；NEKO 插件系统和 MCP 无需开启。详见
+[OpenBiliClaw 内建运行时](docs/zh-CN/modules/openbiliclaw-runtime.md)。
+
 ## 实机展示
 
 支持文本、语音、窥屏、鼠标点击、拖拽等一系列交互方式，既可以在闲暇的时候陪你聊天，也可以游戏娱乐时观战吐槽，还会叼着网络梗图来找你~~

@@ -11,6 +11,7 @@
 | [Offline Client](/zh-CN/modules/omni-offline) | `main_logic/omni_offline_client/` | 通过聊天补全 API 运行流式文本与视觉回合 |
 | [TTS Client](/zh-CN/modules/tts-client) | `main_logic/tts_client/` | 解析外部 TTS worker，并定义 worker 队列契约 |
 | [Config Manager](/zh-CN/modules/config-manager) | `utils/config_manager/` | 解析运行时存储、迁移、角色数据、API profile 与持久化设置 |
+| [OpenBiliClaw 内建运行时](/zh-CN/modules/openbiliclaw-runtime) | `app/openbiliclaw_runtime.py` | 托管内容画像 Core、浏览器扩展桥接、动态模型 Provider 与主动推荐交接 |
 
 ## 组合方式
 

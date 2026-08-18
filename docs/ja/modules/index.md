@@ -11,6 +11,7 @@
 | [Offline Client](/ja/modules/omni-offline) | `main_logic/omni_offline_client/` | chat-completion API に対するストリーミングテキスト・画像ターンを実行 |
 | [TTS Client](/ja/modules/tts-client) | `main_logic/tts_client/` | 外部 TTS worker を解決し、worker のキュー契約を提供 |
 | [Config Manager](/ja/modules/config-manager) | `utils/config_manager/` | ランタイムストレージ、移行、キャラクターデータ、API profile、永続設定を解決 |
+| [OpenBiliClaw 組み込みランタイム](/ja/modules/openbiliclaw-runtime) | `app/openbiliclaw_runtime.py` | content profile Core、extension bridge、dynamic model provider、proactive recommendation handoff を所有 |
 
 ## 組み合わせ方
 

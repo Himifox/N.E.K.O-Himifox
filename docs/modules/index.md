@@ -11,6 +11,7 @@ These pages document the Python runtime modules that assemble a conversation ses
 | [Offline Client](/modules/omni-offline) | `main_logic/omni_offline_client/` | Runs streamed text and vision turns against chat-completion APIs |
 | [TTS Client](/modules/tts-client) | `main_logic/tts_client/` | Resolves an external TTS worker and exposes the worker queue contract |
 | [Config Manager](/modules/config-manager) | `utils/config_manager/` | Resolves runtime storage, migrations, character data, API profiles, and persisted settings |
+| [OpenBiliClaw Runtime](/modules/openbiliclaw-runtime) | `app/openbiliclaw_runtime.py` | Hosts the content-profile Core, extension bridge, dynamic model provider, and proactive recommendation handoff |
 
 ## How they compose
 

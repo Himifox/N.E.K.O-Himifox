@@ -26,6 +26,7 @@ Browser／Electron surface、永続 memory、具現化 avatar、Agent 機能、p
 - **Agent:** browser／computer automation、task state transport、外部 Agent adapter、runtime tool service。
 - **Plugin:** SDK 契約、built-in plugin、hosted surface、lifecycle hook、routing、packaging gate。
 - **Frontend:** 静的／Jinja page、単一の React chat 実装、Vue plugin manager。Browser `/` と Electron の `/chat`、`/subtitle` は別 runtime context です。
+- **組み込み OpenBiliClaw:** browser extension は cross-platform collector のまま、N.E.K.O が Core、model credential、route を所有し、唯一の user-visible speaker になります。structured preview は既存 proactive Phase 1/2 に入り、plugin system と MCP は不要です。詳細は [OpenBiliClaw Runtime](modules/openbiliclaw-runtime.md) を参照してください。
 
 実装が存在しても、すべての provider、platform、distribution、任意 integration が同等にサポートされるとは限りません。
 

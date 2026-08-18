@@ -22,12 +22,42 @@ MCP 通道；关闭这两套可选功能不会禁用 OpenBiliClaw。
 
 ## 模型边界
 
-适配器会读取 NEKO 已解析的对话模型配置，并以内存实例路由的方式提供给 Core，
-不会把 API Key 复制进 OpenBiliClaw 的 `config.toml`。自定义与 Qwen 兼容端点使用
-OpenAI-compatible 协议适配器。
+`NekoManagedLLMProvider` 在每次 OpenBiliClaw 后台调用时读取 NEKO 当前
+conversation 模型快照，再通过 NEKO 既有 `create_chat_llm_async()` 发起请求。
+因此模型或路由切换会在下一次调用生效，无需重启 Core。API Key 只存在于 NEKO
+配置解析结果和调用期内存，不会写入 OpenBiliClaw 的 `config.toml`；调用统一标记为
+`openbiliclaw` 进入 NEKO Token 统计。Provider 支持输出预算、JSON 输出、超时、取消
+和 usage 映射，并遵循 NEKO 不主动下发 temperature 的约定。
+
+“统一模型”表示 NEKO 统一管理路由、凭据与最终说话者，不表示整个系统只有一次模型
+请求。OpenBiliClaw 仍可在后台调用同一路由完成画像分析、候选评估和推荐理由生成；
+这些模块诊断 usage 不应再与 NEKO 总费用重复相加。
 
 内容向量仍由 OpenBiliClaw 独立配置。NEKO 的角色记忆向量与 OpenBiliClaw 的内容
 向量具有不同数据结构，不能因为都叫“向量”就共享存储。
+
+## 单一说话者与推荐交接
+
+```text
+OpenBiliClaw 后台 → NEKO 管理的模型路由 → 结构化推荐池
+NEKO 主动聊天 → preview（无 LLM、不消费）→ 既有 Phase 1
+             → 既有 Phase 2（唯一猫娘台词）→ 成功投递 → 确认展示
+```
+
+- 健康 Core 每轮最多预览 3 条已完成评估和推荐理由的候选；预览不刷新来源、不调用
+  LLM、不写展示历史。
+- Phase 1 总候选预算为 OpenBiliClaw 固定保留 1 个槽位，其余来源继续轮询；没有
+  第二次 Phase 1。
+- Phase 2 继续使用 NEKO 人设、记忆和语言配置生成最终台词。正常聊天、主动聊天和
+  工具链都不调用 `core.chat()`；该接口只保留给 Web、CLI 与兼容用途。
+- 只有被选中且真正提交给用户的候选才确认展示；`[PASS]`、用户抢占、投递失败、
+  Core degraded、空池或预览超时都不会消费候选，也不会阻断其它主动聊天来源。
+- Prompt 只接收标题、URL、平台、作者、推荐依据、主题、置信度和 `item_key`，不注入
+  OpenBiliClaw 完整画像，避免两套记忆互相覆盖。
+
+浏览器扩展仍是 OpenBiliClaw 采集平台行为和浏览器会话的“手脚”。NEKO 插件系统与
+MCP 无需开启；但扩展本身仍需安装和配置。NEKO 关闭期间扩展持久缓存行为事件，
+NEKO 恢复后通过 `127.0.0.1:8420` 自动补传。
 
 ## 状态与恢复
 

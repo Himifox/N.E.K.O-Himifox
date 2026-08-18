@@ -25,15 +25,51 @@ retain events and upload them after the listener returns.
 
 ## Model boundary
 
-At construction time, the adapter reads N.E.K.O's resolved conversation-model
-profile and projects it into an in-memory OpenBiliClaw instance route. Secrets
-are not copied into OpenBiliClaw's `config.toml`. Provider names are normalized
-to the matching Core adapter; custom and Qwen-compatible endpoints use the
-OpenAI-compatible wire adapter.
+`NekoManagedLLMProvider` reads N.E.K.O's current conversation-model snapshot on
+every OpenBiliClaw background call and executes it through the existing
+`create_chat_llm_async()` path. A route or model change therefore applies to the
+next call without restarting Core. API credentials exist only in N.E.K.O's
+resolved configuration and call-time memory; they are never written to
+OpenBiliClaw's `config.toml`. Calls use the `openbiliclaw` token-usage category.
+The provider maps output budgets, JSON mode, timeout, cancellation, and usage,
+and intentionally does not force a temperature.
+
+“Unified model” means unified routing, credentials, and final speaker—not one
+model request for the entire system. OpenBiliClaw can still use the same managed
+route for background profile analysis, candidate evaluation, and recommendation
+copy. Its own usage ledger remains module diagnostics and must not be added to
+N.E.K.O's total cost a second time.
 
 OpenBiliClaw content embeddings remain independently configured. N.E.K.O's
 character-memory vectors and OpenBiliClaw's content vectors have different
 schemas and must not share a store merely because both are called embeddings.
+
+## Single speaker and recommendation handoff
+
+```text
+OpenBiliClaw background → N.E.K.O-managed model route → structured pool
+N.E.K.O proactive chat → preview (no LLM/no consume) → existing Phase 1
+                      → existing Phase 2 (only visible voice)
+                      → successful delivery → acknowledge shown
+```
+
+- A healthy Core previews at most three evaluated, copy-ready candidates per
+  round. Preview does not refresh sources, call an LLM, or write display history.
+- One slot in the existing Phase 1 total budget is reserved for OpenBiliClaw;
+  other sources continue round-robin. No second Phase 1 is introduced.
+- Phase 2 continues to use N.E.K.O persona, memory, and language settings for
+  the final line. Normal chat, proactive chat, and tools do not call
+  `core.chat()`; it remains for Web, CLI, and compatibility clients.
+- Only the selected, successfully committed candidate is acknowledged. `[PASS]`,
+  takeover, delivery failure, degraded Core, empty pool, or preview timeout do
+  not consume it and do not block the remaining proactive sources.
+- Prompts receive bounded candidate fields—not the full OpenBiliClaw profile—so
+  the two memory systems do not overwrite one another.
+
+The browser extension remains OpenBiliClaw's collection and browser-session
+“hands.” N.E.K.O's plugin system and MCP do not need to be enabled, but the
+extension itself still needs to be installed and configured. It buffers events
+while N.E.K.O is down and replays them to `127.0.0.1:8420` after recovery.
 
 ## Status and recovery
 
