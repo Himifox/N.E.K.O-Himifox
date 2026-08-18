@@ -407,6 +407,32 @@ async def _record_committed_delivery(
         {"memory_dir": memory_dir} if memory_dir is not None else {}
     )
 
+    if (
+        selected_web_link
+        and selected_web_link.get("mode") == "openbiliclaw"
+        and _is_link_selected(selected_web_link, source_links)
+    ):
+        recommendation = selected_web_link.get("_openbiliclaw_recommendation")
+        if recommendation is not None:
+            try:
+                from app.openbiliclaw_runtime import get_openbiliclaw_runtime
+
+                recommendation_id = await get_openbiliclaw_runtime().record_recommendation_delivery(
+                    recommendation,
+                    surface="neko_proactive",
+                )
+                if recommendation_id <= 0:
+                    active_logger.info(
+                        "[%s] OpenBiliClaw preview expired before delivery acknowledgement",
+                        lanlan_name,
+                    )
+            except Exception:
+                active_logger.warning(
+                    "[%s] OpenBiliClaw delivery acknowledgement failed",
+                    lanlan_name,
+                    exc_info=True,
+                )
+
     _record_proactive_chat(lanlan_name, response_text, primary_channel)
     _record_proactive_material(
         lanlan_name,

@@ -21,6 +21,8 @@ def _format_phase1_link_candidate(index: int, item: dict[str, Any]) -> str:
         ("source", "来源"),
         ("author", "作者"),
         ("reason", "推荐依据"),
+        ("topic_label", "个性化主题"),
+        ("confidence", "置信度"),
         ("description_hint", "简介"),
         ("url", "URL"),
     )
@@ -56,8 +58,9 @@ def _round_robin_phase1_links(
     sources: dict[str, Any],
     *,
     total: int,
+    reserved_mode: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Give every enabled web mode candidates before any one mode can dominate."""
+    """Give every web mode a turn, optionally reserving one exact source slot."""
 
     selected = {mode: [] for mode in modes}
     positions = {mode: 0 for mode in modes}
@@ -67,6 +70,23 @@ def _round_robin_phase1_links(
     }
     seen_keys: set[str] = set()
     remaining = max(0, total)
+    if reserved_mode in links_by_mode and remaining:
+        reserved_links = links_by_mode[reserved_mode]
+        while positions[reserved_mode] < len(reserved_links):
+            link = dict(reserved_links[positions[reserved_mode]])
+            positions[reserved_mode] += 1
+            key = _source_hash(link.get("url", ""), link.get("title", ""))
+            if key and (key in seen_keys or _should_skip_source(key)):
+                continue
+            if key:
+                seen_keys.add(key)
+            link.setdefault("mode", reserved_mode)
+            selected[reserved_mode].append(link)
+            remaining -= 1
+            break
+        # The reservation is exactly one slot even though Core previews up to
+        # three candidates for Phase 1 to choose from across future rounds.
+        positions[reserved_mode] = len(reserved_links)
     while remaining:
         made_progress = False
         for mode in modes:

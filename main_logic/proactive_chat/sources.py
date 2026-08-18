@@ -267,6 +267,38 @@ def _extract_links_from_raw(
     return links
 
 
+def _openbiliclaw_link(recommendation: Any) -> dict[str, Any] | None:
+    """Keep one Core object private while exposing bounded Phase 1 evidence."""
+    content = getattr(recommendation, "content", None)
+    if content is None:
+        return None
+    title = str(getattr(content, "title", "") or "").strip()
+    url = str(getattr(content, "content_url", "") or "").strip()
+    if not title or not url:
+        return None
+    platform = str(getattr(content, "source_platform", "") or "").strip()
+    author = str(
+        getattr(content, "author_name", "")
+        or getattr(content, "up_name", "")
+        or ""
+    ).strip()
+    return {
+        "title": title,
+        "url": url,
+        "source": "OpenBiliClaw",
+        "mode": "openbiliclaw",
+        "platform": platform,
+        "author": author,
+        "reason": str(getattr(recommendation, "expression", "") or "").strip(),
+        "topic_label": str(
+            getattr(recommendation, "topic_label", "") or ""
+        ).strip(),
+        "confidence": float(getattr(recommendation, "confidence", 0.0) or 0.0),
+        "item_key": str(getattr(content, "item_key", "") or "").strip(),
+        "_openbiliclaw_recommendation": recommendation,
+    }
+
+
 async def _fetch_source(
     mode: str,
     *,
@@ -277,6 +309,23 @@ async def _fetch_source(
     """Fetch and normalize one enabled source using the established shape."""
     screenshot_data = command.screenshot_data
     has_screenshot = bool(screenshot_data) and isinstance(screenshot_data, str)
+
+    if mode == "openbiliclaw":
+        from app.openbiliclaw_runtime import get_openbiliclaw_runtime
+
+        runtime = get_openbiliclaw_runtime()
+        if not runtime.proactive_available:
+            raise ValueError("OpenBiliClaw Core unavailable or degraded")
+        async with asyncio.timeout(1.0):
+            previews = await runtime.preview_recommendations(limit=3)
+        links = [
+            link
+            for recommendation in previews
+            if (link := _openbiliclaw_link(recommendation)) is not None
+        ]
+        if not links:
+            raise ValueError("OpenBiliClaw recommendation pool is empty")
+        return mode, {"links": links}
 
     if mode == "vision":
         if not has_screenshot:

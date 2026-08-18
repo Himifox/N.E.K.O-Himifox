@@ -498,6 +498,26 @@ class NekoOpenBiliClawRuntime:
     async def recommend(self, *, limit: int = 5) -> list[Any]:
         return list(await self._require_core().recommend(limit=limit))
 
+    async def preview_recommendations(self, *, limit: int = 3) -> list[Any]:
+        """Read copy-ready candidates without consuming their pool rows."""
+        return list(
+            await self._require_healthy_core().preview_recommendations(limit=limit)
+        )
+
+    async def record_recommendation_delivery(
+        self,
+        recommendation: Any,
+        *,
+        surface: str = "neko_proactive",
+    ) -> int:
+        """Acknowledge one candidate after N.E.K.O commits its delivery."""
+        return int(
+            await self._require_healthy_core().record_recommendation_delivery(
+                recommendation,
+                surface=surface,
+            )
+        )
+
     async def publish_behavior_event(self, event: dict[str, object]) -> None:
         await self._require_core().publish_event(event)
 
@@ -505,6 +525,22 @@ class NekoOpenBiliClawRuntime:
         if self._core is None or not self._status.bridge_running:
             raise RuntimeError("OpenBiliClaw Core is not running")
         return self._core
+
+    def _require_healthy_core(self) -> Any:
+        core = self._require_core()
+        if self._status.degraded or bool(getattr(core, "degraded", False)):
+            raise RuntimeError("OpenBiliClaw Core is degraded")
+        return core
+
+    @property
+    def proactive_available(self) -> bool:
+        """Whether proactive chat may safely read the canonical pool."""
+        return bool(
+            self._core is not None
+            and self._status.bridge_running
+            and not self._status.degraded
+            and not bool(getattr(self._core, "degraded", False))
+        )
 
 
 _runtime: NekoOpenBiliClawRuntime | None = None

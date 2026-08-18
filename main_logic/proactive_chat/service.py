@@ -1219,6 +1219,22 @@ async def handle_proactive_chat(
                 )
             )
 
+        if not source_mode_selection.restricted_to_vision:
+            try:
+                from app.openbiliclaw_runtime import get_openbiliclaw_runtime
+
+                if (
+                    get_openbiliclaw_runtime().proactive_available
+                    and "openbiliclaw" not in enabled_modes
+                ):
+                    enabled_modes = [*enabled_modes, "openbiliclaw"]
+            except Exception:
+                logger.debug(
+                    "[%s] OpenBiliClaw proactive source unavailable",
+                    lanlan_name,
+                    exc_info=True,
+                )
+
         print(f"[{lanlan_name}] 启用的搭话模式: {enabled_modes}")
 
         # ========== Mini-game 邀请短路 ==========
@@ -1562,7 +1578,9 @@ async def handle_proactive_chat(
         # meme 也不经过 Phase 1 LLM 筛选，直接添加话题
         web_modes = [m for m in sources if m not in ("vision", "music", "meme")]
         # Personal-feed context wins when the same URL also appears elsewhere.
-        web_modes.sort(key=lambda mode: 0 if mode == "personal" else 1)
+        web_modes.sort(
+            key=lambda mode: 0 if mode == "openbiliclaw" else 1 if mode == "personal" else 2
+        )
 
         merged_web_content = ""
 
@@ -1614,6 +1632,8 @@ async def handle_proactive_chat(
             )
 
             for ch in suppressed:
+                if ch == "openbiliclaw":
+                    continue
                 sources.pop(ch, None)
             if "music" in suppressed:
                 music_content = None
@@ -1644,6 +1664,7 @@ async def handle_proactive_chat(
                 total=max(
                     0, _PHASE1_TOTAL_TOPIC_TARGET - len(fallback_modes)
                 ),
+                reserved_mode="openbiliclaw",
             )
             remaining_total = _PHASE1_TOTAL_TOPIC_TARGET - sum(
                 len(items) for items in selected_by_mode.values()
