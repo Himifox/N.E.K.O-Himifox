@@ -98,6 +98,31 @@ def test_neko_model_route_fails_closed_when_live_route_is_unavailable(
     assert projected.llm.default_chain == ["neko-conversation"]
     assert projected.llm.instances["neko-conversation"].api_key == ""
     assert projected.llm.instances["neko-conversation"].model == "neko-managed"
+    assert projected.llm.instances["neko-conversation"].enabled is False
+
+
+def test_neko_public_free_route_is_disabled_for_background_analysis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.config import load_config
+    from utils import config_manager
+
+    class _FreeConfigManager:
+        @staticmethod
+        def get_model_api_config(_model_type: str) -> dict[str, object]:
+            return {
+                "model": "free-model",
+                "base_url": "https://www.lanlan.tech/text/v1",
+                "provider_type": "openai_compatible",
+            }
+
+    monkeypatch.setattr(config_manager, "get_config_manager", lambda: _FreeConfigManager())
+    config = load_config(tmp_path / "missing.toml", consult_environment=False)
+
+    projected = openbiliclaw_runtime._apply_neko_model_config(config)
+
+    assert projected.llm.instances["neko-conversation"].enabled is False
 
 
 async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(

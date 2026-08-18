@@ -40,6 +40,10 @@ projection is reapplied before initial construction and every Core hot reload,
 so source initialization or settings saves cannot reactivate an old direct
 DeepSeek/OpenAI route. If the live conversation route is temporarily
 unresolvable, the adapter fails closed instead of falling back to direct access.
+N.E.K.O's bundled `free-model` service is user-chat-only and rejects background
+profile or candidate analysis. The adapter disables that route, leaving Core in
+degraded bridge mode without repeated requests. Configure a conversation model
+that permits background use and restart N.E.K.O to enable analysis.
 
 “Unified model” means unified routing, credentials, and final speaker—not one
 model request for the entire system. OpenBiliClaw can still use the same managed

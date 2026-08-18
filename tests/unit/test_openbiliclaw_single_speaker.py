@@ -184,6 +184,33 @@ async def test_managed_provider_error_does_not_expose_api_key(
     assert secret not in str(caught.value)
 
 
+async def test_managed_provider_does_not_call_public_free_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _DynamicConfigManager(
+        [
+            {
+                "model": "free-model",
+                "base_url": "https://www.lanlan.tech/text/v1",
+                "api_key": "public-route-token",
+                "provider_type": "openai_compatible",
+            }
+        ]
+    )
+    factory = AsyncMock()
+    from utils import llm_client
+
+    monkeypatch.setattr(llm_client, "create_chat_llm_async", factory)
+    from openbiliclaw.llm.base import LLMProviderError
+
+    with pytest.raises(LLMProviderError, match="public free model"):
+        await openbiliclaw_runtime.NekoManagedLLMProvider(manager).complete(
+            [{"role": "user", "content": "background analysis"}]
+        )
+
+    factory.assert_not_awaited()
+
+
 async def test_openbiliclaw_source_is_structured_and_preview_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

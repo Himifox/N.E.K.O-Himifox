@@ -27,6 +27,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 from utils.logger_config import get_module_logger
 
@@ -37,6 +38,17 @@ _STARTUP_TIMEOUT_SECONDS = 15.0
 _SHUTDOWN_TIMEOUT_SECONDS = 15.0
 _MODEL_CALL_TIMEOUT_SECONDS = 1200.0
 _NEKO_LLM_INSTANCE_ID = "neko-conversation"
+
+
+def _is_neko_public_free_route(model: str, base_url: str) -> bool:
+    """Return whether the route is N.E.K.O's user-chat-only public service."""
+    hostname = (urlsplit(base_url).hostname or "").lower()
+    return model.strip().lower() == "free-model" and hostname in {
+        "lanlan.app",
+        "www.lanlan.app",
+        "lanlan.tech",
+        "www.lanlan.tech",
+    }
 
 
 def _enabled_from_environment() -> bool:
@@ -136,7 +148,9 @@ class NekoManagedLLMProvider:
             snapshot = await self._model_snapshot()
         except Exception:
             return False
-        return bool(str(snapshot.get("model") or "").strip())
+        model = str(snapshot.get("model") or "").strip()
+        base_url = str(snapshot.get("base_url") or "").strip()
+        return bool(model and base_url and not _is_neko_public_free_route(model, base_url))
 
     async def complete(
         self,
@@ -165,6 +179,12 @@ class NekoManagedLLMProvider:
 
         from config.providers import focus_extra_body
         from openbiliclaw.llm.base import LLMProviderError, LLMResponse
+
+        if _is_neko_public_free_route(current_model, base_url):
+            raise LLMProviderError(
+                "N.E.K.O public free model is unavailable for background analysis"
+            )
+
         from utils.llm_client import (
             AIMessage,
             HumanMessage,
@@ -263,10 +283,15 @@ def _apply_neko_model_config(config: Any) -> Any:
     # provider persisted by an older embedded-runtime build. The injected
     # provider resolves the live route again for every call, so these fallback
     # values are metadata only.
-    model = str(model_config.get("model") or "neko-managed").strip()
+    configured_model = str(model_config.get("model") or "").strip()
+    configured_base_url = str(model_config.get("base_url") or "").strip()
+    model = configured_model or "neko-managed"
     base_url = str(
-        model_config.get("base_url") or "http://neko-managed.invalid/v1"
+        configured_base_url or "http://neko-managed.invalid/v1"
     ).strip()
+    route_enabled = bool(configured_model and configured_base_url) and not (
+        _is_neko_public_free_route(configured_model, configured_base_url)
+    )
 
     from openbiliclaw.config import LLMInstanceConfig
 
@@ -276,7 +301,7 @@ def _apply_neko_model_config(config: Any) -> Any:
         api_key="",
         model=model,
         base_url=base_url,
-        enabled=True,
+        enabled=route_enabled,
     )
     llm = replace(
         config.llm,

@@ -33,6 +33,9 @@ conversation 模型快照，再通过 NEKO 既有 `create_chat_llm_async()` 发�
 `neko-conversation` 占位路由；首次构造及每次 Core 热重载前都会重新应用该投影。
 即使来源初始化或设置保存触发 reload，磁盘里的旧 DeepSeek/OpenAI 直连配置也不会
 重新接管调用。暂时无法解析 conversation 路由时会安全失败，而不是回退直连。
+NEKO 自带的 `free-model` 公共服务只允许用户对话，不接受后台画像/候选分析；适配层会
+识别并禁用这一路由，Core 以 degraded 模式保留插件桥接且不会重复请求。要启用后台
+分析，请先在 NEKO 中配置一个允许此类调用的自有会话模型，然后重启 NEKO。
 
 “统一模型”表示 NEKO 统一管理路由、凭据与最终说话者，不表示整个系统只有一次模型
 请求。OpenBiliClaw 仍可在后台调用同一路由完成画像分析、候选评估和推荐理由生成；

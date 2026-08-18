@@ -35,6 +35,10 @@ N.E.K.O の既存方針どおり強制しません。
 Core の各 hot reload 前に再適用するため、source initialization や settings save が
 古い DeepSeek/OpenAI direct route を再有効化することはありません。conversation route
 を一時的に解決できない場合も direct access へ fallback せず fail closed します。
+組み込みの `free-model` service は user chat 専用で background profile/candidate
+analysis を拒否します。adapter はこの route を無効化し、Core を degraded bridge
+mode に保って反復 request を止めます。analysis を有効にするには background use を
+許可する conversation model を N.E.K.O に設定し、N.E.K.O を再起動してください。
 
 「model の統一」は route、credential、最終 speaker の所有権を統一する意味で、
 system 全体の model request が 1 回だけという意味ではありません。OpenBiliClaw は
