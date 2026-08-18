@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -53,6 +54,102 @@ def test_neko_model_route_is_projected_without_credentials(
     assert instance.provider_type == "claude"
     assert instance.api_key == ""
     assert config_path.exists() is False
+
+
+def test_neko_model_route_fails_closed_when_live_route_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.config import LLMInstanceConfig, load_config
+    from utils import config_manager
+
+    class _UnavailableConfigManager:
+        @staticmethod
+        def get_model_api_config(_model_type: str) -> dict[str, object]:
+            raise RuntimeError("conversation route unavailable")
+
+    monkeypatch.setattr(
+        config_manager,
+        "get_config_manager",
+        lambda: _UnavailableConfigManager(),
+    )
+    config = load_config(tmp_path / "missing.toml", consult_environment=False)
+    legacy = LLMInstanceConfig(
+        name="legacy-direct",
+        provider_type="deepseek",
+        api_key="legacy-secret",
+        model="legacy-model",
+        base_url="https://api.deepseek.com",
+        enabled=True,
+    )
+    config = replace(
+        config,
+        llm=replace(
+            config.llm,
+            instance_routing=True,
+            instances={"legacy-direct": legacy},
+            default_chain=["legacy-direct"],
+        ),
+    )
+
+    projected = openbiliclaw_runtime._apply_neko_model_config(config)
+
+    assert set(projected.llm.instances) == {"neko-conversation"}
+    assert projected.llm.default_chain == ["neko-conversation"]
+    assert projected.llm.instances["neko-conversation"].api_key == ""
+    assert projected.llm.instances["neko-conversation"].model == "neko-managed"
+
+
+async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.config import LLMInstanceConfig, load_config, save_config
+    from utils import config_manager
+
+    class _ConfigManager:
+        @staticmethod
+        def get_model_api_config(_model_type: str) -> dict[str, object]:
+            return {
+                "model": "neko-model",
+                "base_url": "https://model.example/v1",
+                "provider_type": "openai",
+            }
+
+    monkeypatch.setattr(config_manager, "get_config_manager", lambda: _ConfigManager())
+    data_root = tmp_path / "embedded"
+    config_path = data_root / "config.toml"
+    raw = load_config(config_path, consult_environment=False)
+    legacy = LLMInstanceConfig(
+        name="legacy-direct",
+        provider_type="deepseek",
+        api_key="legacy-secret-never-survives",
+        model="legacy-model",
+        base_url="https://api.deepseek.com",
+        enabled=True,
+    )
+    raw = replace(
+        raw,
+        llm=replace(
+            raw.llm,
+            instance_routing=True,
+            instances={"legacy-direct": legacy},
+            default_chain=["legacy-direct"],
+        ),
+    )
+    save_config(raw, config_path, preserve_override_provenance=False)
+
+    core, _app = openbiliclaw_runtime._load_openbiliclaw_backend(data_root, 8420)
+    try:
+        assert "legacy-secret-never-survives" not in config_path.read_text(encoding="utf-8")
+        assert core.config.llm.default_chain == ["neko-conversation"]
+
+        await core.reload(raw)
+
+        assert core.config.llm.default_chain == ["neko-conversation"]
+        assert set(core.config.llm.instances) == {"neko-conversation"}
+    finally:
+        await core.stop()
 
 
 async def test_pinned_core_builds_with_real_fastapi_adapter(

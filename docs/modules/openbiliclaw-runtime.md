@@ -34,6 +34,13 @@ OpenBiliClaw's `config.toml`. Calls use the `openbiliclaw` token-usage category.
 The provider maps output budgets, JSON mode, timeout, cancellation, and usage,
 and intentionally does not force a temperature.
 
+At startup the adapter migrates any standalone LLM instance in the embedded
+configuration to a credential-free `neko-conversation` placeholder. The same
+projection is reapplied before initial construction and every Core hot reload,
+so source initialization or settings saves cannot reactivate an old direct
+DeepSeek/OpenAI route. If the live conversation route is temporarily
+unresolvable, the adapter fails closed instead of falling back to direct access.
+
 “Unified model” means unified routing, credentials, and final speaker—not one
 model request for the entire system. OpenBiliClaw can still use the same managed
 route for background profile analysis, candidate evaluation, and recommendation

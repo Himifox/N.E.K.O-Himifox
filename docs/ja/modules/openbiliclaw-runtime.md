@@ -30,6 +30,12 @@ N.E.K.O の解決済み設定と call 中の memory にだけ存在し、OpenBil
 output budget、JSON、timeout、cancel、usage mapping を扱います。temperature は
 N.E.K.O の既存方針どおり強制しません。
 
+起動時に adapter は embedded config の standalone LLM instance を credential を
+含まない `neko-conversation` placeholder へ移行します。同じ projection を初回構築と
+Core の各 hot reload 前に再適用するため、source initialization や settings save が
+古い DeepSeek/OpenAI direct route を再有効化することはありません。conversation route
+を一時的に解決できない場合も direct access へ fallback せず fail closed します。
+
 「model の統一」は route、credential、最終 speaker の所有権を統一する意味で、
 system 全体の model request が 1 回だけという意味ではありません。OpenBiliClaw は
 profile analysis、candidate evaluation、recommendation copy の background work に

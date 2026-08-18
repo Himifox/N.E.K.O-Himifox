@@ -251,18 +251,22 @@ def _normalize_llm_usage(raw_usage: object) -> dict[str, int]:
 
 def _apply_neko_model_config(config: Any) -> Any:
     """Project only route metadata into Core; credentials stay N.E.K.O-owned."""
+    model_config: Mapping[str, object] = {}
     try:
         from utils.config_manager import get_config_manager
 
         model_config = get_config_manager().get_model_api_config("conversation") or {}
     except Exception:
         logger.debug("Could not resolve N.E.K.O model config for OpenBiliClaw", exc_info=True)
-        return config
 
-    model = str(model_config.get("model") or "").strip()
-    base_url = str(model_config.get("base_url") or "").strip()
-    if not model or not base_url:
-        return config
+    # Fail closed: an unresolved N.E.K.O route must never reactivate a direct
+    # provider persisted by an older embedded-runtime build. The injected
+    # provider resolves the live route again for every call, so these fallback
+    # values are metadata only.
+    model = str(model_config.get("model") or "neko-managed").strip()
+    base_url = str(
+        model_config.get("base_url") or "http://neko-managed.invalid/v1"
+    ).strip()
 
     from openbiliclaw.config import LLMInstanceConfig
 
@@ -292,22 +296,32 @@ def _load_openbiliclaw_backend(data_root: Path, port: int) -> tuple[Any, Any]:
 
     from openbiliclaw import OpenBiliClawCore
     from openbiliclaw.api.app import create_app
-    from openbiliclaw.config import load_config
+    from openbiliclaw.config import load_config, save_config
 
     data_root.mkdir(parents=True, exist_ok=True)
     data_dir = data_root / "data"
-    config = load_config(data_root / "config.toml", consult_environment=True)
+    config_path = data_root / "config.toml"
+    config = load_config(config_path, consult_environment=True)
     config = replace(
         config,
         data_dir=str(data_dir),
         api=replace(config.api, host="127.0.0.1", port=port),
     )
     config = _apply_neko_model_config(config)
+    # One-time migration plus ongoing defence: remove standalone model keys
+    # from the active embedded config. N.E.K.O credentials remain in its own
+    # config store and are resolved only at call time by the injected provider.
+    save_config(
+        config,
+        config_path,
+        preserve_override_provenance=False,
+    )
     core = OpenBiliClawCore.create(
         config,
         llm_provider_overrides={
             _NEKO_LLM_INSTANCE_ID: NekoManagedLLMProvider(),
         },
+        host_config_transform=_apply_neko_model_config,
         allow_degraded=True,
     )
     return core, create_app(core=core)
