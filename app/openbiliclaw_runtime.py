@@ -26,7 +26,7 @@ import asyncio
 import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from utils.logger_config import get_module_logger
 
@@ -35,6 +35,8 @@ logger = get_module_logger(__name__, "Main")
 DEFAULT_OPENBILICLAW_PORT = 8420
 _STARTUP_TIMEOUT_SECONDS = 15.0
 _SHUTDOWN_TIMEOUT_SECONDS = 15.0
+_MODEL_CALL_TIMEOUT_SECONDS = 1200.0
+_NEKO_LLM_INSTANCE_ID = "neko-conversation"
 
 
 def _enabled_from_environment() -> bool:
@@ -101,8 +103,151 @@ def _openbiliclaw_provider_type(value: object) -> str:
     return "openai_compatible"
 
 
+class NekoManagedLLMProvider:
+    """OpenBiliClaw provider backed by N.E.K.O's live conversation route."""
+
+    supports_embedding = False
+
+    def __init__(self, config_manager: Any | None = None) -> None:
+        self._config_manager = config_manager
+
+    @property
+    def name(self) -> str:
+        return _NEKO_LLM_INSTANCE_ID
+
+    def _manager(self) -> Any:
+        if self._config_manager is not None:
+            return self._config_manager
+        from utils.config_manager import get_config_manager
+
+        return get_config_manager()
+
+    async def _model_snapshot(self) -> dict[str, Any]:
+        manager = self._manager()
+        async_getter = getattr(manager, "aget_model_api_config", None)
+        if callable(async_getter):
+            return dict(await async_getter("conversation") or {})
+        return dict(
+            await asyncio.to_thread(manager.get_model_api_config, "conversation") or {}
+        )
+
+    async def health_check(self) -> bool:
+        try:
+            snapshot = await self._model_snapshot()
+        except Exception:
+            return False
+        return bool(str(snapshot.get("model") or "").strip())
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        json_mode: bool = False,
+        reasoning_effort: str | None = None,
+        model: str | None = None,
+    ) -> Any:
+        """Run one request through the current N.E.K.O conversation model.
+
+        ``temperature`` is accepted for the OpenBiliClaw protocol but is not
+        forwarded: N.E.K.O intentionally lets each current route keep its own
+        sampling default.
+        """
+        del temperature, model
+        snapshot = await self._model_snapshot()
+        current_model = str(snapshot.get("model") or "").strip()
+        base_url = str(snapshot.get("base_url") or "").strip()
+        api_key = str(snapshot.get("api_key") or "").strip()
+        provider_type = str(snapshot.get("provider_type") or "").strip() or None
+        if not current_model:
+            raise RuntimeError("N.E.K.O conversation model is not configured")
+
+        from config.providers import focus_extra_body
+        from openbiliclaw.llm.base import LLMResponse
+        from utils.llm_client import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            create_chat_llm_async,
+        )
+        from utils.token_tracker import llm_call_context
+
+        neko_messages: list[Any] = []
+        for message in messages:
+            content = str(message.get("content") or "")
+            role = str(message.get("role") or "").lower()
+            if role == "system":
+                neko_messages.append(SystemMessage(content=content))
+            elif role == "assistant":
+                neko_messages.append(AIMessage(content=content))
+            else:
+                neko_messages.append(HumanMessage(content=content))
+        if json_mode:
+            neko_messages.append(
+                SystemMessage(content="Return only one valid JSON value without markdown.")
+            )
+
+        factory_kwargs: dict[str, Any] = {
+            "max_completion_tokens": max(1, int(max_tokens)),
+            "timeout": _MODEL_CALL_TIMEOUT_SECONDS,
+            "provider_type": provider_type,
+        }
+        if reasoning_effort:
+            factory_kwargs["extra_body"] = focus_extra_body(current_model)
+
+        invoke_kwargs: dict[str, Any] = {}
+        if json_mode and provider_type != "anthropic":
+            invoke_kwargs["response_format"] = {"type": "json_object"}
+
+        try:
+            with llm_call_context("openbiliclaw"):
+                client = await create_chat_llm_async(
+                    current_model,
+                    base_url,
+                    api_key,
+                    **factory_kwargs,
+                )
+                async with client:
+                    async with asyncio.timeout(_MODEL_CALL_TIMEOUT_SECONDS):
+                        response = await client.ainvoke(neko_messages, **invoke_kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Upstream SDK errors are not allowed to carry a live credential
+            # across the Core boundary or into its persisted diagnostics.
+            raise RuntimeError("N.E.K.O-managed model call failed") from None
+
+        raw_usage = getattr(response, "response_metadata", {}).get("token_usage", {})
+        usage = _normalize_llm_usage(raw_usage)
+        return LLMResponse(
+            content=str(getattr(response, "content", "") or ""),
+            model=current_model,
+            instance_id=_NEKO_LLM_INSTANCE_ID,
+            provider=_openbiliclaw_provider_type(provider_type),
+            usage=usage,
+            raw=None,
+        )
+
+
+def _normalize_llm_usage(raw_usage: object) -> dict[str, int]:
+    """Map common N.E.K.O provider usage fields into Core diagnostics."""
+    if not isinstance(raw_usage, Mapping):
+        return {}
+    prompt = int(raw_usage.get("prompt_tokens") or raw_usage.get("input_tokens") or 0)
+    completion = int(
+        raw_usage.get("completion_tokens") or raw_usage.get("output_tokens") or 0
+    )
+    total = int(raw_usage.get("total_tokens") or prompt + completion)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+
+
 def _apply_neko_model_config(config: Any) -> Any:
-    """Project N.E.K.O's conversation model into Core without copying secrets."""
+    """Project only route metadata into Core; credentials stay N.E.K.O-owned."""
     try:
         from utils.config_manager import get_config_manager
 
@@ -121,7 +266,7 @@ def _apply_neko_model_config(config: Any) -> Any:
     instance = LLMInstanceConfig(
         name="N.E.K.O conversation model",
         provider_type=_openbiliclaw_provider_type(model_config.get("provider_type")),
-        api_key=str(model_config.get("api_key") or "").strip(),
+        api_key="",
         model=model,
         base_url=base_url,
         enabled=True,
@@ -129,8 +274,8 @@ def _apply_neko_model_config(config: Any) -> Any:
     llm = replace(
         config.llm,
         instance_routing=True,
-        instances={"neko-conversation": instance},
-        default_chain=["neko-conversation"],
+        instances={_NEKO_LLM_INSTANCE_ID: instance},
+        default_chain=[_NEKO_LLM_INSTANCE_ID],
         fallback_provider="",
     )
     return replace(config, llm=llm)
@@ -155,7 +300,13 @@ def _load_openbiliclaw_backend(data_root: Path, port: int) -> tuple[Any, Any]:
         api=replace(config.api, host="127.0.0.1", port=port),
     )
     config = _apply_neko_model_config(config)
-    core = OpenBiliClawCore.create(config, allow_degraded=True)
+    core = OpenBiliClawCore.create(
+        config,
+        llm_provider_overrides={
+            _NEKO_LLM_INSTANCE_ID: NekoManagedLLMProvider(),
+        },
+        allow_degraded=True,
+    )
     return core, create_app(core=core)
 
 
@@ -383,6 +534,7 @@ async def stop_openbiliclaw_runtime() -> None:
 
 __all__ = [
     "DEFAULT_OPENBILICLAW_PORT",
+    "NekoManagedLLMProvider",
     "NekoOpenBiliClawRuntime",
     "OpenBiliClawStatus",
     "get_openbiliclaw_runtime",

@@ -24,7 +24,7 @@ pytest.importorskip("openbiliclaw")
 from app import openbiliclaw_runtime
 
 
-def test_neko_model_profile_is_projected_in_memory_only(
+def test_neko_model_route_is_projected_without_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -51,7 +51,7 @@ def test_neko_model_profile_is_projected_in_memory_only(
     instance = projected.llm.instances["neko-conversation"]
     assert projected.llm.default_chain == ["neko-conversation"]
     assert instance.provider_type == "claude"
-    assert instance.api_key == "secret-never-written"
+    assert instance.api_key == ""
     assert config_path.exists() is False
 
 
@@ -72,7 +72,7 @@ async def test_pinned_core_builds_with_real_fastapi_adapter(
     )
     try:
         status = await runtime.start()
-        assert status.state == "degraded"
+        assert status.state == "running"
         assert status.bridge_running is True
         assert runtime.core.config.data_path == tmp_path / "integration" / "data"
 
