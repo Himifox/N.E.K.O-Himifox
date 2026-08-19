@@ -71,6 +71,8 @@ __pycache__/
 /.pytest_tmp*/
 .DS_Store
 .codex
+/.codex-runtime/
+/.pnpm-store/
 .venv
 .venv_monitor/
 .matplotlib/
