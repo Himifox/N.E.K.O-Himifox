@@ -15,6 +15,12 @@ from .state import _source_hash
 def _format_phase1_link_candidate(index: int, item: dict[str, Any]) -> str:
     """Render useful candidate evidence without leaking bulky raw metadata."""
 
+    envelope = item.get("_openbiliclaw_candidate")
+    if envelope is not None:
+        from .openbiliclaw_candidate import format_phase1_candidate
+
+        return format_phase1_candidate(index, envelope)
+
     title = str(item.get("title") or "").strip()
     details: list[str] = []
     field_labels = (
@@ -60,7 +66,7 @@ def _round_robin_phase1_links(
     total: int,
     reserved_mode: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Give every web mode a turn, optionally reserving one exact source slot."""
+    """Give every web mode a turn, reserving up to three OBC slots when present."""
 
     selected = {mode: [] for mode in modes}
     positions = {mode: 0 for mode in modes}
@@ -72,7 +78,11 @@ def _round_robin_phase1_links(
     remaining = max(0, total)
     if reserved_mode in links_by_mode and remaining:
         reserved_links = links_by_mode[reserved_mode]
-        while positions[reserved_mode] < len(reserved_links):
+        reserved_limit = min(3, remaining)
+        while (
+            positions[reserved_mode] < len(reserved_links)
+            and len(selected[reserved_mode]) < reserved_limit
+        ):
             link = dict(reserved_links[positions[reserved_mode]])
             positions[reserved_mode] += 1
             key = _source_hash(link.get("url", ""), link.get("title", ""))
@@ -83,10 +93,6 @@ def _round_robin_phase1_links(
             link.setdefault("mode", reserved_mode)
             selected[reserved_mode].append(link)
             remaining -= 1
-            break
-        # The reservation is exactly one slot even though Core previews up to
-        # three candidates for Phase 1 to choose from across future rounds.
-        positions[reserved_mode] = len(reserved_links)
     while remaining:
         made_progress = False
         for mode in modes:

@@ -94,7 +94,7 @@ from main_logic.proactive_chat.generation import (
     ProactiveModelConfig,
     _decide_phase1_channels,
     _fetch_phase1_followups,
-    _lookup_link_by_title,
+    _lookup_phase1_link,
     _proactive_llm_retry_error_types,
     _run_phase2_generation,
     _run_unified_phase1,
@@ -1308,11 +1308,24 @@ async def handle_proactive_chat(
         await _ensure_source_history_loaded(**state_storage_kwargs)
 
         # ========== 0. 并行获取所有信息源内容（无 LLM） ==========
+        from main_logic.proactive_chat.openbiliclaw_candidate import recent_user_context
+
+        try:
+            source_projection_language = _resolve_proactive_locale(
+                command,
+                mgr,
+                fmt="prompt",
+            )
+        except Exception:
+            source_projection_language = "zh"
+        active_session = mgr.session if mgr.is_active else None
         sources = await collect_proactive_sources(
             command=command,
             enabled_modes=enabled_modes,
             lanlan_name=lanlan_name,
             log=logger,
+            explicit_context_texts=recent_user_context(active_session),
+            projection_language=source_projection_language,
         )
         avatar_position = command.avatar_position
 
@@ -1693,13 +1706,14 @@ async def handle_proactive_chat(
                 selected_links = selected_by_mode.get(mode, [])
 
                 if selected_links:
+                    start_index = len(all_web_links) + 1
                     all_web_links.extend(selected_links)
                     lines = [
                         _ttt(
                             _format_phase1_link_candidate(index, item),
                             PROACTIVE_EXTERNAL_PER_ITEM_MAX_TOKENS,
                         )
-                        for index, item in enumerate(selected_links, start=1)
+                        for index, item in enumerate(selected_links, start=start_index)
                         if item.get("title", "").strip()
                     ]
                     if lines:
@@ -1778,7 +1792,7 @@ async def handle_proactive_chat(
         # ============================================================
         web_parsed = unified_parsed.get("web")
         if web_parsed and web_parsed.get("title"):
-            matched = _lookup_link_by_title(web_parsed.get("title", ""), all_web_links)
+            matched = _lookup_phase1_link(web_parsed, all_web_links)
             topic_key = _source_hash(
                 matched.get("url", "") if matched else "",
                 web_parsed.get("title", ""),
@@ -1794,11 +1808,14 @@ async def handle_proactive_chat(
             else:
                 if matched:
                     selected_web_link = dict(matched)
+                    selected_title = (
+                        matched.get("title", "")
+                        if matched.get("mode") == "openbiliclaw"
+                        else web_parsed.get("title", matched.get("title", ""))
+                    )
                     selected_web_link.update(
                         {
-                            "title": web_parsed.get(
-                                "title", matched.get("title", "")
-                            ),
+                            "title": selected_title,
                             "url": matched["url"],
                             "source": web_parsed.get(
                                 "source", matched.get("source", "")
@@ -1811,14 +1828,14 @@ async def handle_proactive_chat(
                     )
                 else:
                     print(
-                        f"[{lanlan_name}] Phase 1 未在 web_links 中匹配到标题: {web_parsed.get('title', '')[:60]}"
+                        f"[{lanlan_name}] Phase 1 序号或唯一标题无效，WEB 按 PASS 处理: {web_parsed.get('title', '')[:60]}"
                     )
-                # 不论 matched 与否，都把 topic_key 留下来供 Phase 2 后落盘 ——
-                # 哪怕只有 title 也参与衰减历史，避免同样的标题被反复 surface
-                selected_web_topic_key = topic_key
-                # 用 web_parsed 的 summary 或原始文本作为 topic
-                web_topic_text = web_parsed.get("summary", web_parsed.get("title", ""))
-                phase1_topics.append(("web", web_topic_text.strip()))
+                if matched:
+                    selected_web_topic_key = topic_key
+                    web_topic_text = web_parsed.get(
+                        "summary", web_parsed.get("title", "")
+                    )
+                    phase1_topics.append(("web", web_topic_text.strip()))
 
         # ============================================================
         # 并行后置 fetch：music + meme（使用 LLM 生成的关键词）
@@ -2040,21 +2057,32 @@ async def handle_proactive_chat(
                         )
                     )
                 )
-            try:
-                selected_web_link, web_topic = await prepare_selected_web_candidate(
-                    selected_web_link,
-                    fallback_topic=web_topic,
-                    language=proactive_lang,
-                    is_preempted=mgr.state.is_proactive_preempted,
+            envelope = selected_web_link.get("_openbiliclaw_candidate")
+            if envelope is not None:
+                from main_logic.proactive_chat.openbiliclaw_candidate import (
+                    format_phase2_candidate,
                 )
-            except SelectedWebCandidatePreempted:
-                return await _end_proactive(
-                    ProactiveChatResult(
-                        body=_proactive_preempted_json(
-                            "phase1_candidate_preparation"
+
+                web_topic = format_phase2_candidate(
+                    envelope,
+                    language=proactive_lang,
+                )
+            else:
+                try:
+                    selected_web_link, web_topic = await prepare_selected_web_candidate(
+                        selected_web_link,
+                        fallback_topic=web_topic,
+                        language=proactive_lang,
+                        is_preempted=mgr.state.is_proactive_preempted,
+                    )
+                except SelectedWebCandidatePreempted:
+                    return await _end_proactive(
+                        ProactiveChatResult(
+                            body=_proactive_preempted_json(
+                                "phase1_candidate_preparation"
+                            )
                         )
                     )
-                )
             if mgr.state.is_proactive_preempted():
                 return await _end_proactive(
                     ProactiveChatResult(

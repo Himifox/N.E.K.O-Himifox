@@ -1981,10 +1981,29 @@ def _lookup_link_by_title(title: str, all_links: list[dict]) -> dict | None:
     - partial match (title contains or is contained, ignoring case and surrounding whitespace)
     """
     title_lower = title.lower().strip()
+    matches: list[dict] = []
     for link in all_links:
         link_title = link.get('title', '').lower().strip()
         if not link_title:
             continue
         if link_title == title_lower or link_title in title_lower or title_lower in link_title:
-            return link
+            matches.append(link)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _lookup_phase1_link(parsed: dict, all_links: list[dict]) -> dict | None:
+    """Resolve by external sequence number; keep unique-title fallback for legacy sources."""
+
+    raw_number = str(parsed.get("number") or "").strip()
+    if raw_number:
+        try:
+            number = int(raw_number)
+        except ValueError:
+            return None
+        if 1 <= number <= len(all_links):
+            return all_links[number - 1]
+        return None
+    match = _lookup_link_by_title(str(parsed.get("title") or ""), all_links)
+    if match is not None and match.get("mode") != "openbiliclaw":
+        return match
     return None
