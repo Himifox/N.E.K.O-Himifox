@@ -24,6 +24,39 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_explicit_public_knowledge_request_owns_agent_route():
+    from app.agent_server import api_runtime as srv
+
+    assert srv._is_explicit_local_knowledge_request(
+        [
+            {"role": "user", "content": "之前聊过别的"},
+            {"role": "assistant", "content": "好的"},
+            {"role": "user", "content": "请查询公共知识库：电车难题是什么？"},
+        ]
+    )
+    assert not srv._is_explicit_local_knowledge_request(
+        [{"role": "user", "content": "帮我联网搜索今天的新闻"}]
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_public_knowledge_request_skips_external_agent(monkeypatch):
+    from app.agent_server import api_runtime as srv
+
+    executor = MagicMock()
+    executor.analyze_and_execute = AsyncMock()
+    monkeypatch.setattr(srv.Modules, "task_executor", executor)
+    monkeypatch.setattr(srv.Modules, "analyzer_enabled", True)
+    monkeypatch.setitem(srv.Modules.agent_flags, "browser_use_enabled", False)
+
+    await srv._do_analyze_and_plan(
+        [{"role": "user", "content": "请查询本地知识库：电车难题是什么？"}],
+        "YUI",
+    )
+
+    executor.analyze_and_execute.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # 1. _patch_usage: explicit nulls must not raise and must be zero-filled
 # ---------------------------------------------------------------------------

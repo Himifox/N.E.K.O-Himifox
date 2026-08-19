@@ -47,6 +47,18 @@ title / terms / tags / summary / content
 `source:*` tag. Source homepage and license policy live in the source registry,
 while import health remains in source-level state files.
 
+Knowledge-pack schema v2 adds one package-level field, `material_type`, whose
+value is `knowledge` or `corpus`. It does not add a sixth entry field:
+
+- `knowledge` contains facts, explanations, definitions, meme meanings, and
+  other material that answers what is true or what something means;
+- `corpus` contains reply examples, dialogue samples, style demonstrations, and
+  other material that should be quoted, rewritten, or imitated for the current
+  request rather than presented as fact.
+
+Schema v1 remains readable and defaults to `knowledge`. A local user may
+override a pack's type without rewriting its entries, chunks, or vectors.
+
 Automatic conversation matching has two modes:
 
 - `strong`: titles and aliases with at least three normalized characters, or
@@ -80,8 +92,16 @@ context permission live once in `packs.json` beside the collection database.
 Community source tags are derived as `source:community.<pack_id>` and cannot
 spoof built-in sources. Import atomically replaces only that source slice. A
 community pack is searchable immediately but is excluded from automatic turn
-matching until the user explicitly enables that pack. Packs cannot provide
-Python, prompts, matching policies, response policies, or network configuration.
+matching until the user explicitly enables that pack. Corpus packs cannot be
+enabled for automatic turn matching; they are used only by an explicit public
+knowledge query. Packs cannot provide Python, prompts, matching policies,
+response policies, or network configuration.
+
+One explicit query can search both material types. The Main Server creates one
+query embedding, scans the requested collections with that request-scoped
+vector, and performs one cross-collection RRF fusion. A corpus-oriented request
+prefers corpus hits and fills remaining result slots from knowledge in the same
+candidate pool, so fallback does not issue a second embedding or LLM request.
 
 ## Local management
 

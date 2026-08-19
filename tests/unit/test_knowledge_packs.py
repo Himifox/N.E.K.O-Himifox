@@ -8,7 +8,7 @@ import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
-from knowledge.packs import install_pack, validate_pack
+from knowledge.packs import install_pack, pack_payload, validate_pack
 from knowledge.subscriptions import (
     canonical_pack_bytes,
     load_canonical_pack_artifact,
@@ -40,6 +40,8 @@ def _payload(*, title="community phrase", pack_id="community-fixture"):
 
 def _material_payload(*, pack_id="community-tarot"):
     payload = _payload(title="Community Tarot", pack_id=pack_id)
+    payload["schema_version"] = 2
+    payload["material_type"] = "corpus"
     payload["collection_id"] = "corpora"
     payload["entries"][0]["tags"] = ["dataset:tarot-interpretations"]
     payload["entries"][0]["summary"] = "Community tarot material"
@@ -107,19 +109,55 @@ def test_disabled_material_pack_does_not_hide_enabled_builtin_material(tmp_path)
     assert context.source_tag == "source:corpora"
 
 
-def test_material_pack_auto_context_can_be_enabled_and_disabled_again(tmp_path):
+def test_corpus_pack_cannot_be_enabled_for_automatic_context(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_material_payload()))
 
-    service.set_pack_auto_context("corpora", "community-tarot", enabled=True)
-    enabled = service.build_conversation_context("please draw a tarot card")
-    service.set_pack_auto_context("corpora", "community-tarot", enabled=False)
-    disabled = service.build_conversation_context("please draw a tarot card")
+    with pytest.raises(ValueError, match="corpus packs cannot enable"):
+        service.set_pack_auto_context("corpora", "community-tarot", enabled=True)
 
-    assert enabled.hit_count == 1
-    assert enabled.match_mode == "material_sample"
-    assert enabled.source_tag == "source:community.community-tarot"
-    assert disabled.hit_count == 0
+    installed = service.list_packs("corpora")
+    context = service.build_conversation_context("please draw a tarot card")
+    assert installed[0]["effective_material_type"] == "corpus"
+    assert installed[0]["auto_context"] is False
+    assert context.hit_count == 0
+
+
+def test_legacy_pack_defaults_to_knowledge_and_v2_requires_material_type():
+    legacy = validate_pack(_payload())
+    assert legacy.material_type == "knowledge"
+    assert "material_type" not in pack_payload(legacy)
+
+    v2 = _payload()
+    v2["schema_version"] = 2
+    with pytest.raises(ValueError, match="material_type"):
+        validate_pack(v2)
+
+    v2["material_type"] = "knowledge"
+    current = validate_pack(v2)
+    assert current.material_type == "knowledge"
+    assert pack_payload(current)["material_type"] == "knowledge"
+
+
+def test_material_type_override_changes_routing_without_rewriting_entries(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    database_path = service.database_path("meme")
+    store = KnowledgeStore(database_path)
+    before = store.count_by_source_tag("source:community.community-fixture")
+
+    service.set_pack_material_type_override(
+        "meme", "community-fixture", material_type="corpus"
+    )
+
+    installed = service.list_packs("meme")
+    status = service.get_status("meme")
+    assert installed[0]["declared_material_type"] == "knowledge"
+    assert installed[0]["effective_material_type"] == "corpus"
+    assert store.count_by_source_tag("source:community.community-fixture") == before
+    assert status["knowledge_entries"] == 0
+    assert status["corpus_entries"] == 1
+    assert service.build_turn_context("community phrase appears here").hit_count == 0
 
 
 def test_pack_update_replaces_only_its_own_source(tmp_path):

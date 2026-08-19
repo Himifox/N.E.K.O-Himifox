@@ -55,6 +55,15 @@ class EmbeddingBatchResult:
     state: str = "no_work"
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticQueryEmbedding:
+    """One request-scoped query vector reusable across knowledge collections."""
+
+    vector: list[float] | None
+    status: LocalEmbeddingStatus
+    state: str
+
+
 class _KnowledgeInferenceCoordinator:
     """Serialize knowledge-owned native inference without cancelling timed-out work."""
 
@@ -328,20 +337,38 @@ async def semantic_search(
     limit: int = VECTOR_CANDIDATE_LIMIT,
     allowed_source_tags: tuple[str, ...] | None = None,
 ) -> tuple[list[MoegirlKnowledgeHit], str]:
+    prepared = await prepare_semantic_query(query, stores=(store,))
+    return await semantic_search_prepared(
+        store,
+        prepared,
+        limit=limit,
+        allowed_source_tags=allowed_source_tags,
+    )
+
+
+async def prepare_semantic_query(
+    query: str,
+    *,
+    stores: tuple[MoegirlKnowledgeStore, ...],
+) -> SemanticQueryEmbedding:
+    """Encode one query at most once for all requested collection scans."""
+    empty_status = LocalEmbeddingStatus(state="not_ready")
     if not str(query or "").strip():
-        return [], "empty_query"
+        return SemanticQueryEmbedding(None, empty_status, "empty_query")
     if knowledge_inference_state():
-        return [], "inference_busy"
+        return SemanticQueryEmbedding(None, empty_status, "inference_busy")
     try:
         status = get_local_embedding_status()
     except Exception:
-        return [], "status_unavailable"
+        return SemanticQueryEmbedding(None, empty_status, "status_unavailable")
     if status.state == "disabled":
-        return [], "disabled"
+        return SemanticQueryEmbedding(None, status, "disabled")
     if status.state == "not_ready":
-        chunk_status = await asyncio.to_thread(store.chunk_status)
-        if int(chunk_status.get("chunks_ready", 0)) == 0:
-            return [], "index_not_ready"
+        statuses = await asyncio.gather(
+            *(asyncio.to_thread(store.chunk_status) for store in stores)
+        )
+        if not any(int(value.get("chunks_ready", 0)) > 0 for value in statuses):
+            return SemanticQueryEmbedding(None, status, "index_not_ready")
     service = get_local_embedding_service()
     if status.state == "not_ready":
         load_state = await _INFERENCE_COORDINATOR.ensure_loaded(
@@ -349,25 +376,38 @@ async def semantic_search(
             timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
         )
         if load_state != "ready":
-            return [], load_state
+            return SemanticQueryEmbedding(None, status, load_state)
         status = get_local_embedding_status()
     if not status.ready:
-        return [], status.state
+        return SemanticQueryEmbedding(None, status, status.state)
     vector, query_state = await _INFERENCE_COORDINATOR.run_query(
         service,
         knowledge_query_embedding_text(query),
         timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
     )
     if query_state != "ready":
-        return [], query_state
+        return SemanticQueryEmbedding(None, status, query_state)
     if vector is None:
-        return [], "query_embedding_unavailable"
+        return SemanticQueryEmbedding(None, status, "query_embedding_unavailable")
+    return SemanticQueryEmbedding(vector, status, "ready")
+
+
+async def semantic_search_prepared(
+    store: MoegirlKnowledgeStore,
+    prepared: SemanticQueryEmbedding,
+    *,
+    limit: int = VECTOR_CANDIDATE_LIMIT,
+    allowed_source_tags: tuple[str, ...] | None = None,
+) -> tuple[list[MoegirlKnowledgeHit], str]:
+    """Scan one collection with an already encoded request-scoped query."""
+    if prepared.state != "ready" or prepared.vector is None:
+        return [], prepared.state
     try:
-        snapshot = await asyncio.to_thread(_load_snapshot, store, status)
+        snapshot = await asyncio.to_thread(_load_snapshot, store, prepared.status)
         hits = await asyncio.to_thread(
             _score_snapshot,
             snapshot,
-            vector,
+            prepared.vector,
             store=store,
             limit=limit,
             allowed_source_tags=allowed_source_tags,

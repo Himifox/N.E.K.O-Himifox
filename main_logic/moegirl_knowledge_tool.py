@@ -8,7 +8,10 @@ import time
 from config.prompts.prompts_sys import _loc
 from knowledge.api import open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
-from knowledge.moegirl_knowledge.turn_context import get_meme_type, get_meme_usage_example
+from knowledge.moegirl_knowledge.turn_context import (
+    get_meme_type,
+    get_meme_usage_example,
+)
 from knowledge.service import (
     CORPORA_RESPONSE_POLICY,
     get_reference_material,
@@ -21,7 +24,31 @@ from utils.logger_config import get_module_logger
 
 logger = get_module_logger(__name__, "Main")
 _COLLECTIONS = ("meme", "corpora")
-_COLLECTION_PRIORITY = {"meme": 100, "corpora": 10}
+_CORPUS_INTENT_TERMS = (
+    "参考回复",
+    "怎么回复",
+    "怎么回",
+    "怎么接",
+    "给个样例",
+    "给个示例",
+    "模仿",
+    "改写",
+    "续写",
+    "style",
+    "sample reply",
+    "reference reply",
+)
+_KNOWLEDGE_INTENT_TERMS = (
+    "是什么",
+    "什么意思",
+    "为什么",
+    "出处",
+    "含义",
+    "解释",
+    "介绍",
+    "what is",
+    "explain",
+)
 
 
 PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
@@ -37,7 +64,9 @@ PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
         "Covers memes, ACG, mythology, tarot, films, colors, animals, foods, occupations, "
         "and moods. When the user explicitly asks to draw, randomly choose, or provide such "
         "material, you must call this tool with mode=sample before answering instead of "
-        "inventing a result. It never accesses the network or user memory."
+        "inventing a result. Results may be facts or corpus examples; quote, rewrite, or "
+        "imitate examples when that matches the request. It never accesses the network or "
+        "user memory."
     ),
     "ja": "ローカル公開知識を検索します。素材の抽選やランダム選択を明示された場合は、回答前に必ず mode=sample で呼び出してください。ネットワークやユーザー記憶にはアクセスしません。",
     "ko": "로컬 공개 지식을 검색합니다. 소재 추첨이나 무작위 선택을 명시적으로 요청받으면 답변 전에 반드시 mode=sample로 호출해야 합니다. 네트워크나 사용자 기억에는 접근하지 않습니다.",
@@ -61,6 +90,16 @@ PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION = {
     "pt": "O termo a consultar ou uma etiqueta permitida para selecionar material.",
     "ru": "Термин для поиска или разрешённый тег для выбора материала.",
     "zh-TW": "要查詢的詞句，或抽取素材用的允許標籤。",
+}
+PUBLIC_KNOWLEDGE_MATERIAL_TYPE_DESCRIPTION = {
+    "zh": "事实、解释选 knowledge；回复、对话或风格参考选 corpus；auto 根据问题判断。",
+    "en": "Use knowledge for facts and explanations, corpus for reply or style examples, and auto to infer from the request.",
+    "ja": "事実や説明は knowledge、返信・会話・文体の例は corpus、判定を任せる場合は auto。",
+    "ko": "사실·설명은 knowledge, 답변·대화·스타일 예시는 corpus, 자동 판단은 auto를 사용합니다.",
+    "es": "Usa knowledge para hechos y explicaciones, corpus para ejemplos de respuesta o estilo y auto para inferirlo.",
+    "pt": "Use knowledge para fatos e explicações, corpus para exemplos de resposta ou estilo e auto para inferir.",
+    "ru": "knowledge — факты и объяснения, corpus — примеры ответов и стиля, auto — автоматический выбор.",
+    "zh-TW": "事實、解釋選 knowledge；回覆、對話或風格參考選 corpus；auto 依問題判斷。",
 }
 
 # Compatibility names for imports from builds that exposed only meme lookup.
@@ -94,13 +133,16 @@ async def handle_public_knowledge_call(
     except (TypeError, ValueError):
         requested_limit = 3
     limit = min(max(requested_limit, 1), 3)
+    requested_material_type = str(args.get("material_type") or "auto").strip().lower()
+    if requested_material_type not in {"auto", "knowledge", "corpus", "all"}:
+        return "The requested public knowledge material type is not available."
     service = await asyncio.to_thread(
         open_knowledge,
         get_config_manager().knowledge_dir,
     )
 
     if mode == "sample":
-        entries: list[tuple[str, object]] = []
+        entries: list[tuple[str, str, object]] = []
         collection_ids = _COLLECTIONS if collection == "all" else (collection,)
         for collection_id in collection_ids:
             try:
@@ -112,26 +154,32 @@ async def handle_public_knowledge_call(
                 )
             except ValueError:
                 continue
-            entries.extend((collection_id, entry) for entry in sampled)
+            entries.extend(
+                (
+                    collection_id,
+                    service.material_type_for_entry(collection_id, entry),
+                    entry,
+                )
+                for entry in sampled
+            )
             if entries:
                 break
     else:
         collection_ids = _COLLECTIONS if collection == "all" else (collection,)
-        ranked: list[tuple[float, str, object]] = []
-        for collection_id in collection_ids:
-            hits = await service.asearch(
-                collection_id,
-                query,
-                limit=limit,
-            )
-            ranked.extend((hit.score, collection_id, hit.entry) for hit in hits)
-        ranked.sort(key=lambda item: (
-            -item[0],
-            -_COLLECTION_PRIORITY[item[1]],
-            item[2].title,
-            item[1],
-        ))
-        entries = [(collection_id, entry) for _, collection_id, entry in ranked[:limit]]
+        allowed_types, target_type = _material_query_plan(
+            query,
+            requested_material_type,
+        )
+        hits = await service.asearch_many(
+            collection_ids,
+            query,
+            limit=limit,
+            allowed_material_types=allowed_types,
+            target_material_type=target_type,
+        )
+        entries = [
+            (item.collection_id, item.material_type, item.hit.entry) for item in hits
+        ]
 
     logger.info(
         "[public-knowledge] tool mode=%s collection=%s hits=%d elapsed_ms=%d",
@@ -149,15 +197,49 @@ async def handle_public_knowledge_call(
         "user's request: quote or rewrite samples and reference answers when asked, use "
         "facts cautiously, and do not invent missing content.",
     ]
-    for collection_id, entry in entries:
-        lines.append(_render_entry(service, collection_id, entry))
+    for collection_id, material_type, entry in entries:
+        lines.append(_render_entry(service, collection_id, material_type, entry))
     return "\n".join(lines)
 
 
-def _render_entry(service, collection_id: str, entry: object) -> str:
+def _material_query_plan(
+    query: str,
+    requested_material_type: str,
+) -> tuple[tuple[str, ...], str]:
+    if requested_material_type == "knowledge":
+        return ("knowledge",), "knowledge"
+    if requested_material_type == "corpus":
+        return ("corpus", "knowledge"), "corpus"
+    if requested_material_type == "all":
+        return ("knowledge", "corpus"), ""
+    normalized = query.casefold()
+    if any(term in normalized for term in _CORPUS_INTENT_TERMS):
+        return ("corpus", "knowledge"), "corpus"
+    if any(term in normalized for term in _KNOWLEDGE_INTENT_TERMS):
+        return ("knowledge",), "knowledge"
+    return ("knowledge", "corpus"), ""
+
+
+def _render_entry(
+    service,
+    collection_id: str,
+    material_type: str,
+    entry: object,
+) -> str:
     summary = (entry.summary or entry.content[:420]).replace("\n", " ").strip()[:500]
-    details = f"- [{collection_id}] {entry.title}: {summary}"
-    if collection_id == "meme":
+    details = (
+        f"- [{collection_id}] {entry.title}: {summary}"
+        f"\n  Material type: {material_type}"
+    )
+    if material_type == "corpus":
+        reference_material = get_reference_material(
+            entry,
+            CORPORA_RESPONSE_POLICY.detail_line_prefixes,
+            max_chars=600,
+        )
+        if reference_material:
+            details += f"\n  Reference material: {reference_material}"
+    elif collection_id == "meme":
         meme_type = get_meme_type(entry)
         usage_example = get_meme_usage_example(entry)
         if meme_type:
@@ -179,9 +261,11 @@ def _render_entry(service, collection_id: str, entry: object) -> str:
         entry.source_tag,
         database_path=service.database_path(collection_id),
     )
-    risk_note = " | caution: may include profane or offensive usage" if any(
-        tag in {"risk:profanity", "risk:offense"} for tag in entry.tags
-    ) else ""
+    risk_note = (
+        " | caution: may include profane or offensive usage"
+        if any(tag in {"risk:profanity", "risk:offense"} for tag in entry.tags)
+        else ""
+    )
     quality_note = (
         " | caution: usage may be outdated"
         if "quality:stale-usage" in entry.tags
@@ -203,6 +287,7 @@ async def handle_moegirl_knowledge_call(
     scoped = dict(arguments or {})
     scoped["collection"] = "meme"
     scoped["mode"] = "lookup"
+    scoped["material_type"] = "knowledge"
     return await handle_public_knowledge_call(
         scoped,
         language=language,
@@ -231,6 +316,15 @@ def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
                 "type": "string",
                 "enum": ["lookup", "sample"],
                 "default": "lookup",
+            },
+            "material_type": {
+                "type": "string",
+                "enum": ["auto", "knowledge", "corpus", "all"],
+                "default": "auto",
+                "description": _loc(
+                    PUBLIC_KNOWLEDGE_MATERIAL_TYPE_DESCRIPTION,
+                    language,
+                ),
             },
             "limit": {"type": "integer", "minimum": 1, "maximum": 3},
         },

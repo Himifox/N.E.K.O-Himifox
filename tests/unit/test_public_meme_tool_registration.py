@@ -32,6 +32,12 @@ def test_only_one_generic_public_knowledge_tool_is_registered(monkeypatch):
         "lookup",
         "sample",
     ]
+    assert public_tool.parameters["properties"]["material_type"]["enum"] == [
+        "auto",
+        "knowledge",
+        "corpus",
+        "all",
+    ]
     assert public_tool.parameters["properties"]["limit"]["maximum"] == 3
 
 

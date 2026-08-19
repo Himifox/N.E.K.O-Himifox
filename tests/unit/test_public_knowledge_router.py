@@ -481,3 +481,59 @@ def test_unknown_collection_management_requests_do_not_raise(monkeypatch, tmp_pa
     assert listing == {"ok": False, "reason": "unknown_collection"}
     assert toggle == {"ok": False, "reason": "unknown_collection"}
     assert disable == {"ok": False, "reason": "unknown_collection"}
+
+
+def test_pack_material_type_override_is_visible_and_blocks_auto_context(
+    monkeypatch,
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    service.install_pack(
+        validate_pack(
+            {
+                "schema_version": 1,
+                "pack_id": "classification-fixture",
+                "collection_id": "meme",
+                "source": {
+                    "name": "Classification Fixture",
+                    "homepage": "",
+                    "license": "CC0-1.0",
+                },
+                "entries": [
+                    {
+                        "title": "classification fixture",
+                        "terms": {"alias": [], "recognition": []},
+                        "tags": [],
+                        "summary": "fixture",
+                        "content": "fixture content",
+                    }
+                ],
+            }
+        )
+    )
+    client = _client(monkeypatch, tmp_path)
+
+    changed = client.post(
+        "/api/public-knowledge/packs/material-type",
+        json={
+            "collection": "meme",
+            "pack_id": "classification-fixture",
+            "material_type": "corpus",
+        },
+    ).json()
+    toggle = client.post(
+        "/api/public-knowledge/packs/auto-context",
+        json={
+            "collection": "meme",
+            "pack_id": "classification-fixture",
+            "enabled": True,
+        },
+    ).json()
+    packs = client.get(
+        "/api/public-knowledge/packs",
+        params={"collection": "meme"},
+    ).json()
+
+    assert changed == {"ok": True, "material_type_override": "corpus"}
+    assert toggle == {"ok": False, "reason": "auto_context_not_allowed"}
+    assert packs["packs"][0]["effective_material_type"] == "corpus"

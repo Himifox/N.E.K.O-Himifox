@@ -92,6 +92,7 @@ def stage_pack(
             "job_id": job_id,
             "pack_id": pack.pack_id,
             "collection_id": pack.collection_id,
+            "material_type": pack.material_type,
             "state": "queued",
             "retrieval_mode": "pending",
             "entries_total": preflight.entries,

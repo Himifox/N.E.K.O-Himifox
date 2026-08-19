@@ -81,6 +81,7 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
     job = service.stage_pack(_pack())
 
     assert job["state"] == "queued"
+    assert job["material_type"] == "knowledge"
     assert service.search("meme", "Staged phrase", limit=1) == []
     assert service.list_packs("meme") == ()
 

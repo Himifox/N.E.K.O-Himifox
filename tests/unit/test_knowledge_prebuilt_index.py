@@ -112,6 +112,41 @@ def test_build_and_validate_prebuilt_index_artifacts():
     assert all(row["model_id"] == PREBUILT_MODEL_ID for row in prepared)
 
 
+def test_prebuilt_index_preserves_schema_v2_corpus_classification():
+    payload = _pack_payload()
+    payload["schema_version"] = 2
+    payload["material_type"] = "corpus"
+    pack_artifact = canonical_pack_bytes(payload)
+    pack = validate_pack(payload)
+    chunks = tuple(
+        chunk
+        for entry in pack.entries
+        for chunk in derive_knowledge_chunks(
+            entry,
+            entry_key=f"{entry.source_tag}:{entry.title}",
+        )
+    )
+    vector = np.ones(PREBUILT_DIMENSIONS, dtype="<f2").tobytes()
+    artifacts = build_prebuilt_index_artifacts(
+        pack_artifact,
+        tuple(
+            {
+                "chunk_id": chunk.chunk_id,
+                "content_hash": chunk.content_hash,
+                "model_id": PREBUILT_MODEL_ID,
+                "dimensions": PREBUILT_DIMENSIONS,
+                "embedding": vector,
+            }
+            for chunk in chunks
+        ),
+    )
+
+    validated = _validate(pack_artifact, artifacts)
+
+    assert validated.pack.material_type == "corpus"
+    assert len(validated.prepared_embeddings()) == len(chunks)
+
+
 @pytest.mark.parametrize("digest_field", ["pack", "manifest", "vectors"])
 def test_validation_rejects_external_digest_mismatch(digest_field):
     pack_artifact, artifacts = _artifacts()

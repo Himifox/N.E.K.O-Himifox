@@ -35,7 +35,11 @@ from .routing import (
     get_routing_state,
     notify_database_changed,
 )
-from .vector_index import semantic_search
+from .vector_index import (
+    prepare_semantic_query,
+    semantic_search,
+    semantic_search_prepared,
+)
 
 
 _KNOWLEDGE_RRF_K = 60
@@ -166,6 +170,91 @@ class KnowledgeTurnContext:
     collection_id: str = ""
     entry_title: str = ""
     source_tag: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialKnowledgeHit:
+    collection_id: str
+    hit: MoegirlKnowledgeHit
+    material_type: str
+
+
+def _rrf_material_hits(
+    lexical: list[tuple[str, MoegirlKnowledgeHit]],
+    semantic: list[tuple[str, MoegirlKnowledgeHit]],
+    *,
+    source_types: Mapping[str, Mapping[str, str]],
+    collection_priorities: Mapping[str, int],
+    limit: int,
+) -> list[MaterialKnowledgeHit]:
+    """Fuse a cross-collection candidate pool without collapsing equal titles."""
+    records: dict[tuple[str, str, str], dict[str, object]] = {}
+    for rank, (collection_id, hit) in enumerate(lexical, start=1):
+        key = (collection_id, hit.entry.source_tag, hit.entry.title)
+        record = records.setdefault(
+            key,
+            {"collection_id": collection_id, "entry": hit.entry, "rrf": 0.0},
+        )
+        record["rrf"] = float(record["rrf"]) + 1.0 / (_KNOWLEDGE_RRF_K + rank)
+        record["lexical_rank"] = rank
+        record["lexical_score"] = hit.score
+    for rank, (collection_id, hit) in enumerate(semantic, start=1):
+        key = (collection_id, hit.entry.source_tag, hit.entry.title)
+        record = records.setdefault(
+            key,
+            {"collection_id": collection_id, "entry": hit.entry, "rrf": 0.0},
+        )
+        record["rrf"] = float(record["rrf"]) + 1.0 / (_KNOWLEDGE_RRF_K + rank)
+        record["semantic_score"] = (
+            hit.semantic_score if hit.semantic_score is not None else hit.score
+        )
+        record["best_chunk_index"] = hit.best_chunk_index
+    ordered = sorted(
+        records.values(),
+        key=lambda record: (
+            -float(record["rrf"]),
+            int(record.get("lexical_rank", 1_000_000)),
+            -float(record.get("semantic_score", -1.0)),
+            -int(collection_priorities.get(str(record["collection_id"]), 0)),
+            record["entry"].title,
+            str(record["collection_id"]),
+        ),
+    )
+    results: list[MaterialKnowledgeHit] = []
+    for record in ordered[:limit]:
+        collection_id = str(record["collection_id"])
+        entry = record["entry"]
+        modes = tuple(
+            mode
+            for mode, present in (
+                ("lexical", "lexical_score" in record),
+                ("semantic", "semantic_score" in record),
+            )
+            if present
+        )
+        results.append(
+            MaterialKnowledgeHit(
+                collection_id=collection_id,
+                material_type=source_types[collection_id].get(
+                    entry.source_tag, "knowledge"
+                ),
+                hit=MoegirlKnowledgeHit(
+                    entry=entry,
+                    score=float(record["rrf"]),
+                    retrieval_modes=modes,
+                    lexical_score=float(record["lexical_score"])
+                    if "lexical_score" in record
+                    else None,
+                    semantic_score=float(record["semantic_score"])
+                    if "semantic_score" in record
+                    else None,
+                    best_chunk_index=int(record["best_chunk_index"])
+                    if record.get("best_chunk_index") is not None
+                    else None,
+                ),
+            )
+        )
+    return results
 
 
 MEME_RESPONSE_POLICY = ResponsePolicy(
@@ -605,6 +694,153 @@ class KnowledgeService:
             pass
         return results
 
+    async def asearch_many(
+        self,
+        collection_ids: Iterable[str],
+        query: str,
+        *,
+        limit: int = 3,
+        allowed_material_types: tuple[str, ...] = ("knowledge", "corpus"),
+        target_material_type: str = "",
+    ) -> list[MaterialKnowledgeHit]:
+        """Search collections with one query embedding and one fused candidate pool."""
+        requested = tuple(dict.fromkeys(str(value) for value in collection_ids))
+        if not requested:
+            return []
+        for collection_id in requested:
+            self._spec(collection_id)
+        allowed_types = tuple(dict.fromkeys(allowed_material_types))
+        if not allowed_types or any(
+            value not in {"knowledge", "corpus"} for value in allowed_types
+        ):
+            raise ValueError("unsupported knowledge material type")
+        if target_material_type and target_material_type not in allowed_types:
+            raise ValueError("target material type must be allowed")
+
+        started_at = time.perf_counter()
+        limit = min(max(int(limit), 1), 100)
+        candidate_limit = 12
+        stores = {
+            collection_id: self._store(collection_id) for collection_id in requested
+        }
+        source_types = {
+            collection_id: self._source_material_types(
+                collection_id, stores[collection_id]
+            )
+            for collection_id in requested
+        }
+        allowed_sources = {
+            collection_id: self._allowed_material_sources(
+                source_types[collection_id], allowed_types
+            )
+            for collection_id in requested
+        }
+
+        lexical_future = asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    self._retriever(collection_id).search,
+                    query,
+                    limit=candidate_limit * max(len(allowed_types), 1),
+                    allowed_source_tags=allowed_sources[collection_id],
+                )
+                for collection_id in requested
+            )
+        )
+        prepared_future = asyncio.create_task(
+            prepare_semantic_query(
+                query,
+                stores=tuple(stores.values()),
+            )
+        )
+        lexical_results, prepared = await asyncio.gather(
+            lexical_future,
+            prepared_future,
+        )
+        semantic_results = await asyncio.gather(
+            *(
+                semantic_search_prepared(
+                    stores[collection_id],
+                    prepared,
+                    limit=candidate_limit * max(len(allowed_types), 1),
+                    allowed_source_tags=allowed_sources[collection_id],
+                )
+                for collection_id in requested
+            )
+        )
+
+        lexical: list[tuple[str, MoegirlKnowledgeHit]] = []
+        semantic: list[tuple[str, MoegirlKnowledgeHit]] = []
+        for collection_id, hits in zip(requested, lexical_results, strict=True):
+            lexical.extend((collection_id, hit) for hit in hits)
+        for collection_id, (hits, _state) in zip(
+            requested, semantic_results, strict=True
+        ):
+            semantic.extend((collection_id, hit) for hit in hits)
+        lexical.sort(
+            key=lambda item: (
+                -item[1].score,
+                -self._spec(item[0]).priority,
+                item[1].entry.title,
+                item[0],
+            )
+        )
+        semantic.sort(
+            key=lambda item: (
+                -item[1].score,
+                -self._spec(item[0]).priority,
+                item[1].entry.title,
+                item[0],
+            )
+        )
+        material_hits = _rrf_material_hits(
+            lexical,
+            semantic,
+            source_types=source_types,
+            collection_priorities={
+                collection_id: self._spec(collection_id).priority
+                for collection_id in requested
+            },
+            # Keep the bounded recalled pool until after type preference is
+            # applied; otherwise strong knowledge rows could hide a valid
+            # corpus fallback target before partitioning.
+            limit=max(len(lexical) + len(semantic), limit),
+        )
+
+        if target_material_type:
+            primary = [
+                item
+                for item in material_hits
+                if item.material_type == target_material_type
+            ]
+            fallback = [
+                item
+                for item in material_hits
+                if item.material_type != target_material_type
+            ]
+            selected = primary[:limit]
+            selected.extend(fallback[: max(limit - len(selected), 0)])
+        else:
+            selected = material_hits[:limit]
+
+        try:
+            from .diagnostics import record_knowledge_query
+
+            semantic_count = sum(len(hits) for hits, _state in semantic_results)
+            semantic_state = prepared.state
+            record_knowledge_query(
+                collection_id="all" if len(requested) > 1 else requested[0],
+                retrieval_mode="hybrid" if semantic_count else "bm25",
+                embedding_service_state=semantic_state,
+                lexical_candidates=len(lexical),
+                semantic_candidates=semantic_count,
+                fallback_reason="" if semantic_state == "ready" else semantic_state,
+                elapsed_ms=int((time.perf_counter() - started_at) * 1_000),
+            )
+        except Exception:
+            pass
+        return selected
+
     def search_page(
         self,
         collection_id: str,
@@ -891,6 +1127,35 @@ class KnowledgeService:
             embedding_state = "disabled"
             embedding_model_id = ""
         pack_jobs = self.list_pack_jobs(collection_id)
+        installed_packs = self.list_packs(collection_id)
+        knowledge_packs = tuple(
+            pack
+            for pack in installed_packs
+            if pack.get("effective_material_type", "knowledge") == "knowledge"
+        )
+        corpus_packs = tuple(
+            pack
+            for pack in installed_packs
+            if pack.get("effective_material_type") == "corpus"
+        )
+        source_counts = store.count_by_source_tags() if store is not None else ()
+        source_material_types = (
+            self._source_material_types(collection_id, store)
+            if store is not None
+            else {}
+        )
+        knowledge_entries = sum(
+            int(row.get("entries") or 0)
+            for row in source_counts
+            if source_material_types.get(str(row.get("tag") or ""), "knowledge")
+            == "knowledge"
+        )
+        corpus_entries = sum(
+            int(row.get("entries") or 0)
+            for row in source_counts
+            if source_material_types.get(str(row.get("tag") or ""), "knowledge")
+            == "corpus"
+        )
         pending_pack_jobs = sum(
             job.get("state") not in {"active", "cancelled", "failed"}
             for job in pack_jobs
@@ -902,8 +1167,12 @@ class KnowledgeService:
             "integrity_ok": store.integrity_ok() if store is not None else False,
             "auto_context": self._auto_context_enabled(spec),
             "disabled_entries": len(disabled),
-            "sources": store.count_by_source_tags() if store is not None else (),
-            "packs": len(self.list_packs(collection_id)),
+            "sources": source_counts,
+            "packs": len(installed_packs),
+            "knowledge_packs": len(knowledge_packs),
+            "corpus_packs": len(corpus_packs),
+            "knowledge_entries": knowledge_entries,
+            "corpus_entries": corpus_entries,
             "retrieval_mode": "hybrid"
             if chunk_status["chunks_ready"] and embedding_state == "ready"
             else "bm25",
@@ -1057,6 +1326,24 @@ class KnowledgeService:
         )
         notify_knowledge_index_changed()
 
+    def set_pack_material_type_override(
+        self,
+        collection_id: str,
+        pack_id: str,
+        *,
+        material_type: str | None,
+    ) -> None:
+        from .packs import set_pack_material_type_override
+
+        self._spec(collection_id)
+        set_pack_material_type_override(
+            self.database_path(collection_id),
+            pack_id,
+            material_type=material_type,
+        )
+        self._routing_state = None
+        self.refresh_routing_index(background=True)
+
     def refresh_routing_index(self, *, background: bool = False) -> None:
         state = self._get_routing_state()
         if background:
@@ -1081,6 +1368,51 @@ class KnowledgeService:
 
     def _retriever(self, collection_id: str) -> MoegirlKnowledgeRetriever:
         return MoegirlKnowledgeRetriever(self._store(collection_id))
+
+    def material_type_for_entry(
+        self,
+        collection_id: str,
+        entry: MoegirlKnowledgeEntry,
+    ) -> str:
+        return self._source_material_types(
+            collection_id, self._store(collection_id)
+        ).get(entry.source_tag, "knowledge")
+
+    def _source_material_types(
+        self,
+        collection_id: str,
+        store: MoegirlKnowledgeStore,
+    ) -> dict[str, str]:
+        from .packs import list_installed_packs
+
+        source_types = {
+            str(row.get("tag") or ""): "knowledge"
+            for row in store.count_by_source_tags()
+            if str(row.get("tag") or "").startswith("source:")
+        }
+        for pack in list_installed_packs(self.database_path(collection_id)):
+            source_tag = str(pack.get("source_tag") or "")
+            if source_tag:
+                value = str(pack.get("effective_material_type") or "knowledge")
+                source_types[source_tag] = (
+                    value if value in {"knowledge", "corpus"} else "knowledge"
+                )
+        return source_types
+
+    @staticmethod
+    def _allowed_material_sources(
+        source_types: Mapping[str, str],
+        allowed_types: tuple[str, ...],
+    ) -> tuple[str, ...] | None:
+        if frozenset(allowed_types) == frozenset(("knowledge", "corpus")):
+            return None
+        return tuple(
+            sorted(
+                source_tag
+                for source_tag, material_type in source_types.items()
+                if material_type in allowed_types
+            )
+        )
 
     def _get_routing_state(self) -> KnowledgeRoutingState:
         if self._routing_state is None:

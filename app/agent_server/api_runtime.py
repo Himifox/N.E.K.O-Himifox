@@ -377,6 +377,41 @@ async def _background_analyze_and_plan(messages: list[dict[str, Any]], lanlan_na
         await _do_analyze_and_plan(messages, lanlan_name, conversation_id=conversation_id, external_intent=external_intent, proactive=proactive)
 
 
+_LOCAL_KNOWLEDGE_ROUTE_MARKERS = (
+    "query_public_knowledge",
+    "公共知识库",
+    "本地知识库",
+    "local public knowledge",
+)
+
+
+def _latest_user_text(messages: list[dict[str, Any]]) -> str:
+    """Extract only the latest user text for lightweight route ownership checks."""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content", message.get("text", ""))
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = [
+                str(block.get("text") or "").strip()
+                for block in content
+                if isinstance(block, dict) and block.get("type") in {"text", "input_text"}
+            ]
+            return "\n".join(part for part in parts if part)
+        return ""
+    return ""
+
+
+def _is_explicit_local_knowledge_request(messages: list[dict[str, Any]]) -> bool:
+    """Keep explicit local-knowledge turns out of the external Agent pipeline."""
+    latest = _latest_user_text(messages).casefold()
+    return bool(latest) and any(
+        marker.casefold() in latest for marker in _LOCAL_KNOWLEDGE_ROUTE_MARKERS
+    )
+
+
 async def _do_analyze_and_plan(messages: list[dict[str, Any]], lanlan_name: Optional[str], conversation_id: Optional[str] = None, external_intent: Optional[float] = None, proactive: bool = False):
     """Inner implementation, always called under analyze_lock."""
     try:
@@ -399,6 +434,11 @@ async def _do_analyze_and_plan(messages: list[dict[str, Any]], lanlan_name: Opti
         # 在 inject 之前先把已被用户 UI 取消的 user turn 整段 redact，让 analyzer
         # 完全看不到那条请求；inject 阶段也会跳过 cancelled 任务的所有 record。
         redacted_messages = _redact_cancelled_user_turns(messages, lanlan_name, preserve_trailing_assistant=proactive)
+        if not proactive and _is_explicit_local_knowledge_request(redacted_messages):
+            logger.info(
+                "[AgentAnalyze] skip: explicit local public-knowledge route owns this turn"
+            )
+            return
         # 单条 user 消息签名：派单时塞到 task info 里。取自 redacted_messages
         # 而非 raw —— analyzer 实际看到的最新 user 才是该任务的真触发者；
         # 正常场景下 raw-latest 是 first-time bypass、没被 redact，两个签名

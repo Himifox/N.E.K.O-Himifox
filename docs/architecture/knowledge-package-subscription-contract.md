@@ -51,9 +51,10 @@ POST /api/public-knowledge/subscriptions/apply
     "artifact_sha256": "64-character-lowercase-sha256"
   },
   "pack": {
-    "schema_version": 1,
+    "schema_version": 2,
     "pack_id": "example-pack",
     "collection_id": "meme",
+    "material_type": "knowledge",
     "source": {
       "name": "Example Pack",
       "homepage": "https://example.invalid",
@@ -72,7 +73,7 @@ POST /api/public-knowledge/subscriptions/apply
 
 市场制品使用 `.neko-knowledge.json` 后缀，其文件字节必须等于 `pack` 对象按 UTF-8、JSON 键排序、无多余空白序列化后的结果。`artifact_sha256` 因此同时是下载文件摘要和规范化 `pack` 摘要。Market Bridge 先验证下载字节，Main Server 再独立复算，不信任调用方给出的结果。
 
-v1 只交付知识正文，没有可信的索引身份，因此激活后使用 BM25。该兼容路径不会接受预构建向量。
+协议 v1 只交付知识正文，没有可信的索引身份，因此激活后使用 BM25。该兼容路径不会接受预构建向量。知识包自身的 `schema_version` 独立于订阅协议版本：旧知识包 Schema v1 缺少类型时按 `knowledge` 处理；新知识包 Schema v2 必须在包根声明 `material_type=knowledge|corpus`，词条仍严格保持五字段。
 
 ## 协议 v2（可信市场）
 
@@ -113,7 +114,7 @@ POST /api/public-knowledge/subscriptions/apply-v2
 - 更新按整个数据包原子替换；注册表写入失败时恢复旧来源。
 - 管理器桥接仅允许固定知识 API 路径，不能作为任意 Main Server 代理。
 - 所有写操作继续经过现有 Bridge Token、CSRF 和 Origin 校验。
-- 安装后默认不参与自动搭话，需由用户单独开启该数据包的自动上下文。
+- `knowledge` 包安装后默认不参与自动搭话，需由用户单独开启该数据包的自动上下文；`corpus` 包始终禁止自动搭话，只能在显式查询中使用。
 - 社区包默认采用 `prebuilt_only` 策略：可信预构建索引可用时使用混合检索，否则使用 BM25。
 - “允许本机维护向量”必须由用户按包显式开启；未授权时不会为社区包在本机补算或重建向量。
 - 不写入用户记忆，也不持久化用户对话。

@@ -492,8 +492,13 @@ async def set_public_knowledge_pack_auto_context(request: Request):
             pack_id,
             enabled=enabled,
         )
-    except ValueError:
-        return {"ok": False, "reason": "not_found"}
+    except ValueError as exc:
+        reason = (
+            "auto_context_not_allowed"
+            if "corpus packs cannot enable" in str(exc)
+            else "not_found"
+        )
+        return {"ok": False, "reason": reason}
     return {"ok": True, "auto_context": enabled}
 
 
@@ -518,6 +523,36 @@ async def set_public_knowledge_pack_index_policy(request: Request):
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "local_embedding_enabled": enabled}
+
+
+@router.post("/packs/material-type")
+async def set_public_knowledge_pack_material_type(request: Request):
+    payload = await _json_payload(request)
+    rejected = _validate_mutation(request, payload)
+    if rejected is not None:
+        return rejected
+    collection = str(payload.get("collection") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    raw_material_type = payload.get("material_type")
+    material_type = (
+        None if raw_material_type is None else str(raw_material_type).strip()
+    )
+    if (
+        not collection
+        or not pack_id
+        or material_type not in {None, "knowledge", "corpus"}
+    ):
+        return {"ok": False, "reason": "invalid_request"}
+    try:
+        await asyncio.to_thread(
+            _service().set_pack_material_type_override,
+            collection,
+            pack_id,
+            material_type=material_type,
+        )
+    except ValueError:
+        return {"ok": False, "reason": "not_found"}
+    return {"ok": True, "material_type_override": material_type}
 
 
 @router.post("/packs/remove")

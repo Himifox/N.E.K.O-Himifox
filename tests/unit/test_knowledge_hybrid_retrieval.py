@@ -6,13 +6,19 @@ import numpy as np
 import pytest
 
 import knowledge.vector_index as vector_index
+import knowledge.service as service_module
 from knowledge.moegirl_knowledge.models import (
     MoegirlKnowledgeEntry,
     MoegirlKnowledgeHit,
 )
 from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
 from knowledge.service import KnowledgeService, _rrf_knowledge_hits
-from knowledge.vector_index import VectorIndexSnapshot, _score_snapshot
+from knowledge.packs import validate_pack
+from knowledge.vector_index import (
+    SemanticQueryEmbedding,
+    VectorIndexSnapshot,
+    _score_snapshot,
+)
 from utils.local_embedding_runtime import LocalEmbeddingStatus
 
 
@@ -401,7 +407,9 @@ async def test_asearch_falls_back_to_bm25_for_embedding_failures(
 
 
 @pytest.mark.asyncio
-async def test_asearch_soft_loads_not_ready_model_then_falls_back(tmp_path, monkeypatch):
+async def test_asearch_soft_loads_not_ready_model_then_falls_back(
+    tmp_path, monkeypatch
+):
     database_path = tmp_path / "knowledge.db"
     store = MoegirlKnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
@@ -638,3 +646,74 @@ def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch)
                 dimensions=2,
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_multi_collection_search_reuses_one_query_embedding_and_one_fusion(
+    tmp_path,
+    monkeypatch,
+):
+    service = KnowledgeService(tmp_path)
+    MoegirlKnowledgeStore(service.database_path("meme")).upsert(
+        _entry("shared phrase knowledge", source="source:chime")
+    )
+    service.install_pack(
+        validate_pack(
+            {
+                "schema_version": 2,
+                "pack_id": "reply-samples",
+                "collection_id": "corpora",
+                "material_type": "corpus",
+                "source": {
+                    "name": "Reply Samples",
+                    "homepage": "",
+                    "license": "CC0-1.0",
+                },
+                "entries": [
+                    {
+                        "title": "Corpus answer",
+                        "terms": {"alias": [], "recognition": []},
+                        "tags": [],
+                        "summary": "shared phrase response sample",
+                        "content": "shared phrase response sample",
+                    }
+                ],
+            }
+        )
+    )
+    preparation_calls = 0
+    scan_calls: list[SemanticQueryEmbedding] = []
+    prepared = SemanticQueryEmbedding(
+        vector=None,
+        status=None,
+        state="not_ready",
+    )
+
+    async def _prepare(_query, *, stores):
+        nonlocal preparation_calls
+        preparation_calls += 1
+        assert len(stores) == 2
+        return prepared
+
+    async def _scan(_store, query_embedding, **_kwargs):
+        scan_calls.append(query_embedding)
+        return [], query_embedding.state
+
+    monkeypatch.setattr(service_module, "prepare_semantic_query", _prepare)
+    monkeypatch.setattr(service_module, "semantic_search_prepared", _scan)
+
+    result = await service.asearch_many(
+        ("meme", "corpora"),
+        "shared phrase",
+        allowed_material_types=("corpus", "knowledge"),
+        target_material_type="corpus",
+        limit=2,
+    )
+
+    assert preparation_calls == 1
+    assert scan_calls == [prepared, prepared]
+    assert [item.material_type for item in result] == ["corpus", "knowledge"]
+    assert [item.hit.entry.title for item in result] == [
+        "Corpus answer",
+        "shared phrase knowledge",
+    ]

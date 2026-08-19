@@ -18,7 +18,10 @@ from .moegirl_knowledge.models import MoegirlKnowledgeEntry
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
-PACK_SCHEMA_VERSION = 1
+LEGACY_PACK_SCHEMA_VERSION = 1
+PACK_SCHEMA_VERSION = 2
+PACK_REGISTRY_SCHEMA_VERSION = 2
+MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
 MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_PACK_ENTRIES = 5_000
 MAX_PACK_PROJECTED_CHUNKS = 5_000
@@ -39,6 +42,7 @@ class KnowledgePack:
     schema_version: int
     pack_id: str
     collection_id: str
+    material_type: str
     source: KnowledgePackSource
     entries: tuple[MoegirlKnowledgeEntry, ...]
 
@@ -52,6 +56,7 @@ class PackInstallResult:
     pack_id: str
     collection_id: str
     source_tag: str
+    material_type: str
     entries: int
     retrieval_mode: str = "bm25"
 
@@ -65,8 +70,8 @@ class PackPreflight:
 
 
 def pack_payload(pack: KnowledgePack) -> dict[str, object]:
-    """Return the sole publishable five-field payload for a validated pack."""
-    return {
+    """Return the canonical package payload; entries remain strictly five-field."""
+    payload: dict[str, object] = {
         "schema_version": pack.schema_version,
         "pack_id": pack.pack_id,
         "collection_id": pack.collection_id,
@@ -86,6 +91,9 @@ def pack_payload(pack: KnowledgePack) -> dict[str, object]:
             for entry in pack.entries
         ],
     }
+    if pack.schema_version >= PACK_SCHEMA_VERSION:
+        payload["material_type"] = pack.material_type
+    return payload
 
 
 def get_pack_registry_path(database_path: str | Path) -> Path:
@@ -106,13 +114,18 @@ def load_pack(path: str | Path) -> KnowledgePack:
 def validate_pack(payload: object) -> KnowledgePack:
     if not isinstance(payload, dict):
         raise ValueError("knowledge pack root must be an object")
-    _reject_unknown_keys(
-        payload,
-        {"schema_version", "pack_id", "collection_id", "source", "entries"},
-        "knowledge pack",
-    )
-    if payload.get("schema_version") != PACK_SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    if schema_version not in {LEGACY_PACK_SCHEMA_VERSION, PACK_SCHEMA_VERSION}:
         raise ValueError("unsupported knowledge pack schema version")
+    allowed_keys = {"schema_version", "pack_id", "collection_id", "source", "entries"}
+    if schema_version == PACK_SCHEMA_VERSION:
+        allowed_keys.add("material_type")
+    _reject_unknown_keys(payload, allowed_keys, "knowledge pack")
+    material_type = (
+        "knowledge"
+        if schema_version == LEGACY_PACK_SCHEMA_VERSION
+        else _material_type(payload.get("material_type"))
+    )
     pack_id = _identifier(payload.get("pack_id"), "pack_id")
     collection_id = _identifier(payload.get("collection_id"), "collection_id")
     source_payload = payload.get("source")
@@ -142,9 +155,10 @@ def validate_pack(payload: object) -> KnowledgePack:
         seen_titles.add(normalized_title)
         entries.append(entry)
     pack = KnowledgePack(
-        schema_version=PACK_SCHEMA_VERSION,
+        schema_version=int(schema_version),
         pack_id=pack_id,
         collection_id=collection_id,
+        material_type=material_type,
         source=source,
         entries=tuple(entries),
     )
@@ -265,6 +279,7 @@ def install_pack(
         pack_id=pack.pack_id,
         collection_id=pack.collection_id,
         source_tag=pack.source_tag,
+        material_type=pack.material_type,
         entries=len(pack.entries),
         retrieval_mode=retrieval_mode,
     )
@@ -354,7 +369,40 @@ def set_pack_auto_context(
         packs = registry.get("packs")
         if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
             raise ValueError("knowledge pack is not installed")
-        packs[pack_id] = {**packs[pack_id], "auto_context": bool(enabled)}
+        metadata = packs[pack_id]
+        if _effective_material_type(metadata) == "corpus" and enabled:
+            raise ValueError("corpus packs cannot enable automatic context")
+        packs[pack_id] = {**metadata, "auto_context": bool(enabled)}
+        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+
+
+def set_pack_material_type_override(
+    database_path: str | Path,
+    pack_id: str,
+    *,
+    material_type: str | None,
+) -> None:
+    """Persist a local usage override without changing entries or vectors."""
+    pack_id = _identifier(pack_id, "pack_id")
+    normalized = None if material_type is None else _material_type(material_type)
+    registry_path = get_pack_registry_path(database_path)
+    with mutation_lock(registry_path):
+        registry = _load_registry(registry_path)
+        packs = registry.get("packs")
+        metadata = packs.get(pack_id) if isinstance(packs, dict) else None
+        if not isinstance(metadata, dict):
+            raise ValueError("knowledge pack is not installed")
+        declared = _material_type(metadata.get("declared_material_type", "knowledge"))
+        effective = normalized or declared
+        packs[pack_id] = {
+            **metadata,
+            "material_type_override": normalized,
+            "effective_material_type": effective,
+            "auto_context": bool(metadata.get("auto_context"))
+            if effective == "knowledge"
+            else False,
+        }
+        registry["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
         atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
 
 
@@ -414,7 +462,7 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
         try:
             atomic_write_json(
                 registry_path,
-                {"schema_version": 1, "packs": new_packs},
+                {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": new_packs},
                 ensure_ascii=False,
                 indent=2,
             )
@@ -429,7 +477,22 @@ def enabled_pack_source_tags(database_path: str | Path) -> tuple[str, ...]:
         str(pack.get("source_tag"))
         for pack in list_installed_packs(database_path)
         if pack.get("auto_context") is True
+        and _effective_material_type(pack) == "knowledge"
         and str(pack.get("source_tag") or "").startswith("source:")
+    )
+
+
+def material_source_tags(
+    database_path: str | Path,
+    material_types: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return community source tags whose effective type is allowed."""
+    allowed = frozenset(_material_type(value) for value in material_types)
+    return tuple(
+        str(pack.get("source_tag"))
+        for pack in list_installed_packs(database_path)
+        if _effective_material_type(pack) in allowed
+        and str(pack.get("source_tag") or "").startswith("source:community.")
     )
 
 
@@ -484,6 +547,23 @@ def _identifier(value: object, field: str) -> str:
     return text
 
 
+def _material_type(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text not in MATERIAL_TYPES:
+        raise ValueError("material_type must be knowledge or corpus")
+    return text
+
+
+def _effective_material_type(metadata: object) -> str:
+    if not isinstance(metadata, dict):
+        return "knowledge"
+    override = metadata.get("material_type_override")
+    if override in MATERIAL_TYPES:
+        return str(override)
+    declared = metadata.get("declared_material_type")
+    return str(declared) if declared in MATERIAL_TYPES else "knowledge"
+
+
 def _required_text(value: object, field: str, max_chars: int) -> str:
     text = _optional_text(value, field, max_chars)
     if not text:
@@ -511,9 +591,34 @@ def _load_registry(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"schema_version": 1, "packs": {}}
+        return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
     if not isinstance(payload, dict) or not isinstance(payload.get("packs"), dict):
-        return {"schema_version": 1, "packs": {}}
+        return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
+    for pack_id, metadata in tuple(payload["packs"].items()):
+        if not isinstance(metadata, dict):
+            continue
+        declared = (
+            str(metadata.get("declared_material_type"))
+            if metadata.get("declared_material_type") in MATERIAL_TYPES
+            else "knowledge"
+        )
+        override = metadata.get("material_type_override")
+        if override not in MATERIAL_TYPES:
+            override = None
+        effective = str(override or declared)
+        normalized = {
+            **metadata,
+            "declared_material_type": declared,
+            "material_type_override": override,
+            "effective_material_type": effective,
+            "auto_context": bool(metadata.get("auto_context"))
+            if effective == "knowledge"
+            else False,
+        }
+        if normalized != metadata:
+            payload["packs"][pack_id] = normalized
+    if payload.get("schema_version") != PACK_REGISTRY_SCHEMA_VERSION:
+        payload["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
     return payload
 
 
@@ -534,6 +639,13 @@ def _registry_with_pack(
     previous_subscription = (
         previous.get("subscription") if isinstance(previous, dict) else None
     )
+    override = (
+        str(previous.get("material_type_override"))
+        if isinstance(previous, dict)
+        and previous.get("material_type_override") in MATERIAL_TYPES
+        else None
+    )
+    effective_material_type = override or pack.material_type
     packs[pack.pack_id] = {
         "collection_id": pack.collection_id,
         "source_tag": pack.source_tag,
@@ -543,7 +655,12 @@ def _registry_with_pack(
             "license": pack.source.license,
         },
         "entries": len(pack.entries),
-        "auto_context": auto_context,
+        "declared_material_type": pack.material_type,
+        "material_type_override": override,
+        "effective_material_type": effective_material_type,
+        "auto_context": auto_context
+        if effective_material_type == "knowledge"
+        else False,
         "subscription": subscription
         if subscription is not None
         else previous_subscription,
@@ -564,7 +681,7 @@ def _registry_with_pack(
             (index_metadata or {}).get("prebuilt_chunks_missing") or 0
         ),
     }
-    return {"schema_version": 1, "packs": packs}
+    return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": packs}
 
 
 def _validate_subscription_identity(
