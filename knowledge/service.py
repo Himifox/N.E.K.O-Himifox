@@ -499,6 +499,18 @@ class KnowledgeService:
             get_collection_override_path(self.knowledge_root)
         )
         self._routing_state: KnowledgeRoutingState | None = None
+        from .packs import migrate_legacy_pack_index_policies
+
+        for spec in self._collections.values():
+            database_path = self._database_paths.get(
+                spec.collection_id,
+                self.knowledge_root / spec.storage_directory / spec.database_filename,
+            )
+            if (
+                database_path.is_file()
+                and database_path.with_name("packs.json").is_file()
+            ):
+                migrate_legacy_pack_index_policies(database_path)
 
     @classmethod
     def from_root(cls, knowledge_root: str | Path) -> "KnowledgeService":
@@ -917,7 +929,15 @@ class KnowledgeService:
         self.refresh_routing_index(background=True)
         return result
 
-    def stage_pack(self, pack, *, subscription=None):
+    def stage_pack(
+        self,
+        pack,
+        *,
+        subscription=None,
+        index_manifest=None,
+        vectors=None,
+        index_fallback_reason="",
+    ):
         """Queue a user pack without exposing partially indexed entries."""
         from .pack_jobs import stage_pack
 
@@ -926,6 +946,9 @@ class KnowledgeService:
             self,
             pack,
             subscription=subscription,
+            index_manifest=index_manifest,
+            vectors=vectors,
+            index_fallback_reason=index_fallback_reason,
         )
 
     def collection_ids(self) -> tuple[str, ...]:
@@ -987,6 +1010,24 @@ class KnowledgeService:
         )
         self._routing_state = None
         self.refresh_routing_index(background=True)
+
+    def set_pack_index_policy(
+        self,
+        collection_id: str,
+        pack_id: str,
+        *,
+        local_embedding_enabled: bool,
+    ) -> None:
+        from .indexer import notify_knowledge_index_changed
+        from .packs import set_pack_index_policy
+
+        self._spec(collection_id)
+        set_pack_index_policy(
+            self.database_path(collection_id),
+            pack_id,
+            local_embedding_enabled=local_embedding_enabled,
+        )
+        notify_knowledge_index_changed()
 
     def refresh_routing_index(self, *, background: bool = False) -> None:
         state = self._get_routing_state()

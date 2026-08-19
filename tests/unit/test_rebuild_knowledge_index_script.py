@@ -120,16 +120,20 @@ def test_status_is_read_only_and_does_not_migrate_v5(tmp_path: Path) -> None:
     assert "knowledge_chunks" not in tables
 
 
-def test_status_lists_staging_jobs_without_opening_their_database(tmp_path: Path) -> None:
+def test_status_lists_staging_jobs_without_opening_their_database(
+    tmp_path: Path,
+) -> None:
     job_dir = tmp_path / ".staging" / "fixture-job"
     job_dir.mkdir(parents=True)
     (job_dir / "state.json").write_text(
-        json.dumps({
-            "job_id": "fixture-job",
-            "collection_id": "meme",
-            "state": "embedding",
-            "created_at": 1,
-        }),
+        json.dumps(
+            {
+                "job_id": "fixture-job",
+                "collection_id": "meme",
+                "state": "embedding",
+                "created_at": 1,
+            }
+        ),
         encoding="utf-8",
     )
     staging_database = job_dir / "knowledge.db"
@@ -177,30 +181,84 @@ def test_default_batch_size_is_safe_microbatch() -> None:
     assert args.batch_size == 4
 
 
+def test_enable_local_pack_requires_rebuild_action(tmp_path: Path) -> None:
+    args = MODULE._build_parser().parse_args(
+        [
+            "--status",
+            "--enable-local-pack",
+            "fixture-pack",
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert asyncio.run(MODULE._run(args)) == 2
+
+
+def test_enable_local_pack_dry_run_locates_registry_without_mutating_it(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "moegirl-knowledge" / "knowledge.db"
+    database.parent.mkdir(parents=True)
+    registry = {
+        "schema_version": 1,
+        "packs": {
+            "fixture-pack": {
+                "pack_id": "fixture-pack",
+                "source_tag": "source:community.fixture-pack",
+                "local_embedding_enabled": False,
+            }
+        },
+    }
+    registry_path = database.with_name("packs.json")
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    args = MODULE._build_parser().parse_args(
+        [
+            "--rebuild",
+            "--dry-run",
+            "--collection",
+            "meme",
+            "--enable-local-pack",
+            "fixture-pack",
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert asyncio.run(MODULE._run(args)) == 0
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == registry
+
+
 def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> None:
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "pack_id": "preflight-fixture",
-            "collection_id": "meme",
-            "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
-            "entries": [{
-                "title": "Fixture",
-                "terms": {"alias": [], "recognition": []},
-                "tags": [],
-                "summary": "",
-                "content": "Fixture body",
-            }],
-        }),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pack_id": "preflight-fixture",
+                "collection_id": "meme",
+                "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
+                "entries": [
+                    {
+                        "title": "Fixture",
+                        "terms": {"alias": [], "recognition": []},
+                        "tags": [],
+                        "summary": "",
+                        "content": "Fixture body",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
-    args = MODULE._build_parser().parse_args([
-        "--preflight-pack",
-        str(pack_path),
-        "--knowledge-root",
-        str(tmp_path),
-    ])
+    args = MODULE._build_parser().parse_args(
+        [
+            "--preflight-pack",
+            str(pack_path),
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
 
     result = asyncio.run(MODULE._run(args))
     payload = json.loads(capsys.readouterr().out)
@@ -218,12 +276,14 @@ def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> Non
         encoding="utf-8",
     )
     (job_dir / "pack.json").write_text("{}", encoding="utf-8")
-    args = MODULE._build_parser().parse_args([
-        "--cancel-job",
-        "cancel-fixture",
-        "--knowledge-root",
-        str(tmp_path),
-    ])
+    args = MODULE._build_parser().parse_args(
+        [
+            "--cancel-job",
+            "cancel-fixture",
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
 
     result = asyncio.run(MODULE._run(args))
     payload = json.loads(capsys.readouterr().out)
@@ -262,6 +322,48 @@ def test_status_splits_failed_retry_boundaries(tmp_path: Path) -> None:
     assert status["chunks_failed_retryable_now"] == 1
     assert status["chunks_failed_waiting"] == 1
     assert status["chunks_failed_exhausted"] == 1
+
+
+def test_status_treats_v6_chunks_as_local_policy(tmp_path: Path) -> None:
+    database = tmp_path / "knowledge.db"
+    _write_v6_chunks(database)
+    _insert_failed_chunk(
+        database,
+        chunk_id="legacy-local",
+        attempts=1,
+        next_retry_at=0,
+    )
+
+    status = MODULE.inspect_database(database)
+
+    assert status["chunks_local"] == 1
+    assert status["chunks_prebuilt_only"] == 0
+    assert status["chunks_local_failed_retryable_now"] == 1
+
+
+def test_maintenance_counts_only_local_policy_work(tmp_path: Path) -> None:
+    database = tmp_path / "knowledge.db"
+    _write_v6_chunks(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "ALTER TABLE knowledge_chunks ADD COLUMN embedding_policy TEXT "
+            "NOT NULL DEFAULT 'local'"
+        )
+        connection.execute("UPDATE metadata SET value='7' WHERE key='schema_version'")
+        connection.execute(
+            "INSERT INTO knowledge_chunks("
+            "chunk_id, entry_rowid, chunk_index, chunk_text, content_hash, "
+            "embedding_status, embedding_policy) "
+            "VALUES ('prebuilt', 1, 0, 'body', 'hash', 'pending', 'prebuilt_only')"
+        )
+
+    status = MODULE.inspect_database(database)
+
+    assert status["chunks_pending"] == 1
+    assert status["chunks_local_pending"] == 0
+    assert status["chunks_prebuilt_only"] == 1
+    assert MODULE._eligible_chunk_count(status) == 0
+    assert MODULE._completion_state(status) == "complete"
 
 
 @pytest.mark.parametrize(

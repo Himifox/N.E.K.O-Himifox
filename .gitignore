@@ -147,6 +147,7 @@ build*
 !build_frontend.bat
 !build_frontend.sh
 !build-desktop*.yml
+!scripts/build_knowledge_pack_index.py
 metadata.package.json
 version_info.txt
 

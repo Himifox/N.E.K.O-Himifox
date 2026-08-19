@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from utils.file_utils import atomic_write_json
+from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
@@ -20,6 +20,7 @@ from .packs import (
     preflight_pack,
     validate_pack,
 )
+from .subscriptions import canonical_pack_bytes
 
 
 STAGING_DIRECTORY = ".staging"
@@ -28,6 +29,9 @@ MAX_COMMUNITY_ENTRIES = 10_000
 MAX_COMMUNITY_CHUNKS = 10_000
 MAX_COMMUNITY_CONTENT_BYTES = 64 * 1024 * 1024
 TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
+PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
+INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
+VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 
 
 def _jobs_root(knowledge_root: str | Path) -> Path:
@@ -51,9 +55,7 @@ def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
         "entries": [
             {
                 "title": entry.title,
-                "terms": {
-                    role: list(values) for role, values in entry.terms.items()
-                },
+                "terms": {role: list(values) for role, values in entry.terms.items()},
                 "tags": [tag for tag in entry.tags if not tag.startswith("source:")],
                 "summary": entry.summary,
                 "content": entry.content,
@@ -86,6 +88,9 @@ def stage_pack(
     pack: KnowledgePack,
     *,
     subscription: dict[str, str] | None = None,
+    index_manifest: bytes | None = None,
+    vectors: bytes | None = None,
+    index_fallback_reason: str = "",
 ) -> dict[str, object]:
     """Persist validated source data without making it searchable yet."""
     root = Path(service.knowledge_root)
@@ -99,6 +104,7 @@ def stage_pack(
         job_dir = jobs_root / job_id
         job_dir.mkdir()
         now = int(time.time())
+        has_prebuilt = index_manifest is not None and vectors is not None
         state: dict[str, object] = {
             "job_id": job_id,
             "pack_id": pack.pack_id,
@@ -111,15 +117,24 @@ def stage_pack(
             "chunks_ready": 0,
             "indexed_percent": 0.0,
             "reason": "",
+            "index_origin": "prebuilt" if has_prebuilt else "none",
+            "index_trust": "trusted_market" if has_prebuilt else "none",
+            "index_validation": "pending" if has_prebuilt else "absent",
+            "index_fallback_reason": str(index_fallback_reason or "")[:80],
+            "local_embedding_enabled": False,
+            "prebuilt_chunks_ready": 0,
+            "prebuilt_chunks_missing": preflight.projected_chunks,
             "created_at": now,
             "updated_at": now,
         }
         try:
-            atomic_write_json(
-                job_dir / "pack.json",
-                _pack_payload(pack),
-                ensure_ascii=False,
+            atomic_write_bytes(
+                job_dir / PACK_ARTIFACT_NAME,
+                canonical_pack_bytes(_pack_payload(pack)),
             )
+            if has_prebuilt:
+                atomic_write_bytes(job_dir / INDEX_MANIFEST_NAME, index_manifest)
+                atomic_write_bytes(job_dir / VECTOR_ARTIFACT_NAME, vectors)
             if subscription is not None:
                 atomic_write_json(
                     job_dir / "subscription.json",
@@ -253,6 +268,12 @@ def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
 
 
 def _load_job_pack(job_dir: Path) -> KnowledgePack:
+    artifact_path = job_dir / PACK_ARTIFACT_NAME
+    if artifact_path.is_file():
+        try:
+            return validate_pack(json.loads(artifact_path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("staged knowledge pack is invalid") from exc
     return validate_pack(_read_json(job_dir / "pack.json"))
 
 
@@ -264,7 +285,16 @@ def _subscription(job_dir: Path) -> dict[str, str] | None:
 
 
 def _cleanup_payload(job_dir: Path) -> None:
-    for name in ("pack.json", "subscription.json", "knowledge.db", "knowledge.db-wal", "knowledge.db-shm"):
+    for name in (
+        "pack.json",
+        PACK_ARTIFACT_NAME,
+        INDEX_MANIFEST_NAME,
+        VECTOR_ARTIFACT_NAME,
+        "subscription.json",
+        "knowledge.db",
+        "knowledge.db-wal",
+        "knowledge.db-shm",
+    ):
         try:
             (job_dir / name).unlink(missing_ok=True)
         except OSError:
@@ -281,18 +311,87 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
             state = _write_state(job_dir, state, state="building_fts")
             pack = _load_job_pack(job_dir)
             staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
-            staging_store.replace_source(pack.source_tag, pack.entries)
+            staging_store.replace_source(
+                pack.source_tag,
+                pack.entries,
+                embedding_policy="prebuilt_only",
+            )
             status = staging_store.chunk_status()
             state = _write_state(
                 job_dir,
                 state,
-                state="embedding",
+                state="verifying_index",
                 chunks_total=int(status["chunks_total"]),
             )
+        if state.get("state") == "verifying_index":
+            manifest_path = job_dir / INDEX_MANIFEST_NAME
+            vectors_path = job_dir / VECTOR_ARTIFACT_NAME
+            has_manifest = manifest_path.is_file()
+            has_vectors = vectors_path.is_file()
+            if has_manifest and has_vectors:
+                from .prebuilt_index import validate_prebuilt_index
+
+                subscription = _subscription(job_dir) or {}
+                try:
+                    validated = validate_prebuilt_index(
+                        (job_dir / PACK_ARTIFACT_NAME).read_bytes(),
+                        manifest_path.read_bytes(),
+                        vectors_path.read_bytes(),
+                        expected_pack_sha256=str(
+                            subscription.get("artifact_sha256") or ""
+                        ),
+                        expected_manifest_sha256=str(
+                            subscription.get("index_manifest_sha256") or ""
+                        ),
+                        expected_vectors_sha256=str(
+                            subscription.get("vectors_sha256") or ""
+                        ),
+                    )
+                    stored = staging_store.store_chunk_embeddings_strict(
+                        validated.prepared_embeddings()
+                    )
+                    total = len(validated.chunks)
+                    if stored != total:
+                        raise ValueError("prebuilt index import was incomplete")
+                    state = _write_state(
+                        job_dir,
+                        state,
+                        index_origin="prebuilt",
+                        index_trust="trusted_market",
+                        index_validation="accepted",
+                        index_fallback_reason="",
+                        prebuilt_chunks_ready=total,
+                        prebuilt_chunks_missing=0,
+                    )
+                except (OSError, ValueError):
+                    manifest_path.unlink(missing_ok=True)
+                    vectors_path.unlink(missing_ok=True)
+                    state = _write_state(
+                        job_dir,
+                        state,
+                        index_origin="none",
+                        index_trust="none",
+                        index_validation="rejected",
+                        index_fallback_reason="prebuilt_index_rejected",
+                        prebuilt_chunks_ready=0,
+                        prebuilt_chunks_missing=int(state.get("chunks_total") or 0),
+                    )
+            else:
+                state = _write_state(
+                    job_dir,
+                    state,
+                    index_origin="none",
+                    index_trust="none",
+                    index_validation="absent",
+                    prebuilt_chunks_ready=0,
+                    prebuilt_chunks_missing=int(state.get("chunks_total") or 0),
+                )
         return state
 
 
-def _activate_job(service, job_dir: Path, state: dict[str, Any], *, mode: str) -> dict[str, Any]:
+def _activate_job(
+    service, job_dir: Path, state: dict[str, Any], *, mode: str
+) -> dict[str, Any]:
     with mutation_lock(_state_path(job_dir)):
         current = _read_json(_state_path(job_dir)) or state
         if current.get("state") == "cancelled":
@@ -300,15 +399,22 @@ def _activate_job(service, job_dir: Path, state: dict[str, Any], *, mode: str) -
             return current
         pack = _load_job_pack(job_dir)
         staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
-        embeddings = (
-            staging_store.ready_embedding_records() if mode != "bm25" else ()
-        )
+        embeddings = staging_store.ready_embedding_records() if mode != "bm25" else ()
         result = install_pack(
             service.database_path(pack.collection_id),
             pack,
             subscription=_subscription(job_dir),
             prepared_embeddings=embeddings,
             retrieval_mode=mode,
+            embedding_policy="prebuilt_only",
+            index_metadata={
+                "index_origin": current.get("index_origin", "none"),
+                "index_trust": current.get("index_trust", "none"),
+                "index_validation": current.get("index_validation", "absent"),
+                "index_fallback_reason": current.get("index_fallback_reason", ""),
+                "prebuilt_chunks_ready": current.get("prebuilt_chunks_ready", 0),
+                "prebuilt_chunks_missing": current.get("prebuilt_chunks_missing", 0),
+            },
         )
         service.refresh_routing_index(background=True)
         state = _write_state(
@@ -334,9 +440,7 @@ async def process_pack_jobs(
     batch_size: int,
     ready_vector_chunks: int,
 ) -> dict[str, object]:
-    """Advance at most one job and one safe embedding microbatch."""
-    from .vector_index import index_embedding_batch
-    from utils.local_embedding_runtime import get_local_embedding_status
+    """Verify and activate at most one staged community pack."""
 
     all_jobs = list_pack_jobs(service.knowledge_root)
     for item in all_jobs:
@@ -346,13 +450,9 @@ async def process_pack_jobs(
             and item_job_id
             and Path(item_job_id).name == item_job_id
         ):
-            _cleanup_payload(
-                _jobs_root(service.knowledge_root) / item_job_id
-            )
+            _cleanup_payload(_jobs_root(service.knowledge_root) / item_job_id)
     jobs = [
-        item
-        for item in reversed(all_jobs)
-        if item.get("state") not in TERMINAL_STATES
+        item for item in reversed(all_jobs) if item.get("state") not in TERMINAL_STATES
     ]
     if not jobs:
         return {"state": "no_work", "selected": 0, "stored": 0}
@@ -367,25 +467,18 @@ async def process_pack_jobs(
         status = staging_store.chunk_status()
         total = int(status["chunks_total"])
         ready = int(status["chunks_ready"])
-        if ready_vector_chunks + total > MAX_READY_VECTOR_CHUNKS:
-            activated = await asyncio.to_thread(
-                _activate_job,
-                service,
+        has_prebuilt = state.get("index_validation") == "accepted" and ready == total
+        if has_prebuilt and ready_vector_chunks + total > MAX_READY_VECTOR_CHUNKS:
+            state = _write_state(
                 job_dir,
                 state,
-                mode="bm25",
+                index_origin="none",
+                index_trust="none",
+                index_validation="rejected",
+                index_fallback_reason="vector_budget_exceeded",
+                prebuilt_chunks_ready=0,
+                prebuilt_chunks_missing=total,
             )
-            if activated.get("state") == "cancelled":
-                return {"state": "cancelled", "selected": 0, "stored": 0}
-            activated = _write_state(
-                job_dir,
-                activated,
-                reason="vector_budget_exceeded",
-            )
-            return {"state": "ready_bm25", "selected": 0, "stored": 0}
-
-        embedding_status = get_local_embedding_status()
-        if embedding_status.state == "disabled":
             activated = await asyncio.to_thread(
                 _activate_job,
                 service,
@@ -397,33 +490,13 @@ async def process_pack_jobs(
                 return {"state": "cancelled", "selected": 0, "stored": 0}
             return {"state": "ready_bm25", "selected": 0, "stored": 0}
 
-        result = await index_embedding_batch(
-            staging_store,
-            batch_size=batch_size,
-            load_model=True,
-        )
-        current = _read_json(_state_path(job_dir))
-        if current.get("state") == "cancelled":
-            _cleanup_payload(job_dir)
-            return {"state": "cancelled", "selected": 0, "stored": 0}
-        status = staging_store.chunk_status()
-        total = int(status["chunks_total"])
-        ready = int(status["chunks_ready"])
-        percent = round(100.0 * ready / total, 1) if total else 0.0
-        state = _write_state(
-            job_dir,
-            _read_json(_state_path(job_dir)),
-            state="embedding",
-            chunks_ready=ready,
-            indexed_percent=percent,
-        )
-        unfinished = (
-            int(status["chunks_pending"])
-            + int(status["chunks_stale"])
-            + int(status["chunks_failed_retryable_now"])
-            + int(status["chunks_failed_waiting"])
-        )
-        if total and ready == total:
+        if has_prebuilt:
+            state = _write_state(
+                job_dir,
+                state,
+                chunks_ready=ready,
+                indexed_percent=100.0,
+            )
             activated = await asyncio.to_thread(
                 _activate_job,
                 service,
@@ -432,35 +505,23 @@ async def process_pack_jobs(
                 mode="hybrid",
             )
             activation_state = (
-                "cancelled"
-                if activated.get("state") == "cancelled"
-                else "ready_hybrid"
+                "cancelled" if activated.get("state") == "cancelled" else "ready_hybrid"
             )
             return {
                 "state": activation_state,
-                "selected": result.selected,
-                "stored": result.stored,
+                "selected": ready,
+                "stored": ready,
             }
-        if unfinished == 0 and int(status["chunks_failed_exhausted"]) > 0:
-            mode = "mixed" if ready else "bm25"
-            activated = await asyncio.to_thread(
-                _activate_job,
-                service,
-                job_dir,
-                state,
-                mode=mode,
-            )
-            activation_state = (
-                "cancelled"
-                if activated.get("state") == "cancelled"
-                else f"ready_{mode}"
-            )
-            return {
-                "state": activation_state,
-                "selected": result.selected,
-                "stored": result.stored,
-            }
-        return {"state": result.state, "selected": result.selected, "stored": result.stored}
+        activated = await asyncio.to_thread(
+            _activate_job,
+            service,
+            job_dir,
+            state,
+            mode="bm25",
+        )
+        if activated.get("state") == "cancelled":
+            return {"state": "cancelled", "selected": 0, "stored": 0}
+        return {"state": "ready_bm25", "selected": 0, "stored": 0}
     except Exception as exc:
         current = _read_json(_state_path(job_dir)) or state
         if current.get("state") == "cancelled":

@@ -102,6 +102,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "clarity because it is the only v1 rebuild backend"
         ),
     )
+    parser.add_argument(
+        "--enable-local-pack",
+        metavar="PACK_ID",
+        help=(
+            "explicitly allow local vector maintenance for one installed community "
+            "pack before --rebuild or --full"
+        ),
+    )
     return parser
 
 
@@ -127,6 +135,24 @@ def _targets(root: Path, collection: str) -> tuple[CollectionTarget, ...]:
         CollectionTarget(collection_id, root / COLLECTION_DATABASES[collection_id])
         for collection_id in collection_ids
     )
+
+
+def _installed_pack_targets(
+    targets: Sequence[CollectionTarget],
+    pack_id: str,
+) -> tuple[CollectionTarget, ...]:
+    """Locate a pack from registries without opening or migrating databases."""
+    matches: list[CollectionTarget] = []
+    for target in targets:
+        registry_path = target.database_path.with_name("packs.json")
+        try:
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        packs = registry.get("packs") if isinstance(registry, dict) else None
+        if isinstance(packs, dict) and isinstance(packs.get(pack_id), dict):
+            matches.append(target)
+    return tuple(matches)
 
 
 def _open_read_only(database_path: Path) -> sqlite3.Connection:
@@ -163,6 +189,16 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
         "chunks_failed_retryable_now": 0,
         "chunks_failed_waiting": 0,
         "chunks_failed_exhausted": 0,
+        "chunks_local": 0,
+        "chunks_prebuilt_only": 0,
+        "entries_prebuilt_only": 0,
+        "chunks_local_pending": 0,
+        "chunks_local_ready": 0,
+        "chunks_local_stale": 0,
+        "chunks_local_failed": 0,
+        "chunks_local_failed_retryable_now": 0,
+        "chunks_local_failed_waiting": 0,
+        "chunks_local_failed_exhausted": 0,
         "indexed_percent": 0.0,
         "embedding_model_id": "",
     }
@@ -189,6 +225,15 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
                 result["entries_missing_chunks"] = result["entries_total"]
                 return result
 
+            chunk_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(knowledge_chunks)"
+                ).fetchall()
+            }
+            has_policy = "embedding_policy" in chunk_columns
+            policy_expression = "embedding_policy" if has_policy else "'local'"
+
             counts = {
                 str(row["embedding_status"]): int(row["entry_count"])
                 for row in connection.execute(
@@ -211,6 +256,43 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
                     ),
                 }
             )
+            policy_counts = {
+                (str(row["policy"]), str(row["embedding_status"])): int(
+                    row["entry_count"]
+                )
+                for row in connection.execute(
+                    f"SELECT {policy_expression} policy, embedding_status, "
+                    "COUNT(*) entry_count FROM knowledge_chunks "
+                    f"GROUP BY {policy_expression}, embedding_status"
+                )
+            }
+            local_total = sum(
+                count
+                for (policy, _), count in policy_counts.items()
+                if policy == "local"
+            )
+            prebuilt_total = sum(
+                count
+                for (policy, _), count in policy_counts.items()
+                if policy == "prebuilt_only"
+            )
+            result.update(
+                {
+                    "chunks_local": local_total,
+                    "chunks_prebuilt_only": prebuilt_total,
+                    "chunks_local_pending": policy_counts.get(("local", "pending"), 0),
+                    "chunks_local_ready": policy_counts.get(("local", "ready"), 0),
+                    "chunks_local_stale": policy_counts.get(("local", "stale"), 0),
+                    "chunks_local_failed": policy_counts.get(("local", "failed"), 0),
+                }
+            )
+            if has_policy:
+                result["entries_prebuilt_only"] = int(
+                    connection.execute(
+                        "SELECT COUNT(DISTINCT entry_rowid) FROM knowledge_chunks "
+                        "WHERE embedding_policy='prebuilt_only'"
+                    ).fetchone()[0]
+                )
             now = int(time.time())
             failed_counts = connection.execute(
                 "SELECT "
@@ -228,6 +310,30 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
                     "chunks_failed_waiting": int(failed_counts[1] or 0),
                     "chunks_failed_exhausted": int(failed_counts[2] or 0),
                 }
+            )
+            local_policy_clause = " AND embedding_policy='local'" if has_policy else ""
+            result["chunks_local_failed_retryable_now"] = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM knowledge_chunks "
+                    "WHERE embedding_status='failed' AND embedding_attempts<8 "
+                    "AND next_retry_at<=?" + local_policy_clause,
+                    (now,),
+                ).fetchone()[0]
+            )
+            result["chunks_local_failed_waiting"] = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM knowledge_chunks "
+                    "WHERE embedding_status='failed' AND embedding_attempts<8 "
+                    "AND next_retry_at>?" + local_policy_clause,
+                    (now,),
+                ).fetchone()[0]
+            )
+            result["chunks_local_failed_exhausted"] = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM knowledge_chunks "
+                    "WHERE embedding_status='failed' AND embedding_attempts>=8"
+                    + local_policy_clause
+                ).fetchone()[0]
             )
             if "entries" in tables:
                 result["entries_missing_chunks"] = int(
@@ -260,7 +366,10 @@ def inspect_pack_jobs(root: Path, *, collection: str) -> list[dict[str, Any]]:
         items.append(item)
     return sorted(
         items,
-        key=lambda item: (-int(item.get("created_at") or 0), str(item.get("job_id") or "")),
+        key=lambda item: (
+            -int(item.get("created_at") or 0),
+            str(item.get("job_id") or ""),
+        ),
     )
 
 
@@ -312,13 +421,24 @@ def dry_run_plan(target: CollectionTarget, *, full: bool) -> dict[str, Any]:
     status = inspect_database(target.database_path)
     valid_entries, derived_chunks = _count_derived_chunks(target.database_path)
     if full:
-        affected_chunks = derived_chunks
-        affected_entries = valid_entries
+        affected_chunks = max(
+            derived_chunks - int(status["chunks_prebuilt_only"]),
+            0,
+        )
+        affected_entries = max(
+            valid_entries - int(status["entries_prebuilt_only"]),
+            0,
+        )
     else:
         affected_chunks = (
-            int(status["chunks_pending"])
-            + int(status["chunks_stale"])
-            + int(status["chunks_failed_retryable_now"])
+            int(status.get("chunks_local_pending", status["chunks_pending"]))
+            + int(status.get("chunks_local_stale", status["chunks_stale"]))
+            + int(
+                status.get(
+                    "chunks_local_failed_retryable_now",
+                    status["chunks_failed_retryable_now"],
+                )
+            )
         )
         affected_entries = int(status["entries_missing_chunks"])
         if affected_entries:
@@ -347,18 +467,34 @@ def _backfill_all(store: Any, *, batch_size: int) -> int:
 
 def _eligible_chunk_count(status: dict[str, Any]) -> int:
     return (
-        int(status["chunks_pending"])
-        + int(status["chunks_stale"])
-        + int(status["chunks_failed_retryable_now"])
+        int(status.get("chunks_local_pending", status["chunks_pending"]))
+        + int(status.get("chunks_local_stale", status["chunks_stale"]))
+        + int(
+            status.get(
+                "chunks_local_failed_retryable_now",
+                status["chunks_failed_retryable_now"],
+            )
+        )
     )
 
 
 def _completion_state(status: dict[str, Any], *, last_batch_state: str = "") -> str:
-    if int(status["chunks_failed_exhausted"]) > 0:
+    local_failed = int(status.get("chunks_local_failed", status["chunks_failed"]))
+    if (
+        int(
+            status.get(
+                "chunks_local_failed_exhausted", status["chunks_failed_exhausted"]
+            )
+        )
+        > 0
+    ):
         return "failed_exhausted"
-    if int(status["chunks_failed"]) > 0:
+    if local_failed > 0:
         return "retry_scheduled"
-    if int(status["chunks_pending"]) == 0 and int(status["chunks_stale"]) == 0:
+    if (
+        int(status.get("chunks_local_pending", status["chunks_pending"])) == 0
+        and int(status.get("chunks_local_stale", status["chunks_stale"])) == 0
+    ):
         return "complete"
     if last_batch_state in {
         "disabled",
@@ -492,6 +628,42 @@ async def _run(args: argparse.Namespace) -> int:
         "embedding_backend": "local_shared_runtime",
         "collections": [],
     }
+    if args.enable_local_pack:
+        if requested_action not in {"rebuild", "full"}:
+            payload.update(
+                {
+                    "ok": False,
+                    "error_type": "invalid_action",
+                    "reason": "enable_local_pack_requires_rebuild",
+                }
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 2
+        pack_targets = _installed_pack_targets(targets, args.enable_local_pack)
+        if not pack_targets:
+            payload.update(
+                {
+                    "ok": False,
+                    "error_type": "pack_not_found",
+                    "pack_id": args.enable_local_pack,
+                }
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 2
+        payload["local_embedding_opt_in"] = {
+            "pack_id": args.enable_local_pack,
+            "collections": [target.collection_id for target in pack_targets],
+            "dry_run": bool(args.dry_run),
+        }
+        if not args.dry_run:
+            from knowledge.packs import set_pack_index_policy
+
+            for target in pack_targets:
+                set_pack_index_policy(
+                    target.database_path,
+                    args.enable_local_pack,
+                    local_embedding_enabled=True,
+                )
     if requested_action == "preflight":
         from knowledge.packs import ensure_install_capacity, load_pack, preflight_pack
 
@@ -503,14 +675,16 @@ async def _run(args: argparse.Namespace) -> int:
             payload.update({"ok": False, "error_type": type(exc).__name__})
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 2
-        payload.update({
-            "ok": True,
-            "pack_id": pack.pack_id,
-            "collection_id": pack.collection_id,
-            "entries_total": preflight.entries,
-            "projected_chunks": preflight.projected_chunks,
-            "estimated_working_bytes": preflight.estimated_working_bytes,
-        })
+        payload.update(
+            {
+                "ok": True,
+                "pack_id": pack.pack_id,
+                "collection_id": pack.collection_id,
+                "entries_total": preflight.entries,
+                "projected_chunks": preflight.projected_chunks,
+                "estimated_working_bytes": preflight.estimated_working_bytes,
+            }
+        )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     if requested_action == "cancel_job":

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from knowledge.chunking import (
     EMBEDDING_INPUT_VERSION,
     MAX_CHUNKS_PER_ENTRY,
@@ -95,6 +97,62 @@ def test_schema_v6_migration_keeps_fts_and_backfills_lazily(tmp_path):
     assert store.chunk_status()["entries_missing_chunks"] == 1
     assert store.backfill_missing_chunks(limit=1) == 1
     assert store.chunk_status()["chunks_pending"] == 1
+
+
+def test_schema_v6_to_v7_preserves_fts_and_ready_vectors(tmp_path):
+    path = tmp_path / "knowledge.db"
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO metadata VALUES ('schema_version', '6');
+        INSERT INTO metadata VALUES ('embedding_input_version', '2');
+        INSERT INTO metadata VALUES ('chunks_revision', '3');
+        CREATE TABLE entries (
+            title TEXT NOT NULL, terms TEXT NOT NULL, tags TEXT NOT NULL,
+            summary TEXT NOT NULL, content TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE entries_fts USING fts5(
+            entry_rowid UNINDEXED, title, terms, tags, summary, content,
+            tokenize='unicode61'
+        );
+        INSERT INTO entries VALUES (
+            'V6 title', '{"alias":[],"recognition":[]}',
+            '["source:test"]', '', 'kept body'
+        );
+        INSERT INTO entries_fts VALUES (1, 'V6 title', '', 'source:test', '', 'kept body');
+        CREATE TABLE knowledge_chunks (
+            chunk_id TEXT PRIMARY KEY, entry_rowid INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL, heading TEXT NOT NULL DEFAULT '',
+            chunk_text TEXT NOT NULL, content_hash TEXT NOT NULL,
+            embedding_model_id TEXT, embedding_dimensions INTEGER, embedding BLOB,
+            embedding_status TEXT NOT NULL DEFAULT 'pending',
+            embedding_attempts INTEGER NOT NULL DEFAULT 0,
+            next_retry_at INTEGER NOT NULL DEFAULT 0,
+            last_error_code TEXT NOT NULL DEFAULT '',
+            UNIQUE(entry_rowid, chunk_index)
+        );
+        INSERT INTO knowledge_chunks VALUES (
+            'v6-chunk', 1, 0, '', 'kept body', 'hash', 'fixture', 2,
+            X'00000000', 'ready', 0, 0, ''
+        );
+    """)
+    connection.commit()
+    connection.close()
+
+    store = MoegirlKnowledgeStore(path)
+
+    assert store.query_fts('"kept"', limit=1)
+    with store._connection() as connection:
+        row = connection.execute("SELECT * FROM knowledge_chunks").fetchone()
+        assert row["embedding_policy"] == "local"
+        assert row["embedding_status"] == "ready"
+        assert row["embedding"] == b"\x00\x00\x00\x00"
+        assert (
+            connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'"
+            ).fetchone()[0]
+            == "7"
+        )
 
 
 def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
@@ -319,3 +377,60 @@ def test_source_replacement_reuses_unchanged_vectors(tmp_path):
 
     assert result[0].unchanged is True
     assert store.chunk_status()["chunks_ready"] == 1
+
+
+def test_prebuilt_only_chunks_are_not_local_embedding_work(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    entry = _entry(content="prebuilt content")
+
+    store.replace_source(
+        "source:test",
+        (entry,),
+        embedding_policy="prebuilt_only",
+    )
+
+    assert store.pending_embedding_chunks(model_id="fixture", limit=8) == ()
+    assert store.has_embedding_work() is False
+    assert store.embedding_policy_counts(source_tag="source:test") == {
+        "local": 0,
+        "prebuilt_only": 1,
+    }
+    assert store.source_chunk_status("source:test") == {
+        "chunks_total": 1,
+        "chunks_ready": 0,
+        "chunks_prebuilt_only": 1,
+    }
+
+    assert store.set_source_embedding_policy("source:test", "local") == 1
+    assert store.has_embedding_work() is True
+    assert len(store.pending_embedding_chunks(model_id="fixture", limit=8)) == 1
+
+
+def test_strict_embedding_batch_rolls_back_when_one_chunk_is_stale(tmp_path):
+    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))
+    with store._connection() as connection:
+        rows = connection.execute(
+            "SELECT chunk_id, content_hash FROM knowledge_chunks ORDER BY chunk_index"
+        ).fetchall()
+    assert len(rows) >= 2
+    records = [
+        {
+            "chunk_id": str(row["chunk_id"]),
+            "content_hash": str(row["content_hash"]),
+            "model_id": "fixture",
+            "dimensions": 2,
+            "embedding": b"\x00\x00\x00\x00",
+        }
+        for row in rows[:2]
+    ]
+    records[1]["content_hash"] = "stale-hash"
+
+    with pytest.raises(ValueError):
+        store.store_chunk_embeddings_strict(records)
+
+    with store._connection() as connection:
+        statuses = connection.execute(
+            "SELECT embedding_status FROM knowledge_chunks ORDER BY chunk_index"
+        ).fetchall()
+    assert all(row["embedding_status"] == "pending" for row in statuses)

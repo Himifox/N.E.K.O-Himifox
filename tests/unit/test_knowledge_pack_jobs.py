@@ -1,35 +1,82 @@
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
+import hashlib
 
 import pytest
 
 from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
 from knowledge.pack_jobs import cancel_pack_job, process_pack_jobs
+from knowledge.pack_jobs import _pack_payload
 from knowledge.packs import validate_pack
+from knowledge.prebuilt_index import (
+    PREBUILT_DIMENSIONS,
+    PREBUILT_MODEL_ID,
+    build_prebuilt_index_artifacts,
+)
+from knowledge.chunking import derive_knowledge_chunks
 from knowledge.service import KnowledgeService
-from utils.local_embedding_runtime import LocalEmbeddingStatus
+from knowledge.subscriptions import canonical_pack_bytes
 
 
 def _pack(*, title: str = "Staged phrase", pack_id: str = "staged-fixture"):
-    return validate_pack({
-        "schema_version": 1,
-        "pack_id": pack_id,
-        "collection_id": "meme",
-        "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
-        "entries": [{
-            "title": title,
-            "terms": {"alias": [], "recognition": []},
-            "tags": [],
-            "summary": "A staged entry",
-            "content": "A staged entry body.",
-        }],
-    })
+    return validate_pack(
+        {
+            "schema_version": 1,
+            "pack_id": pack_id,
+            "collection_id": "meme",
+            "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
+            "entries": [
+                {
+                    "title": title,
+                    "terms": {"alias": [], "recognition": []},
+                    "tags": [],
+                    "summary": "A staged entry",
+                    "content": "A staged entry body.",
+                }
+            ],
+        }
+    )
+
+
+def _prebuilt(pack):
+    raw = canonical_pack_bytes(_pack_payload(pack))
+    chunks = tuple(
+        chunk
+        for entry in pack.entries
+        for chunk in derive_knowledge_chunks(
+            entry,
+            entry_key=f"{entry.source_tag}:{entry.title}",
+        )
+    )
+    row = bytes.fromhex("003c") + b"\0" * ((PREBUILT_DIMENSIONS - 1) * 2)
+    artifacts = build_prebuilt_index_artifacts(
+        raw,
+        [
+            {
+                "chunk_id": chunk.chunk_id,
+                "content_hash": chunk.content_hash,
+                "model_id": PREBUILT_MODEL_ID,
+                "dimensions": PREBUILT_DIMENSIONS,
+                "embedding": row,
+            }
+            for chunk in chunks
+        ],
+    )
+    subscription = {
+        "provider": "plugin-market",
+        "remote_id": f"knowledge/{pack.pack_id}",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+        "index_manifest_sha256": artifacts.manifest_sha256,
+        "vectors_sha256": artifacts.vectors_sha256,
+        "trust": "trusted_market",
+    }
+    return artifacts, subscription
 
 
 @pytest.mark.asyncio
-async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path, monkeypatch):
+async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     job = service.stage_pack(_pack())
 
@@ -37,10 +84,6 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path, monkeypatch
     assert service.search("meme", "Staged phrase", limit=1) == []
     assert service.list_packs("meme") == ()
 
-    monkeypatch.setattr(
-        "utils.local_embedding_runtime.get_local_embedding_status",
-        lambda: LocalEmbeddingStatus(state="disabled"),
-    )
     result = await process_pack_jobs(
         service,
         batch_size=4,
@@ -54,7 +97,7 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path, monkeypatch):
+async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     service.install_pack(_pack(title="Old phrase"))
     service.stage_pack(_pack(title="New phrase"))
@@ -62,10 +105,6 @@ async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path, mo
     assert service.search("meme", "Old phrase", limit=1)
     assert service.search("meme", "New phrase", limit=1) == []
 
-    monkeypatch.setattr(
-        "utils.local_embedding_runtime.get_local_embedding_status",
-        lambda: LocalEmbeddingStatus(state="disabled"),
-    )
     await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
     assert service.search("meme", "Old phrase", limit=1) == []
@@ -75,42 +114,15 @@ async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path, mo
 @pytest.mark.asyncio
 async def test_ready_vectors_are_transferred_during_hybrid_activation(
     tmp_path,
-    monkeypatch,
 ):
-    import knowledge.vector_index as vector_index
-
     service = KnowledgeService.from_root(tmp_path)
-    service.stage_pack(_pack())
-
-    class _EmbeddingService:
-        def is_available(self):
-            return True
-
-        def is_disabled(self):
-            return False
-
-        async def embed_batch(self, texts):
-            return [[1.0, 0.0] for _text in texts]
-
-    ready = LocalEmbeddingStatus(
-        state="ready",
-        model_id="fixture",
-        dimensions=2,
-    )
-    monkeypatch.setattr(
-        "utils.local_embedding_runtime.get_local_embedding_status",
-        lambda: ready,
-    )
-    monkeypatch.setattr(vector_index, "get_local_embedding_status", lambda: ready)
-    monkeypatch.setattr(
-        vector_index,
-        "get_local_embedding_service",
-        lambda: _EmbeddingService(),
-    )
-    monkeypatch.setattr(
-        vector_index,
-        "_INFERENCE_COORDINATOR",
-        vector_index._KnowledgeInferenceCoordinator(),
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
     )
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
@@ -183,10 +195,13 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     monkeypatch,
 ):
     service = KnowledgeService.from_root(tmp_path)
-    service.stage_pack(_pack())
-    monkeypatch.setattr(
-        "utils.local_embedding_runtime.get_local_embedding_status",
-        lambda: pytest.fail("vector budget fallback must not load the model"),
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
     )
 
     result = await process_pack_jobs(
@@ -199,44 +214,20 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     assert result["state"] == "ready_bm25"
     assert job["state"] == "active"
     assert job["retrieval_mode"] == "bm25"
-    assert job["reason"] == "vector_budget_exceeded"
+    assert job["index_fallback_reason"] == "vector_budget_exceeded"
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_embedding_never_activates_partial_pack(
+async def test_raw_pack_activation_never_loads_the_embedding_model(
     tmp_path,
     monkeypatch,
 ):
-    import knowledge.vector_index as vector_index
-
     service = KnowledgeService.from_root(tmp_path)
-    job = service.stage_pack(_pack())
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def _slow_batch(_store, **_kwargs):
-        started.set()
-        await release.wait()
-        return SimpleNamespace(selected=1, stored=0, state="ready")
-
-    monkeypatch.setattr(vector_index, "index_embedding_batch", _slow_batch)
+    service.stage_pack(_pack())
     monkeypatch.setattr(
-        "utils.local_embedding_runtime.get_local_embedding_status",
-        lambda: LocalEmbeddingStatus(
-            state="ready",
-            model_id="fixture",
-            dimensions=2,
-        ),
+        "utils.local_embedding_runtime.get_local_embedding_service",
+        lambda: pytest.fail("raw-only packs must not load the embedding model"),
     )
-
-    task = asyncio.create_task(
-        process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
-    )
-    await asyncio.wait_for(started.wait(), timeout=1.0)
-    assert cancel_pack_job(tmp_path, str(job["job_id"])) is True
-    release.set()
-    result = await task
-
-    assert result["state"] == "cancelled"
-    assert service.list_pack_jobs("meme")[0]["state"] == "cancelled"
-    assert service.search("meme", "Staged phrase", limit=1) == []
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    assert result["state"] == "ready_bm25"
+    assert service.list_packs("meme")[0]["local_embedding_enabled"] is False

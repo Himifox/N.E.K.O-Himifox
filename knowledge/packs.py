@@ -97,7 +97,9 @@ def validate_pack(payload: object) -> KnowledgePack:
     _reject_unknown_keys(source_payload, {"name", "homepage", "license"}, "source")
     source = KnowledgePackSource(
         name=_required_text(source_payload.get("name"), "source.name", 200),
-        homepage=_optional_text(source_payload.get("homepage"), "source.homepage", 2_000),
+        homepage=_optional_text(
+            source_payload.get("homepage"), "source.homepage", 2_000
+        ),
         license=_required_text(source_payload.get("license"), "source.license", 500),
     )
     rows = payload.get("entries")
@@ -166,10 +168,14 @@ def install_pack(
     subscription: dict[str, str] | None = None,
     prepared_embeddings: tuple[dict[str, object], ...] = (),
     retrieval_mode: str = "bm25",
+    embedding_policy: str = "prebuilt_only",
+    index_metadata: dict[str, object] | None = None,
 ) -> PackInstallResult:
     """Replace one community source and its metadata with rollback on failure."""
     if retrieval_mode not in {"hybrid", "mixed", "bm25"}:
         raise ValueError("unsupported knowledge pack retrieval mode")
+    if embedding_policy not in {"local", "prebuilt_only"}:
+        raise ValueError("unsupported knowledge pack embedding policy")
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
@@ -179,6 +185,7 @@ def install_pack(
             for entry in store.list_active_entries()
             if entry.source_tag == pack.source_tag
         )
+        old_embeddings = store.ready_embedding_records(source_tag=pack.source_tag)
         old_registry = _load_registry(registry_path)
         existing = old_registry.get("packs", {}).get(pack.pack_id)
         if isinstance(existing, dict):
@@ -189,19 +196,46 @@ def install_pack(
                 existing.get("subscription"),
                 subscription,
             )
+        local_embedding_enabled = embedding_policy == "local" or (
+            isinstance(existing, dict)
+            and existing.get("local_embedding_enabled") is True
+        )
+        effective_policy = "local" if local_embedding_enabled else "prebuilt_only"
         new_registry = _registry_with_pack(
             old_registry,
             pack,
             subscription=subscription,
             retrieval_mode=retrieval_mode,
+            index_metadata=index_metadata,
+            local_embedding_enabled=local_embedding_enabled,
         )
         try:
-            store.replace_source(pack.source_tag, pack.entries)
+            store.replace_source(
+                pack.source_tag,
+                pack.entries,
+                embedding_policy=effective_policy,
+            )
             if prepared_embeddings:
-                store.store_chunk_embeddings(prepared_embeddings)
+                stored = store.store_chunk_embeddings_strict(prepared_embeddings)
+                if stored != len(prepared_embeddings):
+                    raise ValueError(
+                        "prebuilt knowledge index was not imported completely"
+                    )
             atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
         except Exception:
-            store.replace_source(pack.source_tag, old_entries)
+            old_policy = (
+                "local"
+                if isinstance(existing, dict)
+                and existing.get("local_embedding_enabled") is True
+                else "prebuilt_only"
+            )
+            store.replace_source(
+                pack.source_tag,
+                old_entries,
+                embedding_policy=old_policy,
+            )
+            if old_embeddings:
+                store.store_chunk_embeddings_strict(old_embeddings)
             raise
     return PackInstallResult(
         pack_id=pack.pack_id,
@@ -216,11 +250,71 @@ def list_installed_packs(database_path: str | Path) -> tuple[dict[str, Any], ...
     packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
     if not isinstance(packs, dict):
         return ()
-    return tuple(
-        {"pack_id": pack_id, **value}
-        for pack_id, value in sorted(packs.items())
-        if isinstance(value, dict)
-    )
+    store = MoegirlKnowledgeStore(database_path)
+    items: list[dict[str, Any]] = []
+    for pack_id, value in sorted(packs.items()):
+        if not isinstance(value, dict):
+            continue
+        source_tag = str(value.get("source_tag") or "")
+        status = (
+            store.source_chunk_status(source_tag)
+            if source_tag
+            else {
+                "chunks_total": 0,
+                "chunks_ready": 0,
+            }
+        )
+        items.append(
+            {
+                "pack_id": pack_id,
+                **value,
+                "prebuilt_chunks_ready": int(status["chunks_ready"]),
+                "prebuilt_chunks_missing": max(
+                    int(status["chunks_total"]) - int(status["chunks_ready"]),
+                    0,
+                ),
+            }
+        )
+    return tuple(items)
+
+
+def migrate_legacy_pack_index_policies(database_path: str | Path) -> int:
+    """Adopt installed community packs without scheduling new local inference."""
+    database_path = Path(database_path)
+    registry_path = get_pack_registry_path(database_path)
+    registry = _load_registry(registry_path)
+    packs = registry.get("packs")
+    if not isinstance(packs, dict):
+        return 0
+    store = MoegirlKnowledgeStore(database_path)
+    changed = 0
+    with mutation_lock(registry_path):
+        for pack_id, metadata in tuple(packs.items()):
+            if not isinstance(metadata, dict) or "local_embedding_enabled" in metadata:
+                continue
+            source_tag = str(metadata.get("source_tag") or "")
+            if not source_tag.startswith("source:community."):
+                continue
+            status = store.source_chunk_status(source_tag)
+            store.set_source_embedding_policy(source_tag, "prebuilt_only")
+            has_ready = int(status["chunks_ready"]) > 0
+            packs[pack_id] = {
+                **metadata,
+                "index_origin": "legacy" if has_ready else "none",
+                "index_trust": "local_generated" if has_ready else "none",
+                "index_validation": "accepted" if has_ready else "absent",
+                "index_fallback_reason": "",
+                "local_embedding_enabled": False,
+                "prebuilt_chunks_ready": int(status["chunks_ready"]),
+                "prebuilt_chunks_missing": max(
+                    int(status["chunks_total"]) - int(status["chunks_ready"]),
+                    0,
+                ),
+            }
+            changed += 1
+        if changed:
+            atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+    return changed
 
 
 def set_pack_auto_context(
@@ -237,6 +331,35 @@ def set_pack_auto_context(
         if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
             raise ValueError("knowledge pack is not installed")
         packs[pack_id] = {**packs[pack_id], "auto_context": bool(enabled)}
+        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+
+
+def set_pack_index_policy(
+    database_path: str | Path,
+    pack_id: str,
+    *,
+    local_embedding_enabled: bool,
+) -> None:
+    """Persist explicit consent for local maintenance of one community index."""
+    pack_id = _identifier(pack_id, "pack_id")
+    database_path = Path(database_path)
+    registry_path = get_pack_registry_path(database_path)
+    with mutation_lock(registry_path):
+        registry = _load_registry(registry_path)
+        packs = registry.get("packs")
+        metadata = packs.get(pack_id) if isinstance(packs, dict) else None
+        if not isinstance(metadata, dict):
+            raise ValueError("knowledge pack is not installed")
+        source_tag = str(metadata.get("source_tag") or "")
+        if not source_tag.startswith("source:community."):
+            raise ValueError("only community packs have an index policy")
+        policy = "local" if local_embedding_enabled else "prebuilt_only"
+        store = MoegirlKnowledgeStore(database_path)
+        store.set_source_embedding_policy(source_tag, policy)
+        packs[pack_id] = {
+            **metadata,
+            "local_embedding_enabled": bool(local_embedding_enabled),
+        }
         atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
 
 
@@ -281,7 +404,8 @@ def enabled_pack_source_tags(database_path: str | Path) -> tuple[str, ...]:
     return tuple(
         str(pack.get("source_tag"))
         for pack in list_installed_packs(database_path)
-        if pack.get("auto_context") is True and str(pack.get("source_tag") or "").startswith("source:")
+        if pack.get("auto_context") is True
+        and str(pack.get("source_tag") or "").startswith("source:")
     )
 
 
@@ -304,7 +428,9 @@ def _entry_from_payload(
     normalized_terms: dict[str, tuple[str, ...]] = {}
     for role in _TERM_ROLES:
         values = terms.get(role, ())
-        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) for value in values
+        ):
             raise ValueError(f"entries[{index}].terms.{role} must be a string array")
         normalized_terms[role] = tuple(values)
     tags = payload.get("tags", [])
@@ -316,15 +442,21 @@ def _entry_from_payload(
         title=_required_text(payload.get("title"), f"entries[{index}].title", 500),
         terms=normalized_terms,
         tags=(source_tag, *tags),
-        summary=_optional_text(payload.get("summary"), f"entries[{index}].summary", 4_000),
-        content=_required_text(payload.get("content"), f"entries[{index}].content", 80_000),
+        summary=_optional_text(
+            payload.get("summary"), f"entries[{index}].summary", 4_000
+        ),
+        content=_required_text(
+            payload.get("content"), f"entries[{index}].content", 80_000
+        ),
     )
 
 
 def _identifier(value: object, field: str) -> str:
     text = str(value or "").strip()
     if not _PACK_ID_RE.fullmatch(text):
-        raise ValueError(f"{field} must use lowercase letters, numbers, dots, dashes or underscores")
+        raise ValueError(
+            f"{field} must use lowercase letters, numbers, dots, dashes or underscores"
+        )
     return text
 
 
@@ -367,10 +499,14 @@ def _registry_with_pack(
     *,
     subscription: dict[str, str] | None = None,
     retrieval_mode: str = "bm25",
+    index_metadata: dict[str, object] | None = None,
+    local_embedding_enabled: bool = False,
 ) -> dict[str, Any]:
     packs = dict(registry.get("packs", {}))
     previous = packs.get(pack.pack_id, {})
-    auto_context = previous.get("auto_context") is True if isinstance(previous, dict) else False
+    auto_context = (
+        previous.get("auto_context") is True if isinstance(previous, dict) else False
+    )
     previous_subscription = (
         previous.get("subscription") if isinstance(previous, dict) else None
     )
@@ -384,8 +520,25 @@ def _registry_with_pack(
         },
         "entries": len(pack.entries),
         "auto_context": auto_context,
-        "subscription": subscription if subscription is not None else previous_subscription,
+        "subscription": subscription
+        if subscription is not None
+        else previous_subscription,
         "retrieval_mode": retrieval_mode,
+        "index_origin": str((index_metadata or {}).get("index_origin") or "none"),
+        "index_trust": str((index_metadata or {}).get("index_trust") or "none"),
+        "index_validation": str(
+            (index_metadata or {}).get("index_validation") or "absent"
+        ),
+        "index_fallback_reason": str(
+            (index_metadata or {}).get("index_fallback_reason") or ""
+        )[:80],
+        "local_embedding_enabled": bool(local_embedding_enabled),
+        "prebuilt_chunks_ready": int(
+            (index_metadata or {}).get("prebuilt_chunks_ready") or 0
+        ),
+        "prebuilt_chunks_missing": int(
+            (index_metadata or {}).get("prebuilt_chunks_missing") or 0
+        ),
     }
     return {"schema_version": 1, "packs": packs}
 

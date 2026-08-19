@@ -21,8 +21,9 @@ from knowledge.chunking import (
 from .models import MoegirlKnowledgeEntry, UpsertResult
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 MAX_EMBEDDING_ATTEMPTS = 8
+EMBEDDING_POLICIES = frozenset(("local", "prebuilt_only"))
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
 _INITIALIZE_LOCK = threading.Lock()
 
@@ -121,6 +122,8 @@ class MoegirlKnowledgeStore:
                 heading TEXT NOT NULL DEFAULT '',
                 chunk_text TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
+                embedding_policy TEXT NOT NULL DEFAULT 'local'
+                    CHECK (embedding_policy IN ('local', 'prebuilt_only')),
                 embedding_model_id TEXT,
                 embedding_dimensions INTEGER,
                 embedding BLOB,
@@ -149,6 +152,20 @@ class MoegirlKnowledgeStore:
                     WHERE key = 'chunks_revision';
             END;
             """
+        )
+        chunk_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(knowledge_chunks)")
+        }
+        if "embedding_policy" not in chunk_columns:
+            connection.execute(
+                "ALTER TABLE knowledge_chunks ADD COLUMN embedding_policy TEXT "
+                "NOT NULL DEFAULT 'local' "
+                "CHECK (embedding_policy IN ('local', 'prebuilt_only'))"
+            )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS knowledge_chunks_policy_status_idx "
+            "ON knowledge_chunks(embedding_policy, embedding_status)"
         )
         metadata = {
             "schema_version": str(SCHEMA_VERSION),
@@ -272,9 +289,14 @@ class MoegirlKnowledgeStore:
         return results
 
     def replace_source(
-        self, source_tag: str, entries: Sequence[MoegirlKnowledgeEntry]
+        self,
+        source_tag: str,
+        entries: Sequence[MoegirlKnowledgeEntry],
+        *,
+        embedding_policy: str = "local",
     ) -> tuple[UpsertResult, ...]:
         """Atomically replace a fixed bundled/imported source namespace."""
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         if not source_tag.startswith("source:") or any(
             entry.source_tag != source_tag for entry in entries
         ):
@@ -306,7 +328,12 @@ class MoegirlKnowledgeStore:
                     ((rowid,) for rowid in removed_rowids),
                 )
             results = tuple(
-                self._upsert_with_connection(connection, entry) for entry in entries
+                self._upsert_with_connection(
+                    connection,
+                    entry,
+                    embedding_policy=embedding_policy,
+                )
+                for entry in entries
             )
             changed = bool(removed_rowids) or any(
                 not result.unchanged for result in results
@@ -330,8 +357,13 @@ class MoegirlKnowledgeStore:
         return f"{entry.source_tag}:{entry.title}"
 
     def _upsert_with_connection(
-        self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry
+        self,
+        connection: sqlite3.Connection,
+        entry: MoegirlKnowledgeEntry,
+        *,
+        embedding_policy: str = "local",
     ) -> UpsertResult:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         rows = connection.execute(
             "SELECT rowid, * FROM entries WHERE title = ? AND EXISTS (SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?)",
             (entry.title, entry.source_tag),
@@ -339,6 +371,13 @@ class MoegirlKnowledgeStore:
         if len(rows) == 1:
             existing = _entry_from_row(rows[0])
             if existing.content_hash == entry.content_hash:
+                if self._reconcile_chunks(
+                    connection,
+                    int(rows[0]["rowid"]),
+                    entry,
+                    embedding_policy=embedding_policy,
+                ):
+                    return UpsertResult(self._entry_key(entry), updated=True)
                 return UpsertResult(self._entry_key(entry), unchanged=True)
             rowid = rows[0]["rowid"]
             connection.execute(
@@ -352,12 +391,25 @@ class MoegirlKnowledgeStore:
                 ),
             )
             self._replace_fts(connection, rowid, entry)
-            self._reconcile_chunks(connection, rowid, entry)
+            self._reconcile_chunks(
+                connection,
+                rowid,
+                entry,
+                embedding_policy=embedding_policy,
+            )
             return UpsertResult(self._entry_key(entry), updated=True)
-        return self._insert_with_connection(connection, entry)
+        return self._insert_with_connection(
+            connection,
+            entry,
+            embedding_policy=embedding_policy,
+        )
 
     def _insert_with_connection(
-        self, connection: sqlite3.Connection, entry: MoegirlKnowledgeEntry
+        self,
+        connection: sqlite3.Connection,
+        entry: MoegirlKnowledgeEntry,
+        *,
+        embedding_policy: str = "local",
     ) -> UpsertResult:
         cursor = connection.execute(
             "INSERT INTO entries(title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?)",
@@ -371,7 +423,12 @@ class MoegirlKnowledgeStore:
         )
         rowid = int(cursor.lastrowid)
         self._replace_fts(connection, rowid, entry)
-        self._reconcile_chunks(connection, rowid, entry)
+        self._reconcile_chunks(
+            connection,
+            rowid,
+            entry,
+            embedding_policy=embedding_policy,
+        )
         return UpsertResult(self._entry_key(entry), created=True)
 
     @staticmethod
@@ -397,7 +454,10 @@ class MoegirlKnowledgeStore:
         connection: sqlite3.Connection,
         rowid: int,
         entry: MoegirlKnowledgeEntry,
+        *,
+        embedding_policy: str = "local",
     ) -> bool:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         derived = derive_knowledge_chunks(entry, entry_key=cls._entry_key(entry))
         existing = {
             str(row["chunk_id"]): row
@@ -413,6 +473,7 @@ class MoegirlKnowledgeStore:
                 int(existing[chunk.chunk_id]["chunk_index"]) != chunk.chunk_index
                 or str(existing[chunk.chunk_id]["heading"]) != chunk.heading
                 or str(existing[chunk.chunk_id]["chunk_text"]) != chunk.chunk_text
+                or str(existing[chunk.chunk_id]["embedding_policy"]) != embedding_policy
                 for chunk in derived
             )
         if not changed:
@@ -424,9 +485,10 @@ class MoegirlKnowledgeStore:
             connection.execute(
                 "INSERT INTO knowledge_chunks("
                 "chunk_id, entry_rowid, chunk_index, heading, chunk_text, content_hash, "
+                "embedding_policy, "
                 "embedding_model_id, embedding_dimensions, embedding, embedding_status, "
                 "embedding_attempts, next_retry_at, last_error_code"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     chunk.chunk_id,
                     rowid,
@@ -434,6 +496,7 @@ class MoegirlKnowledgeStore:
                     chunk.heading,
                     chunk.chunk_text,
                     chunk.content_hash,
+                    embedding_policy,
                     old["embedding_model_id"] if old is not None else None,
                     old["embedding_dimensions"] if old is not None else None,
                     old["embedding"] if old is not None else None,
@@ -624,6 +687,49 @@ class MoegirlKnowledgeStore:
                     ).fetchone()[0]
                 )
                 chunks_total = sum(counts.values())
+                policy_counts = {
+                    (str(row["embedding_policy"]), str(row["embedding_status"])): int(
+                        row["count"]
+                    )
+                    for row in connection.execute(
+                        "SELECT embedding_policy, embedding_status, COUNT(*) count "
+                        "FROM knowledge_chunks GROUP BY embedding_policy, embedding_status"
+                    ).fetchall()
+                }
+                local_total = sum(
+                    count
+                    for (policy, _), count in policy_counts.items()
+                    if policy == "local"
+                )
+                prebuilt_total = sum(
+                    count
+                    for (policy, _), count in policy_counts.items()
+                    if policy == "prebuilt_only"
+                )
+                local_failed_retryable_now = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_policy='local' AND embedding_status='failed' "
+                        "AND embedding_attempts<? AND next_retry_at<=?",
+                        (MAX_EMBEDDING_ATTEMPTS, now),
+                    ).fetchone()[0]
+                )
+                local_failed_waiting = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_policy='local' AND embedding_status='failed' "
+                        "AND embedding_attempts<? AND next_retry_at>?",
+                        (MAX_EMBEDDING_ATTEMPTS, now),
+                    ).fetchone()[0]
+                )
+                local_failed_exhausted = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks "
+                        "WHERE embedding_policy='local' AND embedding_status='failed' "
+                        "AND embedding_attempts>=?",
+                        (MAX_EMBEDDING_ATTEMPTS,),
+                    ).fetchone()[0]
+                )
                 return {
                     "entries_total": int(
                         connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
@@ -637,6 +743,15 @@ class MoegirlKnowledgeStore:
                     "chunks_failed_retryable_now": failed_retryable_now,
                     "chunks_failed_waiting": failed_waiting,
                     "chunks_failed_exhausted": failed_exhausted,
+                    "chunks_local": local_total,
+                    "chunks_prebuilt_only": prebuilt_total,
+                    "chunks_local_pending": policy_counts.get(("local", "pending"), 0),
+                    "chunks_local_ready": policy_counts.get(("local", "ready"), 0),
+                    "chunks_local_stale": policy_counts.get(("local", "stale"), 0),
+                    "chunks_local_failed": policy_counts.get(("local", "failed"), 0),
+                    "chunks_local_failed_retryable_now": local_failed_retryable_now,
+                    "chunks_local_failed_waiting": local_failed_waiting,
+                    "chunks_local_failed_exhausted": local_failed_exhausted,
                     "indexed_percent": round(
                         100.0 * counts.get("ready", 0) / chunks_total, 1
                     )
@@ -658,18 +773,126 @@ class MoegirlKnowledgeStore:
                 "chunks_failed_retryable_now": 0,
                 "chunks_failed_waiting": 0,
                 "chunks_failed_exhausted": 0,
+                "chunks_local": 0,
+                "chunks_prebuilt_only": 0,
+                "chunks_local_pending": 0,
+                "chunks_local_ready": 0,
+                "chunks_local_stale": 0,
+                "chunks_local_failed": 0,
+                "chunks_local_failed_retryable_now": 0,
+                "chunks_local_failed_waiting": 0,
+                "chunks_local_failed_exhausted": 0,
                 "indexed_percent": 0.0,
                 "chunks_revision": 0,
             }
 
-    def mark_other_models_stale(self, model_id: str) -> int:
+    def embedding_policy_counts(self, *, source_tag: str = "") -> dict[str, int]:
+        """Count derived chunks by generation policy without loading their text."""
+        parameters: tuple[object, ...] = ()
+        source_clause = ""
+        if source_tag:
+            source_clause = (
+                " JOIN entries ON entries.rowid=knowledge_chunks.entry_rowid "
+                "WHERE EXISTS (SELECT 1 FROM json_each(entries.tags) tag "
+                "WHERE tag.value=?)"
+            )
+            parameters = (source_tag,)
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT embedding_policy, COUNT(*) count FROM knowledge_chunks"
+                    f"{source_clause} GROUP BY embedding_policy",
+                    parameters,
+                ).fetchall()
+                counts = {policy: 0 for policy in EMBEDDING_POLICIES}
+                counts.update(
+                    {str(row["embedding_policy"]): int(row["count"]) for row in rows}
+                )
+                return counts
+        except KnowledgeStoreError:
+            return {policy: 0 for policy in EMBEDDING_POLICIES}
+
+    def source_chunk_status(self, source_tag: str) -> dict[str, int]:
+        """Return compact activation counts for one source namespace."""
+        if not source_tag.startswith("source:"):
+            raise ValueError("source_tag must start with source:")
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    "SELECT COUNT(*) chunks_total, "
+                    "SUM(CASE WHEN embedding_status='ready' THEN 1 ELSE 0 END) "
+                    "chunks_ready, "
+                    "SUM(CASE WHEN embedding_policy='prebuilt_only' THEN 1 ELSE 0 END) "
+                    "chunks_prebuilt_only FROM knowledge_chunks JOIN entries "
+                    "ON entries.rowid=knowledge_chunks.entry_rowid WHERE EXISTS ("
+                    "SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value=?)",
+                    (source_tag,),
+                ).fetchone()
+                return {
+                    "chunks_total": int(row["chunks_total"] or 0),
+                    "chunks_ready": int(row["chunks_ready"] or 0),
+                    "chunks_prebuilt_only": int(row["chunks_prebuilt_only"] or 0),
+                }
+        except KnowledgeStoreError:
+            return {
+                "chunks_total": 0,
+                "chunks_ready": 0,
+                "chunks_prebuilt_only": 0,
+            }
+
+    def set_source_embedding_policy(self, source_tag: str, policy: str) -> int:
+        """Switch generation ownership for every existing chunk in one source."""
+        if not source_tag.startswith("source:"):
+            raise ValueError("source_tag must start with source:")
+        policy = _validate_embedding_policy(policy)
+        with self._connection(writable=True) as connection:
+            cursor = connection.execute(
+                "UPDATE knowledge_chunks SET embedding_policy=? "
+                "WHERE embedding_policy<>? AND entry_rowid IN ("
+                "SELECT entries.rowid FROM entries JOIN json_each(entries.tags) tag "
+                "WHERE tag.value=?)",
+                (policy, policy, source_tag),
+            )
+            changed = max(int(cursor.rowcount), 0)
+            if changed:
+                self._increment_chunks_revision(connection)
+        if changed:
+            self._notify_routing_changed()
+        return changed
+
+    def has_embedding_work(self, *, embedding_policy: str = "local") -> bool:
+        """Report immediately eligible work; local generation is the safe default."""
+        embedding_policy = _validate_embedding_policy(embedding_policy)
+        now = int(time.time())
+        try:
+            with self._connection() as connection:
+                return bool(
+                    connection.execute(
+                        "SELECT 1 FROM knowledge_chunks WHERE embedding_policy=? AND ("
+                        "embedding_status IN ('pending', 'stale') OR "
+                        "(embedding_status='failed' AND embedding_attempts<? "
+                        "AND next_retry_at<=?)) LIMIT 1",
+                        (embedding_policy, MAX_EMBEDDING_ATTEMPTS, now),
+                    ).fetchone()
+                )
+        except KnowledgeStoreError:
+            return False
+
+    def mark_other_models_stale(
+        self,
+        model_id: str,
+        *,
+        embedding_policy: str = "local",
+    ) -> int:
         if not model_id:
             return 0
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         with self._connection(writable=True) as connection:
             cursor = connection.execute(
                 "UPDATE knowledge_chunks SET embedding_status='stale', next_retry_at=0 "
-                "WHERE embedding_status='ready' AND embedding_model_id<>?",
-                (model_id,),
+                "WHERE embedding_policy=? AND embedding_status='ready' "
+                "AND embedding_model_id<>?",
+                (embedding_policy, model_id),
             )
             changed = max(int(cursor.rowcount), 0)
             if changed:
@@ -686,7 +909,9 @@ class MoegirlKnowledgeStore:
         model_id: str,
         limit: int = 32,
         include_failed: bool = True,
+        embedding_policy: str = "local",
     ) -> tuple[dict[str, object], ...]:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         limit = min(max(int(limit), 1), 128)
         statuses = (
             ("pending", "stale", "failed") if include_failed else ("pending", "stale")
@@ -700,11 +925,12 @@ class MoegirlKnowledgeStore:
                     "entries.summary, entries.content FROM knowledge_chunks JOIN entries "
                     "ON entries.rowid=knowledge_chunks.entry_rowid "
                     f"WHERE knowledge_chunks.embedding_status IN ({placeholders}) "
+                    "AND knowledge_chunks.embedding_policy=? "
                     "AND knowledge_chunks.next_retry_at<=? "
                     "AND (knowledge_chunks.embedding_status<>'failed' "
                     "OR knowledge_chunks.embedding_attempts<?) "
                     "ORDER BY knowledge_chunks.entry_rowid, knowledge_chunks.chunk_index LIMIT ?",
-                    (*statuses, now, MAX_EMBEDDING_ATTEMPTS, limit),
+                    (*statuses, embedding_policy, now, MAX_EMBEDDING_ATTEMPTS, limit),
                 ).fetchall()
                 result: list[dict[str, object]] = []
                 for row in rows:
@@ -736,7 +962,9 @@ class MoegirlKnowledgeStore:
         model_id: str,
         dimensions: int,
         embedding: bytes,
+        embedding_policy: str = "local",
     ) -> bool:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         if (
             not chunk_id
             or not content_hash
@@ -749,8 +977,15 @@ class MoegirlKnowledgeStore:
             cursor = connection.execute(
                 "UPDATE knowledge_chunks SET embedding_model_id=?, embedding_dimensions=?, "
                 "embedding=?, embedding_status='ready', embedding_attempts=0, next_retry_at=0, "
-                "last_error_code='' WHERE chunk_id=? AND content_hash=?",
-                (model_id, dimensions, embedding, chunk_id, content_hash),
+                "last_error_code='' WHERE embedding_policy=? AND chunk_id=? AND content_hash=?",
+                (
+                    model_id,
+                    dimensions,
+                    embedding,
+                    embedding_policy,
+                    chunk_id,
+                    content_hash,
+                ),
             )
             changed = int(cursor.rowcount) == 1
             if changed:
@@ -761,24 +996,39 @@ class MoegirlKnowledgeStore:
         self,
         records: Sequence[dict[str, object]],
     ) -> int:
-        """Import validated, content-addressed vectors in one short transaction."""
-        changed = 0
+        """Compatibility alias for the strict all-or-nothing importer."""
+        return self.store_chunk_embeddings_strict(records)
+
+    def store_chunk_embeddings_strict(
+        self,
+        records: Sequence[dict[str, object]],
+    ) -> int:
+        """Atomically import vectors only when every content address still matches."""
+        validated: list[tuple[str, str, str, int, bytes]] = []
+        seen: set[str] = set()
+        for record in records:
+            chunk_id = str(record.get("chunk_id") or "")
+            content_hash = str(record.get("content_hash") or "")
+            model_id = str(record.get("model_id") or "")
+            dimensions = int(record.get("dimensions") or 0)
+            embedding = record.get("embedding")
+            if (
+                not chunk_id
+                or chunk_id in seen
+                or not content_hash
+                or not model_id
+                or dimensions <= 0
+                or not isinstance(embedding, bytes)
+                or len(embedding) != dimensions * 2
+            ):
+                raise ValueError("invalid or duplicate chunk embedding record")
+            seen.add(chunk_id)
+            validated.append((chunk_id, content_hash, model_id, dimensions, embedding))
+        if not validated:
+            return 0
+
         with self._connection(writable=True) as connection:
-            for record in records:
-                chunk_id = str(record.get("chunk_id") or "")
-                content_hash = str(record.get("content_hash") or "")
-                model_id = str(record.get("model_id") or "")
-                dimensions = int(record.get("dimensions") or 0)
-                embedding = record.get("embedding")
-                if (
-                    not chunk_id
-                    or not content_hash
-                    or not model_id
-                    or dimensions <= 0
-                    or not isinstance(embedding, bytes)
-                    or len(embedding) != dimensions * 2
-                ):
-                    continue
+            for chunk_id, content_hash, model_id, dimensions, embedding in validated:
                 cursor = connection.execute(
                     "UPDATE knowledge_chunks SET embedding_model_id=?, "
                     "embedding_dimensions=?, embedding=?, embedding_status='ready', "
@@ -786,25 +1036,47 @@ class MoegirlKnowledgeStore:
                     "WHERE chunk_id=? AND content_hash=?",
                     (model_id, dimensions, embedding, chunk_id, content_hash),
                 )
-                changed += int(cursor.rowcount) == 1
-            if changed:
-                self._increment_chunks_revision(connection)
-        return changed
+                if int(cursor.rowcount) != 1:
+                    raise ValueError(
+                        "chunk embedding batch no longer matches current content"
+                    )
+            self._increment_chunks_revision(connection)
+        return len(validated)
 
-    def ready_embedding_records(self) -> tuple[dict[str, object], ...]:
+    def ready_embedding_records(
+        self,
+        *,
+        source_tag: str = "",
+    ) -> tuple[dict[str, object], ...]:
         """Return compact vectors for staging activation; never includes text."""
         try:
             with self._connection() as connection:
+                source_clause = ""
+                parameters: tuple[object, ...] = ()
+                if source_tag:
+                    if not source_tag.startswith("source:"):
+                        raise ValueError("source_tag must start with source:")
+                    source_clause = (
+                        " AND EXISTS (SELECT 1 FROM json_each(entries.tags) tag "
+                        "WHERE tag.value=?)"
+                    )
+                    parameters = (source_tag,)
                 rows = connection.execute(
-                    "SELECT chunk_id, content_hash, embedding_model_id, "
-                    "embedding_dimensions, embedding FROM knowledge_chunks "
-                    "WHERE embedding_status='ready'"
+                    "SELECT knowledge_chunks.chunk_id, knowledge_chunks.content_hash, "
+                    "knowledge_chunks.embedding_model_id, "
+                    "knowledge_chunks.embedding_policy, "
+                    "knowledge_chunks.embedding_dimensions, "
+                    "knowledge_chunks.embedding FROM knowledge_chunks JOIN entries "
+                    "ON entries.rowid=knowledge_chunks.entry_rowid "
+                    "WHERE knowledge_chunks.embedding_status='ready'" + source_clause,
+                    parameters,
                 ).fetchall()
                 return tuple(
                     {
                         "chunk_id": str(row["chunk_id"]),
                         "content_hash": str(row["content_hash"]),
                         "model_id": str(row["embedding_model_id"] or ""),
+                        "embedding_policy": str(row["embedding_policy"]),
                         "dimensions": int(row["embedding_dimensions"] or 0),
                         "embedding": bytes(row["embedding"] or b""),
                     }
@@ -819,12 +1091,14 @@ class MoegirlKnowledgeStore:
         chunk_id: str,
         content_hash: str,
         error_code: str,
+        embedding_policy: str = "local",
     ) -> bool:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         with self._connection(writable=True) as connection:
             row = connection.execute(
                 "SELECT embedding_attempts FROM knowledge_chunks "
-                "WHERE chunk_id=? AND content_hash=?",
-                (chunk_id, content_hash),
+                "WHERE embedding_policy=? AND chunk_id=? AND content_hash=?",
+                (embedding_policy, chunk_id, content_hash),
             ).fetchone()
             if row is None:
                 return False
@@ -835,27 +1109,39 @@ class MoegirlKnowledgeStore:
             retry_at = int(time.time()) + min(3_600, 10 * (2 ** (attempts - 1)))
             connection.execute(
                 "UPDATE knowledge_chunks SET embedding_status='failed', embedding_attempts=?, "
-                "next_retry_at=?, last_error_code=? WHERE chunk_id=? AND content_hash=?",
+                "next_retry_at=?, last_error_code=? WHERE embedding_policy=? "
+                "AND chunk_id=? AND content_hash=?",
                 (
                     attempts,
                     retry_at,
                     str(error_code or "embedding_failed")[:80],
+                    embedding_policy,
                     chunk_id,
                     content_hash,
                 ),
             )
             return True
 
-    def reset_chunk_index(self, *, full: bool = False) -> int:
+    def reset_chunk_index(
+        self,
+        *,
+        full: bool = False,
+        embedding_policy: str = "local",
+    ) -> int:
+        embedding_policy = _validate_embedding_policy(embedding_policy)
         with self._connection(writable=True) as connection:
             if full:
-                connection.execute("DELETE FROM knowledge_chunks")
+                connection.execute(
+                    "DELETE FROM knowledge_chunks WHERE embedding_policy=?",
+                    (embedding_policy,),
+                )
                 changed = int(connection.execute("SELECT changes()").fetchone()[0])
             else:
                 cursor = connection.execute(
                     "UPDATE knowledge_chunks SET embedding_status='pending', embedding_model_id=NULL, "
                     "embedding_dimensions=NULL, embedding=NULL, embedding_attempts=0, "
-                    "next_retry_at=0, last_error_code=''"
+                    "next_retry_at=0, last_error_code='' WHERE embedding_policy=?",
+                    (embedding_policy,),
                 )
                 changed = max(int(cursor.rowcount), 0)
             if changed:
@@ -953,10 +1239,7 @@ class MoegirlKnowledgeStore:
                     f"SELECT rowid, * FROM entries WHERE rowid IN ({placeholders})",
                     unique,
                 ).fetchall()
-                return {
-                    int(row["rowid"]): _entry_from_row(row)
-                    for row in rows
-                }
+                return {int(row["rowid"]): _entry_from_row(row) for row in rows}
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return {}
 
@@ -1118,6 +1401,13 @@ def _terms_json(entry: MoegirlKnowledgeEntry) -> str:
     return json.dumps(
         {role: list(entry.terms[role]) for role in entry.terms}, ensure_ascii=False
     )
+
+
+def _validate_embedding_policy(value: str) -> str:
+    policy = str(value or "").strip()
+    if policy not in EMBEDDING_POLICIES:
+        raise ValueError(f"unsupported embedding policy: {policy or '<empty>'}")
+    return policy
 
 
 def _values_json(values: Sequence[str]) -> str:

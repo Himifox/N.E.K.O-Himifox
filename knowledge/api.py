@@ -19,12 +19,31 @@ from .moegirl_knowledge.store import (
     MoegirlKnowledgeStore as KnowledgeStore,
 )
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
+from .prebuilt_index import (
+    MAX_PREBUILT_CHUNKS,
+    MAX_PREBUILT_MANIFEST_BYTES,
+    MAX_PREBUILT_VECTOR_BYTES,
+    PREBUILT_DIMENSIONS,
+    PREBUILT_ENCODING,
+    PREBUILT_INDEX_SCHEMA_VERSION,
+    PREBUILT_MODEL_ID,
+    PREBUILT_VECTOR_ROW_BYTES,
+    PrebuiltChunkReference,
+    PrebuiltIndexArtifacts,
+    ValidatedPrebuiltIndex,
+    build_prebuilt_index_artifacts,
+    canonical_prebuilt_manifest_bytes,
+    validate_prebuilt_index,
+)
 from .routing import ContextHint
 from .subscriptions import (
+    INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
     SUBSCRIPTION_PROTOCOL_VERSION,
+    IndexedKnowledgeSubscription,
     KnowledgeSubscription,
     canonical_pack_bytes,
     load_canonical_pack_artifact,
+    validate_indexed_subscription,
     validate_subscription,
 )
 from .service import (
@@ -44,6 +63,8 @@ def open_knowledge(knowledge_root: str | Path) -> KnowledgeService:
 __all__ = [
     "CollectionSpec",
     "ContextHint",
+    "INDEXED_SUBSCRIPTION_PROTOCOL_VERSION",
+    "IndexedKnowledgeSubscription",
     "KnowledgeEntry",
     "KnowledgeHit",
     "KnowledgeMentionMatcher",
@@ -57,12 +78,27 @@ __all__ = [
     "KnowledgeTurnContext",
     "MaterialRoute",
     "MatchPolicy",
+    "MAX_PREBUILT_CHUNKS",
+    "MAX_PREBUILT_MANIFEST_BYTES",
+    "MAX_PREBUILT_VECTOR_BYTES",
     "PackInstallResult",
+    "PREBUILT_DIMENSIONS",
+    "PREBUILT_ENCODING",
+    "PREBUILT_INDEX_SCHEMA_VERSION",
+    "PREBUILT_MODEL_ID",
+    "PREBUILT_VECTOR_ROW_BYTES",
+    "PrebuiltChunkReference",
+    "PrebuiltIndexArtifacts",
     "ResponsePolicy",
     "SUBSCRIPTION_PROTOCOL_VERSION",
     "UpsertResult",
+    "ValidatedPrebuiltIndex",
+    "build_prebuilt_index_artifacts",
     "canonical_pack_bytes",
+    "canonical_prebuilt_manifest_bytes",
     "load_canonical_pack_artifact",
     "open_knowledge",
+    "validate_indexed_subscription",
+    "validate_prebuilt_index",
     "validate_subscription",
 ]

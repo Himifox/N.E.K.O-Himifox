@@ -91,7 +91,9 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
             statuses = await asyncio.gather(
                 *(asyncio.to_thread(store.chunk_status) for store in stores)
             )
-            ready_vectors = sum(int(status.get("chunks_ready", 0)) for status in statuses)
+            ready_vectors = sum(
+                int(status.get("chunks_ready", 0)) for status in statuses
+            )
             blocked = False
             job_touched = False
             while remaining > 0:
@@ -154,6 +156,9 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
             statuses = await asyncio.gather(
                 *(asyncio.to_thread(store.chunk_status) for store in stores)
             )
+            local_work = await asyncio.gather(
+                *(asyncio.to_thread(store.has_embedding_work) for store in stores)
+            )
             if ready_vectors >= MAX_READY_VECTOR_CHUNKS:
                 backlog = False
 
@@ -169,12 +174,12 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     )
                 memory_delta_reported = True
 
-            if any(
-                int(status.get("entries_missing_chunks", 0)) > 0
-                or int(status.get("chunks_pending", 0)) > 0
-                or int(status.get("chunks_stale", 0)) > 0
-                or int(status.get("chunks_failed_retryable_now", 0)) > 0
-                for status in statuses
+            if (
+                any(
+                    int(status.get("entries_missing_chunks", 0)) > 0
+                    for status in statuses
+                )
+                or any(local_work)
             ) and ready_vectors < MAX_READY_VECTOR_CHUNKS:
                 if not blocked and not pending_jobs:
                     backlog = True
