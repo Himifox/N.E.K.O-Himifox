@@ -64,6 +64,30 @@ class PackPreflight:
     estimated_working_bytes: int
 
 
+def pack_payload(pack: KnowledgePack) -> dict[str, object]:
+    """Return the sole publishable five-field payload for a validated pack."""
+    return {
+        "schema_version": pack.schema_version,
+        "pack_id": pack.pack_id,
+        "collection_id": pack.collection_id,
+        "source": {
+            "name": pack.source.name,
+            "homepage": pack.source.homepage,
+            "license": pack.source.license,
+        },
+        "entries": [
+            {
+                "title": entry.title,
+                "terms": {role: list(values) for role, values in entry.terms.items()},
+                "tags": [tag for tag in entry.tags if not tag.startswith("source:")],
+                "summary": entry.summary,
+                "content": entry.content,
+            }
+            for entry in pack.entries
+        ],
+    }
+
+
 def get_pack_registry_path(database_path: str | Path) -> Path:
     return Path(database_path).with_name("packs.json")
 

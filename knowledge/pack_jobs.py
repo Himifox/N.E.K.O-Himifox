@@ -17,6 +17,7 @@ from .packs import (
     KnowledgePack,
     ensure_install_capacity,
     install_pack,
+    pack_payload,
     preflight_pack,
     validate_pack,
 )
@@ -43,26 +44,8 @@ def _state_path(job_dir: Path) -> Path:
 
 
 def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
-    return {
-        "schema_version": pack.schema_version,
-        "pack_id": pack.pack_id,
-        "collection_id": pack.collection_id,
-        "source": {
-            "name": pack.source.name,
-            "homepage": pack.source.homepage,
-            "license": pack.source.license,
-        },
-        "entries": [
-            {
-                "title": entry.title,
-                "terms": {role: list(values) for role, values in entry.terms.items()},
-                "tags": [tag for tag in entry.tags if not tag.startswith("source:")],
-                "summary": entry.summary,
-                "content": entry.content,
-            }
-            for entry in pack.entries
-        ],
-    }
+    """Compatibility wrapper for older internal callers and tests."""
+    return pack_payload(pack)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

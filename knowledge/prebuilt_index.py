@@ -11,8 +11,8 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from .chunking import CHUNKER_VERSION, EMBEDDING_INPUT_VERSION, derive_knowledge_chunks
-from .packs import MAX_PACK_BYTES, KnowledgePack, validate_pack
-from .subscriptions import load_canonical_pack_artifact
+from .packs import MAX_PACK_BYTES, KnowledgePack, pack_payload, validate_pack
+from .subscriptions import canonical_pack_bytes, load_canonical_pack_artifact
 
 
 PREBUILT_INDEX_SCHEMA_VERSION = 1
@@ -241,6 +241,8 @@ def _load_pack_and_chunks(pack_artifact: bytes):
     if len(pack_artifact) > MAX_PACK_BYTES:
         raise ValueError("knowledge pack exceeds the size limit")
     pack = validate_pack(load_canonical_pack_artifact(pack_artifact))
+    if canonical_pack_bytes(pack_payload(pack)) != pack_artifact:
+        raise ValueError("knowledge pack is not validation-stable canonical JSON")
     chunks = tuple(
         chunk
         for entry in pack.entries
