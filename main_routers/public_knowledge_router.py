@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 
 from knowledge.api import open_knowledge
 from knowledge.diagnostics import (
@@ -21,9 +21,17 @@ from knowledge.moegirl_knowledge.catalog_overrides import (
 )
 from knowledge.moegirl_knowledge.source_registry import get_source
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
+from knowledge.prebuilt_index import (
+    MAX_PREBUILT_MANIFEST_BYTES,
+    MAX_PREBUILT_VECTOR_BYTES,
+    validate_prebuilt_index,
+)
 from knowledge.subscriptions import (
+    INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
     SUBSCRIPTION_PROTOCOL_VERSION,
     canonical_pack_bytes,
+    load_canonical_pack_artifact,
+    validate_indexed_subscription,
     validate_subscription,
 )
 from main_routers.shared_state import get_config_manager
@@ -31,6 +39,20 @@ from main_routers.shared_state import get_config_manager
 
 router = APIRouter(prefix="/api/public-knowledge", tags=["public-knowledge"])
 _PACK_ENVELOPE_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = await upload.read(64 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise ValueError("uploaded knowledge artifact exceeds the size limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _service():
@@ -354,6 +376,91 @@ async def apply_public_knowledge_subscription(request: Request):
     }
 
 
+@router.post("/subscriptions/apply-v2")
+async def apply_indexed_public_knowledge_subscription(
+    request: Request,
+    protocol_version: int = Form(...),
+    subscription: str = Form(...),
+    index_fallback_reason: str = Form(default=""),
+    pack: UploadFile = File(...),
+    index_manifest: UploadFile | None = File(default=None),
+    vectors: UploadFile | None = File(default=None),
+):
+    """Accept trusted-market raw knowledge plus an optional verified cache."""
+    rejected = _validate_mutation(request, {})
+    if rejected is not None:
+        return rejected
+    if protocol_version != INDEXED_SUBSCRIPTION_PROTOCOL_VERSION:
+        return {"ok": False, "reason": "unsupported_protocol"}
+    try:
+        subscription_payload = json.loads(subscription)
+        indexed_subscription = validate_indexed_subscription(subscription_payload)
+        if indexed_subscription.provider != "plugin-market":
+            return {"ok": False, "reason": "untrusted_provider"}
+        pack_raw = await _read_upload_limited(pack, max_bytes=MAX_PACK_BYTES)
+        pack_payload = load_canonical_pack_artifact(pack_raw)
+        if hashlib.sha256(pack_raw).hexdigest() != indexed_subscription.artifact_sha256:
+            return {"ok": False, "reason": "artifact_hash_mismatch"}
+        knowledge_pack = validate_pack(pack_payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
+
+    manifest_raw: bytes | None = None
+    vectors_raw: bytes | None = None
+    fallback_reason = str(index_fallback_reason or "")[:80]
+    has_manifest = index_manifest is not None
+    has_vectors = vectors is not None
+    if has_manifest and has_vectors:
+        try:
+            manifest_raw = await _read_upload_limited(
+                index_manifest,
+                max_bytes=MAX_PREBUILT_MANIFEST_BYTES,
+            )
+            vectors_raw = await _read_upload_limited(
+                vectors,
+                max_bytes=MAX_PREBUILT_VECTOR_BYTES,
+            )
+            validate_prebuilt_index(
+                pack_raw,
+                manifest_raw,
+                vectors_raw,
+                expected_pack_sha256=indexed_subscription.artifact_sha256,
+                expected_manifest_sha256=indexed_subscription.index_manifest_sha256,
+                expected_vectors_sha256=indexed_subscription.vectors_sha256,
+            )
+            fallback_reason = ""
+        except (OSError, ValueError):
+            manifest_raw = None
+            vectors_raw = None
+            fallback_reason = "prebuilt_index_rejected"
+    elif has_manifest or has_vectors:
+        fallback_reason = "incomplete_index_upload"
+    elif indexed_subscription.index_manifest_sha256:
+        fallback_reason = fallback_reason or "index_artifact_missing"
+
+    try:
+        result = await asyncio.to_thread(
+            _service().stage_pack,
+            knowledge_pack,
+            subscription=indexed_subscription.to_dict(),
+            index_manifest=manifest_raw,
+            vectors=vectors_raw,
+            index_fallback_reason=fallback_reason,
+        )
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
+    return {
+        "ok": True,
+        "protocol_version": INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
+        "provider": indexed_subscription.provider,
+        "remote_id": indexed_subscription.remote_id,
+        "collection": result["collection_id"],
+        "source_tag": knowledge_pack.source_tag,
+        "entries": result["entries_total"],
+        **result,
+    }
+
+
 @router.post("/packs/jobs/cancel")
 async def cancel_public_knowledge_pack_job(request: Request):
     payload = await _json_payload(request)
@@ -388,6 +495,29 @@ async def set_public_knowledge_pack_auto_context(request: Request):
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "auto_context": enabled}
+
+
+@router.post("/packs/index-policy")
+async def set_public_knowledge_pack_index_policy(request: Request):
+    payload = await _json_payload(request)
+    rejected = _validate_mutation(request, payload)
+    if rejected is not None:
+        return rejected
+    collection = str(payload.get("collection") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    enabled = payload.get("local_embedding_enabled")
+    if not collection or not pack_id or not isinstance(enabled, bool):
+        return {"ok": False, "reason": "invalid_request"}
+    try:
+        await asyncio.to_thread(
+            _service().set_pack_index_policy,
+            collection,
+            pack_id,
+            local_embedding_enabled=enabled,
+        )
+    except ValueError:
+        return {"ok": False, "reason": "not_found"}
+    return {"ok": True, "local_embedding_enabled": enabled}
 
 
 @router.post("/packs/remove")
