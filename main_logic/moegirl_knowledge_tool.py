@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 from config.prompts.prompts_sys import _loc
@@ -48,6 +49,16 @@ _KNOWLEDGE_INTENT_TERMS = (
     "介绍",
     "what is",
     "explain",
+)
+_EXPLICIT_LOCAL_KNOWLEDGE_MARKERS = (
+    "query_public_knowledge",
+    "公共知识库",
+    "本地知识库",
+    "local public knowledge",
+)
+_EXPLICIT_QUERY_PREFIX = re.compile(
+    r"^(?:中|里|内)?\s*(?:查询|检索|搜索|查找|查一下|找一下|回答|请问)?\s*",
+    re.IGNORECASE,
 )
 
 
@@ -345,42 +356,63 @@ def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
     )
 
 
-async def build_public_knowledge_turn_context(user_text: str) -> str:
+def _extract_explicit_local_knowledge_query(user_text: str) -> str:
+    """Return the payload after an explicit local-knowledge route marker."""
+    folded = user_text.casefold()
+    matches = (
+        (folded.find(marker.casefold()), marker)
+        for marker in _EXPLICIT_LOCAL_KNOWLEDGE_MARKERS
+    )
+    positions = [(position, marker) for position, marker in matches if position >= 0]
+    if not positions:
+        return ""
+    position, marker = min(positions, key=lambda item: item[0])
+    query = user_text[position + len(marker) :].lstrip(" \t\r\n:：,，；;")
+    query = _EXPLICIT_QUERY_PREFIX.sub("", query, count=1)
+    query = query.lstrip(" \t\r\n:：,，；;")
+    return query.strip() or user_text.strip()
+
+
+async def build_public_knowledge_turn_context(
+    user_text: str,
+    *,
+    tool_calls_supported: bool = True,
+) -> str:
     """Resolve one turn-local card without leaking knowledge concerns into core."""
+    context_text = ""
     try:
         from config.moegirl_knowledge_settings import (
             MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
             MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
         )
 
-        if not MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
-            return ""
-        knowledge_root = get_config_manager().knowledge_dir
+        if MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
+            knowledge_root = get_config_manager().knowledge_dir
 
-        def _build_context():
-            return open_knowledge(knowledge_root).build_conversation_context(
-                user_text,
-                limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+            def _build_context():
+                return open_knowledge(knowledge_root).build_conversation_context(
+                    user_text,
+                    limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+                )
+
+            result = await asyncio.to_thread(_build_context)
+            context_text = result.text
+            from knowledge.diagnostics import record_knowledge_route
+
+            record_knowledge_route(
+                collection_id=result.collection_id,
+                entry_title=result.entry_title,
+                source_tag=result.source_tag,
+                match_mode=result.match_mode,
+                card_delivered=bool(result.text),
+                result="matched" if result.hit_count else "miss",
             )
-
-        result = await asyncio.to_thread(_build_context)
-        from knowledge.diagnostics import record_knowledge_route
-
-        record_knowledge_route(
-            collection_id=result.collection_id,
-            entry_title=result.entry_title,
-            source_tag=result.source_tag,
-            match_mode=result.match_mode,
-            card_delivered=bool(result.text),
-            result="matched" if result.hit_count else "miss",
-        )
-        logger.info(
-            "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
-            result.hit_count,
-            result.match_mode,
-            result.collection_id or "none",
-        )
-        return result.text
+            logger.info(
+                "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
+                result.hit_count,
+                result.match_mode,
+                result.collection_id or "none",
+            )
     except Exception as exc:
         logger.warning(
             "[public-knowledge] automatic turn context failed: %s",
@@ -392,4 +424,31 @@ async def build_public_knowledge_turn_context(user_text: str) -> str:
             record_knowledge_route(result="error", error_type=type(exc).__name__)
         except Exception:
             pass
+
+    if context_text or tool_calls_supported:
+        return context_text
+
+    fallback_query = _extract_explicit_local_knowledge_query(user_text)
+    if not fallback_query:
+        return ""
+    logger.info(
+        "[public-knowledge] host fallback owns explicit request; query_chars=%d",
+        len(fallback_query),
+    )
+    try:
+        return await handle_public_knowledge_call(
+            {
+                "query": fallback_query,
+                "collection": "all",
+                "mode": "lookup",
+                "material_type": "auto",
+                "limit": 3,
+            },
+            language="",
+        )
+    except Exception as exc:
+        logger.warning(
+            "[public-knowledge] host fallback failed: %s",
+            type(exc).__name__,
+        )
         return ""
