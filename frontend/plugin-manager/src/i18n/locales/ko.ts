@@ -61,6 +61,9 @@ export default {
     previous: '이전', next: '다음', packId: '팩 ID', subscription: '구독 출처', localImport: '로컬 가져오기',
     importPack: '지식 팩 가져오기', diagnostics: '최근 일치', time: '시간', collection: '컬렉션', matchMode: '일치 방식',
     delivered: '카드 전달', yes: '예', no: '아니요', terms: '인식어', tags: '태그', content: '본문',
+    indexStatus: '벡터 인덱스', indexOrigin: '인덱스 출처', indexTrust: '신뢰 상태', indexValidation: '검증 상태', indexFallback: '대체 방식',
+    localEmbeddingState: '로컬 유지 상태', allowLocalEmbedding: '로컬 벡터 유지 허용', enabled: '활성화', disabledState: '비활성화',
+    indexPolicyHint: '로컬 CPU와 메모리를 사용할 수 있습니다. 끄면 신뢰할 수 있는 인덱스를 사용할 수 없을 때 BM25로 대체됩니다.',
     loadFailed: '지식 데이터를 불러오지 못했습니다', operationFailed: '지식 작업에 실패했습니다', importSuccess: '지식 팩을 가져왔습니다', importQueued: '지식 팩을 백그라운드에서 준비 중이며 완료되면 자동으로 사용할 수 있습니다',
     invalidPack: '잘못된 지식 팩입니다', removeConfirm: '지식 팩 {name}을(를) 제거할까요?'
   },

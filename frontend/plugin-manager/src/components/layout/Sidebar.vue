@@ -196,4 +196,12 @@ onMounted(() => {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+
+@media (max-width: 640px) {
+  .sidebar { padding-inline: 6px; }
+  .sidebar-brand { justify-content: center; padding-inline: 0; }
+  .sidebar-brand__text, .nav-item__label, .nav-group-label { display: none; }
+  .nav-item, .nav-item--sub { justify-content: center; padding-inline: 10px; }
+  .nav-divider { margin-inline: 8px; }
+}
 </style>

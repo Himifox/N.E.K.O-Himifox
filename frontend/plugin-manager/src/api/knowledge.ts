@@ -75,15 +75,34 @@ export interface KnowledgeEntrySummary {
   source: { tag: string; name: string; homepage: string; license: string }
 }
 
+export interface KnowledgePackSummary {
+  pack_id: string
+  entries?: number
+  auto_context?: boolean
+  subscription?: { provider: string; version: string }
+  index_origin?: string
+  index_trust?: string
+  index_validation?: string
+  index_fallback_reason?: string
+  local_embedding_enabled?: boolean
+}
+
+export interface KnowledgePackIndexPolicy {
+  collection: string
+  pack_id: string
+  local_embedding_enabled: boolean
+}
+
 export const knowledgeApi = {
   collections: () => request<{ ok: boolean; collections: KnowledgeCollection[] }>('collections'),
   entries: (params: any) => request<any>('entries', { params }),
   entry: (params: any) => request<any>('entry', { params }),
   setEntryDisabled: (data: any) => request<any>('entry/disabled', { method: 'POST', data }),
   setCollectionAutoContext: (data: any) => request<any>('collection/auto-context', { method: 'POST', data }),
-  packs: (collection: string) => request<any>('packs', { params: { collection } }),
+  packs: (collection: string) => request<{ ok: boolean; packs: KnowledgePackSummary[] }>('packs', { params: { collection } }),
   importPack: (pack: any) => request<any>('packs/import', { method: 'POST', data: { pack } }),
   setPackAutoContext: (data: any) => request<any>('packs/auto-context', { method: 'POST', data }),
+  setPackIndexPolicy: (data: KnowledgePackIndexPolicy) => request<KnowledgeEnvelope>('packs/index-policy', { method: 'POST', data }),
   removePack: (data: any) => request<any>('packs/remove', { method: 'POST', data }),
   diagnostics: () => request<any>('diagnostics/recent'),
 }

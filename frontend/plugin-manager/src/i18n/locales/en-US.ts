@@ -61,6 +61,9 @@ export default {
     previous: 'Previous', next: 'Next', packId: 'Pack ID', subscription: 'Subscription', localImport: 'Local import',
     importPack: 'Import knowledge pack', diagnostics: 'Recent matches', time: 'Time', collection: 'Collection', matchMode: 'Match mode',
     delivered: 'Card delivered', yes: 'Yes', no: 'No', terms: 'Recognition terms', tags: 'Tags', content: 'Content',
+    indexStatus: 'Vector index', indexOrigin: 'Origin', indexTrust: 'Trust', indexValidation: 'Validation', indexFallback: 'Fallback',
+    localEmbeddingState: 'Local maintenance', allowLocalEmbedding: 'Allow local vector maintenance', enabled: 'Enabled', disabledState: 'Disabled',
+    indexPolicyHint: 'May use local CPU and memory. If disabled, an unavailable trusted index falls back to BM25.',
     loadFailed: 'Failed to load knowledge data', operationFailed: 'Knowledge operation failed', importSuccess: 'Knowledge pack imported', importQueued: 'Knowledge pack is being prepared quietly and will appear when ready',
     invalidPack: 'Invalid knowledge pack', removeConfirm: 'Remove knowledge pack {name}?'
   },

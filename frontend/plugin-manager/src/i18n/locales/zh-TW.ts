@@ -61,6 +61,9 @@ export default {
     previous: '上一頁', next: '下一頁', packId: '資料包 ID', subscription: '訂閱來源', localImport: '本機匯入',
     importPack: '匯入知識包', diagnostics: '最近命中', time: '時間', collection: '知識庫', matchMode: '匹配方式',
     delivered: '已遞卡', yes: '是', no: '否', terms: '識別詞', tags: '標籤', content: '正文',
+    indexStatus: '向量索引', indexOrigin: '索引來源', indexTrust: '信任狀態', indexValidation: '驗證狀態', indexFallback: '降級方式',
+    localEmbeddingState: '本機維護狀態', allowLocalEmbedding: '允許本機維護向量', enabled: '已啟用', disabledState: '已停用',
+    indexPolicyHint: '可能使用本機 CPU 與記憶體；停用後，可信索引不可用時將降級為 BM25。',
     loadFailed: '知識庫資料載入失敗', operationFailed: '知識庫操作失敗', importSuccess: '知識包匯入成功', importQueued: '知識包正在背景靜默處理，準備完成後會自動載入',
     invalidPack: '知識包格式無效', removeConfirm: '確定移除知識包 {name} 嗎？'
   },

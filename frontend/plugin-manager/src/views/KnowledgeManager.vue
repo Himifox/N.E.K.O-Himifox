@@ -105,9 +105,34 @@
               {{ scope.row.subscription ? `${scope.row.subscription.provider} · ${scope.row.subscription.version}` : t('knowledge.localImport') }}
             </template>
           </el-table-column>
+          <el-table-column :label="t('knowledge.indexStatus')" min-width="280">
+            <template #default="scope">
+              <dl class="index-status-list">
+                <div><dt>{{ t('knowledge.indexOrigin') }}</dt><dd>{{ displayIndexValue(scope.row.index_origin) }}</dd></div>
+                <div><dt>{{ t('knowledge.indexTrust') }}</dt><dd>{{ displayIndexValue(scope.row.index_trust) }}</dd></div>
+                <div><dt>{{ t('knowledge.indexValidation') }}</dt><dd>{{ displayIndexValue(scope.row.index_validation) }}</dd></div>
+                <div><dt>{{ t('knowledge.indexFallback') }}</dt><dd>{{ displayIndexValue(scope.row.index_fallback_reason) }}</dd></div>
+                <div>
+                  <dt>{{ t('knowledge.localEmbeddingState') }}</dt>
+                  <dd>{{ scope.row.local_embedding_enabled ? t('knowledge.enabled') : t('knowledge.disabledState') }}</dd>
+                </div>
+              </dl>
+            </template>
+          </el-table-column>
           <el-table-column :label="t('knowledge.autoContext')" width="130">
             <template #default="scope">
               <el-switch :model-value="scope.row.auto_context === true" @change="setPackAuto(scope.row, Boolean($event))" />
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('knowledge.allowLocalEmbedding')" min-width="170">
+            <template #default="scope">
+              <el-tooltip :content="t('knowledge.indexPolicyHint')" placement="top">
+                <el-switch
+                  :model-value="scope.row.local_embedding_enabled === true"
+                  :aria-label="t('knowledge.allowLocalEmbedding')"
+                  @change="setPackIndexPolicy(scope.row, Boolean($event))"
+                />
+              </el-tooltip>
             </template>
           </el-table-column>
           <el-table-column :label="t('knowledge.actions')" width="110">
@@ -150,7 +175,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { knowledgeApi, type KnowledgeCollection, type KnowledgeEntrySummary } from '@/api/knowledge'
+import { knowledgeApi, type KnowledgeCollection, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { openExternalUrl } from '@/utils/openExternal'
@@ -173,7 +198,7 @@ const pageSize = 50
 const hasMore = ref(false)
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
-const packs = ref<any[]>([])
+const packs = ref<KnowledgePackSummary[]>([])
 const packsLoading = ref(false)
 const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
@@ -290,10 +315,26 @@ async function importSelectedPack(event: Event) {
   } catch { ElMessage.error(t('knowledge.invalidPack')) }
 }
 
-async function setPackAuto(row: any, enabled: boolean) {
+async function setPackAuto(row: KnowledgePackSummary, enabled: boolean) {
   try {
     await knowledgeApi.setPackAutoContext({ collection: selectedCollection.value, pack_id: row.pack_id, enabled })
     row.auto_context = enabled
+  } catch { ElMessage.error(t('knowledge.operationFailed')) }
+}
+
+function displayIndexValue(value: unknown): string {
+  const text = String(value ?? '').trim()
+  return text || t('common.nA')
+}
+
+async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
+  try {
+    await knowledgeApi.setPackIndexPolicy({
+      collection: selectedCollection.value,
+      pack_id: row.pack_id,
+      local_embedding_enabled: enabled,
+    })
+    row.local_embedding_enabled = enabled
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -327,10 +368,10 @@ onMounted(() => {
 
 <style scoped>
 .knowledge-manager { padding: 24px; display: flex; flex-direction: column; gap: 18px; }
-.market-entry { display: flex; align-items: center; gap: 12px; }
-.market-entry .el-alert { flex: 1; }
+.market-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; }
+.market-entry .el-alert { flex: 1 1 320px; min-width: 0; }
 .market-login-hint { color: var(--el-text-color-secondary); font-size: 13px; }
-.page-heading, .card-heading, .switch-row, .toolbar, .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.page-heading, .card-heading, .switch-row, .toolbar, .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .page-heading h1 { margin: 0 0 6px; }
 .page-heading p { margin: 0; color: var(--el-text-color-secondary); }
 .collection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
@@ -340,7 +381,16 @@ dt { color: var(--el-text-color-secondary); font-size: 12px; } dd { margin: 4px 
 .switch-row { margin-top: 14px; }
 .source-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
 .toolbar { justify-content: flex-start; margin-bottom: 14px; }
-.toolbar .el-select { width: 210px; } .toolbar .el-input { max-width: 480px; }
+.toolbar .el-select { width: min(210px, 100%); } .toolbar .el-input { min-width: 0; max-width: 480px; }
 .pager { justify-content: flex-end; margin-top: 14px; }
+.index-status-list { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 0; }
+.index-status-list div { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 8px; padding: 0; background: transparent; }
+.index-status-list dt { font-size: 12px; }
+.index-status-list dd { min-width: 0; margin: 0; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border-radius: 8px; background: var(--el-fill-color-light); }
+@media (max-width: 640px) {
+  .knowledge-manager { padding: 16px; }
+  .market-entry .el-alert, .market-entry .el-button { flex-basis: 100%; width: 100%; margin-left: 0; }
+  .toolbar .el-input, .toolbar .el-select, .toolbar .el-button { width: 100%; max-width: none; }
+}
 </style>

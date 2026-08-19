@@ -61,6 +61,9 @@ export default {
     previous: 'Anterior', next: 'Siguiente', packId: 'ID del paquete', subscription: 'Suscripción', localImport: 'Importación local',
     importPack: 'Importar paquete', diagnostics: 'Coincidencias recientes', time: 'Hora', collection: 'Colección', matchMode: 'Modo de coincidencia',
     delivered: 'Tarjeta enviada', yes: 'Sí', no: 'No', terms: 'Términos', tags: 'Etiquetas', content: 'Contenido',
+    indexStatus: 'Índice vectorial', indexOrigin: 'Origen', indexTrust: 'Confianza', indexValidation: 'Validación', indexFallback: 'Modo alternativo',
+    localEmbeddingState: 'Mantenimiento local', allowLocalEmbedding: 'Permitir mantenimiento local de vectores', enabled: 'Activado', disabledState: 'Desactivado',
+    indexPolicyHint: 'Puede usar CPU y memoria locales. Si se desactiva, se usa BM25 cuando el índice de confianza no está disponible.',
     loadFailed: 'No se pudieron cargar los datos', operationFailed: 'La operación falló', importSuccess: 'Paquete importado', importQueued: 'El paquete se está preparando en segundo plano y aparecerá cuando esté listo',
     invalidPack: 'Paquete no válido', removeConfirm: '¿Eliminar el paquete {name}?'
   },
