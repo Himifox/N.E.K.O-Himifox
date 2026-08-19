@@ -546,6 +546,20 @@ class NekoOpenBiliClawRuntime:
             await self._require_healthy_core().preview_recommendations(limit=limit)
         )
 
+    async def preview_proactive_candidates(
+        self,
+        *,
+        limit: int = 3,
+        explicit_context_texts: tuple[str, ...] = (),
+    ) -> list[Any]:
+        """Read privacy-bounded candidates without consuming pool rows."""
+        return list(
+            await self._require_healthy_core().preview_proactive_candidates(
+                limit=max(0, min(3, int(limit))),
+                explicit_context_texts=explicit_context_texts[-3:],
+            )
+        )
+
     async def record_recommendation_delivery(
         self,
         recommendation: Any,

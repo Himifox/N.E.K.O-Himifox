@@ -194,9 +194,10 @@ async def _acknowledge_openbiliclaw_delivery(
         or not _is_link_selected(selected_web_link, source_links)
     ):
         return
-    recommendation = selected_web_link.get("_openbiliclaw_recommendation")
-    if recommendation is None:
+    envelope = selected_web_link.get("_openbiliclaw_candidate")
+    if envelope is None:
         return
+    recommendation = envelope.tracking.delivery_ref
     try:
         from app.openbiliclaw_runtime import get_openbiliclaw_runtime
 
