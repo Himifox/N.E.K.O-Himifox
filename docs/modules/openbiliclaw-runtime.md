@@ -59,23 +59,32 @@ schemas and must not share a store merely because both are called embeddings.
 
 ```text
 OpenBiliClaw background → N.E.K.O-managed model route → structured pool
-N.E.K.O proactive chat → preview (no LLM/no consume) → existing Phase 1
-                      → existing Phase 2 (only visible voice)
+N.E.K.O proactive chat → privacy gate + three-layer preview (no LLM/no consume)
+                      → existing Phase 1 (up to 3 semantic projections)
+                      → existing Phase 2 (one four-field projection; only visible voice)
                       → successful delivery → acknowledge shown
 ```
 
 - A healthy Core previews at most three evaluated, copy-ready candidates per
   round. Preview does not refresh sources, call an LLM, or write display history.
-- One slot in the existing Phase 1 total budget is reserved for OpenBiliClaw;
-  other sources continue round-robin. No second Phase 1 is introduced.
+- Up to three OpenBiliClaw candidates are placed first within the existing
+  Phase 1 total budget; other sources fill the remaining slots. No second
+  Phase 1 is introduced, and selection binds by the displayed sequence number.
 - Phase 2 continues to use N.E.K.O persona, memory, and language settings for
   the final line. Normal chat, proactive chat, and tools do not call
   `core.chat()`; it remains for Web, CLI, and compatibility clients.
 - Only the selected, successfully committed candidate is acknowledged. `[PASS]`,
   takeover, delivery failure, degraded Core, empty pool, or preview timeout do
   not consume it and do not block the remaining proactive sources.
-- Prompts receive bounded candidate fields—not the full OpenBiliClaw profile—so
-  the two memory systems do not overwrite one another.
+- Phase 1 receives only title/topic/summary/why-now, aggregate reason codes, and
+  bounded selection metadata. Phase 2 receives exactly the selected
+  title/topic/summary/why-now. URLs, candidate/item IDs, delivery references,
+  free-form recommendation copy, full profiles, and raw behavior stay outside
+  both prompts. OpenBiliClaw candidates bypass the generic Bilibili scraper.
+- The last three user messages may be read from active in-memory chat state only
+  for Core's deterministic sensitive-topic gate. They are not persisted or
+  sent to a model. Sensitive browsing inferences are rejected; an explicit
+  current topic or user subscription permits only neutral updates.
 
 The browser extension remains OpenBiliClaw's collection and browser-session
 “hands.” N.E.K.O's plugin system and MCP do not need to be enabled, but the

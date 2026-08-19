@@ -86,15 +86,17 @@
                                       └─ NekoManagedLLMProvider
                                          → 当前 conversation 模型路由
 
-主动聊天 → 无模型 preview（最多 3 条）→ 现有 Phase 1（固定 1 个候选槽位）
-        → 现有 Phase 2（NEKO 人设 / 记忆 / 语言）→ 唯一用户可见台词
-        → 文本成功提交且选中该链接 → record_recommendation_delivery
+主动聊天 → 聚合兴趣 + 敏感门禁 → Tracking / Phase 1 / Phase 2 三层
+        → 现有 Phase 1（最多 3 条 OBC 语义投影，按序号选 1 条）
+        → 现有 Phase 2（只接收该条 4 字段投影）→ 唯一用户可见台词
+        → 文本成功提交且响应包含该链接 → Tracking 引用确认展示
 ```
 
 OpenBiliClaw 的后台画像与内容评估可以产生独立模型请求，但模型路由、凭据和总 Token
 统计由 NEKO 管理。`core.chat()` 不进入正常或主动聊天链。预览不消费候选；任何
 `[PASS]`、抢占、发送失败、空池或降级都不会确认展示。完整 OpenBiliClaw 画像不会进入
-Phase 1/2 prompt，内容向量库与 NEKO 角色记忆向量库也继续独立。
+Phase 1/2 prompt；URL 和内部身份只由投递代码使用。内容向量库与 NEKO 角色记忆
+向量库也继续独立。
 
 ## Agent 事件流
 

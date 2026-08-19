@@ -1,6 +1,13 @@
-# Plugin SDK Change Notes
+# Change Notes
 
-This collection explains significant plugin SDK changes that need migration context beyond the API reference. It is not the repository release changelog.
+This collection explains integration and plugin SDK changes that need migration
+context beyond the API reference. It is not the repository release changelog.
+
+## Built-in integrations
+
+- [OpenBiliClaw proactive candidate contract](./openbiliclaw-candidate-contract)
+
+## Plugin SDK
 
 - [`@llm_tool` decorator](./plugin-llm-tool-sdk)
 - [`push_message` v2](./plugin-push-message-v2)

@@ -64,6 +64,21 @@ The memory system keeps separate per-character layers for recent context, facts,
 
 Optional embedding inference is local CPU ONNX, but that does not make the LLM-based maintenance tasks local. Read [Memory System](/architecture/memory-system) for the current runtime contract.
 
+## OpenBiliClaw proactive recommendation boundary
+
+The built-in Core keeps browser-extension behavior and its content profile in
+OpenBiliClaw storage. A proactive preview sends neither the full profile nor raw
+browser/saved/watch-later records to N.E.K.O's models. Phase 1 sees at most three
+bounded semantic candidates; Phase 2 sees only the selected title, topic,
+summary, and selection motive. URLs and delivery identities stay in code.
+
+For sensitive health, finance, politics, or religion topics, Core may inspect
+only the last three active-session user messages in memory to determine whether
+the user explicitly raised that topic. Those messages are not persisted by this
+handoff or sent to a model. Browsing-only sensitive inferences are rejected;
+diagnosis/treatment, investment trading advice, political persuasion, and faith
+inference are always rejected.
+
 ## Telemetry
 
 The repository README states that telemetry is enabled by default and collects operational categories such as:

@@ -78,6 +78,24 @@ Browser / Electron renderer
 
 Routers obtain long-lived managers through `main_routers/shared_state.py` getters. Agent control endpoints are Main Server proxies; browsers do not need direct access to port 48915.
 
+## Built-in OpenBiliClaw recommendation flow
+
+```text
+browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/pool
+proactive chat → aggregate evidence + sensitive gate → three-layer candidates
+               → existing Phase 1 (up to 3 semantic projections; select by number)
+               → existing Phase 2 (one title/topic/summary/why-now projection)
+               → committed text + delivered link → tracking-only acknowledgement
+```
+
+Tracking data, URLs, free-form OpenBiliClaw expression, full profiles, and raw
+behavior never enter Phase 1 or Phase 2 prompts. The active session's last three
+user messages may be checked in memory for deterministic sensitive-topic gating;
+they are not persisted or sent to a model. `[PASS]`, takeover, generation/TTS/
+frontend failure, empty pool, timeout, and degraded Core do not acknowledge a
+candidate. N.E.K.O remains the only user-visible speaker and never calls
+`core.chat()` in this product path.
+
 ## Agent event flow
 
 ```text

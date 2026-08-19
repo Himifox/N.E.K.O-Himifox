@@ -64,6 +64,19 @@ Memory system はキャラクターごとに Recent、Facts、Reflections、Pers
 
 オプションの Embedding inference は local CPU ONNX ですが、LLM を使う maintenance task まで自動的にローカルになるわけではありません。現在の runtime contract は[メモリシステム](/ja/architecture/memory-system)を参照してください。
 
+## OpenBiliClaw proactive recommendation boundary
+
+組み込み Core は browser-extension behavior と content profile を OpenBiliClaw の
+local storage に保持します。proactive preview は full profile、raw browsing、saved、
+watch-later record を N.E.K.O model に送りません。Phase 1 は最大 3 件の bounded
+semantic candidate、Phase 2 は選択 1 件の title/topic/summary/selection motive だけを
+受けます。URL と delivery identity は code layer に残ります。
+
+health、finance、politics、religion の gate は active session memory の直近 3 user
+message だけを確認できます。この handoff は message を永続化も model 送信もしません。
+browsing-only sensitive inference は拒否し、diagnosis/treatment、investment trading
+advice、political persuasion、faith inference は常に拒否します。
+
 ## Telemetry
 
 Repository README では Telemetry が既定で有効で、次のような運用カテゴリを収集すると説明しています。

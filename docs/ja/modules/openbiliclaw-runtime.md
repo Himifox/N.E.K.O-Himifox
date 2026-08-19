@@ -52,21 +52,28 @@ memory vector とは schema と意味が異なるため、同じ store を共有
 
 ```text
 OpenBiliClaw background → N.E.K.O-managed model route → structured pool
-N.E.K.O proactive chat → preview（LLM なし・非消費）→ 既存 Phase 1
-                      → 既存 Phase 2（唯一の表示台詞）
+N.E.K.O proactive chat → privacy gate + 3-layer preview（LLM なし・非消費）
+                      → 既存 Phase 1（最大 3 semantic projection）
+                      → 既存 Phase 2（選択 1 件の 4-field projection）
                       → delivery 成功 → shown を確認
 ```
 
 - healthy Core から 1 round 最大 3 件を preview します。preview は source refresh、
   LLM call、表示履歴 write を行いません。
-- 既存 Phase 1 の total budget に OpenBiliClaw 用 1 slot を予約し、他 source は
-  round-robin を継続します。二つ目の Phase 1 は追加しません。
+- 既存 Phase 1 の total budget 内で最大 3 件の OpenBiliClaw candidate を先に置き、
+  残りを他 source が埋めます。二つ目の Phase 1 は追加せず、表示番号で厳密に選択します。
 - 最終台詞は N.E.K.O の persona、memory、language を使う既存 Phase 2 だけが生成します。
   normal／proactive chat と tool chain は `core.chat()` を呼びません。
 - `[PASS]`、user takeover、delivery failure、degraded Core、empty pool、timeout では
   candidate を消費せず、他の proactive source も止めません。
-- prompt には bounded candidate fields だけを渡し、OpenBiliClaw の full profile は
-  注入しません。
+- Phase 1 は bounded semantics と aggregate reason code だけを受け、Phase 2 は選択した
+  title/topic/summary/why_now の 4 field だけを受けます。URL、candidate/item ID、delivery
+  reference、free-form expression、full profile、raw behavior は prompt に入りません。
+  OBC candidate は generic Bilibili scraper/formatter を通りません。
+- 直近 3 件の user message は deterministic sensitive-topic gate のため active session
+  memory からだけ読み、永続化も model 送信もしません。閲覧から推定した sensitive
+  interest は拒否し、current conversation または明示 subscription は neutral update
+  だけを許可します。
 
 browser extension は引き続き platform behavior と browser session を収集する「手足」です。
 N.E.K.O plugin system と MCP は不要ですが、extension 自体の install／設定は必要です。

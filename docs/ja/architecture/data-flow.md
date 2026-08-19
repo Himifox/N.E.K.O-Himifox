@@ -78,6 +78,22 @@ Browser / Electron renderer
 
 Router は `main_routers/shared_state.py` の getter から長寿命 manager を取得します。Agent 制御は Main Server proxy であり、ブラウザが 48915 に直接接続する必要はありません。
 
+## 組み込み OpenBiliClaw recommendation flow
+
+```text
+browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/pool
+proactive chat → aggregate evidence + sensitive gate → 3-layer candidate
+               → 既存 Phase 1（最大 3 semantic projection、番号で 1 件選択）
+               → 既存 Phase 2（選択 1 件の title/topic/summary/why-now）
+               → text と link の commit 成功 → tracking reference だけで確認
+```
+
+Tracking、URL、free-form expression、full profile、raw behavior は Phase 1/2 prompt
+に入りません。active session の直近 3 user message は deterministic sensitive gate
+のため memory 内だけで確認し、永続化も model 送信もしません。`[PASS]`、takeover、
+generation/TTS/frontend failure、empty/degraded/timeout は candidate を確認しません。
+N.E.K.O が唯一の user-visible speaker で、この経路は `core.chat()` を呼びません。
+
 ## Agent イベントフロー
 
 ```text
