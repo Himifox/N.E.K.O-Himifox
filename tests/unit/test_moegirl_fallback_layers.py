@@ -79,6 +79,43 @@ async def test_explicit_local_result_warns_when_usage_may_be_outdated(monkeypatc
     assert "caution: usage may be outdated" in result
 
 
+@pytest.mark.asyncio
+async def test_corpora_lookup_exposes_unlabelled_reference_content(monkeypatch, tmp_path):
+    knowledge_root = tmp_path / "knowledge"
+    database_path = knowledge_root / "corpora" / "knowledge.db"
+    from knowledge.service import KnowledgeService
+
+    store = MoegirlKnowledgeStore(database_path)
+    store.upsert(MoegirlKnowledgeEntry(
+        title="这个梗也太老了吧",
+        terms={"alias": (), "recognition": ("这个梗也太老了吧",)},
+        tags=("source:corpora", "dataset:dialogue-samples"),
+        summary="这是对话样例，不是事实来源。",
+        content="用户输入：这个梗也太老了吧\n参考回复：确实，这梗都快成 internet fossil 了。",
+    ))
+    monkeypatch.setattr(
+        knowledge_tool,
+        "get_config_manager",
+        lambda: SimpleNamespace(knowledge_dir=knowledge_root),
+    )
+    monkeypatch.setattr(
+        knowledge_tool,
+        "open_knowledge",
+        lambda _root: KnowledgeService(
+            knowledge_root,
+            database_paths={"corpora": database_path},
+        ),
+    )
+
+    result = await knowledge_tool.handle_public_knowledge_call(
+        {"collection": "corpora", "query": "这个梗也太老了吧"},
+        language="zh",
+    )
+
+    assert "参考回复" in result
+    assert "internet fossil" in result
+
+
 def test_normal_source_package_exports_only_local_importers():
     from knowledge.moegirl_knowledge import sources
 
