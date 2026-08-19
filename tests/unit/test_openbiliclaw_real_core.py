@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -205,3 +207,112 @@ async def test_pinned_core_builds_with_real_fastapi_adapter(
         assert response.json()["service"] == "openbiliclaw-api"
     finally:
         await runtime.stop()
+
+
+async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected() -> None:
+    from openbiliclaw import OpenBiliClawCore
+    from openbiliclaw.discovery.engine import DiscoveredContent
+    from openbiliclaw.recommendation.engine import Recommendation
+    from openbiliclaw.soul.profile import InterestTag, PreferenceLayer, SoulProfile
+    from main_logic.proactive_chat.openbiliclaw_candidate import (
+        format_phase1_candidate,
+        format_phase2_candidate,
+        project_openbiliclaw_candidate,
+    )
+
+    now = datetime.now(UTC)
+    profile = SoulProfile(
+        preferences=PreferenceLayer(
+            interests=[
+                InterestTag(
+                    name="Agent architecture",
+                    category="AI coding",
+                    state="active",
+                    evidence_count=8,
+                    first_seen=now - timedelta(days=45),
+                    last_seen=now - timedelta(days=1),
+                    last_evidence_at=(now - timedelta(days=1)).isoformat(),
+                )
+            ],
+            source_platform_mix={"bilibili": 1.0},
+        )
+    )
+    recommendations = [
+        Recommendation(
+            content=DiscoveredContent(
+                bvid=f"BV{index}",
+                title=f"Agent architecture topic {index}",
+                description=f"Structured summary {index}",
+                content_url=f"https://www.bilibili.com/video/BV{index}",
+                source_platform="bilibili",
+                author_name="Creator",
+                content_type="video",
+                temporal_class="current",
+                topic_group="Agent architecture",
+            ),
+            expression=f"private expression {index}",
+            topic_label="Agent architecture",
+            confidence=0.8,
+        )
+        for index in range(3)
+    ]
+    delivered: list[Recommendation] = []
+
+    class _Soul:
+        async def get_profile(self) -> SoulProfile:
+            return profile
+
+    class _Engine:
+        async def preview(self, *_args: object, **_kwargs: object) -> list[Recommendation]:
+            return recommendations
+
+        async def record_delivery(
+            self,
+            recommendation: Recommendation,
+            *,
+            surface: str,
+        ) -> int:
+            assert surface == "neko_proactive"
+            delivered.append(recommendation)
+            return len(delivered)
+
+    database = SimpleNamespace(
+        get_saved_topic_signals=lambda: {},
+        get_enabled_recipes=lambda: [],
+    )
+    core = OpenBiliClawCore.from_context(
+        SimpleNamespace(
+            soul_engine=_Soul(),
+            recommendation_engine=_Engine(),
+            database=database,
+            degraded=False,
+        )
+    )
+
+    candidates = await core.preview_proactive_candidates(limit=3)
+    envelopes = [
+        project_openbiliclaw_candidate(candidate, language="en")
+        for candidate in candidates
+    ]
+    phase1_prompt = "\n".join(
+        format_phase1_candidate(index, envelope)
+        for index, envelope in enumerate(envelopes, start=1)
+    )
+    phase2_prompt = format_phase2_candidate(envelopes[1], language="en")
+
+    assert len(envelopes) == 3
+    for forbidden in (
+        "candidate_id",
+        "item_key",
+        "delivery_ref",
+        "https://",
+        "private expression",
+    ):
+        assert forbidden not in phase1_prompt
+        assert forbidden not in phase2_prompt
+
+    await core.record_recommendation_delivery(
+        envelopes[1].tracking.delivery_ref,
+        surface="neko_proactive",
+    )
+    assert delivered == [recommendations[1]]

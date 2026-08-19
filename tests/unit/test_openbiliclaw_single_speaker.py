@@ -16,6 +16,9 @@ import pytest
 from app import openbiliclaw_runtime
 from main_logic.proactive_chat import candidate_selection, delivery, sources
 from main_logic.proactive_chat.contracts import ProactiveChatCommand
+from main_logic.proactive_chat.openbiliclaw_candidate import (
+    project_openbiliclaw_candidate,
+)
 
 
 class _DynamicConfigManager:
@@ -214,22 +217,35 @@ async def test_managed_provider_does_not_call_public_free_route(
 async def test_openbiliclaw_source_is_structured_and_preview_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recommendation = SimpleNamespace(
-        content=SimpleNamespace(
+    recommendation = object()
+    candidate = SimpleNamespace(
+        tracking=SimpleNamespace(
+            candidate_id="obc:1234",
+            item_key="bilibili:BV1",
+            url="https://example/video",
+            expires_at=None,
+            delivery_ref=recommendation,
+        ),
+        semantics=SimpleNamespace(
             title="A useful video",
-            content_url="https://example/video",
+            topic="Systems thinking",
+            summary="A bounded summary",
+            reason_codes=("recent_interest",),
             source_platform="bilibili",
             author_name="Creator",
-            up_name="",
-            item_key="bilibili:BV1",
+            content_type="video",
+            confidence=0.91,
+            freshness="recent",
         ),
-        expression="Matches your current interest",
-        topic_label="Systems thinking",
-        confidence=0.91,
+        policy=SimpleNamespace(
+            sensitivity="none",
+            proactive_policy="allow",
+            why_now_source="aggregated_interest",
+        ),
     )
     runtime = SimpleNamespace(
         proactive_available=True,
-        preview_recommendations=AsyncMock(return_value=[recommendation]),
+        preview_proactive_candidates=AsyncMock(return_value=[candidate]),
     )
     monkeypatch.setattr(
         openbiliclaw_runtime,
@@ -245,23 +261,21 @@ async def test_openbiliclaw_source_is_structured_and_preview_only(
     )
 
     assert mode == "openbiliclaw"
-    runtime.preview_recommendations.assert_awaited_once_with(limit=3)
-    assert payload["links"][0] == {
+    runtime.preview_proactive_candidates.assert_awaited_once_with(
+        limit=3,
+        explicit_context_texts=(),
+    )
+    link = payload["links"][0]
+    assert {key: link[key] for key in ("title", "url", "source", "mode")} == {
         "title": "A useful video",
         "url": "https://example/video",
         "source": "OpenBiliClaw",
         "mode": "openbiliclaw",
-        "platform": "bilibili",
-        "author": "Creator",
-        "reason": "Matches your current interest",
-        "topic_label": "Systems thinking",
-        "confidence": 0.91,
-        "item_key": "bilibili:BV1",
-        "_openbiliclaw_recommendation": recommendation,
     }
+    assert link["_openbiliclaw_candidate"].tracking.delivery_ref is recommendation
 
 
-def test_phase1_reserves_exactly_one_openbiliclaw_slot(
+def test_phase1_reserves_up_to_three_openbiliclaw_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
@@ -293,14 +307,42 @@ def test_phase1_reserves_exactly_one_openbiliclaw_slot(
         reserved_mode="openbiliclaw",
     )
 
-    assert len(selected["openbiliclaw"]) == 1
-    assert len(selected["personal"]) + len(selected["news"]) == 4
+    assert len(selected["openbiliclaw"]) == 3
+    assert len(selected["personal"]) + len(selected["news"]) == 2
 
 
 async def test_delivery_acknowledges_only_the_committed_openbiliclaw_link(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recommendation = object()
+    envelope = project_openbiliclaw_candidate(
+        SimpleNamespace(
+            tracking=SimpleNamespace(
+                candidate_id="obc:chosen",
+                item_key="bilibili:chosen",
+                url="https://example/chosen",
+                expires_at=None,
+                delivery_ref=recommendation,
+            ),
+            semantics=SimpleNamespace(
+                title="Chosen",
+                topic="Topic",
+                summary="Summary",
+                reason_codes=("recent_interest",),
+                source_platform="bilibili",
+                author_name="Author",
+                content_type="video",
+                confidence=0.8,
+                freshness="recent",
+            ),
+            policy=SimpleNamespace(
+                sensitivity="none",
+                proactive_policy="allow",
+                why_now_source="aggregated_interest",
+            ),
+        ),
+        language="en",
+    )
     runtime = SimpleNamespace(record_recommendation_delivery=AsyncMock(return_value=42))
     monkeypatch.setattr(
         openbiliclaw_runtime,
@@ -312,7 +354,7 @@ async def test_delivery_acknowledges_only_the_committed_openbiliclaw_link(
         "url": "https://example/chosen",
         "source": "OpenBiliClaw",
         "mode": "openbiliclaw",
-        "_openbiliclaw_recommendation": recommendation,
+        "_openbiliclaw_candidate": envelope,
     }
     log = SimpleNamespace(
         info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None
