@@ -60,6 +60,14 @@ _EXPLICIT_QUERY_PREFIX = re.compile(
     r"^(?:中|里|内)?\s*(?:查询|检索|搜索|查找|查一下|找一下|回答|请问)?\s*",
     re.IGNORECASE,
 )
+_QUERY_CLAUSE_SPLIT = re.compile(r"[，,。！？!?；;\r\n]+")
+_QUERY_SPEAKER_PREFIX = re.compile(
+    r"^(?:别人|对方|有人|用户|他|她|它)(?:说|表示|问)\s*[：:]?\s*"
+)
+_QUERY_FIRST_PERSON_PREFIX = re.compile(r"^我(?=(?:应该|该|要)?怎么)")
+_QUERY_EXPLANATION_SUFFIX = re.compile(
+    r"(?:到底)?(?:是什么|是什么意思|什么意思|有何含义|的含义)$"
+)
 
 
 PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
@@ -151,6 +159,7 @@ async def handle_public_knowledge_call(
         open_knowledge,
         get_config_manager().knowledge_dir,
     )
+    attempt_count = 1
 
     if mode == "sample":
         entries: list[tuple[str, str, object]] = []
@@ -181,22 +190,30 @@ async def handle_public_knowledge_call(
             query,
             requested_material_type,
         )
-        hits = await service.asearch_many(
-            collection_ids,
-            query,
-            limit=limit,
-            allowed_material_types=allowed_types,
-            target_material_type=target_type,
-        )
+        hits = []
+        attempted_queries = _knowledge_query_candidates(query)
+        attempt_count = 0
+        for search_query in attempted_queries:
+            attempt_count += 1
+            hits = await service.asearch_many(
+                collection_ids,
+                search_query,
+                limit=limit,
+                allowed_material_types=allowed_types,
+                target_material_type=target_type,
+            )
+            if hits:
+                break
         entries = [
             (item.collection_id, item.material_type, item.hit.entry) for item in hits
         ]
 
     logger.info(
-        "[public-knowledge] tool mode=%s collection=%s hits=%d elapsed_ms=%d",
+        "[public-knowledge] tool mode=%s collection=%s hits=%d attempts=%d elapsed_ms=%d",
         mode,
         collection,
         len(entries),
+        attempt_count,
         int((time.perf_counter() - started_at) * 1000),
     )
     if not entries:
@@ -229,6 +246,27 @@ def _material_query_plan(
     if any(term in normalized for term in _KNOWLEDGE_INTENT_TERMS):
         return ("knowledge",), "knowledge"
     return ("knowledge", "corpus"), ""
+
+
+def _knowledge_query_candidates(query: str) -> tuple[str, ...]:
+    """Build a small ordered set of search phrases from a conversational query."""
+    original = query.strip()
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        value = value.strip(" \t\r\n:：,，。！？!?；;‘’“”\"'")
+        if len(value) >= 2 and value not in candidates:
+            candidates.append(value)
+
+    for clause in _QUERY_CLAUSE_SPLIT.split(original):
+        cleaned = _QUERY_SPEAKER_PREFIX.sub("", clause.strip(), count=1)
+        cleaned = _QUERY_FIRST_PERSON_PREFIX.sub("", cleaned, count=1)
+        explanation_term = _QUERY_EXPLANATION_SUFFIX.sub("", cleaned, count=1)
+        if explanation_term != cleaned:
+            _add(explanation_term)
+        _add(cleaned)
+    _add(original)
+    return tuple(candidates)
 
 
 def _render_entry(
