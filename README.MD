@@ -48,9 +48,10 @@
 OpenBiliClaw 的结构化推荐进入主动聊天现有 Phase 1，最终仍只由 NEKO Phase 2
 说给用户听；NEKO 插件系统和 MCP 无需开启。详见
 [OpenBiliClaw 内建运行时](docs/zh-CN/modules/openbiliclaw-runtime.md)。
-推荐交接严格拆成 Tracking、Phase 1 与 Phase 2：Phase 1 最多看到 3 条有界语义
-候选，Phase 2 只看到最终一条的四个语义字段；链接、内部身份、完整画像和原始行为
-不会进入模型 Prompt。
+推荐交接严格拆成 Tracking、Phase 1 与 Phase 2：OpenBiliClaw Core 内部最多预览并
+排序 3 条，适配层只把排名第 1 条交给 Phase 1，OBC 在总候选集中最多占 1 个槽位；
+Phase 2 只看到最终一条的四个语义字段。Core 以 lazy copy 模式运行，后台不重复生成
+推荐台词；链接、内部身份、完整画像和原始行为不会进入模型 Prompt。
 
 ## 实机展示
 

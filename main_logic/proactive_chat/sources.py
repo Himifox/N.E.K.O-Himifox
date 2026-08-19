@@ -296,13 +296,12 @@ async def _fetch_source(
                 limit=3,
                 explicit_context_texts=explicit_context_texts[-3:],
             )
+        allowed = [candidate for candidate in previews if is_proactive_candidate_allowed(candidate)]
         links = [
             openbiliclaw_link(
-                project_openbiliclaw_candidate(candidate, language=projection_language)
+                project_openbiliclaw_candidate(allowed[0], language=projection_language)
             )
-            for candidate in previews
-            if is_proactive_candidate_allowed(candidate)
-        ]
+        ] if allowed else []
         if not links:
             raise ValueError("OpenBiliClaw recommendation pool is empty")
         return mode, {"links": links}

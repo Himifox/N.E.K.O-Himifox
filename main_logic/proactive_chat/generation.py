@@ -250,7 +250,7 @@ async def _llm_call_with_retry(
 
     from utils.token_tracker import set_call_type
 
-    set_call_type("proactive")
+    set_call_type("proactive.phase1")
     retry_delays = [1, 2]
     for attempt in range(3):
         try:
@@ -694,7 +694,7 @@ async def _generate_phase2_stream(
     active_logger = log or logger
     from utils.token_tracker import set_call_type
 
-    set_call_type("proactive")
+    set_call_type("proactive.phase2")
     buffer = ""
     tag_parsed = False
     source_tag = ""

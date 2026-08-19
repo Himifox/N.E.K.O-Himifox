@@ -134,6 +134,23 @@ class NekoManagedLLMProvider:
 
         return get_config_manager()
 
+    def cache_namespace(self) -> str:
+        """Return a credential-free fingerprint of the live conversation route."""
+        import hashlib
+
+        try:
+            snapshot = dict(self._manager().get_model_api_config("conversation") or {})
+        except Exception:
+            snapshot = {}
+        route = "\x1f".join(
+            (
+                str(snapshot.get("provider_type") or "").strip().lower(),
+                str(snapshot.get("base_url") or "").strip().rstrip("/").lower(),
+                str(snapshot.get("model") or "").strip(),
+            )
+        )
+        return hashlib.sha256(route.encode("utf-8")).hexdigest()
+
     async def _model_snapshot(self) -> dict[str, Any]:
         manager = self._manager()
         async_getter = getattr(manager, "aget_model_api_config", None)
@@ -347,6 +364,7 @@ def _load_openbiliclaw_backend(data_root: Path, port: int) -> tuple[Any, Any]:
             _NEKO_LLM_INSTANCE_ID: NekoManagedLLMProvider(),
         },
         host_config_transform=_apply_neko_model_config,
+        surface_copy_mode="lazy",
         allow_degraded=True,
     )
     return core, create_app(core=core)

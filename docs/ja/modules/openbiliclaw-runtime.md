@@ -42,8 +42,9 @@ mode に保って反復 request を止めます。analysis を有効にするに
 
 「model の統一」は route、credential、最終 speaker の所有権を統一する意味で、
 system 全体の model request が 1 回だけという意味ではありません。OpenBiliClaw は
-profile analysis、candidate evaluation、recommendation copy の background work に
-同じ managed route を引き続き利用できます。
+profile analysis と candidate evaluation の background work に同じ managed route を
+引き続き利用できます。embedded Core は lazy copy のため background
+`recommendation.write_expression` は 0 です。
 
 content embedding は OpenBiliClaw 側で独立して設定します。N.E.K.O の character
 memory vector とは schema と意味が異なるため、同じ store を共有しません。
@@ -52,16 +53,16 @@ memory vector とは schema と意味が異なるため、同じ store を共有
 
 ```text
 OpenBiliClaw background → N.E.K.O-managed model route → structured pool
-N.E.K.O proactive chat → privacy gate + 3-layer preview（LLM なし・非消費）
-                      → 既存 Phase 1（最大 3 semantic projection）
+N.E.K.O proactive chat → privacy gate + Core が最大 3 件を順位付け
+                      → adapter は rank 1 のみ → 既存 Phase 1（OBC 最大 1 slot）
                       → 既存 Phase 2（選択 1 件の 4-field projection）
                       → delivery 成功 → shown を確認
 ```
 
 - healthy Core から 1 round 最大 3 件を preview します。preview は source refresh、
   LLM call、表示履歴 write を行いません。
-- 既存 Phase 1 の total budget 内で最大 3 件の OpenBiliClaw candidate を先に置き、
-  残りを他 source が埋めます。二つ目の Phase 1 は追加せず、表示番号で厳密に選択します。
+- adapter は validation 後の rank 1 だけを使い、OpenBiliClaw は既存 Phase 1 の total
+  budget で最大 1 slot です。残りを他 source が埋め、二つ目の Phase 1 は追加しません。
 - 最終台詞は N.E.K.O の persona、memory、language を使う既存 Phase 2 だけが生成します。
   normal／proactive chat と tool chain は `core.chat()` を呼びません。
 - `[PASS]`、user takeover、delivery failure、degraded Core、empty pool、timeout では
@@ -74,6 +75,10 @@ N.E.K.O proactive chat → privacy gate + 3-layer preview（LLM なし・非消�
   memory からだけ読み、永続化も model 送信もしません。閲覧から推定した sensitive
   interest は拒否し、current conversation または明示 subscription は neutral update
   だけを許可します。
+- confidence 0.75 未満、summary/topic 欠落、期限不正/期限切れ、sensitive policy 不一致は
+  adapter でも fail closed しますが、再 scoring や summary 推測はしません。
+- usage は `proactive.phase1` / `proactive.phase2` に分け、`openbiliclaw` billed total と
+  OBC caller diagnostics を二重加算しません。
 
 browser extension は引き続き platform behavior と browser session を収集する「手足」です。
 N.E.K.O plugin system と MCP は不要ですが、extension 自体の install／設定は必要です。

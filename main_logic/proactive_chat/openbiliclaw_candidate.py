@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -174,7 +176,30 @@ def project_openbiliclaw_candidate(
 def is_proactive_candidate_allowed(core_candidate: Any) -> bool:
     """Fail closed if a malformed Core object crosses the sensitive-topic gate."""
 
-    policy = core_candidate.policy
+    try:
+        policy = core_candidate.policy
+        semantics = core_candidate.semantics
+        tracking = core_candidate.tracking
+        confidence = float(semantics.confidence)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if (
+        not math.isfinite(confidence)
+        or confidence < 0.75
+        or not str(semantics.summary or "").strip()
+        or not str(semantics.topic or "").strip()
+    ):
+        return False
+    expires_at = str(getattr(tracking, "expires_at", "") or "").strip()
+    if expires_at:
+        try:
+            expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        if expires.astimezone(UTC) <= datetime.now(UTC):
+            return False
     sensitivity = str(policy.sensitivity)
     proactive_policy = str(policy.proactive_policy)
     why_now_source = str(policy.why_now_source)

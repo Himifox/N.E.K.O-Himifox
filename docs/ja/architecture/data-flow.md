@@ -82,8 +82,8 @@ Router は `main_routers/shared_state.py` の getter から長寿命 manager を
 
 ```text
 browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/pool
-proactive chat → aggregate evidence + sensitive gate → 3-layer candidate
-               → 既存 Phase 1（最大 3 semantic projection、番号で 1 件選択）
+proactive chat → aggregate evidence + sensitive gate → Core が最大 3 件を順位付け
+               → adapter は rank 1 のみ → 既存 Phase 1（OBC 最大 1 slot）
                → 既存 Phase 2（選択 1 件の title/topic/summary/why-now）
                → text と link の commit 成功 → tracking reference だけで確認
 ```
@@ -93,6 +93,7 @@ Tracking、URL、free-form expression、full profile、raw behavior は Phase 1/
 のため memory 内だけで確認し、永続化も model 送信もしません。`[PASS]`、takeover、
 generation/TTS/frontend failure、empty/degraded/timeout は candidate を確認しません。
 N.E.K.O が唯一の user-visible speaker で、この経路は `core.chat()` を呼びません。
+embedded Core は `surface_copy_mode="lazy"` で background copy owner を起動しません。
 
 ## Agent イベントフロー
 

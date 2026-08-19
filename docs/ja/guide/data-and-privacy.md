@@ -68,8 +68,9 @@ Memory system はキャラクターごとに Recent、Facts、Reflections、Pers
 
 組み込み Core は browser-extension behavior と content profile を OpenBiliClaw の
 local storage に保持します。proactive preview は full profile、raw browsing、saved、
-watch-later record を N.E.K.O model に送りません。Phase 1 は最大 3 件の bounded
-semantic candidate、Phase 2 は選択 1 件の title/topic/summary/selection motive だけを
+watch-later record を N.E.K.O model に送りません。Core 内部では最大 3 件を preview
+しますが、adapter は rank 1 だけを Phase 1 に渡し、OBC は最大 1 slot です。Phase 2 は
+選択 1 件の title/topic/summary/selection motive だけを
 受けます。URL と delivery identity は code layer に残ります。
 
 health、finance、politics、religion の gate は active session memory の直近 3 user

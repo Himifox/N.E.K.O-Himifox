@@ -68,8 +68,9 @@ Optional embedding inference is local CPU ONNX, but that does not make the LLM-b
 
 The built-in Core keeps browser-extension behavior and its content profile in
 OpenBiliClaw storage. A proactive preview sends neither the full profile nor raw
-browser/saved/watch-later records to N.E.K.O's models. Phase 1 sees at most three
-bounded semantic candidates; Phase 2 sees only the selected title, topic,
+browser/saved/watch-later records to N.E.K.O's models. Core may rank up to three
+candidates locally, but the adapter sends rank 1 only, so Phase 1 sees at most
+one OBC slot. Phase 2 sees only the selected title, topic,
 summary, and selection motive. URLs and delivery identities stay in code.
 
 For sensitive health, finance, politics, or religion topics, Core may inspect

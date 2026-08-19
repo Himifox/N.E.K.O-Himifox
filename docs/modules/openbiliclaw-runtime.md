@@ -47,8 +47,9 @@ that permits background use and restart N.E.K.O to enable analysis.
 
 “Unified model” means unified routing, credentials, and final speaker—not one
 model request for the entire system. OpenBiliClaw can still use the same managed
-route for background profile analysis, candidate evaluation, and recommendation
-copy. Its own usage ledger remains module diagnostics and must not be added to
+route for background profile analysis and candidate evaluation. Embedded Core
+uses lazy surface copy, so background `recommendation.write_expression` is zero.
+Its own usage ledger remains module diagnostics and must not be added to
 N.E.K.O's total cost a second time.
 
 OpenBiliClaw content embeddings remain independently configured. N.E.K.O's
@@ -59,16 +60,17 @@ schemas and must not share a store merely because both are called embeddings.
 
 ```text
 OpenBiliClaw background → N.E.K.O-managed model route → structured pool
-N.E.K.O proactive chat → privacy gate + three-layer preview (no LLM/no consume)
-                      → existing Phase 1 (up to 3 semantic projections)
+N.E.K.O proactive chat → privacy gate + Core preview up to 3 (no LLM/no consume)
+                      → adapter takes rank 1 → existing Phase 1 (one OBC slot)
                       → existing Phase 2 (one four-field projection; only visible voice)
                       → successful delivery → acknowledge shown
 ```
 
-- A healthy Core previews at most three evaluated, copy-ready candidates per
+- A healthy Core previews at most three evaluated, semantic-ready candidates per
   round. Preview does not refresh sources, call an LLM, or write display history.
-- Up to three OpenBiliClaw candidates are placed first within the existing
-  Phase 1 total budget; other sources fill the remaining slots. No second
+- After fail-closed validation, the adapter takes rank 1 only. OpenBiliClaw
+  occupies at most one slot in the existing Phase 1 total budget; other sources
+  fill the remaining slots. No second
   Phase 1 is introduced, and selection binds by the displayed sequence number.
 - Phase 2 continues to use N.E.K.O persona, memory, and language settings for
   the final line. Normal chat, proactive chat, and tools do not call
@@ -81,6 +83,12 @@ N.E.K.O proactive chat → privacy gate + three-layer preview (no LLM/no consume
   title/topic/summary/why-now. URLs, candidate/item IDs, delivery references,
   free-form recommendation copy, full profiles, and raw behavior stay outside
   both prompts. OpenBiliClaw candidates bypass the generic Bilibili scraper.
+- Defensive validation rejects confidence below 0.75, missing summary/topic,
+  malformed expiry, expired candidates, or a sensitive-policy mismatch. It
+  never rescores or repairs a candidate; OBC remains responsible for quality.
+- N.E.K.O usage records Phase 1 and Phase 2 as `proactive.phase1` and
+  `proactive.phase2`. The outer `openbiliclaw` entry is the billed total for
+  OBC model calls; OBC caller rows are diagnostics and are not added again.
 - The last three user messages may be read from active in-memory chat state only
   for Core's deterministic sensitive-topic gate. They are not persisted or
   sent to a model. Sensitive browsing inferences are rejected; an explicit

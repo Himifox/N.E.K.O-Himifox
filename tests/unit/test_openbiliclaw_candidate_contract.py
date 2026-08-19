@@ -155,6 +155,19 @@ def test_sensitive_candidate_gate_fails_closed_before_phase1() -> None:
     assert is_proactive_candidate_allowed(subscription_allowed)
 
 
+def test_adapter_rejects_low_confidence_missing_summary_and_expired_candidates() -> None:
+    low = _core_candidate()
+    low.semantics.confidence = 0.7499
+    missing_summary = _core_candidate()
+    missing_summary.semantics.summary = ""
+    expired = _core_candidate()
+    expired.tracking.expires_at = "2000-01-01T00:00:00Z"
+
+    assert not is_proactive_candidate_allowed(low)
+    assert not is_proactive_candidate_allowed(missing_summary)
+    assert not is_proactive_candidate_allowed(expired)
+
+
 def test_recent_user_context_reads_only_three_in_memory_user_messages() -> None:
     session = SimpleNamespace(
         _conversation_history=[

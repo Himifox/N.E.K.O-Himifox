@@ -170,11 +170,15 @@ async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
     try:
         assert "legacy-secret-never-survives" not in config_path.read_text(encoding="utf-8")
         assert core.config.llm.default_chain == ["neko-conversation"]
+        assert core.context.surface_copy_mode == "lazy"
+        assert core.context.runtime_controller.expression_copy_coordinator is None
 
         await core.reload(raw)
 
         assert core.config.llm.default_chain == ["neko-conversation"]
         assert set(core.config.llm.instances) == {"neko-conversation"}
+        assert core.context.surface_copy_mode == "lazy"
+        assert core.context.runtime_controller.expression_copy_coordinator is None
     finally:
         await core.stop()
 
@@ -209,7 +213,7 @@ async def test_pinned_core_builds_with_real_fastapi_adapter(
         await runtime.stop()
 
 
-async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected() -> None:
+async def test_real_core_ranks_three_but_phase1_receives_only_first() -> None:
     from openbiliclaw import OpenBiliClawCore
     from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.recommendation.engine import Recommendation
@@ -248,7 +252,13 @@ async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected()
                 author_name="Creator",
                 content_type="video",
                 temporal_class="current",
+                temporal_policy_version="v2",
+                temporal_evaluated_at=now.isoformat(),
+                temporal_evidence_complete=True,
                 topic_group="Agent architecture",
+                relevance_score=0.8,
+                quality_score=0.85,
+                evaluation_contract_version="content-eval-v7",
             ),
             expression=f"private expression {index}",
             topic_label="Agent architecture",
@@ -263,7 +273,9 @@ async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected()
             return profile
 
     class _Engine:
-        async def preview(self, *_args: object, **_kwargs: object) -> list[Recommendation]:
+        async def preview_semantic(
+            self, *_args: object, **_kwargs: object
+        ) -> list[Recommendation]:
             return recommendations
 
         async def record_delivery(
@@ -296,11 +308,14 @@ async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected()
     ]
     phase1_prompt = "\n".join(
         format_phase1_candidate(index, envelope)
-        for index, envelope in enumerate(envelopes, start=1)
+        for index, envelope in enumerate(envelopes[:1], start=1)
     )
-    phase2_prompt = format_phase2_candidate(envelopes[1], language="en")
+    phase2_prompt = format_phase2_candidate(envelopes[0], language="en")
 
     assert len(envelopes) == 3
+    assert "Agent architecture topic 0" in phase1_prompt
+    assert "Agent architecture topic 1" not in phase1_prompt
+    assert "Agent architecture topic 2" not in phase1_prompt
     for forbidden in (
         "candidate_id",
         "item_key",
@@ -312,7 +327,7 @@ async def test_real_core_three_candidate_prompt_handoff_consumes_only_selected()
         assert forbidden not in phase2_prompt
 
     await core.record_recommendation_delivery(
-        envelopes[1].tracking.delivery_ref,
+        envelopes[0].tracking.delivery_ref,
         surface="neko_proactive",
     )
-    assert delivered == [recommendations[1]]
+    assert delivered == [recommendations[0]]

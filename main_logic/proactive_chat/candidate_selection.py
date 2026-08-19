@@ -66,7 +66,7 @@ def _round_robin_phase1_links(
     total: int,
     reserved_mode: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Give every web mode a turn, reserving up to three OBC slots when present."""
+    """Give every web mode a turn, reserving at most one OBC slot when present."""
 
     selected = {mode: [] for mode in modes}
     positions = {mode: 0 for mode in modes}
@@ -78,7 +78,7 @@ def _round_robin_phase1_links(
     remaining = max(0, total)
     if reserved_mode in links_by_mode and remaining:
         reserved_links = links_by_mode[reserved_mode]
-        reserved_limit = min(3, remaining)
+        reserved_limit = min(1, remaining)
         while (
             positions[reserved_mode] < len(reserved_links)
             and len(selected[reserved_mode]) < reserved_limit
@@ -96,6 +96,8 @@ def _round_robin_phase1_links(
     while remaining:
         made_progress = False
         for mode in modes:
+            if mode == reserved_mode and selected[mode]:
+                continue
             links = links_by_mode[mode]
             while positions[mode] < len(links):
                 link = dict(links[positions[mode]])

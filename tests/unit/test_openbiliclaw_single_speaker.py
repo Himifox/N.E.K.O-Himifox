@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -63,6 +64,25 @@ class _FakeChatClient:
             content='{"ok": true}',
             response_metadata={"token_usage": {"input_tokens": 11, "output_tokens": 7}},
         )
+
+
+def test_managed_provider_cache_namespace_tracks_route_without_credentials() -> None:
+    snapshot = {
+        "model": "route-one",
+        "base_url": "https://one.example/v1",
+        "api_key": "secret-one",
+        "provider_type": "openai",
+    }
+    manager = SimpleNamespace(
+        get_model_api_config=lambda _model_type: dict(snapshot)
+    )
+    provider = openbiliclaw_runtime.NekoManagedLLMProvider(manager)
+
+    first = provider.cache_namespace()
+    snapshot["api_key"] = "secret-two"
+    assert provider.cache_namespace() == first
+    snapshot["model"] = "route-two"
+    assert provider.cache_namespace() != first
 
 
 async def test_managed_provider_uses_live_route_json_budget_and_usage(
@@ -243,9 +263,14 @@ async def test_openbiliclaw_source_is_structured_and_preview_only(
             why_now_source="aggregated_interest",
         ),
     )
+    second_candidate = copy.deepcopy(candidate)
+    second_candidate.semantics.title = "Second ranked video"
+    second_candidate.tracking.url = "https://example/second"
     runtime = SimpleNamespace(
         proactive_available=True,
-        preview_proactive_candidates=AsyncMock(return_value=[candidate]),
+        preview_proactive_candidates=AsyncMock(
+            return_value=[candidate, second_candidate]
+        ),
     )
     monkeypatch.setattr(
         openbiliclaw_runtime,
@@ -266,6 +291,7 @@ async def test_openbiliclaw_source_is_structured_and_preview_only(
         explicit_context_texts=(),
     )
     link = payload["links"][0]
+    assert len(payload["links"]) == 1
     assert {key: link[key] for key in ("title", "url", "source", "mode")} == {
         "title": "A useful video",
         "url": "https://example/video",
@@ -275,7 +301,7 @@ async def test_openbiliclaw_source_is_structured_and_preview_only(
     assert link["_openbiliclaw_candidate"].tracking.delivery_ref is recommendation
 
 
-def test_phase1_reserves_up_to_three_openbiliclaw_slots(
+def test_phase1_reserves_exactly_one_openbiliclaw_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(candidate_selection, "_should_skip_source", lambda _key: False)
@@ -307,8 +333,21 @@ def test_phase1_reserves_up_to_three_openbiliclaw_slots(
         reserved_mode="openbiliclaw",
     )
 
-    assert len(selected["openbiliclaw"]) == 3
-    assert len(selected["personal"]) + len(selected["news"]) == 2
+    assert len(selected["openbiliclaw"]) == 1
+    assert selected["openbiliclaw"][0]["title"] == "obc-0"
+    assert len(selected["personal"]) + len(selected["news"]) == 4
+
+
+def test_proactive_stage_usage_has_distinct_phase_names() -> None:
+    generation_source = (
+        Path(__file__).resolve().parents[2]
+        / "main_logic"
+        / "proactive_chat"
+        / "generation.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'set_call_type("proactive.phase1")' in generation_source
+    assert 'set_call_type("proactive.phase2")' in generation_source
 
 
 async def test_delivery_acknowledges_only_the_committed_openbiliclaw_link(
