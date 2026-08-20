@@ -41,6 +41,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
             "package_id": 7,
             "remote_id": "knowledge/fixture-pack",
             "pack_id": "fixture-pack",
+            "material_type": "knowledge",
             "version": "1.0.0",
             "channel": "stable",
             "artifacts": {
@@ -112,8 +113,64 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
     assert captured["pack_raw"] == raw
     assert captured["manifest_raw"] is None
     assert captured["subscription"]["artifact_sha256"] == digest
+    assert captured["subscription"]["material_type"] == "knowledge"
     result = module._tasks["fixture"]["result"]
     assert result["activation"]["state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_market_subscription_rejects_material_type_mismatch(monkeypatch):
+    raw = canonical_pack_bytes(_pack())
+    descriptor = module.KnowledgeVersionDescriptor.model_validate(
+        {
+            "protocol_version": 3,
+            "package_id": 7,
+            "remote_id": "knowledge/fixture-pack",
+            "pack_id": "fixture-pack",
+            "material_type": "corpus",
+            "version": "1.0.0",
+            "channel": "stable",
+            "artifacts": {
+                "knowledge": {
+                    "url": "https://github.com/example/repo/releases/download/v1/fixture.neko-knowledge.json",
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "bytes": len(raw),
+                },
+                "index_manifest": None,
+                "vectors": None,
+            },
+        }
+    )
+
+    async def fake_fetch(_request):
+        return descriptor
+
+    async def fake_download(_descriptor, **_kwargs):
+        return raw
+
+    monkeypatch.setattr(module, "_fetch_version_descriptor", fake_fetch)
+    monkeypatch.setattr(module, "_download_verified_artifact", fake_download)
+    module._tasks["material-type-mismatch"] = {
+        "status": "pending",
+        "stage": "pending",
+        "progress": 0.0,
+        "message": "",
+        "result": None,
+        "error": None,
+        "error_code": None,
+        "completed_at": None,
+    }
+
+    request = module.KnowledgeSubscribeRequest(
+        package_id=7,
+        version="1.0.0",
+        channel="stable",
+    )
+    await module._execute_subscription("material-type-mismatch", request)
+
+    task = module._tasks["material-type-mismatch"]
+    assert task["status"] == "failed"
+    assert task["error_code"] == "material_type_mismatch"
 
 
 @pytest.mark.asyncio

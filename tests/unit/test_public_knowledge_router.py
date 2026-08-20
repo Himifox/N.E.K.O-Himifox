@@ -158,9 +158,12 @@ def test_raw_subscription_accepts_schema_v3_and_stages(monkeypatch, tmp_path):
     assert response["ok"] is True
     assert response["state"] == "queued"
     assert client.get("/api/public-knowledge/packs").json()["packs"] == []
-    assert client.get("/api/public-knowledge/packs/jobs").json()["jobs"][0][
-        "material_type"
-    ] == "knowledge"
+    assert (
+        client.get("/api/public-knowledge/packs/jobs").json()["jobs"][0][
+            "material_type"
+        ]
+        == "knowledge"
+    )
 
 
 def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path):
@@ -172,6 +175,7 @@ def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path)
         "version": "1.0.0",
         "channel": "stable",
         "artifact_sha256": artifacts.pack_sha256,
+        "material_type": "knowledge",
         "index_manifest_sha256": artifacts.manifest_sha256,
         "vectors_sha256": artifacts.vectors_sha256,
         "trust": "trusted_market",
@@ -202,6 +206,33 @@ def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path)
     assert (job_root / "pack.neko-knowledge.vectors.f16").is_file()
 
 
+def test_indexed_subscription_rejects_market_material_type_mismatch(
+    monkeypatch, tmp_path
+):
+    pack = _pack(pack_id="indexed-type-mismatch", material_type="knowledge")
+    raw, artifacts = _prebuilt(pack)
+    subscription = {
+        "provider": "plugin-market",
+        "remote_id": "knowledge/indexed-type-mismatch",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": artifacts.pack_sha256,
+        "material_type": "corpus",
+        "index_manifest_sha256": artifacts.manifest_sha256,
+        "vectors_sha256": artifacts.vectors_sha256,
+        "trust": "trusted_market",
+    }
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/public-knowledge/subscriptions/apply-v3",
+        data={"protocol_version": "3", "subscription": json.dumps(subscription)},
+        files={"pack": ("pack.neko-knowledge.json", raw, "application/json")},
+    ).json()
+
+    assert response == {"ok": False, "reason": "material_type_mismatch"}
+
+
 def test_material_type_endpoint_controls_auto_context(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_pack(pack_id="classification-fixture")))
@@ -218,6 +249,9 @@ def test_material_type_endpoint_controls_auto_context(monkeypatch, tmp_path):
 
     assert changed == {"ok": True, "material_type_override": "corpus"}
     assert toggle == {"ok": False, "reason": "auto_context_not_allowed"}
-    assert client.get("/api/public-knowledge/packs").json()["packs"][0][
-        "effective_material_type"
-    ] == "corpus"
+    assert (
+        client.get("/api/public-knowledge/packs").json()["packs"][0][
+            "effective_material_type"
+        ]
+        == "corpus"
+    )

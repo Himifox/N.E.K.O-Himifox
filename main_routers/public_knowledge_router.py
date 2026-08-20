@@ -346,6 +346,8 @@ async def apply_indexed_public_knowledge_subscription(
         if hashlib.sha256(pack_raw).hexdigest() != indexed_subscription.artifact_sha256:
             return {"ok": False, "reason": "artifact_hash_mismatch"}
         knowledge_pack = validate_pack(pack_payload)
+        if knowledge_pack.material_type != indexed_subscription.material_type:
+            return {"ok": False, "reason": "material_type_mismatch"}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
 
@@ -475,10 +477,7 @@ async def set_public_knowledge_pack_material_type(request: Request):
     material_type = (
         None if raw_material_type is None else str(raw_material_type).strip()
     )
-    if (
-        not pack_id
-        or material_type not in {None, "knowledge", "corpus"}
-    ):
+    if not pack_id or material_type not in {None, "knowledge", "corpus"}:
         return {"ok": False, "reason": "invalid_request"}
     try:
         await asyncio.to_thread(

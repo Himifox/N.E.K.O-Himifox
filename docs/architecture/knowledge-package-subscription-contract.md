@@ -33,6 +33,7 @@
   "package_id": 42,
   "remote_id": "knowledge/example-pack",
   "pack_id": "example-pack",
+  "material_type": "knowledge",
   "version": "3.0.0",
   "channel": "stable",
   "artifacts": {
@@ -43,7 +44,7 @@
 }
 ```
 
-浏览器只提交 `package_id`、`version` 和 `channel`。本地 Bridge 必须从配置的市场 API 获取描述符，不能信任浏览器提供的 URL 或摘要。
+浏览器只提交 `package_id`、`version` 和 `channel`。本地 Bridge 必须从配置的市场 API 获取描述符，不能信任浏览器提供的 URL、摘要或内容用途。Bridge 和 Main Server 都会校验市场登记的 `material_type` 与原始包一致。
 
 ## Main Server 交接
 
@@ -57,7 +58,7 @@ POST /api/public-knowledge/subscriptions/apply-v3
 
 严格校验顺序：
 
-1. 校验原始包规范字节、Schema v3、身份、容量和 SHA-256。
+1. 校验原始包规范字节、Schema v3、身份、市场登记用途、容量和 SHA-256。
 2. 从五字段原文重新派生完整 chunk 序列。
 3. 逐项比对 `chunk_id`、`content_hash` 和连续 `vector_index`。
 4. 校验固定模型契约、清单摘要、向量摘要和精确文件长度。

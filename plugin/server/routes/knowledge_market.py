@@ -80,6 +80,7 @@ class KnowledgeVersionDescriptor(BaseModel):
     package_id: int = Field(gt=0)
     remote_id: str = Field(pattern=r"^knowledge/[a-z0-9][a-z0-9._-]{1,99}$")
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
+    material_type: Literal["knowledge", "corpus"]
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$")
     channel: Literal["stable", "beta"]
     artifacts: KnowledgeArtifactSet
@@ -195,6 +196,10 @@ async def _execute_subscription(
             raise _KnowledgeTaskError(
                 "package_identity_mismatch", "市场条目与知识包身份不一致"
             )
+        if pack_payload.get("material_type") != descriptor.material_type:
+            raise _KnowledgeTaskError(
+                "material_type_mismatch", "市场登记用途与知识包内容不一致"
+            )
 
         manifest_raw: bytes | None = None
         vectors_raw: bytes | None = None
@@ -227,6 +232,7 @@ async def _execute_subscription(
                 "version": descriptor.version,
                 "channel": descriptor.channel,
                 "artifact_sha256": descriptor.artifacts.knowledge.sha256,
+                "material_type": descriptor.material_type,
                 "index_manifest_sha256": (
                     manifest_descriptor.sha256 if manifest_raw is not None else ""
                 ),

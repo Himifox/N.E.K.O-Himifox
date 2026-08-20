@@ -12,6 +12,7 @@ from knowledge.packs import install_pack, pack_payload, validate_pack
 from knowledge.subscriptions import (
     canonical_pack_bytes,
     load_canonical_pack_artifact,
+    validate_indexed_subscription,
     validate_subscription,
 )
 
@@ -149,9 +150,7 @@ def test_material_type_override_changes_routing_without_rewriting_entries(tmp_pa
     store = KnowledgeStore(database_path)
     before = store.count_by_source_tag("source:community.community-fixture")
 
-    service.set_pack_material_type_override(
-        "community-fixture", material_type="corpus"
-    )
+    service.set_pack_material_type_override("community-fixture", material_type="corpus")
 
     installed = service.list_packs()
     status = service.get_status()
@@ -207,9 +206,7 @@ def test_concurrent_pack_installs_preserve_database_and_registry(tmp_path):
     assert store.count_by_source_tag("source:community.concurrent-alpha") == 1
     assert store.count_by_source_tag("source:community.concurrent-beta") == 1
     registry = json.loads(
-        service.database_path()
-        .with_name("packs.json")
-        .read_text(encoding="utf-8")
+        service.database_path().with_name("packs.json").read_text(encoding="utf-8")
     )
     assert set(registry["packs"]) == {"concurrent-alpha", "concurrent-beta"}
 
@@ -341,6 +338,25 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
         "summary",
         "content",
     }
+
+
+def test_indexed_subscription_requires_supported_material_type():
+    payload = {
+        "provider": "plugin-market",
+        "remote_id": "knowledge/community-fixture",
+        "version": "1.2.3",
+        "channel": "stable",
+        "artifact_sha256": "a" * 64,
+        "material_type": "corpus",
+        "index_manifest_sha256": "",
+        "vectors_sha256": "",
+        "trust": "trusted_market",
+    }
+
+    subscription = validate_indexed_subscription(payload)
+    assert subscription.material_type == "corpus"
+    with pytest.raises(ValueError, match="material_type"):
+        validate_indexed_subscription({**payload, "material_type": "meme"})
 
 
 def test_market_artifact_must_use_canonical_json_bytes():

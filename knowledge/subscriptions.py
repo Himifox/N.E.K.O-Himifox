@@ -31,6 +31,7 @@ class IndexedKnowledgeSubscription:
     version: str
     channel: str
     artifact_sha256: str
+    material_type: str
     index_manifest_sha256: str = ""
     vectors_sha256: str = ""
     trust: str = "trusted_market"
@@ -66,6 +67,7 @@ def validate_indexed_subscription(payload: object) -> IndexedKnowledgeSubscripti
         "version",
         "channel",
         "artifact_sha256",
+        "material_type",
         "index_manifest_sha256",
         "vectors_sha256",
         "trust",
@@ -91,6 +93,9 @@ def validate_indexed_subscription(payload: object) -> IndexedKnowledgeSubscripti
     vectors_digest = _optional_digest(payload.get("vectors_sha256"), "vectors_sha256")
     if bool(manifest_digest) != bool(vectors_digest):
         raise ValueError("indexed subscription requires both index artifact digests")
+    material_type = _required_text(payload.get("material_type"), "material_type", 16)
+    if material_type not in {"knowledge", "corpus"}:
+        raise ValueError("indexed subscription material_type is unsupported")
     trust = _required_text(payload.get("trust"), "trust", 40)
     if trust != "trusted_market":
         raise ValueError("indexed subscription trust is unsupported")
@@ -100,6 +105,7 @@ def validate_indexed_subscription(payload: object) -> IndexedKnowledgeSubscripti
         version=base.version,
         channel=base.channel,
         artifact_sha256=base.artifact_sha256,
+        material_type=material_type,
         index_manifest_sha256=manifest_digest,
         vectors_sha256=vectors_digest,
         trust=trust,
