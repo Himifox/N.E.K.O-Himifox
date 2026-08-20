@@ -79,6 +79,21 @@ _GEOIP_PROVIDERS = (
 # Countries that cannot reliably access DuckDuckGo
 _CN_COUNTRIES = frozenset({"CN"})
 _BAIDU_COOKIE_STORE_KEY = "baidu_anonymous_cookies"
+_ERROR_CODE_BLOCKED = "WEB_SEARCH_BACKEND_BLOCKED"
+_ERROR_CODE_BUSY = "WEB_SEARCH_BACKEND_BUSY"
+_ERROR_CODE_COOLDOWN = "WEB_SEARCH_BACKEND_COOLDOWN"
+
+
+def _search_sdk_error(error: Exception) -> SdkError:
+    if isinstance(error, SearchBlockedError):
+        code = _ERROR_CODE_BLOCKED
+    elif isinstance(error, SearchBusyError):
+        code = _ERROR_CODE_BUSY
+    elif isinstance(error, SearchCooldownError):
+        code = _ERROR_CODE_COOLDOWN
+    else:
+        code = None
+    return SdkError(str(error), code=code)
 
 
 def _select_backend(configured: object, country: Optional[str]) -> str:
@@ -762,7 +777,7 @@ class WebSearchPlugin(NekoPluginBase):
         try:
             results = await self._do_text_search(query, max_r, timeout, backend=backend)
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
-            return Err(SdkError(str(e)))
+            return Err(_search_sdk_error(e))
         except Exception as e:
             # 异常文本可能带完整请求 URL（含 wd= 查询词），只回传类型名，
             # 细节留在本地文件日志里
@@ -828,7 +843,7 @@ class WebSearchPlugin(NekoPluginBase):
         try:
             results = await self._do_text_search(query, max_r, timeout, backend=backend)
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
-            return Err(SdkError(str(e)))
+            return Err(_search_sdk_error(e))
         except Exception as e:
             self.logger.exception("Search failed (query_len={})", len(query))
             return Err(SdkError(f"搜索失败: {type(e).__name__}"))

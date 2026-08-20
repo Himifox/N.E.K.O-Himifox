@@ -31,6 +31,13 @@ _RUN_TIMEOUT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.25
 _MAX_POLL_INTERVAL_SECONDS = 2.0
 _MAX_THROTTLE_WAIT_SECONDS = 2.0
+_FLOW_CONTROL_ERROR_CODES = frozenset(
+    {
+        "web_search_backend_blocked",
+        "web_search_backend_busy",
+        "web_search_backend_cooldown",
+    }
+)
 
 _cache: OrderedDict[
     tuple[str, str, int],
@@ -103,7 +110,9 @@ def _store(key: tuple[str, str, int], result: Dict[str, Any]) -> None:
 
 def _error_message(value: object, default: str) -> str:
     if isinstance(value, dict):
-        return str(value.get("message") or value.get("code") or default)
+        nested = value.get("error")
+        source = nested if isinstance(nested, dict) else value
+        return str(source.get("message") or source.get("code") or default)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return default
@@ -111,15 +120,12 @@ def _error_message(value: object, default: str) -> str:
 
 def _plugin_error(value: object, default: str) -> RuntimeError:
     message = _error_message(value, default)
-    normalized = message.casefold()
-    if any(
-        marker in normalized
-        for marker in (
-            "search backend is busy",
-            "search backend rate-limited",
-            "search backend cooling down",
-        )
-    ):
+    code = ""
+    if isinstance(value, dict):
+        nested = value.get("error")
+        source = nested if isinstance(nested, dict) else value
+        code = str(source.get("code") or "").strip().casefold()
+    if code in _FLOW_CONTROL_ERROR_CODES:
         return _PluginThrottleError(message)
     return RuntimeError(message)
 
