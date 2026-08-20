@@ -332,13 +332,21 @@ async def _search_baidu(
             # 安全验证页，由下方 is_baidu_blocked 显式报错，无需在此处理
             pass
 
-    resp = await request_with_retry(
-        lambda: client.get(
-            _BAIDU_SEARCH_URL, params=params, headers=headers, timeout=timeout
-        ),
-        max_attempts=retry_attempts,
-        base_delay=retry_base_delay,
-    )
+    try:
+        resp = await request_with_retry(
+            lambda: client.get(
+                _BAIDU_SEARCH_URL, params=params, headers=headers, timeout=timeout
+            ),
+            max_attempts=retry_attempts,
+            base_delay=retry_base_delay,
+        )
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code in {403, 429}:
+            raise SearchBlockedError(
+                f"百度桌面端请求受限（{error.response.status_code}），请稍后重试",
+                retry_after_seconds=retry_after_seconds(error.response.headers),
+            ) from error
+        raise
 
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
     # 桌面端风控比移动 SSR 入口更敏感。桌面端返回验证码或 JavaScript
@@ -367,8 +375,14 @@ async def _search_baidu(
         )
     except httpx.HTTPError as error:
         if desktop_blocked:
+            declared_delay = (
+                retry_after_seconds(error.response.headers)
+                if isinstance(error, httpx.HTTPStatusError)
+                else None
+            )
             raise SearchBlockedError(
-                "百度桌面端已触发安全验证，移动端请求失败，请稍后重试"
+                "百度桌面端已触发安全验证，移动端请求失败，请稍后重试",
+                retry_after_seconds=declared_delay,
             ) from error
         raise
     mobile_html = decode_html(
@@ -423,8 +437,7 @@ class WebSearchPlugin(NekoPluginBase):
         ):
             if self._client is not None:
                 current = _snapshot_baidu_cookies(self._client)
-                if current:
-                    self._baidu_cookies = current
+                self._baidu_cookies = current
             self._client = httpx.AsyncClient(follow_redirects=True)
             _restore_baidu_cookies(self._client, self._baidu_cookies)
             self._client_loop = loop
@@ -448,8 +461,7 @@ class WebSearchPlugin(NekoPluginBase):
 
     async def _persist_baidu_cookies(self, client: httpx.AsyncClient) -> None:
         current = _snapshot_baidu_cookies(client)
-        if current:
-            self._baidu_cookies = current
+        self._baidu_cookies = current
         store = getattr(self, "store", None)
         if store is None or not getattr(store, "enabled", False):
             return
