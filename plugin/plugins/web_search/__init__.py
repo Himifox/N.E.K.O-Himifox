@@ -316,9 +316,9 @@ async def _search_baidu(
             _BAIDU_MOBILE_SEARCH_URL,
             params={"word": query},
             headers=mobile_headers,
-            timeout=timeout,
+            timeout=min(timeout, 5.0),
         ),
-        max_attempts=retry_attempts,
+        max_attempts=1,
         base_delay=retry_base_delay,
     )
     mobile_html = decode_html(
@@ -330,7 +330,9 @@ async def _search_baidu(
     mobile_results = parse_baidu_mobile_html(mobile_html, max_results)
     if not mobile_results:
         if desktop_blocked:
-            raise SearchResponseError("百度移动端未返回可解析结果")
+            raise SearchBlockedError(
+                "百度桌面端已触发安全验证，移动端未返回可解析结果，请稍后重试"
+            )
         raise SearchResponseError("百度桌面端和移动端均未返回可解析结果")
     return mobile_results
 
@@ -496,6 +498,8 @@ class WebSearchPlugin(NekoPluginBase):
             cache_entries = int(self._cfg.get("cache_entries", 128))
         except (TypeError, ValueError):
             cache_entries = 128
+        total_timeout = number("total_timeout_seconds", 25.0, 5.0, 25.0)
+        baidu_interval_high = max(3.0, min(20.0, total_timeout - 2.0))
         return {
             "max_results": mr,
             "timeout": to,
@@ -506,7 +510,7 @@ class WebSearchPlugin(NekoPluginBase):
             "cache_entries": max(1, min(cache_entries, 1024)),
             "min_interval": number("min_interval_seconds", 0.75, 0.0, 10.0),
             "baidu_min_interval": number(
-                "baidu_min_interval_seconds", 15.0, 3.0, 60.0
+                "baidu_min_interval_seconds", 15.0, 3.0, baidu_interval_high
             ),
             "ddg_min_interval": number(
                 "duckduckgo_min_interval_seconds", 3.0, 1.0, 15.0
@@ -527,7 +531,7 @@ class WebSearchPlugin(NekoPluginBase):
             ),
             # Keep the complete operation below the host's default 30-second
             # plugin-entry watchdog, including retries and DDG fallback.
-            "total_timeout": number("total_timeout_seconds", 25.0, 1.0, 25.0),
+            "total_timeout": total_timeout,
         }
 
     async def _do_text_search(
@@ -538,11 +542,15 @@ class WebSearchPlugin(NekoPluginBase):
         backend: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         defs = self._defaults()
-        primary_backend = (
-            backend if backend in {"baidu", "duckduckgo"} else self._backend
+        requested_backend = backend if backend in {"baidu", "duckduckgo"} else None
+        primary_backend = requested_backend or self._backend
+        allow_cross_engine_fallback = (
+            primary_backend == "baidu" and requested_backend is None
         )
         normalized_query = " ".join(query.casefold().split())
         attempted_backends = [primary_backend]
+        total_timeout = defs["total_timeout"]
+        deadline = asyncio.get_running_loop().time() + total_timeout
 
         def coordinator_for(backend: str) -> SearchCoordinator:
             coordinators = getattr(self, "_coordinators", None)
@@ -550,7 +558,10 @@ class WebSearchPlugin(NekoPluginBase):
                 return coordinators[backend]
             return self._coordinator
 
-        async def run_backend(backend: str) -> List[Dict[str, str]]:
+        async def run_backend(
+            backend: str,
+            budget: float,
+        ) -> List[Dict[str, str]]:
             key = (backend, normalized_query, max_results)
 
             async def fetch() -> List[Dict[str, str]]:
@@ -602,14 +613,20 @@ class WebSearchPlugin(NekoPluginBase):
                     **kwargs,
                 )
 
-            return await coordinator_for(backend).run(key, fetch)
+            async with asyncio.timeout(max(0.01, budget)):
+                return await coordinator_for(backend).run(key, fetch)
 
         try:
-            async with asyncio.timeout(defs["total_timeout"]):
+            async with asyncio.timeout(total_timeout):
+                primary_budget = (
+                    total_timeout * 0.72
+                    if allow_cross_engine_fallback
+                    else total_timeout
+                )
                 try:
-                    return await run_backend(primary_backend)
+                    return await run_backend(primary_backend, primary_budget)
                 except Exception as primary_error:
-                    if primary_backend != "baidu":
+                    if not allow_cross_engine_fallback:
                         raise
                     attempted_backends.append("duckduckgo")
                     self.logger.warning(
@@ -617,7 +634,10 @@ class WebSearchPlugin(NekoPluginBase):
                         type(primary_error).__name__,
                     )
                     try:
-                        return await run_backend("duckduckgo")
+                        fallback_budget = deadline - asyncio.get_running_loop().time()
+                        if fallback_budget <= 0:
+                            raise primary_error
+                        return await run_backend("duckduckgo", fallback_budget)
                     except Exception:
                         # Preserve the primary error because it describes the
                         # selected backend and has already updated its cooldown.

@@ -257,13 +257,19 @@ def is_baidu_blocked(html: str) -> bool:
     if len(html) <= 4096 and not re.search(
         r"id\s*=\s*['\"]content_left['\"]", head, re.I
     ):
+        if re.search(
+            r"<meta\b[^>]*\bhttp-equiv\s*=\s*['\"]?\s*refresh\b",
+            head,
+            re.I,
+        ):
+            return True
         compact = re.sub(r"\s+", "", head).casefold()
         return any(
             marker in compact
             for marker in (
                 "location.replace(",
+                "location.assign(",
                 "window.location=",
-                "window.location.href=",
                 "location.href=",
             )
         )

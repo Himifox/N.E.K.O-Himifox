@@ -392,13 +392,7 @@ def parse_google_results(html_content: str, limit: int = 5) -> List[Dict[str, st
 
 async def search_duckduckgo(query: str, limit: int = 10) -> Dict[str, Any]:
     """
-    Search keywords on DuckDuckGo and fetch results (for non-Chinese regions).
-
-    Replaces Google: Google's anti-bot measures are nearly guaranteed to trip for
-    headless/scripted requests (302 → /sorry/index → 429), so the proactive-chat
-    window-context search got basically no results. DuckDuckGo's HTML endpoint
-    (html.duckduckgo.com) is far more tolerant of scripted access, and results are
-    embedded directly in the HTML, easy to parse.
+    Search DuckDuckGo through the controlled web-search plugin gateway.
 
     Args:
         query: search keywords
@@ -515,7 +509,7 @@ def parse_duckduckgo_results(html_content: str, limit: int = 5) -> List[Dict[str
 
 async def search_baidu(query: str, limit: int = 5) -> Dict[str, Any]:
     """
-    Search keywords on Baidu and fetch results
+    Search Baidu through the controlled web-search plugin gateway.
     
     Args:
         query: search keywords

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -23,6 +24,7 @@ SearchResults = List[Dict[str, str]]
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _NO_RETRY_STATUS = frozenset({429})
+_MAX_THROTTLE_WAIT_SECONDS = 3.0
 
 
 def _copy_results(results: SearchResults) -> SearchResults:
@@ -196,16 +198,7 @@ class SearchCoordinator:
     ) -> SearchResults:
         state = self._backends.setdefault(backend, _BackendState(asyncio.Lock()))
         try:
-            if state.lock.locked():
-                await asyncio.wait_for(
-                    state.lock.acquire(),
-                    timeout=self.queue_wait_seconds,
-                )
-            else:
-                # Avoid spawning an internal wait_for task on the uncontended
-                # path. Besides reducing latency, this lets short caller-level
-                # timeouts cancel the actual fetch rather than a pending lock
-                # acquisition helper.
+            async with asyncio.timeout(self.queue_wait_seconds):
                 await state.lock.acquire()
         except TimeoutError as error:
             raise SearchBusyError("search backend is busy; retry shortly") from error
@@ -218,6 +211,10 @@ class SearchCoordinator:
                 )
             wait_seconds = state.next_allowed - now
             if wait_seconds > 0:
+                if wait_seconds > _MAX_THROTTLE_WAIT_SECONDS:
+                    raise SearchBusyError(
+                        "search backend rate-limited; retry shortly"
+                    )
                 await asyncio.sleep(wait_seconds)
             try:
                 results = await fetch()
@@ -325,3 +322,11 @@ class SearchCoordinator:
                     if self._inflight.get(key) is task:
                         self._inflight.pop(key, None)
                     task.cancel()
+                    # Python 3.11 can race cancellation with the internal lock
+                    # waiter. Give it a turn and repeat cancellation so a caller
+                    # timeout remains a hard bound without leaking the fetch.
+                    await asyncio.sleep(0)
+                    if not task.done():
+                        task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
