@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from contextlib import suppress
+import os
 import time
 from typing import Any, Dict, Optional
 import uuid
@@ -47,6 +48,7 @@ _next_run_at: Dict[str, float] = {}
 _failure_cooldown_until: Dict[str, float] = {}
 _inflight: Dict[tuple[str, str, int], asyncio.Task[Dict[str, Any]]] = {}
 _waiters: Dict[tuple[str, str, int], int] = {}
+_cleanup_tasks: set[asyncio.Task[None]] = set()
 _runtime_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -158,19 +160,37 @@ def _extract_export(payload: object) -> Dict[str, Any]:
     raise RuntimeError("搜索插件没有返回结构化结果")
 
 
-async def _cancel_run(
-    client: httpx.AsyncClient,
-    base: str,
-    run_id: str,
-) -> None:
+def _plugin_server_base() -> str:
+    raw_port = os.getenv("NEKO_USER_PLUGIN_SERVER_PORT", "").strip()
     try:
-        await client.post(
-            f"{base}/runs/{run_id}/cancel",
-            json={"reason": "search gateway stopped waiting"},
-            timeout=1.0,
-        )
+        port = int(raw_port) if raw_port else int(USER_PLUGIN_SERVER_PORT)
+    except (TypeError, ValueError):
+        port = int(USER_PLUGIN_SERVER_PORT)
+    if not 1 <= port <= 65535:
+        port = int(USER_PLUGIN_SERVER_PORT)
+    return f"http://127.0.0.1:{port}"
+
+
+async def _cancel_run(base: str, run_id: str) -> None:
+    try:
+        timeout = httpx.Timeout(0.5, connect=0.2)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            proxy=None,
+            trust_env=False,
+        ) as client:
+            await client.post(
+                f"{base}/runs/{run_id}/cancel",
+                json={"reason": "search gateway stopped waiting"},
+            )
     except Exception:
         logger.debug("取消遗留联网搜索任务失败 (run_id=%s)", run_id)
+
+
+def _schedule_cancel(base: str, run_id: str) -> None:
+    task = asyncio.create_task(_cancel_run(base, run_id))
+    _cleanup_tasks.add(task)
+    task.add_done_callback(_cleanup_tasks.discard)
 
 
 async def _invoke_plugin(
@@ -179,7 +199,16 @@ async def _invoke_plugin(
     backend: Optional[str],
     preferred_backend: Optional[str],
 ) -> Dict[str, Any]:
-    base = f"http://127.0.0.1:{USER_PLUGIN_SERVER_PORT}"
+    base = _plugin_server_base()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _RUN_TIMEOUT_SECONDS
+
+    def remaining_timeout() -> float:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError("等待联网搜索插件超时")
+        return min(5.0, remaining)
+
     args: Dict[str, Any] = {
         "query": query,
         "max_results": limit,
@@ -199,7 +228,13 @@ async def _invoke_plugin(
     }
     timeout = httpx.Timeout(5.0, connect=1.0)
     async with httpx.AsyncClient(timeout=timeout, proxy=None, trust_env=False) as client:
-        response = await client.post(f"{base}/runs", json=body)
+        request_timeout = remaining_timeout()
+        async with asyncio.timeout(request_timeout):
+            response = await client.post(
+                f"{base}/runs",
+                json=body,
+                timeout=request_timeout,
+            )
         if not 200 <= response.status_code < 300:
             raise RuntimeError(f"联网搜索插件不可用（HTTP {response.status_code}）")
         accepted = response.json()
@@ -207,16 +242,17 @@ async def _invoke_plugin(
         if not isinstance(run_id, str) or not run_id:
             raise RuntimeError("联网搜索插件未返回有效任务编号")
 
-        deadline = asyncio.get_running_loop().time() + _RUN_TIMEOUT_SECONDS
         terminal = {"succeeded", "failed", "canceled", "timeout"}
         poll_interval = _POLL_INTERVAL_SECONDS
         terminal_seen = False
         try:
             while True:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    raise TimeoutError("等待联网搜索插件超时")
-                response = await client.get(f"{base}/runs/{run_id}")
+                request_timeout = remaining_timeout()
+                async with asyncio.timeout(request_timeout):
+                    response = await client.get(
+                        f"{base}/runs/{run_id}",
+                        timeout=request_timeout,
+                    )
                 if response.status_code != 200:
                     raise RuntimeError(
                         f"读取联网搜索任务失败（HTTP {response.status_code}）"
@@ -232,16 +268,21 @@ async def _invoke_plugin(
                             f"联网搜索任务状态：{status}",
                         )
                     break
-                await asyncio.sleep(min(poll_interval, remaining))
+                await asyncio.sleep(
+                    min(poll_interval, max(0.0, deadline - loop.time()))
+                )
                 poll_interval = min(
                     poll_interval * 1.5,
                     _MAX_POLL_INTERVAL_SECONDS,
                 )
 
-            response = await client.get(
-                f"{base}/runs/{run_id}/export",
-                params={"limit": 20},
-            )
+            request_timeout = remaining_timeout()
+            async with asyncio.timeout(request_timeout):
+                response = await client.get(
+                    f"{base}/runs/{run_id}/export",
+                    params={"limit": 20},
+                    timeout=request_timeout,
+                )
             if response.status_code != 200:
                 raise RuntimeError(
                     f"导出联网搜索结果失败（HTTP {response.status_code}）"
@@ -249,7 +290,7 @@ async def _invoke_plugin(
             data = _extract_export(response.json())
         except BaseException:
             if not terminal_seen:
-                await _cancel_run(client, base, run_id)
+                _schedule_cancel(base, run_id)
             raise
 
     normalized_results = []
