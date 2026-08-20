@@ -19,7 +19,7 @@ import httpx
 
 from config import USER_PLUGIN_SERVER_PORT
 
-from ._shared import logger
+from ._shared import is_china_region, logger
 
 
 _CACHE_TTL_SECONDS = 600.0
@@ -74,6 +74,7 @@ def _prepare_runtime_loop() -> asyncio.AbstractEventLoop:
         _inflight.clear()
         _waiters.clear()
         _backend_locks.clear()
+        _cleanup_tasks.clear()
     return loop
 
 
@@ -394,8 +395,18 @@ async def search_via_plugin(
         if preferred_backend in {"baidu", "duckduckgo"}
         else None
     )
-    selected_backend = requested_backend or hinted_backend or "auto"
-    key = (selected_backend, normalized_query.casefold(), requested_limit)
+    selected_backend = requested_backend or hinted_backend
+    if selected_backend is None:
+        selected_backend = "baidu" if is_china_region() else "duckduckgo"
+    allow_cross_engine_fallback = (
+        requested_backend is None and selected_backend == "baidu"
+    )
+    cache_scope = (
+        f"{selected_backend}:fallback"
+        if allow_cross_engine_fallback
+        else selected_backend
+    )
+    key = (cache_scope, normalized_query.casefold(), requested_limit)
     cached = _cached(key)
     if cached is not None:
         return cached
@@ -408,39 +419,30 @@ async def search_via_plugin(
         async def execute() -> Dict[str, Any]:
             deadline = loop.time() + _RUN_TIMEOUT_SECONDS
             try:
-                if selected_backend in {"baidu", "duckduckgo"}:
+                try:
+                    result = await _invoke_in_backend_slot(
+                        normalized_query,
+                        plugin_limit,
+                        selected_backend,
+                        deadline,
+                    )
+                except Exception as primary_error:
+                    if not allow_cross_engine_fallback:
+                        raise
+                    logger.info(
+                        "受控百度搜索失败，协调 DuckDuckGo 后端后重试 "
+                        "(error_type=%s)",
+                        type(primary_error).__name__,
+                    )
                     try:
                         result = await _invoke_in_backend_slot(
                             normalized_query,
                             plugin_limit,
-                            selected_backend,
+                            "duckduckgo",
                             deadline,
                         )
-                    except Exception as primary_error:
-                        if requested_backend is not None or selected_backend != "baidu":
-                            raise
-                        logger.info(
-                            "受控百度搜索失败，协调 DuckDuckGo 后端后重试 "
-                            "(error_type=%s)",
-                            type(primary_error).__name__,
-                        )
-                        try:
-                            result = await _invoke_in_backend_slot(
-                                normalized_query,
-                                plugin_limit,
-                                "duckduckgo",
-                                deadline,
-                            )
-                        except Exception:
-                            raise primary_error
-                else:
-                    result = await _invoke_plugin(
-                        normalized_query,
-                        plugin_limit,
-                        None,
-                        None,
-                        run_timeout=max(0.01, deadline - loop.time()),
-                    )
+                    except Exception:
+                        raise primary_error
             except _PluginThrottleError as error:
                 # Busy/cooldown responses are normal flow control from a
                 # healthy plugin, not grounds for a five-minute outage.
@@ -450,10 +452,6 @@ async def search_via_plugin(
                     "results": [],
                 }
             except Exception as error:
-                if selected_backend == "auto":
-                    _failure_cooldown_until[selected_backend] = (
-                        time.monotonic() + _FAILURE_COOLDOWN_SECONDS
-                    )
                 logger.warning(
                     "受控联网搜索失败 (query_len=%s, error_type=%s)",
                     len(normalized_query),
