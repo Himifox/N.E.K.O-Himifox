@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, NoReturn, Optional
 
 from plugin.sdk.plugin import (
@@ -87,9 +88,10 @@ def _select_backend(configured: object, country: Optional[str]) -> str:
     return "duckduckgo" if country and country not in _CN_COUNTRIES else "baidu"
 
 
-def _snapshot_baidu_cookies(client: httpx.AsyncClient) -> List[Dict[str, str]]:
+def _snapshot_baidu_cookies(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     """Copy anonymous Baidu cookies without touching a user's browser profile."""
-    snapshot: List[Dict[str, str]] = []
+    snapshot: List[Dict[str, Any]] = []
+    now = time.time()
     for cookie in client.cookies.jar:
         domain = str(cookie.domain or "").lower().lstrip(".")
         if domain != "baidu.com" and not domain.endswith(".baidu.com"):
@@ -98,14 +100,18 @@ def _snapshot_baidu_cookies(client: httpx.AsyncClient) -> List[Dict[str, str]]:
         value = str(cookie.value or "")[:4096]
         if not name or not value:
             continue
-        snapshot.append(
-            {
-                "name": name,
-                "value": value,
-                "domain": str(cookie.domain or ".baidu.com")[:255],
-                "path": str(cookie.path or "/")[:255],
-            }
-        )
+        expires = int(cookie.expires) if cookie.expires is not None else None
+        if expires is not None and expires <= now:
+            continue
+        item: Dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "domain": str(cookie.domain or ".baidu.com")[:255],
+            "path": str(cookie.path or "/")[:255],
+        }
+        if expires is not None:
+            item["expires"] = expires
+        snapshot.append(item)
     return snapshot[:64]
 
 
@@ -122,6 +128,15 @@ def _restore_baidu_cookies(
         value = str(item.get("value") or "")[:4096]
         domain = str(item.get("domain") or ".baidu.com")[:255]
         path = str(item.get("path") or "/")[:255]
+        expires_value = item.get("expires")
+        expires: Optional[int] = None
+        if expires_value is not None:
+            try:
+                expires = int(float(expires_value))
+            except (TypeError, ValueError):
+                continue
+            if expires <= time.time():
+                continue
         normalized_domain = domain.lower().lstrip(".")
         if (
             not name
@@ -133,6 +148,19 @@ def _restore_baidu_cookies(
         ):
             continue
         client.cookies.set(name, value, domain=domain, path=path)
+        if expires is not None:
+            # httpx.Cookies.set does not expose expiry. Restore it on the
+            # underlying CookieJar so the next persisted snapshot cannot turn
+            # a time-limited Baidu token into an immortal session cookie.
+            for cookie in client.cookies.jar:
+                if (
+                    cookie.name == name
+                    and cookie.domain == domain
+                    and cookie.path == path
+                ):
+                    cookie.expires = expires
+                    cookie.discard = False
+                    break
 
 
 # ---------------------------------------------------------------------------
@@ -311,16 +339,23 @@ async def _search_baidu(
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": _BAIDU_HOME_URL,
     }
-    mobile_resp = await request_with_retry(
-        lambda: client.get(
-            _BAIDU_MOBILE_SEARCH_URL,
-            params={"word": query},
-            headers=mobile_headers,
-            timeout=min(timeout, 5.0),
-        ),
-        max_attempts=1,
-        base_delay=retry_base_delay,
-    )
+    try:
+        mobile_resp = await request_with_retry(
+            lambda: client.get(
+                _BAIDU_MOBILE_SEARCH_URL,
+                params={"word": query},
+                headers=mobile_headers,
+                timeout=min(timeout, 5.0),
+            ),
+            max_attempts=1,
+            base_delay=retry_base_delay,
+        )
+    except httpx.HTTPError as error:
+        if desktop_blocked:
+            raise SearchBlockedError(
+                "百度桌面端已触发安全验证，移动端请求失败，请稍后重试"
+            ) from error
+        raise
     mobile_html = decode_html(
         mobile_resp.content,
         mobile_resp.headers.get("content-type", ""),
@@ -354,7 +389,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._backend: str = "baidu"
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._baidu_cookies: List[Dict[str, str]] = []
+        self._baidu_cookies: List[Dict[str, Any]] = []
         self._user_agent = _UA
         self._coordinator = SearchCoordinator()
         self._coordinators: Dict[str, SearchCoordinator] = {

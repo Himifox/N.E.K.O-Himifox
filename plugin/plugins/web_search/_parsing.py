@@ -335,6 +335,8 @@ def parse_baidu_mobile_html(
             metadata = json.loads(str(item.get("data-log") or "{}"))
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
+        if not isinstance(metadata, dict):
+            continue
         url = str(metadata.get("mu") or "").strip()
         if not is_http_url(url) or url in seen_urls:
             continue
