@@ -11,7 +11,7 @@ requires-python = "==3.11.*"
 dependencies = [
   # Built into the main-server runtime (not a user plugin or MCP channel).
   # Pin the host-neutral Core contract until it lands in a tagged release.
-  "openbiliclaw @ git+https://github.com/Himifox/OpenBiliClaw.git@79ffada1",
+  "openbiliclaw @ git+https://github.com/Himifox/OpenBiliClaw.git@3c180eae5",
   "fastapi~=0.115.9",
   "websockets~=15.0.1",
   "soxr~=0.5.0",
