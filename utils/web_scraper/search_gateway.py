@@ -177,6 +177,7 @@ async def _invoke_plugin(
     query: str,
     limit: int,
     backend: Optional[str],
+    preferred_backend: Optional[str],
 ) -> Dict[str, Any]:
     base = f"http://127.0.0.1:{USER_PLUGIN_SERVER_PORT}"
     args: Dict[str, Any] = {
@@ -186,6 +187,10 @@ async def _invoke_plugin(
     }
     if backend in {"baidu", "duckduckgo"}:
         args["backend"] = backend
+    elif preferred_backend in {"baidu", "duckduckgo"}:
+        # Keep plugin auto semantics (including Baidu -> DDG fallback), while
+        # making its primary coordinator match the gateway's reserved slot.
+        args["preferred_backend"] = preferred_backend
     body = {
         "task_id": f"proactive-search-{uuid.uuid4().hex}",
         "plugin_id": "web_search",
@@ -275,6 +280,7 @@ async def search_via_plugin(
     limit: int = 5,
     *,
     backend: Optional[str] = None,
+    preferred_backend: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a cached, rate-limited search through the web_search plugin."""
     normalized_query = " ".join(str(query or "").split())
@@ -285,7 +291,13 @@ async def search_via_plugin(
     except (TypeError, ValueError):
         requested_limit = 5
     plugin_limit = max(3, requested_limit)
-    selected_backend = backend if backend in {"baidu", "duckduckgo"} else "auto"
+    requested_backend = backend if backend in {"baidu", "duckduckgo"} else None
+    hinted_backend = (
+        preferred_backend
+        if preferred_backend in {"baidu", "duckduckgo"}
+        else None
+    )
+    selected_backend = requested_backend or hinted_backend or "auto"
     key = (selected_backend, normalized_query.casefold(), requested_limit)
     cached = _cached(key)
     if cached is not None:
@@ -306,19 +318,7 @@ async def search_via_plugin(
                 "error": "联网搜索暂处于失败冷却期",
                 "results": [],
             }
-        # The gateway cannot know which backend the plugin will choose for
-        # auto until after the run. Reserve both possible short start slots so
-        # auto cannot race an explicit request into the same coordinator.
-        # Explicit Baidu and DuckDuckGo requests still use independent slots.
-        coordination_slots = (
-            ("baidu", "duckduckgo")
-            if selected_backend == "auto"
-            else (selected_backend,)
-        )
-        start_at = max(
-            now,
-            *(_next_run_at.get(slot, 0.0) for slot in coordination_slots),
-        )
+        start_at = max(now, _next_run_at.get(selected_backend, 0.0))
         throttle_wait = start_at - now
         if throttle_wait > _MAX_THROTTLE_WAIT_SECONDS:
             return stale or {
@@ -327,8 +327,7 @@ async def search_via_plugin(
                 "results": [],
             }
         next_start = start_at + _MIN_RUN_INTERVAL_SECONDS
-        for slot in coordination_slots:
-            _next_run_at[slot] = next_start
+        _next_run_at[selected_backend] = next_start
 
         async def execute() -> Dict[str, Any]:
             if throttle_wait > 0:
@@ -338,6 +337,7 @@ async def search_via_plugin(
                     normalized_query,
                     plugin_limit,
                     backend,
+                    hinted_backend,
                 )
             except _PluginThrottleError as error:
                 # Busy/cooldown responses are normal flow control from a

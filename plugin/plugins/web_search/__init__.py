@@ -602,10 +602,16 @@ class WebSearchPlugin(NekoPluginBase):
         max_results: int,
         timeout: float,
         backend: Optional[str] = None,
+        preferred_backend: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         defs = self._defaults()
         requested_backend = backend if backend in {"baidu", "duckduckgo"} else None
-        primary_backend = requested_backend or self._backend
+        hinted_backend = (
+            preferred_backend
+            if preferred_backend in {"baidu", "duckduckgo"}
+            else None
+        )
+        primary_backend = requested_backend or hinted_backend or self._backend
         allow_cross_engine_fallback = (
             primary_backend == "baidu" and requested_backend is None
         )
@@ -769,6 +775,7 @@ class WebSearchPlugin(NekoPluginBase):
         query: str,
         max_results: int = 0,
         backend: str = "auto",
+        preferred_backend: str = "",
         **_,
     ):
         if not query or not query.strip():
@@ -787,7 +794,13 @@ class WebSearchPlugin(NekoPluginBase):
         )
 
         try:
-            results = await self._do_text_search(query, max_r, timeout, backend=backend)
+            results = await self._do_text_search(
+                query,
+                max_r,
+                timeout,
+                backend=backend,
+                preferred_backend=preferred_backend,
+            )
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(_search_sdk_error(e))
         except Exception as e:
@@ -842,6 +855,7 @@ class WebSearchPlugin(NekoPluginBase):
         query: str,
         max_results: int = 5,
         backend: str = "auto",
+        preferred_backend: str = "",
         **_,
     ):
         if not query or not query.strip():
@@ -853,7 +867,13 @@ class WebSearchPlugin(NekoPluginBase):
         timeout = defs["timeout"]
 
         try:
-            results = await self._do_text_search(query, max_r, timeout, backend=backend)
+            results = await self._do_text_search(
+                query,
+                max_r,
+                timeout,
+                backend=backend,
+                preferred_backend=preferred_backend,
+            )
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(_search_sdk_error(e))
         except Exception as e:

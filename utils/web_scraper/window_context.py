@@ -758,7 +758,11 @@ async def fetch_window_context_content(limit: int = 5) -> Dict[str, Any]:
         
         query = search_queries[0]
         logger.info(f"使用受控窗口查询 (len={len(query)})")
-        search_result = await search_via_plugin(query, limit)
+        search_result = await search_via_plugin(
+            query,
+            limit,
+            preferred_backend="baidu" if china_region else "duckduckgo",
+        )
         if search_result.get('success') and search_result.get('results'):
             all_results.extend(search_result['results'])
             successful_queries.append(query)
