@@ -34,6 +34,7 @@ from ._parsing import (
     is_ddg_blocked,
     is_ddg_no_results,
     parse_baidu_html,
+    parse_baidu_mobile_html,
     parse_ddg_html,
     parse_ddg_lite_html,
 )
@@ -46,12 +47,29 @@ from ._resilience import (
     should_skip_fallback,
 )
 
-_UA = "N.E.K.O-WebSearch/0.1.4 (+https://github.com/Project-N-E-K-O/N.E.K.O)"
+_UA = "N.E.K.O-WebSearch/0.1.5 (+https://github.com/Project-N-E-K-O/N.E.K.O)"
+# Baidu currently answers plain bot-style user agents with a tiny JavaScript
+# redirect shell even after the normal BAIDUID cookie warm-up.  Use a
+# browser-compatible UA for Baidu while retaining the N.E.K.O product token;
+# DuckDuckGo continues to receive the honest crawler UA above.
+_BAIDU_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36 "
+    "N.E.K.O-WebSearch/0.1.5"
+)
 
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
 _BAIDU_HOME_URL = "https://www.baidu.com/"
 _BAIDU_SEARCH_URL = "https://www.baidu.com/s"
+_BAIDU_MOBILE_SEARCH_URL = "https://m.baidu.com/s"
+_BAIDU_MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 10; K) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Mobile Safari/537.36 "
+    "N.E.K.O-WebSearch/0.1.5"
+)
 _GEOIP_PROVIDERS = (
     ("https://ipwho.is/?fields=success,country_code", "country_code"),
     ("https://ipapi.co/json/", "country_code"),
@@ -59,6 +77,7 @@ _GEOIP_PROVIDERS = (
 
 # Countries that cannot reliably access DuckDuckGo
 _CN_COUNTRIES = frozenset({"CN"})
+_BAIDU_COOKIE_STORE_KEY = "baidu_anonymous_cookies"
 
 
 def _select_backend(configured: object, country: Optional[str]) -> str:
@@ -66,6 +85,54 @@ def _select_backend(configured: object, country: Optional[str]) -> str:
     if backend in {"baidu", "duckduckgo"}:
         return backend
     return "duckduckgo" if country and country not in _CN_COUNTRIES else "baidu"
+
+
+def _snapshot_baidu_cookies(client: httpx.AsyncClient) -> List[Dict[str, str]]:
+    """Copy anonymous Baidu cookies without touching a user's browser profile."""
+    snapshot: List[Dict[str, str]] = []
+    for cookie in client.cookies.jar:
+        domain = str(cookie.domain or "").lower().lstrip(".")
+        if domain != "baidu.com" and not domain.endswith(".baidu.com"):
+            continue
+        name = str(cookie.name or "")[:128]
+        value = str(cookie.value or "")[:4096]
+        if not name or not value:
+            continue
+        snapshot.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": str(cookie.domain or ".baidu.com")[:255],
+                "path": str(cookie.path or "/")[:255],
+            }
+        )
+    return snapshot[:64]
+
+
+def _restore_baidu_cookies(
+    client: httpx.AsyncClient,
+    saved: object,
+) -> None:
+    if not isinstance(saved, list):
+        return
+    for item in saved[:64]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")[:128]
+        value = str(item.get("value") or "")[:4096]
+        domain = str(item.get("domain") or ".baidu.com")[:255]
+        path = str(item.get("path") or "/")[:255]
+        normalized_domain = domain.lower().lstrip(".")
+        if (
+            not name
+            or not value
+            or (
+                normalized_domain != "baidu.com"
+                and not normalized_domain.endswith(".baidu.com")
+            )
+        ):
+            continue
+        client.cookies.set(name, value, domain=domain, path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +268,7 @@ async def _search_baidu(
     query: str,
     max_results: int = 8,
     timeout: float = 15.0,
-    user_agent: str = _UA,
+    user_agent: str = _BAIDU_UA,
     retry_attempts: int = 2,
     retry_base_delay: float = 0.5,
 ) -> List[Dict[str, str]]:
@@ -231,13 +298,41 @@ async def _search_baidu(
     )
 
     html = decode_html(resp.content, resp.headers.get("content-type", ""))
-    # 被拦截时会 302 到 wappass.baidu.com 验证码页
-    if "wappass.baidu.com" in str(resp.url) or is_baidu_blocked(html):
-        raise SearchBlockedError("百度返回安全验证页（反爬拦截），请稍后重试")
+    # 桌面端风控比移动 SSR 入口更敏感。桌面端返回验证码或 JavaScript
+    # 跳转壳时仍留在百度体系内降级，不直接切换搜索引擎。
+    desktop_blocked = "wappass.baidu.com" in str(resp.url) or is_baidu_blocked(html)
     results = parse_baidu_html(html, max_results)
-    if not results and not is_baidu_no_results(html):
-        raise SearchResponseError("百度未返回可解析结果")
-    return results
+    if not desktop_blocked and (results or is_baidu_no_results(html)):
+        return results
+
+    mobile_headers = {
+        "User-Agent": _BAIDU_MOBILE_UA,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": _BAIDU_HOME_URL,
+    }
+    mobile_resp = await request_with_retry(
+        lambda: client.get(
+            _BAIDU_MOBILE_SEARCH_URL,
+            params={"word": query},
+            headers=mobile_headers,
+            timeout=timeout,
+        ),
+        max_attempts=retry_attempts,
+        base_delay=retry_base_delay,
+    )
+    mobile_html = decode_html(
+        mobile_resp.content,
+        mobile_resp.headers.get("content-type", ""),
+    )
+    if "wappass.baidu.com" in str(mobile_resp.url) or is_baidu_blocked(mobile_html):
+        raise SearchBlockedError("百度桌面端和移动端均返回安全验证页，请稍后重试")
+    mobile_results = parse_baidu_mobile_html(mobile_html, max_results)
+    if not mobile_results:
+        if desktop_blocked:
+            raise SearchResponseError("百度移动端未返回可解析结果")
+        raise SearchResponseError("百度桌面端和移动端均未返回可解析结果")
+    return mobile_results
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +352,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._backend: str = "baidu"
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._baidu_cookies: List[Dict[str, str]] = []
         self._user_agent = _UA
         self._coordinator = SearchCoordinator()
         self._coordinators: Dict[str, SearchCoordinator] = {
@@ -273,15 +369,52 @@ class WebSearchPlugin(NekoPluginBase):
             or self._client.is_closed
             or self._client_loop is not loop
         ):
+            if self._client is not None:
+                current = _snapshot_baidu_cookies(self._client)
+                if current:
+                    self._baidu_cookies = current
             self._client = httpx.AsyncClient(follow_redirects=True)
+            _restore_baidu_cookies(self._client, self._baidu_cookies)
             self._client_loop = loop
         return self._client
+
+    async def _load_baidu_cookies(self) -> None:
+        self._baidu_cookies = []
+        store = getattr(self, "store", None)
+        if store is None or not getattr(store, "enabled", False):
+            return
+        result = await store.get(_BAIDU_COOKIE_STORE_KEY, [])
+        if hasattr(result, "is_ok") and callable(result.is_ok):
+            if not result.is_ok():
+                self.logger.warning("Failed to restore Baidu anonymous session")
+                return
+            saved = result.value
+        else:
+            saved = getattr(result, "value", result)
+        if isinstance(saved, list):
+            self._baidu_cookies = [dict(item) for item in saved if isinstance(item, dict)][:64]
+
+    async def _persist_baidu_cookies(self, client: httpx.AsyncClient) -> None:
+        current = _snapshot_baidu_cookies(client)
+        if current:
+            self._baidu_cookies = current
+        store = getattr(self, "store", None)
+        if store is None or not getattr(store, "enabled", False):
+            return
+        result = await store.set(_BAIDU_COOKIE_STORE_KEY, self._baidu_cookies)
+        if (
+            hasattr(result, "is_ok")
+            and callable(result.is_ok)
+            and not result.is_ok()
+        ):
+            self.logger.warning("Failed to persist Baidu anonymous session")
 
     @lifecycle(id="startup")
     async def startup(self, **_):
         cfg = await self.config.dump(timeout=5.0)
         cfg = cfg if isinstance(cfg, dict) else {}
         self._cfg = cfg.get("search") if isinstance(cfg.get("search"), dict) else {}
+        await self._load_baidu_cookies()
         defs = self._defaults()
         configured_backend = str(self._cfg.get("backend", "auto")).strip().lower()
         self._country = (
@@ -300,7 +433,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._coordinators = {
             "baidu": SearchCoordinator(
                 **common_coordinator_options,
-                min_interval_seconds=defs["min_interval"],
+                min_interval_seconds=defs["baidu_min_interval"],
                 cooldown_seconds=defs["cooldown"],
                 # Baidu uses a fixed cooldown; DDG retains progressive backoff.
                 max_cooldown_seconds=defs["cooldown"],
@@ -372,6 +505,9 @@ class WebSearchPlugin(NekoPluginBase):
             "stale_ttl": number("stale_ttl_seconds", 600.0, 0.0, 86400.0),
             "cache_entries": max(1, min(cache_entries, 1024)),
             "min_interval": number("min_interval_seconds", 0.75, 0.0, 10.0),
+            "baidu_min_interval": number(
+                "baidu_min_interval_seconds", 15.0, 3.0, 60.0
+            ),
             "ddg_min_interval": number(
                 "duckduckgo_min_interval_seconds", 3.0, 1.0, 15.0
             ),
@@ -426,15 +562,31 @@ class WebSearchPlugin(NekoPluginBase):
                 )
                 kwargs = {
                     "timeout": timeout,
-                    "user_agent": self._user_agent,
                     "retry_attempts": defs["retry_attempts"],
                     "retry_base_delay": retry_base_delay,
                 }
                 if backend == "baidu":
-                    return await _search_baidu(client, query, max_results, **kwargs)
+                    try:
+                        return await _search_baidu(
+                            client,
+                            query,
+                            max_results,
+                            user_agent=_BAIDU_UA,
+                            **kwargs,
+                        )
+                    finally:
+                        persist = getattr(self, "_persist_baidu_cookies", None)
+                        if callable(persist):
+                            await persist(client)
 
                 try:
-                    return await _search_ddg_html(client, query, max_results, **kwargs)
+                    return await _search_ddg_html(
+                        client,
+                        query,
+                        max_results,
+                        user_agent=self._user_agent,
+                        **kwargs,
+                    )
                 except Exception as e:
                     if should_skip_fallback(e):
                         raise
@@ -442,7 +594,13 @@ class WebSearchPlugin(NekoPluginBase):
                 await asyncio.sleep(
                     max(defs["ddg_fallback_delay"], defs["ddg_min_interval"])
                 )
-                return await _search_ddg_lite(client, query, max_results, **kwargs)
+                return await _search_ddg_lite(
+                    client,
+                    query,
+                    max_results,
+                    user_agent=self._user_agent,
+                    **kwargs,
+                )
 
             return await coordinator_for(backend).run(key, fetch)
 
