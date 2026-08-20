@@ -28,6 +28,7 @@ _FAILURE_COOLDOWN_SECONDS = 300.0
 _MIN_RUN_INTERVAL_SECONDS = 5.0
 _MAX_CACHE_ENTRIES = 64
 _RUN_TIMEOUT_SECONDS = 30.0
+_PRIMARY_BACKEND_BUDGET_RATIO = 0.72
 _POLL_INTERVAL_SECONDS = 0.25
 _MAX_POLL_INTERVAL_SECONDS = 2.0
 _FLOW_CONTROL_ERROR_CODES = frozenset(
@@ -418,13 +419,19 @@ async def search_via_plugin(
 
         async def execute() -> Dict[str, Any]:
             deadline = loop.time() + _RUN_TIMEOUT_SECONDS
+            primary_deadline = (
+                loop.time()
+                + (_RUN_TIMEOUT_SECONDS * _PRIMARY_BACKEND_BUDGET_RATIO)
+                if allow_cross_engine_fallback
+                else deadline
+            )
             try:
                 try:
                     result = await _invoke_in_backend_slot(
                         normalized_query,
                         plugin_limit,
                         selected_backend,
-                        deadline,
+                        primary_deadline,
                     )
                 except Exception as primary_error:
                     if not allow_cross_engine_fallback:
