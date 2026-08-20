@@ -306,7 +306,19 @@ async def search_via_plugin(
                 "error": "联网搜索暂处于失败冷却期",
                 "results": [],
             }
-        start_at = max(now, _next_run_at.get(selected_backend, 0.0))
+        # The gateway cannot know which backend the plugin will choose for
+        # auto until after the run. Reserve both possible short start slots so
+        # auto cannot race an explicit request into the same coordinator.
+        # Explicit Baidu and DuckDuckGo requests still use independent slots.
+        coordination_slots = (
+            ("baidu", "duckduckgo")
+            if selected_backend == "auto"
+            else (selected_backend,)
+        )
+        start_at = max(
+            now,
+            *(_next_run_at.get(slot, 0.0) for slot in coordination_slots),
+        )
         throttle_wait = start_at - now
         if throttle_wait > _MAX_THROTTLE_WAIT_SECONDS:
             return stale or {
@@ -314,7 +326,9 @@ async def search_via_plugin(
                 "error": "联网搜索请求过于频繁，请稍后重试",
                 "results": [],
             }
-        _next_run_at[selected_backend] = start_at + _MIN_RUN_INTERVAL_SECONDS
+        next_start = start_at + _MIN_RUN_INTERVAL_SECONDS
+        for slot in coordination_slots:
+            _next_run_at[slot] = next_start
 
         async def execute() -> Dict[str, Any]:
             if throttle_wait > 0:
