@@ -246,7 +246,27 @@ def parse_ddg_lite_html(html: str, max_results: int = 8) -> List[Dict[str, str]]
 
 def is_baidu_blocked(html: str) -> bool:
     head = html[:5000]
-    return "百度安全验证" in head or "wappass.baidu.com" in head
+    if "百度安全验证" in head or "wappass.baidu.com" in head:
+        return True
+
+    # Baidu may answer non-browser clients with a tiny JavaScript redirect
+    # document while still returning HTTP 200.  httpx does not execute the
+    # redirect, so treating it as a normal empty result would bypass the
+    # backend cooldown and encourage an immediate retry burst.
+    if len(html) <= 4096 and not re.search(
+        r"id\s*=\s*['\"]content_left['\"]", head, re.I
+    ):
+        compact = re.sub(r"\s+", "", head).casefold()
+        return any(
+            marker in compact
+            for marker in (
+                "location.replace(",
+                "window.location=",
+                "window.location.href=",
+                "location.href=",
+            )
+        )
+    return False
 
 
 def parse_baidu_html(html: str, max_results: int = 8) -> List[Dict[str, str]]:
