@@ -72,6 +72,8 @@ browser/saved/watch-later records to N.E.K.O's models. Core may rank up to three
 candidates locally, but the adapter sends rank 1 only, so Phase 1 sees at most
 one OBC slot. Phase 2 sees only the selected title, topic,
 summary, and selection motive. URLs and delivery identities stay in code.
+Core's summary-quality score is diagnostic-only; it is neither exposed to
+N.E.K.O prompts nor combined with N.E.K.O memory.
 
 For sensitive health, finance, politics, or religion topics, Core may inspect
 only the last three active-session user messages in memory to determine whether

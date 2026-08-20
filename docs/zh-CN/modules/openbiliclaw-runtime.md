@@ -57,6 +57,8 @@ NEKO 主动聊天 → 隐私门禁 + Core 最多预览排序 3 条（无 LLM、�
 
 - 健康 Core 每轮最多预览 3 条已完成评估的 semantic-ready 候选；预览不刷新来源、不调用
   LLM、不写展示历史。
+- Core `content-eval-v8` 分别门禁内容质量、相关性和最终 80 字摘要投影的可靠度；三个
+  诊断分量都留在 Core 内，不进入 NEKO 的 Phase 1/Phase 2 Prompt。
 - 适配层按 Core 排序过滤后只取第 1 条，OpenBiliClaw 在 Phase 1 总预算内最多占 1 个
   槽位，其余来源正常补位；没有第二次 Phase 1。
 - Phase 2 继续使用 NEKO 人设、记忆和语言配置生成最终台词。正常聊天、主动聊天和

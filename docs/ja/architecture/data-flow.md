@@ -82,7 +82,7 @@ Router は `main_routers/shared_state.py` の getter から長寿命 manager を
 
 ```text
 browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/pool
-proactive chat → aggregate evidence + sensitive gate → Core が最大 3 件を順位付け
+proactive chat → quality/relevance/summary-quality gate → aggregate evidence + sensitive gate → Core が最大 3 件を順位付け
                → adapter は rank 1 のみ → 既存 Phase 1（OBC 最大 1 slot）
                → 既存 Phase 2（選択 1 件の title/topic/summary/why-now）
                → text と link の commit 成功 → tracking reference だけで確認

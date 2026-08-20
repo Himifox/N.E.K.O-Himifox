@@ -68,6 +68,9 @@ N.E.K.O proactive chat → privacy gate + Core preview up to 3 (no LLM/no consum
 
 - A healthy Core previews at most three evaluated, semantic-ready candidates per
   round. Preview does not refresh sources, call an LLM, or write display history.
+- Core `content-eval-v8` independently gates content quality, relevance, and the
+  reliability of the exact 80-character summary projection. The diagnostic
+  components remain inside Core and never enter either N.E.K.O prompt.
 - After fail-closed validation, the adapter takes rank 1 only. OpenBiliClaw
   occupies at most one slot in the existing Phase 1 total budget; other sources
   fill the remaining slots. No second

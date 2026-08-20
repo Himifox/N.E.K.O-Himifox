@@ -63,6 +63,9 @@ N.E.K.O proactive chat → privacy gate + Core が最大 3 件を順位付け
   LLM call、表示履歴 write を行いません。
 - adapter は validation 後の rank 1 だけを使い、OpenBiliClaw は既存 Phase 1 の total
   budget で最大 1 slot です。残りを他 source が埋め、二つ目の Phase 1 は追加しません。
+- Core `content-eval-v8` は content quality、relevance、最終 80 文字 summary projection の
+  reliability を別々に gate します。3 つの診断 component は Core 内だけに残り、
+  N.E.K.O の Phase 1/2 prompt には入りません。
 - 最終台詞は N.E.K.O の persona、memory、language を使う既存 Phase 2 だけが生成します。
   normal／proactive chat と tool chain は `core.chat()` を呼びません。
 - `[PASS]`、user takeover、delivery failure、degraded Core、empty pool、timeout では

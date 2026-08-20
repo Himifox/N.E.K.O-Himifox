@@ -82,7 +82,7 @@ Routers obtain long-lived managers through `main_routers/shared_state.py` getter
 
 ```text
 browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/pool
-proactive chat → aggregate evidence + sensitive gate → Core ranks up to 3
+proactive chat → quality/relevance/summary-quality gate → aggregate evidence + sensitive gate → Core ranks up to 3
                → adapter takes rank 1 → existing Phase 1 (one OBC slot; timing only)
                → existing Phase 2 (one title/topic/summary/why-now projection)
                → committed text + delivered link → tracking-only acknowledgement

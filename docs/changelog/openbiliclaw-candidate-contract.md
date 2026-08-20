@@ -22,8 +22,12 @@ recommendation object directly.
 Normal chat and proactive chat still never call `core.chat()`. Existing public
 response links remain `title/url/source/mode`. The plugin system, MCP, browser
 extension endpoint, model ownership, and two-call Phase 1/Phase 2 architecture
-are unchanged. N.E.K.O pins OpenBiliClaw Core commit `9cd7d6eae` and starts it
+are unchanged. N.E.K.O pins OpenBiliClaw Core commit `79ffada1` and starts it
 with lazy surface copy, so background `recommendation.write_expression` is zero.
+
+The pinned Core now uses `content-eval-v8`: summary reliability is scored in the
+existing Discovery evaluation call and fails closed below 0.75. That component
+is diagnostic-only and does not expand Phase 1 or Phase 2 prompts.
 
 The contract is covered by prompt-boundary unit tests, single-speaker tests, and
 a real-Core integration test that confirms Core can rank three while Phase 1
