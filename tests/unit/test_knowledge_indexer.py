@@ -53,3 +53,21 @@ def test_indexer_work_limits_are_bounded() -> None:
     assert indexer.BACKLOG_DELAY_SECONDS == 30.0
     assert indexer.EMBEDDING_BATCH_SIZE == 4
     assert indexer.MAX_CHUNKS_PER_ROUND == 8
+
+
+@pytest.mark.asyncio
+async def test_indexer_initialization_failure_is_retrieved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(indexer, "STARTUP_DELAY_SECONDS", 0.0)
+
+    def fail_to_open(_root):
+        raise ValueError("legacy migration conflict")
+
+    monkeypatch.setattr(
+        "knowledge.service.KnowledgeService.from_root",
+        fail_to_open,
+    )
+
+    await indexer._run_indexer(tmp_path, asyncio.Event())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -12,12 +13,17 @@ from pathlib import Path
 from utils.file_utils import atomic_write_json
 
 from ._mutation_lock import mutation_lock
+from .chunking import derive_knowledge_chunks
 from .moegirl_knowledge.catalog_overrides import load_disabled_entries
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry
+from .moegirl_knowledge.models import (
+    MoegirlKnowledgeEntry,
+    normalize_knowledge_title,
+)
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
 _LEGACY_DIRECTORIES = ("moegirl-knowledge", "corpora")
+logger = logging.getLogger("N.E.K.O.Knowledge.Migration")
 
 
 def migrate_split_knowledge_layout(
@@ -81,7 +87,9 @@ def migrate_split_knowledge_layout(
                 indent=2,
             )
             if not staged_store.integrity_ok():
-                raise ValueError("unified public knowledge migration failed integrity check")
+                raise ValueError(
+                    "unified public knowledge migration failed integrity check"
+                )
 
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(stage / "packs.json", destination.with_name("packs.json"))
@@ -109,17 +117,32 @@ def _collect_legacy_data(
     dict[str, dict[str, object]],
 ]:
     entries_by_source: dict[str, dict[str, MoegirlKnowledgeEntry]] = defaultdict(dict)
+    entry_origins: dict[tuple[str, str], Path] = {}
     policy_votes: dict[str, set[str]] = defaultdict(set)
     vectors: dict[str, dict[str, object]] = {}
     for database in databases:
         store = MoegirlKnowledgeStore(database)
         for entry in store.list_active_entries():
-            previous = entries_by_source[entry.source_tag].get(entry.title)
-            if previous is not None and previous.content_hash != entry.content_hash:
+            normalized_title = normalize_knowledge_title(entry.title)
+            identity = (entry.source_tag, normalized_title)
+            previous = entries_by_source[entry.source_tag].get(normalized_title)
+            previous_origin = entry_origins.get(identity)
+            if (
+                previous is not None
+                and previous.content_hash != entry.content_hash
+                and previous_origin != database
+            ):
                 raise ValueError(
                     "legacy public knowledge contains conflicting source/title entries"
                 )
-            entries_by_source[entry.source_tag][entry.title] = entry
+            if previous is not None and previous.content_hash != entry.content_hash:
+                logger.warning(
+                    "Keeping the later legacy entry for source=%s title=%s",
+                    entry.source_tag,
+                    entry.title,
+                )
+            entries_by_source[entry.source_tag][normalized_title] = entry
+            entry_origins[identity] = database
         for row in store.count_by_source_tags():
             source_tag = str(row.get("tag") or "")
             if not source_tag:
@@ -135,12 +158,23 @@ def _collect_legacy_data(
                 raise ValueError("legacy public knowledge contains conflicting vectors")
             vectors[chunk_id] = record
 
-    policies = {
-        source_tag: (
-            "prebuilt_only"
-            if votes == {"prebuilt_only"}
-            else "local"
+    selected_chunk_ids = {
+        chunk.chunk_id
+        for entries in entries_by_source.values()
+        for entry in entries.values()
+        for chunk in derive_knowledge_chunks(
+            entry,
+            entry_key=f"{entry.source_tag}:{entry.title}",
         )
+    }
+    vectors = {
+        chunk_id: record
+        for chunk_id, record in vectors.items()
+        if chunk_id in selected_chunk_ids
+    }
+
+    policies = {
+        source_tag: ("prebuilt_only" if votes == {"prebuilt_only"} else "local")
         for source_tag, votes in policy_votes.items()
     }
     for source_tag in entries_by_source:
@@ -185,11 +219,12 @@ def _merge_registries(
             )
             previous = merged.get(str(pack_id))
             if previous is not None:
-                if (
-                    previous.get("source_tag") != metadata.get("source_tag")
-                    or previous.get("subscription") != metadata.get("subscription")
-                ):
-                    raise ValueError("legacy public knowledge contains conflicting packs")
+                if previous.get("source_tag") != metadata.get(
+                    "source_tag"
+                ) or previous.get("subscription") != metadata.get("subscription"):
+                    raise ValueError(
+                        "legacy public knowledge contains conflicting packs"
+                    )
                 if (
                     previous.get("effective_material_type") == "corpus"
                     or effective == "corpus"

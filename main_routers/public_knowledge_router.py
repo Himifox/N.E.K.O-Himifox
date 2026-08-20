@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 
-from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
 from knowledge.api import open_knowledge
 from knowledge.diagnostics import (
@@ -56,7 +56,16 @@ async def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
 
 
 def _service():
-    return open_knowledge(get_config_manager().knowledge_dir)
+    try:
+        return open_knowledge(get_config_manager().knowledge_dir)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "knowledge_unavailable",
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
 
 
 def _source_tag(value: str) -> str:
@@ -117,7 +126,21 @@ def _validate_mutation(request: Request, payload: dict):
 
 @router.get("/status")
 async def get_public_knowledge_status():
-    service = _service()
+    try:
+        service = _service()
+    except HTTPException as exc:
+        return {
+            "ok": False,
+            "status": {
+                "status": "degraded",
+                "available": False,
+                "migration_state": "failed",
+                "error_code": "knowledge_unavailable",
+                "error_type": str(exc.detail.get("error_type") or "")
+                if isinstance(exc.detail, dict)
+                else "",
+            },
+        }
     status = await asyncio.to_thread(service.get_status)
     state = "ready" if status.get("integrity_ok") is True else "degraded"
     return {"ok": True, "status": {"status": state, **status}}

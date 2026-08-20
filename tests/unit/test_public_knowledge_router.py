@@ -111,6 +111,25 @@ def test_management_api_exposes_one_store(monkeypatch, tmp_path):
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
 
 
+def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        module,
+        "open_knowledge",
+        lambda _root: (_ for _ in ()).throw(ValueError("migration conflict")),
+    )
+
+    status = client.get("/api/public-knowledge/status")
+    entries = client.get("/api/public-knowledge/entries")
+
+    assert status.status_code == 200
+    assert status.json()["status"]["migration_state"] == "failed"
+    assert entries.status_code == 503
+    assert entries.json()["detail"]["code"] == "knowledge_unavailable"
+
+
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(

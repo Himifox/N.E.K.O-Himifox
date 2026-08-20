@@ -14,7 +14,10 @@ from utils.file_utils import atomic_write_json
 from ._mutation_lock import mutation_lock
 from .chunking import derive_knowledge_chunks
 from .moegirl_knowledge.filters import sanitize_external_text
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry
+from .moegirl_knowledge.models import (
+    MoegirlKnowledgeEntry,
+    normalize_knowledge_title,
+)
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
@@ -137,7 +140,7 @@ def validate_pack(payload: object) -> KnowledgePack:
     seen_titles: set[str] = set()
     for index, row in enumerate(rows):
         entry = _entry_from_payload(row, source_tag=source_tag, index=index)
-        normalized_title = entry.title.casefold()
+        normalized_title = normalize_knowledge_title(entry.title)
         if normalized_title in seen_titles:
             raise ValueError("knowledge pack contains duplicate titles")
         seen_titles.add(normalized_title)

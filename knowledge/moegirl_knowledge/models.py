@@ -8,12 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import re
 from typing import Iterable, Mapping
+import unicodedata
 
 from .filters import sanitize_external_text
 
 
 TERM_ROLES = ("alias", "recognition")
+_TITLE_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_knowledge_title(value: str) -> str:
+    """Return the source-local identity key for a displayed knowledge title."""
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return _TITLE_WHITESPACE_RE.sub(" ", normalized).strip().casefold()
 
 
 def _clean_values(values: Iterable[str]) -> tuple[str, ...]:
@@ -27,7 +36,9 @@ def _clean_values(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def normalize_terms(value: Mapping[str, Iterable[str]] | None) -> dict[str, tuple[str, ...]]:
+def normalize_terms(
+    value: Mapping[str, Iterable[str]] | None,
+) -> dict[str, tuple[str, ...]]:
     """Return the only supported term roles with cleaned, distinct values."""
     value = value or {}
     return {role: _clean_values(value.get(role, ())) for role in TERM_ROLES}
@@ -51,7 +62,9 @@ class MoegirlKnowledgeEntry:
         object.__setattr__(self, "title", title)
         object.__setattr__(self, "terms", normalize_terms(self.terms))
         object.__setattr__(self, "tags", _clean_values(self.tags))
-        object.__setattr__(self, "summary", sanitize_external_text(self.summary, max_chars=4_000))
+        object.__setattr__(
+            self, "summary", sanitize_external_text(self.summary, max_chars=4_000)
+        )
         object.__setattr__(self, "content", content)
         source_tags = [tag for tag in self.tags if tag.startswith("source:")]
         if len(source_tags) != 1:
@@ -73,13 +86,15 @@ class MoegirlKnowledgeEntry:
     @property
     def content_hash(self) -> str:
         """Transient comparison key; it is intentionally not persisted."""
-        payload = "\0".join((
-            self.title,
-            repr(self.terms),
-            repr(self.tags),
-            self.summary,
-            self.content,
-        ))
+        payload = "\0".join(
+            (
+                self.title,
+                repr(self.terms),
+                repr(self.tags),
+                self.summary,
+                self.content,
+            )
+        )
         return sha256(payload.encode("utf-8")).hexdigest()
 
 

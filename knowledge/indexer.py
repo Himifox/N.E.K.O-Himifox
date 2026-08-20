@@ -61,7 +61,17 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     from .service import KnowledgeService
     from .vector_index import index_embedding_batch
 
-    service = KnowledgeService.from_root(knowledge_root)
+    try:
+        service = KnowledgeService.from_root(knowledge_root)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Knowledge background indexing could not initialize (%s); "
+            "BM25 remains available when the store recovers",
+            type(exc).__name__,
+        )
+        return
     memory_baseline = _rss_bytes()
     memory_delta_reported = False
 

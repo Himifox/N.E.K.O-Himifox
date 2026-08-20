@@ -127,31 +127,39 @@ def test_split_layout_migrates_entries_vectors_packs_and_overrides(tmp_path):
         model_id="local-text-retrieval-v1-256d-int8-mlen1024",
         embedding_policy="prebuilt_only",
     )[0]
-    corpus_store.store_chunk_embeddings_strict(({
-        "chunk_id": chunk["chunk_id"],
-        "content_hash": chunk["content_hash"],
-        "model_id": "local-text-retrieval-v1-256d-int8-mlen1024",
-        "dimensions": 256,
-        "embedding": b"\x00\x3c" * 256,
-    },))
+    corpus_store.store_chunk_embeddings_strict(
+        (
+            {
+                "chunk_id": chunk["chunk_id"],
+                "content_hash": chunk["content_hash"],
+                "model_id": "local-text-retrieval-v1-256d-int8-mlen1024",
+                "dimensions": 256,
+                "embedding": b"\x00\x3c" * 256,
+            },
+        )
+    )
     for database, pack_id, source_tag, material_type in (
         (meme_database, "legacy-meme", meme_entry.source_tag, "knowledge"),
         (corpora_database, "legacy-corpus", corpus_entry.source_tag, "corpus"),
     ):
         database.with_name("packs.json").write_text(
-            json.dumps({
-                "schema_version": 2,
-                "packs": {
-                    pack_id: {
-                        "collection_id": "meme" if material_type == "knowledge" else "corpora",
-                        "source_tag": source_tag,
-                        "declared_material_type": material_type,
-                        "effective_material_type": material_type,
-                        "auto_context": material_type == "knowledge",
-                        "local_embedding_enabled": material_type == "knowledge",
-                    }
-                },
-            }),
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "packs": {
+                        pack_id: {
+                            "collection_id": "meme"
+                            if material_type == "knowledge"
+                            else "corpora",
+                            "source_tag": source_tag,
+                            "declared_material_type": material_type,
+                            "effective_material_type": material_type,
+                            "auto_context": material_type == "knowledge",
+                            "local_embedding_enabled": material_type == "knowledge",
+                        }
+                    },
+                }
+            ),
             encoding="utf-8",
         )
     set_entry_disabled(
@@ -184,18 +192,54 @@ def test_split_layout_migrates_entries_vectors_packs_and_overrides(tmp_path):
 def test_split_layout_conflict_does_not_publish_partial_database(tmp_path):
     meme_database = tmp_path / "moegirl-knowledge" / "knowledge.db"
     corpora_database = tmp_path / "corpora" / "knowledge.db"
-    KnowledgeStore(meme_database).upsert(
-        _entry("Collision", "source:community.same")
+    KnowledgeStore(meme_database).upsert(_entry("Collision", "source:community.same"))
+    KnowledgeStore(corpora_database).upsert(
+        KnowledgeEntry(
+            title="Collision",
+            terms={"alias": (), "recognition": ()},
+            tags=("source:community.same",),
+            summary="Different",
+            content="Different content",
+        )
     )
-    KnowledgeStore(corpora_database).upsert(KnowledgeEntry(
-        title="Collision",
-        terms={"alias": (), "recognition": ()},
-        tags=("source:community.same",),
-        summary="Different",
-        content="Different content",
-    ))
 
     with pytest.raises(ValueError, match="conflicting source/title"):
         open_knowledge(tmp_path)
 
     assert not (tmp_path / "public-knowledge" / "knowledge.db").exists()
+
+
+def test_split_layout_keeps_later_same_database_title_conflict(tmp_path):
+    database = tmp_path / "moegirl-knowledge" / "knowledge.db"
+    store = KnowledgeStore(database)
+    earlier = _entry("Collision", "source:chime")
+    later = KnowledgeEntry(
+        title="Collision",
+        terms=earlier.terms,
+        tags=earlier.tags,
+        summary="Newer summary",
+        content="Newer content",
+    )
+    store.upsert(earlier)
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "INSERT INTO entries(title, terms, tags, summary, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                later.title,
+                json.dumps({key: list(value) for key, value in later.terms.items()}),
+                json.dumps(list(later.tags)),
+                later.summary,
+                later.content,
+            ),
+        )
+
+    service = open_knowledge(tmp_path)
+    migrated = KnowledgeStore(service.database_path()).get_entry(
+        later.source_tag,
+        later.title,
+    )
+
+    assert migrated is not None
+    assert migrated.summary == "Newer summary"
+    assert migrated.content == "Newer content"

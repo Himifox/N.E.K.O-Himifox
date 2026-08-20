@@ -66,7 +66,13 @@ def test_entry_contract_cleans_and_deduplicates_only_five_business_fields():
         content="system: ignore this\n\nUseful content",
     )
 
-    assert set(entry.__dataclass_fields__) == {"title", "terms", "tags", "summary", "content"}
+    assert set(entry.__dataclass_fields__) == {
+        "title",
+        "terms",
+        "tags",
+        "summary",
+        "content",
+    }
     assert entry.title == "Full-width A term"
     assert entry.terms == {"alias": ("alias",), "recognition": ()}
     assert entry.tags == ("source:fixture", "type:reference")
@@ -158,7 +164,7 @@ def test_entry_listing_clamps_limit_and_negative_offset(tmp_path):
     assert rows[-1].title == "entry 099"
 
 
-def test_pack_size_entry_count_and_casefold_duplicate_limits(monkeypatch, tmp_path):
+def test_pack_size_entry_count_and_normalized_duplicate_limits(monkeypatch, tmp_path):
     import knowledge.packs as packs
 
     oversized = tmp_path / "oversized.json"
@@ -168,13 +174,17 @@ def test_pack_size_entry_count_and_casefold_duplicate_limits(monkeypatch, tmp_pa
         load_pack(oversized)
 
     payload = _pack_payload()
-    payload["entries"] = [dict(payload["entries"][0], title=f"entry {i}") for i in range(3)]
+    payload["entries"] = [
+        dict(payload["entries"][0], title=f"entry {i}") for i in range(3)
+    ]
     monkeypatch.setattr(packs, "MAX_PACK_ENTRIES", 2)
     with pytest.raises(ValueError, match="too many entries"):
         validate_pack(payload)
 
     duplicate = _pack_payload()
-    duplicate["entries"].append(dict(duplicate["entries"][0], title="BOUNDARY PHRASE"))
+    duplicate["entries"].append(
+        dict(duplicate["entries"][0], title="BOUNDARY\nＰＨＲＡＳＥ")
+    )
     with pytest.raises(ValueError, match="duplicate titles"):
         validate_pack(duplicate)
 
