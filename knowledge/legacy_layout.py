@@ -1,0 +1,227 @@
+"""One-time migration from the former split public-knowledge layout."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+from collections import defaultdict
+from pathlib import Path
+
+from utils.file_utils import atomic_write_json
+
+from ._mutation_lock import mutation_lock
+from .moegirl_knowledge.catalog_overrides import load_disabled_entries
+from .moegirl_knowledge.models import MoegirlKnowledgeEntry
+from .moegirl_knowledge.store import MoegirlKnowledgeStore
+
+
+_LEGACY_DIRECTORIES = ("moegirl-knowledge", "corpora")
+
+
+def migrate_split_knowledge_layout(
+    knowledge_root: str | Path,
+    destination_database: str | Path,
+) -> bool:
+    """Merge old meme/corpora stores into the unified database exactly once.
+
+    The legacy databases remain untouched and therefore serve as recovery
+    copies.  A complete replacement database and its sidecars are assembled in
+    a sibling staging directory before the new database becomes visible.
+    """
+    root = Path(knowledge_root)
+    destination = Path(destination_database)
+    if destination.is_file():
+        return False
+    legacy_databases = tuple(
+        path
+        for directory in _LEGACY_DIRECTORIES
+        if (path := root / directory / "knowledge.db").is_file()
+    )
+    if not legacy_databases:
+        return False
+
+    with mutation_lock(destination):
+        if destination.is_file():
+            return False
+        stage = Path(tempfile.mkdtemp(prefix=".public-knowledge-migration-", dir=root))
+        try:
+            staged_database = stage / "knowledge.db"
+            staged_store = MoegirlKnowledgeStore(staged_database)
+            entries_by_source, policies, vectors = _collect_legacy_data(
+                legacy_databases
+            )
+            for source_tag, entries in sorted(entries_by_source.items()):
+                staged_store.replace_source(
+                    source_tag,
+                    tuple(entries.values()),
+                    embedding_policy=policies[source_tag],
+                )
+            if vectors:
+                staged_store.store_chunk_embeddings_strict(tuple(vectors.values()))
+
+            registry = _merge_registries(legacy_databases, staged_store)
+            atomic_write_json(
+                stage / "packs.json",
+                registry,
+                ensure_ascii=False,
+                indent=2,
+            )
+            disabled = _merge_disabled_entries(legacy_databases)
+            atomic_write_json(
+                stage / "catalog.override.json",
+                {
+                    "disabled": [
+                        {"source": source, "title": title}
+                        for source, title in sorted(disabled)
+                    ]
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            if not staged_store.integrity_ok():
+                raise ValueError("unified public knowledge migration failed integrity check")
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(stage / "packs.json", destination.with_name("packs.json"))
+            os.replace(
+                stage / "catalog.override.json",
+                destination.with_name("catalog.override.json"),
+            )
+            # Publish the database last. Its presence is the completion marker;
+            # if the process stops while replacing sidecars, the next startup
+            # safely rebuilds the still-unpublished migration.
+            os.replace(staged_database, destination)
+        except Exception:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+        else:
+            shutil.rmtree(stage, ignore_errors=True)
+    return True
+
+
+def _collect_legacy_data(
+    databases: tuple[Path, ...],
+) -> tuple[
+    dict[str, dict[str, MoegirlKnowledgeEntry]],
+    dict[str, str],
+    dict[str, dict[str, object]],
+]:
+    entries_by_source: dict[str, dict[str, MoegirlKnowledgeEntry]] = defaultdict(dict)
+    policy_votes: dict[str, set[str]] = defaultdict(set)
+    vectors: dict[str, dict[str, object]] = {}
+    for database in databases:
+        store = MoegirlKnowledgeStore(database)
+        for entry in store.list_active_entries():
+            previous = entries_by_source[entry.source_tag].get(entry.title)
+            if previous is not None and previous.content_hash != entry.content_hash:
+                raise ValueError(
+                    "legacy public knowledge contains conflicting source/title entries"
+                )
+            entries_by_source[entry.source_tag][entry.title] = entry
+        for row in store.count_by_source_tags():
+            source_tag = str(row.get("tag") or "")
+            if not source_tag:
+                continue
+            counts = store.embedding_policy_counts(source_tag=source_tag)
+            policy_votes[source_tag].update(
+                policy for policy, count in counts.items() if int(count) > 0
+            )
+        for record in store.ready_embedding_records():
+            chunk_id = str(record.get("chunk_id") or "")
+            previous = vectors.get(chunk_id)
+            if previous is not None and previous != record:
+                raise ValueError("legacy public knowledge contains conflicting vectors")
+            vectors[chunk_id] = record
+
+    policies = {
+        source_tag: (
+            "prebuilt_only"
+            if votes == {"prebuilt_only"}
+            else "local"
+        )
+        for source_tag, votes in policy_votes.items()
+    }
+    for source_tag in entries_by_source:
+        policies.setdefault(source_tag, "local")
+    return dict(entries_by_source), policies, vectors
+
+
+def _merge_registries(
+    databases: tuple[Path, ...],
+    store: MoegirlKnowledgeStore,
+) -> dict[str, object]:
+    merged: dict[str, dict[str, object]] = {}
+    for database in databases:
+        try:
+            payload = json.loads(database.with_name("packs.json").read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        packs = payload.get("packs") if isinstance(payload, dict) else None
+        if not isinstance(packs, dict):
+            continue
+        for pack_id, raw in packs.items():
+            if not isinstance(raw, dict):
+                continue
+            metadata = dict(raw)
+            metadata.pop("collection_id", None)
+            declared = str(metadata.get("declared_material_type") or "knowledge")
+            if declared not in {"knowledge", "corpus"}:
+                declared = "knowledge"
+            override = metadata.get("material_type_override")
+            if override not in {"knowledge", "corpus"}:
+                override = None
+            effective = str(override or declared)
+            metadata.update(
+                {
+                    "declared_material_type": declared,
+                    "material_type_override": override,
+                    "effective_material_type": effective,
+                    "auto_context": bool(metadata.get("auto_context"))
+                    if effective == "knowledge"
+                    else False,
+                }
+            )
+            previous = merged.get(str(pack_id))
+            if previous is not None:
+                if (
+                    previous.get("source_tag") != metadata.get("source_tag")
+                    or previous.get("subscription") != metadata.get("subscription")
+                ):
+                    raise ValueError("legacy public knowledge contains conflicting packs")
+                if (
+                    previous.get("effective_material_type") == "corpus"
+                    or effective == "corpus"
+                ):
+                    metadata["declared_material_type"] = "corpus"
+                    metadata["material_type_override"] = None
+                    metadata["effective_material_type"] = "corpus"
+                    metadata["auto_context"] = False
+            source_tag = str(metadata.get("source_tag") or "")
+            status = store.source_chunk_status(source_tag) if source_tag else {}
+            total = int(status.get("chunks_total", 0))
+            ready = int(status.get("chunks_ready", 0))
+            metadata.update(
+                {
+                    "entries": sum(
+                        1
+                        for entry in store.list_active_entries()
+                        if entry.source_tag == source_tag
+                    ),
+                    "retrieval_mode": "hybrid" if total and ready == total else "bm25",
+                    "prebuilt_chunks_ready": ready,
+                    "prebuilt_chunks_missing": max(total - ready, 0),
+                }
+            )
+            merged[str(pack_id)] = metadata
+    return {"schema_version": 3, "packs": merged}
+
+
+def _merge_disabled_entries(databases: tuple[Path, ...]) -> set[tuple[str, str]]:
+    disabled: set[tuple[str, str]] = set()
+    for database in databases:
+        disabled.update(
+            load_disabled_entries(database.with_name("catalog.override.json"))
+        )
+    return disabled

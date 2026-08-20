@@ -38,7 +38,7 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
         if not case_id or case_id in seen:
             raise ValueError("quality case ids must be non-empty and unique")
         seen.add(case_id)
-        if case["expected_mode"] not in {"strong", "weak_short", "none"}:
+        if case["expected_mode"] not in {"strong", "none"}:
             raise ValueError(f"invalid expected_mode for {case_id}")
         if not isinstance(case["forbidden"], list):
             raise ValueError(f"forbidden must be a list for {case_id}")
@@ -46,14 +46,10 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
 
 
 def _route_preflight(cases: list[dict[str, Any]], database: Path) -> list[dict[str, Any]]:
-    service = KnowledgeService.for_collection("meme", database)
+    service = KnowledgeService.for_database(database)
     results: list[dict[str, Any]] = []
     for case in cases:
-        context = service.build_turn_context(
-            str(case["message"]),
-            collection_ids=("meme",),
-            limit=1,
-        )
+        context = service.build_turn_context(str(case["message"]), limit=1)
         term_match = re.search(r"^Term: (.+)$", context.text, flags=re.MULTILINE)
         actual_mode = context.match_mode
         results.append({
@@ -151,7 +147,7 @@ async def _run_direct(
     from utils.language_utils import normalize_language_code
 
     config_manager = get_config_manager()
-    knowledge = KnowledgeService.for_collection("meme", database)
+    knowledge = KnowledgeService.for_database(database)
     conversation = config_manager.get_model_api_config("conversation")
     vision = config_manager.get_model_api_config("vision")
     master_name, character_name, _, _, _, prompts, *_ = (
@@ -199,11 +195,7 @@ async def _run_direct(
             chunks.clear()
             first_text_at = None
             turn_started = time.perf_counter()
-            context = knowledge.build_turn_context(
-                str(case["message"]),
-                collection_ids=("meme",),
-                limit=1,
-            )
+            context = knowledge.build_turn_context(str(case["message"]), limit=1)
             await client.stream_text(
                 str(case["message"]),
                 ephemeral_response_instruction=context.text,

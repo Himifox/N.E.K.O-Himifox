@@ -58,7 +58,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     from .diagnostics import record_knowledge_index_batch
     from .moegirl_knowledge.store import MoegirlKnowledgeStore
     from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
-    from .service import BUILTIN_COLLECTIONS, KnowledgeService
+    from .service import KnowledgeService
     from .vector_index import index_embedding_batch
 
     service = KnowledgeService.from_root(knowledge_root)
@@ -66,11 +66,10 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     memory_delta_reported = False
 
     while True:
-        stores = [
-            MoegirlKnowledgeStore(database_path)
-            for spec in BUILTIN_COLLECTIONS
-            if (database_path := service.database_path(spec.collection_id)).is_file()
-        ]
+        database_path = service.database_path()
+        stores = (
+            [MoegirlKnowledgeStore(database_path)] if database_path.is_file() else []
+        )
         backlog = False
         try:
             remaining = MAX_CHUNKS_PER_ROUND

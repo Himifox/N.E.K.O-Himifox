@@ -16,6 +16,7 @@ class KnowledgeSource:
     homepage: str
     license: str
     supports_sync: bool
+    material_type: str = "knowledge"
 
 
 SOURCES: dict[str, KnowledgeSource] = {
@@ -29,6 +30,7 @@ SOURCES: dict[str, KnowledgeSource] = {
         "https://github.com/dariusk/corpora",
         "CC0 1.0",
         False,
+        "corpus",
     ),
 }
 
@@ -74,5 +76,10 @@ def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
                 max_chars=500,
             ),
             supports_sync=False,
+            material_type=(
+                str(pack.get("effective_material_type"))
+                if pack.get("effective_material_type") in {"knowledge", "corpus"}
+                else "knowledge"
+            ),
         )
     return None

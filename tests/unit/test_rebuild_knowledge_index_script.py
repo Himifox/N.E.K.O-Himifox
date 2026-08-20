@@ -129,7 +129,6 @@ def test_status_lists_staging_jobs_without_opening_their_database(
         json.dumps(
             {
                 "job_id": "fixture-job",
-                "collection_id": "meme",
                 "state": "embedding",
                 "created_at": 1,
             }
@@ -138,17 +137,16 @@ def test_status_lists_staging_jobs_without_opening_their_database(
     )
     staging_database = job_dir / "knowledge.db"
 
-    jobs = MODULE.inspect_pack_jobs(tmp_path, collection="meme")
+    jobs = MODULE.inspect_pack_jobs(tmp_path)
 
     assert jobs[0]["state"] == "embedding"
     assert not staging_database.exists()
-    assert MODULE.inspect_pack_jobs(tmp_path, collection="corpora") == []
 
 
 def test_full_dry_run_counts_derived_chunks_without_writing(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     _write_v5_database(database)
-    target = MODULE.CollectionTarget("meme", database)
+    target = MODULE.KnowledgeTarget(database)
 
     plan = MODULE.dry_run_plan(target, full=True)
 
@@ -198,7 +196,7 @@ def test_enable_local_pack_requires_rebuild_action(tmp_path: Path) -> None:
 def test_enable_local_pack_dry_run_locates_registry_without_mutating_it(
     tmp_path: Path,
 ) -> None:
-    database = tmp_path / "moegirl-knowledge" / "knowledge.db"
+    database = tmp_path / "public-knowledge" / "knowledge.db"
     database.parent.mkdir(parents=True)
     registry = {
         "schema_version": 1,
@@ -216,8 +214,6 @@ def test_enable_local_pack_dry_run_locates_registry_without_mutating_it(
         [
             "--rebuild",
             "--dry-run",
-            "--collection",
-            "meme",
             "--enable-local-pack",
             "fixture-pack",
             "--knowledge-root",
@@ -234,9 +230,9 @@ def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> 
     pack_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 3,
                 "pack_id": "preflight-fixture",
-                "collection_id": "meme",
+                "material_type": "knowledge",
                 "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
                 "entries": [
                     {

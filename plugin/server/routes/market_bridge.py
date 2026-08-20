@@ -98,14 +98,16 @@ _DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 200 MB
 _DOWNLOAD_TIMEOUT = 120.0  # 秒
 _ALLOWED_SUFFIXES = frozenset({".neko-plugin", ".neko-bundle"})
 _KNOWLEDGE_BRIDGE_PATHS = frozenset({
-    "collections",
+    "status",
     "entries",
     "entry",
     "entry/disabled",
-    "collection/auto-context",
     "packs",
+    "packs/jobs",
     "packs/import",
     "packs/auto-context",
+    "packs/index-policy",
+    "packs/material-type",
     "packs/remove",
     "subscriptions/apply",
     "diagnostics/recent",

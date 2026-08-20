@@ -18,9 +18,8 @@ from .moegirl_knowledge.models import MoegirlKnowledgeEntry
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
-LEGACY_PACK_SCHEMA_VERSION = 1
-PACK_SCHEMA_VERSION = 2
-PACK_REGISTRY_SCHEMA_VERSION = 2
+PACK_SCHEMA_VERSION = 3
+PACK_REGISTRY_SCHEMA_VERSION = 3
 MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
 MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_PACK_ENTRIES = 5_000
@@ -41,7 +40,6 @@ class KnowledgePackSource:
 class KnowledgePack:
     schema_version: int
     pack_id: str
-    collection_id: str
     material_type: str
     source: KnowledgePackSource
     entries: tuple[MoegirlKnowledgeEntry, ...]
@@ -54,7 +52,6 @@ class KnowledgePack:
 @dataclass(frozen=True, slots=True)
 class PackInstallResult:
     pack_id: str
-    collection_id: str
     source_tag: str
     material_type: str
     entries: int
@@ -74,7 +71,7 @@ def pack_payload(pack: KnowledgePack) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": pack.schema_version,
         "pack_id": pack.pack_id,
-        "collection_id": pack.collection_id,
+        "material_type": pack.material_type,
         "source": {
             "name": pack.source.name,
             "homepage": pack.source.homepage,
@@ -91,8 +88,6 @@ def pack_payload(pack: KnowledgePack) -> dict[str, object]:
             for entry in pack.entries
         ],
     }
-    if pack.schema_version >= PACK_SCHEMA_VERSION:
-        payload["material_type"] = pack.material_type
     return payload
 
 
@@ -115,19 +110,12 @@ def validate_pack(payload: object) -> KnowledgePack:
     if not isinstance(payload, dict):
         raise ValueError("knowledge pack root must be an object")
     schema_version = payload.get("schema_version")
-    if schema_version not in {LEGACY_PACK_SCHEMA_VERSION, PACK_SCHEMA_VERSION}:
+    if schema_version != PACK_SCHEMA_VERSION:
         raise ValueError("unsupported knowledge pack schema version")
-    allowed_keys = {"schema_version", "pack_id", "collection_id", "source", "entries"}
-    if schema_version == PACK_SCHEMA_VERSION:
-        allowed_keys.add("material_type")
+    allowed_keys = {"schema_version", "pack_id", "material_type", "source", "entries"}
     _reject_unknown_keys(payload, allowed_keys, "knowledge pack")
-    material_type = (
-        "knowledge"
-        if schema_version == LEGACY_PACK_SCHEMA_VERSION
-        else _material_type(payload.get("material_type"))
-    )
+    material_type = _material_type(payload.get("material_type"))
     pack_id = _identifier(payload.get("pack_id"), "pack_id")
-    collection_id = _identifier(payload.get("collection_id"), "collection_id")
     source_payload = payload.get("source")
     if not isinstance(source_payload, dict):
         raise ValueError("knowledge pack source must be an object")
@@ -157,7 +145,6 @@ def validate_pack(payload: object) -> KnowledgePack:
     pack = KnowledgePack(
         schema_version=int(schema_version),
         pack_id=pack_id,
-        collection_id=collection_id,
         material_type=material_type,
         source=source,
         entries=tuple(entries),
@@ -227,9 +214,6 @@ def install_pack(
         old_registry = _load_registry(registry_path)
         existing = old_registry.get("packs", {}).get(pack.pack_id)
         if isinstance(existing, dict):
-            existing_collection = str(existing.get("collection_id") or "")
-            if existing_collection and existing_collection != pack.collection_id:
-                raise ValueError("knowledge pack cannot change its collection")
             _validate_subscription_identity(
                 existing.get("subscription"),
                 subscription,
@@ -277,7 +261,6 @@ def install_pack(
             raise
     return PackInstallResult(
         pack_id=pack.pack_id,
-        collection_id=pack.collection_id,
         source_tag=pack.source_tag,
         material_type=pack.material_type,
         entries=len(pack.entries),
@@ -647,7 +630,6 @@ def _registry_with_pack(
     )
     effective_material_type = override or pack.material_type
     packs[pack.pack_id] = {
-        "collection_id": pack.collection_id,
         "source_tag": pack.source_tag,
         "source": {
             "name": pack.source.name,

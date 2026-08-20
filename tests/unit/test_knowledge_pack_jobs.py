@@ -21,9 +21,9 @@ from knowledge.subscriptions import canonical_pack_bytes
 def _pack(*, title: str = "Staged phrase", pack_id: str = "staged-fixture"):
     return validate_pack(
         {
-            "schema_version": 1,
+            "schema_version": 3,
             "pack_id": pack_id,
-            "collection_id": "meme",
+            "material_type": "knowledge",
             "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
             "entries": [
                 {
@@ -82,8 +82,8 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
 
     assert job["state"] == "queued"
     assert job["material_type"] == "knowledge"
-    assert service.search("meme", "Staged phrase", limit=1) == []
-    assert service.list_packs("meme") == ()
+    assert service.search("Staged phrase", limit=1) == []
+    assert service.list_packs() == ()
 
     result = await process_pack_jobs(
         service,
@@ -92,9 +92,9 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
     )
 
     assert result["state"] == "ready_bm25"
-    assert service.search("meme", "Staged phrase", limit=1)
-    assert service.list_packs("meme")[0]["retrieval_mode"] == "bm25"
-    assert service.list_pack_jobs("meme")[0]["state"] == "active"
+    assert service.search("Staged phrase", limit=1)
+    assert service.list_packs()[0]["retrieval_mode"] == "bm25"
+    assert service.list_pack_jobs()[0]["state"] == "active"
 
 
 @pytest.mark.asyncio
@@ -103,13 +103,13 @@ async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path):
     service.install_pack(_pack(title="Old phrase"))
     service.stage_pack(_pack(title="New phrase"))
 
-    assert service.search("meme", "Old phrase", limit=1)
-    assert service.search("meme", "New phrase", limit=1) == []
+    assert service.search("Old phrase", limit=1)
+    assert service.search("New phrase", limit=1) == []
 
     await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
-    assert service.search("meme", "Old phrase", limit=1) == []
-    assert service.search("meme", "New phrase", limit=1)
+    assert service.search("Old phrase", limit=1) == []
+    assert service.search("New phrase", limit=1)
 
 
 @pytest.mark.asyncio
@@ -127,11 +127,11 @@ async def test_ready_vectors_are_transferred_during_hybrid_activation(
     )
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
-    status = MoegirlKnowledgeStore(service.database_path("meme")).chunk_status()
+    status = MoegirlKnowledgeStore(service.database_path()).chunk_status()
 
     assert result["state"] == "ready_hybrid"
     assert status["chunks_ready"] == status["chunks_total"] == 1
-    assert service.list_packs("meme")[0]["retrieval_mode"] == "hybrid"
+    assert service.list_packs()[0]["retrieval_mode"] == "hybrid"
 
 
 def test_cancelled_job_never_becomes_visible(tmp_path):
@@ -140,9 +140,9 @@ def test_cancelled_job_never_becomes_visible(tmp_path):
 
     assert cancel_pack_job(tmp_path, str(job["job_id"])) is True
     assert cancel_pack_job(tmp_path, str(job["job_id"])) is False
-    assert service.list_pack_jobs("meme")[0]["state"] == "cancelled"
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
     assert not (tmp_path / ".staging" / str(job["job_id"]) / "pack.json").exists()
-    assert service.search("meme", "Staged phrase", limit=1) == []
+    assert service.search("Staged phrase", limit=1) == []
 
 
 def test_pack_chunk_budget_is_enforced(monkeypatch):
@@ -210,7 +210,7 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
         batch_size=4,
         ready_vector_chunks=10_000,
     )
-    job = service.list_pack_jobs("meme")[0]
+    job = service.list_pack_jobs()[0]
 
     assert result["state"] == "ready_bm25"
     assert job["state"] == "active"
@@ -231,4 +231,4 @@ async def test_raw_pack_activation_never_loads_the_embedding_model(
     )
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
     assert result["state"] == "ready_bm25"
-    assert service.list_packs("meme")[0]["local_embedding_enabled"] is False
+    assert service.list_packs()[0]["local_embedding_enabled"] is False

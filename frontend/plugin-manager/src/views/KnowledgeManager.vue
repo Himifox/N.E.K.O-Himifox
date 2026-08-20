@@ -27,31 +27,23 @@
 
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="t('knowledge.overview')" name="overview">
-        <div class="collection-grid" v-loading="loading">
-          <el-card v-for="item in collections" :key="item.collection_id" shadow="never">
+        <div class="status-grid" v-loading="loading">
+          <el-card v-if="status" shadow="never">
             <template #header>
               <div class="card-heading">
-                <strong>{{ item.name }}</strong>
-                <el-tag :type="item.status === 'ready' ? 'success' : 'danger'">
-                  {{ item.status === 'ready' ? t('knowledge.ready') : t('knowledge.degraded') }}
+                <strong>{{ status.name }}</strong>
+                <el-tag :type="status.status === 'ready' ? 'success' : 'danger'">
+                  {{ status.status === 'ready' ? t('knowledge.ready') : t('knowledge.degraded') }}
                 </el-tag>
               </div>
             </template>
             <dl>
-              <div><dt>{{ t('knowledge.entries') }}</dt><dd>{{ item.entries ?? 0 }}</dd></div>
-              <div><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ item.disabled_entries ?? 0 }}</dd></div>
-              <div><dt>{{ t('knowledge.packs') }}</dt><dd>{{ item.packs ?? 0 }}</dd></div>
+              <div><dt>{{ t('knowledge.entries') }}</dt><dd>{{ status.entries ?? 0 }}</dd></div>
+              <div><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
+              <div><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
             </dl>
-            <div class="switch-row">
-              <span>{{ t('knowledge.autoContext') }}</span>
-              <el-switch
-                :model-value="item.auto_context"
-                :disabled="item.status !== 'ready'"
-                @change="setCollectionAuto(item, Boolean($event))"
-              />
-            </div>
             <div class="source-list">
-              <el-tag v-for="source in item.sources || []" :key="source.tag" size="small" effect="plain">
+              <el-tag v-for="source in status.sources || []" :key="source.tag" size="small" effect="plain">
                 {{ source.tag }} · {{ source.entries }}
               </el-tag>
             </div>
@@ -61,9 +53,6 @@
 
       <el-tab-pane :label="t('knowledge.catalog')" name="catalog">
         <div class="toolbar">
-          <el-select v-model="selectedCollection" @change="loadEntries(true)">
-            <el-option v-for="item in collections" :key="item.collection_id" :label="item.name" :value="item.collection_id" />
-          </el-select>
           <el-input v-model="query" clearable :placeholder="t('knowledge.searchPlaceholder')" @keyup.enter="loadEntries(true)" />
           <el-button type="primary" @click="loadEntries(true)">{{ t('common.search') }}</el-button>
         </div>
@@ -91,14 +80,22 @@
 
       <el-tab-pane :label="t('knowledge.packs')" name="packs">
         <div class="toolbar">
-          <el-select v-model="selectedCollection" @change="loadPacks">
-            <el-option v-for="item in collections" :key="item.collection_id" :label="item.name" :value="item.collection_id" />
-          </el-select>
           <input ref="fileInput" type="file" accept="application/json,.json" hidden @change="importSelectedPack" />
           <el-button type="primary" @click="fileInput?.click()">{{ t('knowledge.importPack') }}</el-button>
         </div>
         <el-table :data="packs" v-loading="packsLoading">
           <el-table-column prop="pack_id" :label="t('knowledge.packId')" min-width="180" />
+          <el-table-column :label="t('knowledge.materialType')" width="150">
+            <template #default="scope">
+              <el-select
+                :model-value="scope.row.effective_material_type || 'knowledge'"
+                @change="setPackMaterialType(scope.row, String($event))"
+              >
+                <el-option label="knowledge" value="knowledge" />
+                <el-option label="corpus" value="corpus" />
+              </el-select>
+            </template>
+          </el-table-column>
           <el-table-column prop="entries" :label="t('knowledge.entries')" width="100" />
           <el-table-column :label="t('knowledge.subscription')" min-width="200">
             <template #default="scope">
@@ -121,7 +118,11 @@
           </el-table-column>
           <el-table-column :label="t('knowledge.autoContext')" width="130">
             <template #default="scope">
-              <el-switch :model-value="scope.row.auto_context === true" @change="setPackAuto(scope.row, Boolean($event))" />
+              <el-switch
+                :model-value="scope.row.auto_context === true"
+                :disabled="scope.row.effective_material_type === 'corpus'"
+                @change="setPackAuto(scope.row, Boolean($event))"
+              />
             </template>
           </el-table-column>
           <el-table-column :label="t('knowledge.allowLocalEmbedding')" min-width="170">
@@ -146,7 +147,6 @@
       <el-tab-pane :label="t('knowledge.diagnostics')" name="diagnostics">
         <el-table :data="diagnostics" v-loading="diagnosticsLoading">
           <el-table-column prop="timestamp" :label="t('knowledge.time')" width="210" />
-          <el-table-column prop="collection_id" :label="t('knowledge.collection')" width="130" />
           <el-table-column prop="entry_title" :label="t('knowledge.term')" min-width="180" />
           <el-table-column prop="match_mode" :label="t('knowledge.matchMode')" width="140" />
           <el-table-column :label="t('knowledge.delivered')" width="100">
@@ -175,7 +175,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { knowledgeApi, type KnowledgeCollection, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
+import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { openExternalUrl } from '@/utils/openExternal'
@@ -188,8 +188,7 @@ const {
 } = useMarketAuth()
 const activeTab = ref('overview')
 const loading = ref(false)
-const collections = ref<KnowledgeCollection[]>([])
-const selectedCollection = ref('meme')
+const status = ref<(KnowledgeStatus & { status: 'ready' | 'degraded' }) | null>(null)
 const query = ref('')
 const entries = ref<KnowledgeEntrySummary[]>([])
 const entriesLoading = ref(false)
@@ -207,7 +206,6 @@ const marketOpening = ref(false)
 
 function knowledgeEntryRowKey(row: KnowledgeEntrySummary): string {
   return JSON.stringify([
-    row.collection_id,
     row.source?.tag || '',
     row.title,
   ])
@@ -243,11 +241,8 @@ async function openKnowledgeMarket() {
 async function refreshAll() {
   loading.value = true
   try {
-    const response = await knowledgeApi.collections()
-    collections.value = response.collections || []
-    if (!collections.value.some((item) => item.collection_id === selectedCollection.value)) {
-      selectedCollection.value = collections.value[0]?.collection_id || ''
-    }
+    const response = await knowledgeApi.status()
+    status.value = response.status || null
   } catch {
     ElMessage.error(t('knowledge.loadFailed'))
   } finally {
@@ -255,19 +250,11 @@ async function refreshAll() {
   }
 }
 
-async function setCollectionAuto(item: KnowledgeCollection, enabled: boolean) {
-  try {
-    await knowledgeApi.setCollectionAutoContext({ collection: item.collection_id, enabled })
-    item.auto_context = enabled
-  } catch { ElMessage.error(t('knowledge.operationFailed')) }
-}
-
 async function loadEntries(reset = false) {
-  if (!selectedCollection.value) return
   if (reset) offset.value = 0
   entriesLoading.value = true
   try {
-    const response = await knowledgeApi.entries({ collection: selectedCollection.value, query: query.value, limit: pageSize, offset: offset.value })
+    const response = await knowledgeApi.entries({ query: query.value, limit: pageSize, offset: offset.value })
     entries.value = response.items || []
     hasMore.value = Boolean(response.has_more)
   } catch { ElMessage.error(t('knowledge.loadFailed')) }
@@ -275,14 +262,14 @@ async function loadEntries(reset = false) {
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {
-  const response = await knowledgeApi.entry({ collection: row.collection_id, source: row.source.tag, title: row.title })
+  const response = await knowledgeApi.entry({ source: row.source.tag, title: row.title })
   selectedEntry.value = response.entry || null
   drawerOpen.value = Boolean(selectedEntry.value)
 }
 
 async function toggleEntry(row: KnowledgeEntrySummary) {
   try {
-    await knowledgeApi.setEntryDisabled({ collection: row.collection_id, source: row.source.tag, title: row.title, disabled: !row.disabled })
+    await knowledgeApi.setEntryDisabled({ source: row.source.tag, title: row.title, disabled: !row.disabled })
     row.disabled = !row.disabled
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
@@ -291,9 +278,8 @@ function previousPage() { offset.value = Math.max(0, offset.value - pageSize); l
 function nextPage() { offset.value += pageSize; loadEntries() }
 
 async function loadPacks() {
-  if (!selectedCollection.value) return
   packsLoading.value = true
-  try { packs.value = (await knowledgeApi.packs(selectedCollection.value)).packs || [] }
+  try { packs.value = (await knowledgeApi.packs()).packs || [] }
   catch { ElMessage.error(t('knowledge.loadFailed')) }
   finally { packsLoading.value = false }
 }
@@ -317,8 +303,17 @@ async function importSelectedPack(event: Event) {
 
 async function setPackAuto(row: KnowledgePackSummary, enabled: boolean) {
   try {
-    await knowledgeApi.setPackAutoContext({ collection: selectedCollection.value, pack_id: row.pack_id, enabled })
+    await knowledgeApi.setPackAutoContext({ pack_id: row.pack_id, enabled })
     row.auto_context = enabled
+  } catch { ElMessage.error(t('knowledge.operationFailed')) }
+}
+
+async function setPackMaterialType(row: KnowledgePackSummary, materialType: string) {
+  try {
+    await knowledgeApi.setPackMaterialType({ pack_id: row.pack_id, material_type: materialType })
+    row.effective_material_type = materialType as 'knowledge' | 'corpus'
+    if (materialType === 'corpus') row.auto_context = false
+    await refreshAll()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -330,7 +325,6 @@ function displayIndexValue(value: unknown): string {
 async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
   try {
     await knowledgeApi.setPackIndexPolicy({
-      collection: selectedCollection.value,
       pack_id: row.pack_id,
       local_embedding_enabled: enabled,
     })
@@ -341,7 +335,7 @@ async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
 async function removePack(row: any) {
   try {
     await ElMessageBox.confirm(t('knowledge.removeConfirm', { name: row.pack_id }), t('common.warning'), { type: 'warning' })
-    await knowledgeApi.removePack({ collection: selectedCollection.value, pack_id: row.pack_id })
+    await knowledgeApi.removePack({ pack_id: row.pack_id })
     await Promise.all([refreshAll(), loadPacks()])
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(t('knowledge.operationFailed'))
@@ -374,7 +368,7 @@ onMounted(() => {
 .page-heading, .card-heading, .switch-row, .toolbar, .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .page-heading h1 { margin: 0 0 6px; }
 .page-heading p { margin: 0; color: var(--el-text-color-secondary); }
-.collection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
 dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 dl div { padding: 10px; border-radius: 8px; background: var(--el-fill-color-light); }
 dt { color: var(--el-text-color-secondary); font-size: 12px; } dd { margin: 4px 0 0; font-size: 20px; font-weight: 700; }

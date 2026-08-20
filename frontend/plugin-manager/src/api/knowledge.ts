@@ -50,21 +50,22 @@ async function request<T extends KnowledgeEnvelope>(
   return data
 }
 
-export interface KnowledgeCollection {
-  collection_id: string
+export interface KnowledgeStatus {
   name: string
   entries?: number
   integrity_ok: boolean
   status: 'ready' | 'degraded'
-  auto_context: boolean
   disabled_entries?: number
   packs?: number
+  knowledge_packs?: number
+  corpus_packs?: number
+  knowledge_entries?: number
+  corpus_entries?: number
   sources?: Array<{ tag: string; entries: number }>
   error_type?: string
 }
 
 export interface KnowledgeEntrySummary {
-  collection_id: string
   title: string
   terms: Record<string, string[]>
   tags: string[]
@@ -77,6 +78,7 @@ export interface KnowledgeEntrySummary {
 
 export interface KnowledgePackSummary {
   pack_id: string
+  effective_material_type?: 'knowledge' | 'corpus'
   entries?: number
   auto_context?: boolean
   subscription?: { provider: string; version: string }
@@ -88,20 +90,19 @@ export interface KnowledgePackSummary {
 }
 
 export interface KnowledgePackIndexPolicy {
-  collection: string
   pack_id: string
   local_embedding_enabled: boolean
 }
 
 export const knowledgeApi = {
-  collections: () => request<{ ok: boolean; collections: KnowledgeCollection[] }>('collections'),
+  status: () => request<{ ok: boolean; status: KnowledgeStatus }>('status'),
   entries: (params: any) => request<any>('entries', { params }),
   entry: (params: any) => request<any>('entry', { params }),
   setEntryDisabled: (data: any) => request<any>('entry/disabled', { method: 'POST', data }),
-  setCollectionAutoContext: (data: any) => request<any>('collection/auto-context', { method: 'POST', data }),
-  packs: (collection: string) => request<{ ok: boolean; packs: KnowledgePackSummary[] }>('packs', { params: { collection } }),
+  packs: () => request<{ ok: boolean; packs: KnowledgePackSummary[] }>('packs'),
   importPack: (pack: any) => request<any>('packs/import', { method: 'POST', data: { pack } }),
   setPackAutoContext: (data: any) => request<any>('packs/auto-context', { method: 'POST', data }),
+  setPackMaterialType: (data: any) => request<any>('packs/material-type', { method: 'POST', data }),
   setPackIndexPolicy: (data: KnowledgePackIndexPolicy) => request<KnowledgeEnvelope>('packs/index-policy', { method: 'POST', data }),
   removePack: (data: any) => request<any>('packs/remove', { method: 'POST', data }),
   diagnostics: () => request<any>('diagnostics/recent'),

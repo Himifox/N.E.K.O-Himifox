@@ -10,9 +10,9 @@ from plugin.server.routes import knowledge_market as module
 
 def _pack():
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "pack_id": "fixture-pack",
-        "collection_id": "meme",
+        "material_type": "knowledge",
         "source": {"name": "Fixture", "homepage": "", "license": "CC0-1.0"},
         "entries": [
             {
@@ -37,7 +37,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
     )
     descriptor = module.KnowledgeVersionDescriptor.model_validate(
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "package_id": 7,
             "remote_id": "knowledge/fixture-pack",
             "pack_id": "fixture-pack",
@@ -68,7 +68,6 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
             "ok": True,
             "job_id": "fixture-job",
             "pack_id": "fixture-pack",
-            "collection_id": "meme",
             "state": "queued",
         }
 
@@ -168,7 +167,6 @@ async def test_market_task_waits_for_staged_pack_activation(monkeypatch):
     result = await module._wait_for_pack_job(
         task,
         job_id="fixture-job",
-        collection_id="meme",
     )
 
     assert calls == 2

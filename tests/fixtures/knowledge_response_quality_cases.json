@@ -35,7 +35,7 @@
     "id": "phenomenon_neijuan",
     "category": "phenomenon",
     "message": "大家把日报写得像论文一样，这也太内卷了。",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "回应无效竞争和被迫加码的评价",
     "forbidden": ["只说太夸张了", "解释成卷东西", "只复述原句"]
   },
@@ -43,7 +43,7 @@
     "id": "phenomenon_shangtou",
     "category": "phenomenon",
     "message": "最近做这个方案越改越上头。",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "理解为越来越投入、兴奋或停不下来",
     "forbidden": ["解释身体上方", "只复述舍不得停", "主动百科化"]
   },
@@ -51,7 +51,7 @@
     "id": "phenomenon_bailan",
     "category": "phenomenon",
     "message": "这个需求先摆烂两天再说。",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "理解为暂时放弃努力或消极处理，并自然回应",
     "forbidden": ["解释摆放腐烂物品", "只复述原句", "默认严肃说教"]
   },
@@ -83,7 +83,7 @@
     "id": "explicit_weak_shangtou",
     "category": "explicit_meaning",
     "message": "上头在这里是什么意思？",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "直接解释当前网络语境中的投入、兴奋或失去冷静",
     "forbidden": ["只顺势玩梗不解释", "解释字面方位", "询问是不是梗"]
   },
@@ -99,7 +99,7 @@
     "id": "serious_security_pofang",
     "category": "serious_exit",
     "message": "服务器防线已经破防，需要立即处理安全事故。",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "忽略弱卡的网络情绪含义，按安全事故严肃回应",
     "forbidden": ["调侃情绪破防", "玩梗", "淡化安全风险"]
   },
@@ -123,7 +123,7 @@
     "id": "serious_food_poisoning",
     "category": "serious_exit",
     "message": "我好像食物中毒了，现在很难受。",
-    "expected_mode": "weak_short",
+    "expected_mode": "none",
     "intent": "按健康与安全语境认真回应",
     "forbidden": ["玩梗", "轻描淡写", "声称知识库命中"]
   }

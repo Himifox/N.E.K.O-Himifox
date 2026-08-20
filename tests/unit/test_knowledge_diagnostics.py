@@ -15,7 +15,6 @@ def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
     clear_knowledge_route_diagnostics()
     for index in range(25):
         record_knowledge_route(
-            collection_id="meme",
             entry_title=f"entry-{index}",
             source_tag="source:fixture",
             match_mode="strong",
@@ -35,7 +34,6 @@ def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
 def test_query_diagnostics_keep_counts_but_not_query_content():
     clear_knowledge_route_diagnostics()
     record_knowledge_query(
-        collection_id="meme",
         retrieval_mode="bm25",
         embedding_service_state="not_ready",
         lexical_candidates=4,

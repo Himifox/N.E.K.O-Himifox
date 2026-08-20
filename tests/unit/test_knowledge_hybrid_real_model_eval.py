@@ -34,7 +34,6 @@ def test_real_model_fixture_is_grounded_and_bounded():
         "扫地老太太",
         "永远的神",
     }
-    assert {case["expected_collection"] for case in payload["positives"]} == {"meme"}
     identifiers = [
         case["id"] for group in ("positives", "negatives") for case in payload[group]
     ]

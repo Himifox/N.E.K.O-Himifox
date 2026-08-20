@@ -23,17 +23,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-COLLECTION_DATABASES = {
-    "meme": Path("moegirl-knowledge") / "knowledge.db",
-    "corpora": Path("corpora") / "knowledge.db",
-}
+KNOWLEDGE_DATABASE = Path("public-knowledge") / "knowledge.db"
 DEFAULT_BATCH_SIZE = 4
 EMBEDDING_MICROBATCH_SIZE = 4
 
 
 @dataclass(frozen=True, slots=True)
-class CollectionTarget:
-    collection_id: str
+class KnowledgeTarget:
     database_path: Path
 
 
@@ -67,12 +63,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cancel-job",
         metavar="JOB_ID",
         help="cancel one staged import job and remove its staged payload",
-    )
-    parser.add_argument(
-        "--collection",
-        choices=("meme", "corpora", "all"),
-        default="all",
-        help="limit work to one collection (default: all)",
     )
     parser.add_argument(
         "--batch-size",
@@ -129,30 +119,22 @@ def _default_knowledge_root() -> Path:
     return Path(get_config_manager(migrate=False).knowledge_dir)
 
 
-def _targets(root: Path, collection: str) -> tuple[CollectionTarget, ...]:
-    collection_ids = COLLECTION_DATABASES if collection == "all" else (collection,)
-    return tuple(
-        CollectionTarget(collection_id, root / COLLECTION_DATABASES[collection_id])
-        for collection_id in collection_ids
-    )
+def _target(root: Path) -> KnowledgeTarget:
+    return KnowledgeTarget(root / KNOWLEDGE_DATABASE)
 
 
 def _installed_pack_targets(
-    targets: Sequence[CollectionTarget],
+    target: KnowledgeTarget,
     pack_id: str,
-) -> tuple[CollectionTarget, ...]:
+) -> tuple[KnowledgeTarget, ...]:
     """Locate a pack from registries without opening or migrating databases."""
-    matches: list[CollectionTarget] = []
-    for target in targets:
-        registry_path = target.database_path.with_name("packs.json")
-        try:
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        packs = registry.get("packs") if isinstance(registry, dict) else None
-        if isinstance(packs, dict) and isinstance(packs.get(pack_id), dict):
-            matches.append(target)
-    return tuple(matches)
+    registry_path = target.database_path.with_name("packs.json")
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    packs = registry.get("packs") if isinstance(registry, dict) else None
+    return (target,) if isinstance(packs, dict) and isinstance(packs.get(pack_id), dict) else ()
 
 
 def _open_read_only(database_path: Path) -> sqlite3.Connection:
@@ -348,7 +330,7 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
     return result
 
 
-def inspect_pack_jobs(root: Path, *, collection: str) -> list[dict[str, Any]]:
+def inspect_pack_jobs(root: Path) -> list[dict[str, Any]]:
     """Read persistent job metadata without opening or migrating staging databases."""
     jobs_root = root / ".staging"
     if not jobs_root.is_dir():
@@ -360,8 +342,6 @@ def inspect_pack_jobs(root: Path, *, collection: str) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(item, dict):
-            continue
-        if collection != "all" and item.get("collection_id") != collection:
             continue
         items.append(item)
     return sorted(
@@ -417,7 +397,7 @@ def _count_derived_chunks(database_path: Path) -> tuple[int, int]:
     return entries, chunks
 
 
-def dry_run_plan(target: CollectionTarget, *, full: bool) -> dict[str, Any]:
+def dry_run_plan(target: KnowledgeTarget, *, full: bool) -> dict[str, Any]:
     status = inspect_database(target.database_path)
     valid_entries, derived_chunks = _count_derived_chunks(target.database_path)
     if full:
@@ -536,7 +516,7 @@ async def _run_embedding_work_round(
 
 
 async def rebuild_target(
-    target: CollectionTarget,
+    target: KnowledgeTarget,
     *,
     full: bool,
     batch_size: int,
@@ -610,7 +590,7 @@ async def rebuild_target(
 
 async def _run(args: argparse.Namespace) -> int:
     root = (args.knowledge_root or _default_knowledge_root()).expanduser().resolve()
-    targets = _targets(root, args.collection)
+    target = _target(root)
     requested_action = (
         "preflight"
         if args.preflight_pack
@@ -626,7 +606,7 @@ async def _run(args: argparse.Namespace) -> int:
         "action": requested_action,
         "knowledge_root": str(root),
         "embedding_backend": "local_shared_runtime",
-        "collections": [],
+        "database": str(target.database_path),
     }
     if args.enable_local_pack:
         if requested_action not in {"rebuild", "full"}:
@@ -639,7 +619,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 2
-        pack_targets = _installed_pack_targets(targets, args.enable_local_pack)
+        pack_targets = _installed_pack_targets(target, args.enable_local_pack)
         if not pack_targets:
             payload.update(
                 {
@@ -652,7 +632,6 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
         payload["local_embedding_opt_in"] = {
             "pack_id": args.enable_local_pack,
-            "collections": [target.collection_id for target in pack_targets],
             "dry_run": bool(args.dry_run),
         }
         if not args.dry_run:
@@ -679,7 +658,7 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "ok": True,
                 "pack_id": pack.pack_id,
-                "collection_id": pack.collection_id,
+                "material_type": pack.material_type,
                 "entries_total": preflight.entries,
                 "projected_chunks": preflight.projected_chunks,
                 "estimated_working_bytes": preflight.estimated_working_bytes,
@@ -695,43 +674,25 @@ async def _run(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0 if cancelled else 2
     if requested_action == "status":
-        payload["collections"] = [
-            {
-                "collection_id": target.collection_id,
-                **inspect_database(target.database_path),
-            }
-            for target in targets
-        ]
-        payload["pack_jobs"] = inspect_pack_jobs(root, collection=args.collection)
+        payload["index"] = inspect_database(target.database_path)
+        payload["pack_jobs"] = inspect_pack_jobs(root)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
     if args.dry_run:
-        payload["collections"] = [
-            {
-                "collection_id": target.collection_id,
-                **dry_run_plan(target, full=args.full),
-            }
-            for target in targets
-        ]
+        payload["index"] = dry_run_plan(target, full=args.full)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
     all_complete = True
     try:
-        for target in targets:
-            result, complete = await rebuild_target(
-                target,
-                full=args.full,
-                batch_size=args.batch_size,
-            )
-            payload["collections"].append(
-                {
-                    "collection_id": target.collection_id,
-                    **result,
-                }
-            )
-            all_complete = all_complete and complete
+        result, complete = await rebuild_target(
+            target,
+            full=args.full,
+            batch_size=args.batch_size,
+        )
+        payload["index"] = result
+        all_complete = complete
     finally:
         from knowledge.vector_index import drain_knowledge_embedding_inference
         from utils.local_embedding_runtime import release_local_embedding_service

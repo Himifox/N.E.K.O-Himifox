@@ -35,7 +35,6 @@ from .prebuilt_index import (
     canonical_prebuilt_manifest_bytes,
     validate_prebuilt_index,
 )
-from .routing import ContextHint
 from .subscriptions import (
     INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
     SUBSCRIPTION_PROTOCOL_VERSION,
@@ -47,10 +46,8 @@ from .subscriptions import (
     validate_subscription,
 )
 from .service import (
-    CollectionSpec,
     KnowledgeService,
     KnowledgeTurnContext,
-    MaterialRoute,
     ResponsePolicy,
 )
 
@@ -61,8 +58,6 @@ def open_knowledge(knowledge_root: str | Path) -> KnowledgeService:
 
 
 __all__ = [
-    "CollectionSpec",
-    "ContextHint",
     "INDEXED_SUBSCRIPTION_PROTOCOL_VERSION",
     "IndexedKnowledgeSubscription",
     "KnowledgeEntry",
@@ -76,7 +71,6 @@ __all__ = [
     "KnowledgeStoreError",
     "KnowledgeSubscription",
     "KnowledgeTurnContext",
-    "MaterialRoute",
     "MatchPolicy",
     "MAX_PREBUILT_CHUNKS",
     "MAX_PREBUILT_MANIFEST_BYTES",

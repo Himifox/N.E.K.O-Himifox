@@ -36,14 +36,14 @@ def test_conversion_is_deduplicated_explicit_only_and_safety_labelled():
     assert "safety:self-harm" in entries[1]["tags"]
 
 
-def test_converted_rows_form_a_valid_removable_corpora_pack():
+def test_converted_rows_form_a_valid_removable_corpus_pack():
     entries, excluded = MODULE.convert_rows(
         [{"instruction": "为什么太阳会发光?", "output": "这是趣味回答。"}]
     )
     payload = {
-        "schema_version": 1,
+        "schema_version": 3,
         "pack_id": "ruozhiba-qa",
-        "collection_id": "corpora",
+        "material_type": "corpus",
         "source": {
             "name": "LooksJuicy/ruozhiba 趣味问答",
             "homepage": MODULE.SOURCE_HOMEPAGE,
@@ -55,6 +55,6 @@ def test_converted_rows_form_a_valid_removable_corpora_pack():
     pack = validate_pack(payload)
 
     assert excluded == 0
-    assert pack.collection_id == "corpora"
+    assert pack.material_type == "corpus"
     assert pack.source_tag == "source:community.ruozhiba-qa"
     assert pack.entries[0].recognition_terms == ()

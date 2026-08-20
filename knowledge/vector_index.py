@@ -57,7 +57,7 @@ class EmbeddingBatchResult:
 
 @dataclass(frozen=True, slots=True)
 class SemanticQueryEmbedding:
-    """One request-scoped query vector reusable across knowledge collections."""
+    """One request-scoped query vector reusable across public-knowledge scans."""
 
     vector: list[float] | None
     status: LocalEmbeddingStatus
@@ -351,7 +351,7 @@ async def prepare_semantic_query(
     *,
     stores: tuple[MoegirlKnowledgeStore, ...],
 ) -> SemanticQueryEmbedding:
-    """Encode one query at most once for all requested collection scans."""
+    """Encode one query at most once for the requested public-knowledge scan."""
     empty_status = LocalEmbeddingStatus(state="not_ready")
     if not str(query or "").strip():
         return SemanticQueryEmbedding(None, empty_status, "empty_query")
@@ -399,7 +399,7 @@ async def semantic_search_prepared(
     limit: int = VECTOR_CANDIDATE_LIMIT,
     allowed_source_tags: tuple[str, ...] | None = None,
 ) -> tuple[list[MoegirlKnowledgeHit], str]:
-    """Scan one collection with an already encoded request-scoped query."""
+    """Scan the public-knowledge index with an encoded request-scoped query."""
     if prepared.state != "ready" or prepared.vector is None:
         return [], prepared.state
     try:

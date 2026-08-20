@@ -27,9 +27,9 @@ SPEC.loader.exec_module(MODULE)
 
 def _pack_payload():
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "pack_id": "publisher-fixture",
-        "collection_id": "corpora",
+        "material_type": "corpus",
         "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
         "entries": [
             {
@@ -166,4 +166,4 @@ def test_builder_output_is_validation_stable_and_staging_compatible(
         process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
     )
     assert result["state"] == "ready_hybrid"
-    assert service.list_packs("corpora")[0]["index_validation"] == "accepted"
+    assert service.list_packs()[0]["index_validation"] == "accepted"

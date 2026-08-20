@@ -14,7 +14,6 @@ _MAX_RECORDS = 20
 @dataclass(frozen=True, slots=True)
 class KnowledgeRouteDiagnostic:
     timestamp: str
-    collection_id: str
     entry_title: str
     source_tag: str
     match_mode: str
@@ -26,7 +25,6 @@ class KnowledgeRouteDiagnostic:
 @dataclass(frozen=True, slots=True)
 class KnowledgeQueryDiagnostic:
     timestamp: str
-    collection_id: str
     retrieval_mode: str
     embedding_service_state: str
     lexical_candidates: int
@@ -54,7 +52,6 @@ _lock = threading.Lock()
 
 def record_knowledge_route(
     *,
-    collection_id: str = "",
     entry_title: str = "",
     source_tag: str = "",
     match_mode: str = "none",
@@ -64,7 +61,6 @@ def record_knowledge_route(
 ) -> None:
     record = KnowledgeRouteDiagnostic(
         timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        collection_id=str(collection_id or ""),
         entry_title=str(entry_title or "")[:500],
         source_tag=str(source_tag or "")[:100],
         match_mode=str(match_mode or "none")[:40],
@@ -83,7 +79,6 @@ def list_recent_knowledge_routes() -> tuple[dict, ...]:
 
 def record_knowledge_query(
     *,
-    collection_id: str,
     retrieval_mode: str,
     embedding_service_state: str,
     lexical_candidates: int,
@@ -94,7 +89,6 @@ def record_knowledge_query(
     """Store content-free retrieval telemetry; never retain the query or vectors."""
     record = KnowledgeQueryDiagnostic(
         timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        collection_id=str(collection_id or "")[:40],
         retrieval_mode=str(retrieval_mode or "bm25")[:20],
         embedding_service_state=str(embedding_service_state or "unknown")[:40],
         lexical_candidates=max(int(lexical_candidates), 0),

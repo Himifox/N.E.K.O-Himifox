@@ -18,9 +18,9 @@ from knowledge.subscriptions import (
 
 def _payload(*, title="community phrase", pack_id="community-fixture"):
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "pack_id": pack_id,
-        "collection_id": "meme",
+        "material_type": "knowledge",
         "source": {
             "name": "Community Fixture",
             "homepage": "https://example.invalid/fixture",
@@ -40,9 +40,7 @@ def _payload(*, title="community phrase", pack_id="community-fixture"):
 
 def _material_payload(*, pack_id="community-tarot"):
     payload = _payload(title="Community Tarot", pack_id=pack_id)
-    payload["schema_version"] = 2
     payload["material_type"] = "corpus"
-    payload["collection_id"] = "corpora"
     payload["entries"][0]["tags"] = ["dataset:tarot-interpretations"]
     payload["entries"][0]["summary"] = "Community tarot material"
     payload["entries"][0]["content"] = "Community tarot material"
@@ -61,14 +59,13 @@ def test_imported_pack_is_searchable_but_not_automatic_until_enabled(tmp_path):
     result = service.import_pack(pack_path)
 
     assert result.entries == 1
-    assert service.search("meme", "community phrase", limit=1)
+    assert service.search("community phrase", limit=1)
     assert service.build_turn_context("community phrase appears here").hit_count == 0
 
-    service.set_pack_auto_context("meme", "community-fixture", enabled=True)
+    service.set_pack_auto_context("community-fixture", enabled=True)
     context = service.build_turn_context("community phrase appears here")
 
     assert context.hit_count == 1
-    assert context.collection_id == "meme"
     assert "Source: Community Fixture" in context.text
 
 
@@ -76,9 +73,8 @@ def test_material_pack_is_explicitly_available_but_not_automatic_by_default(tmp_
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_material_payload()))
 
-    installed = service.list_packs("corpora")
+    installed = service.list_packs()
     explicit = service.sample_entries(
-        "corpora",
         "dataset:tarot-interpretations",
         limit=1,
     )
@@ -89,9 +85,9 @@ def test_material_pack_is_explicitly_available_but_not_automatic_by_default(tmp_
     assert automatic.hit_count == 0
 
 
-def test_disabled_material_pack_does_not_hide_enabled_builtin_material(tmp_path):
+def test_corpus_material_never_auto_injects(tmp_path):
     service = open_knowledge(tmp_path)
-    KnowledgeStore(service.database_path("corpora")).upsert(
+    KnowledgeStore(service.database_path()).upsert(
         KnowledgeEntry(
             title="Built-in Tarot",
             terms={},
@@ -104,9 +100,7 @@ def test_disabled_material_pack_does_not_hide_enabled_builtin_material(tmp_path)
 
     context = service.build_conversation_context("please draw a tarot card")
 
-    assert context.hit_count == 1
-    assert context.match_mode == "material_sample"
-    assert context.source_tag == "source:corpora"
+    assert context.hit_count == 0
 
 
 def test_corpus_pack_cannot_be_enabled_for_automatic_context(tmp_path):
@@ -114,44 +108,53 @@ def test_corpus_pack_cannot_be_enabled_for_automatic_context(tmp_path):
     service.install_pack(validate_pack(_material_payload()))
 
     with pytest.raises(ValueError, match="corpus packs cannot enable"):
-        service.set_pack_auto_context("corpora", "community-tarot", enabled=True)
+        service.set_pack_auto_context("community-tarot", enabled=True)
 
-    installed = service.list_packs("corpora")
+    installed = service.list_packs()
     context = service.build_conversation_context("please draw a tarot card")
     assert installed[0]["effective_material_type"] == "corpus"
     assert installed[0]["auto_context"] is False
     assert context.hit_count == 0
 
 
-def test_legacy_pack_defaults_to_knowledge_and_v2_requires_material_type():
-    legacy = validate_pack(_payload())
-    assert legacy.material_type == "knowledge"
-    assert "material_type" not in pack_payload(legacy)
-
-    v2 = _payload()
-    v2["schema_version"] = 2
+def test_v3_pack_requires_material_type():
+    missing = _payload()
+    missing.pop("material_type")
     with pytest.raises(ValueError, match="material_type"):
-        validate_pack(v2)
+        validate_pack(missing)
 
-    v2["material_type"] = "knowledge"
-    current = validate_pack(v2)
+    current = validate_pack(_payload())
     assert current.material_type == "knowledge"
     assert pack_payload(current)["material_type"] == "knowledge"
+
+
+def test_v3_pack_rejects_legacy_collection_contract():
+    legacy = _payload()
+    legacy["schema_version"] = 2
+    legacy["collection_id"] = "meme"
+
+    with pytest.raises(ValueError, match="unsupported knowledge pack schema"):
+        validate_pack(legacy)
+
+    current_with_collection = _payload()
+    current_with_collection["collection_id"] = "meme"
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_pack(current_with_collection)
 
 
 def test_material_type_override_changes_routing_without_rewriting_entries(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
-    database_path = service.database_path("meme")
+    database_path = service.database_path()
     store = KnowledgeStore(database_path)
     before = store.count_by_source_tag("source:community.community-fixture")
 
     service.set_pack_material_type_override(
-        "meme", "community-fixture", material_type="corpus"
+        "community-fixture", material_type="corpus"
     )
 
-    installed = service.list_packs("meme")
-    status = service.get_status("meme")
+    installed = service.list_packs()
+    status = service.get_status()
     assert installed[0]["declared_material_type"] == "knowledge"
     assert installed[0]["effective_material_type"] == "corpus"
     assert store.count_by_source_tag("source:community.community-fixture") == before
@@ -162,7 +165,7 @@ def test_material_type_override_changes_routing_without_rewriting_entries(tmp_pa
 
 def test_pack_update_replaces_only_its_own_source(tmp_path):
     service = open_knowledge(tmp_path)
-    database_path = service.database_path("meme")
+    database_path = service.database_path()
     KnowledgeStore(database_path).upsert(
         KnowledgeEntry(
             title="built in entry",
@@ -179,9 +182,9 @@ def test_pack_update_replaces_only_its_own_source(tmp_path):
         _write_pack(tmp_path / "second.json", _payload(title="new title"))
     )
 
-    assert service.search("meme", "old title", limit=1) == []
-    assert service.search("meme", "new title", limit=1)
-    assert service.search("meme", "built in entry", limit=1)
+    assert service.search("old title", limit=1) == []
+    assert service.search("new title", limit=1)
+    assert service.search("built in entry", limit=1)
 
 
 def test_concurrent_pack_installs_preserve_database_and_registry(tmp_path):
@@ -198,13 +201,13 @@ def test_concurrent_pack_installs_preserve_database_and_registry(tmp_path):
         "concurrent-alpha",
         "concurrent-beta",
     }
-    installed = {pack["pack_id"]: pack for pack in service.list_packs("meme")}
+    installed = {pack["pack_id"]: pack for pack in service.list_packs()}
     assert set(installed) == {"concurrent-alpha", "concurrent-beta"}
-    store = KnowledgeStore(service.database_path("meme"))
+    store = KnowledgeStore(service.database_path())
     assert store.count_by_source_tag("source:community.concurrent-alpha") == 1
     assert store.count_by_source_tag("source:community.concurrent-beta") == 1
     registry = json.loads(
-        service.database_path("meme")
+        service.database_path()
         .with_name("packs.json")
         .read_text(encoding="utf-8")
     )
@@ -221,12 +224,12 @@ def test_concurrent_updates_of_one_pack_keep_one_complete_source(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as executor:
         tuple(executor.map(service.install_pack, packs))
 
-    installed = service.list_packs("meme")
+    installed = service.list_packs()
     assert len(installed) == 1
     assert installed[0]["pack_id"] == "community-fixture"
     entries = tuple(
         entry
-        for entry in KnowledgeStore(service.database_path("meme")).list_active_entries()
+        for entry in KnowledgeStore(service.database_path()).list_active_entries()
         if entry.source_tag == "source:community.community-fixture"
     )
     assert len(entries) == 1
@@ -236,7 +239,7 @@ def test_concurrent_updates_of_one_pack_keep_one_complete_source(tmp_path):
 def test_pack_source_metadata_is_stored_outside_entries(tmp_path):
     service = open_knowledge(tmp_path)
     service.import_pack(_write_pack(tmp_path / "pack.json", _payload()))
-    entry = service.search("meme", "community phrase", limit=1)[0].entry
+    entry = service.search("community phrase", limit=1)[0].entry
 
     assert set(entry.__dataclass_fields__) == {
         "title",
@@ -245,7 +248,7 @@ def test_pack_source_metadata_is_stored_outside_entries(tmp_path):
         "summary",
         "content",
     }
-    source = get_source(entry.source_tag, database_path=service.database_path("meme"))
+    source = get_source(entry.source_tag, database_path=service.database_path())
     assert source.name == "Community Fixture"
     assert source.license == "CC0-1.0"
 
@@ -324,10 +327,9 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
 
     service.install_pack(pack, subscription=subscription.to_dict())
 
-    installed = service.list_packs("meme")
+    installed = service.list_packs()
     assert installed[0]["subscription"] == subscription.to_dict()
     entry = service.get_entry(
-        "meme",
         source_tag=pack.source_tag,
         title="community phrase",
     )
@@ -376,7 +378,7 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
 
 def test_removing_pack_does_not_remove_another_source(tmp_path):
     service = open_knowledge(tmp_path)
-    database_path = service.database_path("meme")
+    database_path = service.database_path()
     KnowledgeStore(database_path).upsert(
         KnowledgeEntry(
             title="built in entry",
@@ -388,21 +390,21 @@ def test_removing_pack_does_not_remove_another_source(tmp_path):
     )
     service.install_pack(validate_pack(_payload()))
 
-    removed = service.remove_pack("meme", "community-fixture")
+    removed = service.remove_pack("community-fixture")
 
     assert removed == 1
-    assert service.search("meme", "community phrase", limit=1) == []
-    assert service.search("meme", "built in entry", limit=1)
-    assert service.list_packs("meme") == ()
+    assert service.search("community phrase", limit=1) == []
+    assert service.search("built in entry", limit=1)
+    assert service.list_packs() == ()
 
 
 def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
-    database_path = service.database_path("meme")
+    database_path = service.database_path()
     store = KnowledgeStore(database_path)
 
-    installed = service.list_packs("meme")[0]
+    installed = service.list_packs()[0]
     assert installed["local_embedding_enabled"] is False
     assert store.embedding_policy_counts(source_tag=installed["source_tag"]) == {
         "local": 0,
@@ -410,11 +412,10 @@ def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
     }
 
     service.set_pack_index_policy(
-        "meme",
         "community-fixture",
         local_embedding_enabled=True,
     )
-    assert service.list_packs("meme")[0]["local_embedding_enabled"] is True
+    assert service.list_packs()[0]["local_embedding_enabled"] is True
     assert (
         store.embedding_policy_counts(source_tag=installed["source_tag"])["local"] == 1
     )
@@ -423,7 +424,7 @@ def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
 def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
-    database_path = service.database_path("meme")
+    database_path = service.database_path()
     registry_path = database_path.with_name("packs.json")
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     metadata = registry["packs"]["community-fixture"]
@@ -439,7 +440,7 @@ def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tm
         metadata.pop(field, None)
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
-    migrated = open_knowledge(tmp_path).list_packs("meme")[0]
+    migrated = open_knowledge(tmp_path).list_packs()[0]
 
     assert migrated["local_embedding_enabled"] is False
     assert migrated["index_origin"] == "none"

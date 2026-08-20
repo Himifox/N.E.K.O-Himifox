@@ -76,7 +76,7 @@ class KnowledgeArtifactSet(BaseModel):
 class KnowledgeVersionDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     package_id: int = Field(gt=0)
     remote_id: str = Field(pattern=r"^knowledge/[a-z0-9][a-z0-9._-]{1,99}$")
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
@@ -89,7 +89,6 @@ class KnowledgeUnsubscribeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     package_id: int = Field(gt=0)
-    collection: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
 
@@ -144,18 +143,12 @@ async def get_knowledge_task(task_id: str, token: str = Query(...)):
 @router.get("/subscriptions")
 async def list_local_knowledge_subscriptions(token: str = Query(...)):
     _verify_bridge_token(token)
-    collections = await _main_request("GET", "collections")
-    items: list[dict[str, Any]] = []
-    for collection in collections.get("collections", []):
-        collection_id = str(collection.get("collection_id") or "")
-        if not collection_id:
-            continue
-        payload = await _main_request(
-            "GET", "packs", params={"collection": collection_id}
-        )
-        for pack in payload.get("packs", []):
-            if isinstance(pack, dict) and isinstance(pack.get("subscription"), dict):
-                items.append({"collection": collection_id, **pack})
+    payload = await _main_request("GET", "packs")
+    items = [
+        pack
+        for pack in payload.get("packs", [])
+        if isinstance(pack, dict) and isinstance(pack.get("subscription"), dict)
+    ]
     return {"ok": True, "subscriptions": items}
 
 
@@ -168,7 +161,7 @@ async def unsubscribe_knowledge_package(
     result = await _main_request(
         "POST",
         "packs/remove",
-        json={"collection": payload.collection, "pack_id": payload.pack_id},
+        json={"pack_id": payload.pack_id},
     )
     if result.get("ok") is not True:
         raise HTTPException(
@@ -254,15 +247,7 @@ async def _execute_subscription(
             )
         job_id = str(result.get("job_id") or "")
         if job_id:
-            activated = await _wait_for_pack_job(
-                task,
-                job_id=job_id,
-                collection_id=str(
-                    result.get("collection_id")
-                    or pack_payload.get("collection_id")
-                    or ""
-                ),
-            )
+            activated = await _wait_for_pack_job(task, job_id=job_id)
             result = {**result, "activation": activated}
         task["result"] = result
         task["status"] = "completed"
@@ -422,7 +407,7 @@ async def _main_indexed_subscription_request(
             trust_env=False,
         ) as client:
             response = await client.post(
-                f"http://127.0.0.1:{port}/api/public-knowledge/subscriptions/apply-v2",
+                f"http://127.0.0.1:{port}/api/public-knowledge/subscriptions/apply-v3",
                 data=data,
                 files=files,
                 headers=headers,
@@ -481,16 +466,11 @@ async def _wait_for_pack_job(
     task: dict[str, Any],
     *,
     job_id: str,
-    collection_id: str,
 ) -> dict[str, Any]:
     """Keep marketplace install pending until the staged pack is truly active."""
     deadline = time.monotonic() + _JOB_WAIT_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        payload = await _main_request(
-            "GET",
-            "packs/jobs",
-            params={"collection": collection_id},
-        )
+        payload = await _main_request("GET", "packs/jobs")
         job = next(
             (
                 item

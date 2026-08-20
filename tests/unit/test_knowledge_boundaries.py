@@ -9,21 +9,11 @@ import pytest
 
 from knowledge._mutation_lock import mutation_lock
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
-from knowledge.collection_overrides import (
-    load_auto_context_overrides,
-    set_collection_auto_context,
-)
-from knowledge.moegirl_knowledge.retrieval import MatchPolicy
 from knowledge.packs import (
     list_installed_packs,
     load_pack,
     set_pack_auto_context,
     validate_pack,
-)
-from knowledge.service import (
-    MEME_RESPONSE_POLICY,
-    CollectionSpec,
-    KnowledgeService,
 )
 
 
@@ -45,11 +35,11 @@ def _entry(
     )
 
 
-def _pack_payload(*, pack_id: str = "boundary-pack", collection_id: str = "meme"):
+def _pack_payload(*, pack_id: str = "boundary-pack", material_type: str = "knowledge"):
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "pack_id": pack_id,
-        "collection_id": collection_id,
+        "material_type": material_type,
         "source": {
             "name": "Boundary Fixture",
             "homepage": "https://example.invalid/boundary",
@@ -199,62 +189,6 @@ def test_corrupt_pack_registry_fails_closed(tmp_path):
         set_pack_auto_context(database_path, "missing-pack", enabled=True)
 
 
-def test_unknown_collection_is_rejected_before_install(tmp_path):
-    service = open_knowledge(tmp_path)
-    pack_path = tmp_path / "unknown.json"
-    pack_path.write_text(json.dumps(_pack_payload(collection_id="unknown")), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="unknown knowledge collection"):
-        service.import_pack(pack_path)
-    assert not (tmp_path / "unknown").exists()
-
-
-def test_explicit_manual_collection_can_match_but_is_not_automatic(tmp_path):
-    manual = CollectionSpec(
-        collection_id="manual",
-        storage_directory="manual",
-        priority=1,
-        auto_context_enabled=False,
-        match_policy=MatchPolicy(),
-        response_policy=MEME_RESPONSE_POLICY,
-    )
-    service = KnowledgeService(tmp_path, collections=(manual,))
-    KnowledgeStore(service.database_path("manual")).upsert(_entry("manual phrase"))
-
-    assert service.build_turn_context("manual phrase appears").hit_count == 0
-    context = service.build_turn_context(
-        "manual phrase appears",
-        collection_ids=("manual",),
-    )
-    assert context.hit_count == 1
-    assert context.collection_id == "manual"
-
-
-def test_equal_strong_matches_use_collection_priority_as_tiebreaker(tmp_path):
-    low = CollectionSpec(
-        collection_id="low",
-        storage_directory="low",
-        priority=1,
-        auto_context_enabled=True,
-        response_policy=MEME_RESPONSE_POLICY,
-    )
-    high = CollectionSpec(
-        collection_id="high",
-        storage_directory="high",
-        priority=20,
-        auto_context_enabled=True,
-        response_policy=MEME_RESPONSE_POLICY,
-    )
-    service = KnowledgeService(tmp_path, collections=(low, high))
-    for collection_id in ("low", "high"):
-        KnowledgeStore(service.database_path(collection_id)).upsert(_entry("same phrase"))
-
-    context = service.build_turn_context("same phrase appears")
-
-    assert context.collection_id == "high"
-    assert context.match_mode == "strong"
-
-
 def test_mutation_lock_serializes_the_same_normalized_path(tmp_path):
     first_entered = threading.Event()
     release_first = threading.Event()
@@ -316,37 +250,6 @@ def test_mutation_locks_for_different_paths_do_not_block_each_other(tmp_path):
         second.join(timeout=2)
     assert not first.is_alive()
     assert not second.is_alive()
-
-
-def test_collection_override_concurrent_updates_keep_both_keys(tmp_path):
-    path = tmp_path / "collection.overrides.json"
-    threads = (
-        threading.Thread(
-            target=set_collection_auto_context,
-            args=(path,),
-            kwargs={"collection_id": "meme", "enabled": True},
-        ),
-        threading.Thread(
-            target=set_collection_auto_context,
-            args=(path,),
-            kwargs={"collection_id": "corpora", "enabled": False},
-        ),
-    )
-
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=2)
-
-    assert all(not thread.is_alive() for thread in threads)
-    assert load_auto_context_overrides(path) == {
-        "corpora": False,
-        "meme": True,
-    }
-    assert list(json.loads(path.read_text(encoding="utf-8"))["auto_context"]) == [
-        "corpora",
-        "meme",
-    ]
 
 
 def test_feature_branch_does_not_ship_bundled_knowledge_datasets():

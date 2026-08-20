@@ -1244,7 +1244,7 @@ class MoegirlKnowledgeStore:
             return {}
 
     def load_routing_entries(self) -> tuple[int, tuple[MoegirlKnowledgeEntry, ...]]:
-        """Read one collection revision and its routeable cards in one transaction."""
+        """Read the database revision and routeable cards in one transaction."""
         try:
             with self._connection() as connection:
                 revision_row = connection.execute(

@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 
 
 SUBSCRIPTION_PROTOCOL_VERSION = 1
-INDEXED_SUBSCRIPTION_PROTOCOL_VERSION = 2
+INDEXED_SUBSCRIPTION_PROTOCOL_VERSION = 3
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 

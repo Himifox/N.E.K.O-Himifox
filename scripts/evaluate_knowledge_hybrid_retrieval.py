@@ -1,7 +1,7 @@
 """Calibrate semantic knowledge retrieval with the optional local ONNX model.
 
-The evaluator opens the existing ``meme`` and ``corpora`` SQLite databases in
-read-only mode.  It never constructs ``MoegirlKnowledgeStore`` and therefore
+The evaluator opens the unified public-knowledge SQLite database in read-only
+mode. It never constructs ``MoegirlKnowledgeStore`` and therefore
 cannot create tables, migrate metadata, or rebuild vectors.
 """
 
@@ -26,10 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 DEFAULT_CASES = (
     PROJECT_ROOT / "tests" / "fixtures" / "knowledge_hybrid_real_model_cases.json"
 )
-COLLECTION_DATABASES = {
-    "meme": Path("moegirl-knowledge") / "knowledge.db",
-    "corpora": Path("corpora") / "knowledge.db",
-}
+KNOWLEDGE_DATABASE = Path("public-knowledge") / "knowledge.db"
 REQUIRED_INPUT_VERSION = "2"
 QUERY_BATCH_SIZE = 4
 
@@ -38,7 +35,7 @@ QUERY_BATCH_SIZE = 4
 class VectorCorpus:
     matrix: np.ndarray
     rows: tuple[dict[str, object], ...]
-    collections: tuple[dict[str, object], ...]
+    status: dict[str, object]
 
 
 class EvaluationUnavailable(RuntimeError):
@@ -53,7 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--knowledge-root",
         type=Path,
         required=True,
-        help="knowledge directory containing moegirl-knowledge/ and corpora/",
+        help="knowledge directory containing public-knowledge/knowledge.db",
     )
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--output", type=Path)
@@ -78,7 +75,6 @@ def _load_cases(path: Path) -> dict[str, Any]:
             "id",
             "query",
             "expected_title",
-            "expected_collection",
         }:
             raise ValueError("positive cases use an invalid schema")
         case_id = str(case["id"])
@@ -106,10 +102,9 @@ def _open_read_only(database_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _load_collection_vectors(
+def _load_vectors(
     database_path: Path,
     *,
-    collection_id: str,
     model_id: str,
     dimensions: int,
 ) -> tuple[list[np.ndarray], list[dict[str, object]], dict[str, object]]:
@@ -123,7 +118,7 @@ def _load_collection_vectors(
             }
             required = {"metadata", "entries", "knowledge_chunks"}
             if not required <= tables:
-                raise EvaluationUnavailable(f"index_schema_unavailable:{collection_id}")
+                raise EvaluationUnavailable("index_schema_unavailable")
             metadata = {
                 str(row["key"]): str(row["value"])
                 for row in connection.execute(
@@ -133,7 +128,7 @@ def _load_collection_vectors(
             }
             if metadata.get("embedding_input_version") != REQUIRED_INPUT_VERSION:
                 raise EvaluationUnavailable(
-                    f"embedding_input_version_mismatch:{collection_id}"
+                    "embedding_input_version_mismatch"
                 )
             rows = connection.execute(
                 "SELECT knowledge_chunks.entry_rowid, knowledge_chunks.chunk_index, "
@@ -147,7 +142,7 @@ def _load_collection_vectors(
             ).fetchall()
     except sqlite3.DatabaseError as exc:
         raise EvaluationUnavailable(
-            f"database_unavailable:{collection_id}:{type(exc).__name__}"
+            f"database_unavailable:{type(exc).__name__}"
         ) from exc
 
     vectors: list[np.ndarray] = []
@@ -170,19 +165,17 @@ def _load_collection_vectors(
         vectors.append(vector / norm)
         result_rows.append(
             {
-                "collection_id": collection_id,
                 "entry_rowid": int(row["entry_rowid"]),
                 "chunk_index": int(row["chunk_index"]),
                 "title": str(row["title"]),
             }
         )
     if not vectors:
-        raise EvaluationUnavailable(f"ready_vectors_missing:{collection_id}")
+        raise EvaluationUnavailable("ready_vectors_missing")
     return (
         vectors,
         result_rows,
         {
-            "collection_id": collection_id,
             "database": str(database_path),
             "schema_version": int(metadata.get("schema_version", "0")),
             "embedding_input_version": int(metadata["embedding_input_version"]),
@@ -198,23 +191,15 @@ def _load_vector_corpus(
     model_id: str,
     dimensions: int,
 ) -> VectorCorpus:
-    vectors: list[np.ndarray] = []
-    rows: list[dict[str, object]] = []
-    collections: list[dict[str, object]] = []
-    for collection_id, relative_path in COLLECTION_DATABASES.items():
-        collection_vectors, collection_rows, status = _load_collection_vectors(
-            knowledge_root / relative_path,
-            collection_id=collection_id,
-            model_id=model_id,
-            dimensions=dimensions,
-        )
-        vectors.extend(collection_vectors)
-        rows.extend(collection_rows)
-        collections.append(status)
+    vectors, rows, status = _load_vectors(
+        knowledge_root / KNOWLEDGE_DATABASE,
+        model_id=model_id,
+        dimensions=dimensions,
+    )
     return VectorCorpus(
         matrix=np.stack(vectors).astype(np.float32, copy=False),
         rows=tuple(rows),
-        collections=tuple(collections),
+        status=status,
     )
 
 
@@ -229,15 +214,14 @@ def _rank_entries(
     if norm <= 0:
         raise EvaluationUnavailable("query_embedding_empty")
     scores = corpus.matrix @ (query / norm)
-    best: dict[tuple[str, int], dict[str, object]] = {}
+    best: dict[int, dict[str, object]] = {}
     for index, score_value in enumerate(scores):
         row = corpus.rows[index]
-        key = (str(row["collection_id"]), int(row["entry_rowid"]))
+        key = int(row["entry_rowid"])
         score = float(score_value)
         previous = best.get(key)
         if previous is None or score > float(previous["score"]):
             best[key] = {
-                "collection_id": key[0],
                 "title": str(row["title"]),
                 "score": round(score, 6),
                 "chunk_index": int(row["chunk_index"]),
@@ -247,7 +231,6 @@ def _rank_entries(
         key=lambda row: (
             -float(row["score"]),
             str(row["title"]),
-            str(row["collection_id"]),
         ),
     )
 
@@ -366,13 +349,11 @@ async def evaluate(knowledge_root: Path, cases: Mapping[str, object]) -> dict[st
         top3 = ranking[:3]
         if "expected_title" in case:
             expected_title = str(case["expected_title"])
-            expected_collection = str(case["expected_collection"])
             expected_rank = next(
                 (
                     index
                     for index, row in enumerate(ranking, start=1)
                     if row["title"] == expected_title
-                    and row["collection_id"] == expected_collection
                 ),
                 None,
             )
@@ -412,7 +393,7 @@ async def evaluate(knowledge_root: Path, cases: Mapping[str, object]) -> dict[st
         "model_id": status.model_id,
         "dimensions": status.dimensions,
         "embedding_input_version": 2,
-        "collections": list(corpus.collections),
+        "index": corpus.status,
         "positive_results": positive_results,
         "negative_results": negative_results,
         "quality_targets": {

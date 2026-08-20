@@ -44,11 +44,11 @@ describe('knowledge API response handling', () => {
   })
 
   it('returns a successful response unchanged', async () => {
-    const payload = { ok: true, collections: [] }
+    const payload = { ok: true, status: { status: 'ready' } }
     axiosMocks.request.mockResolvedValue({ data: payload })
     const { knowledgeApi } = await loadKnowledgeApi()
 
-    await expect(knowledgeApi.collections()).resolves.toEqual(payload)
+    await expect(knowledgeApi.status()).resolves.toEqual(payload)
   })
 
   it('preserves transport failures', async () => {
@@ -56,6 +56,6 @@ describe('knowledge API response handling', () => {
     axiosMocks.request.mockRejectedValue(upstream)
     const { knowledgeApi } = await loadKnowledgeApi()
 
-    await expect(knowledgeApi.collections()).rejects.toBe(upstream)
+    await expect(knowledgeApi.status()).rejects.toBe(upstream)
   })
 })

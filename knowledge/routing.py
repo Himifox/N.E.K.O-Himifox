@@ -1,8 +1,7 @@
-"""Rebuildable cross-collection routing for automatic conversational context."""
+"""Rebuildable exact-term routing for automatic public-knowledge context."""
 
 from __future__ import annotations
 
-import logging
 import re
 import threading
 import unicodedata
@@ -16,50 +15,34 @@ from .moegirl_knowledge.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .moegirl_knowledge.filters import normalize_meme_phrase, normalize_search_text
+from .moegirl_knowledge.filters import normalize_search_text
 from .moegirl_knowledge.models import MoegirlKnowledgeEntry
 from .moegirl_knowledge.retrieval import MatchPolicy
 from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
 _CARD_CACHE_LIMIT = 256
-logger = logging.getLogger(__name__)
+_STATE_CACHE_LIMIT = 16
 
 
 @dataclass(frozen=True, slots=True)
-class ContextHint:
-    """Non-triggering vocabulary used only to break equal cross-library matches."""
-
-    required_tags: tuple[str, ...] = ()
-    terms: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class RouteCollection:
-    collection_id: str
+class RoutingConfig:
     database_path: Path
-    priority: int
     policy: MatchPolicy
-    context_hints: tuple[ContextHint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class RouteRecord:
-    collection_id: str
     database_path: Path
-    priority: int
     source_tag: str
     title: str
     strong_terms: tuple[str, ...]
     boundary_terms: tuple[str, ...]
-    weak_terms: tuple[str, ...]
-    context_terms: tuple[str, ...]
-    boundary_context_terms: tuple[str, ...]
     revision: int
 
     @property
-    def key(self) -> tuple[str, str, str]:
-        return self.collection_id, self.source_tag, self.title
+    def key(self) -> tuple[str, str]:
+        return self.source_tag, self.title
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +59,7 @@ class _TrieNode:
 
 
 class RoutingSnapshot:
-    """Immutable matcher for one collection's lightweight route records."""
+    """Immutable title/alias/recognition matcher for one knowledge database."""
 
     def __init__(self, records: Iterable[RouteRecord]) -> None:
         self._nodes = [_TrieNode()]
@@ -85,8 +68,6 @@ class RoutingSnapshot:
                 self._insert(phrase, record, "strong")
             for phrase in record.boundary_terms:
                 self._insert(phrase, record, "strong")
-            for phrase in record.weak_terms:
-                self._insert(phrase, record, "weak_short")
 
     def _insert(self, phrase: str, record: RouteRecord, mode: str) -> None:
         node_index = 0
@@ -100,32 +81,24 @@ class RoutingSnapshot:
         if value not in terminal:
             terminal.append(value)
 
-    def find_normalized(
-        self,
-        normalized: str,
-        phrase: str,
-        boundary_text: str,
-    ) -> RouteMatch | None:
+    def find(self, user_text: str) -> RouteMatch | None:
+        normalized = normalize_search_text(user_text)
         if len(normalized) < 2:
             return None
+        boundary_text = _normalize_latin_boundary_text(user_text)
         candidates = self._scan(normalized)
-        if phrase and phrase != normalized:
-            candidates.extend(self._scan(phrase))
         if boundary_text:
             candidates.extend(self._scan(boundary_text))
-        best: dict[tuple[str, str, str], RouteMatch] = {}
+        if not candidates:
+            return None
+        best: dict[tuple[str, str], RouteMatch] = {}
         for candidate in candidates:
             previous = best.get(candidate.record.key)
             if previous is None or _match_sort_key(candidate) < _match_sort_key(previous):
                 best[candidate.record.key] = candidate
-        if not best:
-            return None
         return min(best.values(), key=_match_sort_key)
 
-    def _scan(
-        self,
-        text: str,
-    ) -> list[RouteMatch]:
+    def _scan(self, text: str) -> list[RouteMatch]:
         results: list[RouteMatch] = []
         for start_index in range(len(text)):
             node_index = 0
@@ -139,184 +112,52 @@ class RoutingSnapshot:
         return results
 
 
-class SegmentedRoutingSnapshot:
-    """One logical router backed by independently replaceable collection tries."""
-
-    def __init__(self, matchers: dict[str, RoutingSnapshot]) -> None:
-        self._matchers = matchers
-
-    def find(
-        self,
-        user_text: str,
-        *,
-        allowed_collections: frozenset[str],
-    ) -> RouteMatch | None:
-        normalized = normalize_search_text(user_text)
-        if len(normalized) < 2:
-            return None
-        phrase = normalize_meme_phrase(normalized, already_normalized=True)
-        boundary_text = _normalize_latin_boundary_text(user_text)
-        matches = (
-            matcher.find_normalized(normalized, phrase, boundary_text)
-            for collection_id, matcher in self._matchers.items()
-            if collection_id in allowed_collections
-        )
-        candidates = [match for match in matches if match is not None]
-        if not candidates:
-            return None
-        if len(candidates) == 1:
-            return candidates[0]
-        evidence = {
-            match.record.key: _context_evidence_score(match.record, normalized, boundary_text)
-            for match in candidates
-        }
-        selected = min(
-            candidates,
-            key=lambda match: _cross_collection_sort_key(match, evidence[match.record.key]),
-        )
-        quality_peers = [
-            match
-            for match in candidates
-            if match.match_mode == selected.match_mode and match.score == selected.score
-        ]
-        peer_scores = [evidence[match.record.key] for match in quality_peers]
-        best_evidence = max(peer_scores, default=0)
-        resolved_by_hint = (
-            best_evidence > 0
-            and evidence[selected.record.key] == best_evidence
-            and peer_scores.count(best_evidence) == 1
-        )
-        resolution = (
-            "match_quality"
-            if len(quality_peers) == 1
-            else "context_hint" if resolved_by_hint else "collection_priority"
-        )
-        logger.info(
-            "[public-knowledge] route conflict candidates=%d resolution=%s collection=%s",
-            len(candidates),
-            resolution,
-            selected.record.collection_id,
-        )
-        return selected
-
-
-def _match_sort_key(match: RouteMatch) -> tuple[int, float, int, str, str]:
+def _match_sort_key(match: RouteMatch) -> tuple[int, float, str, str]:
     return (
-        0 if match.match_mode == "strong" else 1,
+        0,
         -match.score,
-        -match.record.priority,
         match.record.title,
-        match.record.collection_id,
+        match.record.source_tag,
     )
-
-
-def _cross_collection_sort_key(
-    match: RouteMatch,
-    context_score: int,
-) -> tuple[int, float, int, int, str, str]:
-    return (
-        0 if match.match_mode == "strong" else 1,
-        -match.score,
-        -context_score,
-        -match.record.priority,
-        match.record.title,
-        match.record.collection_id,
-    )
-
-
-def _context_evidence_score(
-    record: RouteRecord,
-    normalized: str,
-    boundary_text: str,
-) -> int:
-    ordinary = max(
-        (len(term) for term in record.context_terms if term in normalized),
-        default=0,
-    )
-    bounded = max(
-        (
-            len(term.replace("\0", ""))
-            for term in record.boundary_context_terms
-            if term in boundary_text
-        ),
-        default=0,
-    )
-    return max(ordinary, bounded)
 
 
 class KnowledgeRoutingState:
-    """One atomic route snapshot plus a bounded cache of complete cards."""
+    """One atomic route snapshot plus a bounded cache of complete entries."""
 
-    def __init__(self, collections: tuple[RouteCollection, ...]) -> None:
-        self.collections = collections
-        self._segments: dict[str, tuple[RouteRecord, ...]] = {}
-        self._matchers: dict[str, RoutingSnapshot] = {}
-        self._snapshot: SegmentedRoutingSnapshot | None = None
-        self._dirty = {collection.collection_id for collection in collections}
-        self._dirty_generation = {
-            collection.collection_id: 0 for collection in collections
-        }
+    def __init__(self, config: RoutingConfig) -> None:
+        self.config = config
+        self._snapshot: RoutingSnapshot | None = None
+        self._dirty = True
+        self._generation = 0
         self._cards: OrderedDict[
-            tuple[str, str, str, int], MoegirlKnowledgeEntry
+            tuple[str, str, int], MoegirlKnowledgeEntry
         ] = OrderedDict()
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
 
     def mark_database_dirty(self, database_path: str | Path) -> None:
-        resolved = Path(database_path).resolve()
+        if Path(database_path).resolve() != self.config.database_path.resolve():
+            return
         with self._lock:
-            changed = {
-                collection.collection_id
-                for collection in self.collections
-                if collection.database_path.resolve() == resolved
-            }
-            self._dirty.update(changed)
-            for collection_id in changed:
-                self._dirty_generation[collection_id] += 1
-            if changed:
-                self._cards = OrderedDict(
-                    (key, value)
-                    for key, value in self._cards.items()
-                    if key[0] not in changed
-                )
+            self._dirty = True
+            self._generation += 1
+            self._cards.clear()
 
     def refresh(self) -> None:
         with self._refresh_lock:
             while True:
                 with self._lock:
-                    dirty = {
-                        collection_id: self._dirty_generation[collection_id]
-                        for collection_id in self._dirty
-                    }
+                    generation = self._generation
+                    dirty = self._dirty
                 if not dirty and self._snapshot is not None:
                     return
-                configs = {
-                    collection.collection_id: collection for collection in self.collections
-                }
-                replacements = {
-                    collection_id: _safe_load_segment(configs[collection_id])
-                    for collection_id in dirty
-                    if collection_id in configs
-                }
+                snapshot = RoutingSnapshot(_safe_load_records(self.config))
                 with self._lock:
-                    segments = dict(self._segments)
-                    segments.update(replacements)
-                    matchers = dict(self._matchers)
-                    matchers.update(
-                        (
-                            collection_id,
-                            RoutingSnapshot(replacements[collection_id]),
-                        )
-                        for collection_id in replacements
-                    )
-                    snapshot = SegmentedRoutingSnapshot(matchers)
-                    self._segments = segments
-                    self._matchers = matchers
                     self._snapshot = snapshot
-                    for collection_id, generation in dirty.items():
-                        if self._dirty_generation[collection_id] == generation:
-                            self._dirty.discard(collection_id)
+                    if self._generation == generation:
+                        self._dirty = False
+                        return
 
     def refresh_in_background(self) -> None:
         with self._lock:
@@ -338,27 +179,18 @@ class KnowledgeRoutingState:
                 if self._refresh_thread is threading.current_thread():
                     self._refresh_thread = None
 
-    def match(
-        self,
-        user_text: str,
-        *,
-        allowed_collections: frozenset[str],
-    ) -> RouteMatch | None:
+    def match(self, user_text: str) -> RouteMatch | None:
         with self._lock:
             snapshot = self._snapshot
-            dirty = bool(self._dirty)
+            dirty = self._dirty
             refresh_running = (
-                self._refresh_thread is not None
-                and self._refresh_thread.is_alive()
+                self._refresh_thread is not None and self._refresh_thread.is_alive()
             )
         if snapshot is None or (dirty and not refresh_running):
             self.refresh()
             with self._lock:
                 snapshot = self._snapshot
-        return snapshot.find(
-            user_text,
-            allowed_collections=allowed_collections,
-        ) if snapshot is not None else None
+        return snapshot.find(user_text) if snapshot is not None else None
 
     def get_card(self, match: RouteMatch) -> MoegirlKnowledgeEntry | None:
         record = match.record
@@ -387,15 +219,15 @@ class KnowledgeRoutingState:
             return len(self._cards)
 
 
-def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
-    store = MoegirlKnowledgeStore(collection.database_path)
+def _load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
+    store = MoegirlKnowledgeStore(config.database_path)
     revision, entries = store.load_routing_entries()
-    disabled = load_disabled_entries(get_catalog_override_path(collection.database_path))
+    disabled = load_disabled_entries(get_catalog_override_path(config.database_path))
     records: list[RouteRecord] = []
     for entry in entries:
         if entry_key(entry) in disabled:
             continue
-        policy = collection.policy
+        policy = config.policy
         if (
             policy.allowed_source_tags is not None
             and entry.source_tag not in policy.allowed_source_tags
@@ -403,13 +235,8 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
             continue
         if any(tag in entry.tags for tag in policy.excluded_entry_tags):
             continue
-        context_terms, boundary_context_terms = _entry_context_terms(
-            entry,
-            collection.context_hints,
-        )
         strong: list[str] = []
         boundary: list[str] = []
-        weak: list[str] = []
         for index, value in enumerate((entry.title, *entry.aliases)):
             phrase = normalize_search_text(value)
             minimum = policy.title_min_length if index == 0 else policy.alias_min_length
@@ -418,12 +245,6 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
                     boundary.append(_normalize_latin_boundary_text(value))
                 else:
                     strong.append(phrase)
-            elif (
-                policy.weak_term_length > 0
-                and len(phrase) == policy.weak_term_length
-                and _weak_entry_is_eligible(entry, policy)
-            ):
-                weak.append(phrase)
         for value in entry.recognition_terms:
             phrase = normalize_search_text(value)
             if len(phrase) >= policy.recognition_min_length:
@@ -431,21 +252,25 @@ def _load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
                     boundary.append(_normalize_latin_boundary_text(value))
                 else:
                     strong.append(phrase)
-        if strong or boundary or weak:
-            records.append(RouteRecord(
-                collection_id=collection.collection_id,
-                database_path=collection.database_path,
-                priority=collection.priority,
-                source_tag=entry.source_tag,
-                title=entry.title,
-                strong_terms=tuple(dict.fromkeys(strong)),
-                boundary_terms=tuple(dict.fromkeys(boundary)),
-                weak_terms=tuple(dict.fromkeys(weak)),
-                context_terms=context_terms,
-                boundary_context_terms=boundary_context_terms,
-                revision=revision,
-            ))
+        if strong or boundary:
+            records.append(
+                RouteRecord(
+                    database_path=config.database_path,
+                    source_tag=entry.source_tag,
+                    title=entry.title,
+                    strong_terms=tuple(dict.fromkeys(strong)),
+                    boundary_terms=tuple(dict.fromkeys(boundary)),
+                    revision=revision,
+                )
+            )
     return tuple(records)
+
+
+def _safe_load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
+    try:
+        return _load_records(config)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return ()
 
 
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -460,72 +285,20 @@ def _normalize_latin_boundary_text(value: str) -> str:
     return "\0" + "\0".join(tokens) + "\0" if tokens else ""
 
 
-def _entry_context_terms(
-    entry: MoegirlKnowledgeEntry,
-    hints: tuple[ContextHint, ...],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    ordinary: list[str] = []
-    bounded: list[str] = []
-    tags = frozenset(entry.tags)
-    for hint in hints:
-        if not set(hint.required_tags).issubset(tags):
-            continue
-        for value in hint.terms:
-            normalized = normalize_search_text(value)
-            if not normalized:
-                continue
-            if _contains_latin(value):
-                boundary = _normalize_latin_boundary_text(value)
-                if boundary:
-                    bounded.append(boundary)
-            else:
-                ordinary.append(normalized)
-    return tuple(dict.fromkeys(ordinary)), tuple(dict.fromkeys(bounded))
-
-
-def _safe_load_segment(collection: RouteCollection) -> tuple[RouteRecord, ...]:
-    try:
-        return _load_segment(collection)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return ()
-
-
-def _weak_entry_is_eligible(entry: MoegirlKnowledgeEntry, policy: MatchPolicy) -> bool:
-    tags = entry.tags
-    if any(tag not in tags for tag in policy.weak_required_tags):
-        return False
-    if any(tag in tags for tag in policy.weak_excluded_tags):
-        return False
-    for prefix in policy.weak_required_tag_prefixes:
-        if not any(tag.startswith(prefix) and tag.removeprefix(prefix).strip() for tag in tags):
-            return False
-    if policy.weak_content_line_prefix:
-        return any(
-            line.strip().startswith(policy.weak_content_line_prefix)
-            for line in entry.content.splitlines()
-        )
-    return True
-
-
-_STATE_CACHE_LIMIT = 16
-_STATES: OrderedDict[
-    tuple[RouteCollection, ...], KnowledgeRoutingState
-] = OrderedDict()
+_STATES: OrderedDict[RoutingConfig, KnowledgeRoutingState] = OrderedDict()
 _STATES_LOCK = threading.Lock()
 
 
-def get_routing_state(
-    collections: tuple[RouteCollection, ...],
-) -> KnowledgeRoutingState:
+def get_routing_state(config: RoutingConfig) -> KnowledgeRoutingState:
     with _STATES_LOCK:
-        state = _STATES.get(collections)
+        state = _STATES.get(config)
         if state is None:
-            state = KnowledgeRoutingState(collections)
-            _STATES[collections] = state
+            state = KnowledgeRoutingState(config)
+            _STATES[config] = state
             while len(_STATES) > _STATE_CACHE_LIMIT:
                 _STATES.popitem(last=False)
         else:
-            _STATES.move_to_end(collections)
+            _STATES.move_to_end(config)
         return state
 
 

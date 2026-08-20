@@ -388,7 +388,7 @@ async def test_asearch_falls_back_to_bm25_for_embedding_failures(
     database_path = tmp_path / "knowledge.db"
     store = MoegirlKnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
-    service = KnowledgeService.for_collection("meme", database_path)
+    service = KnowledgeService.for_database(database_path)
 
     monkeypatch.setattr(
         vector_index,
@@ -401,9 +401,9 @@ async def test_asearch_falls_back_to_bm25_for_embedding_failures(
         lambda: pytest.fail("an unavailable model must not be queried"),
     )
 
-    result = await service.asearch("meme", "Fallback target", limit=3)
+    result = await service.asearch("Fallback target", limit=3)
 
-    assert [hit.entry.title for hit in result] == ["Fallback target"]
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
 
 
 @pytest.mark.asyncio
@@ -421,7 +421,7 @@ async def test_asearch_soft_loads_not_ready_model_then_falls_back(
         dimensions=2,
         embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
     )
-    service = KnowledgeService.for_collection("meme", database_path)
+    service = KnowledgeService.for_database(database_path)
 
     class _NotReadyService:
         async def request_load(self):
@@ -438,9 +438,9 @@ async def test_asearch_soft_loads_not_ready_model_then_falls_back(
         lambda: _NotReadyService(),
     )
 
-    result = await service.asearch("meme", "Fallback target", limit=3)
+    result = await service.asearch("Fallback target", limit=3)
 
-    assert [hit.entry.title for hit in result] == ["Fallback target"]
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
 
 
 @pytest.mark.asyncio
@@ -448,7 +448,7 @@ async def test_asearch_falls_back_to_bm25_for_corrupt_embedding(tmp_path, monkey
     database_path = tmp_path / "knowledge.db"
     store = MoegirlKnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
-    service = KnowledgeService.for_collection("meme", database_path)
+    service = KnowledgeService.for_database(database_path)
 
     class _CorruptEmbeddingService:
         async def embed(self, _query):
@@ -469,9 +469,9 @@ async def test_asearch_falls_back_to_bm25_for_corrupt_embedding(tmp_path, monkey
         lambda: _CorruptEmbeddingService(),
     )
 
-    result = await service.asearch("meme", "Fallback target", limit=3)
+    result = await service.asearch("Fallback target", limit=3)
 
-    assert [hit.entry.title for hit in result] == ["Fallback target"]
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
 
 
 @pytest.mark.asyncio
@@ -479,7 +479,7 @@ async def test_asearch_falls_back_to_bm25_when_embedding_raises(tmp_path, monkey
     database_path = tmp_path / "knowledge.db"
     store = MoegirlKnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
-    service = KnowledgeService.for_collection("meme", database_path)
+    service = KnowledgeService.for_database(database_path)
 
     class _FailingEmbeddingService:
         async def embed(self, _query):
@@ -500,9 +500,9 @@ async def test_asearch_falls_back_to_bm25_when_embedding_raises(tmp_path, monkey
         lambda: _FailingEmbeddingService(),
     )
 
-    result = await service.asearch("meme", "Fallback target", limit=3)
+    result = await service.asearch("Fallback target", limit=3)
 
-    assert [hit.entry.title for hit in result] == ["Fallback target"]
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
 
 
 def test_invalid_query_vector_is_safely_ignored(tmp_path):
@@ -542,7 +542,7 @@ def test_invalid_query_vector_is_safely_ignored(tmp_path):
 async def test_non_numeric_embedding_response_falls_back_to_bm25(tmp_path, monkeypatch):
     database_path = tmp_path / "knowledge.db"
     MoegirlKnowledgeStore(database_path).upsert(_entry("Fallback target"))
-    service = KnowledgeService.for_collection("meme", database_path)
+    service = KnowledgeService.for_database(database_path)
 
     class _MalformedEmbeddingService:
         async def embed(self, _query):
@@ -563,9 +563,9 @@ async def test_non_numeric_embedding_response_falls_back_to_bm25(tmp_path, monke
         lambda: _MalformedEmbeddingService(),
     )
 
-    result = await service.asearch("meme", "Fallback target", limit=3)
+    result = await service.asearch("Fallback target", limit=3)
 
-    assert [hit.entry.title for hit in result] == ["Fallback target"]
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
 
 
 def test_semantic_threshold_rejects_weak_candidates(tmp_path):
@@ -649,20 +649,19 @@ def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_multi_collection_search_reuses_one_query_embedding_and_one_fusion(
+async def test_single_store_search_reuses_one_query_embedding_across_material_types(
     tmp_path,
     monkeypatch,
 ):
     service = KnowledgeService(tmp_path)
-    MoegirlKnowledgeStore(service.database_path("meme")).upsert(
+    MoegirlKnowledgeStore(service.database_path()).upsert(
         _entry("shared phrase knowledge", source="source:chime")
     )
     service.install_pack(
         validate_pack(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "pack_id": "reply-samples",
-                "collection_id": "corpora",
                 "material_type": "corpus",
                 "source": {
                     "name": "Reply Samples",
@@ -692,7 +691,7 @@ async def test_multi_collection_search_reuses_one_query_embedding_and_one_fusion
     async def _prepare(_query, *, stores):
         nonlocal preparation_calls
         preparation_calls += 1
-        assert len(stores) == 2
+        assert len(stores) == 1
         return prepared
 
     async def _scan(_store, query_embedding, **_kwargs):
@@ -702,8 +701,7 @@ async def test_multi_collection_search_reuses_one_query_embedding_and_one_fusion
     monkeypatch.setattr(service_module, "prepare_semantic_query", _prepare)
     monkeypatch.setattr(service_module, "semantic_search_prepared", _scan)
 
-    result = await service.asearch_many(
-        ("meme", "corpora"),
+    result = await service.asearch(
         "shared phrase",
         allowed_material_types=("corpus", "knowledge"),
         target_material_type="corpus",
@@ -711,7 +709,7 @@ async def test_multi_collection_search_reuses_one_query_embedding_and_one_fusion
     )
 
     assert preparation_calls == 1
-    assert scan_calls == [prepared, prepared]
+    assert scan_calls == [prepared]
     assert [item.material_type for item in result] == ["corpus", "knowledge"]
     assert [item.hit.entry.title for item in result] == [
         "Corpus answer",

@@ -9,14 +9,11 @@ import time
 from config.prompts.prompts_sys import _loc
 from knowledge.api import open_knowledge
 from knowledge.moegirl_knowledge.source_registry import get_source
-from knowledge.moegirl_knowledge.turn_context import (
-    get_meme_type,
-    get_meme_usage_example,
-)
 from knowledge.service import (
-    CORPORA_RESPONSE_POLICY,
+    CORPUS_RESPONSE_POLICY,
     get_reference_material,
     get_tag_value,
+    get_usage_example,
 )
 from main_logic.tool_calling import ToolDefinition
 from utils.config_manager import get_config_manager
@@ -24,7 +21,6 @@ from utils.logger_config import get_module_logger
 
 
 logger = get_module_logger(__name__, "Main")
-_COLLECTIONS = ("meme", "corpora")
 _CORPUS_INTENT_TERMS = (
     "参考回复",
     "怎么回复",
@@ -121,29 +117,19 @@ PUBLIC_KNOWLEDGE_MATERIAL_TYPE_DESCRIPTION = {
     "zh-TW": "事實、解釋選 knowledge；回覆、對話或風格參考選 corpus；auto 依問題判斷。",
 }
 
-# Compatibility names for imports from builds that exposed only meme lookup.
-MOEGIRL_KNOWLEDGE_TOOL_DESCRIPTION = PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION
-MOEGIRL_KNOWLEDGE_QUERY_DESCRIPTION = PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION
-PUBLIC_MEME_KNOWLEDGE_TOOL_DESCRIPTION = PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION
-PUBLIC_MEME_KNOWLEDGE_QUERY_DESCRIPTION = PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION
-
-
 async def handle_public_knowledge_call(
     arguments: dict,
     *,
     language: str,
     deadline_monotonic: float | None = None,
 ) -> str:
-    """Query enabled local collections or sample an explicitly allowed material tag."""
+    """Query the local public-knowledge store or sample an allowed corpus tag."""
     del language, deadline_monotonic
     started_at = time.perf_counter()
     args = arguments if isinstance(arguments, dict) else {}
     query = str(args.get("query") or "").strip()
     if not query:
         return "No public knowledge query was provided."
-    collection = str(args.get("collection") or "all").strip().lower()
-    if collection not in {"all", *_COLLECTIONS}:
-        return "The requested public knowledge collection is not available."
     mode = str(args.get("mode") or "lookup").strip().lower()
     if mode not in {"lookup", "sample"}:
         return "The requested public knowledge mode is not available."
@@ -162,56 +148,35 @@ async def handle_public_knowledge_call(
     attempt_count = 1
 
     if mode == "sample":
-        entries: list[tuple[str, str, object]] = []
-        collection_ids = _COLLECTIONS if collection == "all" else (collection,)
-        for collection_id in collection_ids:
-            try:
-                sampled = await asyncio.to_thread(
-                    service.sample_entries,
-                    collection_id,
-                    query,
-                    limit=limit,
-                )
-            except ValueError:
-                continue
-            entries.extend(
-                (
-                    collection_id,
-                    service.material_type_for_entry(collection_id, entry),
-                    entry,
-                )
-                for entry in sampled
+        try:
+            sampled = await asyncio.to_thread(
+                service.sample_entries,
+                query,
+                limit=limit,
             )
-            if entries:
-                break
+        except ValueError:
+            sampled = ()
+        entries = [
+            (service.material_type_for_entry(entry), entry) for entry in sampled
+        ]
     else:
-        collection_ids = _COLLECTIONS if collection == "all" else (collection,)
         allowed_types, target_type = _material_query_plan(
             query,
             requested_material_type,
         )
-        hits = []
         attempted_queries = _knowledge_query_candidates(query)
-        attempt_count = 0
-        for search_query in attempted_queries:
-            attempt_count += 1
-            hits = await service.asearch_many(
-                collection_ids,
-                search_query,
-                limit=limit,
-                allowed_material_types=allowed_types,
-                target_material_type=target_type,
-            )
-            if hits:
-                break
-        entries = [
-            (item.collection_id, item.material_type, item.hit.entry) for item in hits
-        ]
+        hits = await service.asearch(
+            query,
+            limit=limit,
+            lexical_queries=attempted_queries,
+            allowed_material_types=allowed_types,
+            target_material_type=target_type,
+        )
+        entries = [(item.material_type, item.hit.entry) for item in hits]
 
     logger.info(
-        "[public-knowledge] tool mode=%s collection=%s hits=%d attempts=%d elapsed_ms=%d",
+        "[public-knowledge] tool mode=%s hits=%d attempts=%d elapsed_ms=%d",
         mode,
-        collection,
         len(entries),
         attempt_count,
         int((time.perf_counter() - started_at) * 1000),
@@ -225,8 +190,8 @@ async def handle_public_knowledge_call(
         "user's request: quote or rewrite samples and reference answers when asked, use "
         "facts cautiously, and do not invent missing content.",
     ]
-    for collection_id, material_type, entry in entries:
-        lines.append(_render_entry(service, collection_id, material_type, entry))
+    for material_type, entry in entries:
+        lines.append(_render_entry(service, material_type, entry))
     return "\n".join(lines)
 
 
@@ -271,26 +236,25 @@ def _knowledge_query_candidates(query: str) -> tuple[str, ...]:
 
 def _render_entry(
     service,
-    collection_id: str,
     material_type: str,
     entry: object,
 ) -> str:
     summary = (entry.summary or entry.content[:420]).replace("\n", " ").strip()[:500]
     details = (
-        f"- [{collection_id}] {entry.title}: {summary}"
+        f"- {entry.title}: {summary}"
         f"\n  Material type: {material_type}"
     )
     if material_type == "corpus":
         reference_material = get_reference_material(
             entry,
-            CORPORA_RESPONSE_POLICY.detail_line_prefixes,
+            CORPUS_RESPONSE_POLICY.detail_line_prefixes,
             max_chars=600,
         )
         if reference_material:
             details += f"\n  Reference material: {reference_material}"
-    elif collection_id == "meme":
-        meme_type = get_meme_type(entry)
-        usage_example = get_meme_usage_example(entry)
+    elif "domain:meme" in entry.tags:
+        meme_type = get_tag_value(entry, "type:")
+        usage_example = get_usage_example(entry)
         if meme_type:
             details += f"\n  Type: {meme_type}"
         if usage_example:
@@ -299,7 +263,7 @@ def _render_entry(
         category = get_tag_value(entry, "category:")
         reference_details = get_reference_material(
             entry,
-            CORPORA_RESPONSE_POLICY.detail_line_prefixes,
+            CORPUS_RESPONSE_POLICY.detail_line_prefixes,
             max_chars=600,
         )
         if category:
@@ -308,7 +272,7 @@ def _render_entry(
             details += f"\n  Reference details: {reference_details}"
     source = get_source(
         entry.source_tag,
-        database_path=service.database_path(collection_id),
+        database_path=service.database_path(),
     )
     risk_note = (
         " | caution: may include profane or offensive usage"
@@ -326,27 +290,6 @@ def _render_entry(
     )
 
 
-async def handle_moegirl_knowledge_call(
-    arguments: dict,
-    *,
-    language: str,
-    deadline_monotonic: float | None = None,
-) -> str:
-    """Compatibility wrapper that keeps legacy callers scoped to meme knowledge."""
-    scoped = dict(arguments or {})
-    scoped["collection"] = "meme"
-    scoped["mode"] = "lookup"
-    scoped["material_type"] = "knowledge"
-    return await handle_public_knowledge_call(
-        scoped,
-        language=language,
-        deadline_monotonic=deadline_monotonic,
-    )
-
-
-handle_public_meme_knowledge_call = handle_moegirl_knowledge_call
-
-
 def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
     """Register the public-knowledge tool without exposing its schema to core."""
     parameters = {
@@ -355,11 +298,6 @@ def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
             "query": {
                 "type": "string",
                 "description": _loc(PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION, language),
-            },
-            "collection": {
-                "type": "string",
-                "enum": ["all", "meme", "corpora"],
-                "default": "all",
             },
             "mode": {
                 "type": "string",
@@ -419,18 +357,18 @@ async def build_public_knowledge_turn_context(
     """Resolve one turn-local card without leaking knowledge concerns into core."""
     context_text = ""
     try:
-        from config.moegirl_knowledge_settings import (
-            MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
-            MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+        from config.public_knowledge_settings import (
+            PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
+            PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
         )
 
-        if MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
+        if PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
             knowledge_root = get_config_manager().knowledge_dir
 
             def _build_context():
                 return open_knowledge(knowledge_root).build_conversation_context(
                     user_text,
-                    limit=MOEGIRL_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+                    limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
                 )
 
             result = await asyncio.to_thread(_build_context)
@@ -438,7 +376,6 @@ async def build_public_knowledge_turn_context(
             from knowledge.diagnostics import record_knowledge_route
 
             record_knowledge_route(
-                collection_id=result.collection_id,
                 entry_title=result.entry_title,
                 source_tag=result.source_tag,
                 match_mode=result.match_mode,
@@ -446,10 +383,9 @@ async def build_public_knowledge_turn_context(
                 result="matched" if result.hit_count else "miss",
             )
             logger.info(
-                "[public-knowledge] automatic turn context hits=%d mode=%s collection=%s",
+                "[public-knowledge] automatic turn context hits=%d mode=%s",
                 result.hit_count,
                 result.match_mode,
-                result.collection_id or "none",
             )
     except Exception as exc:
         logger.warning(
@@ -477,7 +413,6 @@ async def build_public_knowledge_turn_context(
         return await handle_public_knowledge_call(
             {
                 "query": fallback_query,
-                "collection": "all",
                 "mode": "lookup",
                 "material_type": "auto",
                 "limit": 3,

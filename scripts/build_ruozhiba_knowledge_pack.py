@@ -2,7 +2,7 @@
 
 The source file is intentionally supplied by the caller.  Runtime knowledge
 code never downloads community content, and the generated pack remains an
-explicitly installed, removable ``corpora`` source.
+explicitly installed, removable ``corpus`` knowledge pack.
 """
 
 from __future__ import annotations
@@ -106,9 +106,9 @@ def build_pack(source_path: Path) -> tuple[dict[str, object], int]:
     entries, excluded = convert_rows(rows)
     return (
         {
-            "schema_version": 1,
+            "schema_version": 3,
             "pack_id": "ruozhiba-qa",
-            "collection_id": "corpora",
+            "material_type": "corpus",
             "source": {
                 "name": "LooksJuicy/ruozhiba 趣味问答",
                 "homepage": SOURCE_HOMEPAGE,

@@ -485,7 +485,7 @@ class StreamingMixin:
                         build_public_knowledge_turn_context,
                     )
 
-                    _meme_turn_context = await build_public_knowledge_turn_context(
+                    _knowledge_turn_context = await build_public_knowledge_turn_context(
                         record_data,
                         tool_calls_supported=route_supports_tool_calls(
                             getattr(self.session, "model", ""),
@@ -532,7 +532,7 @@ class StreamingMixin:
 
                     stream_text_kwargs = {
                         "system_prefix": _agent_cb_ctx or None,
-                        "ephemeral_response_instruction": _meme_turn_context or None,
+                        "ephemeral_response_instruction": _knowledge_turn_context or None,
                         "thinking_on": _focus_thinking,
                         "response_discarded_callback": response_discarded_callback,
                     }

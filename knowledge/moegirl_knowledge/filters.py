@@ -12,8 +12,6 @@ _ROLE_MARKER_RE = re.compile(r"(?im)^\s*(?:system|developer|assistant|user)\s*[:
 _WHITESPACE_RE = re.compile(r"[ \t]+")
 _NEWLINES_RE = re.compile(r"\n{3,}")
 _FTS_TOKEN_RE = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
-_MEME_FILLER_RE = re.compile(r"(?:这是|这个是|就是|是|吧|啊|呀|呢|了|的|嘛|啦|么|吗)")
-_MEME_PRONOUN_RE = re.compile(r"[我你他她它]")
 
 
 def sanitize_external_text(value: str, *, max_chars: int = 80_000) -> str:
@@ -30,19 +28,6 @@ def sanitize_external_text(value: str, *, max_chars: int = 80_000) -> str:
 def normalize_search_text(value: str) -> str:
     """Return a comparison-friendly value for title, alias, and tag matching."""
     return "".join(_FTS_TOKEN_RE.split(unicodedata.normalize("NFKC", str(value or "")).casefold()))
-
-
-def normalize_meme_phrase(value: str, *, already_normalized: bool = False) -> str:
-    """Normalize a conversational rendering of a known meme title.
-
-    This is deliberately narrower than semantic search: it removes common
-    sentence glue and maps Chinese personal pronouns to one placeholder.  It
-    lets a title such as ``他在 CPU 你`` match ``他这是在 CPU 我吧`` without
-    treating unrelated prose or source content as a meme alias.
-    """
-    normalized = str(value) if already_normalized else normalize_search_text(value)
-    normalized = _MEME_FILLER_RE.sub("", normalized)
-    return _MEME_PRONOUN_RE.sub("人", normalized)
 
 
 def is_relevant_source_page(query: str, *, title: str, content: str) -> bool:

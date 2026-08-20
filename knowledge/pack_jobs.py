@@ -91,7 +91,6 @@ def stage_pack(
         state: dict[str, object] = {
             "job_id": job_id,
             "pack_id": pack.pack_id,
-            "collection_id": pack.collection_id,
             "material_type": pack.material_type,
             "state": "queued",
             "retrieval_mode": "pending",
@@ -147,32 +146,23 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
     ]
     if any(
         job.get("pack_id") == pack.pack_id
-        and job.get("collection_id") == pack.collection_id
         for job in pending
     ):
         raise ValueError("knowledge pack already has a pending import")
 
     totals = {"entries_total": 0, "chunks_total": 0, "content_bytes": 0}
-    stores: dict[str, MoegirlKnowledgeStore] = {}
-    for collection_id in service.collection_ids():
-        database_path = service.database_path(collection_id)
-        if not database_path.is_file():
-            continue
-        store = MoegirlKnowledgeStore(database_path)
-        stores[collection_id] = store
+    database_path = service.database_path()
+    store = MoegirlKnowledgeStore(database_path)
+    if database_path.is_file():
         usage = store.community_usage()
         for key in totals:
             totals[key] += int(usage[key])
 
-    replacement_keys = {
-        (str(job.get("collection_id") or ""), str(job.get("pack_id") or ""))
-        for job in pending
-    }
-    replacement_keys.add((pack.collection_id, pack.pack_id))
+    replacement_keys = {str(job.get("pack_id") or "") for job in pending}
+    replacement_keys.add(pack.pack_id)
     replacement = {"entries_total": 0, "chunks_total": 0, "content_bytes": 0}
-    for collection_id, pack_id in replacement_keys:
-        store = stores.get(collection_id)
-        if store is None or not pack_id:
+    for pack_id in replacement_keys:
+        if not pack_id:
             continue
         usage = store.community_usage(source_tag=f"source:community.{pack_id}")
         for key in replacement:
@@ -206,8 +196,6 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
 
 def list_pack_jobs(
     knowledge_root: str | Path,
-    *,
-    collection_id: str = "",
 ) -> tuple[dict[str, object], ...]:
     jobs_root = _jobs_root(knowledge_root)
     if not jobs_root.is_dir():
@@ -217,7 +205,7 @@ def list_pack_jobs(
         if not job_dir.is_dir():
             continue
         state = _read_json(_state_path(job_dir))
-        if not state or (collection_id and state.get("collection_id") != collection_id):
+        if not state:
             continue
         items.append(state)
     return tuple(
@@ -385,7 +373,7 @@ def _activate_job(
         staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
         embeddings = staging_store.ready_embedding_records() if mode != "bm25" else ()
         result = install_pack(
-            service.database_path(pack.collection_id),
+            service.database_path(),
             pack,
             subscription=_subscription(job_dir),
             prepared_embeddings=embeddings,
