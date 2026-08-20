@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -197,7 +196,16 @@ class SearchCoordinator:
     ) -> SearchResults:
         state = self._backends.setdefault(backend, _BackendState(asyncio.Lock()))
         try:
-            async with asyncio.timeout(self.queue_wait_seconds):
+            if state.lock.locked():
+                await asyncio.wait_for(
+                    state.lock.acquire(),
+                    timeout=self.queue_wait_seconds,
+                )
+            else:
+                # Avoid spawning an internal wait_for task on the uncontended
+                # path. Besides reducing latency, this lets short caller-level
+                # timeouts cancel the actual fetch rather than a pending lock
+                # acquisition helper.
                 await state.lock.acquire()
         except TimeoutError as error:
             raise SearchBusyError("search backend is busy; retry shortly") from error
@@ -317,12 +325,3 @@ class SearchCoordinator:
                     if self._inflight.get(key) is task:
                         self._inflight.pop(key, None)
                     task.cancel()
-                    # On Python 3.11 a cancellation can race with an immediately
-                    # completing ``wait_for(lock.acquire())`` and be consumed by
-                    # that awaitable. Give the task one turn, then repeat the
-                    # cancellation so caller-level timeouts remain a hard bound.
-                    await asyncio.sleep(0)
-                    if not task.done():
-                        task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task

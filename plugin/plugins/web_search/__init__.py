@@ -259,6 +259,10 @@ class WebSearchPlugin(NekoPluginBase):
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._user_agent = _UA
         self._coordinator = SearchCoordinator()
+        self._coordinators: Dict[str, SearchCoordinator] = {
+            "baidu": self._coordinator,
+            "duckduckgo": SearchCoordinator(),
+        }
 
     def _get_client(self) -> httpx.AsyncClient:
         # 宿主对 startup / 命令循环 / shutdown 分别 asyncio.run()（plugin/core/host.py），
@@ -287,31 +291,30 @@ class WebSearchPlugin(NekoPluginBase):
         )
         self._backend = _select_backend(configured_backend, self._country)
         self._is_cn = self._backend == "baidu"
-        min_interval = (
-            defs["ddg_min_interval"]
-            if self._backend == "duckduckgo"
-            else defs["min_interval"]
-        )
-        cooldown = (
-            defs["ddg_cooldown"]
-            if self._backend == "duckduckgo"
-            else defs["cooldown"]
-        )
-        max_cooldown = (
-            defs["ddg_max_cooldown"]
-            if self._backend == "duckduckgo"
-            # Progressive cooldown is DDG-specific; Baidu keeps a fixed delay.
-            else defs["cooldown"]
-        )
-        self._coordinator = SearchCoordinator(
-            ttl_seconds=defs["cache_ttl"],
-            stale_seconds=defs["stale_ttl"],
-            max_entries=defs["cache_entries"],
-            min_interval_seconds=min_interval,
-            cooldown_seconds=cooldown,
-            max_cooldown_seconds=max_cooldown,
-            queue_wait_seconds=defs["queue_wait"],
-        )
+        common_coordinator_options = {
+            "ttl_seconds": defs["cache_ttl"],
+            "stale_seconds": defs["stale_ttl"],
+            "max_entries": defs["cache_entries"],
+            "queue_wait_seconds": defs["queue_wait"],
+        }
+        self._coordinators = {
+            "baidu": SearchCoordinator(
+                **common_coordinator_options,
+                min_interval_seconds=defs["min_interval"],
+                cooldown_seconds=defs["cooldown"],
+                # Baidu uses a fixed cooldown; DDG retains progressive backoff.
+                max_cooldown_seconds=defs["cooldown"],
+            ),
+            "duckduckgo": SearchCoordinator(
+                **common_coordinator_options,
+                min_interval_seconds=defs["ddg_min_interval"],
+                cooldown_seconds=defs["ddg_cooldown"],
+                max_cooldown_seconds=defs["ddg_max_cooldown"],
+            ),
+        }
+        # Keep the historical attribute for integrations that inspect the
+        # primary backend coordinator directly.
+        self._coordinator = self._coordinators[self._backend]
 
         self.logger.info(
             "WebSearch started: country={}, configured_backend={}, backend={}",
@@ -398,43 +401,79 @@ class WebSearchPlugin(NekoPluginBase):
         timeout: float,
     ) -> List[Dict[str, str]]:
         defs = self._defaults()
-        backend = self._backend
-        key = (backend, " ".join(query.casefold().split()), max_results)
+        primary_backend = self._backend
+        normalized_query = " ".join(query.casefold().split())
+        attempted_backends = [primary_backend]
 
-        async def fetch() -> List[Dict[str, str]]:
-            client = self._get_client()
-            retry_base_delay = (
-                defs["ddg_retry_base_delay"]
-                if backend == "duckduckgo"
-                else defs["retry_base_delay"]
-            )
-            kwargs = {
-                "timeout": timeout,
-                "user_agent": self._user_agent,
-                "retry_attempts": defs["retry_attempts"],
-                "retry_base_delay": retry_base_delay,
-            }
-            if backend == "baidu":
-                return await _search_baidu(client, query, max_results, **kwargs)
+        def coordinator_for(backend: str) -> SearchCoordinator:
+            coordinators = getattr(self, "_coordinators", None)
+            if isinstance(coordinators, dict) and backend in coordinators:
+                return coordinators[backend]
+            return self._coordinator
 
-            try:
-                return await _search_ddg_html(client, query, max_results, **kwargs)
-            except Exception as e:
-                if should_skip_fallback(e):
-                    raise
-                self.logger.warning("DDG html failed, trying lite: {}", e)
-            await asyncio.sleep(
-                max(defs["ddg_fallback_delay"], defs["ddg_min_interval"])
-            )
-            return await _search_ddg_lite(client, query, max_results, **kwargs)
+        async def run_backend(backend: str) -> List[Dict[str, str]]:
+            key = (backend, normalized_query, max_results)
+
+            async def fetch() -> List[Dict[str, str]]:
+                client = self._get_client()
+                retry_base_delay = (
+                    defs["ddg_retry_base_delay"]
+                    if backend == "duckduckgo"
+                    else defs["retry_base_delay"]
+                )
+                kwargs = {
+                    "timeout": timeout,
+                    "user_agent": self._user_agent,
+                    "retry_attempts": defs["retry_attempts"],
+                    "retry_base_delay": retry_base_delay,
+                }
+                if backend == "baidu":
+                    return await _search_baidu(client, query, max_results, **kwargs)
+
+                try:
+                    return await _search_ddg_html(client, query, max_results, **kwargs)
+                except Exception as e:
+                    if should_skip_fallback(e):
+                        raise
+                    self.logger.warning("DDG html failed, trying lite: {}", e)
+                await asyncio.sleep(
+                    max(defs["ddg_fallback_delay"], defs["ddg_min_interval"])
+                )
+                return await _search_ddg_lite(client, query, max_results, **kwargs)
+
+            return await coordinator_for(backend).run(key, fetch)
 
         try:
             async with asyncio.timeout(defs["total_timeout"]):
-                return await self._coordinator.run(key, fetch)
+                try:
+                    return await run_backend(primary_backend)
+                except Exception as primary_error:
+                    if primary_backend != "baidu":
+                        raise
+                    attempted_backends.append("duckduckgo")
+                    self.logger.warning(
+                        "Baidu search failed ({}); trying DuckDuckGo",
+                        type(primary_error).__name__,
+                    )
+                    try:
+                        return await run_backend("duckduckgo")
+                    except Exception:
+                        # Preserve the primary error because it describes the
+                        # selected backend and has already updated its cooldown.
+                        raise primary_error
         except TimeoutError:
-            stale = self._coordinator.stale(key)
-            if stale is not None:
-                return stale
+            # The coordinator cancels an orphaned shared fetch immediately.
+            # At this point asyncio.timeout has restored this task's normal
+            # cancellation state, so a loop turn can safely finish the fetch's
+            # finally blocks before the plugin entry returns.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            for backend in attempted_backends:
+                stale = coordinator_for(backend).stale(
+                    (backend, normalized_query, max_results)
+                )
+                if stale is not None:
+                    return stale
             raise
 
     @staticmethod
