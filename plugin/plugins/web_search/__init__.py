@@ -638,6 +638,11 @@ class WebSearchPlugin(NekoPluginBase):
                         if fallback_budget <= 0:
                             raise primary_error
                         return await run_backend("duckduckgo", fallback_budget)
+                    except TimeoutError:
+                        # Let the outer timeout handler inspect retained results
+                        # from both attempted backends. Replacing this with the
+                        # Baidu error would skip DuckDuckGo's stale cache.
+                        raise
                     except Exception:
                         # Preserve the primary error because it describes the
                         # selected backend and has already updated its cooldown.
