@@ -399,9 +399,12 @@ class WebSearchPlugin(NekoPluginBase):
         query: str,
         max_results: int,
         timeout: float,
+        backend: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         defs = self._defaults()
-        primary_backend = self._backend
+        primary_backend = (
+            backend if backend in {"baidu", "duckduckgo"} else self._backend
+        )
         normalized_query = " ".join(query.casefold().split())
         attempted_backends = [primary_backend]
 
@@ -506,6 +509,12 @@ class WebSearchPlugin(NekoPluginBase):
                     "description": "最大结果数 (默认 8，最少 3)",
                     "default": 8,
                 },
+                "backend": {
+                    "type": "string",
+                    "enum": ["auto", "baidu", "duckduckgo"],
+                    "description": "搜索后端；通常保持 auto",
+                    "default": "auto",
+                },
             },
             "required": ["query"],
         },
@@ -514,6 +523,7 @@ class WebSearchPlugin(NekoPluginBase):
         self,
         query: str,
         max_results: int = 0,
+        backend: str = "auto",
         **_,
     ):
         if not query or not query.strip():
@@ -532,7 +542,7 @@ class WebSearchPlugin(NekoPluginBase):
         )
 
         try:
-            results = await self._do_text_search(query, max_r, timeout)
+            results = await self._do_text_search(query, max_r, timeout, backend=backend)
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(SdkError(str(e)))
         except Exception as e:
@@ -572,11 +582,23 @@ class WebSearchPlugin(NekoPluginBase):
                     "description": "最大结果数（最少 3）",
                     "default": 5,
                 },
+                "backend": {
+                    "type": "string",
+                    "enum": ["auto", "baidu", "duckduckgo"],
+                    "description": "搜索后端；通常保持 auto",
+                    "default": "auto",
+                },
             },
             "required": ["query"],
         },
     )
-    async def search_summary(self, query: str, max_results: int = 5, **_):
+    async def search_summary(
+        self,
+        query: str,
+        max_results: int = 5,
+        backend: str = "auto",
+        **_,
+    ):
         if not query or not query.strip():
             return Err(SdkError("搜索关键词不能为空"))
 
@@ -586,7 +608,7 @@ class WebSearchPlugin(NekoPluginBase):
         timeout = defs["timeout"]
 
         try:
-            results = await self._do_text_search(query, max_r, timeout)
+            results = await self._do_text_search(query, max_r, timeout, backend=backend)
         except (SearchBlockedError, SearchBusyError, SearchCooldownError) as e:
             return Err(SdkError(str(e)))
         except Exception as e:
