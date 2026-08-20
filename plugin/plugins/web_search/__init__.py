@@ -419,6 +419,7 @@ class WebSearchPlugin(NekoPluginBase):
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._baidu_cookies: List[Dict[str, Any]] = []
+        self._baidu_persist_tasks: set[asyncio.Task[None]] = set()
         self._user_agent = _UA
         self._coordinator = SearchCoordinator()
         self._coordinators: Dict[str, SearchCoordinator] = {
@@ -459,19 +460,36 @@ class WebSearchPlugin(NekoPluginBase):
         if isinstance(saved, list):
             self._baidu_cookies = [dict(item) for item in saved if isinstance(item, dict)][:64]
 
-    async def _persist_baidu_cookies(self, client: httpx.AsyncClient) -> None:
-        current = _snapshot_baidu_cookies(client)
+    def _schedule_baidu_cookie_persist(self, client: httpx.AsyncClient) -> None:
+        try:
+            current = _snapshot_baidu_cookies(client)
+        except Exception:
+            self.logger.warning("Failed to snapshot Baidu anonymous session")
+            return
         self._baidu_cookies = current
         store = getattr(self, "store", None)
         if store is None or not getattr(store, "enabled", False):
             return
-        result = await store.set(_BAIDU_COOKIE_STORE_KEY, self._baidu_cookies)
-        if (
-            hasattr(result, "is_ok")
-            and callable(result.is_ok)
-            and not result.is_ok()
-        ):
-            self.logger.warning("Failed to persist Baidu anonymous session")
+
+        async def persist() -> None:
+            try:
+                result = await store.set(_BAIDU_COOKIE_STORE_KEY, current)
+                if (
+                    hasattr(result, "is_ok")
+                    and callable(result.is_ok)
+                    and not result.is_ok()
+                ):
+                    self.logger.warning("Failed to persist Baidu anonymous session")
+            except Exception:
+                self.logger.warning("Failed to persist Baidu anonymous session")
+
+        task = asyncio.create_task(persist())
+        tasks = getattr(self, "_baidu_persist_tasks", None)
+        if not isinstance(tasks, set):
+            tasks = set()
+            self._baidu_persist_tasks = tasks
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     @lifecycle(id="startup")
     async def startup(self, **_):
@@ -654,9 +672,13 @@ class WebSearchPlugin(NekoPluginBase):
                             **kwargs,
                         )
                     finally:
-                        persist = getattr(self, "_persist_baidu_cookies", None)
-                        if callable(persist):
-                            await persist(client)
+                        schedule = getattr(
+                            self,
+                            "_schedule_baidu_cookie_persist",
+                            None,
+                        )
+                        if callable(schedule):
+                            schedule(client)
 
                 try:
                     return await _search_ddg_html(
