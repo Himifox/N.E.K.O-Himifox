@@ -1,9 +1,8 @@
 """Controlled main-process access to the web-search plugin.
 
-All proactive search traffic goes through the plugin run protocol so the
-plugin owns upstream caching, rate limits, cooldowns, and backend fallback.
-This module adds a longer-lived proactive cache and failure cooldown to avoid
-turning frequent context refreshes into frequent plugin runs.
+All proactive search traffic goes through the plugin run protocol. This module
+coordinates proactive backend transitions and adds a longer-lived cache and
+failure cooldown, while the plugin remains the final upstream resilience layer.
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ _MAX_CACHE_ENTRIES = 64
 _RUN_TIMEOUT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.25
 _MAX_POLL_INTERVAL_SECONDS = 2.0
-_MAX_THROTTLE_WAIT_SECONDS = 2.0
 _FLOW_CONTROL_ERROR_CODES = frozenset(
     {
         "web_search_backend_blocked",
@@ -48,6 +46,7 @@ _next_run_at: Dict[str, float] = {}
 _failure_cooldown_until: Dict[str, float] = {}
 _inflight: Dict[tuple[str, str, int], asyncio.Task[Dict[str, Any]]] = {}
 _waiters: Dict[tuple[str, str, int], int] = {}
+_backend_locks: Dict[str, asyncio.Lock] = {}
 _cleanup_tasks: set[asyncio.Task[None]] = set()
 _runtime_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -74,6 +73,7 @@ def _prepare_runtime_loop() -> asyncio.AbstractEventLoop:
         _runtime_loop = loop
         _inflight.clear()
         _waiters.clear()
+        _backend_locks.clear()
     return loop
 
 
@@ -198,10 +198,12 @@ async def _invoke_plugin(
     limit: int,
     backend: Optional[str],
     preferred_backend: Optional[str],
+    run_timeout: float = _RUN_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     base = _plugin_server_base()
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + _RUN_TIMEOUT_SECONDS
+    run_timeout = max(0.01, min(float(run_timeout), _RUN_TIMEOUT_SECONDS))
+    deadline = loop.time() + run_timeout
 
     def remaining_timeout() -> float:
         remaining = deadline - loop.time()
@@ -212,7 +214,7 @@ async def _invoke_plugin(
     args: Dict[str, Any] = {
         "query": query,
         "max_results": limit,
-        "_ctx": {"entry_timeout": _RUN_TIMEOUT_SECONDS},
+        "_ctx": {"entry_timeout": run_timeout},
     }
     if backend in {"baidu", "duckduckgo"}:
         args["backend"] = backend
@@ -316,6 +318,60 @@ async def _invoke_plugin(
     }
 
 
+async def _invoke_in_backend_slot(
+    query: str,
+    limit: int,
+    backend: str,
+    deadline: float,
+) -> Dict[str, Any]:
+    """Serialize one upstream backend while leaving other engines independent."""
+    loop = asyncio.get_running_loop()
+    lock = _backend_locks.setdefault(backend, asyncio.Lock())
+    remaining = deadline - loop.time()
+    if remaining <= 0:
+        raise TimeoutError("等待联网搜索插件超时")
+    try:
+        async with asyncio.timeout(remaining):
+            await lock.acquire()
+    except TimeoutError as error:
+        raise _PluginThrottleError("联网搜索后端繁忙，请稍后重试") from error
+
+    try:
+        now = time.monotonic()
+        cooldown_until = _failure_cooldown_until.get(backend, 0.0)
+        if now < cooldown_until:
+            raise _PluginThrottleError("联网搜索暂处于失败冷却期")
+        throttle_wait = max(0.0, _next_run_at.get(backend, 0.0) - now)
+        if throttle_wait:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError("等待联网搜索插件超时")
+            async with asyncio.timeout(remaining):
+                await asyncio.sleep(throttle_wait)
+
+        _next_run_at[backend] = time.monotonic() + _MIN_RUN_INTERVAL_SECONDS
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError("等待联网搜索插件超时")
+        try:
+            return await _invoke_plugin(
+                query,
+                limit,
+                backend,
+                None,
+                run_timeout=remaining,
+            )
+        except _PluginThrottleError:
+            raise
+        except Exception:
+            _failure_cooldown_until[backend] = (
+                time.monotonic() + _FAILURE_COOLDOWN_SECONDS
+            )
+            raise
+    finally:
+        lock.release()
+
+
 async def search_via_plugin(
     query: str,
     limit: int = 5,
@@ -347,39 +403,44 @@ async def search_via_plugin(
     loop = _prepare_runtime_loop()
     task = _inflight.get(key)
     if task is None:
-        # Reserve a per-backend start slot synchronously before yielding. This
-        # prevents bursts without holding one global lock for a complete plugin
-        # run; other backends remain independent and identical keys share work.
-        now = time.monotonic()
         stale = _cached(key, fresh=False)
-        cooldown_until = _failure_cooldown_until.get(selected_backend, 0.0)
-        if now < cooldown_until:
-            return stale or {
-                "success": False,
-                "error": "联网搜索暂处于失败冷却期",
-                "results": [],
-            }
-        start_at = max(now, _next_run_at.get(selected_backend, 0.0))
-        throttle_wait = start_at - now
-        if throttle_wait > _MAX_THROTTLE_WAIT_SECONDS:
-            return stale or {
-                "success": False,
-                "error": "联网搜索请求过于频繁，请稍后重试",
-                "results": [],
-            }
-        next_start = start_at + _MIN_RUN_INTERVAL_SECONDS
-        _next_run_at[selected_backend] = next_start
 
         async def execute() -> Dict[str, Any]:
-            if throttle_wait > 0:
-                await asyncio.sleep(throttle_wait)
+            deadline = loop.time() + _RUN_TIMEOUT_SECONDS
             try:
-                result = await _invoke_plugin(
-                    normalized_query,
-                    plugin_limit,
-                    backend,
-                    hinted_backend,
-                )
+                if selected_backend in {"baidu", "duckduckgo"}:
+                    try:
+                        result = await _invoke_in_backend_slot(
+                            normalized_query,
+                            plugin_limit,
+                            selected_backend,
+                            deadline,
+                        )
+                    except Exception as primary_error:
+                        if requested_backend is not None or selected_backend != "baidu":
+                            raise
+                        logger.info(
+                            "受控百度搜索失败，协调 DuckDuckGo 后端后重试 "
+                            "(error_type=%s)",
+                            type(primary_error).__name__,
+                        )
+                        try:
+                            result = await _invoke_in_backend_slot(
+                                normalized_query,
+                                plugin_limit,
+                                "duckduckgo",
+                                deadline,
+                            )
+                        except Exception:
+                            raise primary_error
+                else:
+                    result = await _invoke_plugin(
+                        normalized_query,
+                        plugin_limit,
+                        None,
+                        None,
+                        run_timeout=max(0.01, deadline - loop.time()),
+                    )
             except _PluginThrottleError as error:
                 # Busy/cooldown responses are normal flow control from a
                 # healthy plugin, not grounds for a five-minute outage.
@@ -389,9 +450,10 @@ async def search_via_plugin(
                     "results": [],
                 }
             except Exception as error:
-                _failure_cooldown_until[selected_backend] = (
-                    time.monotonic() + _FAILURE_COOLDOWN_SECONDS
-                )
+                if selected_backend == "auto":
+                    _failure_cooldown_until[selected_backend] = (
+                        time.monotonic() + _FAILURE_COOLDOWN_SECONDS
+                    )
                 logger.warning(
                     "受控联网搜索失败 (query_len=%s, error_type=%s)",
                     len(normalized_query),
