@@ -120,7 +120,6 @@
             <template #default="scope">
               <el-switch
                 :model-value="scope.row.auto_context === true"
-                :disabled="scope.row.effective_material_type === 'corpus'"
                 @change="setPackAuto(scope.row, Boolean($event))"
               />
             </template>
@@ -312,7 +311,7 @@ async function setPackMaterialType(row: KnowledgePackSummary, materialType: stri
   try {
     await knowledgeApi.setPackMaterialType({ pack_id: row.pack_id, material_type: materialType })
     row.effective_material_type = materialType as 'knowledge' | 'corpus'
-    if (materialType === 'corpus') row.auto_context = false
+    if (materialType === 'corpus') row.auto_context = true
     await refreshAll()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }

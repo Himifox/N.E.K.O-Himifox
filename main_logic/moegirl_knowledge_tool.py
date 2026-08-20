@@ -90,6 +90,16 @@ PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
     "ru": "Ищет в локальной базе знаний. Если пользователь просит выбрать случайный материал, сначала обязательно вызовите инструмент с mode=sample. Сеть и память пользователя не используются.",
     "zh-TW": "查詢本機公共知識。使用者明確要求抽取或隨機選擇素材時，必須先用 mode=sample 呼叫本工具，不可自行編造；不會連網或讀取使用者記憶。",
 }
+PUBLIC_KNOWLEDGE_SAMPLE_TOOL_DESCRIPTION = {
+    "zh": "从本地公共素材中抽取用户明确要求的随机项目，例如塔罗牌、动物、颜色或职业。不用于普通知识查询。",
+    "en": "Draw a user-requested random item from local public material, such as a tarot card, animal, color, or occupation. Do not use it for ordinary knowledge lookup.",
+    "ja": "タロット、動物、色、職業など、利用者が求めたランダム素材をローカル公開素材から抽出します。通常の知識検索には使用しません。",
+    "ko": "타로, 동물, 색상, 직업처럼 사용자가 요청한 무작위 항목을 로컬 공개 자료에서 뽑습니다. 일반 지식 검색에는 사용하지 않습니다.",
+    "es": "Extrae de material público local un elemento aleatorio solicitado, como una carta del tarot, un animal, un color o una profesión. No se usa para consultas normales.",
+    "pt": "Seleciona do material público local um item aleatório solicitado, como uma carta de tarô, animal, cor ou profissão. Não serve para consultas comuns.",
+    "ru": "Выбирает из локальных общедоступных материалов случайный запрошенный объект: карту Таро, животное, цвет или профессию. Не используется для обычного поиска знаний.",
+    "zh-TW": "從本機公共素材中抽取使用者明確要求的隨機項目，例如塔羅牌、動物、顏色或職業。不用於一般知識查詢。",
+}
 PUBLIC_KNOWLEDGE_QUERY_DESCRIPTION = {
     "zh": (
         "查询时填写词条或问题；抽取时填写允许的标签，例如 "
@@ -290,8 +300,14 @@ def _render_entry(
     )
 
 
-def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
+def register_public_knowledge_tool(
+    tool_registry,
+    *,
+    language: str,
+    lookup_enabled: bool = True,
+) -> None:
     """Register the public-knowledge tool without exposing its schema to core."""
+    mode_values = ["lookup", "sample"] if lookup_enabled else ["sample"]
     parameters = {
         "type": "object",
         "properties": {
@@ -301,8 +317,8 @@ def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
             },
             "mode": {
                 "type": "string",
-                "enum": ["lookup", "sample"],
-                "default": "lookup",
+                "enum": mode_values,
+                "default": "lookup" if lookup_enabled else "sample",
             },
             "material_type": {
                 "type": "string",
@@ -320,10 +336,17 @@ def register_public_knowledge_tool(tool_registry, *, language: str) -> None:
     tool_registry.register(
         ToolDefinition(
             name="query_public_knowledge",
-            description=_loc(PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION, language),
+            description=_loc(
+                PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION
+                if lookup_enabled
+                else PUBLIC_KNOWLEDGE_SAMPLE_TOOL_DESCRIPTION,
+                language,
+            ),
             parameters=parameters,
             handler=lambda arguments: handle_public_knowledge_call(
-                arguments,
+                arguments
+                if lookup_enabled
+                else {**(arguments or {}), "mode": "sample"},
                 language=language,
             ),
             metadata={"source": "builtin", "domain": "public_knowledge"},
@@ -364,14 +387,12 @@ async def build_public_knowledge_turn_context(
 
         if PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
             knowledge_root = get_config_manager().knowledge_dir
-
-            def _build_context():
-                return open_knowledge(knowledge_root).build_conversation_context(
-                    user_text,
-                    limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
-                )
-
-            result = await asyncio.to_thread(_build_context)
+            service = await asyncio.to_thread(open_knowledge, knowledge_root)
+            result = await service.abuild_conversation_context(
+                user_text,
+                lexical_queries=_knowledge_query_candidates(user_text),
+                limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+            )
             context_text = result.text
             from knowledge.diagnostics import record_knowledge_route
 
@@ -381,6 +402,9 @@ async def build_public_knowledge_turn_context(
                 match_mode=result.match_mode,
                 card_delivered=bool(result.text),
                 result="matched" if result.hit_count else "miss",
+                knowledge_hits=result.knowledge_hits,
+                corpus_hits=result.corpus_hits,
+                elapsed_ms=result.elapsed_ms,
             )
             logger.info(
                 "[public-knowledge] automatic turn context hits=%d mode=%s",

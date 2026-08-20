@@ -22,7 +22,7 @@ from .moegirl_knowledge.store import MoegirlKnowledgeStore
 
 
 PACK_SCHEMA_VERSION = 3
-PACK_REGISTRY_SCHEMA_VERSION = 3
+PACK_REGISTRY_SCHEMA_VERSION = 4
 MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
 MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_PACK_ENTRIES = 5_000
@@ -356,8 +356,6 @@ def set_pack_auto_context(
         if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
             raise ValueError("knowledge pack is not installed")
         metadata = packs[pack_id]
-        if _effective_material_type(metadata) == "corpus" and enabled:
-            raise ValueError("corpus packs cannot enable automatic context")
         packs[pack_id] = {**metadata, "auto_context": bool(enabled)}
         atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
 
@@ -379,14 +377,15 @@ def set_pack_material_type_override(
         if not isinstance(metadata, dict):
             raise ValueError("knowledge pack is not installed")
         declared = _material_type(metadata.get("declared_material_type", "knowledge"))
+        previous_effective = _effective_material_type(metadata)
         effective = normalized or declared
         packs[pack_id] = {
             **metadata,
             "material_type_override": normalized,
             "effective_material_type": effective,
-            "auto_context": bool(metadata.get("auto_context"))
-            if effective == "knowledge"
-            else False,
+            "auto_context": True
+            if effective == "corpus" and previous_effective != "corpus"
+            else bool(metadata.get("auto_context")),
         }
         registry["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
         atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
@@ -580,6 +579,11 @@ def _load_registry(path: Path) -> dict[str, Any]:
         return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
     if not isinstance(payload, dict) or not isinstance(payload.get("packs"), dict):
         return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
+    previous_schema_version = payload.get("schema_version")
+    migrate_corpus_auto_context = (
+        not isinstance(previous_schema_version, int)
+        or previous_schema_version < PACK_REGISTRY_SCHEMA_VERSION
+    )
     for pack_id, metadata in tuple(payload["packs"].items()):
         if not isinstance(metadata, dict):
             continue
@@ -592,14 +596,18 @@ def _load_registry(path: Path) -> dict[str, Any]:
         if override not in MATERIAL_TYPES:
             override = None
         effective = str(override or declared)
+        auto_context = bool(metadata.get("auto_context"))
+        if (
+            effective == "corpus"
+            and migrate_corpus_auto_context
+        ):
+            auto_context = True
         normalized = {
             **metadata,
             "declared_material_type": declared,
             "material_type_override": override,
             "effective_material_type": effective,
-            "auto_context": bool(metadata.get("auto_context"))
-            if effective == "knowledge"
-            else False,
+            "auto_context": auto_context,
         }
         if normalized != metadata:
             payload["packs"][pack_id] = normalized
@@ -620,7 +628,9 @@ def _registry_with_pack(
     packs = dict(registry.get("packs", {}))
     previous = packs.get(pack.pack_id, {})
     auto_context = (
-        previous.get("auto_context") is True if isinstance(previous, dict) else False
+        previous.get("auto_context") is True
+        if isinstance(previous, dict) and previous
+        else pack.material_type == "corpus"
     )
     previous_subscription = (
         previous.get("subscription") if isinstance(previous, dict) else None
@@ -643,9 +653,7 @@ def _registry_with_pack(
         "declared_material_type": pack.material_type,
         "material_type_override": override,
         "effective_material_type": effective_material_type,
-        "auto_context": auto_context
-        if effective_material_type == "knowledge"
-        else False,
+        "auto_context": auto_context,
         "subscription": subscription
         if subscription is not None
         else previous_subscription,

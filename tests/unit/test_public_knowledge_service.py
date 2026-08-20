@@ -11,6 +11,8 @@ from knowledge.moegirl_knowledge.catalog_overrides import (
     set_entry_disabled,
 )
 from knowledge.packs import validate_pack
+from knowledge.service import MaterialKnowledgeHit
+from knowledge.moegirl_knowledge.models import MoegirlKnowledgeHit
 
 
 def _entry(title: str, source: str, *tags: str) -> KnowledgeEntry:
@@ -82,16 +84,158 @@ def test_meme_domain_tag_changes_style_not_routing_permission(tmp_path):
     assert "Knowledge type: 引用" in context.text
 
 
-def test_corpus_pack_is_explicit_only(tmp_path):
+def test_corpus_pack_can_participate_in_automatic_conversation(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(
         _pack(pack_id="reply-samples", material_type="corpus", title="Reply sample")
     )
 
     assert service.search("Reply sample", limit=1)
-    assert service.build_conversation_context("Reply sample").hit_count == 0
-    with pytest.raises(ValueError, match="corpus packs cannot enable"):
-        service.set_pack_auto_context("reply-samples", enabled=True)
+    assert service.list_packs()[0]["auto_context"] is True
+    service.set_pack_auto_context("reply-samples", enabled=False)
+    assert service.list_packs()[0]["auto_context"] is False
+
+
+@pytest.mark.asyncio
+async def test_automatic_conversation_uses_corpus_without_magic_words(
+    monkeypatch,
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    entry = _entry("你这瓜保熟吗", "source:corpora")
+    entry = KnowledgeEntry(
+        title=entry.title,
+        terms=entry.terms,
+        tags=entry.tags,
+        summary="一条回应参考",
+        content="保熟，不熟你提着瓜来找我。",
+    )
+    calls = []
+
+    async def _asearch(*_args, **kwargs):
+        calls.append(kwargs)
+        return [
+            MaterialKnowledgeHit(
+                hit=MoegirlKnowledgeHit(
+                    entry=entry,
+                    score=1.0,
+                    retrieval_modes=("lexical",),
+                    lexical_score=1.0,
+                ),
+                material_type="corpus",
+            )
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context("你这瓜保熟吗？")
+
+    assert len(calls) == 1
+    assert context.corpus_hits == 1
+    assert context.knowledge_hits == 0
+    assert "保熟,不熟你提着瓜来找我" in context.text
+    assert "Reference material:" in context.text
+
+
+@pytest.mark.asyncio
+async def test_automatic_conversation_rejects_weak_semantic_corpus(
+    monkeypatch,
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    entry = _entry("无关语料", "source:corpora")
+
+    async def _asearch(*_args, **_kwargs):
+        return [
+            MaterialKnowledgeHit(
+                hit=MoegirlKnowledgeHit(
+                    entry=entry,
+                    score=0.69,
+                    retrieval_modes=("semantic",),
+                    semantic_score=0.69,
+                ),
+                material_type="corpus",
+            )
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context("你好呀")
+
+    assert context.hit_count == 0
+    assert context.text == ""
+
+
+@pytest.mark.asyncio
+async def test_short_natural_corpus_phrase_does_not_require_an_intent_command(
+    monkeypatch,
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    entry = _entry("现在全网都在刷你急了你急了的梗", "source:corpora")
+
+    async def _asearch(*_args, **_kwargs):
+        return [
+            MaterialKnowledgeHit(
+                hit=MoegirlKnowledgeHit(
+                    entry=entry,
+                    score=0.62,
+                    retrieval_modes=("lexical", "semantic"),
+                    lexical_score=3.0,
+                    semantic_score=0.62,
+                ),
+                material_type="corpus",
+            )
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context("你急了")
+
+    assert context.corpus_hits == 1
+    assert "Conversation trigger:" in context.text
+
+
+@pytest.mark.asyncio
+async def test_automatic_conversation_shares_one_search_for_knowledge_and_corpus(
+    monkeypatch,
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    knowledge_entry = _entry("周三电池", "source:chime", "domain:meme")
+    corpus_entry = _entry("猫猫回应", "source:corpora")
+    calls = 0
+
+    async def _asearch(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return [
+            MaterialKnowledgeHit(
+                hit=MoegirlKnowledgeHit(
+                    entry=knowledge_entry,
+                    score=1.0,
+                    retrieval_modes=("lexical",),
+                    lexical_score=1.0,
+                ),
+                material_type="knowledge",
+            ),
+            MaterialKnowledgeHit(
+                hit=MoegirlKnowledgeHit(
+                    entry=corpus_entry,
+                    score=0.82,
+                    retrieval_modes=("semantic",),
+                    semantic_score=0.82,
+                ),
+                material_type="corpus",
+            ),
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context("周三电池是什么意思？")
+
+    assert calls == 1
+    assert context.hit_count == 2
+    assert context.knowledge_hits == 1
+    assert context.corpus_hits == 1
+    assert "Knowledge term: 周三电池" in context.text
+    assert "Conversation trigger: 猫猫回应" in context.text
 
 
 def test_material_type_override_rebuilds_auto_route_without_rewriting_entry(tmp_path):

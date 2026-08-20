@@ -70,7 +70,7 @@ def test_imported_pack_is_searchable_but_not_automatic_until_enabled(tmp_path):
     assert "Source: Community Fixture" in context.text
 
 
-def test_material_pack_is_explicitly_available_but_not_automatic_by_default(tmp_path):
+def test_corpus_pack_enables_automatic_conversation_use_by_default(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_material_payload()))
 
@@ -81,12 +81,12 @@ def test_material_pack_is_explicitly_available_but_not_automatic_by_default(tmp_
     )
     automatic = service.build_conversation_context("please draw a tarot card")
 
-    assert installed[0]["auto_context"] is False
+    assert installed[0]["auto_context"] is True
     assert explicit[0].source_tag == "source:community.community-tarot"
     assert automatic.hit_count == 0
 
 
-def test_corpus_material_never_auto_injects(tmp_path):
+def test_legacy_exact_matcher_still_excludes_corpus_material(tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(
         KnowledgeEntry(
@@ -104,18 +104,34 @@ def test_corpus_material_never_auto_injects(tmp_path):
     assert context.hit_count == 0
 
 
-def test_corpus_pack_cannot_be_enabled_for_automatic_context(tmp_path):
+def test_corpus_pack_automatic_context_can_be_disabled_and_enabled(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_material_payload()))
 
-    with pytest.raises(ValueError, match="corpus packs cannot enable"):
-        service.set_pack_auto_context("community-tarot", enabled=True)
+    service.set_pack_auto_context("community-tarot", enabled=False)
+    assert service.list_packs()[0]["auto_context"] is False
+    service.set_pack_auto_context("community-tarot", enabled=True)
 
     installed = service.list_packs()
     context = service.build_conversation_context("please draw a tarot card")
     assert installed[0]["effective_material_type"] == "corpus"
-    assert installed[0]["auto_context"] is False
+    assert installed[0]["auto_context"] is True
     assert context.hit_count == 0
+
+
+def test_v3_registry_enables_existing_corpus_for_conversation(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["schema_version"] = 3
+    registry["packs"]["community-tarot"]["auto_context"] = False
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    installed = service.list_packs()
+
+    assert installed[0]["effective_material_type"] == "corpus"
+    assert installed[0]["auto_context"] is True
 
 
 def test_v3_pack_requires_material_type():

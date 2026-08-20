@@ -267,7 +267,7 @@ def test_material_type_endpoint_controls_auto_context(monkeypatch, tmp_path):
     ).json()
 
     assert changed == {"ok": True, "material_type_override": "corpus"}
-    assert toggle == {"ok": False, "reason": "auto_context_not_allowed"}
+    assert toggle == {"ok": True, "auto_context": True}
     assert (
         client.get("/api/public-knowledge/packs").json()["packs"][0][
             "effective_material_type"

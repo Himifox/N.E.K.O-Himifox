@@ -169,7 +169,14 @@ class ToolCallingMixin:
         try:
             from main_logic.moegirl_knowledge_tool import register_public_knowledge_tool
 
-            register_public_knowledge_tool(self.tool_registry, language=_lang)
+            # Ordinary lookup is resolved deterministically before the response,
+            # so exposing lookup here would invite a redundant LLM tool round-trip.
+            # Keep only the action-like random material sampler in companion chat.
+            register_public_knowledge_tool(
+                self.tool_registry,
+                language=_lang,
+                lookup_enabled=False,
+            )
         except Exception as exc:
             logger.warning(
                 "[public-knowledge] builtin tool registration failed: %s",

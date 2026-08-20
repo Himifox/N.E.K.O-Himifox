@@ -20,6 +20,9 @@ def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
             match_mode="strong",
             card_delivered=True,
             result="hit",
+            knowledge_hits=1,
+            corpus_hits=2,
+            elapsed_ms=237,
         )
 
     records = list_recent_knowledge_routes()
@@ -29,6 +32,9 @@ def test_route_diagnostics_are_bounded_and_do_not_store_conversation_text():
     assert "user_text" not in records[0]
     assert "card" not in records[0]
     assert "response" not in records[0]
+    assert records[0]["knowledge_hits"] == 1
+    assert records[0]["corpus_hits"] == 2
+    assert records[0]["elapsed_ms"] == 237
 
 
 def test_query_diagnostics_keep_counts_but_not_query_content():

@@ -458,13 +458,8 @@ async def set_public_knowledge_pack_auto_context(request: Request):
             pack_id,
             enabled=enabled,
         )
-    except ValueError as exc:
-        reason = (
-            "auto_context_not_allowed"
-            if "corpus packs cannot enable" in str(exc)
-            else "not_found"
-        )
-        return {"ok": False, "reason": reason}
+    except ValueError:
+        return {"ok": False, "reason": "not_found"}
     return {"ok": True, "auto_context": enabled}
 
 

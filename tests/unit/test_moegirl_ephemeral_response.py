@@ -41,7 +41,9 @@ def _make_client():
 
 
 @pytest.mark.asyncio
-async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(monkeypatch):
+async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(
+    monkeypatch,
+):
     from main_logic.omni_offline_client import OmniOfflineClient
     from utils.llm_client import AIMessage, HumanMessage, LLMStreamChunk
 
@@ -65,7 +67,11 @@ async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(monk
         history_replacement_text="memory summary",
     )
 
-    sent_humans = [message.content for message in sent_messages if isinstance(message, HumanMessage)]
+    sent_humans = [
+        message.content
+        for message in sent_messages
+        if isinstance(message, HumanMessage)
+    ]
     assert sent_humans[-2:] == [
         "raw user message",
         "reply to the preceding user message using this meme card",
@@ -130,3 +136,63 @@ async def test_ephemeral_instruction_is_not_added_when_transcript_callback_fails
         if isinstance(message, HumanMessage)
     ]
     assert human_messages == ["raw user message"]
+
+
+@pytest.mark.asyncio
+async def test_companion_chat_public_knowledge_tool_is_sample_only(monkeypatch):
+    import main_logic.moegirl_knowledge_tool as knowledge_tool
+    from main_logic.tool_calling import ToolRegistry
+
+    captured = {}
+
+    async def _handle(arguments, *, language, deadline_monotonic=None):
+        del language, deadline_monotonic
+        captured.update(arguments)
+        return "sampled"
+
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", _handle)
+    registry = ToolRegistry()
+    knowledge_tool.register_public_knowledge_tool(
+        registry,
+        language="zh",
+        lookup_enabled=False,
+    )
+
+    tool = registry.get("query_public_knowledge")
+    assert tool is not None
+    assert tool.parameters["properties"]["mode"]["enum"] == ["sample"]
+    assert tool.parameters["properties"]["mode"]["default"] == "sample"
+    assert (
+        await tool.handler({"query": "dataset:animals", "mode": "lookup"}) == "sampled"
+    )
+    assert captured["mode"] == "sample"
+
+
+@pytest.mark.asyncio
+async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypatch):
+    import main_logic.moegirl_knowledge_tool as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    received = []
+
+    class _Service:
+        async def abuild_conversation_context(
+            self,
+            user_text,
+            *,
+            lexical_queries,
+            limit,
+        ):
+            received.append((user_text, lexical_queries, limit))
+            return KnowledgeTurnContext(match_mode="automatic_miss")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: _Service())
+
+    context = await knowledge_tool.build_public_knowledge_turn_context(
+        "你好呀",
+        tool_calls_supported=True,
+    )
+
+    assert context == ""
+    assert received
+    assert received[0][0] == "你好呀"

@@ -20,6 +20,9 @@ class KnowledgeRouteDiagnostic:
     card_delivered: bool
     result: str
     error_type: str = ""
+    knowledge_hits: int = 0
+    corpus_hits: int = 0
+    elapsed_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +61,9 @@ def record_knowledge_route(
     card_delivered: bool = False,
     result: str = "miss",
     error_type: str = "",
+    knowledge_hits: int = 0,
+    corpus_hits: int = 0,
+    elapsed_ms: int = 0,
 ) -> None:
     record = KnowledgeRouteDiagnostic(
         timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -67,6 +73,9 @@ def record_knowledge_route(
         card_delivered=bool(card_delivered),
         result=str(result or "miss")[:40],
         error_type=str(error_type or "")[:100],
+        knowledge_hits=max(int(knowledge_hits), 0),
+        corpus_hits=max(int(corpus_hits), 0),
+        elapsed_ms=max(int(elapsed_ms), 0),
     )
     with _lock:
         _records.append(record)
