@@ -27,12 +27,15 @@ _MIN_RUN_INTERVAL_SECONDS = 5.0
 _MAX_CACHE_ENTRIES = 64
 _RUN_TIMEOUT_SECONDS = 30.0
 _POLL_INTERVAL_SECONDS = 0.25
+_MAX_POLL_INTERVAL_SECONDS = 2.0
+_MAX_QUEUE_WAIT_SECONDS = 2.0
+_MAX_THROTTLE_WAIT_SECONDS = 2.0
 
 _cache: OrderedDict[tuple[str, str, int], tuple[float, Dict[str, Any]]] = OrderedDict()
 _lock: Optional[asyncio.Lock] = None
 _lock_loop: Optional[asyncio.AbstractEventLoop] = None
-_next_run_at = 0.0
-_failure_cooldown_until = 0.0
+_next_run_at: Dict[str, float] = {}
+_failure_cooldown_until: Dict[str, float] = {}
 
 
 def _copy_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,12 +93,36 @@ def _extract_export(payload: object) -> Dict[str, Any]:
             raw = item.get("json_data")
         if not isinstance(raw, dict):
             continue
-        if raw.get("error"):
-            raise RuntimeError(_error_message(raw.get("error"), "搜索插件执行失败"))
-        data = raw.get("data")
-        if isinstance(data, dict):
-            return data
+        current = raw
+        # Run exports contain the server envelope and the child-host response
+        # envelope before the plugin's own result payload.
+        for _ in range(4):
+            if current.get("success") is False or current.get("error"):
+                raise RuntimeError(
+                    _error_message(current.get("error"), "搜索插件执行失败")
+                )
+            nested = current.get("data")
+            if not isinstance(nested, dict):
+                break
+            current = nested
+        if isinstance(current.get("results"), list):
+            return current
     raise RuntimeError("搜索插件没有返回结构化结果")
+
+
+async def _cancel_run(
+    client: httpx.AsyncClient,
+    base: str,
+    run_id: str,
+) -> None:
+    try:
+        await client.post(
+            f"{base}/runs/{run_id}/cancel",
+            json={"reason": "search gateway stopped waiting"},
+            timeout=1.0,
+        )
+    except Exception:
+        logger.debug("取消遗留联网搜索任务失败 (run_id=%s)", run_id)
 
 
 async def _invoke_plugin(
@@ -129,28 +156,50 @@ async def _invoke_plugin(
 
         deadline = asyncio.get_running_loop().time() + _RUN_TIMEOUT_SECONDS
         terminal = {"succeeded", "failed", "canceled", "timeout"}
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise TimeoutError("等待联网搜索插件超时")
-            response = await client.get(f"{base}/runs/{run_id}")
-            if response.status_code != 200:
-                raise RuntimeError(f"读取联网搜索任务失败（HTTP {response.status_code}）")
-            candidate = response.json()
-            run_data = candidate if isinstance(candidate, dict) else {}
-            status = str(run_data.get("status") or "")
-            if status in terminal:
-                if status != "succeeded":
+        poll_interval = _POLL_INTERVAL_SECONDS
+        terminal_seen = False
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("等待联网搜索插件超时")
+                response = await client.get(f"{base}/runs/{run_id}")
+                if response.status_code != 200:
                     raise RuntimeError(
-                        _error_message(run_data.get("error"), f"联网搜索任务状态：{status}")
+                        f"读取联网搜索任务失败（HTTP {response.status_code}）"
                     )
-                break
-            await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
+                candidate = response.json()
+                run_data = candidate if isinstance(candidate, dict) else {}
+                status = str(run_data.get("status") or "")
+                if status in terminal:
+                    terminal_seen = True
+                    if status != "succeeded":
+                        raise RuntimeError(
+                            _error_message(
+                                run_data.get("error"),
+                                f"联网搜索任务状态：{status}",
+                            )
+                        )
+                    break
+                await asyncio.sleep(min(poll_interval, remaining))
+                poll_interval = min(
+                    poll_interval * 1.5,
+                    _MAX_POLL_INTERVAL_SECONDS,
+                )
 
-        response = await client.get(f"{base}/runs/{run_id}/export", params={"limit": 20})
-        if response.status_code != 200:
-            raise RuntimeError(f"导出联网搜索结果失败（HTTP {response.status_code}）")
-        data = _extract_export(response.json())
+            response = await client.get(
+                f"{base}/runs/{run_id}/export",
+                params={"limit": 20},
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"导出联网搜索结果失败（HTTP {response.status_code}）"
+                )
+            data = _extract_export(response.json())
+        except BaseException:
+            if not terminal_seen:
+                await _cancel_run(client, base, run_id)
+            raise
 
     normalized_results = []
     for item in data.get("results") or []:
@@ -182,36 +231,60 @@ async def search_via_plugin(
     backend: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a cached, rate-limited search through the web_search plugin."""
-    global _next_run_at, _failure_cooldown_until
-
     normalized_query = " ".join(str(query or "").split())
     if len(normalized_query) < 2:
         return {"success": False, "error": "搜索关键词太短", "results": []}
-    bounded_limit = max(3, min(int(limit), 10))
+    try:
+        requested_limit = max(1, min(int(limit), 10))
+    except (TypeError, ValueError):
+        requested_limit = 5
+    plugin_limit = max(3, requested_limit)
     selected_backend = backend if backend in {"baidu", "duckduckgo"} else "auto"
-    key = (selected_backend, normalized_query.casefold(), bounded_limit)
+    key = (selected_backend, normalized_query.casefold(), requested_limit)
     cached = _cached(key)
     if cached is not None:
         return cached
 
-    async with _gateway_lock():
+    lock = _gateway_lock()
+    try:
+        await asyncio.wait_for(
+            lock.acquire(),
+            timeout=_MAX_QUEUE_WAIT_SECONDS,
+        )
+    except TimeoutError:
+        return {
+            "success": False,
+            "error": "联网搜索网关繁忙，请稍后重试",
+            "results": [],
+        }
+    try:
         cached = _cached(key)
         if cached is not None:
             return cached
         now = time.monotonic()
-        if now < _failure_cooldown_until:
+        cooldown_until = _failure_cooldown_until.get(selected_backend, 0.0)
+        if now < cooldown_until:
             return {
                 "success": False,
                 "error": "联网搜索暂处于失败冷却期",
                 "results": [],
             }
-        if now < _next_run_at:
-            await asyncio.sleep(_next_run_at - now)
+        throttle_wait = _next_run_at.get(selected_backend, 0.0) - now
+        if throttle_wait > _MAX_THROTTLE_WAIT_SECONDS:
+            return {
+                "success": False,
+                "error": "联网搜索请求过于频繁，请稍后重试",
+                "results": [],
+            }
+        if throttle_wait > 0:
+            await asyncio.sleep(throttle_wait)
 
         try:
-            result = await _invoke_plugin(normalized_query, bounded_limit, backend)
+            result = await _invoke_plugin(normalized_query, plugin_limit, backend)
         except Exception as error:
-            _failure_cooldown_until = time.monotonic() + _FAILURE_COOLDOWN_SECONDS
+            _failure_cooldown_until[selected_backend] = (
+                time.monotonic() + _FAILURE_COOLDOWN_SECONDS
+            )
             logger.warning(
                 "受控联网搜索失败 (query_len=%s, error_type=%s)",
                 len(normalized_query),
@@ -223,9 +296,22 @@ async def search_via_plugin(
                 "results": [],
             }
         finally:
-            _next_run_at = time.monotonic() + _MIN_RUN_INTERVAL_SECONDS
+            _next_run_at[selected_backend] = (
+                time.monotonic() + _MIN_RUN_INTERVAL_SECONDS
+            )
+
+        result["results"] = [
+            dict(item)
+            for item in result.get("results", [])[:requested_limit]
+            if isinstance(item, dict)
+        ]
+        result["success"] = bool(result["results"])
+        if result["success"]:
+            result["error"] = ""
 
         # A valid empty result is cacheable too; otherwise a stable obscure
         # window title would still trigger one upstream search every refresh.
         _store(key, result)
         return _copy_result(result)
+    finally:
+        lock.release()
