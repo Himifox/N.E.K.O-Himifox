@@ -252,9 +252,9 @@
       </el-tab-pane>
     </el-tabs>
 
-    <div v-if="drawerOpen && selectedEntry" class="entry-detail-overlay" @click.self="closeEntryDetail">
-      <aside class="knowledge-entry-panel" role="dialog" aria-modal="true" :aria-label="selectedEntry?.title || t('knowledge.details')">
-        <header v-if="selectedEntry" class="entry-drawer-header">
+    <el-drawer v-model="drawerOpen" class="knowledge-entry-drawer" size="620px">
+      <template #header>
+        <div v-if="selectedEntry" class="entry-drawer-header">
           <strong :title="selectedEntry.title">{{ selectedEntry.title }}</strong>
           <div class="entry-drawer-meta">
             <el-tag effect="plain">{{ displaySourceTag(selectedEntry.source?.tag || selectedEntry.source?.name) }}</el-tag>
@@ -262,9 +262,9 @@
               {{ selectedEntry.disabled ? t('knowledge.disabledState') : t('knowledge.enabled') }}
             </el-tag>
           </div>
-          <button class="entry-panel-close" type="button" :aria-label="t('common.close')" @click="closeEntryDetail">×</button>
-        </header>
-
+        </div>
+      </template>
+      <template v-if="selectedEntry">
         <div class="entry-drawer-body">
           <section class="entry-detail-section entry-detail-section--summary">
             <h3>{{ t('knowledge.summary') }}</h3>
@@ -299,8 +299,8 @@
             <pre class="entry-content">{{ selectedEntry.content }}</pre>
           </section>
         </div>
-      </aside>
-    </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -524,10 +524,6 @@ async function openEntry(row: KnowledgeEntrySummary) {
   const response = await knowledgeApi.entry({ source: row.source.tag, title: row.title })
   selectedEntry.value = response.entry || null
   drawerOpen.value = Boolean(selectedEntry.value)
-}
-
-function closeEntryDetail() {
-  drawerOpen.value = false
 }
 
 async function toggleEntry(row: KnowledgeEntrySummary) {
@@ -1427,37 +1423,28 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.entry-detail-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  display: flex;
-  justify-content: flex-end;
+:global(.knowledge-entry-drawer) {
+  --knowledge-surface: var(--el-bg-color);
+  --knowledge-surface-muted: var(--el-fill-color-extra-light);
+  --knowledge-line: var(--el-border-color-lighter);
   min-width: 0;
-  padding: 10px 0 10px 12px;
-  background: linear-gradient(90deg, rgba(15, 23, 42, 0.42), rgba(15, 23, 42, 0.16));
 }
 
-.knowledge-entry-panel {
-  display: flex;
-  flex-direction: column;
-  width: min(580px, calc(100% - 56px));
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--knowledge-line);
-  border-right: 0;
-  border-radius: 10px 0 0 10px;
-  background: var(--knowledge-surface);
-  box-shadow: -12px 0 34px rgba(15, 23, 42, 0.14);
+:global(.knowledge-entry-drawer .el-drawer__header) {
+  margin: 0;
+  padding: 30px 30px 22px;
+  border-bottom: 1px solid var(--knowledge-line);
+}
+
+:global(.knowledge-entry-drawer .el-drawer__body) {
+  padding: 0;
+  color: var(--el-text-color-regular);
 }
 
 .entry-drawer-header {
-  position: relative;
   display: grid;
   gap: 12px;
   min-width: 0;
-  padding: 30px 68px 22px 30px;
-  border-bottom: 1px solid var(--knowledge-line);
 }
 
 .entry-drawer-header strong {
@@ -1488,35 +1475,7 @@ dd {
 .entry-drawer-body {
   display: grid;
   gap: 18px;
-  min-height: 0;
-  overflow: auto;
   padding: 28px 30px 42px;
-}
-
-.entry-panel-close {
-  position: absolute;
-  top: 26px;
-  right: 24px;
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--el-text-color-primary);
-  cursor: pointer;
-  font-size: 24px;
-  line-height: 1;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
-}
-
-.entry-panel-close:hover {
-  border-color: var(--knowledge-line);
-  background: var(--knowledge-surface-muted);
 }
 
 .entry-detail-section {
@@ -1609,23 +1568,12 @@ pre {
 }
 
 @media (max-width: 640px) {
-  .entry-detail-overlay {
-    padding: 0;
+  :global(.knowledge-entry-drawer) {
+    width: min(100vw, 620px) !important;
   }
 
-  .knowledge-entry-panel {
-    width: 100%;
-    border-radius: 0;
-    border-left: 0;
-  }
-
-  .entry-drawer-header {
-    padding: 26px 56px 18px 18px;
-  }
-
-  .entry-panel-close {
-    top: 20px;
-    right: 14px;
+  :global(.knowledge-entry-drawer .el-drawer__header) {
+    padding: 26px 18px 18px;
   }
 
   .entry-drawer-body {
