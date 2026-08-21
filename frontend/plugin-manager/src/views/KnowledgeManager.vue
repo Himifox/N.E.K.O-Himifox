@@ -112,10 +112,20 @@
         </div>
         <div class="table-shell">
           <el-table :data="entries" v-loading="entriesLoading" :row-key="knowledgeEntryRowKey">
-            <el-table-column prop="title" :label="t('knowledge.term')" min-width="180" />
+            <el-table-column :label="t('knowledge.term')" min-width="180">
+              <template #default="scope">
+                <span class="catalog-cell catalog-cell--title" :title="scope.row.title">
+                  {{ displayPrefix(scope.row.title, 18) }}
+                </span>
+              </template>
+            </el-table-column>
             <el-table-column prop="summary" :label="t('knowledge.summary')" min-width="320" show-overflow-tooltip />
             <el-table-column :label="t('knowledge.source')" width="170">
-              <template #default="scope">{{ scope.row.source?.name }}</template>
+              <template #default="scope">
+                <span class="catalog-cell" :title="scope.row.source?.name">
+                  {{ displayPrefix(scope.row.source?.name, 18) }}
+                </span>
+              </template>
             </el-table-column>
             <el-table-column :label="t('knowledge.actions')" width="190">
               <template #default="scope">
@@ -494,6 +504,13 @@ function displayIndexValue(value: unknown): string {
 
 function displaySourceTag(value: unknown): string {
   return String(value ?? '').replace(/^source:/, '') || t('common.nA')
+}
+
+function displayPrefix(value: unknown, maxLength: number): string {
+  const text = String(value ?? '').trim()
+  if (!text) return t('common.nA')
+  const chars = Array.from(text)
+  return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : text
 }
 
 function formatDiagnosticDate(value: unknown): string {
@@ -1159,6 +1176,20 @@ dd {
 
 .table-shell :deep(.el-table td.el-table__cell) {
   color: var(--el-text-color-regular);
+}
+
+.catalog-cell {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-cell--title {
+  color: var(--el-text-color-primary);
+  font-weight: 500;
 }
 
 .packs-table :deep(.el-table__expanded-cell) {
