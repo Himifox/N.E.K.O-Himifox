@@ -70,6 +70,7 @@ export interface KnowledgeEntrySummary {
   terms: Record<string, string[]>
   tags: string[]
   summary: string
+  content_preview?: string
   content?: string
   disabled: boolean
   score?: number

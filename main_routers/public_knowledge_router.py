@@ -73,6 +73,13 @@ def _source_tag(value: str) -> str:
     return value if not value or value.startswith("source:") else f"source:{value}"
 
 
+def _content_preview(value: str, *, max_chars: int = 180) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
 def _entry_payload(
     service,
     entry,
@@ -99,6 +106,7 @@ def _entry_payload(
         "terms": {role: list(values) for role, values in entry.terms.items()},
         "tags": list(entry.tags),
         "summary": entry.summary,
+        "content_preview": _content_preview(entry.content),
         "source": {
             "tag": source.tag,
             "name": source.name,

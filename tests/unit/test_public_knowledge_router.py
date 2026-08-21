@@ -108,6 +108,7 @@ def test_management_api_exposes_one_store(monkeypatch, tmp_path):
         "knowledge fixture",
         "corpus fixture",
     }
+    assert listing["items"][0]["content_preview"] == "Meaning - A typical use"
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
 
 

@@ -119,7 +119,11 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column prop="summary" :label="t('knowledge.summary')" min-width="320" show-overflow-tooltip />
+            <el-table-column :label="t('knowledge.summary')" min-width="320" show-overflow-tooltip>
+              <template #default="scope">
+                {{ displayEntryPreview(scope.row) }}
+              </template>
+            </el-table-column>
             <el-table-column :label="t('knowledge.source')" width="170">
               <template #default="scope">
                 <span class="catalog-cell" :title="scope.row.source?.name">
@@ -511,6 +515,10 @@ function displayPrefix(value: unknown, maxLength: number): string {
   if (!text) return t('common.nA')
   const chars = Array.from(text)
   return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : text
+}
+
+function displayEntryPreview(row: KnowledgeEntrySummary): string {
+  return String(row.content_preview || row.summary || '').trim() || t('common.nA')
 }
 
 function formatDiagnosticDate(value: unknown): string {
