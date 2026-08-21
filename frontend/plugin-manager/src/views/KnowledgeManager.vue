@@ -314,6 +314,12 @@ import { useMarketAuth } from '@/composables/useMarketAuth'
 import { openExternalUrl } from '@/utils/openExternal'
 import dayjs from 'dayjs'
 
+type KnowledgeStatusView = KnowledgeStatus & { status: 'ready' | 'degraded' }
+
+const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
+let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
+let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
+
 const { t } = useI18n()
 const {
   marketAuth,
@@ -322,7 +328,7 @@ const {
 } = useMarketAuth()
 const activeTab = ref('overview')
 const loading = ref(false)
-const status = ref<(KnowledgeStatus & { status: 'ready' | 'degraded' }) | null>(null)
+const status = ref<KnowledgeStatusView | null>(null)
 const query = ref('')
 const entries = ref<KnowledgeEntrySummary[]>([])
 const entriesLoading = ref(false)
@@ -483,9 +489,11 @@ async function refreshAll() {
     ])
     if (statusResult.status === 'fulfilled') {
       status.value = statusResult.value.status || null
+      if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
     }
     if (packsResult.status === 'fulfilled') {
       packs.value = packsResult.value.packs || []
+      cachedPacks = { value: packs.value, loadedAt: Date.now() }
     }
     if (statusResult.status === 'rejected' || packsResult.status === 'rejected') {
       ElMessage.error(t('knowledge.loadFailed'))
@@ -498,14 +506,31 @@ async function refreshAll() {
   }
 }
 
-async function loadStatus() {
-  loading.value = true
+function isFresh(loadedAt: number): boolean {
+  return Date.now() - loadedAt < KNOWLEDGE_OVERVIEW_CACHE_TTL_MS
+}
+
+function restoreOverviewCache(): { statusFresh: boolean; packsFresh: boolean } {
+  const statusFresh = cachedStatus ? isFresh(cachedStatus.loadedAt) : false
+  const packsFresh = cachedPacks ? isFresh(cachedPacks.loadedAt) : false
+  if (cachedStatus) status.value = cachedStatus.value
+  if (cachedPacks) packs.value = cachedPacks.value
+  return { statusFresh, packsFresh }
+}
+
+async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
+  if (!options.force && cachedStatus && isFresh(cachedStatus.loadedAt)) {
+    status.value = cachedStatus.value
+    return
+  }
+  if (!options.silent) loading.value = true
   try {
     status.value = (await knowledgeApi.status()).status || null
+    if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
   } catch {
     ElMessage.error(t('knowledge.loadFailed'))
   } finally {
-    loading.value = false
+    if (!options.silent) loading.value = false
   }
 }
 
@@ -536,12 +561,21 @@ async function toggleEntry(row: KnowledgeEntrySummary) {
 function previousPage() { offset.value = Math.max(0, offset.value - pageSize); loadEntries() }
 function nextPage() { offset.value += pageSize; loadEntries() }
 
-async function loadPacks(options: { force?: boolean } = {}) {
+async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
+  if (!options.force && cachedPacks && isFresh(cachedPacks.loadedAt)) {
+    packs.value = cachedPacks.value
+    return
+  }
   if (packsLoading.value && !options.force) return
-  packsLoading.value = true
-  try { packs.value = (await knowledgeApi.packs()).packs || [] }
+  if (!options.silent) packsLoading.value = true
+  try {
+    packs.value = (await knowledgeApi.packs()).packs || []
+    cachedPacks = { value: packs.value, loadedAt: Date.now() }
+  }
   catch { ElMessage.error(t('knowledge.loadFailed')) }
-  finally { packsLoading.value = false }
+  finally {
+    if (!options.silent) packsLoading.value = false
+  }
 }
 
 async function importSelectedPack(event: Event) {
@@ -690,10 +724,9 @@ watch(activeTab, (tab) => {
   if (tab === 'diagnostics') loadDiagnostics()
 })
 
-function deferInitialSecondaryLoads() {
-  packsLoading.value = true
+function deferInitialSecondaryLoads(silent = false) {
   const run = () => {
-    void loadPacks({ force: true })
+    void loadPacks({ silent })
     void loadMarketAuthStatus()
   }
   if ('requestIdleCallback' in window) {
@@ -704,8 +737,15 @@ function deferInitialSecondaryLoads() {
 }
 
 onMounted(() => {
-  void loadStatus()
-  deferInitialSecondaryLoads()
+  const cache = restoreOverviewCache()
+  if (!cache.statusFresh) {
+    void loadStatus({ silent: Boolean(status.value) })
+  }
+  if (!cache.packsFresh) {
+    deferInitialSecondaryLoads(Boolean(cachedPacks))
+  } else {
+    void loadMarketAuthStatus()
+  }
 })
 </script>
 
