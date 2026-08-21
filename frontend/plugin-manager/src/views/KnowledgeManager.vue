@@ -37,15 +37,16 @@
                 </el-tag>
               </div>
             </template>
-            <dl>
-              <div><dt>{{ t('knowledge.entries') }}</dt><dd>{{ status.entries ?? 0 }}</dd></div>
-              <div><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
-              <div><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
+            <dl class="status-metrics">
+              <div class="status-metric"><dt>{{ t('knowledge.entries') }}</dt><dd>{{ status.entries ?? 0 }}</dd></div>
+              <div class="status-metric"><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
+              <div class="status-metric"><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
             </dl>
             <div class="source-list">
-              <el-tag v-for="source in status.sources || []" :key="source.tag" size="small" effect="plain">
-                {{ source.tag }} · {{ source.entries }}
-              </el-tag>
+              <span v-for="source in status.sources || []" :key="source.tag" class="source-chip" :title="source.tag">
+                <span class="source-chip__name">{{ displaySourceTag(source.tag) }}</span>
+                <span class="source-chip__count">{{ source.entries }}</span>
+              </span>
             </div>
           </el-card>
         </div>
@@ -149,13 +150,32 @@
 
       <el-tab-pane :label="t('knowledge.diagnostics')" name="diagnostics">
         <div class="table-shell">
-          <el-table :data="diagnostics" v-loading="diagnosticsLoading">
-            <el-table-column prop="timestamp" :label="t('knowledge.time')" width="210" />
-            <el-table-column prop="entry_title" :label="t('knowledge.term')" min-width="180" />
-            <el-table-column prop="match_mode" :label="t('knowledge.matchMode')" width="140" />
-            <el-table-column :label="t('knowledge.delivered')" width="100">
+          <el-table class="diagnostics-table" :data="diagnostics" v-loading="diagnosticsLoading">
+            <el-table-column :label="t('knowledge.time')" width="176">
               <template #default="scope">
-                <el-tag :type="scope.row.card_delivered ? 'success' : 'info'">
+                <time class="diagnostic-time" :datetime="scope.row.timestamp">
+                  <span class="diagnostic-time__date">{{ formatDiagnosticDate(scope.row.timestamp) }}</span>
+                  <span class="diagnostic-time__clock">{{ formatDiagnosticTime(scope.row.timestamp) }}</span>
+                </time>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('knowledge.term')" min-width="280">
+              <template #default="scope">
+                <span class="diagnostic-term" :class="{ 'is-empty': !scope.row.entry_title }">
+                  {{ scope.row.entry_title || t('common.nA') }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('knowledge.matchMode')" width="180">
+              <template #default="scope">
+                <el-tag class="match-mode-tag" :type="diagnosticMatchTagType(scope.row.match_mode)" effect="plain">
+                  {{ displayMatchMode(scope.row.match_mode) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('knowledge.delivered')" width="110" align="center">
+              <template #default="scope">
+                <el-tag class="delivered-tag" :type="scope.row.card_delivered ? 'success' : 'info'" effect="plain">
                   {{ scope.row.card_delivered ? t('knowledge.yes') : t('knowledge.no') }}
                 </el-tag>
               </template>
@@ -184,6 +204,7 @@ import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type Kn
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { openExternalUrl } from '@/utils/openExternal'
+import dayjs from 'dayjs'
 
 const { t } = useI18n()
 const {
@@ -327,6 +348,33 @@ function displayIndexValue(value: unknown): string {
   return text || t('common.nA')
 }
 
+function displaySourceTag(value: unknown): string {
+  return String(value ?? '').replace(/^source:/, '') || t('common.nA')
+}
+
+function formatDiagnosticDate(value: unknown): string {
+  const parsed = dayjs(String(value ?? ''))
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD') : t('common.nA')
+}
+
+function formatDiagnosticTime(value: unknown): string {
+  const parsed = dayjs(String(value ?? ''))
+  return parsed.isValid() ? parsed.format('HH:mm:ss') : ''
+}
+
+function displayMatchMode(value: unknown): string {
+  const text = String(value ?? '').trim()
+  if (!text) return t('common.nA')
+  return text.replace(/^automatic_/, '').replace(/_/g, ' ')
+}
+
+function diagnosticMatchTagType(value: unknown): 'success' | 'info' | 'warning' {
+  const text = String(value ?? '')
+  if (text.includes('hybrid')) return 'success'
+  if (text.includes('miss')) return 'info'
+  return 'warning'
+}
+
 async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
   try {
     await knowledgeApi.setPackIndexPolicy({
@@ -371,7 +419,7 @@ onMounted(() => {
   --knowledge-surface-muted: var(--el-fill-color-extra-light);
   --knowledge-line: var(--el-border-color-lighter);
   --knowledge-accent-soft: var(--el-color-primary-light-9);
-  padding: 24px;
+  padding: 24px 24px 72px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -545,17 +593,33 @@ onMounted(() => {
   padding: 18px;
 }
 
-dl {
+.status-metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 12px;
 }
 
-dl div {
-  padding: 12px;
+.status-metric {
+  position: relative;
+  padding: 16px;
   border: 0;
   border-radius: 8px;
-  background: var(--knowledge-surface-muted);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0)),
+    var(--knowledge-surface-muted);
+  overflow: hidden;
+}
+
+.status-metric::after {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--el-color-primary-light-5);
+  opacity: 0.58;
+  content: '';
 }
 
 dt {
@@ -565,9 +629,11 @@ dt {
 
 dd {
   margin: 4px 0 0;
-  font-size: 20px;
+  color: var(--el-text-color-primary);
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.15;
+  font-variant-numeric: tabular-nums;
 }
 
 .switch-row {
@@ -578,18 +644,42 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
-.source-list .el-tag {
-  max-width: min(260px, 100%);
-}
-
-.source-list :deep(.el-tag__content) {
+.source-chip {
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
+  max-width: min(300px, 100%);
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 7px;
+  background: var(--knowledge-surface);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+
+.source-chip__name {
+  min-width: 0;
+  padding: 0 9px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-chip__count {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-left: 1px solid var(--knowledge-line);
+  background: var(--knowledge-surface-muted);
+  color: var(--el-color-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .toolbar {
@@ -652,6 +742,63 @@ dd {
   color: var(--el-color-primary);
 }
 
+.diagnostics-table :deep(.el-table__row) {
+  height: 58px;
+}
+
+.diagnostics-table :deep(.el-table__cell) {
+  vertical-align: middle;
+}
+
+.diagnostic-time {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.diagnostic-time__date {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnostic-time__clock {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnostic-term {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-term.is-empty {
+  color: var(--el-text-color-placeholder);
+}
+
+.match-mode-tag,
+.delivered-tag {
+  max-width: 100%;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.match-mode-tag :deep(.el-tag__content) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pager {
   justify-content: flex-end;
   margin-top: 14px;
@@ -708,7 +855,7 @@ pre {
 
 @media (max-width: 640px) {
   .knowledge-manager {
-    padding: 16px;
+    padding: 16px 16px 72px;
   }
 
   .market-entry .el-alert,
@@ -731,7 +878,7 @@ pre {
     padding: 14px;
   }
 
-  dl {
+  .status-metrics {
     grid-template-columns: 1fr;
   }
 
