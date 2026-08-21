@@ -56,7 +56,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
 
     from .diagnostics import record_knowledge_index_batch
-    from .moegirl_knowledge.store import MoegirlKnowledgeStore
+    from .store import KnowledgeStore
     from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
     from .service import KnowledgeService
     from .vector_index import index_embedding_batch
@@ -78,7 +78,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     while True:
         database_path = service.database_path()
         stores = (
-            [MoegirlKnowledgeStore(database_path)] if database_path.is_file() else []
+            [KnowledgeStore(database_path)] if database_path.is_file() else []
         )
         backlog = False
         try:

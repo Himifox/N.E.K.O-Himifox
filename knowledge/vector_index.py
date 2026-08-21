@@ -21,13 +21,13 @@ from utils.local_embedding_runtime import (
 
 from ._mutation_lock import mutation_lock
 from .chunking import knowledge_query_embedding_text
-from .moegirl_knowledge.catalog_overrides import (
+from .catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .moegirl_knowledge.models import MoegirlKnowledgeHit
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .models import KnowledgeHit
+from .store import KnowledgeStore
 
 
 logger = logging.getLogger("N.E.K.O.Knowledge.VectorIndex")
@@ -208,7 +208,7 @@ def _database_identity(path: Path) -> tuple[int, int, int, int] | tuple[()]:
 
 
 def _load_snapshot(
-    store: MoegirlKnowledgeStore, status: LocalEmbeddingStatus
+    store: KnowledgeStore, status: LocalEmbeddingStatus
 ) -> VectorIndexSnapshot:
     revision = store.chunks_revision()
     key = _cache_key(store.database_path)
@@ -271,10 +271,10 @@ def _score_snapshot(
     snapshot: VectorIndexSnapshot,
     query_vector: list[float],
     *,
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     limit: int,
     allowed_source_tags: tuple[str, ...] | None,
-) -> list[MoegirlKnowledgeHit]:
+) -> list[KnowledgeHit]:
     if snapshot.matrix.size == 0:
         return []
     query = np.asarray(query_vector, dtype=np.float32).ravel()
@@ -296,7 +296,7 @@ def _score_snapshot(
     rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
     entries = store.load_entries_by_rowids(rowids)
     disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
-    best: dict[tuple[str, str], MoegirlKnowledgeHit] = {}
+    best: dict[tuple[str, str], KnowledgeHit] = {}
     for index in candidate_indices:
         score = float(scores[index])
         if score < SEMANTIC_THRESHOLD:
@@ -312,7 +312,7 @@ def _score_snapshot(
         ):
             continue
         key = entry_key(entry)
-        candidate = MoegirlKnowledgeHit(
+        candidate = KnowledgeHit(
             entry=entry,
             score=score,
             retrieval_modes=("semantic",),
@@ -331,12 +331,12 @@ def _score_snapshot(
 
 
 async def semantic_search(
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     query: str,
     *,
     limit: int = VECTOR_CANDIDATE_LIMIT,
     allowed_source_tags: tuple[str, ...] | None = None,
-) -> tuple[list[MoegirlKnowledgeHit], str]:
+) -> tuple[list[KnowledgeHit], str]:
     prepared = await prepare_semantic_query(query, stores=(store,))
     return await semantic_search_prepared(
         store,
@@ -349,7 +349,7 @@ async def semantic_search(
 async def prepare_semantic_query(
     query: str,
     *,
-    stores: tuple[MoegirlKnowledgeStore, ...],
+    stores: tuple[KnowledgeStore, ...],
 ) -> SemanticQueryEmbedding:
     """Encode one query at most once for the requested public-knowledge scan."""
     empty_status = LocalEmbeddingStatus(state="not_ready")
@@ -393,12 +393,12 @@ async def prepare_semantic_query(
 
 
 async def semantic_search_prepared(
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     prepared: SemanticQueryEmbedding,
     *,
     limit: int = VECTOR_CANDIDATE_LIMIT,
     allowed_source_tags: tuple[str, ...] | None = None,
-) -> tuple[list[MoegirlKnowledgeHit], str]:
+) -> tuple[list[KnowledgeHit], str]:
     """Scan the public-knowledge index with an encoded request-scoped query."""
     if prepared.state != "ready" or prepared.vector is None:
         return [], prepared.state
@@ -418,7 +418,7 @@ async def semantic_search_prepared(
 
 
 async def index_embedding_batch(
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     *,
     batch_size: int = DEFAULT_EMBEDDING_MICROBATCH_SIZE,
     load_model: bool = False,

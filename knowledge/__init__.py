@@ -1,10 +1,19 @@
-"""Local public knowledge, strictly separate from user and character memory."""
+"""Local knowledge, strictly separate from user and character memory."""
 
-from .api import KnowledgeEntry, KnowledgeService, KnowledgeTurnContext, open_knowledge
+from .api import (
+    KnowledgeEntry,
+    KnowledgeRetriever,
+    KnowledgeService,
+    KnowledgeStore,
+    KnowledgeTurnContext,
+    open_knowledge,
+)
 
 __all__ = [
     "KnowledgeEntry",
+    "KnowledgeRetriever",
     "KnowledgeService",
+    "KnowledgeStore",
     "KnowledgeTurnContext",
     "open_knowledge",
 ]

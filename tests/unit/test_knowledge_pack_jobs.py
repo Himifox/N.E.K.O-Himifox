@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
+from knowledge.store import KnowledgeStore
 from knowledge.pack_jobs import cancel_pack_job, process_pack_jobs
 from knowledge.pack_jobs import _pack_payload
 from knowledge.packs import validate_pack
@@ -127,7 +127,7 @@ async def test_ready_vectors_are_transferred_during_hybrid_activation(
     )
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
-    status = MoegirlKnowledgeStore(service.database_path()).chunk_status()
+    status = KnowledgeStore(service.database_path()).chunk_status()
 
     assert result["state"] == "ready_hybrid"
     assert status["chunks_ready"] == status["chunks_total"] == 1

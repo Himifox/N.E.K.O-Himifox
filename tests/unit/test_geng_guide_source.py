@@ -1,4 +1,4 @@
-from knowledge.moegirl_knowledge.sources.geng_guide import load_geng_guide_markdown
+from knowledge.importers.geng_guide import load_geng_guide_markdown
 
 
 def test_geng_guide_import_keeps_summary_highlights_and_tags_but_not_questions():

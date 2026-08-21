@@ -1,7 +1,7 @@
 """Calibrate semantic knowledge retrieval with the optional local ONNX model.
 
-The evaluator opens the unified public-knowledge SQLite database in read-only
-mode. It never constructs ``MoegirlKnowledgeStore`` and therefore
+The evaluator opens the unified knowledge SQLite database in read-only
+mode. It never constructs ``KnowledgeStore`` and therefore
 cannot create tables, migrate metadata, or rebuild vectors.
 """
 
@@ -26,7 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 DEFAULT_CASES = (
     PROJECT_ROOT / "tests" / "fixtures" / "knowledge_hybrid_real_model_cases.json"
 )
-KNOWLEDGE_DATABASE = Path("public-knowledge") / "knowledge.db"
+KNOWLEDGE_DATABASE = Path("knowledge.db")
 REQUIRED_INPUT_VERSION = "2"
 QUERY_BATCH_SIZE = 4
 
@@ -50,7 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--knowledge-root",
         type=Path,
         required=True,
-        help="knowledge directory containing public-knowledge/knowledge.db",
+        help="knowledge directory containing knowledge.db",
     )
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--output", type=Path)

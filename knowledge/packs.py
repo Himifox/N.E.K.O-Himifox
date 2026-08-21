@@ -13,12 +13,12 @@ from utils.file_utils import atomic_write_json
 
 from ._mutation_lock import mutation_lock
 from .chunking import derive_knowledge_chunks
-from .moegirl_knowledge.filters import sanitize_external_text
-from .moegirl_knowledge.models import (
-    MoegirlKnowledgeEntry,
+from .filters import sanitize_external_text
+from .models import (
+    KnowledgeEntry,
     normalize_knowledge_title,
 )
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .store import KnowledgeStore
 
 
 PACK_SCHEMA_VERSION = 3
@@ -45,7 +45,7 @@ class KnowledgePack:
     pack_id: str
     material_type: str
     source: KnowledgePackSource
-    entries: tuple[MoegirlKnowledgeEntry, ...]
+    entries: tuple[KnowledgeEntry, ...]
 
     @property
     def source_tag(self) -> str:
@@ -136,7 +136,7 @@ def validate_pack(payload: object) -> KnowledgePack:
     if len(rows) > MAX_PACK_ENTRIES:
         raise ValueError("knowledge pack contains too many entries")
     source_tag = f"source:community.{pack_id}"
-    entries: list[MoegirlKnowledgeEntry] = []
+    entries: list[KnowledgeEntry] = []
     seen_titles: set[str] = set()
     for index, row in enumerate(rows):
         entry = _entry_from_payload(row, source_tag=source_tag, index=index)
@@ -207,7 +207,7 @@ def install_pack(
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
-        store = MoegirlKnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
         old_entries = tuple(
             entry
             for entry in store.list_active_entries()
@@ -275,7 +275,7 @@ def list_installed_packs(database_path: str | Path) -> tuple[dict[str, Any], ...
     packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
     if not isinstance(packs, dict):
         return ()
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     items: list[dict[str, Any]] = []
     for pack_id, value in sorted(packs.items()):
         if not isinstance(value, dict):
@@ -311,7 +311,7 @@ def migrate_legacy_pack_index_policies(database_path: str | Path) -> int:
     packs = registry.get("packs")
     if not isinstance(packs, dict):
         return 0
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     changed = 0
     with mutation_lock(registry_path):
         for pack_id, metadata in tuple(packs.items()):
@@ -411,7 +411,7 @@ def set_pack_index_policy(
         if not source_tag.startswith("source:community."):
             raise ValueError("only community packs have an index policy")
         policy = "local" if local_embedding_enabled else "prebuilt_only"
-        store = MoegirlKnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
         store.set_source_embedding_policy(source_tag, policy)
         packs[pack_id] = {
             **metadata,
@@ -435,7 +435,7 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
         if not source_tag.startswith("source:community."):
             raise ValueError("only community packs can be removed")
 
-        store = MoegirlKnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
         old_entries = tuple(
             entry
             for entry in store.list_active_entries()
@@ -486,7 +486,7 @@ def _entry_from_payload(
     *,
     source_tag: str,
     index: int,
-) -> MoegirlKnowledgeEntry:
+) -> KnowledgeEntry:
     if not isinstance(payload, dict):
         raise ValueError(f"entries[{index}] must be an object")
     _reject_unknown_keys(
@@ -510,7 +510,7 @@ def _entry_from_payload(
         raise ValueError(f"entries[{index}].tags must be a string array")
     if any(tag.startswith("source:") for tag in tags):
         raise ValueError("community entries cannot declare source tags")
-    return MoegirlKnowledgeEntry(
+    return KnowledgeEntry(
         title=_required_text(payload.get("title"), f"entries[{index}].title", 500),
         terms=normalized_terms,
         tags=(source_tag, *tags),

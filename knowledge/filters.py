@@ -30,19 +30,6 @@ def normalize_search_text(value: str) -> str:
     return "".join(_FTS_TOKEN_RE.split(unicodedata.normalize("NFKC", str(value or "")).casefold()))
 
 
-def is_relevant_source_page(query: str, *, title: str, content: str) -> bool:
-    """Require the requested term to occur in a discovered public-source page.
-
-    MediaWiki's generator search can return weak or unrelated candidates.  The
-    synchronizer therefore treats search as discovery only, never as proof that
-    the result represents the requested meme.
-    """
-    normalized_query = normalize_search_text(query)
-    if len(normalized_query) < 2:
-        return False
-    return normalized_query in normalize_search_text(title) or normalized_query in normalize_search_text(content)
-
-
 def make_fts_query(value: str) -> str:
     """Build a conservative FTS5 query from user-supplied text.
 

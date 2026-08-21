@@ -11,13 +11,13 @@ from knowledge.chunking import (
     derive_knowledge_chunks,
     knowledge_query_embedding_text,
 )
-from knowledge.moegirl_knowledge import store as store_module
-from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry
-from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
+from knowledge import store as store_module
+from knowledge.models import KnowledgeEntry
+from knowledge.store import KnowledgeStore
 
 
 def _entry(*, content: str, tags=("source:test",), summary="summary"):
-    return MoegirlKnowledgeEntry(
+    return KnowledgeEntry(
         title="Hybrid retrieval",
         terms={"alias": ("hybrid",), "recognition": ("RAG",)},
         tags=tags,
@@ -91,7 +91,7 @@ def test_schema_v6_migration_keeps_fts_and_backfills_lazily(tmp_path):
     connection.commit()
     connection.close()
 
-    store = MoegirlKnowledgeStore(path)
+    store = KnowledgeStore(path)
     assert store.count() == 1
     assert store.query_fts('"Legacy"', limit=1)
     assert store.chunk_status()["entries_missing_chunks"] == 1
@@ -139,7 +139,7 @@ def test_schema_v6_to_v7_preserves_fts_and_ready_vectors(tmp_path):
     connection.commit()
     connection.close()
 
-    store = MoegirlKnowledgeStore(path)
+    store = KnowledgeStore(path)
 
     assert store.query_fts('"kept"', limit=1)
     with store._connection() as connection:
@@ -157,7 +157,7 @@ def test_schema_v6_to_v7_preserves_fts_and_ready_vectors(tmp_path):
 
 def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
     path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(path)
+    store = KnowledgeStore(path)
     store.upsert(_entry(content="The answer remains searchable."))
     with store._connection(writable=True) as connection:
         connection.execute(
@@ -175,7 +175,7 @@ def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
     # Force a fresh database-open initialization, as an existing v6 database
     # from before the input contract version key would experience on upgrade.
     store_module._INITIALIZED_DATABASES.pop(str(path.resolve()), None)
-    reopened = MoegirlKnowledgeStore(path)
+    reopened = KnowledgeStore(path)
 
     assert reopened.count() == 1
     assert reopened.query_fts('"answer"', limit=1)
@@ -202,12 +202,12 @@ def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
 
 def test_current_embedding_input_version_keeps_derived_chunks_on_reopen(tmp_path):
     path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(path)
+    store = KnowledgeStore(path)
     store.upsert(_entry(content="Current input contract."))
     before = store.chunk_status()
 
     store_module._INITIALIZED_DATABASES.pop(str(path.resolve()), None)
-    reopened = MoegirlKnowledgeStore(path)
+    reopened = KnowledgeStore(path)
     after = reopened.chunk_status()
 
     assert after["chunks_total"] == before["chunks_total"] == 1
@@ -215,7 +215,7 @@ def test_current_embedding_input_version_keeps_derived_chunks_on_reopen(tmp_path
 
 
 def test_tag_only_update_preserves_ready_embedding(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     original = _entry(content="same content")
     store.upsert(original)
     with store._connection(writable=True) as connection:
@@ -233,7 +233,7 @@ def test_tag_only_update_preserves_ready_embedding(tmp_path):
 
 
 def test_content_update_reuses_unchanged_chunks_and_deletes_orphans(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="# A\n\n" + "a" * 1_100 + "\n\n# B\n\n" + "b" * 1_100))
     with store._connection(writable=True) as connection:
         rows = connection.execute(
@@ -269,7 +269,7 @@ def test_content_update_reuses_unchanged_chunks_and_deletes_orphans(tmp_path):
 
 
 def test_source_deletion_invalidates_ready_vector_cache_revision(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="ready content"))
     before = store.chunks_revision()
 
@@ -279,7 +279,7 @@ def test_source_deletion_invalidates_ready_vector_cache_revision(tmp_path):
 
 
 def test_embedding_result_cannot_overwrite_a_changed_chunk(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="old text"))
     pending = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
 
@@ -299,7 +299,7 @@ def test_embedding_result_cannot_overwrite_a_changed_chunk(tmp_path):
 
 
 def test_model_change_marks_only_other_ready_vectors_stale(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="same content"))
     pending = store.pending_embedding_chunks(model_id="old-model", limit=1)[0]
     assert store.store_chunk_embedding(
@@ -317,7 +317,7 @@ def test_model_change_marks_only_other_ready_vectors_stale(tmp_path):
 
 
 def test_exhausted_embedding_failure_is_not_retried_forever(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="failure boundary"))
     pending = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
     with store._connection(writable=True) as connection:
@@ -336,7 +336,7 @@ def test_exhausted_embedding_failure_is_not_retried_forever(tmp_path):
 
 
 def test_failed_embedding_status_distinguishes_ready_and_waiting_retries(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))
     with store._connection(writable=True) as connection:
         rows = connection.execute(
@@ -361,7 +361,7 @@ def test_failed_embedding_status_distinguishes_ready_and_waiting_retries(tmp_pat
 
 
 def test_source_replacement_reuses_unchanged_vectors(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     original = _entry(content="same packaged content")
     store.replace_source("source:test", (original,))
     pending = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
@@ -380,7 +380,7 @@ def test_source_replacement_reuses_unchanged_vectors(tmp_path):
 
 
 def test_prebuilt_only_chunks_are_not_local_embedding_work(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     entry = _entry(content="prebuilt content")
 
     store.replace_source(
@@ -407,7 +407,7 @@ def test_prebuilt_only_chunks_are_not_local_embedding_work(tmp_path):
 
 
 def test_strict_embedding_batch_rolls_back_when_one_chunk_is_stale(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))
     with store._connection() as connection:
         rows = connection.execute(

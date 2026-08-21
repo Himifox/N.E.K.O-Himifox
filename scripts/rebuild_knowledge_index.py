@@ -1,4 +1,4 @@
-"""Inspect or rebuild the local public-knowledge vector index.
+"""Inspect or rebuild the local knowledge vector index.
 
 Status and dry-run modes open SQLite databases read-only and never migrate
 them.  Rebuild modes use the knowledge-owned local embedding runtime; they do
@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-KNOWLEDGE_DATABASE = Path("public-knowledge") / "knowledge.db"
+KNOWLEDGE_DATABASE = Path("knowledge.db")
 DEFAULT_BATCH_SIZE = 4
 EMBEDDING_MICROBATCH_SIZE = 4
 
@@ -356,7 +356,7 @@ def inspect_pack_jobs(root: Path) -> list[dict[str, Any]]:
 def _count_derived_chunks(database_path: Path) -> tuple[int, int]:
     """Count valid entries and deterministic v1 chunks using read-only data."""
     from knowledge.chunking import derive_knowledge_chunks
-    from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry
+    from knowledge.models import KnowledgeEntry
 
     if not database_path.is_file():
         return 0, 0
@@ -377,7 +377,7 @@ def _count_derived_chunks(database_path: Path) -> tuple[int, int]:
                 "ORDER BY rowid"
             ):
                 try:
-                    entry = MoegirlKnowledgeEntry(
+                    entry = KnowledgeEntry(
                         title=str(row["title"]),
                         terms=json.loads(str(row["terms"])),
                         tags=tuple(json.loads(str(row["tags"]))),
@@ -522,14 +522,14 @@ async def rebuild_target(
     batch_size: int,
 ) -> tuple[dict[str, Any], bool]:
     """Reconcile chunks and generate all currently eligible embeddings."""
-    from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
+    from knowledge.store import KnowledgeStore
     from utils.local_embedding_runtime import get_local_embedding_status
 
     before = inspect_database(target.database_path)
     if not target.database_path.is_file():
         return {**before, "action": "skipped", "reason": "database_missing"}, True
 
-    store = MoegirlKnowledgeStore(target.database_path)
+    store = KnowledgeStore(target.database_path)
     reset_chunks = store.reset_chunk_index(full=True) if full else 0
     backfilled_entries = await asyncio.to_thread(
         _backfill_all,

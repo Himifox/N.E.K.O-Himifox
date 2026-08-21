@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from knowledge.moegirl_knowledge.models import MoegirlKnowledgeEntry
+from knowledge.models import KnowledgeEntry
 
 
 FIXTURE = (
@@ -15,7 +15,7 @@ FIXTURE = (
 
 def test_hybrid_retrieval_eval_fixture_covers_quality_boundaries():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    entries = tuple(MoegirlKnowledgeEntry(**row) for row in payload["entries"])
+    entries = tuple(KnowledgeEntry(**row) for row in payload["entries"])
     kinds = {case["kind"] for case in payload["queries"]}
 
     assert payload["schema_version"] == 1

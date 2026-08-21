@@ -140,7 +140,7 @@ async def test_ephemeral_instruction_is_not_added_when_transcript_callback_fails
 
 @pytest.mark.asyncio
 async def test_companion_chat_public_knowledge_tool_is_sample_only(monkeypatch):
-    import main_logic.moegirl_knowledge_tool as knowledge_tool
+    import main_logic.knowledge_context as knowledge_tool
     from main_logic.tool_calling import ToolRegistry
 
     captured = {}
@@ -170,7 +170,7 @@ async def test_companion_chat_public_knowledge_tool_is_sample_only(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypatch):
-    import main_logic.moegirl_knowledge_tool as knowledge_tool
+    import main_logic.knowledge_context as knowledge_tool
     from knowledge.service import KnowledgeTurnContext
 
     received = []

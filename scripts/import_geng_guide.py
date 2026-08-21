@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from knowledge.moegirl_knowledge.sources.geng_guide import load_geng_guide_markdown
-from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
+from knowledge.importers.geng_guide import load_geng_guide_markdown
+from knowledge.store import KnowledgeStore
 
 
 def main() -> None:
@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument("--database", type=Path, required=True)
     args = parser.parse_args()
     entries = load_geng_guide_markdown(args.input.read_bytes())
-    results = MoegirlKnowledgeStore(args.database).replace_source("source:geng-guide", entries)
+    results = KnowledgeStore(args.database).replace_source("source:geng-guide", entries)
     print(
         f"entries={len(entries)} added={sum(item.created for item in results)} "
         f"updated={sum(item.updated for item in results)} unchanged={sum(item.unchanged for item in results)}"

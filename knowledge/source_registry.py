@@ -15,21 +15,19 @@ class KnowledgeSource:
     name: str
     homepage: str
     license: str
-    supports_sync: bool
     material_type: str = "knowledge"
 
 
 SOURCES: dict[str, KnowledgeSource] = {
-    "source:chime": KnowledgeSource("source:chime", "CHIME", "https://github.com/yuboxie/chime", "MIT", False),
-    "source:geng-guide": KnowledgeSource("source:geng-guide", "梗指南", "local-import://geng-guide-output.md", "User-provided export; license not stated", False),
-    "source:moegirl": KnowledgeSource("source:moegirl", "萌娘百科", "https://zh.moegirl.org.cn/", "CC BY-NC-SA 3.0 CN", True),
-    "source:geng8": KnowledgeSource("source:geng8", "梗8", "https://www.geng8.com/", "Verify site terms before redistribution", True),
+    "source:chime": KnowledgeSource("source:chime", "CHIME", "https://github.com/yuboxie/chime", "MIT"),
+    "source:geng-guide": KnowledgeSource("source:geng-guide", "梗指南", "local-import://geng-guide-output.md", "User-provided export; license not stated"),
+    "source:moegirl": KnowledgeSource("source:moegirl", "萌娘百科", "https://zh.moegirl.org.cn/", "CC BY-NC-SA 3.0 CN"),
+    "source:geng8": KnowledgeSource("source:geng8", "梗8", "https://www.geng8.com/", "Verify site terms before redistribution"),
     "source:corpora": KnowledgeSource(
         "source:corpora",
         "Darius Kazemi's Corpora",
         "https://github.com/dariusk/corpora",
         "CC0 1.0",
-        False,
         "corpus",
     ),
 }
@@ -47,7 +45,7 @@ def get_source(
         source = _get_pack_source(tag, Path(database_path).with_name("packs.json"))
         if source is not None:
             return source
-    return KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown", False)
+    return KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown")
 
 
 def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
@@ -75,7 +73,6 @@ def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
                 str(source.get("license") or "Unknown"),
                 max_chars=500,
             ),
-            supports_sync=False,
             material_type=(
                 str(pack.get("effective_material_type"))
                 if pack.get("effective_material_type") in {"knowledge", "corpus"}

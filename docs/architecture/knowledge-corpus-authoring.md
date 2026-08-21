@@ -83,7 +83,7 @@ uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.n
 
 ```text
 导入 Schema v3 包
-  → 同一 public-knowledge/knowledge.db
+  → 同一 knowledge/knowledge.db
   → entries + FTS + knowledge_chunks
 
 普通聊天

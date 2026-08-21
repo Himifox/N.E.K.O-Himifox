@@ -7,11 +7,11 @@ import pytest
 
 import knowledge.vector_index as vector_index
 import knowledge.service as service_module
-from knowledge.moegirl_knowledge.models import (
-    MoegirlKnowledgeEntry,
-    MoegirlKnowledgeHit,
+from knowledge.models import (
+    KnowledgeEntry,
+    KnowledgeHit,
 )
-from knowledge.moegirl_knowledge.store import MoegirlKnowledgeStore
+from knowledge.store import KnowledgeStore
 from knowledge.service import KnowledgeService, _rrf_knowledge_hits
 from knowledge.packs import validate_pack
 from knowledge.vector_index import (
@@ -22,8 +22,8 @@ from knowledge.vector_index import (
 from utils.local_embedding_runtime import LocalEmbeddingStatus
 
 
-def _entry(title: str, *, source: str = "source:test") -> MoegirlKnowledgeEntry:
-    return MoegirlKnowledgeEntry(
+def _entry(title: str, *, source: str = "source:test") -> KnowledgeEntry:
+    return KnowledgeEntry(
         title=title,
         terms={"alias": (f"{title} alias",), "recognition": ()},
         tags=(source,),
@@ -39,8 +39,8 @@ def _hit(
     semantic: bool = False,
     source: str = "source:test",
     chunk_index: int | None = None,
-) -> MoegirlKnowledgeHit:
-    return MoegirlKnowledgeHit(
+) -> KnowledgeHit:
+    return KnowledgeHit(
         entry=_entry(title, source=source),
         score=score,
         retrieval_modes=("semantic",) if semantic else (),
@@ -111,7 +111,7 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     kept = _entry("Kept", source="source:allowed")
     disabled = _entry("Disabled", source="source:allowed")
     wrong_source = _entry("Wrong source", source="source:other")
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     for entry in (kept, disabled, wrong_source):
         store.upsert(entry)
     snapshot = VectorIndexSnapshot(
@@ -149,7 +149,7 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_semantic_search_uses_versioned_query_input(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     received: list[str] = []
 
     class _EmbeddingService:
@@ -171,7 +171,7 @@ async def test_semantic_search_does_not_overlap_background_inference(
     tmp_path,
     monkeypatch,
 ):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -209,7 +209,7 @@ async def test_query_soft_timeout_tracks_native_work_and_prevents_stacking(
     tmp_path,
     monkeypatch,
 ):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -255,7 +255,7 @@ async def test_query_soft_timeout_tracks_native_work_and_prevents_stacking(
 async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
     tmp_path, monkeypatch
 ):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     for index in range(12):
         store.upsert(_entry(f"Entry {index}"))
 
@@ -285,7 +285,7 @@ async def test_embedding_batch_does_not_touch_runtime_without_pending_work(
     tmp_path,
     monkeypatch,
 ):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     monkeypatch.setattr(
         vector_index,
         "get_local_embedding_service",
@@ -299,7 +299,7 @@ async def test_embedding_batch_does_not_touch_runtime_without_pending_work(
 
 @pytest.mark.asyncio
 async def test_slow_embedding_batch_is_stored_without_failure(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Slow but valid"))
 
     class _EmbeddingService:
@@ -322,7 +322,7 @@ async def test_slow_embedding_batch_is_stored_without_failure(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 async def test_embedding_exception_marks_selected_chunks_failed(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Broken inference"))
 
     class _EmbeddingService:
@@ -343,7 +343,7 @@ async def test_embedding_exception_marks_selected_chunks_failed(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_embedding_result_reports_stale_writeback(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Changing entry"))
     started = asyncio.Event()
     release = asyncio.Event()
@@ -359,7 +359,7 @@ async def test_embedding_result_reports_stale_writeback(tmp_path, monkeypatch):
     task = asyncio.create_task(vector_index.index_embedding_batch(store))
     await asyncio.wait_for(started.wait(), timeout=1.0)
     updated = _entry("Changing entry")
-    updated = MoegirlKnowledgeEntry(
+    updated = KnowledgeEntry(
         title=updated.title,
         terms=updated.terms,
         tags=updated.tags,
@@ -386,7 +386,7 @@ async def test_asearch_falls_back_to_bm25_for_embedding_failures(
     semantic_state,
 ):
     database_path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
     service = KnowledgeService.for_database(database_path)
 
@@ -411,7 +411,7 @@ async def test_asearch_soft_loads_not_ready_model_then_falls_back(
     tmp_path, monkeypatch
 ):
     database_path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
     chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
     store.store_chunk_embedding(
@@ -446,7 +446,7 @@ async def test_asearch_soft_loads_not_ready_model_then_falls_back(
 @pytest.mark.asyncio
 async def test_asearch_falls_back_to_bm25_for_corrupt_embedding(tmp_path, monkeypatch):
     database_path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
     service = KnowledgeService.for_database(database_path)
 
@@ -477,7 +477,7 @@ async def test_asearch_falls_back_to_bm25_for_corrupt_embedding(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_asearch_falls_back_to_bm25_when_embedding_raises(tmp_path, monkeypatch):
     database_path = tmp_path / "knowledge.db"
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     store.upsert(_entry("Fallback target"))
     service = KnowledgeService.for_database(database_path)
 
@@ -506,7 +506,7 @@ async def test_asearch_falls_back_to_bm25_when_embedding_raises(tmp_path, monkey
 
 
 def test_invalid_query_vector_is_safely_ignored(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Target"))
     snapshot = VectorIndexSnapshot(
         revision=1,
@@ -541,7 +541,7 @@ def test_invalid_query_vector_is_safely_ignored(tmp_path):
 @pytest.mark.asyncio
 async def test_non_numeric_embedding_response_falls_back_to_bm25(tmp_path, monkeypatch):
     database_path = tmp_path / "knowledge.db"
-    MoegirlKnowledgeStore(database_path).upsert(_entry("Fallback target"))
+    KnowledgeStore(database_path).upsert(_entry("Fallback target"))
     service = KnowledgeService.for_database(database_path)
 
     class _MalformedEmbeddingService:
@@ -569,7 +569,7 @@ async def test_non_numeric_embedding_response_falls_back_to_bm25(tmp_path, monke
 
 
 def test_semantic_threshold_rejects_weak_candidates(tmp_path):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Weak"))
     snapshot = VectorIndexSnapshot(
         revision=1,
@@ -592,7 +592,7 @@ def test_semantic_threshold_rejects_weak_candidates(tmp_path):
 
 
 def test_vector_snapshot_is_compact_and_reused(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Compact"))
     chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
     store.store_chunk_embedding(
@@ -624,7 +624,7 @@ def test_vector_snapshot_is_compact_and_reused(tmp_path, monkeypatch):
 
 
 def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch):
-    store = MoegirlKnowledgeStore(tmp_path / "knowledge.db")
+    store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Oversized"))
     chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
     store.store_chunk_embedding(
@@ -654,7 +654,7 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
     monkeypatch,
 ):
     service = KnowledgeService(tmp_path)
-    MoegirlKnowledgeStore(service.database_path()).upsert(
+    KnowledgeStore(service.database_path()).upsert(
         _entry("shared phrase knowledge", source="source:chime")
     )
     service.install_pack(

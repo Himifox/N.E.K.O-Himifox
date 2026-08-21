@@ -45,7 +45,7 @@ def normalize_terms(
 
 
 @dataclass(frozen=True, slots=True)
-class MoegirlKnowledgeEntry:
+class KnowledgeEntry:
     """A compact public knowledge card; never a user or character memory."""
 
     title: str
@@ -99,8 +99,8 @@ class MoegirlKnowledgeEntry:
 
 
 @dataclass(frozen=True, slots=True)
-class MoegirlKnowledgeHit:
-    entry: MoegirlKnowledgeEntry
+class KnowledgeHit:
+    entry: KnowledgeEntry
     score: float
     retrieval_modes: tuple[str, ...] = ()
     lexical_score: float | None = None

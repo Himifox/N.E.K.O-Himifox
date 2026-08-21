@@ -1,4 +1,4 @@
-"""Read-only retrieval over the local Moegirl knowledge database."""
+"""Read-only retrieval over the local knowledge database."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Iterable
 
 from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
 from .filters import make_fts_query, normalize_search_text
-from .models import MoegirlKnowledgeHit
-from .store import MoegirlKnowledgeStore, _entry_from_row
+from .models import KnowledgeHit
+from .store import KnowledgeStore, _entry_from_row
 
 
 _AUTO_MENTION_MIN_LENGTH = 3
@@ -82,7 +82,7 @@ class KnowledgeMentionMatcher:
         if not any(existing.content_hash == entry.content_hash for existing, _ in terminal):
             terminal.append((entry, len(phrase)))
 
-    def find(self, text: str, *, limit: int) -> list[MoegirlKnowledgeHit]:
+    def find(self, text: str, *, limit: int) -> list[KnowledgeHit]:
         if limit <= 0:
             return []
         best_by_id: dict[str, tuple[object, int]] = {}
@@ -99,16 +99,16 @@ class KnowledgeMentionMatcher:
                     if previous is None or length > previous[1]:
                         best_by_id[entry_key] = (entry, length)
         hits = [
-            MoegirlKnowledgeHit(entry=entry, score=float(length))
+            KnowledgeHit(entry=entry, score=float(length))
             for entry, length in best_by_id.values()
         ]
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
-class MoegirlKnowledgeRetriever:
+class KnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
 
-    def __init__(self, store: MoegirlKnowledgeStore) -> None:
+    def __init__(self, store: KnowledgeStore) -> None:
         self.store = store
 
     def search(
@@ -118,7 +118,7 @@ class MoegirlKnowledgeRetriever:
         limit: int = 3,
         allowed_source_tags: tuple[str, ...] | None = None,
         include_disabled: bool = False,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
             return []
@@ -148,7 +148,7 @@ class MoegirlKnowledgeRetriever:
                 get_catalog_override_path(self.store.database_path)
             )
         )
-        hits: list[MoegirlKnowledgeHit] = []
+        hits: list[KnowledgeHit] = []
         for row in rows_by_id.values():
             try:
                 entry = _entry_from_row(row)
@@ -159,7 +159,7 @@ class MoegirlKnowledgeRetriever:
             if entry_key(entry) in disabled:
                 continue
             score = _score(entry, query_text, float(row["rank"]) if "rank" in row.keys() else 0.0)
-            hits.append(MoegirlKnowledgeHit(entry=entry, score=score))
+            hits.append(KnowledgeHit(entry=entry, score=score))
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
@@ -169,14 +169,14 @@ class MoegirlKnowledgeRetriever:
         *,
         limit: int = 1,
         policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         """Find known phrases anywhere in a normal conversational sentence."""
         normalized_text = normalize_search_text(user_text)
         if len(normalized_text) < 2 or limit <= 0:
             return []
         matcher = _get_cached_mention_matcher(self.store, policy)
         results = matcher.find(normalized_text, limit=max(limit * 2, limit))
-        best_by_id: dict[str, MoegirlKnowledgeHit] = {}
+        best_by_id: dict[str, KnowledgeHit] = {}
         for hit in results:
             entry_key = hit.entry.content_hash
             previous = best_by_id.get(entry_key)
@@ -190,7 +190,7 @@ class MoegirlKnowledgeRetriever:
         *,
         policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
         limit: int = 1,
-    ) -> tuple[str, list[MoegirlKnowledgeHit]]:
+    ) -> tuple[str, list[KnowledgeHit]]:
         """Return explicit title, alias, or recognition-term matches."""
         strong = self.find_mentions(user_text, limit=limit, policy=policy)
         if strong:
@@ -208,7 +208,7 @@ _MENTION_MATCHER_CACHE: dict[tuple[str, MatchPolicy], _CachedMentionMatcher] = {
 
 
 def _get_cached_mention_matcher(
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
     policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
 ) -> KnowledgeMentionMatcher:
     """Refresh the per-database matcher only after a committed upsert batch."""
@@ -236,9 +236,6 @@ def _get_cached_mention_matcher(
         )
         _MENTION_MATCHER_CACHE[cache_key] = cached
     return cached.matcher
-
-
-KnowledgeRetriever = MoegirlKnowledgeRetriever
 
 
 def _score(entry, normalized_query: str, fts_rank: float) -> float:

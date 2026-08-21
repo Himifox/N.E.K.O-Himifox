@@ -481,7 +481,7 @@ class StreamingMixin:
                     # read a hidden scaffold prompt (e.g. avatar-drop file
                     # contents) the user never typed, mismatching the cadence
                     # signal and entering Focus on evidence the user didn't author.
-                    from main_logic.moegirl_knowledge_tool import (
+                    from main_logic.knowledge_context import (
                         build_public_knowledge_turn_context,
                     )
 

@@ -1,4 +1,4 @@
-"""One-time migration from the former split public-knowledge layout."""
+"""One-time migration from former knowledge database layouts."""
 
 from __future__ import annotations
 
@@ -14,23 +14,24 @@ from utils.file_utils import atomic_write_json
 
 from ._mutation_lock import mutation_lock
 from .chunking import derive_knowledge_chunks
-from .moegirl_knowledge.catalog_overrides import load_disabled_entries
-from .moegirl_knowledge.models import (
-    MoegirlKnowledgeEntry,
+from .catalog_overrides import load_disabled_entries
+from .models import (
+    KnowledgeEntry,
     normalize_knowledge_title,
 )
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .store import KnowledgeStore
 
 
-_LEGACY_DIRECTORIES = ("moegirl-knowledge", "corpora")
+_LEGACY_SPLIT_DIRECTORIES = ("moegirl-knowledge", "corpora")
+_LEGACY_UNIFIED_DIRECTORY = "public-knowledge"
 logger = logging.getLogger("N.E.K.O.Knowledge.Migration")
 
 
-def migrate_split_knowledge_layout(
+def migrate_legacy_knowledge_layout(
     knowledge_root: str | Path,
     destination_database: str | Path,
 ) -> bool:
-    """Merge old meme/corpora stores into the unified database exactly once.
+    """Move an old unified store or merge split stores exactly once.
 
     The legacy databases remain untouched and therefore serve as recovery
     copies.  A complete replacement database and its sidecars are assembled in
@@ -40,10 +41,15 @@ def migrate_split_knowledge_layout(
     destination = Path(destination_database)
     if destination.is_file():
         return False
-    legacy_databases = tuple(
-        path
-        for directory in _LEGACY_DIRECTORIES
-        if (path := root / directory / "knowledge.db").is_file()
+    old_unified = root / _LEGACY_UNIFIED_DIRECTORY / "knowledge.db"
+    legacy_databases = (
+        (old_unified,)
+        if old_unified.is_file()
+        else tuple(
+            path
+            for directory in _LEGACY_SPLIT_DIRECTORIES
+            if (path := root / directory / "knowledge.db").is_file()
+        )
     )
     if not legacy_databases:
         return False
@@ -51,10 +57,10 @@ def migrate_split_knowledge_layout(
     with mutation_lock(destination):
         if destination.is_file():
             return False
-        stage = Path(tempfile.mkdtemp(prefix=".public-knowledge-migration-", dir=root))
+        stage = Path(tempfile.mkdtemp(prefix=".knowledge-migration-", dir=root))
         try:
             staged_database = stage / "knowledge.db"
-            staged_store = MoegirlKnowledgeStore(staged_database)
+            staged_store = KnowledgeStore(staged_database)
             entries_by_source, policies, vectors = _collect_legacy_data(
                 legacy_databases
             )
@@ -88,7 +94,7 @@ def migrate_split_knowledge_layout(
             )
             if not staged_store.integrity_ok():
                 raise ValueError(
-                    "unified public knowledge migration failed integrity check"
+                    "unified knowledge migration failed integrity check"
                 )
 
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -112,16 +118,16 @@ def migrate_split_knowledge_layout(
 def _collect_legacy_data(
     databases: tuple[Path, ...],
 ) -> tuple[
-    dict[str, dict[str, MoegirlKnowledgeEntry]],
+    dict[str, dict[str, KnowledgeEntry]],
     dict[str, str],
     dict[str, dict[str, object]],
 ]:
-    entries_by_source: dict[str, dict[str, MoegirlKnowledgeEntry]] = defaultdict(dict)
+    entries_by_source: dict[str, dict[str, KnowledgeEntry]] = defaultdict(dict)
     entry_origins: dict[tuple[str, str], Path] = {}
     policy_votes: dict[str, set[str]] = defaultdict(set)
     vectors: dict[str, dict[str, object]] = {}
     for database in databases:
-        store = MoegirlKnowledgeStore(database)
+        store = KnowledgeStore(database)
         for entry in store.list_active_entries():
             normalized_title = normalize_knowledge_title(entry.title)
             identity = (entry.source_tag, normalized_title)
@@ -133,7 +139,7 @@ def _collect_legacy_data(
                 and previous_origin != database
             ):
                 raise ValueError(
-                    "legacy public knowledge contains conflicting source/title entries"
+                    "legacy knowledge contains conflicting source/title entries"
                 )
             if previous is not None and previous.content_hash != entry.content_hash:
                 logger.warning(
@@ -155,7 +161,7 @@ def _collect_legacy_data(
             chunk_id = str(record.get("chunk_id") or "")
             previous = vectors.get(chunk_id)
             if previous is not None and previous != record:
-                raise ValueError("legacy public knowledge contains conflicting vectors")
+                raise ValueError("legacy knowledge contains conflicting vectors")
             vectors[chunk_id] = record
 
     selected_chunk_ids = {
@@ -184,7 +190,7 @@ def _collect_legacy_data(
 
 def _merge_registries(
     databases: tuple[Path, ...],
-    store: MoegirlKnowledgeStore,
+    store: KnowledgeStore,
 ) -> dict[str, object]:
     merged: dict[str, dict[str, object]] = {}
     for database in databases:
@@ -223,7 +229,7 @@ def _merge_registries(
                     "source_tag"
                 ) or previous.get("subscription") != metadata.get("subscription"):
                     raise ValueError(
-                        "legacy public knowledge contains conflicting packs"
+                        "legacy knowledge contains conflicting packs"
                     )
                 if (
                     previous.get("effective_material_type") == "corpus"

@@ -9,19 +9,19 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 import unicodedata
-from .moegirl_knowledge.catalog_overrides import (
+from .catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,
 )
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry, MoegirlKnowledgeHit
-from .moegirl_knowledge.retrieval import (
+from .models import KnowledgeEntry, KnowledgeHit
+from .retrieval import (
     KNOWLEDGE_MATCH_POLICY,
     MatchPolicy,
-    MoegirlKnowledgeRetriever,
+    KnowledgeRetriever,
 )
-from .moegirl_knowledge.source_registry import SOURCES, get_source
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .source_registry import SOURCES, get_source
+from .store import KnowledgeStore
 from .routing import (
     KnowledgeRoutingState,
     RoutingConfig,
@@ -38,11 +38,11 @@ _KNOWLEDGE_RRF_K = 60
 
 
 def _rrf_knowledge_hits(
-    lexical: list[MoegirlKnowledgeHit],
-    semantic: list[MoegirlKnowledgeHit],
+    lexical: list[KnowledgeHit],
+    semantic: list[KnowledgeHit],
     *,
     limit: int,
-) -> list[MoegirlKnowledgeHit]:
+) -> list[KnowledgeHit]:
     """Fuse ranked entry lists without comparing incompatible raw scores."""
     records: dict[tuple[str, str], dict[str, object]] = {}
     for rank, hit in enumerate(lexical, start=1):
@@ -69,7 +69,7 @@ def _rrf_knowledge_hits(
             record["entry"].source_tag,
         ),
     )
-    results: list[MoegirlKnowledgeHit] = []
+    results: list[KnowledgeHit] = []
     for record in ordered[:limit]:
         modes = tuple(
             mode
@@ -80,7 +80,7 @@ def _rrf_knowledge_hits(
             if present
         )
         results.append(
-            MoegirlKnowledgeHit(
+            KnowledgeHit(
                 entry=record["entry"],
                 score=float(record["rrf"]),
                 retrieval_modes=modes,
@@ -99,14 +99,14 @@ def _rrf_knowledge_hits(
 
 
 def _search_lexical_candidates(
-    retriever: MoegirlKnowledgeRetriever,
+    retriever: KnowledgeRetriever,
     queries: tuple[str, ...],
     *,
     limit: int,
     allowed_source_tags: tuple[str, ...] | None,
-) -> list[MoegirlKnowledgeHit]:
+) -> list[KnowledgeHit]:
     """Merge deterministic BM25 candidates without generating extra embeddings."""
-    merged: dict[tuple[str, str], tuple[int, MoegirlKnowledgeHit]] = {}
+    merged: dict[tuple[str, str], tuple[int, KnowledgeHit]] = {}
     sequence = 0
     for query in queries:
         for hit in retriever.search(
@@ -148,7 +148,7 @@ class ResponsePolicy:
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeTurnMatch:
-    hit: MoegirlKnowledgeHit
+    hit: KnowledgeHit
     match_mode: str
 
 
@@ -166,7 +166,7 @@ class KnowledgeTurnContext:
 
 @dataclass(frozen=True, slots=True)
 class MaterialKnowledgeHit:
-    hit: MoegirlKnowledgeHit
+    hit: KnowledgeHit
     material_type: str
 
 
@@ -182,7 +182,7 @@ def _normalized_direct_text(value: str) -> str:
     return "".join(character for character in folded if character.isalnum())
 
 
-def _is_direct_material_match(query: str, entry: MoegirlKnowledgeEntry) -> bool:
+def _is_direct_material_match(query: str, entry: KnowledgeEntry) -> bool:
     normalized_query = _normalized_direct_text(query)
     if len(normalized_query) < 2:
         return False
@@ -202,7 +202,7 @@ def _is_direct_material_match(query: str, entry: MoegirlKnowledgeEntry) -> bool:
 
 def _is_short_query_embedded_in_term(
     query: str,
-    entry: MoegirlKnowledgeEntry,
+    entry: KnowledgeEntry,
 ) -> bool:
     """Recognize a short natural utterance inside a longer corpus title.
 
@@ -419,7 +419,7 @@ def get_reference_material(
 
 
 class KnowledgeService:
-    """Query, match and manage the single local public-knowledge store."""
+    """Query, match and manage the single local knowledge store."""
 
     def __init__(
         self,
@@ -431,12 +431,12 @@ class KnowledgeService:
         self._database_path = (
             Path(database_path)
             if database_path is not None
-            else self.knowledge_root / "public-knowledge" / "knowledge.db"
+            else self.knowledge_root / "knowledge.db"
         )
         if database_path is None:
-            from .legacy_layout import migrate_split_knowledge_layout
+            from .legacy_layout import migrate_legacy_knowledge_layout
 
-            migrate_split_knowledge_layout(self.knowledge_root, self._database_path)
+            migrate_legacy_knowledge_layout(self.knowledge_root, self._database_path)
         self._routing_state: KnowledgeRoutingState | None = None
         from .packs import migrate_legacy_pack_index_policies
 
@@ -457,7 +457,7 @@ class KnowledgeService:
     ) -> "KnowledgeService":
         database_path = Path(database_path)
         return cls(
-            database_path.parent.parent,
+            database_path.parent,
             database_path=database_path,
         )
 
@@ -466,7 +466,7 @@ class KnowledgeService:
         query: str,
         *,
         limit: int = 3,
-    ) -> list[MoegirlKnowledgeHit]:
+    ) -> list[KnowledgeHit]:
         return self._retriever().search(query, limit=limit)
 
     async def asearch(
@@ -682,7 +682,7 @@ class KnowledgeService:
         offset: int = 0,
         source_tag: str = "",
         include_disabled: bool = False,
-    ) -> tuple[MoegirlKnowledgeHit, ...]:
+    ) -> tuple[KnowledgeHit, ...]:
         """Return one bounded ranked page without loading the whole database."""
         limit = min(max(int(limit), 1), 100)
         offset = min(max(int(offset), 0), 10_000)
@@ -699,7 +699,7 @@ class KnowledgeService:
         sample_tag: str,
         *,
         limit: int = 1,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         """Return a small random selection from an approved material tag."""
         return self._sample_entries(sample_tag, limit=limit)
 
@@ -708,7 +708,7 @@ class KnowledgeService:
         sample_tag: str,
         *,
         limit: int,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         if sample_tag not in CORPORA_SAMPLE_TAGS:
             raise ValueError("sample tag is not enabled for public knowledge")
         limit = min(max(int(limit), 1), 3)
@@ -755,7 +755,7 @@ class KnowledgeService:
         if entry is None:
             return KnowledgeTurnContext()
         selected = KnowledgeTurnMatch(
-            hit=MoegirlKnowledgeHit(entry=entry, score=route_match.score),
+            hit=KnowledgeHit(entry=entry, score=route_match.score),
             match_mode=route_match.match_mode,
         )
         return KnowledgeTurnContext(
@@ -781,7 +781,7 @@ class KnowledgeService:
         source_tag: str = "",
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         return self._store().list_entries(
             source_tag=source_tag,
             limit=limit,
@@ -793,7 +793,7 @@ class KnowledgeService:
         *,
         source_tag: str,
         title: str,
-    ) -> MoegirlKnowledgeEntry | None:
+    ) -> KnowledgeEntry | None:
         return self._store().get_entry(source_tag, title)
 
     def set_entry_disabled(
@@ -1030,15 +1030,15 @@ class KnowledgeService:
     def database_path(self) -> Path:
         return self._database_path
 
-    def _store(self) -> MoegirlKnowledgeStore:
-        return MoegirlKnowledgeStore(self.database_path())
+    def _store(self) -> KnowledgeStore:
+        return KnowledgeStore(self.database_path())
 
-    def _retriever(self) -> MoegirlKnowledgeRetriever:
-        return MoegirlKnowledgeRetriever(self._store())
+    def _retriever(self) -> KnowledgeRetriever:
+        return KnowledgeRetriever(self._store())
 
     def material_type_for_entry(
         self,
-        entry: MoegirlKnowledgeEntry,
+        entry: KnowledgeEntry,
     ) -> str:
         return self._source_material_types(self._store()).get(
             entry.source_tag, "knowledge"
@@ -1046,7 +1046,7 @@ class KnowledgeService:
 
     def _source_material_types(
         self,
-        store: MoegirlKnowledgeStore,
+        store: KnowledgeStore,
     ) -> dict[str, str]:
         from .packs import list_installed_packs
 

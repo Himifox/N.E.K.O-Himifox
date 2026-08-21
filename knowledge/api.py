@@ -4,20 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .moegirl_knowledge.models import (
-    MoegirlKnowledgeEntry as KnowledgeEntry,
-    MoegirlKnowledgeHit as KnowledgeHit,
-    UpsertResult,
-)
-from .moegirl_knowledge.retrieval import (
+from .models import KnowledgeEntry, KnowledgeHit, UpsertResult
+from .retrieval import (
     KnowledgeMentionMatcher,
     KnowledgeRetriever,
     MatchPolicy,
 )
-from .moegirl_knowledge.store import (
-    KnowledgeStoreError,
-    MoegirlKnowledgeStore as KnowledgeStore,
-)
+from .store import KnowledgeStore, KnowledgeStoreError
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
 from .prebuilt_index import (
     MAX_PREBUILT_CHUNKS,

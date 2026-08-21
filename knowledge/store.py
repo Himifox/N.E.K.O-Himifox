@@ -18,7 +18,7 @@ from knowledge.chunking import (
     knowledge_embedding_text,
 )
 
-from .models import MoegirlKnowledgeEntry, UpsertResult
+from .models import KnowledgeEntry, UpsertResult
 
 
 SCHEMA_VERSION = 7
@@ -32,7 +32,7 @@ class KnowledgeStoreError(RuntimeError):
     pass
 
 
-class MoegirlKnowledgeStore:
+class KnowledgeStore:
     """Own a small rebuildable database without touching character memory."""
 
     def __init__(self, database_path: str | Path) -> None:
@@ -227,7 +227,7 @@ class MoegirlKnowledgeStore:
             )
             changed = True
         if changed:
-            MoegirlKnowledgeStore._increment_entries_revision(connection)
+            KnowledgeStore._increment_entries_revision(connection)
 
     def _migrate_legacy_entries(self, connection: sqlite3.Connection) -> None:
         """Copy the old attributed schema into a five-field table once.
@@ -266,7 +266,7 @@ class MoegirlKnowledgeStore:
             )
         connection.execute("DROP TABLE entries_legacy")
 
-    def upsert(self, entry: MoegirlKnowledgeEntry) -> UpsertResult:
+    def upsert(self, entry: KnowledgeEntry) -> UpsertResult:
         with self._connection(writable=True) as connection:
             result = self._upsert_with_connection(connection, entry)
             if not result.unchanged:
@@ -276,7 +276,7 @@ class MoegirlKnowledgeStore:
         return result
 
     def upsert_many(
-        self, entries: Sequence[MoegirlKnowledgeEntry]
+        self, entries: Sequence[KnowledgeEntry]
     ) -> tuple[UpsertResult, ...]:
         with self._connection(writable=True) as connection:
             results = tuple(
@@ -291,7 +291,7 @@ class MoegirlKnowledgeStore:
     def replace_source(
         self,
         source_tag: str,
-        entries: Sequence[MoegirlKnowledgeEntry],
+        entries: Sequence[KnowledgeEntry],
         *,
         embedding_policy: str = "local",
     ) -> tuple[UpsertResult, ...]:
@@ -353,13 +353,13 @@ class MoegirlKnowledgeStore:
         notify_knowledge_index_changed()
 
     @staticmethod
-    def _entry_key(entry: MoegirlKnowledgeEntry) -> str:
+    def _entry_key(entry: KnowledgeEntry) -> str:
         return f"{entry.source_tag}:{entry.title}"
 
     def _upsert_with_connection(
         self,
         connection: sqlite3.Connection,
-        entry: MoegirlKnowledgeEntry,
+        entry: KnowledgeEntry,
         *,
         embedding_policy: str = "local",
     ) -> UpsertResult:
@@ -407,7 +407,7 @@ class MoegirlKnowledgeStore:
     def _insert_with_connection(
         self,
         connection: sqlite3.Connection,
-        entry: MoegirlKnowledgeEntry,
+        entry: KnowledgeEntry,
         *,
         embedding_policy: str = "local",
     ) -> UpsertResult:
@@ -433,7 +433,7 @@ class MoegirlKnowledgeStore:
 
     @staticmethod
     def _replace_fts(
-        connection: sqlite3.Connection, rowid: int, entry: MoegirlKnowledgeEntry
+        connection: sqlite3.Connection, rowid: int, entry: KnowledgeEntry
     ) -> None:
         connection.execute("DELETE FROM entries_fts WHERE entry_rowid = ?", (rowid,))
         connection.execute(
@@ -453,7 +453,7 @@ class MoegirlKnowledgeStore:
         cls,
         connection: sqlite3.Connection,
         rowid: int,
-        entry: MoegirlKnowledgeEntry,
+        entry: KnowledgeEntry,
         *,
         embedding_policy: str = "local",
     ) -> bool:
@@ -1228,7 +1228,7 @@ class MoegirlKnowledgeStore:
     def load_entries_by_rowids(
         self,
         rowids: Sequence[int],
-    ) -> dict[int, MoegirlKnowledgeEntry]:
+    ) -> dict[int, KnowledgeEntry]:
         unique = tuple(dict.fromkeys(int(rowid) for rowid in rowids if int(rowid) > 0))
         if not unique:
             return {}
@@ -1243,7 +1243,7 @@ class MoegirlKnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return {}
 
-    def load_routing_entries(self) -> tuple[int, tuple[MoegirlKnowledgeEntry, ...]]:
+    def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:
         """Read the database revision and routeable cards in one transaction."""
         try:
             with self._connection() as connection:
@@ -1251,7 +1251,7 @@ class MoegirlKnowledgeStore:
                     "SELECT value FROM metadata WHERE key = 'entries_revision'"
                 ).fetchone()
                 revision = int(revision_row["value"]) if revision_row else 0
-                entries: list[MoegirlKnowledgeEntry] = []
+                entries: list[KnowledgeEntry] = []
                 for row in connection.execute(
                     "SELECT rowid, * FROM entries ORDER BY rowid"
                 ).fetchall():
@@ -1272,7 +1272,7 @@ class MoegirlKnowledgeStore:
         except KnowledgeStoreError:
             return False
 
-    def list_active_entries(self) -> tuple[MoegirlKnowledgeEntry, ...]:
+    def list_active_entries(self) -> tuple[KnowledgeEntry, ...]:
         try:
             with self._connection() as connection:
                 rows = connection.execute(
@@ -1282,7 +1282,7 @@ class MoegirlKnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
-    def get_entry(self, source_tag: str, title: str) -> MoegirlKnowledgeEntry | None:
+    def get_entry(self, source_tag: str, title: str) -> KnowledgeEntry | None:
         try:
             with self._connection() as connection:
                 row = connection.execute(
@@ -1300,7 +1300,7 @@ class MoegirlKnowledgeStore:
         source_tag: str = "",
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[MoegirlKnowledgeEntry, ...]:
+    ) -> tuple[KnowledgeEntry, ...]:
         limit = min(max(int(limit), 1), 100)
         offset = max(int(offset), 0)
         try:
@@ -1397,7 +1397,7 @@ class MoegirlKnowledgeStore:
             return ()
 
 
-def _terms_json(entry: MoegirlKnowledgeEntry) -> str:
+def _terms_json(entry: KnowledgeEntry) -> str:
     return json.dumps(
         {role: list(entry.terms[role]) for role in entry.terms}, ensure_ascii=False
     )
@@ -1414,7 +1414,7 @@ def _values_json(values: Sequence[str]) -> str:
     return json.dumps(tuple(values), ensure_ascii=False)
 
 
-def _terms_search_text(entry: MoegirlKnowledgeEntry) -> str:
+def _terms_search_text(entry: KnowledgeEntry) -> str:
     return " ".join(value for role in entry.terms.values() for value in role)
 
 
@@ -1427,9 +1427,9 @@ def _json_values(value: str) -> tuple[str, ...]:
     )
 
 
-def _entry_from_row(row: sqlite3.Row) -> MoegirlKnowledgeEntry:
+def _entry_from_row(row: sqlite3.Row) -> KnowledgeEntry:
     raw_terms = json.loads(row["terms"])
-    return MoegirlKnowledgeEntry(
+    return KnowledgeEntry(
         title=row["title"],
         terms=raw_terms if isinstance(raw_terms, dict) else {},
         tags=_json_values(row["tags"]),

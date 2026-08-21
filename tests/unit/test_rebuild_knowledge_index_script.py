@@ -196,8 +196,7 @@ def test_enable_local_pack_requires_rebuild_action(tmp_path: Path) -> None:
 def test_enable_local_pack_dry_run_locates_registry_without_mutating_it(
     tmp_path: Path,
 ) -> None:
-    database = tmp_path / "public-knowledge" / "knowledge.db"
-    database.parent.mkdir(parents=True)
+    database = tmp_path / "knowledge.db"
     registry = {
         "schema_version": 1,
         "packs": {

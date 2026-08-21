@@ -5,14 +5,14 @@ import json
 import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
-from knowledge.moegirl_knowledge.catalog_overrides import (
+from knowledge.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,
 )
 from knowledge.packs import validate_pack
 from knowledge.service import MaterialKnowledgeHit
-from knowledge.moegirl_knowledge.models import MoegirlKnowledgeHit
+from knowledge.models import KnowledgeHit
 
 
 def _entry(title: str, source: str, *tags: str) -> KnowledgeEntry:
@@ -51,7 +51,7 @@ def test_service_uses_one_database_and_searches_all_material_types(tmp_path):
     store.upsert(_entry("Knowledge fact", "source:chime"))
     store.upsert(_entry("Corpus sample", "source:corpora"))
 
-    assert service.database_path() == tmp_path / "public-knowledge" / "knowledge.db"
+    assert service.database_path() == tmp_path / "knowledge.db"
     assert service.search("Knowledge fact", limit=1)[0].entry.title == "Knowledge fact"
     assert service.search("Corpus sample", limit=1)[0].entry.title == "Corpus sample"
 
@@ -116,7 +116,7 @@ async def test_automatic_conversation_uses_corpus_without_magic_words(
         calls.append(kwargs)
         return [
             MaterialKnowledgeHit(
-                hit=MoegirlKnowledgeHit(
+                hit=KnowledgeHit(
                     entry=entry,
                     score=1.0,
                     retrieval_modes=("lexical",),
@@ -147,7 +147,7 @@ async def test_automatic_conversation_rejects_weak_semantic_corpus(
     async def _asearch(*_args, **_kwargs):
         return [
             MaterialKnowledgeHit(
-                hit=MoegirlKnowledgeHit(
+                hit=KnowledgeHit(
                     entry=entry,
                     score=0.69,
                     retrieval_modes=("semantic",),
@@ -175,7 +175,7 @@ async def test_short_natural_corpus_phrase_does_not_require_an_intent_command(
     async def _asearch(*_args, **_kwargs):
         return [
             MaterialKnowledgeHit(
-                hit=MoegirlKnowledgeHit(
+                hit=KnowledgeHit(
                     entry=entry,
                     score=0.62,
                     retrieval_modes=("lexical", "semantic"),
@@ -208,7 +208,7 @@ async def test_automatic_conversation_shares_one_search_for_knowledge_and_corpus
         calls += 1
         return [
             MaterialKnowledgeHit(
-                hit=MoegirlKnowledgeHit(
+                hit=KnowledgeHit(
                     entry=knowledge_entry,
                     score=1.0,
                     retrieval_modes=("lexical",),
@@ -217,7 +217,7 @@ async def test_automatic_conversation_shares_one_search_for_knowledge_and_corpus
                 material_type="knowledge",
             ),
             MaterialKnowledgeHit(
-                hit=MoegirlKnowledgeHit(
+                hit=KnowledgeHit(
                     entry=corpus_entry,
                     score=0.82,
                     retrieval_modes=("semantic",),
@@ -350,7 +350,22 @@ def test_split_layout_conflict_does_not_publish_partial_database(tmp_path):
     with pytest.raises(ValueError, match="conflicting source/title"):
         open_knowledge(tmp_path)
 
-    assert not (tmp_path / "public-knowledge" / "knowledge.db").exists()
+    assert not (tmp_path / "knowledge.db").exists()
+
+
+def test_previous_unified_layout_moves_to_flat_knowledge_root(tmp_path):
+    old_database = tmp_path / "public-knowledge" / "knowledge.db"
+    old_store = KnowledgeStore(old_database)
+    old_store.upsert(_entry("Previously unified", "source:chime"))
+
+    service = open_knowledge(tmp_path)
+
+    assert service.database_path() == tmp_path / "knowledge.db"
+    assert KnowledgeStore(service.database_path()).get_entry(
+        "source:chime",
+        "Previously unified",
+    ) is not None
+    assert old_database.is_file()
 
 
 def test_split_layout_keeps_later_same_database_title_conflict(tmp_path):

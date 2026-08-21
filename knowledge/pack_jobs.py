@@ -12,7 +12,7 @@ from typing import Any
 from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .store import KnowledgeStore
 from .packs import (
     KnowledgePack,
     ensure_install_capacity,
@@ -152,7 +152,7 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
 
     totals = {"entries_total": 0, "chunks_total": 0, "content_bytes": 0}
     database_path = service.database_path()
-    store = MoegirlKnowledgeStore(database_path)
+    store = KnowledgeStore(database_path)
     if database_path.is_file():
         usage = store.community_usage()
         for key in totals:
@@ -282,7 +282,7 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
         if state.get("state") in {"queued", "validating", "building_fts"}:
             state = _write_state(job_dir, state, state="building_fts")
             pack = _load_job_pack(job_dir)
-            staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
+            staging_store = KnowledgeStore(job_dir / "knowledge.db")
             staging_store.replace_source(
                 pack.source_tag,
                 pack.entries,
@@ -370,7 +370,7 @@ def _activate_job(
             _cleanup_payload(job_dir)
             return current
         pack = _load_job_pack(job_dir)
-        staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
+        staging_store = KnowledgeStore(job_dir / "knowledge.db")
         embeddings = staging_store.ready_embedding_records() if mode != "bm25" else ()
         result = install_pack(
             service.database_path(),
@@ -435,7 +435,7 @@ async def process_pack_jobs(
         if not state or state.get("state") in TERMINAL_STATES:
             return {"state": "no_work", "selected": 0, "stored": 0}
 
-        staging_store = MoegirlKnowledgeStore(job_dir / "knowledge.db")
+        staging_store = KnowledgeStore(job_dir / "knowledge.db")
         status = staging_store.chunk_status()
         total = int(status["chunks_total"])
         ready = int(status["chunks_ready"])

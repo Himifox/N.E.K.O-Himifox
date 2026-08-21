@@ -8,7 +8,7 @@ import time
 
 from config.prompts.prompts_sys import _loc
 from knowledge.api import open_knowledge
-from knowledge.moegirl_knowledge.source_registry import get_source
+from knowledge.source_registry import get_source
 from knowledge.service import (
     CORPUS_RESPONSE_POLICY,
     get_reference_material,

@@ -167,7 +167,7 @@ class ToolCallingMixin:
         )
         self.tool_registry.register(recall_tool, replace=True)
         try:
-            from main_logic.moegirl_knowledge_tool import register_public_knowledge_tool
+            from main_logic.knowledge_context import register_public_knowledge_tool
 
             # Ordinary lookup is resolved deterministically before the response,
             # so exposing lookup here would invite a redundant LLM tool round-trip.

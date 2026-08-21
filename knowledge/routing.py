@@ -10,15 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .moegirl_knowledge.catalog_overrides import (
+from .catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .moegirl_knowledge.filters import normalize_search_text
-from .moegirl_knowledge.models import MoegirlKnowledgeEntry
-from .moegirl_knowledge.retrieval import MatchPolicy
-from .moegirl_knowledge.store import MoegirlKnowledgeStore
+from .filters import normalize_search_text
+from .models import KnowledgeEntry
+from .retrieval import MatchPolicy
+from .store import KnowledgeStore
 
 
 _CARD_CACHE_LIMIT = 256
@@ -130,7 +130,7 @@ class KnowledgeRoutingState:
         self._dirty = True
         self._generation = 0
         self._cards: OrderedDict[
-            tuple[str, str, int], MoegirlKnowledgeEntry
+            tuple[str, str, int], KnowledgeEntry
         ] = OrderedDict()
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -192,7 +192,7 @@ class KnowledgeRoutingState:
                 snapshot = self._snapshot
         return snapshot.find(user_text) if snapshot is not None else None
 
-    def get_card(self, match: RouteMatch) -> MoegirlKnowledgeEntry | None:
+    def get_card(self, match: RouteMatch) -> KnowledgeEntry | None:
         record = match.record
         key = (*record.key, record.revision)
         with self._lock:
@@ -200,7 +200,7 @@ class KnowledgeRoutingState:
             if cached is not None:
                 self._cards.move_to_end(key)
                 return cached
-        entry = MoegirlKnowledgeStore(record.database_path).get_entry(
+        entry = KnowledgeStore(record.database_path).get_entry(
             record.source_tag,
             record.title,
         )
@@ -220,7 +220,7 @@ class KnowledgeRoutingState:
 
 
 def _load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
-    store = MoegirlKnowledgeStore(config.database_path)
+    store = KnowledgeStore(config.database_path)
     revision, entries = store.load_routing_entries()
     disabled = load_disabled_entries(get_catalog_override_path(config.database_path))
     records: list[RouteRecord] = []

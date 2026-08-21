@@ -14,12 +14,12 @@ from knowledge.diagnostics import (
     list_recent_knowledge_queries,
     list_recent_knowledge_routes,
 )
-from knowledge.moegirl_knowledge.catalog_overrides import (
+from knowledge.catalog_overrides import (
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
 )
-from knowledge.moegirl_knowledge.source_registry import get_source
+from knowledge.source_registry import get_source
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
 from knowledge.prebuilt_index import (
     MAX_PREBUILT_MANIFEST_BYTES,
