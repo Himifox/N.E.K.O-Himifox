@@ -86,28 +86,10 @@
           <el-button type="primary" @click="fileInput?.click()">{{ t('knowledge.importPack') }}</el-button>
         </div>
         <div class="table-shell">
-          <el-table :data="packs" v-loading="packsLoading">
-            <el-table-column prop="pack_id" :label="t('knowledge.packId')" min-width="180" />
-            <el-table-column :label="t('knowledge.materialType')" width="150">
+          <el-table class="packs-table" :data="packs" v-loading="packsLoading">
+            <el-table-column type="expand" width="40">
               <template #default="scope">
-                <el-select
-                  :model-value="scope.row.effective_material_type || 'knowledge'"
-                  @change="setPackMaterialType(scope.row, String($event))"
-                >
-                  <el-option label="knowledge" value="knowledge" />
-                  <el-option label="corpus" value="corpus" />
-                </el-select>
-              </template>
-            </el-table-column>
-            <el-table-column prop="entries" :label="t('knowledge.entries')" width="100" />
-            <el-table-column :label="t('knowledge.subscription')" min-width="200">
-              <template #default="scope">
-                {{ scope.row.subscription ? `${scope.row.subscription.provider} · ${scope.row.subscription.version}` : t('knowledge.localImport') }}
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('knowledge.indexStatus')" min-width="280">
-              <template #default="scope">
-                <dl class="index-status-list">
+                <dl class="index-status-list index-status-list--expanded">
                   <div><dt>{{ t('knowledge.indexOrigin') }}</dt><dd>{{ displayIndexValue(scope.row.index_origin) }}</dd></div>
                   <div><dt>{{ t('knowledge.indexTrust') }}</dt><dd>{{ displayIndexValue(scope.row.index_trust) }}</dd></div>
                   <div><dt>{{ t('knowledge.indexValidation') }}</dt><dd>{{ displayIndexValue(scope.row.index_validation) }}</dd></div>
@@ -119,7 +101,25 @@
                 </dl>
               </template>
             </el-table-column>
-            <el-table-column :label="t('knowledge.autoContext')" width="130">
+            <el-table-column prop="pack_id" :label="t('knowledge.packId')" width="160" show-overflow-tooltip />
+            <el-table-column :label="t('knowledge.materialType')" width="132">
+              <template #default="scope">
+                <el-select
+                  :model-value="scope.row.effective_material_type || 'knowledge'"
+                  @change="setPackMaterialType(scope.row, String($event))"
+                >
+                  <el-option label="knowledge" value="knowledge" />
+                  <el-option label="corpus" value="corpus" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column prop="entries" :label="t('knowledge.entries')" width="72" align="center" />
+            <el-table-column :label="t('knowledge.subscription')" width="150" show-overflow-tooltip>
+              <template #default="scope">
+                {{ scope.row.subscription ? `${scope.row.subscription.provider} · ${scope.row.subscription.version}` : t('knowledge.localImport') }}
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('knowledge.autoContext')" width="126" align="center">
               <template #default="scope">
                 <el-switch
                   :model-value="scope.row.auto_context === true"
@@ -127,7 +127,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column :label="t('knowledge.allowLocalEmbedding')" min-width="170">
+            <el-table-column :label="t('knowledge.allowLocalEmbedding')" width="145" align="center">
               <template #default="scope">
                 <el-tooltip :content="t('knowledge.indexPolicyHint')" placement="top">
                   <el-switch
@@ -138,7 +138,7 @@
                 </el-tooltip>
               </template>
             </el-table-column>
-            <el-table-column :label="t('knowledge.actions')" width="110">
+            <el-table-column :label="t('knowledge.actions')" width="82" align="center">
               <template #default="scope">
                 <el-button link type="danger" @click="removePack(scope.row)">{{ t('common.delete') }}</el-button>
               </template>
@@ -639,6 +639,19 @@ dd {
   color: var(--el-text-color-regular);
 }
 
+.packs-table :deep(.el-table__expanded-cell) {
+  padding: 14px 18px 16px 60px;
+  background: var(--knowledge-surface-muted);
+}
+
+.packs-table :deep(.el-table__expand-icon) {
+  color: var(--el-text-color-secondary);
+}
+
+.packs-table :deep(.el-table__expand-icon--expanded) {
+  color: var(--el-color-primary);
+}
+
 .pager {
   justify-content: flex-end;
   margin-top: 14px;
@@ -656,6 +669,11 @@ dd {
   grid-template-columns: 1fr;
   gap: 4px;
   margin: 0;
+}
+
+.index-status-list--expanded {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
 }
 
 .index-status-list div {
@@ -722,6 +740,14 @@ pre {
   .toolbar .el-button {
     width: 100%;
     max-width: none;
+  }
+
+  .packs-table :deep(.el-table__expanded-cell) {
+    padding: 12px;
+  }
+
+  .index-status-list--expanded {
+    grid-template-columns: 1fr;
   }
 
   .pager {
