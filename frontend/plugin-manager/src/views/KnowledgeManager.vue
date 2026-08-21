@@ -1401,7 +1401,7 @@ dd {
 
 :global(.knowledge-entry-drawer .el-drawer__header) {
   margin: 0;
-  padding: 20px 24px 16px;
+  padding: 30px 30px 22px;
   border-bottom: 1px solid var(--knowledge-line);
 }
 
@@ -1412,7 +1412,7 @@ dd {
 
 .entry-drawer-header {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -1443,14 +1443,20 @@ dd {
 
 .entry-drawer-body {
   display: grid;
-  gap: 16px;
-  padding: 22px 24px 32px;
+  gap: 18px;
+  padding: 28px 30px 42px;
 }
 
 .entry-detail-section {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0)),
+    var(--knowledge-surface-muted);
 }
 
 .entry-detail-section h3 {
@@ -1469,27 +1475,15 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.entry-detail-section--summary {
-  padding: 14px 16px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
-    var(--knowledge-surface-muted);
-}
-
 .term-groups {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .term-group {
   display: grid;
-  gap: 7px;
-  padding: 10px 12px;
-  border: 1px solid var(--knowledge-line);
-  border-radius: 8px;
-  background: var(--knowledge-surface-muted);
+  gap: 8px;
+  min-width: 0;
 }
 
 .term-group > span {
@@ -1535,10 +1529,11 @@ dd {
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: 12px;
-  border: 1px solid var(--knowledge-line);
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-extra-light);
   border-radius: 8px;
-  background: var(--knowledge-surface-muted);
+  background: var(--knowledge-surface);
 }
 
 @media (max-width: 640px) {
@@ -1547,11 +1542,16 @@ pre {
   }
 
   :global(.knowledge-entry-drawer .el-drawer__header) {
-    padding: 18px 18px 14px;
+    padding: 26px 18px 18px;
   }
 
   .entry-drawer-body {
-    padding: 18px 18px 28px;
+    gap: 14px;
+    padding: 22px 18px 32px;
+  }
+
+  .entry-detail-section {
+    padding: 14px;
   }
 
   .entry-drawer-header strong {
