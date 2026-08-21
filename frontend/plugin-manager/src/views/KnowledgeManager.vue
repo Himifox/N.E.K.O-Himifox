@@ -252,9 +252,9 @@
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="drawerOpen" class="knowledge-entry-drawer" size="520px">
-      <template #header>
-        <div v-if="selectedEntry" class="entry-drawer-header">
+    <div v-if="drawerOpen && selectedEntry" class="entry-detail-overlay" @click.self="closeEntryDetail">
+      <aside class="knowledge-entry-panel" role="dialog" aria-modal="true" :aria-label="selectedEntry?.title || t('knowledge.details')">
+        <header v-if="selectedEntry" class="entry-drawer-header">
           <strong :title="selectedEntry.title">{{ selectedEntry.title }}</strong>
           <div class="entry-drawer-meta">
             <el-tag effect="plain">{{ displaySourceTag(selectedEntry.source?.tag || selectedEntry.source?.name) }}</el-tag>
@@ -262,9 +262,9 @@
               {{ selectedEntry.disabled ? t('knowledge.disabledState') : t('knowledge.enabled') }}
             </el-tag>
           </div>
-        </div>
-      </template>
-      <template v-if="selectedEntry">
+          <button class="entry-panel-close" type="button" :aria-label="t('common.close')" @click="closeEntryDetail">×</button>
+        </header>
+
         <div class="entry-drawer-body">
           <section class="entry-detail-section entry-detail-section--summary">
             <h3>{{ t('knowledge.summary') }}</h3>
@@ -299,8 +299,8 @@
             <pre class="entry-content">{{ selectedEntry.content }}</pre>
           </section>
         </div>
-      </template>
-    </el-drawer>
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -498,6 +498,17 @@ async function refreshAll() {
   }
 }
 
+async function loadStatus() {
+  loading.value = true
+  try {
+    status.value = (await knowledgeApi.status()).status || null
+  } catch {
+    ElMessage.error(t('knowledge.loadFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function loadEntries(reset = false) {
   if (reset) offset.value = 0
   entriesLoading.value = true
@@ -515,6 +526,10 @@ async function openEntry(row: KnowledgeEntrySummary) {
   drawerOpen.value = Boolean(selectedEntry.value)
 }
 
+function closeEntryDetail() {
+  drawerOpen.value = false
+}
+
 async function toggleEntry(row: KnowledgeEntrySummary) {
   try {
     await knowledgeApi.setEntryDisabled({ source: row.source.tag, title: row.title, disabled: !row.disabled })
@@ -525,7 +540,8 @@ async function toggleEntry(row: KnowledgeEntrySummary) {
 function previousPage() { offset.value = Math.max(0, offset.value - pageSize); loadEntries() }
 function nextPage() { offset.value += pageSize; loadEntries() }
 
-async function loadPacks() {
+async function loadPacks(options: { force?: boolean } = {}) {
+  if (packsLoading.value && !options.force) return
   packsLoading.value = true
   try { packs.value = (await knowledgeApi.packs()).packs || [] }
   catch { ElMessage.error(t('knowledge.loadFailed')) }
@@ -545,7 +561,7 @@ async function importSelectedPack(event: Event) {
         ? t('knowledge.importQueued')
         : t('knowledge.importSuccess'),
     )
-    await Promise.all([refreshAll(), loadPacks()])
+    await refreshAll()
   } catch { ElMessage.error(t('knowledge.invalidPack')) }
 }
 
@@ -651,7 +667,7 @@ async function removePack(row: any) {
   try {
     await ElMessageBox.confirm(t('knowledge.removeConfirm', { name: row.pack_id }), t('common.warning'), { type: 'warning' })
     await knowledgeApi.removePack({ pack_id: row.pack_id })
-    await Promise.all([refreshAll(), loadPacks()])
+    await refreshAll()
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(t('knowledge.operationFailed'))
   }
@@ -678,8 +694,22 @@ watch(activeTab, (tab) => {
   if (tab === 'diagnostics') loadDiagnostics()
 })
 
+function deferInitialSecondaryLoads() {
+  packsLoading.value = true
+  const run = () => {
+    void loadPacks({ force: true })
+    void loadMarketAuthStatus()
+  }
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(run, { timeout: 1200 })
+    return
+  }
+  window.setTimeout(run, 120)
+}
+
 onMounted(() => {
-  void Promise.all([refreshAll(), loadMarketAuthStatus()])
+  void loadStatus()
+  deferInitialSecondaryLoads()
 })
 </script>
 
@@ -689,12 +719,14 @@ onMounted(() => {
   --knowledge-surface-muted: var(--el-fill-color-extra-light);
   --knowledge-line: var(--el-border-color-lighter);
   --knowledge-accent-soft: var(--el-color-primary-light-9);
+  position: relative;
   padding: 24px 24px 72px;
   display: flex;
   flex-direction: column;
   gap: 18px;
   width: 100%;
   min-width: 0;
+  overflow-x: clip;
 }
 
 .market-entry {
@@ -787,14 +819,17 @@ onMounted(() => {
 .knowledge-tabs :deep(.el-tabs__nav) {
   display: flex;
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: 8px;
   min-width: max-content;
 }
 
 .knowledge-tabs :deep(.el-tabs__item) {
   position: relative;
+  display: inline-flex;
+  justify-content: center;
+  width: 104px;
   height: 36px;
-  padding: 0 16px;
+  padding: 0 12px;
   border-radius: 7px;
   color: var(--el-text-color-regular);
   font-size: 14px;
@@ -1392,28 +1427,37 @@ dd {
   overflow-wrap: anywhere;
 }
 
-:global(.knowledge-entry-drawer) {
-  --knowledge-surface: var(--el-bg-color);
-  --knowledge-surface-muted: var(--el-fill-color-extra-light);
-  --knowledge-line: var(--el-border-color-lighter);
+.entry-detail-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: flex-end;
   min-width: 0;
+  padding: 10px 0 10px 12px;
+  background: linear-gradient(90deg, rgba(15, 23, 42, 0.42), rgba(15, 23, 42, 0.16));
 }
 
-:global(.knowledge-entry-drawer .el-drawer__header) {
-  margin: 0;
-  padding: 30px 30px 22px;
-  border-bottom: 1px solid var(--knowledge-line);
-}
-
-:global(.knowledge-entry-drawer .el-drawer__body) {
-  padding: 0;
-  color: var(--el-text-color-regular);
+.knowledge-entry-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, calc(100% - 56px));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--knowledge-line);
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
+  background: var(--knowledge-surface);
+  box-shadow: -12px 0 34px rgba(15, 23, 42, 0.14);
 }
 
 .entry-drawer-header {
+  position: relative;
   display: grid;
   gap: 12px;
   min-width: 0;
+  padding: 30px 68px 22px 30px;
+  border-bottom: 1px solid var(--knowledge-line);
 }
 
 .entry-drawer-header strong {
@@ -1444,7 +1488,35 @@ dd {
 .entry-drawer-body {
   display: grid;
   gap: 18px;
+  min-height: 0;
+  overflow: auto;
   padding: 28px 30px 42px;
+}
+
+.entry-panel-close {
+  position: absolute;
+  top: 26px;
+  right: 24px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.entry-panel-close:hover {
+  border-color: var(--knowledge-line);
+  background: var(--knowledge-surface-muted);
 }
 
 .entry-detail-section {
@@ -1537,12 +1609,23 @@ pre {
 }
 
 @media (max-width: 640px) {
-  :global(.knowledge-entry-drawer) {
-    width: min(100vw, 520px) !important;
+  .entry-detail-overlay {
+    padding: 0;
   }
 
-  :global(.knowledge-entry-drawer .el-drawer__header) {
-    padding: 26px 18px 18px;
+  .knowledge-entry-panel {
+    width: 100%;
+    border-radius: 0;
+    border-left: 0;
+  }
+
+  .entry-drawer-header {
+    padding: 26px 56px 18px 18px;
+  }
+
+  .entry-panel-close {
+    top: 20px;
+    right: 14px;
   }
 
   .entry-drawer-body {
@@ -1574,8 +1657,9 @@ pre {
   }
 
   .knowledge-tabs :deep(.el-tabs__item) {
+    width: 86px;
     height: 34px;
-    padding: 0 12px;
+    padding: 0 8px;
   }
 
   .knowledge-tabs :deep(.el-tabs__content) {
