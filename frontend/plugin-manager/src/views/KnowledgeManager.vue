@@ -557,9 +557,17 @@ async function removePack(row: any) {
 
 async function loadDiagnostics() {
   diagnosticsLoading.value = true
-  try { diagnostics.value = (await knowledgeApi.diagnostics()).items || [] }
+  try {
+    const items = (await knowledgeApi.diagnostics()).items || []
+    diagnostics.value = items.filter(hasDiagnosticEntry)
+  }
   catch { ElMessage.error(t('knowledge.loadFailed')) }
   finally { diagnosticsLoading.value = false }
+}
+
+function hasDiagnosticEntry(item: any): boolean {
+  const title = String(item?.entry_title ?? '').trim()
+  return Boolean(title) && title.toLowerCase() !== 'null'
 }
 
 watch(activeTab, (tab) => {
