@@ -317,6 +317,7 @@ import dayjs from 'dayjs'
 type KnowledgeStatusView = KnowledgeStatus & { status: 'ready' | 'degraded' }
 
 const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
+const KNOWLEDGE_OVERVIEW_CACHE_KEY = 'neko.pluginManager.knowledgeOverview'
 let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
 let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
 
@@ -495,6 +496,7 @@ async function refreshAll() {
       packs.value = packsResult.value.packs || []
       cachedPacks = { value: packs.value, loadedAt: Date.now() }
     }
+    writeOverviewCache()
     if (statusResult.status === 'rejected' || packsResult.status === 'rejected') {
       ElMessage.error(t('knowledge.loadFailed'))
     }
@@ -510,7 +512,35 @@ function isFresh(loadedAt: number): boolean {
   return Date.now() - loadedAt < KNOWLEDGE_OVERVIEW_CACHE_TTL_MS
 }
 
+function readOverviewCache() {
+  if (cachedStatus || cachedPacks) return
+  try {
+    const raw = window.sessionStorage.getItem(KNOWLEDGE_OVERVIEW_CACHE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (parsed?.status?.value && Number.isFinite(parsed.status.loadedAt)) {
+      cachedStatus = parsed.status
+    }
+    if (Array.isArray(parsed?.packs?.value) && Number.isFinite(parsed.packs.loadedAt)) {
+      cachedPacks = parsed.packs
+    }
+  } catch {
+    cachedStatus = null
+    cachedPacks = null
+  }
+}
+
+function writeOverviewCache() {
+  try {
+    window.sessionStorage.setItem(
+      KNOWLEDGE_OVERVIEW_CACHE_KEY,
+      JSON.stringify({ status: cachedStatus, packs: cachedPacks }),
+    )
+  } catch {}
+}
+
 function restoreOverviewCache(): { statusFresh: boolean; packsFresh: boolean } {
+  readOverviewCache()
   const statusFresh = cachedStatus ? isFresh(cachedStatus.loadedAt) : false
   const packsFresh = cachedPacks ? isFresh(cachedPacks.loadedAt) : false
   if (cachedStatus) status.value = cachedStatus.value
@@ -527,6 +557,7 @@ async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
   try {
     status.value = (await knowledgeApi.status()).status || null
     if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
+    writeOverviewCache()
   } catch {
     ElMessage.error(t('knowledge.loadFailed'))
   } finally {
@@ -571,6 +602,7 @@ async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
   try {
     packs.value = (await knowledgeApi.packs()).packs || []
     cachedPacks = { value: packs.value, loadedAt: Date.now() }
+    writeOverviewCache()
   }
   catch { ElMessage.error(t('knowledge.loadFailed')) }
   finally {
