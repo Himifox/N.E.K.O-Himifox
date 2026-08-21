@@ -95,7 +95,9 @@ they are not persisted or sent to a model. `[PASS]`, takeover, generation/TTS/
 frontend failure, empty pool, timeout, and degraded Core do not acknowledge a
 candidate. N.E.K.O remains the only user-visible speaker and never calls
 `core.chat()` in this product path. The embedded Core starts with
-`surface_copy_mode="lazy"`; background expression copy is disabled.
+`surface_copy_mode="lazy"`; background expression copy is disabled at the
+periodic pool drain and candidate/refresh fallback boundaries as well as at the
+coordinator owner.
 
 ## Agent event flow
 

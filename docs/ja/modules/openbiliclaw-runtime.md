@@ -44,7 +44,9 @@ mode に保って反復 request を止めます。analysis を有効にするに
 system 全体の model request が 1 回だけという意味ではありません。OpenBiliClaw は
 profile analysis と candidate evaluation の background work に同じ managed route を
 引き続き利用できます。embedded Core は lazy copy のため background
-`recommendation.write_expression` は 0 です。
+`recommendation.write_expression` は 0 です。固定された Core は periodic pool
+maintenance、candidate admission fallback、refresh completion fallback をすべて gate し、
+hot reload 後もこの境界を維持します。
 
 content embedding は OpenBiliClaw 側で独立して設定します。N.E.K.O の character
 memory vector とは schema と意味が異なるため、同じ store を共有しません。

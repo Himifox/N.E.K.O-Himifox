@@ -94,6 +94,7 @@ Tracking、URL、free-form expression、full profile、raw behavior は Phase 1/
 generation/TTS/frontend failure、empty/degraded/timeout は candidate を確認しません。
 N.E.K.O が唯一の user-visible speaker で、この経路は `core.chat()` を呼びません。
 embedded Core は `surface_copy_mode="lazy"` で background copy owner を起動しません。
+periodic pool maintenance と candidate/refresh fallback も同じ gate に従います。
 
 ## Agent イベントフロー
 

@@ -39,7 +39,8 @@ NEKO 自带的 `free-model` 公共服务只允许用户对话，不接受后台�
 
 “统一模型”表示 NEKO 统一管理路由、凭据与最终说话者，不表示整个系统只有一次模型
 请求。OpenBiliClaw 仍可在后台调用同一路由完成画像分析和候选评估；内嵌 Core 使用
-lazy copy，后台 `recommendation.write_expression` 为 0；
+lazy copy，后台 `recommendation.write_expression` 为 0；固定的 Core 提交会同时门禁
+周期池维护、候选入池 fallback 和 refresh 完成 fallback，并在热重载后继续生效；
 这些模块诊断 usage 不应再与 NEKO 总费用重复相加。
 
 内容向量仍由 OpenBiliClaw 独立配置。NEKO 的角色记忆向量与 OpenBiliClaw 的内容

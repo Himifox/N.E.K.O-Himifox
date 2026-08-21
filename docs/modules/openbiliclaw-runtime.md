@@ -49,6 +49,8 @@ that permits background use and restart N.E.K.O to enable analysis.
 model request for the entire system. OpenBiliClaw can still use the same managed
 route for background profile analysis and candidate evaluation. Embedded Core
 uses lazy surface copy, so background `recommendation.write_expression` is zero.
+The pinned Core enforces this at periodic pool maintenance and both
+candidate-admission and refresh-completion fallbacks, including after hot reload.
 Its own usage ledger remains module diagnostics and must not be added to
 N.E.K.O's total cost a second time.
 

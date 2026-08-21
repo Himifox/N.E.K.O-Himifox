@@ -171,6 +171,7 @@ async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
         assert "legacy-secret-never-survives" not in config_path.read_text(encoding="utf-8")
         assert core.config.llm.default_chain == ["neko-conversation"]
         assert core.context.surface_copy_mode == "lazy"
+        assert core.context.runtime_controller.background_expression_copy_enabled is False
         assert core.context.runtime_controller.expression_copy_coordinator is None
 
         await core.reload(raw)
@@ -178,6 +179,7 @@ async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
         assert core.config.llm.default_chain == ["neko-conversation"]
         assert set(core.config.llm.instances) == {"neko-conversation"}
         assert core.context.surface_copy_mode == "lazy"
+        assert core.context.runtime_controller.background_expression_copy_enabled is False
         assert core.context.runtime_controller.expression_copy_coordinator is None
     finally:
         await core.stop()

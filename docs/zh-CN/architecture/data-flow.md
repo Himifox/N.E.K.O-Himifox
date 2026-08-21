@@ -97,6 +97,7 @@ OpenBiliClaw 的后台画像与内容评估可以产生独立模型请求，但�
 `[PASS]`、抢占、发送失败、空池或降级都不会确认展示。完整 OpenBiliClaw 画像不会进入
 Phase 1/2 prompt；URL 和内部身份只由投递代码使用。内容向量库与 NEKO 角色记忆
 向量库也继续独立。内嵌 Core 固定使用 `surface_copy_mode="lazy"`，不会启动后台推荐文案 owner。
+周期池维护、候选入池和 refresh 完成后的 fallback 也受同一门禁约束。
 
 ## Agent 事件流
 
