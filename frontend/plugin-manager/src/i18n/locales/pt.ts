@@ -63,6 +63,7 @@ export default {
     delivered: 'Cartão enviado', yes: 'Sim', no: 'Não', terms: 'Termos', tags: 'Tags', content: 'Conteúdo',
     indexStatus: 'Índice vetorial', indexOrigin: 'Origem', indexTrust: 'Confiança', indexValidation: 'Validação', indexFallback: 'Modo alternativo',
     localEmbeddingState: 'Manutenção local', allowLocalEmbedding: 'Permitir manutenção local de vetores', enabled: 'Ativado', disabledState: 'Desativado',
+    packageStatus: 'Estado dos pacotes', sourceDistribution: 'Distribuição de fontes', inactivePacks: 'Desativados', needsAttention: 'Precisa de atenção', materialMix: 'Tipo de pacote', noPacks: 'Nenhum pacote',
     indexPolicyHint: 'Pode usar CPU e memória locais. Se desativado, usa BM25 quando o índice confiável não está disponível.',
     loadFailed: 'Falha ao carregar os dados', operationFailed: 'A operação falhou', importSuccess: 'Pacote importado', importQueued: 'O pacote está sendo preparado em segundo plano e aparecerá quando estiver pronto',
     invalidPack: 'Pacote inválido', removeConfirm: 'Remover o pacote {name}?'

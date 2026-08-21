@@ -42,12 +42,56 @@
               <div class="status-metric"><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
               <div class="status-metric"><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
             </dl>
-            <div class="source-list">
-              <span v-for="source in status.sources || []" :key="source.tag" class="source-chip" :title="source.tag">
-                <span class="source-chip__name">{{ displaySourceTag(source.tag) }}</span>
-                <span class="source-chip__count">{{ source.entries }}</span>
-              </span>
-            </div>
+            <section class="overview-section">
+              <div class="overview-section__heading">
+                <h3>{{ t('knowledge.packageStatus') }}</h3>
+              </div>
+              <div class="pack-runtime-grid" v-loading="packsLoading">
+                <div v-for="item in packRuntimeCards" :key="item.key" class="pack-runtime-card" :class="`is-${item.tone}`">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                  <small>{{ item.meta }}</small>
+                </div>
+              </div>
+              <div v-if="packs.length" class="overview-pack-list">
+                <div v-for="pack in packs" :key="pack.pack_id" class="overview-pack-row">
+                  <div class="overview-pack-row__identity">
+                    <strong :title="pack.pack_id">{{ pack.pack_id }}</strong>
+                    <span>{{ pack.entries ?? 0 }} {{ t('knowledge.entries') }}</span>
+                  </div>
+                  <div class="overview-pack-row__states">
+                    <div class="overview-state-cell is-info">
+                      <span>{{ t('knowledge.materialType') }}</span>
+                      <strong>{{ pack.effective_material_type || 'knowledge' }}</strong>
+                    </div>
+                    <div class="overview-state-cell" :class="pack.auto_context === true ? 'is-enabled' : 'is-disabled'">
+                      <span>{{ t('knowledge.autoContext') }}</span>
+                      <strong>{{ pack.auto_context === true ? t('knowledge.enabled') : t('knowledge.disabledState') }}</strong>
+                    </div>
+                    <div class="overview-state-cell" :class="pack.local_embedding_enabled === true ? 'is-enabled' : 'is-disabled'">
+                      <span>{{ t('knowledge.allowLocalEmbedding') }}</span>
+                      <strong>{{ pack.local_embedding_enabled === true ? t('knowledge.enabled') : t('knowledge.disabledState') }}</strong>
+                    </div>
+                    <div class="overview-state-cell" :class="packIndexStateClass(pack)">
+                      <span>{{ t('knowledge.indexValidation') }}</span>
+                      <strong>{{ displayIndexValue(pack.index_validation) }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <el-empty v-else :description="t('knowledge.noPacks')" :image-size="56" />
+            </section>
+            <section class="overview-section">
+              <div class="overview-section__heading">
+                <h3>{{ t('knowledge.sourceDistribution') }}</h3>
+              </div>
+              <div class="source-list">
+                <span v-for="source in status.sources || []" :key="source.tag" class="source-chip" :title="source.tag">
+                  <span class="source-chip__name">{{ displaySourceTag(source.tag) }}</span>
+                  <span class="source-chip__count">{{ source.entries }}</span>
+                </span>
+              </div>
+            </section>
           </el-card>
         </div>
       </el-tab-pane>
@@ -197,7 +241,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
@@ -229,6 +273,45 @@ const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const marketOpening = ref(false)
+
+const packRuntimeCards = computed(() => {
+  const total = packs.value.length
+  const autoEnabled = packs.value.filter((pack) => pack.auto_context === true).length
+  const localVectorEnabled = packs.value.filter((pack) => pack.local_embedding_enabled === true).length
+  const acceptedIndex = packs.value.filter((pack) => String(pack.index_validation || '') === 'accepted').length
+  const corpusPacks = packs.value.filter((pack) => pack.effective_material_type === 'corpus').length
+  const knowledgePacks = total - corpusPacks
+  return [
+    {
+      key: 'auto-context',
+      label: t('knowledge.autoContext'),
+      value: autoEnabled,
+      meta: `${t('knowledge.enabled')} ${autoEnabled} / ${t('knowledge.disabledState')} ${total - autoEnabled}`,
+      tone: autoEnabled > 0 ? 'success' : 'muted',
+    },
+    {
+      key: 'local-vector',
+      label: t('knowledge.allowLocalEmbedding'),
+      value: localVectorEnabled,
+      meta: `${t('knowledge.enabled')} ${localVectorEnabled} / ${t('knowledge.disabledState')} ${total - localVectorEnabled}`,
+      tone: localVectorEnabled > 0 ? 'success' : 'muted',
+    },
+    {
+      key: 'index-health',
+      label: t('knowledge.indexValidation'),
+      value: acceptedIndex,
+      meta: `accepted ${acceptedIndex} / ${t('knowledge.needsAttention')} ${Math.max(0, total - acceptedIndex)}`,
+      tone: total === acceptedIndex ? 'success' : 'warning',
+    },
+    {
+      key: 'material-mix',
+      label: t('knowledge.materialMix'),
+      value: total,
+      meta: `knowledge ${knowledgePacks} / corpus ${corpusPacks}`,
+      tone: 'info',
+    },
+  ] as const
+})
 
 function knowledgeEntryRowKey(row: KnowledgeEntrySummary): string {
   return JSON.stringify([
@@ -266,13 +349,26 @@ async function openKnowledgeMarket() {
 
 async function refreshAll() {
   loading.value = true
+  packsLoading.value = true
   try {
-    const response = await knowledgeApi.status()
-    status.value = response.status || null
+    const [statusResult, packsResult] = await Promise.allSettled([
+      knowledgeApi.status(),
+      knowledgeApi.packs(),
+    ])
+    if (statusResult.status === 'fulfilled') {
+      status.value = statusResult.value.status || null
+    }
+    if (packsResult.status === 'fulfilled') {
+      packs.value = packsResult.value.packs || []
+    }
+    if (statusResult.status === 'rejected' || packsResult.status === 'rejected') {
+      ElMessage.error(t('knowledge.loadFailed'))
+    }
   } catch {
     ElMessage.error(t('knowledge.loadFailed'))
   } finally {
     loading.value = false
+    packsLoading.value = false
   }
 }
 
@@ -373,6 +469,22 @@ function diagnosticMatchTagType(value: unknown): 'success' | 'info' | 'warning' 
   if (text.includes('hybrid')) return 'success'
   if (text.includes('miss')) return 'info'
   return 'warning'
+}
+
+function packIndexTagType(pack: KnowledgePackSummary): 'success' | 'info' | 'warning' | 'danger' {
+  const validation = String(pack.index_validation || '')
+  if (validation === 'accepted') return 'success'
+  if (validation === 'pending') return 'warning'
+  if (validation === 'rejected') return 'danger'
+  return 'info'
+}
+
+function packIndexStateClass(pack: KnowledgePackSummary): string {
+  const type = packIndexTagType(pack)
+  if (type === 'success') return 'is-enabled'
+  if (type === 'warning') return 'is-warning'
+  if (type === 'danger') return 'is-danger'
+  return 'is-info'
 }
 
 async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
@@ -647,6 +759,195 @@ dd {
   margin-top: 18px;
 }
 
+.overview-section {
+  margin-top: 20px;
+}
+
+.overview-section__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.overview-section__heading h3 {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pack-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.pack-runtime-card {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background: var(--knowledge-surface);
+}
+
+.pack-runtime-card::before {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--el-color-info-light-5);
+  content: '';
+}
+
+.pack-runtime-card.is-success::before {
+  background: var(--el-color-success);
+}
+
+.pack-runtime-card.is-warning::before {
+  background: var(--el-color-warning);
+}
+
+.pack-runtime-card.is-info::before {
+  background: var(--el-color-primary);
+}
+
+.pack-runtime-card span,
+.pack-runtime-card small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-runtime-card span {
+  padding-right: 16px;
+  font-size: 12px;
+}
+
+.pack-runtime-card strong {
+  color: var(--el-text-color-primary);
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-runtime-card small {
+  font-size: 12px;
+}
+
+.overview-pack-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.overview-pack-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background: var(--knowledge-surface-muted);
+}
+
+.overview-pack-row__identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.overview-pack-row__identity strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-pack-row__identity span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-pack-row__states {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(108px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.overview-state-cell {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px 9px 12px;
+  overflow: hidden;
+  border: 1px solid var(--knowledge-line);
+  border-left: 3px solid var(--el-color-info);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.overview-state-cell span,
+.overview-state-cell strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-state-cell span {
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+}
+
+.overview-state-cell strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.overview-state-cell.is-enabled {
+  border-left-color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+}
+
+.overview-state-cell.is-disabled {
+  border-left-color: var(--el-border-color-darker);
+  background: #fff;
+}
+
+.overview-state-cell.is-disabled strong {
+  color: var(--el-text-color-secondary);
+}
+
+.overview-state-cell.is-warning {
+  border-left-color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+
+.overview-state-cell.is-danger {
+  border-left-color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+}
+
+.overview-state-cell.is-info {
+  border-left-color: var(--el-color-primary);
+}
+
 .source-chip {
   display: inline-flex;
   align-items: center;
@@ -880,6 +1181,14 @@ pre {
 
   .status-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .overview-pack-row {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-pack-row__states {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .toolbar .el-input,

@@ -63,6 +63,7 @@ export default {
     delivered: 'Карточка передана', yes: 'Да', no: 'Нет', terms: 'Термины', tags: 'Теги', content: 'Содержимое',
     indexStatus: 'Векторный индекс', indexOrigin: 'Источник', indexTrust: 'Доверие', indexValidation: 'Проверка', indexFallback: 'Резервный режим',
     localEmbeddingState: 'Локальное обслуживание', allowLocalEmbedding: 'Разрешить локальное обслуживание векторов', enabled: 'Включено', disabledState: 'Отключено',
+    packageStatus: 'Состояние пакетов', sourceDistribution: 'Распределение источников', inactivePacks: 'Отключено', needsAttention: 'Требует внимания', materialMix: 'Тип пакета', noPacks: 'Нет пакетов знаний',
     indexPolicyHint: 'Может использовать локальные CPU и память. Если отключено, при недоступном доверенном индексе используется BM25.',
     loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован', importQueued: 'Пакет готовится в фоновом режиме и появится после завершения',
     invalidPack: 'Недопустимый пакет', removeConfirm: 'Удалить пакет {name}?'

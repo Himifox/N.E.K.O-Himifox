@@ -63,6 +63,7 @@ export default {
     delivered: '已递卡', yes: '是', no: '否', terms: '识别词', tags: '标签', content: '正文',
     indexStatus: '向量索引', indexOrigin: '索引来源', indexTrust: '信任状态', indexValidation: '校验状态', indexFallback: '降级方式',
     localEmbeddingState: '本机维护状态', allowLocalEmbedding: '允许本机维护向量', enabled: '已启用', disabledState: '已禁用',
+    packageStatus: '知识包运行态', sourceDistribution: '来源分布', inactivePacks: '关闭', needsAttention: '需关注', materialMix: '知识包类型', noPacks: '暂无知识包',
     indexPolicyHint: '可能占用本机 CPU 和内存；关闭后，可信索引不可用时将降级为 BM25。',
     loadFailed: '知识库数据加载失败', operationFailed: '知识库操作失败', importSuccess: '知识包导入成功', importQueued: '知识包正在后台静默处理，准备完成后会自动载入',
     invalidPack: '知识包格式无效', removeConfirm: '确定移除知识包 {name} 吗？'
