@@ -320,6 +320,8 @@ const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
 const KNOWLEDGE_OVERVIEW_CACHE_KEY = 'neko.pluginManager.knowledgeOverview'
 let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
 let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
+let overviewRefreshTimer: ReturnType<typeof window.setTimeout> | null = null
+let overviewRefreshInFlight: Promise<void> | null = null
 
 const { t } = useI18n()
 const {
@@ -548,6 +550,29 @@ function restoreOverviewCache(): { statusFresh: boolean; packsFresh: boolean } {
   return { statusFresh, packsFresh }
 }
 
+function markOverviewCacheStale() {
+  if (cachedStatus) cachedStatus = { ...cachedStatus, loadedAt: 0 }
+  if (cachedPacks) cachedPacks = { ...cachedPacks, loadedAt: 0 }
+  writeOverviewCache()
+}
+
+function refreshOverviewInBackground(delayMs = 0) {
+  markOverviewCacheStale()
+  if (overviewRefreshTimer) window.clearTimeout(overviewRefreshTimer)
+  overviewRefreshTimer = window.setTimeout(() => {
+    overviewRefreshTimer = null
+    const run = () => Promise.allSettled([
+      loadStatus({ force: true, silent: true }),
+      loadPacks({ force: true, silent: true }),
+    ]).then(() => {})
+    overviewRefreshInFlight = (overviewRefreshInFlight || Promise.resolve())
+      .then(run)
+      .finally(() => {
+        overviewRefreshInFlight = null
+      })
+  }, delayMs)
+}
+
 async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
   if (!options.force && cachedStatus && isFresh(cachedStatus.loadedAt)) {
     status.value = cachedStatus.value
@@ -586,6 +611,7 @@ async function toggleEntry(row: KnowledgeEntrySummary) {
   try {
     await knowledgeApi.setEntryDisabled({ source: row.source.tag, title: row.title, disabled: !row.disabled })
     row.disabled = !row.disabled
+    refreshOverviewInBackground()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -623,7 +649,7 @@ async function importSelectedPack(event: Event) {
         ? t('knowledge.importQueued')
         : t('knowledge.importSuccess'),
     )
-    await refreshAll()
+    refreshOverviewInBackground(response.state === 'queued' ? 1500 : 0)
   } catch { ElMessage.error(t('knowledge.invalidPack')) }
 }
 
@@ -631,6 +657,7 @@ async function setPackAuto(row: KnowledgePackSummary, enabled: boolean) {
   try {
     await knowledgeApi.setPackAutoContext({ pack_id: row.pack_id, enabled })
     row.auto_context = enabled
+    refreshOverviewInBackground()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -639,7 +666,7 @@ async function setPackMaterialType(row: KnowledgePackSummary, materialType: stri
     await knowledgeApi.setPackMaterialType({ pack_id: row.pack_id, material_type: materialType })
     row.effective_material_type = materialType as 'knowledge' | 'corpus'
     if (materialType === 'corpus') row.auto_context = true
-    await refreshAll()
+    refreshOverviewInBackground()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -722,6 +749,7 @@ async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
       local_embedding_enabled: enabled,
     })
     row.local_embedding_enabled = enabled
+    refreshOverviewInBackground()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
@@ -729,7 +757,8 @@ async function removePack(row: any) {
   try {
     await ElMessageBox.confirm(t('knowledge.removeConfirm', { name: row.pack_id }), t('common.warning'), { type: 'warning' })
     await knowledgeApi.removePack({ pack_id: row.pack_id })
-    await refreshAll()
+    packs.value = packs.value.filter((pack) => pack.pack_id !== row.pack_id)
+    refreshOverviewInBackground()
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(t('knowledge.operationFailed'))
   }
