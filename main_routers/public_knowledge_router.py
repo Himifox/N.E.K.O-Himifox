@@ -101,12 +101,13 @@ def _entry_payload(
             get_catalog_override_path(database_path)
         )
     disabled = entry_key(entry) in disabled_entries
+    content_preview = _content_preview(entry.content)
     payload = {
         "title": entry.title,
         "terms": {role: list(values) for role, values in entry.terms.items()},
         "tags": list(entry.tags),
-        "summary": entry.summary,
-        "content_preview": _content_preview(entry.content),
+        "summary": entry.summary or content_preview,
+        "content_preview": content_preview,
         "source": {
             "tag": source.tag,
             "name": source.name,

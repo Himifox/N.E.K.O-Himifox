@@ -19,12 +19,12 @@ from knowledge.prebuilt_index import (
 from knowledge.subscriptions import canonical_pack_bytes
 
 
-def _entry(title: str, source: str) -> KnowledgeEntry:
+def _entry(title: str, source: str, *, summary: str = "A compact summary") -> KnowledgeEntry:
     return KnowledgeEntry(
         title=title,
         terms={"alias": (), "recognition": ()},
         tags=(source,),
-        summary="A compact summary",
+        summary=summary,
         content="Meaning\n- A typical use",
     )
 
@@ -110,6 +110,21 @@ def test_management_api_exposes_one_store(monkeypatch, tmp_path):
     }
     assert listing["items"][0]["content_preview"] == "Meaning - A typical use"
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
+
+
+def test_management_api_uses_content_preview_when_summary_is_blank(monkeypatch, tmp_path):
+    service = open_knowledge(tmp_path)
+    KnowledgeStore(service.database_path()).upsert(
+        _entry("blank summary fixture", "source:chime", summary="")
+    )
+    client = _client(monkeypatch, tmp_path)
+
+    item = client.get("/api/public-knowledge/entries", params={"limit": 1}).json()[
+        "items"
+    ][0]
+
+    assert item["summary"] == "Meaning - A typical use"
+    assert item["content_preview"] == "Meaning - A typical use"
 
 
 def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_path):
