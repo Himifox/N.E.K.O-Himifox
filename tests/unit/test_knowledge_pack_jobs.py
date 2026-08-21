@@ -208,7 +208,7 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     result = await process_pack_jobs(
         service,
         batch_size=4,
-        ready_vector_chunks=10_000,
+        ready_vector_chunks=20_000,
     )
     job = service.list_pack_jobs()[0]
 
