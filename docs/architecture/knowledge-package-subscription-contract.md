@@ -67,9 +67,12 @@ POST /api/public-knowledge/subscriptions/apply-v3
 
 ## 运行边界
 
+> **更正（2026-08-21）**：旧版契约曾声明 `corpus`“永不自动注入”。现行运行策略已允许 `corpus` 包参与普通聊天的自动素材选择，并通过按包开关及独立高阈值控制误召回；制品格式、可信校验和订阅交接协议不受此策略更正影响。
+
 - 所有包写入同一个公共知识数据库，不再按 meme/corpora 分库。
 - `material_type` 是用途策略；`domain:meme` 是可选主题标签。
-- `knowledge` 包可由用户开启明确词条自动上下文；`corpus` 永不自动注入。
+- `knowledge` 包可由用户开启自动上下文；新安装的 `corpus` 包默认开启，二者均可由用户按包关闭或重新开启。
+- 自动上下文共用一次 BM25、Query Embedding 和 RRF 候选池，再按材料类型的独立高阈值筛选；弱相关候选不会仅凭低分语义相似度注入。
 - 社区包默认 `prebuilt_only`。可信索引可直接 Hybrid，否则 BM25。
 - 本机维护向量必须由用户按包明确开启。
 - 显式查询始终走同一 BM25、Query Embedding 和 RRF 路径。

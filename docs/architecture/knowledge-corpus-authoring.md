@@ -4,10 +4,12 @@
 
 公共知识只使用一个数据库和一套检索接口。`material_type` 表示内容用途，不表示数据库、索引或工具：
 
+> **更正（2026-08-21）**：旧版文档曾写明 `corpus`“永不自动注入”且“无法开启自动上下文”，该描述已失效。现行架构允许 `corpus` 包参与普通聊天的自动素材选择：新安装的 `corpus` 包默认开启，用户可按包关闭或重新开启；候选仍需通过直接匹配、词法与语义双路阈值，或带候选差距要求的高阈值语义筛选，避免弱相关素材进入上下文。
+
 | 类型 | 内容 | 普通聊天 | 显式公共知识查询 |
 | --- | --- | --- | --- |
-| `knowledge` | 事实、定义、解释、梗义、出处 | 用户启用包后，明确标题/别名/识别词可自动注入 | BM25 + Embedding + RRF |
-| `corpus` | 回复范例、对话样例、写作与语气素材 | 永不自动注入 | BM25 + Embedding + RRF |
+| `knowledge` | 事实、定义、解释、梗义、出处 | 用户启用包后，可通过直接匹配或高置信混合检索自动注入 | BM25 + Embedding + RRF |
+| `corpus` | 回复范例、对话样例、写作与语气素材 | 新安装包默认参与自动素材选择，用户可按包关闭或重新开启 | BM25 + Embedding + RRF |
 
 `meme` 不再是集合或第三种材料类型。它只是可选主题标签 `domain:meme`：梗的含义属于 `knowledge`，梗式回复样例属于 `corpus`。该标签只影响结果交给模型时的表达策略，不改变存储和检索路径。
 
@@ -87,8 +89,9 @@ uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.n
   → entries + FTS + knowledge_chunks
 
 普通聊天
-  → 只对已授权 knowledge 包运行明确词条匹配
-  → corpus 不参与
+  → 对内置来源和已授权知识包运行一次共享的 BM25 + Embedding + RRF 检索
+  → knowledge 与 corpus 分别使用更严格的自动上下文阈值筛选
+  → 每轮最多注入 1 条 knowledge 与受总上限约束的 corpus 素材
 
 显式查询
   → 一次 BM25 + 一次 Query Embedding
@@ -97,9 +100,9 @@ uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.n
   → 一次 LLM 回复
 ```
 
-Knowledge 与 corpus 不会触发两次 Query Embedding 或两次 LLM 请求。
+Knowledge 与 corpus 共用一次 Query Embedding、一个融合候选池和一次 LLM 请求，不会按材料类型重复调用。
 
-自动上下文没有梗专用模糊规则。标题和别名过短、容易与普通句子冲突时，作者应提供更明确的 `terms.recognition`（例如“上头是什么意思”），而不是依赖系统删除语气词或替换代词后猜测含义。
+自动上下文没有梗专用模糊规则。直接标题、别名或识别词匹配之外，系统只接受达到独立高阈值的双路或语义候选；纯语义候选还必须与下一候选保持足够分差。短语容易与普通句子冲突时，作者仍应提供更明确的 `terms.recognition`（例如“上头是什么意思”），而不是依赖系统删除语气词或替换代词后猜测含义。
 
 ## 本地管理 API
 
@@ -111,7 +114,7 @@ POST /api/public-knowledge/packs/auto-context
 POST /api/public-knowledge/packs/index-policy
 ```
 
-修改包用途只更新来源级策略，不改写原始词条。`corpus` 无法开启自动上下文。
+修改包用途只更新来源级策略，不改写原始词条。`knowledge` 与 `corpus` 都可通过 `packs/auto-context` 按包开启或关闭自动上下文；包首次切换为 `corpus` 时会按现行策略默认开启。
 
 完整制品协议另见：
 
