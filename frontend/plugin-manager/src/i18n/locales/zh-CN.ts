@@ -60,7 +60,7 @@ export default {
     term: '词条', summary: '摘要', source: '来源', actions: '操作', details: '详情', restore: '恢复', disable: '禁用',
     previous: '上一页', next: '下一页', packId: '数据包 ID', materialType: '内容类型', subscription: '订阅来源', localImport: '本地导入',
     importPack: '导入知识包', diagnostics: '最近命中', time: '时间', matchMode: '匹配方式',
-    delivered: '已递卡', yes: '是', no: '否', terms: '识别词', tags: '标签', content: '正文',
+    delivered: '已递卡', yes: '是', no: '否', terms: '识别词', titleMatch: '词条标题', aliasTerms: '别名', recognitionPhrases: '识别短语', tags: '标签', content: '正文',
     indexStatus: '向量索引', indexOrigin: '索引来源', indexTrust: '信任状态', indexValidation: '校验状态', indexFallback: '降级方式',
     localEmbeddingState: '本机维护状态', allowLocalEmbedding: '允许本机维护向量', enabled: '已启用', disabledState: '已禁用',
     packageStatus: '知识包运行态', sourceDistribution: '来源分布', otherSources: '其他', inactivePacks: '关闭', needsAttention: '需关注', materialMix: '知识包类型', noPacks: '暂无知识包',

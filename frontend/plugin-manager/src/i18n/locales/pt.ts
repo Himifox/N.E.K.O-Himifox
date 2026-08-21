@@ -60,7 +60,7 @@ export default {
     term: 'Entrada', summary: 'Resumo', source: 'Fonte', actions: 'Ações', details: 'Detalhes', restore: 'Restaurar', disable: 'Desativar',
     previous: 'Anterior', next: 'Próxima', packId: 'ID do pacote', materialType: 'Tipo de conteúdo', subscription: 'Assinatura', localImport: 'Importação local',
     importPack: 'Importar pacote', diagnostics: 'Correspondências recentes', time: 'Hora', matchMode: 'Modo de correspondência',
-    delivered: 'Cartão enviado', yes: 'Sim', no: 'Não', terms: 'Termos', tags: 'Tags', content: 'Conteúdo',
+    delivered: 'Cartão enviado', yes: 'Sim', no: 'Não', terms: 'Termos', titleMatch: 'Título', aliasTerms: 'Aliases', recognitionPhrases: 'Frases de reconhecimento', tags: 'Tags', content: 'Conteúdo',
     indexStatus: 'Índice vetorial', indexOrigin: 'Origem', indexTrust: 'Confiança', indexValidation: 'Validação', indexFallback: 'Modo alternativo',
     localEmbeddingState: 'Manutenção local', allowLocalEmbedding: 'Permitir manutenção local de vetores', enabled: 'Ativado', disabledState: 'Desativado',
     packageStatus: 'Estado dos pacotes', sourceDistribution: 'Distribuição de fontes', otherSources: 'Outros', inactivePacks: 'Desativados', needsAttention: 'Precisa de atenção', materialMix: 'Tipo de pacote', noPacks: 'Nenhum pacote',

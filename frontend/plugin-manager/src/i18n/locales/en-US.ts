@@ -60,7 +60,7 @@ export default {
     term: 'Entry', summary: 'Summary', source: 'Source', actions: 'Actions', details: 'Details', restore: 'Restore', disable: 'Disable',
     previous: 'Previous', next: 'Next', packId: 'Pack ID', materialType: 'Content type', subscription: 'Subscription', localImport: 'Local import',
     importPack: 'Import knowledge pack', diagnostics: 'Recent matches', time: 'Time', matchMode: 'Match mode',
-    delivered: 'Card delivered', yes: 'Yes', no: 'No', terms: 'Recognition terms', tags: 'Tags', content: 'Content',
+    delivered: 'Card delivered', yes: 'Yes', no: 'No', terms: 'Recognition terms', titleMatch: 'Entry title', aliasTerms: 'Aliases', recognitionPhrases: 'Recognition phrases', tags: 'Tags', content: 'Content',
     indexStatus: 'Vector index', indexOrigin: 'Origin', indexTrust: 'Trust', indexValidation: 'Validation', indexFallback: 'Fallback',
     localEmbeddingState: 'Local maintenance', allowLocalEmbedding: 'Allow local vector maintenance', enabled: 'Enabled', disabledState: 'Disabled',
     packageStatus: 'Package runtime', sourceDistribution: 'Source distribution', otherSources: 'Other', inactivePacks: 'Off', needsAttention: 'Needs attention', materialMix: 'Pack type', noPacks: 'No knowledge packs',

@@ -60,7 +60,7 @@ export default {
     term: 'Запись', summary: 'Описание', source: 'Источник', actions: 'Действия', details: 'Подробнее', restore: 'Восстановить', disable: 'Отключить',
     previous: 'Назад', next: 'Далее', packId: 'ID пакета', materialType: 'Тип содержимого', subscription: 'Подписка', localImport: 'Локальный импорт',
     importPack: 'Импортировать пакет', diagnostics: 'Последние совпадения', time: 'Время', matchMode: 'Режим совпадения',
-    delivered: 'Карточка передана', yes: 'Да', no: 'Нет', terms: 'Термины', tags: 'Теги', content: 'Содержимое',
+    delivered: 'Карточка передана', yes: 'Да', no: 'Нет', terms: 'Термины', titleMatch: 'Заголовок', aliasTerms: 'Псевдонимы', recognitionPhrases: 'Фразы распознавания', tags: 'Теги', content: 'Содержимое',
     indexStatus: 'Векторный индекс', indexOrigin: 'Источник', indexTrust: 'Доверие', indexValidation: 'Проверка', indexFallback: 'Резервный режим',
     localEmbeddingState: 'Локальное обслуживание', allowLocalEmbedding: 'Разрешить локальное обслуживание векторов', enabled: 'Включено', disabledState: 'Отключено',
     packageStatus: 'Состояние пакетов', sourceDistribution: 'Распределение источников', otherSources: 'Другие', inactivePacks: 'Отключено', needsAttention: 'Требует внимания', materialMix: 'Тип пакета', noPacks: 'Нет пакетов знаний',

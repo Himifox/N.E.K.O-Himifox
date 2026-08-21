@@ -255,7 +255,17 @@
     <el-drawer v-model="drawerOpen" :title="selectedEntry?.title || ''" size="520px">
       <template v-if="selectedEntry">
         <h3>{{ t('knowledge.summary') }}</h3><p>{{ selectedEntry.summary }}</p>
-        <h3>{{ t('knowledge.terms') }}</h3><pre>{{ JSON.stringify(selectedEntry.terms, null, 2) }}</pre>
+        <h3>{{ t('knowledge.terms') }}</h3>
+        <div class="term-groups">
+          <section v-for="group in selectedEntryTermGroups" :key="group.key" class="term-group">
+            <span>{{ group.label }}</span>
+            <div class="term-chips">
+              <el-tag v-for="value in group.values" :key="value" effect="plain">
+                {{ value }}
+              </el-tag>
+            </div>
+          </section>
+        </div>
         <h3>{{ t('knowledge.tags') }}</h3><p>{{ selectedEntry.tags.join(' · ') }}</p>
         <h3>{{ t('knowledge.content') }}</h3><pre>{{ selectedEntry.content }}</pre>
       </template>
@@ -373,6 +383,29 @@ const packRuntimeCards = computed(() => {
       tone: 'info',
     },
   ] as const
+})
+
+const selectedEntryTermGroups = computed(() => {
+  const entry = selectedEntry.value
+  if (!entry) return []
+  const terms = entry.terms || {}
+  return [
+    {
+      key: 'title',
+      label: t('knowledge.titleMatch'),
+      values: [entry.title],
+    },
+    {
+      key: 'alias',
+      label: t('knowledge.aliasTerms'),
+      values: uniqueTerms(terms.alias || terms.aliases),
+    },
+    {
+      key: 'recognition',
+      label: t('knowledge.recognitionPhrases'),
+      values: uniqueTerms(terms.recognition),
+    },
+  ].filter((group) => group.values.length > 0)
 })
 
 function knowledgeEntryRowKey(row: KnowledgeEntrySummary): string {
@@ -519,6 +552,19 @@ function displayPrefix(value: unknown, maxLength: number): string {
 
 function displayEntryPreview(row: KnowledgeEntrySummary): string {
   return String(row.content_preview || row.summary || '').trim() || t('common.nA')
+}
+
+function uniqueTerms(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const text = String(value ?? '').trim()
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    result.push(text)
+  }
+  return result
 }
 
 function formatDiagnosticDate(value: unknown): string {
@@ -1313,6 +1359,45 @@ dd {
   font-size: 12px;
   font-weight: 500;
   overflow-wrap: anywhere;
+}
+
+.term-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.term-group {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background: var(--knowledge-surface-muted);
+}
+
+.term-group > span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.term-chips :deep(.el-tag) {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.term-chips :deep(.el-tag__content) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 pre {

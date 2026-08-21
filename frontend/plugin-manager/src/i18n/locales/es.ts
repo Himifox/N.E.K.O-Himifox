@@ -60,7 +60,7 @@ export default {
     term: 'Entrada', summary: 'Resumen', source: 'Fuente', actions: 'Acciones', details: 'Detalles', restore: 'Restaurar', disable: 'Desactivar',
     previous: 'Anterior', next: 'Siguiente', packId: 'ID del paquete', materialType: 'Tipo de contenido', subscription: 'Suscripción', localImport: 'Importación local',
     importPack: 'Importar paquete', diagnostics: 'Coincidencias recientes', time: 'Hora', matchMode: 'Modo de coincidencia',
-    delivered: 'Tarjeta enviada', yes: 'Sí', no: 'No', terms: 'Términos', tags: 'Etiquetas', content: 'Contenido',
+    delivered: 'Tarjeta enviada', yes: 'Sí', no: 'No', terms: 'Términos', titleMatch: 'Título', aliasTerms: 'Alias', recognitionPhrases: 'Frases de reconocimiento', tags: 'Etiquetas', content: 'Contenido',
     indexStatus: 'Índice vectorial', indexOrigin: 'Origen', indexTrust: 'Confianza', indexValidation: 'Validación', indexFallback: 'Modo alternativo',
     localEmbeddingState: 'Mantenimiento local', allowLocalEmbedding: 'Permitir mantenimiento local de vectores', enabled: 'Activado', disabledState: 'Desactivado',
     packageStatus: 'Estado de paquetes', sourceDistribution: 'Distribución de fuentes', otherSources: 'Otros', inactivePacks: 'Desactivados', needsAttention: 'Requiere atención', materialMix: 'Tipo de paquete', noPacks: 'No hay paquetes',

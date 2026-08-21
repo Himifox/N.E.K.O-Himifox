@@ -60,7 +60,7 @@ export default {
     term: '項目', summary: '要約', source: '出典', actions: '操作', details: '詳細', restore: '復元', disable: '無効化',
     previous: '前へ', next: '次へ', packId: 'パック ID', materialType: 'コンテンツ種別', subscription: '購読元', localImport: 'ローカル導入',
     importPack: 'ナレッジパックを導入', diagnostics: '最近の一致', time: '時刻', matchMode: '一致方式',
-    delivered: 'カード送信', yes: 'はい', no: 'いいえ', terms: '認識語', tags: 'タグ', content: '本文',
+    delivered: 'カード送信', yes: 'はい', no: 'いいえ', terms: '認識語', titleMatch: '項目タイトル', aliasTerms: '別名', recognitionPhrases: '認識フレーズ', tags: 'タグ', content: '本文',
     indexStatus: 'ベクトル索引', indexOrigin: '索引元', indexTrust: '信頼状態', indexValidation: '検証状態', indexFallback: 'フォールバック',
     localEmbeddingState: 'ローカル保守状態', allowLocalEmbedding: 'ローカルでのベクトル保守を許可', enabled: '有効', disabledState: '無効',
     packageStatus: 'パック稼働状態', sourceDistribution: '出典分布', otherSources: 'その他', inactivePacks: 'オフ', needsAttention: '要確認', materialMix: 'パック種別', noPacks: 'ナレッジパックはありません',

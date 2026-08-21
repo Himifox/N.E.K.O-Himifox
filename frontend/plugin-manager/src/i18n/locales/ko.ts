@@ -60,7 +60,7 @@ export default {
     term: '항목', summary: '요약', source: '출처', actions: '작업', details: '상세', restore: '복원', disable: '비활성화',
     previous: '이전', next: '다음', packId: '팩 ID', materialType: '콘텐츠 유형', subscription: '구독 출처', localImport: '로컬 가져오기',
     importPack: '지식 팩 가져오기', diagnostics: '최근 일치', time: '시간', matchMode: '일치 방식',
-    delivered: '카드 전달', yes: '예', no: '아니요', terms: '인식어', tags: '태그', content: '본문',
+    delivered: '카드 전달', yes: '예', no: '아니요', terms: '인식어', titleMatch: '항목 제목', aliasTerms: '별칭', recognitionPhrases: '인식 문구', tags: '태그', content: '본문',
     indexStatus: '벡터 인덱스', indexOrigin: '인덱스 출처', indexTrust: '신뢰 상태', indexValidation: '검증 상태', indexFallback: '대체 방식',
     localEmbeddingState: '로컬 유지 상태', allowLocalEmbedding: '로컬 벡터 유지 허용', enabled: '활성화', disabledState: '비활성화',
     packageStatus: '지식 팩 실행 상태', sourceDistribution: '출처 분포', otherSources: '기타', inactivePacks: '꺼짐', needsAttention: '확인 필요', materialMix: '팩 유형', noPacks: '지식 팩 없음',

@@ -60,7 +60,7 @@ export default {
     term: '詞條', summary: '摘要', source: '來源', actions: '操作', details: '詳情', restore: '恢復', disable: '停用',
     previous: '上一頁', next: '下一頁', packId: '資料包 ID', materialType: '內容類型', subscription: '訂閱來源', localImport: '本機匯入',
     importPack: '匯入知識包', diagnostics: '最近命中', time: '時間', matchMode: '匹配方式',
-    delivered: '已遞卡', yes: '是', no: '否', terms: '識別詞', tags: '標籤', content: '正文',
+    delivered: '已遞卡', yes: '是', no: '否', terms: '識別詞', titleMatch: '詞條標題', aliasTerms: '別名', recognitionPhrases: '識別短語', tags: '標籤', content: '正文',
     indexStatus: '向量索引', indexOrigin: '索引來源', indexTrust: '信任狀態', indexValidation: '驗證狀態', indexFallback: '降級方式',
     localEmbeddingState: '本機維護狀態', allowLocalEmbedding: '允許本機維護向量', enabled: '已啟用', disabledState: '已停用',
     packageStatus: '知識包運行態', sourceDistribution: '來源分布', otherSources: '其他', inactivePacks: '關閉', needsAttention: '需關注', materialMix: '知識包類型', noPacks: '暫無知識包',
