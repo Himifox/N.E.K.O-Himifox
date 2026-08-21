@@ -37,11 +37,31 @@
                 </el-tag>
               </div>
             </template>
-            <dl class="status-metrics">
-              <div class="status-metric"><dt>{{ t('knowledge.entries') }}</dt><dd>{{ status.entries ?? 0 }}</dd></div>
-              <div class="status-metric"><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
-              <div class="status-metric"><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
-            </dl>
+            <div class="overview-top">
+              <section class="source-donut-card" :aria-label="t('knowledge.sourceDistribution')">
+                <div class="source-donut" :style="{ background: sourceChartBackground }">
+                  <div class="source-donut__label">
+                    <span>{{ status.entries ?? 0 }}</span>
+                    <small>{{ t('knowledge.entries') }}</small>
+                  </div>
+                </div>
+                <div class="source-donut-card__body">
+                  <h3>{{ t('knowledge.sourceDistribution') }}</h3>
+                  <div class="source-legend">
+                    <span v-for="source in sourceChartLegend" :key="source.key" class="source-legend__item" :title="source.name">
+                      <i :style="{ background: source.color }" />
+                      <span>{{ source.name }}</span>
+                      <strong>{{ source.entries }}</strong>
+                    </span>
+                  </div>
+                </div>
+              </section>
+              <dl class="status-metrics">
+                <div class="status-metric"><dt>{{ t('knowledge.entries') }}</dt><dd>{{ status.entries ?? 0 }}</dd></div>
+                <div class="status-metric"><dt>{{ t('knowledge.disabled') }}</dt><dd>{{ status.disabled_entries ?? 0 }}</dd></div>
+                <div class="status-metric"><dt>{{ t('knowledge.packs') }}</dt><dd>{{ status.packs ?? 0 }}</dd></div>
+              </dl>
+            </div>
             <section class="overview-section">
               <div class="overview-section__heading">
                 <h3>{{ t('knowledge.packageStatus') }}</h3>
@@ -80,17 +100,6 @@
                 </div>
               </div>
               <el-empty v-else :description="t('knowledge.noPacks')" :image-size="56" />
-            </section>
-            <section class="overview-section">
-              <div class="overview-section__heading">
-                <h3>{{ t('knowledge.sourceDistribution') }}</h3>
-              </div>
-              <div class="source-list">
-                <span v-for="source in status.sources || []" :key="source.tag" class="source-chip" :title="source.tag">
-                  <span class="source-chip__name">{{ displaySourceTag(source.tag) }}</span>
-                  <span class="source-chip__count">{{ source.entries }}</span>
-                </span>
-              </div>
             </section>
           </el-card>
         </div>
@@ -273,6 +282,45 @@ const diagnostics = ref<any[]>([])
 const diagnosticsLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const marketOpening = ref(false)
+const sourceChartColors = [
+  'var(--el-color-primary)',
+  'var(--el-color-success)',
+  'var(--el-color-warning)',
+  'var(--el-color-danger)',
+  'var(--el-color-info)',
+]
+
+const sourceChartLegend = computed(() => {
+  const sources = (status.value?.sources || [])
+    .map((source) => ({
+      key: String(source.tag ?? ''),
+      name: displaySourceTag(source.tag),
+      entries: Number(source.entries) || 0,
+    }))
+    .filter((source) => source.entries > 0)
+    .sort((a, b) => b.entries - a.entries)
+  const visible = sources.slice(0, 4)
+  const rest = sources.slice(4).reduce((sum, source) => sum + source.entries, 0)
+  const legend = rest > 0
+    ? [...visible, { key: '__other__', name: t('knowledge.otherSources'), entries: rest }]
+    : visible
+  return legend.map((source, index) => ({
+    ...source,
+    color: sourceChartColors[index % sourceChartColors.length],
+  }))
+})
+
+const sourceChartBackground = computed(() => {
+  const total = sourceChartLegend.value.reduce((sum, source) => sum + source.entries, 0)
+  if (total <= 0) return 'var(--knowledge-line)'
+  let cursor = 0
+  const stops = sourceChartLegend.value.map((source) => {
+    const start = cursor
+    cursor += (source.entries / total) * 100
+    return `${source.color} ${start}% ${cursor}%`
+  })
+  return `conic-gradient(${stops.join(', ')})`
+})
 
 const packRuntimeCards = computed(() => {
   const total = packs.value.length
@@ -752,11 +800,121 @@ dd {
   margin-top: 14px;
 }
 
-.source-list {
-  display: flex;
-  flex-wrap: wrap;
+.overview-top {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.source-donut-card {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background: var(--knowledge-surface-muted);
+}
+
+.source-donut {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+}
+
+.source-donut::before {
+  position: absolute;
+  inset: 12px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--knowledge-surface);
+  content: '';
+}
+
+.source-donut__label {
+  z-index: 1;
+  display: grid;
+  gap: 3px;
+  max-width: 48px;
+  overflow: hidden;
+  text-align: center;
+}
+
+.source-donut__label span,
+.source-donut__label small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--el-text-color-primary);
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-donut__label span {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-donut__label small {
+  color: var(--el-text-color-secondary);
+  font-size: 10px;
+}
+
+.source-donut-card__body {
+  display: grid;
   gap: 8px;
-  margin-top: 18px;
+  min-width: 0;
+}
+
+.source-donut-card__body h3 {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.source-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 10px;
+  min-width: 0;
+}
+
+.source-legend__item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+}
+
+.source-legend__item i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.source-legend__item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-legend__item strong {
+  color: var(--el-text-color-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .overview-section {
@@ -946,41 +1104,6 @@ dd {
 
 .overview-state-cell.is-info {
   border-left-color: var(--el-color-primary);
-}
-
-.source-chip {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  max-width: min(300px, 100%);
-  height: 28px;
-  overflow: hidden;
-  border: 1px solid var(--knowledge-line);
-  border-radius: 7px;
-  background: var(--knowledge-surface);
-  color: var(--el-text-color-regular);
-  font-size: 12px;
-  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
-}
-
-.source-chip__name {
-  min-width: 0;
-  padding: 0 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.source-chip__count {
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px;
-  border-left: 1px solid var(--knowledge-line);
-  background: var(--knowledge-surface-muted);
-  color: var(--el-color-primary);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
 }
 
 .toolbar {
@@ -1177,6 +1300,18 @@ pre {
 
   .knowledge-tabs :deep(.el-tabs__content) {
     padding: 14px;
+  }
+
+  .overview-top {
+    grid-template-columns: 1fr;
+  }
+
+  .source-donut-card {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .source-legend {
+    grid-template-columns: 1fr;
   }
 
   .status-metrics {

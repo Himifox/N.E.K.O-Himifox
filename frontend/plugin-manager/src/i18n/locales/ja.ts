@@ -63,7 +63,7 @@ export default {
     delivered: 'カード送信', yes: 'はい', no: 'いいえ', terms: '認識語', tags: 'タグ', content: '本文',
     indexStatus: 'ベクトル索引', indexOrigin: '索引元', indexTrust: '信頼状態', indexValidation: '検証状態', indexFallback: 'フォールバック',
     localEmbeddingState: 'ローカル保守状態', allowLocalEmbedding: 'ローカルでのベクトル保守を許可', enabled: '有効', disabledState: '無効',
-    packageStatus: 'パック稼働状態', sourceDistribution: '出典分布', inactivePacks: 'オフ', needsAttention: '要確認', materialMix: 'パック種別', noPacks: 'ナレッジパックはありません',
+    packageStatus: 'パック稼働状態', sourceDistribution: '出典分布', otherSources: 'その他', inactivePacks: 'オフ', needsAttention: '要確認', materialMix: 'パック種別', noPacks: 'ナレッジパックはありません',
     indexPolicyHint: 'ローカルの CPU とメモリを使用する場合があります。無効時は信頼済み索引が利用できなければ BM25 にフォールバックします。',
     loadFailed: 'ナレッジデータを読み込めません', operationFailed: 'ナレッジ操作に失敗しました', importSuccess: 'ナレッジパックを導入しました', importQueued: 'ナレッジパックをバックグラウンドで準備中です。完了後に自動で利用可能になります',
     invalidPack: 'ナレッジパックが無効です', removeConfirm: 'ナレッジパック {name} を削除しますか？'
