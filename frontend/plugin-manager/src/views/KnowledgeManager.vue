@@ -252,22 +252,53 @@
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="drawerOpen" :title="selectedEntry?.title || ''" size="520px">
+    <el-drawer v-model="drawerOpen" class="knowledge-entry-drawer" size="520px">
+      <template #header>
+        <div v-if="selectedEntry" class="entry-drawer-header">
+          <strong :title="selectedEntry.title">{{ selectedEntry.title }}</strong>
+          <div class="entry-drawer-meta">
+            <el-tag effect="plain">{{ displaySourceTag(selectedEntry.source?.tag || selectedEntry.source?.name) }}</el-tag>
+            <el-tag :type="selectedEntry.disabled ? 'danger' : 'success'" effect="plain">
+              {{ selectedEntry.disabled ? t('knowledge.disabledState') : t('knowledge.enabled') }}
+            </el-tag>
+          </div>
+        </div>
+      </template>
       <template v-if="selectedEntry">
-        <h3>{{ t('knowledge.summary') }}</h3><p>{{ selectedEntry.summary }}</p>
-        <h3>{{ t('knowledge.terms') }}</h3>
-        <div class="term-groups">
-          <section v-for="group in selectedEntryTermGroups" :key="group.key" class="term-group">
-            <span>{{ group.label }}</span>
-            <div class="term-chips">
-              <el-tag v-for="value in group.values" :key="value" effect="plain">
-                {{ value }}
+        <div class="entry-drawer-body">
+          <section class="entry-detail-section entry-detail-section--summary">
+            <h3>{{ t('knowledge.summary') }}</h3>
+            <p>{{ selectedEntry.summary || displayEntryPreview(selectedEntry) }}</p>
+          </section>
+
+          <section class="entry-detail-section">
+            <h3>{{ t('knowledge.terms') }}</h3>
+            <div class="term-groups">
+              <section v-for="group in selectedEntryTermGroups" :key="group.key" class="term-group">
+                <span>{{ group.label }}</span>
+                <div class="term-chips">
+                  <el-tag v-for="value in group.values" :key="value" effect="plain">
+                    {{ value }}
+                  </el-tag>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="entry-detail-section">
+            <h3>{{ t('knowledge.tags') }}</h3>
+            <div class="entry-tag-list">
+              <el-tag v-for="tag in selectedEntry.tags" :key="tag" effect="plain">
+                {{ tag }}
               </el-tag>
             </div>
           </section>
+
+          <section class="entry-detail-section">
+            <h3>{{ t('knowledge.content') }}</h3>
+            <pre class="entry-content">{{ selectedEntry.content }}</pre>
+          </section>
         </div>
-        <h3>{{ t('knowledge.tags') }}</h3><p>{{ selectedEntry.tags.join(' · ') }}</p>
-        <h3>{{ t('knowledge.content') }}</h3><pre>{{ selectedEntry.content }}</pre>
       </template>
     </el-drawer>
   </div>
@@ -1361,6 +1392,92 @@ dd {
   overflow-wrap: anywhere;
 }
 
+:global(.knowledge-entry-drawer) {
+  --knowledge-surface: var(--el-bg-color);
+  --knowledge-surface-muted: var(--el-fill-color-extra-light);
+  --knowledge-line: var(--el-border-color-lighter);
+  min-width: 0;
+}
+
+:global(.knowledge-entry-drawer .el-drawer__header) {
+  margin: 0;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--knowledge-line);
+}
+
+:global(.knowledge-entry-drawer .el-drawer__body) {
+  padding: 0;
+  color: var(--el-text-color-regular);
+}
+
+.entry-drawer-header {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.entry-drawer-header strong {
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  color: var(--el-text-color-primary);
+  font-size: 17px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-drawer-meta,
+.entry-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.entry-drawer-meta :deep(.el-tag),
+.entry-tag-list :deep(.el-tag) {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.entry-drawer-body {
+  display: grid;
+  gap: 16px;
+  padding: 22px 24px 32px;
+}
+
+.entry-detail-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entry-detail-section h3 {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.entry-detail-section p {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.entry-detail-section--summary {
+  padding: 14px 16px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
+    var(--knowledge-surface-muted);
+}
+
 .term-groups {
   display: grid;
   gap: 10px;
@@ -1400,6 +1517,21 @@ dd {
   white-space: nowrap;
 }
 
+.entry-tag-list :deep(.el-tag__content) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-content {
+  max-height: 360px;
+  overflow: auto;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1410,6 +1542,22 @@ pre {
 }
 
 @media (max-width: 640px) {
+  :global(.knowledge-entry-drawer) {
+    width: min(100vw, 520px) !important;
+  }
+
+  :global(.knowledge-entry-drawer .el-drawer__header) {
+    padding: 18px 18px 14px;
+  }
+
+  .entry-drawer-body {
+    padding: 18px 18px 28px;
+  }
+
+  .entry-drawer-header strong {
+    max-width: calc(100vw - 88px);
+  }
+
   .knowledge-manager {
     padding: 16px 16px 72px;
   }
