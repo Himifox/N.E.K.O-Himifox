@@ -355,6 +355,26 @@ def test_split_layout_conflict_does_not_publish_partial_database(tmp_path):
     assert not (tmp_path / "knowledge.db").exists()
 
 
+def test_split_layout_discards_corrupt_vectors_without_losing_entries(tmp_path):
+    legacy_database = tmp_path / "corpora" / "knowledge.db"
+    legacy_store = KnowledgeStore(legacy_database)
+    entry = _entry("Recoverable corpus", "source:corpora")
+    legacy_store.replace_source(entry.source_tag, (entry,))
+    with legacy_store._connection(writable=True) as connection:
+        connection.execute(
+            "UPDATE knowledge_chunks SET embedding_status='ready', "
+            "embedding_model_id='legacy-model', embedding_dimensions=256, embedding=?",
+            (b"invalid",),
+        )
+
+    service = open_knowledge(tmp_path)
+    migrated_store = KnowledgeStore(service.database_path())
+
+    assert migrated_store.get_entry(entry.source_tag, entry.title) is not None
+    assert migrated_store.chunk_status()["chunks_ready"] == 0
+    assert legacy_database.is_file()
+
+
 def test_previous_unified_layout_moves_to_flat_knowledge_root(tmp_path):
     old_database = tmp_path / "public-knowledge" / "knowledge.db"
     old_store = KnowledgeStore(old_database)

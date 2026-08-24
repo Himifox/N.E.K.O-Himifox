@@ -72,7 +72,17 @@ def migrate_legacy_knowledge_layout(
                     embedding_policy=policies[source_tag],
                 )
             if vectors:
-                staged_store.store_chunk_embeddings_strict(tuple(vectors.values()))
+                try:
+                    staged_store.store_chunk_embeddings_strict(tuple(vectors.values()))
+                except ValueError as exc:
+                    # Embeddings are rebuildable derived data.  A malformed
+                    # legacy row must not make the authoritative entries and
+                    # registry unavailable after an upgrade.
+                    logger.warning(
+                        "Discarding %d incompatible legacy knowledge vectors (%s)",
+                        len(vectors),
+                        type(exc).__name__,
+                    )
 
             registry = _merge_registries(legacy_databases, staged_store)
             atomic_write_json(
@@ -127,6 +137,7 @@ def _collect_legacy_data(
     entry_origins: dict[tuple[str, str], Path] = {}
     policy_votes: dict[str, set[str]] = defaultdict(set)
     vectors: dict[str, dict[str, object]] = {}
+    conflicting_vector_ids: set[str] = set()
     for database in databases:
         store = KnowledgeStore(database)
         for entry in store.list_active_entries():
@@ -160,9 +171,13 @@ def _collect_legacy_data(
             )
         for record in store.ready_embedding_records():
             chunk_id = str(record.get("chunk_id") or "")
+            if not chunk_id or chunk_id in conflicting_vector_ids:
+                continue
             previous = vectors.get(chunk_id)
             if previous is not None and previous != record:
-                raise ValueError("legacy knowledge contains conflicting vectors")
+                vectors.pop(chunk_id, None)
+                conflicting_vector_ids.add(chunk_id)
+                continue
             vectors[chunk_id] = record
 
     selected_chunk_ids = {
