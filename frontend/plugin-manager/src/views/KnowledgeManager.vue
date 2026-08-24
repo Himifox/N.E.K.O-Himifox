@@ -325,12 +325,12 @@ let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = nu
 let overviewRefreshTimer: number | null = null
 let overviewRefreshInFlight: Promise<void> | null = null
 let packJobPollTimer: number | null = null
-let packJobPollStartedAt = 0
 let packJobPollAttempts = 0
+let packJobPollInFlight = false
 let deferredIdleHandle: number | null = null
 let deferredLoadTimer: number | null = null
 let disposed = false
-const pendingImportJobIds = new Set<string>()
+const pendingImportJobs = new Map<string, number>()
 
 const { t } = useI18n()
 const {
@@ -627,9 +627,13 @@ async function loadEntries(reset = false) {
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {
-  const response = await knowledgeApi.entry({ source: row.source.tag, title: row.title })
-  selectedEntry.value = response.entry || null
-  drawerOpen.value = Boolean(selectedEntry.value)
+  try {
+    const response = await knowledgeApi.entry({ source: row.source.tag, title: row.title })
+    selectedEntry.value = response.entry || null
+    drawerOpen.value = Boolean(selectedEntry.value)
+  } catch {
+    if (!disposed) ElMessage.error(t('knowledge.loadFailed'))
+  }
 }
 
 async function toggleEntry(row: KnowledgeEntrySummary) {
@@ -668,8 +672,14 @@ async function importSelectedPack(event: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
+  let pack: unknown
   try {
-    const pack = JSON.parse(await file.text())
+    pack = JSON.parse(await file.text())
+  } catch {
+    ElMessage.error(t('knowledge.invalidPack'))
+    return
+  }
+  try {
     const response = await knowledgeApi.importPack(pack)
     ElMessage.info(
       response.state === 'queued'
@@ -682,20 +692,20 @@ async function importSelectedPack(event: Event) {
     } else {
       refreshOverviewInBackground(response.state === 'queued' ? 1500 : 0)
     }
-  } catch { ElMessage.error(t('knowledge.invalidPack')) }
+  } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
 function watchImportJob(jobId: string) {
-  pendingImportJobIds.add(jobId)
-  if (!packJobPollStartedAt) packJobPollStartedAt = Date.now()
-  if (packJobPollTimer === null) {
+  if (!pendingImportJobs.has(jobId)) pendingImportJobs.set(jobId, Date.now())
+  if (packJobPollTimer === null && !packJobPollInFlight) {
     packJobPollTimer = window.setTimeout(pollImportJobs, 1000)
   }
 }
 
 async function pollImportJobs() {
   packJobPollTimer = null
-  if (disposed || pendingImportJobIds.size === 0) return
+  if (disposed || pendingImportJobs.size === 0 || packJobPollInFlight) return
+  packJobPollInFlight = true
   let completed = false
   try {
     const response = await knowledgeApi.packJobs()
@@ -703,33 +713,32 @@ async function pollImportJobs() {
     const jobs = new Map(
       (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
     )
-    for (const jobId of [...pendingImportJobIds]) {
+    for (const [jobId, startedAt] of [...pendingImportJobs]) {
       const job = jobs.get(jobId)
       const state = String(job?.state || '')
       if (state === 'active') {
-        pendingImportJobIds.delete(jobId)
+        pendingImportJobs.delete(jobId)
         completed = true
         ElMessage.success(t('knowledge.importSuccess'))
       } else if (state === 'failed' || state === 'cancelled') {
-        pendingImportJobIds.delete(jobId)
+        pendingImportJobs.delete(jobId)
         completed = true
         ElMessage.error(t('knowledge.operationFailed'))
+      } else if (Date.now() - startedAt >= PACK_JOB_POLL_LIMIT_MS) {
+        pendingImportJobs.delete(jobId)
+        ElMessage.warning(t('knowledge.importStillProcessing'))
       }
     }
     packJobPollAttempts = 0
   } catch {
     packJobPollAttempts += 1
+  } finally {
+    packJobPollInFlight = false
   }
   if (completed) refreshOverviewInBackground()
-  if (
-    pendingImportJobIds.size > 0 &&
-    Date.now() - packJobPollStartedAt < PACK_JOB_POLL_LIMIT_MS
-  ) {
+  if (pendingImportJobs.size > 0 && !disposed) {
     const delay = Math.min(1000 * 2 ** packJobPollAttempts, 5000)
     packJobPollTimer = window.setTimeout(pollImportJobs, delay)
-  } else {
-    pendingImportJobIds.clear()
-    packJobPollStartedAt = 0
   }
 }
 
@@ -895,7 +904,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
-  pendingImportJobIds.clear()
+  pendingImportJobs.clear()
   if (overviewRefreshTimer !== null) window.clearTimeout(overviewRefreshTimer)
   if (packJobPollTimer !== null) window.clearTimeout(packJobPollTimer)
   if (deferredLoadTimer !== null) window.clearTimeout(deferredLoadTimer)

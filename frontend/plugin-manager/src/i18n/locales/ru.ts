@@ -65,7 +65,7 @@ export default {
     localEmbeddingState: 'Локальное обслуживание', allowLocalEmbedding: 'Разрешить локальное обслуживание векторов', enabled: 'Включено', disabledState: 'Отключено',
     packageStatus: 'Состояние пакетов', sourceDistribution: 'Распределение источников', otherSources: 'Другие', inactivePacks: 'Отключено', needsAttention: 'Требует внимания', materialMix: 'Тип пакета', noPacks: 'Нет пакетов знаний',
     indexPolicyHint: 'Может использовать локальные CPU и память. Если отключено, при недоступном доверенном индексе используется BM25.',
-    loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован', importQueued: 'Пакет готовится в фоновом режиме и появится после завершения',
+    loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован', importQueued: 'Пакет готовится в фоновом режиме и появится после завершения', importStillProcessing: 'Пакет всё ещё обрабатывается. Обновите страницу позже, чтобы проверить состояние.',
     invalidPack: 'Недопустимый пакет', removeConfirm: 'Удалить пакет {name}?'
   },
   market: {

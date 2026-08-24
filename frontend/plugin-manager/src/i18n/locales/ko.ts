@@ -65,7 +65,7 @@ export default {
     localEmbeddingState: '로컬 유지 상태', allowLocalEmbedding: '로컬 벡터 유지 허용', enabled: '활성화', disabledState: '비활성화',
     packageStatus: '지식 팩 실행 상태', sourceDistribution: '출처 분포', otherSources: '기타', inactivePacks: '꺼짐', needsAttention: '확인 필요', materialMix: '팩 유형', noPacks: '지식 팩 없음',
     indexPolicyHint: '로컬 CPU와 메모리를 사용할 수 있습니다. 끄면 신뢰할 수 있는 인덱스를 사용할 수 없을 때 BM25로 대체됩니다.',
-    loadFailed: '지식 데이터를 불러오지 못했습니다', operationFailed: '지식 작업에 실패했습니다', importSuccess: '지식 팩을 가져왔습니다', importQueued: '지식 팩을 백그라운드에서 준비 중이며 완료되면 자동으로 사용할 수 있습니다',
+    loadFailed: '지식 데이터를 불러오지 못했습니다', operationFailed: '지식 작업에 실패했습니다', importSuccess: '지식 팩을 가져왔습니다', importQueued: '지식 팩을 백그라운드에서 준비 중이며 완료되면 자동으로 사용할 수 있습니다', importStillProcessing: '지식 팩이 아직 처리 중입니다. 나중에 새로고침하여 상태를 확인하세요.',
     invalidPack: '잘못된 지식 팩입니다', removeConfirm: '지식 팩 {name}을(를) 제거할까요?'
   },
   market: {

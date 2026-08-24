@@ -41,6 +41,7 @@ async def test_structured_public_knowledge_owner_skips_external_agent(monkeypatc
             "route_owner": "public_knowledge",
         }
     )
+    await asyncio.sleep(0)
 
     plan.assert_not_awaited()
 

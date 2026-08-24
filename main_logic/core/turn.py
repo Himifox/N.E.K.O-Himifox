@@ -758,6 +758,7 @@ class TurnMixin:
             })
 
         if not will_retry and not _is_too_long_final and _truncated_text is None:
+            self._text_route_owners.pop(str(active_request_id or ""), None)
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None

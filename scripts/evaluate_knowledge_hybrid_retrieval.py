@@ -12,6 +12,7 @@ import asyncio
 import json
 import sqlite3
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -95,7 +96,8 @@ def _load_cases(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _open_read_only(database_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _open_read_only(database_path: Path):
     if not database_path.is_file():
         raise EvaluationUnavailable(f"database_missing:{database_path}")
     uri = f"{database_path.resolve().as_uri()}?mode=ro"
@@ -103,7 +105,10 @@ def _open_read_only(database_path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     connection.execute("PRAGMA busy_timeout=5000")
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _load_vectors(

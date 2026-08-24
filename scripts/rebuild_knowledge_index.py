@@ -13,6 +13,7 @@ import json
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -137,13 +138,17 @@ def _installed_pack_targets(
     return (target,) if isinstance(packs, dict) and isinstance(packs.get(pack_id), dict) else ()
 
 
-def _open_read_only(database_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _open_read_only(database_path: Path):
     uri = f"{database_path.resolve().as_uri()}?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     connection.execute("PRAGMA busy_timeout=5000")
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _table_names(connection: sqlite3.Connection) -> frozenset[str]:
