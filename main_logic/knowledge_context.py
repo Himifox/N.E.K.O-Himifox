@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import re
 import threading
 import time
@@ -23,6 +24,7 @@ from knowledge.service import (
     get_tag_value,
     get_usage_example,
 )
+from main_logic.agent_routing import ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE
 from main_logic.tool_calling import ToolDefinition
 from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
@@ -57,14 +59,19 @@ _KNOWLEDGE_INTENT_TERMS = (
     "what is",
     "explain",
 )
-_EXPLICIT_LOCAL_KNOWLEDGE_MARKERS = (
-    "query_public_knowledge",
-    "公共知识库",
-    "本地知识库",
-    "local public knowledge",
-)
-_EXPLICIT_QUERY_PREFIX = re.compile(
-    r"^(?:中|里|内)?\s*(?:查询|检索|搜索|查找|查一下|找一下|回答|请问)?\s*",
+_EXPLICIT_LOCAL_KNOWLEDGE_ROUTE = re.compile(
+    r"^\s*(?:"
+    r"query_public_knowledge\s*(?:[:：]|\s)\s*"
+    r"|/knowledge\s*(?:[:：]|\s)\s*"
+    r"|(?:请\s*)?(?:查询|检索|搜索|查找|查一下|找一下)\s*"
+    r"(?:公共知识库|本地知识库|local public knowledge)\s*[:：,，；;]?\s*"
+    r"|(?:请\s*)?(?:在\s*)?"
+    r"(?:公共知识库|本地知识库|local public knowledge)(?:中|里|内)?\s*"
+    r"(?:"
+    r"(?:查询|检索|搜索|查找|查一下|找一下|回答|请问)\s*[:：,，；;]?\s*"
+    r"|[:：,，；;]\s*"
+    r")"
+    r")(?P<query>\S[\s\S]*?)\s*$",
     re.IGNORECASE,
 )
 _QUERY_CLAUSE_SPLIT = re.compile(r"[，,。！？!?；;\r\n]+")
@@ -387,26 +394,21 @@ def register_public_knowledge_tool(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PublicKnowledgeTurnResult:
+    context: str = ""
+    route_owner: str | None = None
+
+
 def _extract_explicit_local_knowledge_query(user_text: str) -> str:
-    """Return the payload after an explicit local-knowledge route marker."""
-    folded = user_text.casefold()
-    matches = (
-        (folded.find(marker.casefold()), marker)
-        for marker in _EXPLICIT_LOCAL_KNOWLEDGE_MARKERS
-    )
-    positions = [(position, marker) for position, marker in matches if position >= 0]
-    if not positions:
-        return ""
-    position, marker = min(positions, key=lambda item: item[0])
-    query = user_text[position + len(marker) :].lstrip(" \t\r\n:：,，；;")
-    query = _EXPLICIT_QUERY_PREFIX.sub("", query, count=1)
-    query = query.lstrip(" \t\r\n:：,，；;")
-    return query.strip() or user_text.strip()
+    """Return a query only when the whole utterance is an explicit local route."""
+    match = _EXPLICIT_LOCAL_KNOWLEDGE_ROUTE.fullmatch(user_text)
+    return match.group("query").strip() if match else ""
 
 
 async def build_public_knowledge_turn_context(
     user_text: str,
-) -> str:
+) -> PublicKnowledgeTurnResult:
     """Resolve one turn-local card without leaking knowledge concerns into core."""
     fallback_query = _extract_explicit_local_knowledge_query(user_text)
     if fallback_query:
@@ -422,7 +424,7 @@ async def build_public_knowledge_turn_context(
             len(fallback_query),
         )
         try:
-            return await handle_public_knowledge_call(
+            context = await handle_public_knowledge_call(
                 {
                     "query": fallback_query,
                     "mode": "lookup",
@@ -432,12 +434,18 @@ async def build_public_knowledge_turn_context(
                 language="",
                 deadline_monotonic=deadline,
             )
+            return PublicKnowledgeTurnResult(
+                context=context,
+                route_owner=ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE,
+            )
         except Exception as exc:
             logger.warning(
                 "[public-knowledge] explicit host lookup failed: %s",
                 type(exc).__name__,
             )
-            return ""
+            return PublicKnowledgeTurnResult(
+                route_owner=ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE,
+            )
 
     try:
         from config.public_knowledge_settings import (
@@ -447,7 +455,7 @@ async def build_public_knowledge_turn_context(
         )
 
         if not PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
-            return ""
+            return PublicKnowledgeTurnResult()
         started_at = time.monotonic()
         deadline = started_at + PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS
 
@@ -468,7 +476,7 @@ async def build_public_knowledge_turn_context(
             from knowledge.diagnostics import record_knowledge_route
 
             record_knowledge_route(result="skipped_busy")
-            return ""
+            return PublicKnowledgeTurnResult()
         completed, result = await _wait_task_until(task, deadline)
         if not completed or result is None:
             from knowledge.diagnostics import record_knowledge_route
@@ -478,7 +486,7 @@ async def build_public_knowledge_turn_context(
                 error_type="budget_exhausted",
                 elapsed_ms=int((time.monotonic() - started_at) * 1_000),
             )
-            return ""
+            return PublicKnowledgeTurnResult()
         from knowledge.diagnostics import record_knowledge_route
 
         record_knowledge_route(
@@ -496,7 +504,7 @@ async def build_public_knowledge_turn_context(
             result.hit_count,
             result.match_mode,
         )
-        return result.text
+        return PublicKnowledgeTurnResult(context=result.text)
     except Exception as exc:
         logger.warning(
             "[public-knowledge] automatic turn context failed: %s",
@@ -508,4 +516,4 @@ async def build_public_knowledge_turn_context(
             record_knowledge_route(result="error", error_type=type(exc).__name__)
         except Exception:
             pass
-        return ""
+        return PublicKnowledgeTurnResult()

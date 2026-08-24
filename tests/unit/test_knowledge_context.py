@@ -43,6 +43,38 @@ def _make_client():
     return client
 
 
+@pytest.mark.parametrize(
+    ("text", "query"),
+    [
+        ("query_public_knowledge: 初音未来", "初音未来"),
+        ("/knowledge 初音未来", "初音未来"),
+        ("本地知识库：初音未来", "初音未来"),
+        ("请查询公共知识库：初音未来", "初音未来"),
+        ("请在本地知识库中查询：初音未来", "初音未来"),
+        ("请在本地知识库中查询初音未来", "初音未来"),
+    ],
+)
+def test_explicit_local_route_requires_a_complete_command(text, query):
+    import main_logic.knowledge_context as knowledge_tool
+
+    assert knowledge_tool._extract_explicit_local_knowledge_query(text) == query
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "联网搜索本地知识库技术的最新新闻",
+        "解释‘本地知识库’这个概念",
+        "比较公共知识库和网络搜索",
+        "请结合本地知识库并联网核实",
+    ],
+)
+def test_embedded_knowledge_words_do_not_claim_the_route(text):
+    import main_logic.knowledge_context as knowledge_tool
+
+    assert knowledge_tool._extract_explicit_local_knowledge_query(text) == ""
+
+
 @pytest.mark.asyncio
 async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(
     monkeypatch,
@@ -184,11 +216,12 @@ async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypa
     monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
     monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
-    context = await knowledge_tool.build_public_knowledge_turn_context(
+    result = await knowledge_tool.build_public_knowledge_turn_context(
         "你好呀",
     )
 
-    assert context == ""
+    assert result.context == ""
+    assert result.route_owner is None
     selector.assert_awaited_once()
     assert selector.await_args.args == ("你好呀",)
     fallback.assert_not_awaited()
@@ -201,11 +234,12 @@ async def test_explicit_local_knowledge_uses_one_host_lookup(monkeypatch):
     fallback = AsyncMock(return_value="local result")
     monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
-    context = await knowledge_tool.build_public_knowledge_turn_context(
+    result = await knowledge_tool.build_public_knowledge_turn_context(
         "请查询本地知识库：电车难题是什么？",
     )
 
-    assert context == "local result"
+    assert result.context == "local result"
+    assert result.route_owner == "public_knowledge"
     fallback.assert_awaited_once_with(
         {
             "query": "电车难题是什么？",
@@ -216,6 +250,24 @@ async def test_explicit_local_knowledge_uses_one_host_lookup(monkeypatch):
         language="",
         deadline_monotonic=ANY,
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_explicit_lookup_still_keeps_local_route_owner(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+
+    monkeypatch.setattr(
+        knowledge_tool,
+        "handle_public_knowledge_call",
+        AsyncMock(side_effect=RuntimeError("offline")),
+    )
+
+    result = await knowledge_tool.build_public_knowledge_turn_context(
+        "本地知识库：电车难题是什么？",
+    )
+
+    assert result.context == ""
+    assert result.route_owner == "public_knowledge"
 
 
 @pytest.mark.asyncio
@@ -236,11 +288,12 @@ async def test_automatic_knowledge_hit_does_not_use_explicit_lookup(monkeypatch)
     monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
     monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
-    context = await knowledge_tool.build_public_knowledge_turn_context(
+    result = await knowledge_tool.build_public_knowledge_turn_context(
         "你急了",
     )
 
-    assert context == "automatic result"
+    assert result.context == "automatic result"
+    assert result.route_owner is None
     fallback.assert_not_awaited()
 
 
@@ -271,9 +324,11 @@ async def test_automatic_context_timeout_fails_open_without_stacking(monkeypatch
     )
     started_at = asyncio.get_running_loop().time()
     try:
-        assert await knowledge_tool.build_public_knowledge_turn_context("第一轮") == ""
+        result = await knowledge_tool.build_public_knowledge_turn_context("第一轮")
+        assert result.context == ""
         await asyncio.wait_for(started.wait(), timeout=1.0)
-        assert await knowledge_tool.build_public_knowledge_turn_context("第二轮") == ""
+        result = await knowledge_tool.build_public_knowledge_turn_context("第二轮")
+        assert result.context == ""
         assert calls == 1
     finally:
         release.set()
@@ -310,7 +365,8 @@ async def test_slow_knowledge_open_does_not_block_the_event_loop(monkeypatch):
         0.02,
     )
     tick = asyncio.create_task(_tick())
-    assert await knowledge_tool.build_public_knowledge_turn_context("普通聊天") == ""
+    result = await knowledge_tool.build_public_knowledge_turn_context("普通聊天")
+    assert result.context == ""
     await asyncio.wait_for(heartbeat.wait(), timeout=0.05)
     await tick
     await asyncio.sleep(0.1)

@@ -45,6 +45,7 @@ from utils.internal_http_client import get_internal_http_client
 from utils.language_utils import is_supported_language_code
 from utils.logger_config import get_module_logger
 from main_logic.agent_event_bus import publish_analyze_request_reliably
+from main_logic.agent_routing import normalize_analyze_route_owner
 
 # Setup logger for this module
 logger = get_module_logger(__name__, "Main")
@@ -61,7 +62,16 @@ emoji_pattern2 = re.compile("["
 emotion_pattern = re.compile('<(.*?)>')
 
 
-async def _publish_analyze_request_with_fallback(lanlan_name: str, trigger: str, messages: list[dict], *, conversation_id: str | None = None, had_user_input: bool = True, language: str | None = None) -> bool:
+async def _publish_analyze_request_with_fallback(
+    lanlan_name: str,
+    trigger: str,
+    messages: list[dict],
+    *,
+    conversation_id: str | None = None,
+    had_user_input: bool = True,
+    language: str | None = None,
+    route_owner: str | None = None,
+) -> bool:
     """Publish analyze request via EventBus with ack/retry.
 
     ``had_user_input`` is False for a proactive turn (lanlan spoke with no fresh
@@ -111,6 +121,7 @@ async def _publish_analyze_request_with_fallback(lanlan_name: str, trigger: str,
             external_intent=external_intent,
             proactive=not had_user_input,
             language=language,
+            route_owner=normalize_analyze_route_owner(route_owner),
         )
         if sent:
             logger.debug(
@@ -887,6 +898,7 @@ async def run_sync_connector(
     current_turn_start_index = 0
     last_screen = None
     pending_user_images: list = []
+    pending_analyze_route_owner: str | None = None
     last_synced_index = 0  # 用于 turn end 时仅同步新增消息到 memory，避免 memory_browser 不更新
     avatar_interaction_memory_cache: dict[str, dict[str, int | str]] = {}
     memory_cache_health_state = {
@@ -1251,6 +1263,16 @@ async def run_sync_connector(
                                             f"agent_callback_turn={is_agent_callback_turn_end} "
                                             f"avatar_drop_turn={latest_user_is_avatar_drop}"
                                         )
+                                        _turn_had_user_input = (
+                                            had_user_input_this_turn
+                                            or bool(selected_pending_user_images)
+                                        )
+                                        if _turn_had_user_input:
+                                            pending_analyze_route_owner = (
+                                                normalize_analyze_route_owner(
+                                                    message.get("route_owner")
+                                                )
+                                            )
                                         if recent and has_user and latest_user_is_avatar_drop:
                                             logger.info(f"[{lanlan_name}] analyze_request skipped (avatar_drop turn_end), messages={len(recent)}")
                                         elif recent and not is_agent_callback_turn_end:
@@ -1260,7 +1282,6 @@ async def run_sync_connector(
                                             # NOT mis-marked proactive (which, with the feature off, would
                                             # drop the image task). Only a genuinely self-initiated turn
                                             # (no text, no image) is proactive.
-                                            _turn_had_user_input = had_user_input_this_turn or bool(selected_pending_user_images)
                                             sent = await _publish_analyze_request_with_fallback(
                                                 lanlan_name=lanlan_name,
                                                 trigger="turn_end",
@@ -1268,8 +1289,10 @@ async def run_sync_connector(
                                                 conversation_id=uuid.uuid4().hex,
                                                 had_user_input=_turn_had_user_input,
                                                 language=_current_analyze_language(),
+                                                route_owner=pending_analyze_route_owner,
                                             )
                                             if sent:
+                                                pending_analyze_route_owner = None
                                                 logger.debug(f"[{lanlan_name}] analyze_request dispatch success (turn_end), messages={len(recent)}")
                                             else:
                                                 logger.info(f"[{lanlan_name}] analyze_request dispatch failed (turn_end), messages={len(recent)}")
@@ -1376,11 +1399,13 @@ async def run_sync_connector(
                                                 messages=recent,
                                                 conversation_id=uuid.uuid4().hex,
                                                 language=_current_analyze_language(),
+                                                route_owner=pending_analyze_route_owner,
                                                 # session_end is terminal — never treated as proactive
                                                 # (had_user_input defaults True), so it always takes the
                                                 # ordinary user-turn path.
                                             )
                                             if sent:
+                                                pending_analyze_route_owner = None
                                                 logger.info(f"[{lanlan_name}] analyze_request dispatch success (session_end), messages={len(recent)}")
                                             else:
                                                 logger.info(f"[{lanlan_name}] analyze_request dispatch failed (session_end), messages={len(recent)}")

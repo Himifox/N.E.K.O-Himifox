@@ -24,37 +24,82 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_explicit_public_knowledge_request_owns_agent_route():
+@pytest.mark.asyncio
+async def test_structured_public_knowledge_owner_skips_external_agent(monkeypatch):
     from app.agent_server import api_runtime as srv
 
-    assert srv._is_explicit_local_knowledge_request(
-        [
-            {"role": "user", "content": "之前聊过别的"},
-            {"role": "assistant", "content": "好的"},
-            {"role": "user", "content": "请查询公共知识库：电车难题是什么？"},
-        ]
+    plan = AsyncMock()
+    monkeypatch.setattr(srv, "_agent_master_enabled", lambda: True)
+    monkeypatch.setattr(srv, "_background_analyze_and_plan", plan)
+    monkeypatch.setattr(srv.Modules, "last_user_turn_fingerprint", {})
+
+    await srv._on_session_event(
+        {
+            "event_type": "analyze_request",
+            "lanlan_name": "YUI",
+            "messages": [{"role": "user", "content": "电车难题是什么？"}],
+            "route_owner": "public_knowledge",
+        }
     )
-    assert not srv._is_explicit_local_knowledge_request(
-        [{"role": "user", "content": "帮我联网搜索今天的新闻"}]
-    )
+
+    plan.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_explicit_public_knowledge_request_skips_external_agent(monkeypatch):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "联网搜索本地知识库技术的最新新闻",
+        "解释‘本地知识库’这个概念",
+        "请结合本地知识库并联网核实",
+    ],
+)
+async def test_knowledge_words_without_structured_owner_do_not_skip_agent(
+    monkeypatch, text
+):
     from app.agent_server import api_runtime as srv
 
-    executor = MagicMock()
-    executor.analyze_and_execute = AsyncMock()
-    monkeypatch.setattr(srv.Modules, "task_executor", executor)
-    monkeypatch.setattr(srv.Modules, "analyzer_enabled", True)
-    monkeypatch.setitem(srv.Modules.agent_flags, "browser_use_enabled", False)
+    plan = AsyncMock()
+    monkeypatch.setattr(srv, "_agent_master_enabled", lambda: True)
+    monkeypatch.setattr(srv, "_background_analyze_and_plan", plan)
+    monkeypatch.setattr(srv.Modules, "last_user_turn_fingerprint", {})
 
-    await srv._do_analyze_and_plan(
-        [{"role": "user", "content": "请查询本地知识库：电车难题是什么？"}],
-        "YUI",
+    await srv._on_session_event(
+        {
+            "event_type": "analyze_request",
+            "lanlan_name": "YUI",
+            "messages": [{"role": "user", "content": text}],
+        }
+    )
+    await asyncio.sleep(0)
+
+    plan.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
+    from main_logic.core.turn import TurnMixin
+
+    queue = MagicMock()
+    manager = SimpleNamespace(
+        _text_route_owners={"req-local": "public_knowledge"},
+        _pending_turn_meta=None,
+        sync_message_queue=queue,
+        websocket=None,
+        _flush_ai_turn_text_to_tracker=MagicMock(),
     )
 
-    executor.analyze_and_execute.assert_not_awaited()
+    await TurnMixin._emit_turn_end(manager, "req-local")
+
+    queue.put.assert_called_once_with(
+        {
+            "type": "system",
+            "data": "turn end",
+            "route_owner": "public_knowledge",
+            "request_id": "req-local",
+        }
+    )
+    assert manager._text_route_owners == {}
 
 
 # ---------------------------------------------------------------------------

@@ -485,9 +485,18 @@ class StreamingMixin:
                         build_public_knowledge_turn_context,
                     )
 
-                    _knowledge_turn_context = await build_public_knowledge_turn_context(
+                    _knowledge_turn_result = await build_public_knowledge_turn_context(
                         record_data,
                     )
+                    _knowledge_turn_context = _knowledge_turn_result.context
+                    _route_request_id = str(text_request_id or "")
+                    if _route_request_id:
+                        if _knowledge_turn_result.route_owner:
+                            self._text_route_owners[_route_request_id] = (
+                                _knowledge_turn_result.route_owner
+                            )
+                        else:
+                            self._text_route_owners.pop(_route_request_id, None)
                     _focus_thinking = await self._focus_inline_decision(record_data)
 
                     async def response_discarded_callback(

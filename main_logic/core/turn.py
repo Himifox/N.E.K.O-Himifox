@@ -368,6 +368,10 @@ class TurnMixin:
         Unified semantics: sync queue and WS carry the same meta, avoiding one
         having meta while the other doesn't."""
         turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
+        route_request_id = str(active_request_id or "")
+        route_owner = self._text_route_owners.pop(route_request_id, None)
+        if route_owner:
+            turn_end_msg['route_owner'] = route_owner
         pending_meta = self._pending_turn_meta
         if pending_meta:
             turn_end_msg['meta'] = pending_meta
