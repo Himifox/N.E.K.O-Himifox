@@ -185,6 +185,8 @@ async def test_inference_drain_timeout_keeps_native_task_running() -> None:
 
 def test_indexer_work_limits_are_bounded() -> None:
     assert indexer.STARTUP_DELAY_SECONDS == 45.0
+    assert indexer.INITIALIZATION_RETRY_SECONDS == 5.0
+    assert indexer.MAX_INITIALIZATION_RETRY_SECONDS == 60.0
     assert indexer.BACKLOG_DELAY_SECONDS == 30.0
     assert indexer.EMBEDDING_BATCH_SIZE == 4
     assert indexer.MAX_CHUNKS_PER_ROUND == 8
@@ -196,8 +198,10 @@ async def test_indexer_initialization_failure_is_retrieved(
     tmp_path,
 ) -> None:
     monkeypatch.setattr(indexer, "STARTUP_DELAY_SECONDS", 0.0)
+    attempted = asyncio.Event()
 
     def fail_to_open(_root):
+        attempted.set()
         raise ValueError("legacy migration conflict")
 
     monkeypatch.setattr(
@@ -205,4 +209,54 @@ async def test_indexer_initialization_failure_is_retrieved(
         fail_to_open,
     )
 
-    await indexer._run_indexer(tmp_path, asyncio.Event())
+    task = asyncio.create_task(indexer._run_indexer(tmp_path, asyncio.Event()))
+    await asyncio.wait_for(attempted.wait(), timeout=1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_indexer_retries_initialization_after_wake(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(indexer, "STARTUP_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(indexer, "INITIALIZATION_RETRY_SECONDS", 60.0)
+    first_failure = asyncio.Event()
+    recovered = asyncio.Event()
+    attempts = 0
+
+    class FakeService:
+        def database_path(self):
+            return tmp_path / "knowledge.db"
+
+    def flaky_open(_root):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            first_failure.set()
+            raise OSError("store temporarily unavailable")
+        return FakeService()
+
+    async def observe_recovery(*_args, **_kwargs):
+        recovered.set()
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "knowledge.service.KnowledgeService.from_root",
+        flaky_open,
+    )
+    monkeypatch.setattr(
+        "knowledge.pack_jobs.process_pack_jobs",
+        observe_recovery,
+    )
+    wake = asyncio.Event()
+    task = asyncio.create_task(indexer._run_indexer(tmp_path, wake))
+    await asyncio.wait_for(first_failure.wait(), timeout=1.0)
+    wake.set()
+    await asyncio.wait_for(recovered.wait(), timeout=1.0)
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert attempts == 2

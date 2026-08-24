@@ -13,6 +13,8 @@ from pathlib import Path
 logger = logging.getLogger("N.E.K.O.Knowledge.Indexer")
 
 STARTUP_DELAY_SECONDS = 45.0
+INITIALIZATION_RETRY_SECONDS = 5.0
+MAX_INITIALIZATION_RETRY_SECONDS = 60.0
 BACKLOG_DELAY_SECONDS = 30.0
 IDLE_DELAY_SECONDS = 60.0
 EMBEDDING_BATCH_SIZE = 4
@@ -83,17 +85,25 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     from .service import KnowledgeService
     from .vector_index import index_embedding_batch, reconcile_embedding_models
 
-    try:
-        service = KnowledgeService.from_root(knowledge_root)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning(
-            "Knowledge background indexing could not initialize (%s); "
-            "BM25 remains available when the store recovers",
-            type(exc).__name__,
-        )
-        return
+    retry_seconds = INITIALIZATION_RETRY_SECONDS
+    while True:
+        try:
+            service = KnowledgeService.from_root(knowledge_root)
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Knowledge background indexing could not initialize (%s); "
+                "retrying in %.1fs while BM25 remains available",
+                type(exc).__name__,
+                retry_seconds,
+            )
+            await _wait_for_wake(wake_event, retry_seconds)
+            retry_seconds = min(
+                retry_seconds * 2,
+                MAX_INITIALIZATION_RETRY_SECONDS,
+            )
     memory_baseline = _rss_bytes()
     memory_delta_reported = False
 
