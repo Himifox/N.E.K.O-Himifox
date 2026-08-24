@@ -5,9 +5,23 @@ import hashlib
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from knowledge.api import canonical_pack_bytes
 from plugin.server.routes import knowledge_market as module
+
+
+@pytest.fixture(autouse=True)
+def _clear_task_registries():
+    module._tasks.clear()
+    module._task_workers.clear()
+    module._active_package_tasks.clear()
+    yield
+    for worker in module._task_workers.values():
+        worker.cancel()
+    module._tasks.clear()
+    module._task_workers.clear()
+    module._active_package_tasks.clear()
 
 
 def _pack():
@@ -261,6 +275,45 @@ async def test_artifact_download_follows_validated_github_redirect(monkeypatch):
         "https://github.com/example/repo/releases/download/v1/fixture.bin",
         "https://release-assets.githubusercontent.com/fixture.bin",
     ]
+
+
+@pytest.mark.asyncio
+async def test_subscriptions_are_single_flight_and_globally_bounded(monkeypatch):
+    release = asyncio.Event()
+
+    async def blocked(_task_id, _payload):
+        await release.wait()
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_execute_subscription", blocked)
+
+    first = await module.subscribe_knowledge_package(
+        module.KnowledgeSubscribeRequest(package_id=1, version="1.0.0"),
+        token="fixture",
+    )
+    duplicate = await module.subscribe_knowledge_package(
+        module.KnowledgeSubscribeRequest(package_id=1, version="1.0.0"),
+        token="fixture",
+    )
+    assert duplicate["task_id"] == first["task_id"]
+
+    for package_id in (2, 3, 4):
+        await module.subscribe_knowledge_package(
+            module.KnowledgeSubscribeRequest(package_id=package_id, version="1.0.0"),
+            token="fixture",
+        )
+    with pytest.raises(HTTPException) as busy:
+        await module.subscribe_knowledge_package(
+            module.KnowledgeSubscribeRequest(package_id=5, version="1.0.0"),
+            token="fixture",
+        )
+    assert busy.value.status_code == 429
+    assert len(module._task_workers) == 4
+
+    release.set()
+    await asyncio.gather(*tuple(module._task_workers.values()))
+    await asyncio.sleep(0)
+    assert module._task_workers == {}
 
 
 @pytest.mark.asyncio

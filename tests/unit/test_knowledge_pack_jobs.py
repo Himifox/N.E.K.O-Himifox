@@ -297,3 +297,21 @@ async def test_raw_pack_activation_never_loads_the_embedding_model(
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
     assert result["state"] == "ready_bm25"
     assert service.list_packs()[0]["local_embedding_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_routing_refresh_failure_does_not_relabel_committed_pack(
+    tmp_path, monkeypatch
+):
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+
+    def fail_refresh(*_args, **_kwargs):
+        raise OSError("refresh unavailable")
+
+    monkeypatch.setattr(service, "refresh_routing_index", fail_refresh)
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "ready_bm25"
+    assert service.list_pack_jobs()[0]["state"] == "active"
+    assert service.list_packs()[0]["pack_id"] == "staged-fixture"

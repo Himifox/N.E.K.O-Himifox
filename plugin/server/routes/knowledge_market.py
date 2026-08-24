@@ -30,7 +30,10 @@ from plugin.server.routes.market_bridge import (
 router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
+_task_workers: dict[str, asyncio.Task[None]] = {}
+_active_package_tasks: dict[int, str] = {}
 _TASK_TTL_SECONDS = 60 * 60
+_MAX_ACTIVE_SUBSCRIPTIONS = 4
 _JOB_POLL_SECONDS = 5.0
 _JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 _MAX_INDEX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -115,6 +118,24 @@ async def subscribe_knowledge_package(
 ):
     _verify_bridge_token(token)
     _cleanup_tasks()
+    existing_id = _active_package_tasks.get(payload.package_id)
+    if existing_id:
+        existing = _tasks.get(existing_id)
+        if existing and (
+            existing.get("version") == payload.version
+            and existing.get("channel") == payload.channel
+        ):
+            return {"task_id": existing_id, "status": existing.get("status", "pending")}
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "knowledge_subscription_conflict"},
+        )
+    if len(_task_workers) >= _MAX_ACTIVE_SUBSCRIPTIONS:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "knowledge_subscription_busy"},
+            headers={"Retry-After": "5"},
+        )
     task_id = secrets.token_urlsafe(16)
     _tasks[task_id] = {
         "task_id": task_id,
@@ -127,12 +148,37 @@ async def subscribe_knowledge_package(
         "error_code": None,
         "created_at": time.time(),
         "completed_at": None,
+        "package_id": payload.package_id,
+        "version": payload.version,
+        "channel": payload.channel,
     }
-    asyncio.create_task(
+    worker = asyncio.create_task(
         _execute_subscription(task_id, payload),
         name=f"market-knowledge-{task_id}",
     )
+    _task_workers[task_id] = worker
+    _active_package_tasks[payload.package_id] = task_id
+    worker.add_done_callback(
+        lambda completed, *, task_id=task_id, package_id=payload.package_id:
+        _subscription_done(task_id, package_id, completed)
+    )
     return {"task_id": task_id, "status": "pending"}
+
+
+def _subscription_done(
+    task_id: str,
+    package_id: int,
+    completed: asyncio.Task[None],
+) -> None:
+    if _task_workers.get(task_id) is completed:
+        _task_workers.pop(task_id, None)
+    if _active_package_tasks.get(package_id) == task_id:
+        _active_package_tasks.pop(package_id, None)
+    if not completed.cancelled():
+        try:
+            completed.exception()
+        except Exception:
+            logger.exception("failed to consume knowledge subscription task result")
 
 
 @router.get("/tasks/{task_id}", response_model=KnowledgeTaskResponse)
@@ -639,7 +685,8 @@ def _cleanup_tasks() -> None:
     expired = [
         task_id
         for task_id, task in _tasks.items()
-        if task.get("completed_at")
+        if task_id not in _task_workers
+        and task.get("completed_at")
         and now - float(task["completed_at"]) > _TASK_TTL_SECONDS
     ]
     for task_id in expired:

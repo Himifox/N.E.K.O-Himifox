@@ -56,6 +56,11 @@ from plugin.settings import (
     NEKO_AUTH_CLIENT_ID,
     NEKO_AUTH_URL,
 )
+from knowledge.packs import MAX_PACK_BYTES
+from knowledge.prebuilt_index import (
+    MAX_PREBUILT_MANIFEST_BYTES,
+    MAX_PREBUILT_VECTOR_BYTES,
+)
 
 router = APIRouter(prefix="/market", tags=["market-bridge"])
 logger = get_logger("server.routes.market_bridge")
@@ -113,6 +118,14 @@ _KNOWLEDGE_BRIDGE_PATHS = frozenset({
     "subscriptions/apply",
     "diagnostics/recent",
 })
+_KNOWLEDGE_JSON_BODY_MAX_BYTES = 64 * 1024
+_KNOWLEDGE_PACK_ENVELOPE_MAX_BYTES = MAX_PACK_BYTES + 64 * 1024
+_KNOWLEDGE_SUBSCRIPTION_ENVELOPE_MAX_BYTES = (
+    MAX_PACK_BYTES
+    + MAX_PREBUILT_MANIFEST_BYTES
+    + MAX_PREBUILT_VECTOR_BYTES
+    + 256 * 1024
+)
 
 # GitHub Release download mirrors exposed by the local plugin-manager UI.
 # Keeping this allowlist server-side means the speed test never accepts an
@@ -189,6 +202,7 @@ async def public_knowledge_bridge(
     else:
         forwarded = []
     headers = {"Accept": "application/json"}
+    body: bytes | None = None
     if request.method == "POST":
         import config
 
@@ -197,6 +211,10 @@ async def public_knowledge_bridge(
             "Origin": f"http://127.0.0.1:{main_port}",
             "X-CSRF-Token": str(config.AUTOSTART_CSRF_TOKEN),
         })
+        body = await _read_knowledge_body_limited(
+            request,
+            max_bytes=_knowledge_body_limit(normalized_path),
+        )
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(15.0, connect=2.0),
@@ -207,7 +225,7 @@ async def public_knowledge_bridge(
                 request.method,
                 target,
                 params=forwarded,
-                content=await request.body() if request.method == "POST" else None,
+                content=body,
                 headers=headers,
             )
     except httpx.HTTPError as exc:
@@ -222,6 +240,35 @@ async def public_knowledge_bridge(
             )
         },
     )
+
+
+def _knowledge_body_limit(path: str) -> int:
+    if path == "packs/import":
+        return _KNOWLEDGE_PACK_ENVELOPE_MAX_BYTES
+    if path == "subscriptions/apply":
+        return _KNOWLEDGE_SUBSCRIPTION_ENVELOPE_MAX_BYTES
+    return _KNOWLEDGE_JSON_BODY_MAX_BYTES
+
+
+async def _read_knowledge_body_limited(request: Request, *, max_bytes: int) -> bytes:
+    try:
+        declared = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        declared = 0
+    if declared > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "knowledge_request_too_large"},
+        )
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "knowledge_request_too_large"},
+            )
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _main_server_port() -> int:

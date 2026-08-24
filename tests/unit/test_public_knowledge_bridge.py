@@ -65,6 +65,22 @@ def test_knowledge_bridge_rejects_arbitrary_proxy_paths(monkeypatch):
     assert captured == {}
 
 
+def test_knowledge_bridge_rejects_oversized_body_before_forwarding(monkeypatch):
+    captured = {}
+    client = _client(monkeypatch, captured)
+
+    response = client.post(
+        "/market/knowledge/entry/disabled",
+        params={"token": "fixture"},
+        content=b"x" * (64 * 1024 + 1),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "knowledge_request_too_large"
+    assert captured == {}
+
+
 def test_bridge_token_error_uses_stable_code():
     from plugin.server.routes import market_bridge as module
 

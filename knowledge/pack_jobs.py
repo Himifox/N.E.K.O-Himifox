@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -33,6 +34,7 @@ TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
+logger = logging.getLogger(__name__)
 
 
 def _jobs_root(knowledge_root: str | Path) -> Path:
@@ -415,20 +417,36 @@ def _activate_job(
                 "prebuilt_chunks_missing": current.get("prebuilt_chunks_missing", 0),
             },
         )
-        service.refresh_routing_index(background=True)
-        state = _write_state(
-            job_dir,
-            current,
-            state="active",
-            retrieval_mode=result.retrieval_mode,
-            chunks_ready=len(embeddings),
-            indexed_percent=(
-                100.0
-                if mode == "hybrid"
-                else float(current.get("indexed_percent") or 0.0)
-            ),
-            reason="",
-        )
+        try:
+            state = _write_state(
+                job_dir,
+                current,
+                state="active",
+                retrieval_mode=result.retrieval_mode,
+                chunks_ready=len(embeddings),
+                indexed_percent=(
+                    100.0
+                    if mode == "hybrid"
+                    else float(current.get("indexed_percent") or 0.0)
+                ),
+                reason="",
+            )
+        except Exception:
+            # install_pack() is the durable commit point.  Keep the staging
+            # payload so a later pass can reconcile the journal, but never let
+            # an auxiliary state-file failure relabel the live pack as failed.
+            logger.exception("knowledge pack committed but active state was not persisted")
+            return {
+                **current,
+                "state": "active",
+                "retrieval_mode": result.retrieval_mode,
+                "_activation_committed": True,
+                "_state_persisted": False,
+            }
+        try:
+            service.refresh_routing_index(background=True)
+        except Exception:
+            logger.exception("knowledge pack activated but routing refresh failed")
     _cleanup_payload(job_dir)
     return state
 
@@ -468,15 +486,13 @@ async def process_pack_jobs(
         if not state or state.get("state") in TERMINAL_STATES:
             return {"state": "no_work", "selected": 0, "stored": 0}
 
-        staging_store = KnowledgeStore(job_dir / "knowledge.db")
-        status = staging_store.chunk_status()
-        total = int(status["chunks_total"])
-        ready = int(status["chunks_ready"])
-        has_prebuilt = state.get("index_validation") == "accepted" and ready == total
-        replaced_ready = _ready_chunks_replaced_by_job(
+        total, ready, replaced_ready = await asyncio.to_thread(
+            _activation_capacity_snapshot,
             service,
+            job_dir,
             str(state.get("pack_id") or ""),
         )
+        has_prebuilt = state.get("index_validation") == "accepted" and ready == total
         projected_ready = max(ready_vector_chunks - replaced_ready, 0) + total
         if has_prebuilt and projected_ready > MAX_READY_VECTOR_CHUNKS:
             state = await _write_state_async(
@@ -546,3 +562,15 @@ async def process_pack_jobs(
         )
         _cleanup_payload(job_dir)
         return {"state": "failed", "selected": 0, "stored": 0}
+
+
+def _activation_capacity_snapshot(
+    service, job_dir: Path, pack_id: str
+) -> tuple[int, int, int]:
+    """Read activation capacity inputs off the event-loop thread."""
+    status = KnowledgeStore(job_dir / "knowledge.db").chunk_status()
+    return (
+        int(status["chunks_total"]),
+        int(status["chunks_ready"]),
+        _ready_chunks_replaced_by_job(service, pack_id),
+    )
