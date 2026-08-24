@@ -320,7 +320,7 @@ const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
 const KNOWLEDGE_OVERVIEW_CACHE_KEY = 'neko.pluginManager.knowledgeOverview'
 let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
 let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
-let overviewRefreshTimer: ReturnType<typeof window.setTimeout> | null = null
+let overviewRefreshTimer: number | null = null
 let overviewRefreshInFlight: Promise<void> | null = null
 
 const { t } = useI18n()
@@ -790,8 +790,9 @@ function deferInitialSecondaryLoads(silent = false) {
     void loadPacks({ silent })
     void loadMarketAuthStatus()
   }
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 1200 })
+  const requestIdleCallback = window.requestIdleCallback
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 1200 })
     return
   }
   window.setTimeout(run, 120)
