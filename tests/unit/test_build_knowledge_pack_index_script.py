@@ -27,7 +27,7 @@ SPEC.loader.exec_module(MODULE)
 
 def _pack_payload():
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": "publisher-fixture",
         "material_type": "corpus",
         "source": {"name": "Fixture", "homepage": "", "license": "CC0"},

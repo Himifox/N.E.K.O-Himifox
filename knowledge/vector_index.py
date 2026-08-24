@@ -31,7 +31,7 @@ from .store import KnowledgeStore
 
 
 logger = logging.getLogger("N.E.K.O.Knowledge.VectorIndex")
-# Calibrated with input contract v2 against the local 256d int8 model:
+# Calibrated with input contract v1 against the local 256d int8 model:
 # Recall@3=80% and unrelated-query rejection=90% on the grounded release set.
 SEMANTIC_THRESHOLD = 0.57
 VECTOR_CANDIDATE_LIMIT = 12

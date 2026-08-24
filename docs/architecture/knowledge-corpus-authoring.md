@@ -1,6 +1,6 @@
 # Knowledge / Corpus 知识包编写与发布
 
-> **运行时更新（2026-08-24）**：构建、评估和重建知识索引的命令会在自身进程入口显式绑定本地 Embedding 提供方；知识模块本身只依赖中立门面。仅执行制品校验不加载模型，提供方未配置或不可用时运行时安全降级为 BM25。
+> **首发契约（2026-08-24）**：知识包格式、市场交付、预构建索引、Embedding 输入和分块规则统一从 v1 起步。构建、评估和重建知识索引的命令会在自身进程入口显式绑定本地 Embedding 提供方；仅执行制品校验不加载模型，提供方未配置或不可用时安全降级为 BM25。
 
 ## 统一模型
 
@@ -15,13 +15,13 @@
 
 `meme` 不再是集合或第三种材料类型。它只是可选主题标签 `domain:meme`：梗的含义属于 `knowledge`，梗式回复样例属于 `corpus`。该标签只影响结果交给模型时的表达策略，不改变存储和检索路径。
 
-## 知识包 Schema v3
+## 知识包 Schema v1
 
-Schema v3 删除 `collection_id`。包根只能包含 `schema_version`、`pack_id`、`material_type`、`source` 和 `entries`：
+Schema v1 的包根只能包含 `schema_version`、`pack_id`、`material_type`、`source` 和 `entries`：
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 1,
   "pack_id": "example-meme-knowledge",
   "material_type": "knowledge",
   "source": {
@@ -52,7 +52,7 @@ title / terms / tags / summary / content
 
 `chunks`、哈希、向量、模型 ID 和索引状态都是系统派生数据，不能写入原始包。
 
-Schema v1/v2 和 `collection_id=meme|corpora` 不再兼容；发布者必须重新生成规范 Schema v3 原始包及其摘要。
+`collection_id` 不属于首发格式；内容用途只由 `material_type` 表达。发布者必须从规范 Schema v1 原始包生成摘要和可选索引。
 
 ## 原始包与预构建索引
 
@@ -68,7 +68,7 @@ Schema v1/v2 和 `collection_id=meme|corpora` 不再兼容；发布者必须重�
 
 ```text
 embedding_model_id      = local-text-retrieval-v1-256d-int8-mlen1024
-embedding_input_version = 2
+embedding_input_version = 1
 chunker_version         = 1
 embedding_dimensions    = 256
 vector_encoding         = float16-le-row-major
@@ -86,7 +86,7 @@ uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.n
 ## 运行路径
 
 ```text
-导入 Schema v3 包
+导入 Schema v1 包
   → 同一 knowledge/knowledge.db
   → entries + FTS + knowledge_chunks
 
@@ -124,7 +124,7 @@ POST /api/public-knowledge/packs/index-policy
 POST /api/public-knowledge/packs/remove
 ```
 
-写接口仅接受通过本地 CSRF 与 Origin 校验的请求。修改包用途只更新来源级策略，不改写原始词条。`knowledge` 与 `corpus` 都可通过 `packs/auto-context` 按包开启或关闭自动上下文；包首次切换为 `corpus` 时会按现行策略默认开启。可信市场的 `/subscriptions/apply-v3` 交接端点另见订阅契约，不是供浏览器直接提交任意 URL 的导入接口。
+写接口仅接受通过本地 CSRF 与 Origin 校验的请求。修改包用途只更新来源级策略，不改写原始词条。`knowledge` 与 `corpus` 都可通过 `packs/auto-context` 按包开启或关闭自动上下文；包首次切换为 `corpus` 时会按现行策略默认开启。可信市场的 `/subscriptions/apply` 交接端点另见订阅契约，不是供浏览器直接提交任意 URL 的导入接口。
 
 完整制品协议另见：
 

@@ -27,11 +27,9 @@ from knowledge.prebuilt_index import (
     validate_prebuilt_index,
 )
 from knowledge.subscriptions import (
-    INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
     SUBSCRIPTION_PROTOCOL_VERSION,
     canonical_pack_bytes,
     load_canonical_pack_artifact,
-    validate_indexed_subscription,
     validate_subscription,
 )
 from main_routers.shared_state import get_config_manager
@@ -311,49 +309,7 @@ async def import_public_knowledge_pack(request: Request):
 
 
 @router.post("/subscriptions/apply")
-async def apply_public_knowledge_subscription(request: Request):
-    """Install provider-verified data without coupling to a market protocol."""
-    payload, too_large = await _bounded_json_payload(
-        request,
-        max_bytes=MAX_PACK_BYTES + _PACK_ENVELOPE_OVERHEAD_BYTES,
-    )
-    if too_large:
-        return {"ok": False, "reason": "pack_too_large"}
-    rejected = _validate_mutation(request, payload)
-    if rejected is not None:
-        return rejected
-    if payload.get("protocol_version") != SUBSCRIPTION_PROTOCOL_VERSION:
-        return {"ok": False, "reason": "unsupported_protocol"}
-    try:
-        subscription = validate_subscription(payload.get("subscription"))
-        pack_payload = payload.get("pack")
-        pack_bytes = canonical_pack_bytes(pack_payload)
-        if len(pack_bytes) > MAX_PACK_BYTES:
-            return {"ok": False, "reason": "pack_too_large"}
-        digest = hashlib.sha256(pack_bytes).hexdigest()
-        if digest != subscription.artifact_sha256:
-            return {"ok": False, "reason": "artifact_hash_mismatch"}
-        pack = validate_pack(pack_payload)
-        result = await asyncio.to_thread(
-            _service().stage_pack,
-            pack,
-            subscription=subscription.to_dict(),
-        )
-    except (OSError, ValueError) as exc:
-        return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
-    return {
-        "ok": True,
-        "protocol_version": SUBSCRIPTION_PROTOCOL_VERSION,
-        "provider": subscription.provider,
-        "remote_id": subscription.remote_id,
-        "source_tag": pack.source_tag,
-        "entries": result["entries_total"],
-        **result,
-    }
-
-
-@router.post("/subscriptions/apply-v3")
-async def apply_indexed_public_knowledge_subscription(
+async def apply_public_knowledge_subscription(
     request: Request,
     protocol_version: int = Form(...),
     subscription: str = Form(...),
@@ -366,19 +322,22 @@ async def apply_indexed_public_knowledge_subscription(
     rejected = _validate_mutation(request, {})
     if rejected is not None:
         return rejected
-    if protocol_version != INDEXED_SUBSCRIPTION_PROTOCOL_VERSION:
+    if protocol_version != SUBSCRIPTION_PROTOCOL_VERSION:
         return {"ok": False, "reason": "unsupported_protocol"}
     try:
         subscription_payload = json.loads(subscription)
-        indexed_subscription = validate_indexed_subscription(subscription_payload)
-        if indexed_subscription.provider != "plugin-market":
+        validated_subscription = validate_subscription(subscription_payload)
+        if validated_subscription.provider != "plugin-market":
             return {"ok": False, "reason": "untrusted_provider"}
         pack_raw = await _read_upload_limited(pack, max_bytes=MAX_PACK_BYTES)
         pack_payload = load_canonical_pack_artifact(pack_raw)
-        if hashlib.sha256(pack_raw).hexdigest() != indexed_subscription.artifact_sha256:
+        if (
+            hashlib.sha256(pack_raw).hexdigest()
+            != validated_subscription.artifact_sha256
+        ):
             return {"ok": False, "reason": "artifact_hash_mismatch"}
         knowledge_pack = validate_pack(pack_payload)
-        if knowledge_pack.material_type != indexed_subscription.material_type:
+        if knowledge_pack.material_type != validated_subscription.material_type:
             return {"ok": False, "reason": "material_type_mismatch"}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
@@ -402,9 +361,9 @@ async def apply_indexed_public_knowledge_subscription(
                 pack_raw,
                 manifest_raw,
                 vectors_raw,
-                expected_pack_sha256=indexed_subscription.artifact_sha256,
-                expected_manifest_sha256=indexed_subscription.index_manifest_sha256,
-                expected_vectors_sha256=indexed_subscription.vectors_sha256,
+                expected_pack_sha256=validated_subscription.artifact_sha256,
+                expected_manifest_sha256=validated_subscription.index_manifest_sha256,
+                expected_vectors_sha256=validated_subscription.vectors_sha256,
             )
             fallback_reason = ""
         except (OSError, ValueError):
@@ -413,14 +372,14 @@ async def apply_indexed_public_knowledge_subscription(
             fallback_reason = "prebuilt_index_rejected"
     elif has_manifest or has_vectors:
         fallback_reason = "incomplete_index_upload"
-    elif indexed_subscription.index_manifest_sha256:
+    elif validated_subscription.index_manifest_sha256:
         fallback_reason = fallback_reason or "index_artifact_missing"
 
     try:
         result = await asyncio.to_thread(
             _service().stage_pack,
             knowledge_pack,
-            subscription=indexed_subscription.to_dict(),
+            subscription=validated_subscription.to_dict(),
             index_manifest=manifest_raw,
             vectors=vectors_raw,
             index_fallback_reason=fallback_reason,
@@ -429,9 +388,9 @@ async def apply_indexed_public_knowledge_subscription(
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
         "ok": True,
-        "protocol_version": INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
-        "provider": indexed_subscription.provider,
-        "remote_id": indexed_subscription.remote_id,
+        "protocol_version": SUBSCRIPTION_PROTOCOL_VERSION,
+        "provider": validated_subscription.provider,
+        "remote_id": validated_subscription.remote_id,
         "source_tag": knowledge_pack.source_tag,
         "entries": result["entries_total"],
         **result,

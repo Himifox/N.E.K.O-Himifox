@@ -19,6 +19,7 @@ from .models import (
     KnowledgeEntry,
     normalize_knowledge_title,
 )
+from .packs import PACK_REGISTRY_SCHEMA_VERSION
 from .store import KnowledgeStore
 
 
@@ -256,7 +257,7 @@ def _merge_registries(
                 }
             )
             merged[str(pack_id)] = metadata
-    return {"schema_version": 3, "packs": merged}
+    return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": merged}
 
 
 def _merge_disabled_entries(databases: tuple[Path, ...]) -> set[tuple[str, str]]:

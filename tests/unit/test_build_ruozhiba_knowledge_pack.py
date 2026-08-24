@@ -41,7 +41,7 @@ def test_converted_rows_form_a_valid_removable_corpus_pack():
         [{"instruction": "为什么太阳会发光?", "output": "这是趣味回答。"}]
     )
     payload = {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": "ruozhiba-qa",
         "material_type": "corpus",
         "source": {

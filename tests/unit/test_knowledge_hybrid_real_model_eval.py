@@ -15,7 +15,7 @@ def test_real_model_fixture_is_grounded_and_bounded():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
     assert payload["schema_version"] == 1
-    assert payload["embedding_input_version"] == 2
+    assert payload["embedding_input_version"] == 1
     assert payload["quality_targets"] == {
         "recall_at_3": 0.8,
         "negative_rejection": 0.9,

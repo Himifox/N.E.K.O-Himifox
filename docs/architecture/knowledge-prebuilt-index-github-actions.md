@@ -82,7 +82,7 @@ jobs:
       - name: Upload the immutable artifact set
         uses: actions/upload-artifact@v4
         with:
-          name: example-knowledge-v3
+          name: example-knowledge-${{ github.ref_name }}
           if-no-files-found: error
           retention-days: 30
           path: |

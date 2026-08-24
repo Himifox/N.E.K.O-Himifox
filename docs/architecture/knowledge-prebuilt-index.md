@@ -1,6 +1,6 @@
 # 预构建知识向量索引
 
-> **版本澄清（2026-08-24）**：可信市场的带索引交付协议为 v3，原始知识包 Schema 为 v3；本页的“固定 v1”仅指索引清单格式。这三个版本号属于不同契约，不能互换。
+> **首发契约（2026-08-24）**：市场交付协议、原始知识包 Schema、索引清单、Embedding 输入与分块规则统一从 v1 起步；知识包自身的发布版本另行使用 SemVer。
 
 ## 目的与默认行为
 
@@ -10,7 +10,7 @@
 
 ## 三制品契约
 
-一次完整的可信市场 protocol v3 发布包含：
+一次完整的可信市场 protocol v1 发布包含：
 
 1. `*.neko-knowledge.json`：规范 JSON 知识正文。
 2. `*.neko-knowledge.index.json`：规范 JSON 索引清单。
@@ -26,7 +26,7 @@
 | --- | --- |
 | `index_schema_version` | `1` |
 | `embedding_model_id` | `local-text-retrieval-v1-256d-int8-mlen1024` |
-| `embedding_input_version` | `2` |
+| `embedding_input_version` | `1` |
 | `chunker_version` | `1` |
 | `embedding_dimensions` | `256` |
 | `vector_encoding` | `float16-le-row-major` |
@@ -65,7 +65,7 @@
 
 ## 信任与本机维护
 
-`trusted_market` 表示制品来自本地允许的市场交接链，并且完成了上述本地二次校验；它不是发布者可在知识 JSON 中自行填写的字段。本地文件导入、旧版 v1 订阅和任意旁路下载都不能声明该信任级别。
+`trusted_market` 表示制品来自本地允许的市场交接链，并且完成了上述本地二次校验；它不是发布者可在知识 JSON 中自行填写的字段。本地文件导入和任意旁路下载都不能声明该信任级别。
 
 每个已安装包记录以下可观察状态：
 

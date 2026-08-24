@@ -229,7 +229,7 @@ def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> 
     pack_path.write_text(
         json.dumps(
             {
-                "schema_version": 3,
+                "schema_version": 1,
                 "pack_id": "preflight-fixture",
                 "material_type": "knowledge",
                 "source": {"name": "Fixture", "homepage": "", "license": "CC0"},

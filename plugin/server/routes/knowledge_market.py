@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from knowledge.api import (
-    INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
+    SUBSCRIPTION_PROTOCOL_VERSION,
     load_canonical_pack_artifact,
 )
 from knowledge.packs import MAX_PACK_BYTES
@@ -76,7 +76,7 @@ class KnowledgeArtifactSet(BaseModel):
 class KnowledgeVersionDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal[3]
+    protocol_version: Literal[1]
     package_id: int = Field(gt=0)
     remote_id: str = Field(pattern=r"^knowledge/[a-z0-9][a-z0-9._-]{1,99}$")
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
@@ -225,7 +225,7 @@ async def _execute_subscription(
                 vectors_raw = None
                 index_fallback_reason = exc.code
         _stage(task, "installing", 0.75, "正在写入本地知识库")
-        result = await _main_indexed_subscription_request(
+        result = await _main_subscription_request(
             subscription={
                 "provider": "plugin-market",
                 "remote_id": descriptor.remote_id,
@@ -372,7 +372,7 @@ async def _download_artifact(url: str, *, max_bytes: int = MAX_PACK_BYTES) -> by
     return b"".join(chunks)
 
 
-async def _main_indexed_subscription_request(
+async def _main_subscription_request(
     *,
     subscription: dict[str, str],
     pack_raw: bytes,
@@ -389,7 +389,7 @@ async def _main_indexed_subscription_request(
         "X-CSRF-Token": str(config.AUTOSTART_CSRF_TOKEN),
     }
     data = {
-        "protocol_version": str(INDEXED_SUBSCRIPTION_PROTOCOL_VERSION),
+        "protocol_version": str(SUBSCRIPTION_PROTOCOL_VERSION),
         "subscription": json.dumps(subscription, separators=(",", ":"), sort_keys=True),
         "index_fallback_reason": index_fallback_reason,
     }
@@ -413,7 +413,7 @@ async def _main_indexed_subscription_request(
             trust_env=False,
         ) as client:
             response = await client.post(
-                f"http://127.0.0.1:{port}/api/public-knowledge/subscriptions/apply-v3",
+                f"http://127.0.0.1:{port}/api/public-knowledge/subscriptions/apply",
                 data=data,
                 files=files,
                 headers=headers,

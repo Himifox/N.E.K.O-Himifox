@@ -12,14 +12,13 @@ from knowledge.packs import install_pack, pack_payload, validate_pack
 from knowledge.subscriptions import (
     canonical_pack_bytes,
     load_canonical_pack_artifact,
-    validate_indexed_subscription,
     validate_subscription,
 )
 
 
 def _payload(*, title="community phrase", pack_id="community-fixture"):
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": pack_id,
         "material_type": "knowledge",
         "source": {
@@ -134,7 +133,7 @@ def test_v3_registry_enables_existing_corpus_for_conversation(tmp_path):
     assert installed[0]["auto_context"] is True
 
 
-def test_v3_pack_requires_material_type():
+def test_pack_requires_material_type():
     missing = _payload()
     missing.pop("material_type")
     with pytest.raises(ValueError, match="material_type"):
@@ -145,13 +144,12 @@ def test_v3_pack_requires_material_type():
     assert pack_payload(current)["material_type"] == "knowledge"
 
 
-def test_v3_pack_rejects_legacy_collection_contract():
-    legacy = _payload()
-    legacy["schema_version"] = 2
-    legacy["collection_id"] = "meme"
+def test_pack_rejects_pre_release_schema_and_removed_collection_field():
+    wrong_version = _payload()
+    wrong_version["schema_version"] = 3
 
     with pytest.raises(ValueError, match="unsupported knowledge pack schema"):
-        validate_pack(legacy)
+        validate_pack(wrong_version)
 
     current_with_collection = _payload()
     current_with_collection["collection_id"] = "meme"
@@ -335,6 +333,10 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
             "version": "1.2.3",
             "channel": "stable",
             "artifact_sha256": digest,
+            "material_type": "knowledge",
+            "index_manifest_sha256": "",
+            "vectors_sha256": "",
+            "trust": "trusted_market",
         }
     )
 
@@ -356,7 +358,7 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
     }
 
 
-def test_indexed_subscription_requires_supported_material_type():
+def test_subscription_requires_supported_material_type():
     payload = {
         "provider": "plugin-market",
         "remote_id": "knowledge/community-fixture",
@@ -369,10 +371,10 @@ def test_indexed_subscription_requires_supported_material_type():
         "trust": "trusted_market",
     }
 
-    subscription = validate_indexed_subscription(payload)
+    subscription = validate_subscription(payload)
     assert subscription.material_type == "corpus"
     with pytest.raises(ValueError, match="material_type"):
-        validate_indexed_subscription({**payload, "material_type": "meme"})
+        validate_subscription({**payload, "material_type": "meme"})
 
 
 def test_market_artifact_must_use_canonical_json_bytes():

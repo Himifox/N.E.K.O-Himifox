@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "embedding_input_version": 2,
+  "embedding_input_version": 1,
   "quality_targets": {
     "recall_at_3": 0.8,
     "negative_rejection": 0.9

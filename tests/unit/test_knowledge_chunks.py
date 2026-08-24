@@ -99,13 +99,13 @@ def test_schema_v6_migration_keeps_fts_and_backfills_lazily(tmp_path):
     assert store.chunk_status()["chunks_pending"] == 1
 
 
-def test_schema_v6_to_v7_preserves_fts_and_ready_vectors(tmp_path):
+def test_schema_v6_to_v7_preserves_fts_and_current_vectors(tmp_path):
     path = tmp_path / "knowledge.db"
     connection = sqlite3.connect(path)
     connection.executescript("""
         CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT INTO metadata VALUES ('schema_version', '6');
-        INSERT INTO metadata VALUES ('embedding_input_version', '2');
+        INSERT INTO metadata VALUES ('embedding_input_version', '1');
         INSERT INTO metadata VALUES ('chunks_revision', '3');
         CREATE TABLE entries (
             title TEXT NOT NULL, terms TEXT NOT NULL, tags TEXT NOT NULL,
@@ -155,7 +155,7 @@ def test_schema_v6_to_v7_preserves_fts_and_ready_vectors(tmp_path):
         )
 
 
-def test_embedding_input_v2_migration_only_clears_derived_chunks(tmp_path):
+def test_missing_embedding_input_version_only_clears_derived_chunks(tmp_path):
     path = tmp_path / "knowledge.db"
     store = KnowledgeStore(path)
     store.upsert(_entry(content="The answer remains searchable."))

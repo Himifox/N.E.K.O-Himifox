@@ -21,7 +21,7 @@ from .models import (
 from .store import KnowledgeStore
 
 
-PACK_SCHEMA_VERSION = 3
+PACK_SCHEMA_VERSION = 1
 PACK_REGISTRY_SCHEMA_VERSION = 4
 MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
 MAX_PACK_BYTES = 10 * 1024 * 1024

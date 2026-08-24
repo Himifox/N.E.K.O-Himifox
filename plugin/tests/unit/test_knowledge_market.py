@@ -10,7 +10,7 @@ from plugin.server.routes import knowledge_market as module
 
 def _pack():
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": "fixture-pack",
         "material_type": "knowledge",
         "source": {"name": "Fixture", "homepage": "", "license": "CC0-1.0"},
@@ -37,7 +37,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
     )
     descriptor = module.KnowledgeVersionDescriptor.model_validate(
         {
-            "protocol_version": 3,
+            "protocol_version": 1,
             "package_id": 7,
             "remote_id": "knowledge/fixture-pack",
             "pack_id": "fixture-pack",
@@ -63,7 +63,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
     async def fake_download(_descriptor, **_kwargs):
         return raw
 
-    async def fake_indexed_main(**kwargs):
+    async def fake_subscription_main(**kwargs):
         captured.update(kwargs)
         return {
             "ok": True,
@@ -93,7 +93,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
 
     monkeypatch.setattr(module, "_fetch_version_descriptor", fake_fetch)
     monkeypatch.setattr(module, "_download_verified_artifact", fake_download)
-    monkeypatch.setattr(module, "_main_indexed_subscription_request", fake_indexed_main)
+    monkeypatch.setattr(module, "_main_subscription_request", fake_subscription_main)
     monkeypatch.setattr(module, "_main_request", fake_main)
     monkeypatch.setattr(module, "_report_subscription_best_effort", no_report)
     module._tasks["fixture"] = {
@@ -123,7 +123,7 @@ async def test_market_subscription_rejects_material_type_mismatch(monkeypatch):
     raw = canonical_pack_bytes(_pack())
     descriptor = module.KnowledgeVersionDescriptor.model_validate(
         {
-            "protocol_version": 3,
+            "protocol_version": 1,
             "package_id": 7,
             "remote_id": "knowledge/fixture-pack",
             "pack_id": "fixture-pack",

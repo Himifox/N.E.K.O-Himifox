@@ -37,7 +37,7 @@ def _entry(
 
 def _pack_payload(*, pack_id: str = "boundary-pack", material_type: str = "knowledge"):
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": pack_id,
         "material_type": material_type,
         "source": {

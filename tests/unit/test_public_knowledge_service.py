@@ -28,7 +28,7 @@ def _entry(title: str, source: str, *tags: str) -> KnowledgeEntry:
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):
     return validate_pack(
         {
-            "schema_version": 3,
+            "schema_version": 1,
             "pack_id": pack_id,
             "material_type": material_type,
             "source": {"name": pack_id, "homepage": "", "license": "CC0"},

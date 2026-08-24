@@ -29,13 +29,10 @@ from .prebuilt_index import (
     validate_prebuilt_index,
 )
 from .subscriptions import (
-    INDEXED_SUBSCRIPTION_PROTOCOL_VERSION,
     SUBSCRIPTION_PROTOCOL_VERSION,
-    IndexedKnowledgeSubscription,
     KnowledgeSubscription,
     canonical_pack_bytes,
     load_canonical_pack_artifact,
-    validate_indexed_subscription,
     validate_subscription,
 )
 from .service import (
@@ -51,8 +48,6 @@ def open_knowledge(knowledge_root: str | Path) -> KnowledgeService:
 
 
 __all__ = [
-    "INDEXED_SUBSCRIPTION_PROTOCOL_VERSION",
-    "IndexedKnowledgeSubscription",
     "KnowledgeEntry",
     "KnowledgeHit",
     "KnowledgeMentionMatcher",
@@ -85,7 +80,6 @@ __all__ = [
     "canonical_prebuilt_manifest_bytes",
     "load_canonical_pack_artifact",
     "open_knowledge",
-    "validate_indexed_subscription",
     "validate_prebuilt_index",
     "validate_subscription",
 ]

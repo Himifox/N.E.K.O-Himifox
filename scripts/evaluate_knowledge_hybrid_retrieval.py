@@ -23,11 +23,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from knowledge.chunking import EMBEDDING_INPUT_VERSION
+
 DEFAULT_CASES = (
     PROJECT_ROOT / "tests" / "fixtures" / "knowledge_hybrid_real_model_cases.json"
 )
 KNOWLEDGE_DATABASE = Path("knowledge.db")
-REQUIRED_INPUT_VERSION = "2"
+REQUIRED_INPUT_VERSION = str(EMBEDDING_INPUT_VERSION)
 QUERY_BATCH_SIZE = 4
 
 
@@ -61,8 +63,10 @@ def _load_cases(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         raise ValueError("evaluation fixture must use schema_version=1")
-    if payload.get("embedding_input_version") != 2:
-        raise ValueError("evaluation fixture must use embedding_input_version=2")
+    if payload.get("embedding_input_version") != EMBEDDING_INPUT_VERSION:
+        raise ValueError(
+            "evaluation fixture must use the current embedding input contract"
+        )
     positives = payload.get("positives")
     negatives = payload.get("negatives")
     if not isinstance(positives, list) or not positives:
@@ -392,7 +396,7 @@ async def evaluate(knowledge_root: Path, cases: Mapping[str, object]) -> dict[st
         "state": "complete",
         "model_id": status.model_id,
         "dimensions": status.dimensions,
-        "embedding_input_version": 2,
+        "embedding_input_version": EMBEDDING_INPUT_VERSION,
         "index": corpus.status,
         "positive_results": positive_results,
         "negative_results": negative_results,

@@ -660,7 +660,7 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
     service.install_pack(
         validate_pack(
             {
-                "schema_version": 3,
+                "schema_version": 1,
                 "pack_id": "reply-samples",
                 "material_type": "corpus",
                 "source": {

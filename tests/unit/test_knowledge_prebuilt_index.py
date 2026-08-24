@@ -22,7 +22,7 @@ from knowledge.subscriptions import canonical_pack_bytes
 
 def _pack_payload() -> dict[str, object]:
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": "fixture-pack",
         "material_type": "corpus",
         "source": {
@@ -112,7 +112,7 @@ def test_build_and_validate_prebuilt_index_artifacts():
     assert all(row["model_id"] == PREBUILT_MODEL_ID for row in prepared)
 
 
-def test_prebuilt_index_preserves_v3_corpus_classification():
+def test_prebuilt_index_preserves_corpus_classification():
     payload = _pack_payload()
     pack_artifact = canonical_pack_bytes(payload)
     pack = validate_pack(payload)

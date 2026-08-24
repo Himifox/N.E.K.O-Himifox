@@ -1,16 +1,16 @@
-# 知识包订阅交接接口（可信市场 v3）
+# 知识包订阅交接接口（可信市场 v1）
 
-> **版本与边界说明（2026-08-24）**：带预构建索引的市场交付协议是 v3，知识包 Schema 也是 v3；索引清单格式仍独立保持 v1。Main Server 校验预构建制品时不会加载本地 Embedding 模型，也不会调用 Memory Server。
+> **首发契约（2026-08-24）**：市场交付协议、知识包 Schema、索引清单、Embedding 输入与分块规则统一为 v1。Main Server 校验预构建制品时不会加载本地 Embedding 模型，也不会调用 Memory Server。
 
 ## 定位
 
 知识包是纯数据制品，不是可执行插件。Main Server 统一负责存储和检索；Market Bridge 只解析可信目录、受限下载并把制品交给 Main Server 二次校验。
 
 ```text
-可信市场 protocol v3 descriptor
+可信市场 protocol v1 descriptor
   → Market Bridge 校验 HTTPS、主机、大小和 SHA-256
-  → POST /api/public-knowledge/subscriptions/apply-v3
-  → Main Server 校验 Schema v3、确定性 chunk 和向量绑定
+  → POST /api/public-knowledge/subscriptions/apply
+  → Main Server 校验 Schema v1、确定性 chunk 和向量绑定
   → 原子替换 source:community.<pack_id>
   → 索引有效则 Hybrid，否则原文仍以 BM25 激活
 ```
@@ -23,20 +23,20 @@
 | 索引清单 | `.neko-knowledge.index.json` | 与 vectors 同时存在或同时缺失 |
 | 向量矩阵 | `.neko-knowledge.vectors.f16` | 与 manifest 同时存在或同时缺失 |
 
-原始包必须是规范 UTF-8 JSON，`schema_version=3`，声明 `material_type=knowledge|corpus`，且不含 `collection_id`。每条词条仍只有 `title / terms / tags / summary / content`。
+原始包必须是规范 UTF-8 JSON，`schema_version=1`，声明 `material_type=knowledge|corpus`，且不含 `collection_id`。每条词条仍只有 `title / terms / tags / summary / content`。
 
 索引损坏、缺失或不兼容只导致 BM25 降级；原始包无效才导致订阅失败。
 
-## 市场版本描述符 v3
+## 市场版本描述符 v1
 
 ```json
 {
-  "protocol_version": 3,
+  "protocol_version": 1,
   "package_id": 42,
   "remote_id": "knowledge/example-pack",
   "pack_id": "example-pack",
   "material_type": "knowledge",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "channel": "stable",
   "artifacts": {
     "knowledge": {"url": "https://…/example.neko-knowledge.json", "sha256": "…", "bytes": 1024},
@@ -53,14 +53,14 @@
 可信三制品使用 loopback、Bridge Token、CSRF 和 Origin 保护的 multipart 端点：
 
 ```text
-POST /api/public-knowledge/subscriptions/apply-v3
+POST /api/public-knowledge/subscriptions/apply
 ```
 
-字段包括订阅元数据、`pack`，以及可选的 `index_manifest` 和 `vectors`。旧 JSON `/subscriptions/apply` 仅保留 raw-only 入口，但其 pack 也必须符合 Schema v3；它不能自行声明可信预构建索引。
+字段包括订阅元数据、`pack`，以及必须成对出现的可选 `index_manifest` 和 `vectors`。不提供索引制品时，同一端点完成 raw-only 安装并以 BM25 激活；不再维护第二套订阅协议。
 
 严格校验顺序：
 
-1. 校验原始包规范字节、Schema v3、身份、市场登记用途、容量和 SHA-256。
+1. 校验原始包规范字节、Schema v1、身份、市场登记用途、容量和 SHA-256。
 2. 从五字段原文重新派生完整 chunk 序列。
 3. 逐项比对 `chunk_id`、`content_hash` 和连续 `vector_index`。
 4. 校验固定模型契约、清单摘要、向量摘要和精确文件长度。

@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-import re
 import json
+import re
 from dataclasses import asdict, dataclass
 
 
 SUBSCRIPTION_PROTOCOL_VERSION = 1
-INDEXED_SUBSCRIPTION_PROTOCOL_VERSION = 3
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeSubscription:
-    provider: str
-    remote_id: str
-    version: str
-    channel: str
-    artifact_sha256: str
-
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
-
-
-@dataclass(frozen=True, slots=True)
-class IndexedKnowledgeSubscription:
     provider: str
     remote_id: str
     version: str
@@ -43,24 +30,6 @@ class IndexedKnowledgeSubscription:
 def validate_subscription(payload: object) -> KnowledgeSubscription:
     if not isinstance(payload, dict):
         raise ValueError("subscription metadata must be an object")
-    allowed = {"provider", "remote_id", "version", "channel", "artifact_sha256"}
-    if set(payload) - allowed:
-        raise ValueError("subscription metadata contains unsupported fields")
-    provider = _required_text(payload.get("provider"), "provider", 64)
-    remote_id = _required_text(payload.get("remote_id"), "remote_id", 200)
-    version = _required_text(payload.get("version"), "version", 100)
-    channel = _required_text(payload.get("channel"), "channel", 40)
-    digest = _required_text(
-        payload.get("artifact_sha256"), "artifact_sha256", 64
-    ).lower()
-    if not _SHA256_RE.fullmatch(digest):
-        raise ValueError("artifact_sha256 must be a SHA-256 digest")
-    return KnowledgeSubscription(provider, remote_id, version, channel, digest)
-
-
-def validate_indexed_subscription(payload: object) -> IndexedKnowledgeSubscription:
-    if not isinstance(payload, dict):
-        raise ValueError("indexed subscription metadata must be an object")
     allowed = {
         "provider",
         "remote_id",
@@ -73,38 +42,35 @@ def validate_indexed_subscription(payload: object) -> IndexedKnowledgeSubscripti
         "trust",
     }
     if set(payload) - allowed:
-        raise ValueError("indexed subscription metadata contains unsupported fields")
-    base = validate_subscription(
-        {
-            key: payload.get(key)
-            for key in (
-                "provider",
-                "remote_id",
-                "version",
-                "channel",
-                "artifact_sha256",
-            )
-        }
-    )
+        raise ValueError("subscription metadata contains unsupported fields")
+    provider = _required_text(payload.get("provider"), "provider", 64)
+    remote_id = _required_text(payload.get("remote_id"), "remote_id", 200)
+    version = _required_text(payload.get("version"), "version", 100)
+    channel = _required_text(payload.get("channel"), "channel", 40)
+    digest = _required_text(
+        payload.get("artifact_sha256"), "artifact_sha256", 64
+    ).lower()
+    if not _SHA256_RE.fullmatch(digest):
+        raise ValueError("artifact_sha256 must be a SHA-256 digest")
     manifest_digest = _optional_digest(
         payload.get("index_manifest_sha256"),
         "index_manifest_sha256",
     )
     vectors_digest = _optional_digest(payload.get("vectors_sha256"), "vectors_sha256")
     if bool(manifest_digest) != bool(vectors_digest):
-        raise ValueError("indexed subscription requires both index artifact digests")
+        raise ValueError("subscription requires both index artifact digests")
     material_type = _required_text(payload.get("material_type"), "material_type", 16)
     if material_type not in {"knowledge", "corpus"}:
-        raise ValueError("indexed subscription material_type is unsupported")
+        raise ValueError("subscription material_type is unsupported")
     trust = _required_text(payload.get("trust"), "trust", 40)
     if trust != "trusted_market":
-        raise ValueError("indexed subscription trust is unsupported")
-    return IndexedKnowledgeSubscription(
-        provider=base.provider,
-        remote_id=base.remote_id,
-        version=base.version,
-        channel=base.channel,
-        artifact_sha256=base.artifact_sha256,
+        raise ValueError("subscription trust is unsupported")
+    return KnowledgeSubscription(
+        provider=provider,
+        remote_id=remote_id,
+        version=version,
+        channel=channel,
+        artifact_sha256=digest,
         material_type=material_type,
         index_manifest_sha256=manifest_digest,
         vectors_sha256=vectors_digest,
@@ -148,5 +114,5 @@ def _optional_digest(value: object, field: str) -> str:
         return ""
     digest = str(value).strip().lower()
     if not _SHA256_RE.fullmatch(digest):
-        raise ValueError(f"indexed subscription {field} is invalid")
+        raise ValueError(f"subscription {field} is invalid")
     return digest

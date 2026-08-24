@@ -21,7 +21,7 @@ from knowledge.subscriptions import canonical_pack_bytes
 def _pack(*, title: str = "Staged phrase", pack_id: str = "staged-fixture"):
     return validate_pack(
         {
-            "schema_version": 3,
+            "schema_version": 1,
             "pack_id": pack_id,
             "material_type": "knowledge",
             "source": {"name": "Fixture", "homepage": "", "license": "CC0"},
@@ -68,6 +68,7 @@ def _prebuilt(pack):
         "version": "1.0.0",
         "channel": "stable",
         "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+        "material_type": pack.material_type,
         "index_manifest_sha256": artifacts.manifest_sha256,
         "vectors_sha256": artifacts.vectors_sha256,
         "trust": "trusted_market",

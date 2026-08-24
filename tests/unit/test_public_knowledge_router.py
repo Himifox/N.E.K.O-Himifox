@@ -31,7 +31,7 @@ def _entry(title: str, source: str, *, summary: str = "A compact summary") -> Kn
 
 def _pack(*, pack_id="market-fixture", material_type="knowledge") -> dict:
     return {
-        "schema_version": 3,
+        "schema_version": 1,
         "pack_id": pack_id,
         "material_type": material_type,
         "source": {"name": pack_id, "homepage": "", "license": "CC0-1.0"},
@@ -170,24 +170,27 @@ def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     assert item["disabled"] is True
 
 
-def test_raw_subscription_accepts_schema_v3_and_stages(monkeypatch, tmp_path):
+def test_raw_subscription_v1_stages_without_index(monkeypatch, tmp_path):
     pack = _pack()
-    digest = hashlib.sha256(canonical_pack_bytes(pack)).hexdigest()
+    raw = canonical_pack_bytes(pack)
+    digest = hashlib.sha256(raw).hexdigest()
+    subscription = {
+        "provider": "plugin-market",
+        "remote_id": "knowledge/market-fixture",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": digest,
+        "material_type": "knowledge",
+        "index_manifest_sha256": "",
+        "vectors_sha256": "",
+        "trust": "trusted_market",
+    }
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
         "/api/public-knowledge/subscriptions/apply",
-        json={
-            "protocol_version": 1,
-            "subscription": {
-                "provider": "plugin-market",
-                "remote_id": "knowledge/market-fixture",
-                "version": "1.0.0",
-                "channel": "stable",
-                "artifact_sha256": digest,
-            },
-            "pack": pack,
-        },
+        data={"protocol_version": "1", "subscription": json.dumps(subscription)},
+        files={"pack": ("pack.neko-knowledge.json", raw, "application/json")},
     ).json()
 
     assert response["ok"] is True
@@ -201,7 +204,21 @@ def test_raw_subscription_accepts_schema_v3_and_stages(monkeypatch, tmp_path):
     )
 
 
-def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path):
+def test_subscription_rejects_pre_release_protocol(monkeypatch, tmp_path):
+    pack = _pack()
+    raw = canonical_pack_bytes(pack)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/public-knowledge/subscriptions/apply",
+        data={"protocol_version": "3", "subscription": "{}"},
+        files={"pack": ("pack.neko-knowledge.json", raw, "application/json")},
+    ).json()
+
+    assert response == {"ok": False, "reason": "unsupported_protocol"}
+
+
+def test_subscription_v1_stages_verified_sidecars(monkeypatch, tmp_path):
     pack = _pack(pack_id="indexed-fixture")
     raw, artifacts = _prebuilt(pack)
     subscription = {
@@ -218,8 +235,8 @@ def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path)
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
-        "/api/public-knowledge/subscriptions/apply-v3",
-        data={"protocol_version": "3", "subscription": json.dumps(subscription)},
+        "/api/public-knowledge/subscriptions/apply",
+        data={"protocol_version": "1", "subscription": json.dumps(subscription)},
         files={
             "pack": ("pack.neko-knowledge.json", raw, "application/json"),
             "index_manifest": (
@@ -241,7 +258,7 @@ def test_indexed_subscription_v3_stages_verified_sidecars(monkeypatch, tmp_path)
     assert (job_root / "pack.neko-knowledge.vectors.f16").is_file()
 
 
-def test_indexed_subscription_rejects_market_material_type_mismatch(
+def test_subscription_rejects_market_material_type_mismatch(
     monkeypatch, tmp_path
 ):
     pack = _pack(pack_id="indexed-type-mismatch", material_type="knowledge")
@@ -260,8 +277,8 @@ def test_indexed_subscription_rejects_market_material_type_mismatch(
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
-        "/api/public-knowledge/subscriptions/apply-v3",
-        data={"protocol_version": "3", "subscription": json.dumps(subscription)},
+        "/api/public-knowledge/subscriptions/apply",
+        data={"protocol_version": "1", "subscription": json.dumps(subscription)},
         files={"pack": ("pack.neko-knowledge.json", raw, "application/json")},
     ).json()
 
