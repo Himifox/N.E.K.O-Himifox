@@ -44,9 +44,18 @@ async function token(forceRefresh = false): Promise<string> {
 function isInvalidBridgeToken(error: unknown): boolean {
   const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })
     ?.response
+  const detail = response?.data?.detail
+  const code = detail && typeof detail === 'object'
+    ? String((detail as { code?: unknown }).code || '').trim().toLowerCase()
+    : ''
+  const legacyDetail = typeof detail === 'string' ? detail.trim().toLowerCase() : ''
   return (
     response?.status === 403 &&
-    String(response.data?.detail || '').trim().toLowerCase() === 'invalid bridge token'
+    (
+      code === 'invalid_bridge_token' ||
+      legacyDetail === 'invalid bridge token' ||
+      legacyDetail === '无效的 bridge token'
+    )
   )
 }
 

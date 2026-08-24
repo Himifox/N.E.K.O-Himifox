@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -61,3 +63,16 @@ def test_knowledge_bridge_rejects_arbitrary_proxy_paths(monkeypatch):
 
     assert response.status_code == 404
     assert captured == {}
+
+
+def test_bridge_token_error_uses_stable_code():
+    from plugin.server.routes import market_bridge as module
+
+    with pytest.raises(HTTPException) as failure:
+        module._verify_token("not-the-current-token")
+
+    assert failure.value.status_code == 403
+    assert failure.value.detail == {
+        "code": "invalid_bridge_token",
+        "message": "无效的 bridge token",
+    }

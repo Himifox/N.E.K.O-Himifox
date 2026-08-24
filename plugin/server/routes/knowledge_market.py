@@ -23,6 +23,7 @@ from plugin.server.routes.market_bridge import (
     _ensure_valid_oauth_token,
     _main_server_port,
     get_bridge_token,
+    invalid_bridge_token_error,
 )
 
 
@@ -582,7 +583,7 @@ async def _report_unsubscribe_best_effort(package_id: int) -> None:
 
 def _verify_bridge_token(token: str) -> None:
     if not secrets.compare_digest(token, get_bridge_token()):
-        raise HTTPException(status_code=403, detail="invalid bridge token")
+        raise invalid_bridge_token_error()
 
 
 def _validate_artifact_url(url: str, *, required_suffix: str = "") -> None:

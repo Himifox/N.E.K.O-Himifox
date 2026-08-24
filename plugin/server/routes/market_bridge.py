@@ -153,6 +153,20 @@ def get_bridge_token() -> str:
     return _BRIDGE_TOKEN
 
 
+INVALID_BRIDGE_TOKEN_CODE = "invalid_bridge_token"
+
+
+def invalid_bridge_token_error() -> HTTPException:
+    """Return the stable error contract shared by every local bridge route."""
+    return HTTPException(
+        status_code=403,
+        detail={
+            "code": INVALID_BRIDGE_TOKEN_CODE,
+            "message": "无效的 bridge token",
+        },
+    )
+
+
 @router.api_route("/knowledge/{path:path}", methods=["GET", "POST"])
 async def public_knowledge_bridge(
     path: str,
@@ -1627,7 +1641,7 @@ def _verify_token(
         candidate = (token or "").strip() or None
 
     if not candidate or not secrets.compare_digest(candidate, _BRIDGE_TOKEN):
-        raise HTTPException(status_code=403, detail="无效的 bridge token")
+        raise invalid_bridge_token_error()
 
 
 def _pkce_s256_challenge(code_verifier: str) -> str:

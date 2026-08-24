@@ -65,7 +65,15 @@ describe('knowledge API response handling', () => {
       .mockResolvedValueOnce({ data: { bridge_token: 'fresh-token' } })
     axiosMocks.request
       .mockRejectedValueOnce({
-        response: { status: 403, data: { detail: 'invalid bridge token' } },
+        response: {
+          status: 403,
+          data: {
+            detail: {
+              code: 'invalid_bridge_token',
+              message: '无效的 bridge token',
+            },
+          },
+        },
       })
       .mockResolvedValueOnce({ data: { ok: true } })
     const { knowledgeApi } = await loadKnowledgeApi()
@@ -76,6 +84,21 @@ describe('knowledge API response handling', () => {
     expect(axiosMocks.request).toHaveBeenCalledTimes(2)
     expect(axiosMocks.request.mock.calls[0]![0].params.token).toBe('stale-token')
     expect(axiosMocks.request.mock.calls[1]![0].params.token).toBe('fresh-token')
+  })
+
+  it('keeps compatibility with the legacy localized bridge-token error', async () => {
+    axiosMocks.get
+      .mockResolvedValueOnce({ data: { bridge_token: 'stale-token' } })
+      .mockResolvedValueOnce({ data: { bridge_token: 'fresh-token' } })
+    axiosMocks.request
+      .mockRejectedValueOnce({
+        response: { status: 403, data: { detail: '无效的 bridge token' } },
+      })
+      .mockResolvedValueOnce({ data: { ok: true } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.status()).resolves.toEqual({ ok: true })
+    expect(axiosMocks.get).toHaveBeenCalledTimes(2)
   })
 
   it('shares one bridge-token fetch between concurrent requests', async () => {
