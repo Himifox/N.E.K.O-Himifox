@@ -501,6 +501,64 @@ def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
     )
 
 
+def test_index_policy_registry_failure_restores_previous_policy(monkeypatch, tmp_path):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    database_path = service.database_path()
+    source_tag = "source:community.community-fixture"
+    monkeypatch.setattr(
+        packs,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
+    )
+
+    with pytest.raises(OSError, match="fixture failure"):
+        service.set_pack_index_policy(
+            "community-fixture",
+            local_embedding_enabled=True,
+        )
+
+    assert KnowledgeStore(database_path).embedding_policy_counts(
+        source_tag=source_tag
+    ) == {"local": 0, "prebuilt_only": 1}
+    assert service.list_packs()[0]["local_embedding_enabled"] is False
+
+
+def test_legacy_policy_migration_rolls_back_when_registry_write_fails(
+    monkeypatch, tmp_path
+):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-fixture"]
+    metadata.pop("local_embedding_enabled")
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    source_tag = "source:community.community-fixture"
+    store = KnowledgeStore(database_path)
+    store.set_source_embedding_policy(source_tag, "local")
+    monkeypatch.setattr(
+        packs,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
+    )
+
+    with pytest.raises(OSError, match="fixture failure"):
+        packs.migrate_legacy_pack_index_policies(database_path)
+
+    assert store.embedding_policy_counts(source_tag=source_tag) == {
+        "local": 1,
+        "prebuilt_only": 0,
+    }
+    persisted = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert "local_embedding_enabled" not in persisted["packs"]["community-fixture"]
+
+
 def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))

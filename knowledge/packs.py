@@ -205,11 +205,19 @@ def _snapshot_source(
     source_tag: str,
     metadata: object,
 ) -> _SourceSnapshot:
+    policy_counts = store.embedding_policy_counts(source_tag=source_tag)
+    active_policies = tuple(
+        policy for policy, count in policy_counts.items() if int(count) > 0
+    )
     embedding_policy = (
-        "local"
-        if isinstance(metadata, dict)
-        and metadata.get("local_embedding_enabled") is True
-        else "prebuilt_only"
+        active_policies[0]
+        if len(active_policies) == 1
+        else (
+            "local"
+            if isinstance(metadata, dict)
+            and metadata.get("local_embedding_enabled") is True
+            else "prebuilt_only"
+        )
     )
     return _SourceSnapshot(
         entries=tuple(
@@ -365,41 +373,55 @@ def migrate_legacy_pack_index_policies(database_path: str | Path) -> int:
     """Adopt installed community packs without scheduling new local inference."""
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
-    try:
-        registry = _load_registry(registry_path)
-    except KnowledgePackRegistryError:
-        return 0
-    packs = registry.get("packs")
-    if not isinstance(packs, dict):
-        return 0
-    store = KnowledgeStore(database_path)
-    changed = 0
     with mutation_lock(registry_path):
-        for pack_id, metadata in tuple(packs.items()):
-            if not isinstance(metadata, dict) or "local_embedding_enabled" in metadata:
-                continue
-            source_tag = str(metadata.get("source_tag") or "")
-            if not source_tag.startswith("source:community."):
-                continue
-            status = store.source_chunk_status(source_tag)
-            store.set_source_embedding_policy(source_tag, "prebuilt_only")
-            has_ready = int(status["chunks_ready"]) > 0
-            packs[pack_id] = {
-                **metadata,
-                "index_origin": "legacy" if has_ready else "none",
-                "index_trust": "local_generated" if has_ready else "none",
-                "index_validation": "accepted" if has_ready else "absent",
-                "index_fallback_reason": "",
-                "local_embedding_enabled": False,
-                "prebuilt_chunks_ready": int(status["chunks_ready"]),
-                "prebuilt_chunks_missing": max(
-                    int(status["chunks_total"]) - int(status["chunks_ready"]),
-                    0,
-                ),
-            }
-            changed += 1
-        if changed:
-            atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+        try:
+            registry = _load_registry(registry_path)
+        except KnowledgePackRegistryError:
+            return 0
+        packs = registry.get("packs")
+        if not isinstance(packs, dict):
+            return 0
+        store = KnowledgeStore(database_path)
+        changed = 0
+        snapshots: list[tuple[str, _SourceSnapshot]] = []
+        try:
+            for pack_id, metadata in tuple(packs.items()):
+                if (
+                    not isinstance(metadata, dict)
+                    or "local_embedding_enabled" in metadata
+                ):
+                    continue
+                source_tag = str(metadata.get("source_tag") or "")
+                if not source_tag.startswith("source:community."):
+                    continue
+                status = store.source_chunk_status(source_tag)
+                snapshots.append(
+                    (source_tag, _snapshot_source(store, source_tag, metadata))
+                )
+                store.set_source_embedding_policy(source_tag, "prebuilt_only")
+                has_ready = int(status["chunks_ready"]) > 0
+                packs[pack_id] = {
+                    **metadata,
+                    "index_origin": "legacy" if has_ready else "none",
+                    "index_trust": "local_generated" if has_ready else "none",
+                    "index_validation": "accepted" if has_ready else "absent",
+                    "index_fallback_reason": "",
+                    "local_embedding_enabled": False,
+                    "prebuilt_chunks_ready": int(status["chunks_ready"]),
+                    "prebuilt_chunks_missing": max(
+                        int(status["chunks_total"]) - int(status["chunks_ready"]),
+                        0,
+                    ),
+                }
+                changed += 1
+            if changed:
+                atomic_write_json(
+                    registry_path, registry, ensure_ascii=False, indent=2
+                )
+        except Exception:
+            for source_tag, snapshot in reversed(snapshots):
+                _restore_source(store, source_tag, snapshot)
+            raise
     return changed
 
 
@@ -473,12 +495,17 @@ def set_pack_index_policy(
             raise ValueError("only community packs have an index policy")
         policy = "local" if local_embedding_enabled else "prebuilt_only"
         store = KnowledgeStore(database_path)
-        store.set_source_embedding_policy(source_tag, policy)
+        snapshot = _snapshot_source(store, source_tag, metadata)
         packs[pack_id] = {
             **metadata,
             "local_embedding_enabled": bool(local_embedding_enabled),
         }
-        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+        try:
+            store.set_source_embedding_policy(source_tag, policy)
+            atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+        except Exception:
+            _restore_source(store, source_tag, snapshot)
+            raise
 
 
 def remove_pack(database_path: str | Path, pack_id: str) -> int:
