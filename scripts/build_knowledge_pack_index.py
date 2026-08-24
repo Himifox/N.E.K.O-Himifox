@@ -82,6 +82,9 @@ def _validated_pack_artifact(pack_raw: bytes):
 
 
 async def _build(pack_path: Path, output_dir: Path) -> dict[str, object]:
+    from memory.local_embedding_provider import bind_process_local_embedding_provider
+
+    bind_process_local_embedding_provider()
     pack_raw, chunks = _validated_pack_artifact(pack_path.read_bytes())
     service = get_local_embedding_service()
     try:

@@ -1021,7 +1021,11 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
 
             try:
                 from knowledge.indexer import start_knowledge_indexer
+                from memory.local_embedding_provider import (
+                    bind_process_local_embedding_provider,
+                )
 
+                bind_process_local_embedding_provider()
                 start_knowledge_indexer(_config_manager.knowledge_dir)
             except Exception as _knowledge_index_exc:
                 logger.warning(

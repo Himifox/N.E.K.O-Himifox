@@ -1,15 +1,15 @@
 """Shared local ONNX text-embedding capability.
 
-This module is the non-business API used outside the memory domain.  The
-existing implementation remains behind a compatibility import in v1 so the
-knowledge runtime does not couple itself to Memory Server APIs, storage, or
-recall logic.  A later mechanical relocation can preserve this interface.
+This module is the non-business API used outside the memory domain. Process
+composition roots bind the existing implementation through a neutral provider
+interface, so the knowledge runtime does not couple itself to Memory Server
+APIs, storage, or recall logic.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 
 class LocalEmbeddingService(Protocol):
@@ -36,13 +36,65 @@ class LocalEmbeddingStatus:
         return self.state == "ready" and bool(self.model_id) and self.dimensions > 0
 
 
+class _UnavailableLocalEmbeddingService:
+    """Safe fallback used until the application binds a concrete provider."""
+
+    def is_available(self) -> bool:
+        return False
+
+    def is_disabled(self) -> bool:
+        return True
+
+    def disable_reason(self) -> str:
+        return "provider_unconfigured"
+
+    def model_id(self) -> str | None:
+        return None
+
+    def dim(self) -> int | None:
+        return None
+
+    async def request_load(self) -> bool:
+        return False
+
+    async def embed(self, text: str) -> list[float] | None:
+        return None
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float] | None]:
+        return [None] * len(texts)
+
+    async def close(self) -> None:
+        return None
+
+
+_ServiceFactory = Callable[[], LocalEmbeddingService]
+_ReleaseCallback = Callable[[], Awaitable[None]]
+_UNAVAILABLE_SERVICE = _UnavailableLocalEmbeddingService()
+_service_factory: _ServiceFactory | None = None
+_release_callback: _ReleaseCallback | None = None
+
+
+def bind_local_embedding_provider(
+    service_factory: _ServiceFactory,
+    release_callback: _ReleaseCallback,
+) -> None:
+    """Bind the process-owned implementation at the application boundary."""
+    global _service_factory, _release_callback
+    _service_factory = service_factory
+    _release_callback = release_callback
+
+
+def reset_local_embedding_provider_for_tests() -> None:
+    """Remove the process provider so isolated tests get the safe fallback."""
+    global _service_factory, _release_callback
+    _service_factory = None
+    _release_callback = None
+
+
 def get_local_embedding_service() -> LocalEmbeddingService:
-    """Return this process's local service without touching memory data."""
-    try:
-        from memory.embeddings import get_embedding_service
-    except Exception:
-        from memory.embeddings_fallback import get_embedding_service
-    return get_embedding_service()
+    """Return the bound process service without depending on its owner."""
+    factory = _service_factory
+    return factory() if factory is not None else _UNAVAILABLE_SERVICE
 
 
 def get_local_embedding_status() -> LocalEmbeddingStatus:
@@ -62,13 +114,7 @@ def get_local_embedding_status() -> LocalEmbeddingStatus:
 
 
 async def release_local_embedding_service() -> None:
-    """Release this process's singleton without exposing its legacy owner."""
-    try:
-        from memory.embeddings import release_embedding_service
-    except Exception:
-        service = get_local_embedding_service()
-        close = getattr(service, "close", None)
-        if close is not None:
-            await close()
-        return
-    await release_embedding_service()
+    """Release the bound process singleton without exposing its owner."""
+    callback = _release_callback
+    if callback is not None:
+        await callback()

@@ -414,8 +414,10 @@ def _emit(payload: Mapping[str, object], output: Path | None) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
+    from memory.local_embedding_provider import bind_process_local_embedding_provider
     from utils.local_embedding_runtime import release_local_embedding_service
 
+    bind_process_local_embedding_provider()
     try:
         cases = _load_cases(args.cases)
         payload = await evaluate(args.knowledge_root.expanduser().resolve(), cases)

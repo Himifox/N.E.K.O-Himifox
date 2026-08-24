@@ -684,6 +684,9 @@ async def _run(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
+    from memory.local_embedding_provider import bind_process_local_embedding_provider
+
+    bind_process_local_embedding_provider()
     all_complete = True
     try:
         result, complete = await rebuild_target(
