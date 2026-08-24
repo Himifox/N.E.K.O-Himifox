@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 let bridgeToken = ''
+let bridgeTokenRequest: Promise<string> | null = null
 
 interface KnowledgeEnvelope {
   ok?: boolean
@@ -20,19 +21,40 @@ export class KnowledgeApiError extends Error {
   }
 }
 
-async function token(): Promise<string> {
+async function token(forceRefresh = false): Promise<string> {
+  if (forceRefresh) bridgeToken = ''
   if (bridgeToken) return bridgeToken
-  const response = await axios.get('/market/bridge-token', { timeout: 3000 })
-  bridgeToken = String(response.data?.bridge_token || '')
-  if (!bridgeToken) throw new Error('knowledge bridge token unavailable')
-  return bridgeToken
+  if (!bridgeTokenRequest) {
+    bridgeTokenRequest = axios
+      .get('/market/bridge-token', { timeout: 3000 })
+      .then((response) => {
+        bridgeToken = String(response.data?.bridge_token || '')
+        if (!bridgeToken) throw new Error('knowledge bridge token unavailable')
+        return bridgeToken
+      })
+  }
+  const pending = bridgeTokenRequest
+  try {
+    return await pending
+  } finally {
+    if (bridgeTokenRequest === pending) bridgeTokenRequest = null
+  }
 }
 
-async function request<T extends KnowledgeEnvelope>(
+function isInvalidBridgeToken(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })
+    ?.response
+  return (
+    response?.status === 403 &&
+    String(response.data?.detail || '').trim().toLowerCase() === 'invalid bridge token'
+  )
+}
+
+async function executeRequest<T extends KnowledgeEnvelope>(
   path: string,
-  options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {},
+  options: { method?: 'GET' | 'POST'; params?: any; data?: any },
+  value: string,
 ): Promise<T> {
-  const value = await token()
   const response = await axios.request<T>({
     url: `/market/knowledge/${path}`,
     method: options.method || 'GET',
@@ -40,7 +62,20 @@ async function request<T extends KnowledgeEnvelope>(
     data: options.data,
     timeout: 15000,
   })
-  const data = response.data
+  return response.data
+}
+
+async function request<T extends KnowledgeEnvelope>(
+  path: string,
+  options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {},
+): Promise<T> {
+  let data: T
+  try {
+    data = await executeRequest<T>(path, options, await token())
+  } catch (error) {
+    if (!isInvalidBridgeToken(error)) throw error
+    data = await executeRequest<T>(path, options, await token(true))
+  }
   if (data?.ok === false) {
     throw new KnowledgeApiError(
       String(data.reason || 'operation_failed'),

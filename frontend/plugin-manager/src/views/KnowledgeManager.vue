@@ -311,6 +311,7 @@ import { useI18n } from 'vue-i18n'
 import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
+import { createLatestRequestGate } from '@/utils/latestRequest'
 import { openExternalUrl } from '@/utils/openExternal'
 import dayjs from 'dayjs'
 
@@ -338,6 +339,7 @@ const entriesLoading = ref(false)
 const offset = ref(0)
 const pageSize = 50
 const hasMore = ref(false)
+const entriesRequestGate = createLatestRequestGate()
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
 const packs = ref<KnowledgePackSummary[]>([])
@@ -592,13 +594,24 @@ async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
 
 async function loadEntries(reset = false) {
   if (reset) offset.value = 0
+  const requestId = entriesRequestGate.begin()
+  const requestedQuery = query.value
+  const requestedOffset = offset.value
   entriesLoading.value = true
   try {
-    const response = await knowledgeApi.entries({ query: query.value, limit: pageSize, offset: offset.value })
+    const response = await knowledgeApi.entries({
+      query: requestedQuery,
+      limit: pageSize,
+      offset: requestedOffset,
+    })
+    if (!entriesRequestGate.isLatest(requestId)) return
     entries.value = response.items || []
     hasMore.value = Boolean(response.has_more)
-  } catch { ElMessage.error(t('knowledge.loadFailed')) }
-  finally { entriesLoading.value = false }
+  } catch {
+    if (entriesRequestGate.isLatest(requestId)) ElMessage.error(t('knowledge.loadFailed'))
+  } finally {
+    if (entriesRequestGate.isLatest(requestId)) entriesLoading.value = false
+  }
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {

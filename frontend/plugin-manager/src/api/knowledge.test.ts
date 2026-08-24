@@ -58,4 +58,42 @@ describe('knowledge API response handling', () => {
 
     await expect(knowledgeApi.status()).rejects.toBe(upstream)
   })
+
+  it('refreshes an invalid bridge token and retries once', async () => {
+    axiosMocks.get
+      .mockResolvedValueOnce({ data: { bridge_token: 'stale-token' } })
+      .mockResolvedValueOnce({ data: { bridge_token: 'fresh-token' } })
+    axiosMocks.request
+      .mockRejectedValueOnce({
+        response: { status: 403, data: { detail: 'invalid bridge token' } },
+      })
+      .mockResolvedValueOnce({ data: { ok: true } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.status()).resolves.toEqual({ ok: true })
+
+    expect(axiosMocks.get).toHaveBeenCalledTimes(2)
+    expect(axiosMocks.request).toHaveBeenCalledTimes(2)
+    expect(axiosMocks.request.mock.calls[0]![0].params.token).toBe('stale-token')
+    expect(axiosMocks.request.mock.calls[1]![0].params.token).toBe('fresh-token')
+  })
+
+  it('shares one bridge-token fetch between concurrent requests', async () => {
+    let resolveToken!: (value: { data: { bridge_token: string } }) => void
+    axiosMocks.get.mockReturnValue(
+      new Promise((resolve) => {
+        resolveToken = resolve
+      }),
+    )
+    axiosMocks.request.mockResolvedValue({ data: { ok: true } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    const first = knowledgeApi.status()
+    const second = knowledgeApi.packs()
+    resolveToken({ data: { bridge_token: 'shared-token' } })
+    await Promise.all([first, second])
+
+    expect(axiosMocks.get).toHaveBeenCalledTimes(1)
+    expect(axiosMocks.request).toHaveBeenCalledTimes(2)
+  })
 })
