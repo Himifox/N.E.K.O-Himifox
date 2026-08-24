@@ -6,6 +6,7 @@ import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.catalog_overrides import (
+    CatalogOverrideError,
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,
@@ -23,6 +24,35 @@ def _entry(title: str, source: str, *tags: str) -> KnowledgeEntry:
         summary=f"Meaning of {title}",
         content=f"Reference for {title}",
     )
+
+
+def test_invalid_catalog_override_fails_closed_and_is_not_overwritten(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(
+        _pack(
+            pack_id="override-fixture",
+            material_type="knowledge",
+            title="Disabled fixture",
+        )
+    )
+    override_path = get_catalog_override_path(service.database_path())
+    corrupt = b'{"disabled": ['
+    override_path.write_bytes(corrupt)
+
+    with pytest.raises(CatalogOverrideError):
+        load_disabled_entries(override_path)
+    with pytest.raises(CatalogOverrideError):
+        service.set_entry_disabled(
+            source_tag="source:community.override-fixture",
+            title="Disabled fixture",
+            disabled=True,
+        )
+
+    assert override_path.read_bytes() == corrupt
+    assert service.build_turn_context("Disabled fixture").hit_count == 0
+    status = service.get_status()
+    assert status["catalog_override_state"] == "invalid"
+    assert status["integrity_ok"] is False
 
 
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):

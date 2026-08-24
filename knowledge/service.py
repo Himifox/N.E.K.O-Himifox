@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Mapping, TypeVar
 import unicodedata
 from .catalog_overrides import (
+    CatalogOverrideError,
     get_catalog_override_path,
     load_disabled_entries,
     set_entry_disabled,
@@ -938,7 +939,13 @@ class KnowledgeService:
         database_path = self.database_path()
         database_exists = database_path.is_file()
         store = self._store() if database_exists else None
-        disabled = load_disabled_entries(get_catalog_override_path(database_path))
+        override_path = get_catalog_override_path(database_path)
+        try:
+            disabled = load_disabled_entries(override_path)
+            override_state = "ready" if override_path.is_file() else "missing"
+        except CatalogOverrideError:
+            disabled = frozenset()
+            override_state = "invalid"
         chunk_status = (
             store.chunk_status()
             if store is not None
@@ -1001,8 +1008,11 @@ class KnowledgeService:
         return {
             "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
             "entries": store.count() if store is not None else 0,
-            "integrity_ok": store.integrity_ok() if store is not None else False,
+            "integrity_ok": (
+                store.integrity_ok() if store is not None else False
+            ) and override_state != "invalid",
             "disabled_entries": len(disabled),
+            "catalog_override_state": override_state,
             "sources": source_counts,
             "packs": len(installed_packs),
             "knowledge_packs": len(knowledge_packs),

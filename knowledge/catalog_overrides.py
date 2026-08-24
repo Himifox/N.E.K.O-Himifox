@@ -13,24 +13,34 @@ from knowledge._mutation_lock import mutation_lock
 EntryKey = tuple[str, str]
 
 
+class CatalogOverrideError(ValueError):
+    """The override file exists but cannot be trusted or safely mutated."""
+
+
 def get_catalog_override_path(database_path: str | Path) -> Path:
     return Path(database_path).with_name("catalog.override.json")
 
 
 def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
+    override_path = Path(path)
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(override_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return frozenset()
-    rows = payload.get("disabled", ()) if isinstance(payload, dict) else ()
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CatalogOverrideError("catalog override is unreadable or invalid") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("disabled"), list):
+        raise CatalogOverrideError("catalog override must contain a disabled list")
+    rows = payload["disabled"]
     result: set[EntryKey] = set()
-    for row in rows if isinstance(rows, list) else ():
+    for row in rows:
         if not isinstance(row, dict):
-            continue
+            raise CatalogOverrideError("catalog override contains an invalid entry")
         source = str(row.get("source") or "").strip()
         title = str(row.get("title") or "").strip()
-        if source.startswith("source:") and title:
-            result.add((source, title))
+        if not source.startswith("source:") or not title:
+            raise CatalogOverrideError("catalog override contains an invalid entry")
+        result.add((source, title))
     return frozenset(result)
 
 

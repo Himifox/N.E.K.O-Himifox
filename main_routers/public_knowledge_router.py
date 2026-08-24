@@ -15,6 +15,7 @@ from knowledge.diagnostics import (
     list_recent_knowledge_routes,
 )
 from knowledge.catalog_overrides import (
+    CatalogOverrideError,
     entry_key,
     get_catalog_override_path,
     load_disabled_entries,
@@ -163,10 +164,13 @@ async def list_public_knowledge_entries(
     service = _service()
     source_tag = _source_tag(source)
     database_path = service.database_path()
-    disabled_entries = await asyncio.to_thread(
-        load_disabled_entries,
-        get_catalog_override_path(database_path),
-    )
+    try:
+        disabled_entries = await asyncio.to_thread(
+            load_disabled_entries,
+            get_catalog_override_path(database_path),
+        )
+    except CatalogOverrideError:
+        return {"ok": False, "reason": "catalog_override_invalid"}
     source_cache = {}
     if query.strip():
         page = await asyncio.to_thread(
@@ -235,9 +239,21 @@ async def get_public_knowledge_entry(
     )
     if entry is None:
         return {"ok": False, "reason": "not_found"}
+    try:
+        disabled_entries = await asyncio.to_thread(
+            load_disabled_entries,
+            get_catalog_override_path(service.database_path()),
+        )
+    except CatalogOverrideError:
+        return {"ok": False, "reason": "catalog_override_invalid"}
     return {
         "ok": True,
-        "entry": _entry_payload(service, entry, detail=True),
+        "entry": _entry_payload(
+            service,
+            entry,
+            detail=True,
+            disabled_entries=disabled_entries,
+        ),
     }
 
 
@@ -260,12 +276,15 @@ async def set_public_knowledge_entry_disabled(request: Request):
     )
     if entry is None:
         return {"ok": False, "reason": "not_found"}
-    count = await asyncio.to_thread(
-        service.set_entry_disabled,
-        source_tag=source_tag,
-        title=title,
-        disabled=disabled,
-    )
+    try:
+        count = await asyncio.to_thread(
+            service.set_entry_disabled,
+            source_tag=source_tag,
+            title=title,
+            disabled=disabled,
+        )
+    except CatalogOverrideError:
+        return {"ok": False, "reason": "catalog_override_invalid"}
     return {"ok": True, "disabled": disabled, "disabled_entries": count}
 
 
