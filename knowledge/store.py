@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 import threading
 import time
@@ -250,7 +249,21 @@ class KnowledgeStore:
         )
         if self.database_path.exists() and not backup.exists():
             connection.commit()
-            shutil.copy2(self.database_path, backup)
+            temporary_backup = backup.with_name(f"{backup.name}.tmp")
+            temporary_backup.unlink(missing_ok=True)
+            backup_connection: sqlite3.Connection | None = None
+            try:
+                backup_connection = sqlite3.connect(temporary_backup)
+                connection.backup(backup_connection)
+                backup_connection.commit()
+                backup_connection.close()
+                backup_connection = None
+                temporary_backup.replace(backup)
+            except Exception:
+                if backup_connection is not None:
+                    backup_connection.close()
+                temporary_backup.unlink(missing_ok=True)
+                raise
         rows = connection.execute("SELECT * FROM entries").fetchall()
         connection.execute("DROP TABLE IF EXISTS entries_fts")
         connection.execute("ALTER TABLE entries RENAME TO entries_legacy")

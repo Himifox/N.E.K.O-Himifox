@@ -128,7 +128,11 @@ def test_replace_source_rejects_mixed_sources_without_modifying_data(tmp_path):
 
 def test_legacy_database_migrates_to_five_fields_and_keeps_backup(tmp_path):
     database_path = tmp_path / "knowledge.db"
-    with sqlite3.connect(database_path) as connection:
+    writer = sqlite3.connect(database_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        connection = writer
         connection.execute(
             "CREATE TABLE entries (title TEXT, aliases TEXT, tags TEXT, summary TEXT, content TEXT)"
         )
@@ -142,17 +146,25 @@ def test_legacy_database_migrates_to_five_fields_and_keeps_backup(tmp_path):
                 "legacy content",
             ),
         )
+        connection.commit()
 
-    store = KnowledgeStore(database_path)
+        store = KnowledgeStore(database_path)
 
-    assert store.count() == 1
-    migrated = store.get_entry("source:fixture", "legacy phrase")
-    assert migrated is not None
-    assert migrated.aliases == ("legacy alias",)
-    assert database_path.with_suffix(".db.legacy.bak").exists()
-    with store._connection() as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
-        assert columns == {"title", "terms", "tags", "summary", "content"}
+        assert store.count() == 1
+        migrated = store.get_entry("source:fixture", "legacy phrase")
+        assert migrated is not None
+        assert migrated.aliases == ("legacy alias",)
+        backup = database_path.with_suffix(".db.legacy.bak")
+        assert backup.exists()
+        with sqlite3.connect(backup) as backup_connection:
+            assert backup_connection.execute(
+                "SELECT title FROM entries"
+            ).fetchone() == ("legacy phrase",)
+        with store._connection() as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
+            assert columns == {"title", "terms", "tags", "summary", "content"}
+    finally:
+        writer.close()
 
 
 def test_entry_listing_clamps_limit_and_negative_offset(tmp_path):
