@@ -288,6 +288,7 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
         state = _read_json(_state_path(job_dir))
         if not state or state.get("state") in TERMINAL_STATES:
             return state
+        staging_store: KnowledgeStore | None = None
         if state.get("state") in {"queued", "validating", "building_fts"}:
             state = _write_state(job_dir, state, state="building_fts")
             pack = _load_job_pack(job_dir)
@@ -305,6 +306,23 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
                 chunks_total=int(status["chunks_total"]),
             )
         if state.get("state") == "verifying_index":
+            if staging_store is None:
+                # ``verifying_index`` is a durable restart boundary.  Reopen and
+                # reconcile the staging database instead of relying on locals
+                # created by the preceding in-process state transition.
+                pack = _load_job_pack(job_dir)
+                staging_store = KnowledgeStore(job_dir / "knowledge.db")
+                staging_store.replace_source(
+                    pack.source_tag,
+                    pack.entries,
+                    embedding_policy="prebuilt_only",
+                )
+                status = staging_store.chunk_status()
+                state = _write_state(
+                    job_dir,
+                    state,
+                    chunks_total=int(status["chunks_total"]),
+                )
             manifest_path = job_dir / INDEX_MANIFEST_NAME
             vectors_path = job_dir / VECTOR_ARTIFACT_NAME
             has_manifest = manifest_path.is_file()

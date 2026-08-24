@@ -5,8 +5,8 @@ import hashlib
 import pytest
 
 from knowledge.store import KnowledgeStore
+from knowledge.pack_jobs import _pack_payload, _prepare_job
 from knowledge.pack_jobs import cancel_pack_job, process_pack_jobs
-from knowledge.pack_jobs import _pack_payload
 from knowledge.packs import validate_pack
 from knowledge.prebuilt_index import (
     PREBUILT_DIMENSIONS,
@@ -79,6 +79,27 @@ def _prebuilt(pack):
         "trust": "trusted_market",
     }
     return artifacts, subscription
+
+
+def test_prebuilt_verification_resumes_from_persisted_state(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+
+    first = _prepare_job(job_dir)
+    resumed = _prepare_job(job_dir)
+
+    assert first["state"] == "verifying_index"
+    assert resumed["state"] == "verifying_index"
+    assert resumed["index_validation"] == "accepted"
+    assert KnowledgeStore(job_dir / "knowledge.db").chunk_status()["chunks_ready"] == 1
 
 
 @pytest.mark.asyncio
