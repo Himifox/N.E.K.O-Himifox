@@ -234,9 +234,9 @@ def _merge_registries(
                     "declared_material_type": declared,
                     "material_type_override": override,
                     "effective_material_type": effective,
-                    "auto_context": bool(metadata.get("auto_context"))
-                    if effective == "knowledge"
-                    else False,
+                    "auto_context": True
+                    if effective == "corpus"
+                    else bool(metadata.get("auto_context")),
                 }
             )
             previous = merged.get(str(pack_id))
@@ -254,7 +254,7 @@ def _merge_registries(
                     metadata["declared_material_type"] = "corpus"
                     metadata["material_type_override"] = None
                     metadata["effective_material_type"] = "corpus"
-                    metadata["auto_context"] = False
+                    metadata["auto_context"] = True
             source_tag = str(metadata.get("source_tag") or "")
             status = store.source_chunk_status(source_tag) if source_tag else {}
             total = int(status.get("chunks_total", 0))

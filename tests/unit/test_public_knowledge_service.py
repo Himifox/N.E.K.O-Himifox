@@ -328,6 +328,7 @@ def test_split_layout_migrates_entries_vectors_packs_and_overrides(tmp_path):
     packs = {pack["pack_id"]: pack for pack in service.list_packs()}
     assert set(packs) == {"legacy-meme", "legacy-corpus"}
     assert packs["legacy-corpus"]["effective_material_type"] == "corpus"
+    assert packs["legacy-corpus"]["auto_context"] is True
     assert "collection_id" not in packs["legacy-corpus"]
     assert (
         corpus_entry.source_tag,
