@@ -15,6 +15,7 @@
         <button
           class="nav-item"
           :class="{ 'nav-item--active': isExactActive || isRouteActive(item.path) }"
+          :aria-label="item.label"
           :aria-current="isExactActive || isRouteActive(item.path) ? 'page' : undefined"
           :data-yui-guide-id="item.guideId || null"
           @click="navigate"
@@ -38,6 +39,8 @@
           <button
             class="nav-item nav-item--sub"
             :class="{ 'nav-item--active': isActive }"
+            :aria-label="adapter.name"
+            :aria-current="isActive ? 'page' : undefined"
             @click="navigate"
           >
             <el-icon class="nav-item__icon"><Link /></el-icon>
