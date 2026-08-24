@@ -18,7 +18,12 @@ from knowledge.service import KnowledgeService
 from knowledge.subscriptions import canonical_pack_bytes
 
 
-def _pack(*, title: str = "Staged phrase", pack_id: str = "staged-fixture"):
+def _pack(
+    *,
+    title: str = "Staged phrase",
+    pack_id: str = "staged-fixture",
+    content: str = "A staged entry body.",
+):
     return validate_pack(
         {
             "schema_version": 1,
@@ -31,7 +36,7 @@ def _pack(*, title: str = "Staged phrase", pack_id: str = "staged-fixture"):
                     "terms": {"alias": [], "recognition": []},
                     "tags": [],
                     "summary": "A staged entry",
-                    "content": "A staged entry body.",
+                    "content": content,
                 }
             ],
         }
@@ -217,6 +222,44 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     assert job["state"] == "active"
     assert job["retrieval_mode"] == "bm25"
     assert job["index_fallback_reason"] == "vector_budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_vector_budget_subtracts_replaced_pack_vectors(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack(title="Old phrase")
+    artifacts, subscription = _prebuilt(pack)
+    service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    assert (
+        await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    )["state"] == "ready_hybrid"
+
+    replacement = _pack(title="New phrase")
+    artifacts, subscription = _prebuilt(replacement)
+    service.stage_pack(
+        replacement,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    monkeypatch.setattr(pack_jobs, "MAX_READY_VECTOR_CHUNKS", 1)
+
+    result = await process_pack_jobs(
+        service,
+        batch_size=4,
+        ready_vector_chunks=1,
+    )
+
+    assert result["state"] == "ready_hybrid"
+    assert service.search("Old phrase", limit=1) == []
+    assert service.search("New phrase", limit=1)
 
 
 @pytest.mark.asyncio

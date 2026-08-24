@@ -415,6 +415,12 @@ def _activate_job(
     return state
 
 
+def _ready_chunks_replaced_by_job(service, pack_id: str) -> int:
+    source_tag = f"source:community.{pack_id}"
+    status = KnowledgeStore(service.database_path()).source_chunk_status(source_tag)
+    return int(status["chunks_ready"])
+
+
 async def process_pack_jobs(
     service,
     *,
@@ -449,7 +455,12 @@ async def process_pack_jobs(
         total = int(status["chunks_total"])
         ready = int(status["chunks_ready"])
         has_prebuilt = state.get("index_validation") == "accepted" and ready == total
-        if has_prebuilt and ready_vector_chunks + total > MAX_READY_VECTOR_CHUNKS:
+        replaced_ready = _ready_chunks_replaced_by_job(
+            service,
+            str(state.get("pack_id") or ""),
+        )
+        projected_ready = max(ready_vector_chunks - replaced_ready, 0) + total
+        if has_prebuilt and projected_ready > MAX_READY_VECTOR_CHUNKS:
             state = await _write_state_async(
                 job_dir,
                 state,
