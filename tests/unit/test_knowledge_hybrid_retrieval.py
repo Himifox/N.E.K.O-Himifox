@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import numpy as np
 import pytest
@@ -294,6 +295,31 @@ async def test_embedding_batch_does_not_touch_runtime_without_pending_work(
 
     result = await vector_index.index_embedding_batch(store, load_model=True)
 
+    assert result.state == "no_work"
+
+
+@pytest.mark.asyncio
+async def test_embedding_batch_reads_sqlite_off_the_event_loop(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    entered = threading.Event()
+    release = threading.Event()
+    original_status = store.chunk_status
+
+    def slow_status():
+        entered.set()
+        release.wait(timeout=0.5)
+        return original_status()
+
+    monkeypatch.setattr(store, "chunk_status", slow_status)
+    task = asyncio.create_task(vector_index.index_embedding_batch(store))
+
+    while not entered.is_set():
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    release.set()
+    result = await task
     assert result.state == "no_work"
 
 

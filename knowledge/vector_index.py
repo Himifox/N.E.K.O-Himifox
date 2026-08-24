@@ -498,6 +498,82 @@ async def semantic_search_prepared(
     return hits, "ready"
 
 
+def _embedding_work_status(store: KnowledgeStore) -> dict[str, object]:
+    return store.chunk_status()
+
+
+def _select_embedding_chunks(
+    store: KnowledgeStore,
+    *,
+    model_id: str,
+    limit: int,
+) -> tuple[dict[str, object], ...]:
+    with mutation_lock(store.database_path):
+        store.mark_other_models_stale(model_id)
+    return store.pending_embedding_chunks(model_id=model_id, limit=limit)
+
+
+def _mark_embedding_chunks_failed(
+    store: KnowledgeStore,
+    chunks: tuple[dict[str, object], ...],
+    error_code: str,
+) -> None:
+    with mutation_lock(store.database_path):
+        for chunk in chunks:
+            store.mark_chunk_embedding_failed(
+                chunk_id=str(chunk["chunk_id"]),
+                content_hash=str(chunk["content_hash"]),
+                error_code=error_code,
+            )
+
+
+def _store_embedding_vectors(
+    store: KnowledgeStore,
+    chunks: tuple[dict[str, object], ...],
+    vectors: list[object] | tuple[object, ...],
+    *,
+    model_id: str,
+    dimensions: int,
+) -> tuple[int, int, int]:
+    stored = 0
+    failed = 0
+    stale_writebacks = 0
+    with mutation_lock(store.database_path):
+        for index, chunk in enumerate(chunks):
+            vector = vectors[index] if index < len(vectors) else None
+            if vector is None:
+                store.mark_chunk_embedding_failed(
+                    chunk_id=str(chunk["chunk_id"]),
+                    content_hash=str(chunk["content_hash"]),
+                    error_code="empty_embedding",
+                )
+                failed += 1
+                continue
+            try:
+                array = np.asarray(vector, dtype=np.float32).ravel()
+            except (TypeError, ValueError):
+                array = np.empty(0, dtype=np.float32)
+            if array.size != dimensions or not np.isfinite(array).all():
+                store.mark_chunk_embedding_failed(
+                    chunk_id=str(chunk["chunk_id"]),
+                    content_hash=str(chunk["content_hash"]),
+                    error_code="invalid_embedding",
+                )
+                failed += 1
+                continue
+            payload = array.astype("<f2").tobytes()
+            did_store = store.store_chunk_embedding(
+                chunk_id=str(chunk["chunk_id"]),
+                content_hash=str(chunk["content_hash"]),
+                model_id=model_id,
+                dimensions=dimensions,
+                embedding=payload,
+            )
+            stored += int(did_store)
+            stale_writebacks += int(not did_store)
+    return stored, failed, stale_writebacks
+
+
 async def index_embedding_batch(
     store: KnowledgeStore,
     *,
@@ -505,7 +581,7 @@ async def index_embedding_batch(
     load_model: bool = False,
 ) -> EmbeddingBatchResult:
     safe_batch_size = max(1, min(int(batch_size), MAX_EMBEDDING_MICROBATCH_SIZE))
-    work = store.chunk_status()
+    work = await asyncio.to_thread(_embedding_work_status, store)
     if not any(
         int(work.get(key, 0)) > 0
         for key in (
@@ -531,10 +607,11 @@ async def index_embedding_batch(
         return EmbeddingBatchResult(state="embedding_unavailable")
     if not status.ready:
         return EmbeddingBatchResult(state=status.state)
-    with mutation_lock(store.database_path):
-        store.mark_other_models_stale(status.model_id)
-    chunks = store.pending_embedding_chunks(
-        model_id=status.model_id, limit=safe_batch_size
+    chunks = await asyncio.to_thread(
+        _select_embedding_chunks,
+        store,
+        model_id=status.model_id,
+        limit=safe_batch_size,
     )
     if not chunks:
         return EmbeddingBatchResult(state="no_work")
@@ -552,13 +629,12 @@ async def index_embedding_batch(
     if inference_state == "inference_busy":
         return EmbeddingBatchResult(elapsed_ms=elapsed_ms, state=inference_state)
     if inference_error is not None:
-        with mutation_lock(store.database_path):
-            for chunk in chunks:
-                store.mark_chunk_embedding_failed(
-                    chunk_id=str(chunk["chunk_id"]),
-                    content_hash=str(chunk["content_hash"]),
-                    error_code=type(inference_error).__name__,
-                )
+        await asyncio.to_thread(
+            _mark_embedding_chunks_failed,
+            store,
+            chunks,
+            type(inference_error).__name__,
+        )
         return EmbeddingBatchResult(
             selected=len(chunks),
             failed=len(chunks),
@@ -567,13 +643,12 @@ async def index_embedding_batch(
         )
 
     if not isinstance(vectors, (list, tuple)):
-        with mutation_lock(store.database_path):
-            for chunk in chunks:
-                store.mark_chunk_embedding_failed(
-                    chunk_id=str(chunk["chunk_id"]),
-                    content_hash=str(chunk["content_hash"]),
-                    error_code="invalid_response",
-                )
+        await asyncio.to_thread(
+            _mark_embedding_chunks_failed,
+            store,
+            chunks,
+            "invalid_response",
+        )
         return EmbeddingBatchResult(
             selected=len(chunks),
             failed=len(chunks),
@@ -581,42 +656,14 @@ async def index_embedding_batch(
             state="failed",
         )
 
-    stored = 0
-    failed = 0
-    stale_writebacks = 0
-    with mutation_lock(store.database_path):
-        for index, chunk in enumerate(chunks):
-            vector = vectors[index] if index < len(vectors) else None
-            if vector is None:
-                store.mark_chunk_embedding_failed(
-                    chunk_id=str(chunk["chunk_id"]),
-                    content_hash=str(chunk["content_hash"]),
-                    error_code="empty_embedding",
-                )
-                failed += 1
-                continue
-            try:
-                array = np.asarray(vector, dtype=np.float32).ravel()
-            except (TypeError, ValueError):
-                array = np.empty(0, dtype=np.float32)
-            if array.size != status.dimensions or not np.isfinite(array).all():
-                store.mark_chunk_embedding_failed(
-                    chunk_id=str(chunk["chunk_id"]),
-                    content_hash=str(chunk["content_hash"]),
-                    error_code="invalid_embedding",
-                )
-                failed += 1
-                continue
-            payload = array.astype("<f2").tobytes()
-            did_store = store.store_chunk_embedding(
-                chunk_id=str(chunk["chunk_id"]),
-                content_hash=str(chunk["content_hash"]),
-                model_id=status.model_id,
-                dimensions=status.dimensions,
-                embedding=payload,
-            )
-            stored += int(did_store)
-            stale_writebacks += int(not did_store)
+    stored, failed, stale_writebacks = await asyncio.to_thread(
+        _store_embedding_vectors,
+        store,
+        chunks,
+        vectors,
+        model_id=status.model_id,
+        dimensions=status.dimensions,
+    )
     state = "failed" if failed else "ready"
     if not failed and elapsed_ms > round(SLOW_BATCH_SECONDS * 1000):
         state = "slow_batch"
