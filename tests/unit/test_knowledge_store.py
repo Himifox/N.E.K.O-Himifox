@@ -5,6 +5,7 @@ from knowledge import (
     KnowledgeRetriever,
     KnowledgeStore,
 )
+from knowledge.catalog_overrides import get_catalog_override_path
 
 
 def _entry(index: int, *, content: str | None = None) -> KnowledgeEntry:
@@ -66,6 +67,18 @@ def test_corrupt_database_degrades_reads_without_deleting_it(tmp_path):
     assert store.count() == 0
     assert store.integrity_ok() is False
     assert KnowledgeRetriever(store).search("急了") == []
+
+
+def test_invalid_catalog_override_fails_automatic_search_closed(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(0))
+    get_catalog_override_path(store.database_path).write_text(
+        "not-json",
+        encoding="utf-8",
+    )
+
+    assert KnowledgeRetriever(store).search("急了") == []
+    assert KnowledgeRetriever(store).search("急了", include_disabled=True)
 
 
 def test_damaged_metadata_row_does_not_block_other_results(tmp_path):

@@ -327,6 +327,40 @@ def test_model_change_marks_only_other_ready_vectors_stale(tmp_path):
     assert status["chunks_stale"] == 1
 
 
+def test_model_change_stales_local_and_prebuilt_ready_vectors_together(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(content="local model content"))
+    store.upsert(
+        _entry(content="prebuilt model content", tags=("source:prebuilt",))
+    )
+    store.set_source_embedding_policy("source:prebuilt", "prebuilt_only")
+    local_pending = store.pending_embedding_chunks(
+        model_id="old-model",
+        limit=1,
+    )
+    prebuilt_pending = store.pending_embedding_chunks(
+        model_id="old-model", limit=1, embedding_policy="prebuilt_only"
+    )
+    assert len(local_pending) == len(prebuilt_pending) == 1
+    for chunk, policy in (
+        (local_pending[0], "local"),
+        (prebuilt_pending[0], "prebuilt_only"),
+    ):
+        assert store.store_chunk_embedding(
+            chunk_id=str(chunk["chunk_id"]),
+            content_hash=str(chunk["content_hash"]),
+            model_id="old-model",
+            dimensions=2,
+            embedding=b"\x00\x00\x00\x00",
+            embedding_policy=policy,
+        )
+
+    assert store.mark_incompatible_models_stale("new-model") == 2
+    status = store.chunk_status()
+    assert status["chunks_ready"] == 0
+    assert status["chunks_stale"] == 2
+
+
 def test_exhausted_embedding_failure_is_not_retried_forever(tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="failure boundary"))

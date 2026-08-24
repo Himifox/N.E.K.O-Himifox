@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from typing import Iterable, Iterator, Mapping, Sequence
 
 from knowledge.chunking import (
     CHUNKER_VERSION,
@@ -943,6 +943,32 @@ class KnowledgeStore:
             )
             return changed
 
+    def mark_incompatible_models_stale(self, model_id: str) -> int:
+        """Release every incompatible ready vector from the global budget.
+
+        Prebuilt-only vectors are query caches for one concrete model just as
+        local vectors are. Keeping an old prebuilt vector ``ready`` makes it
+        unsearchable by the current model while it still consumes the shared
+        ready-vector budget.
+        """
+        if not model_id:
+            return 0
+        with self._connection(writable=True) as connection:
+            cursor = connection.execute(
+                "UPDATE knowledge_chunks SET embedding_status='stale', next_retry_at=0 "
+                "WHERE embedding_policy IN ('local', 'prebuilt_only') "
+                "AND embedding_status='ready' AND embedding_model_id<>?",
+                (model_id,),
+            )
+            changed = max(int(cursor.rowcount), 0)
+            if changed:
+                self._increment_chunks_revision(connection)
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES ('embedding_model_id', ?)",
+                (model_id,),
+            )
+            return changed
+
     def pending_embedding_chunks(
         self,
         *,
@@ -1300,6 +1326,42 @@ class KnowledgeStore:
                 ).fetchall()
                 return frozenset(int(row["rowid"]) for row in rows)
         except (KnowledgeStoreError, sqlite3.OperationalError, TypeError, ValueError):
+            return frozenset()
+
+    def entry_rowids_for_keys(
+        self,
+        keys: Iterable[tuple[str, str]],
+    ) -> frozenset[int]:
+        """Resolve source/title override identities before vector top-K."""
+        wanted = frozenset(
+            (str(source).strip(), str(title).strip()) for source, title in keys
+        )
+        if not wanted:
+            return frozenset()
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT rowid, title, tags FROM entries"
+                ).fetchall()
+            matched: set[int] = set()
+            for row in rows:
+                tags = json.loads(row["tags"])
+                source_tags = [
+                    str(tag) for tag in tags if str(tag).startswith("source:")
+                ]
+                if len(source_tags) == 1 and (
+                    source_tags[0],
+                    str(row["title"]),
+                ) in wanted:
+                    matched.add(int(row["rowid"]))
+            return frozenset(matched)
+        except (
+            KnowledgeStoreError,
+            sqlite3.Error,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return frozenset()
 
     def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:

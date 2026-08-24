@@ -349,6 +349,8 @@ def _score_snapshot(
     if norm <= 0:
         return []
     scores = snapshot.matrix @ (query / norm)
+    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    disabled_rowids = store.entry_rowids_for_keys(disabled)
     if allowed_source_tags is None:
         eligible_indices = np.arange(len(scores), dtype=np.int64)
     else:
@@ -358,6 +360,12 @@ def _score_snapshot(
         eligible_indices = np.flatnonzero(
             np.isin(snapshot.entry_rowids, tuple(eligible_rowids))
         )
+        if not len(eligible_indices):
+            return []
+    if disabled_rowids:
+        eligible_indices = eligible_indices[
+            ~np.isin(snapshot.entry_rowids[eligible_indices], tuple(disabled_rowids))
+        ]
         if not len(eligible_indices):
             return []
     eligible_scores = scores[eligible_indices]
@@ -375,7 +383,6 @@ def _score_snapshot(
         candidate_indices = eligible_indices[np.argsort(-eligible_scores)]
     rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
     entries = store.load_entries_by_rowids(rowids)
-    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
     best: dict[tuple[str, str], KnowledgeHit] = {}
     for index in candidate_indices:
         score = float(scores[index])
@@ -383,8 +390,6 @@ def _score_snapshot(
             break
         entry = entries.get(int(snapshot.entry_rowids[int(index)]))
         if entry is None:
-            continue
-        if entry_key(entry) in disabled:
             continue
         if (
             allowed_source_tags is not None
@@ -537,7 +542,7 @@ def _mark_store_model_vectors_stale(
     model_id: str,
 ) -> int:
     with mutation_lock(store.database_path):
-        return int(store.mark_other_models_stale(model_id))
+        return int(store.mark_incompatible_models_stale(model_id))
 
 
 async def reconcile_embedding_models(
@@ -571,7 +576,7 @@ def _select_embedding_chunks(
     limit: int,
 ) -> tuple[dict[str, object], ...]:
     with mutation_lock(store.database_path):
-        store.mark_other_models_stale(model_id)
+        store.mark_incompatible_models_stale(model_id)
     return store.pending_embedding_chunks(model_id=model_id, limit=limit)
 
 
@@ -648,7 +653,12 @@ async def index_embedding_batch(
         try:
             service = get_local_embedding_service()
             if not service.is_available() and not service.is_disabled():
-                await service.request_load()
+                load_state = await _INFERENCE_COORDINATOR.ensure_loaded(
+                    service,
+                    timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+                )
+                if load_state != "ready":
+                    return EmbeddingBatchResult(state=load_state)
         except Exception:
             return EmbeddingBatchResult(state="embedding_unavailable")
     work = await asyncio.to_thread(_embedding_work_status, store)

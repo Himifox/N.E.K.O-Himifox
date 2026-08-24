@@ -6,7 +6,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from .catalog_overrides import entry_key, get_catalog_override_path, load_disabled_entries
+from .catalog_overrides import (
+    CatalogOverrideError,
+    entry_key,
+    get_catalog_override_path,
+    load_disabled_entries,
+)
 from .filters import make_fts_query, normalize_search_text
 from .models import KnowledgeHit
 from .store import KnowledgeStore, _entry_from_row
@@ -126,13 +131,18 @@ class KnowledgeRetriever:
             allowed_source_tags = tuple(dict.fromkeys(allowed_source_tags))
             if not allowed_source_tags:
                 return []
-        disabled = (
-            frozenset()
-            if include_disabled
-            else load_disabled_entries(
-                get_catalog_override_path(self.store.database_path)
+        try:
+            disabled = (
+                frozenset()
+                if include_disabled
+                else load_disabled_entries(
+                    get_catalog_override_path(self.store.database_path)
+                )
             )
-        )
+        except CatalogOverrideError:
+            # Automatic retrieval fails closed; management/status endpoints
+            # still expose the invalid override as a diagnosable condition.
+            return []
         candidate_limit = max(12, limit * 4) + len(disabled)
         rows_by_id = {}
         for row in self.store.query_fts(

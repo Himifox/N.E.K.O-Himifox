@@ -176,6 +176,34 @@ def test_semantic_scan_filters_sources_before_top_k(tmp_path, monkeypatch):
     assert result[0].semantic_score == pytest.approx(0.8)
 
 
+def test_semantic_scan_filters_disabled_chunks_before_top_k(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Disabled crowd"))
+    store.upsert(_entry("Enabled result"))
+    snapshot = VectorIndexSnapshot(
+        revision=1,
+        model_id="fixture",
+        matrix=np.asarray([[1.0, 0.0]] * 65 + [[0.8, 0.6]], dtype=np.float32),
+        entry_rowids=np.asarray([1] * 65 + [2], dtype=np.int64),
+        chunk_indices=np.arange(66, dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: frozenset({("source:test", "Disabled crowd")}),
+    )
+
+    result = _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=1,
+        allowed_source_tags=None,
+    )
+
+    assert [hit.entry.title for hit in result] == ["Enabled result"]
+    assert result[0].semantic_score == pytest.approx(0.8)
+
+
 @pytest.mark.asyncio
 async def test_semantic_search_uses_versioned_query_input(tmp_path, monkeypatch):
     store = KnowledgeStore(tmp_path / "knowledge.db")
@@ -326,8 +354,10 @@ async def test_embedding_batch_prewarms_query_runtime_without_pending_work(
 
         async def request_load(self):
             self.load_requests += 1
+            return True
 
     service = _PrewarmService()
+    _fresh_coordinator(monkeypatch)
     monkeypatch.setattr(vector_index, "get_local_embedding_service", lambda: service)
 
     result = await vector_index.index_embedding_batch(store, load_model=True)
