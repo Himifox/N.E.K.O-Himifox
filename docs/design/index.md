@@ -21,6 +21,7 @@ These documents preserve design intent and implementation context. They are grou
 
 - [ASR client phase record](./asr-client-phase1)
 - [Compact chat mode](./compact-chat-mode-design)
+- [PR #2951 public-knowledge boundary remediation](./public-knowledge-pr2951-boundary-remediation)
 - [Memory event journal](./memory-event-log-rfc)
 - [User-driven memory evidence](./memory-evidence-rfc)
 - [PNGTuber lightweight avatar](./pngtuber-lightweight-avatar-plan)
