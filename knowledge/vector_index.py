@@ -502,6 +502,39 @@ def _embedding_work_status(store: KnowledgeStore) -> dict[str, object]:
     return store.chunk_status()
 
 
+def _mark_store_model_vectors_stale(
+    store: KnowledgeStore,
+    *,
+    model_id: str,
+) -> int:
+    with mutation_lock(store.database_path):
+        return int(store.mark_other_models_stale(model_id))
+
+
+async def reconcile_embedding_models(
+    stores: tuple[KnowledgeStore, ...] | list[KnowledgeStore],
+) -> int:
+    """Stale old local-model vectors before the global ready-vector budget is read."""
+    try:
+        status = get_local_embedding_status()
+    except Exception:
+        return 0
+    model_id = str(status.model_id or "").strip()
+    if not model_id or not stores:
+        return 0
+    stale_counts = await asyncio.gather(
+        *(
+            asyncio.to_thread(
+                _mark_store_model_vectors_stale,
+                store,
+                model_id=model_id,
+            )
+            for store in stores
+        )
+    )
+    return sum(stale_counts)
+
+
 def _select_embedding_chunks(
     store: KnowledgeStore,
     *,

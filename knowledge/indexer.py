@@ -81,7 +81,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     from .store import KnowledgeStore
     from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
     from .service import KnowledgeService
-    from .vector_index import index_embedding_batch
+    from .vector_index import index_embedding_batch, reconcile_embedding_models
 
     try:
         service = KnowledgeService.from_root(knowledge_root)
@@ -121,6 +121,9 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     await asyncio.sleep(0)
                     break
 
+            # A model change must release old local vectors from the global
+            # ready budget before deciding whether any replacement work fits.
+            await reconcile_embedding_models(stores)
             statuses = await asyncio.gather(
                 *(asyncio.to_thread(store.chunk_status) for store in stores)
             )

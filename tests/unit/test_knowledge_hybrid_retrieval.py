@@ -324,6 +324,39 @@ async def test_embedding_batch_reads_sqlite_off_the_event_loop(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_model_reconciliation_releases_old_vectors_from_ready_budget(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Old model vector"))
+    chunk = store.pending_embedding_chunks(model_id="old-model", limit=1)[0]
+    assert store.store_chunk_embedding(
+        chunk_id=str(chunk["chunk_id"]),
+        content_hash=str(chunk["content_hash"]),
+        model_id="old-model",
+        dimensions=2,
+        embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
+    )
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_status",
+        lambda: LocalEmbeddingStatus(
+            state="not_ready",
+            model_id="new-model",
+            dimensions=2,
+        ),
+    )
+
+    stale = await vector_index.reconcile_embedding_models([store])
+    status = store.chunk_status()
+
+    assert stale == 1
+    assert status["chunks_ready"] == 0
+    assert status["chunks_stale"] == 1
+
+
+@pytest.mark.asyncio
 async def test_slow_embedding_batch_is_stored_without_failure(tmp_path, monkeypatch):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry("Slow but valid"))
