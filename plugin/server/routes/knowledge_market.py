@@ -6,7 +6,7 @@ import json
 import secrets
 import time
 from typing import Any, Literal
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -34,6 +34,8 @@ _JOB_POLL_SECONDS = 5.0
 _JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 _MAX_INDEX_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_VECTOR_BYTES = 5_000 * 256 * 2
+_MAX_ARTIFACT_REDIRECTS = 5
+_ARTIFACT_REDIRECT_STATUSES = frozenset((301, 302, 303, 307, 308))
 _ALLOWED_ARTIFACT_HOSTS = {
     "github.com",
     "objects.githubusercontent.com",
@@ -325,7 +327,12 @@ async def _download_verified_artifact(
 ) -> bytes:
     if descriptor.bytes > max_bytes:
         raise _KnowledgeTaskError("artifact_too_large", "知识制品超过大小限制")
-    _validate_artifact_url(descriptor.url, required_suffix=required_suffix)
+    _require_artifact_url(
+        descriptor.url,
+        code="unsafe_artifact_url",
+        message="知识制品地址不受信任",
+        required_suffix=required_suffix,
+    )
     raw = await _download_artifact(descriptor.url, max_bytes=max_bytes)
     if len(raw) != descriptor.bytes:
         raise _KnowledgeTaskError("artifact_size_mismatch", "知识制品大小不一致")
@@ -337,39 +344,68 @@ async def _download_verified_artifact(
 
 async def _download_artifact(url: str, *, max_bytes: int = MAX_PACK_BYTES) -> bytes:
     headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
-    chunks: list[bytes] = []
-    size = 0
+    current_url = url
+    redirects = 0
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0),
-            follow_redirects=True,
+            follow_redirects=False,
             trust_env=False,
         ) as client:
-            async with client.stream("GET", url, headers=headers) as response:
-                response.raise_for_status()
-                for hop in (*response.history, response):
-                    try:
-                        _validate_artifact_url(str(hop.url))
-                    except HTTPException as exc:
+            while True:
+                _require_artifact_url(
+                    current_url,
+                    code="unsafe_artifact_redirect",
+                    message="知识包下载发生了不安全的重定向",
+                )
+                async with client.stream("GET", current_url, headers=headers) as response:
+                    if response.status_code in _ARTIFACT_REDIRECT_STATUSES:
+                        location = response.headers.get("location")
+                        if not location or redirects >= _MAX_ARTIFACT_REDIRECTS:
+                            raise _KnowledgeTaskError(
+                                "unsafe_artifact_redirect",
+                                "知识包下载重定向无效或次数过多",
+                            )
+                        next_url = urljoin(str(response.url), location)
+                        _require_artifact_url(
+                            next_url,
+                            code="unsafe_artifact_redirect",
+                            message="知识包下载发生了不安全的重定向",
+                        )
+                        current_url = next_url
+                        redirects += 1
+                        continue
+                    if 300 <= response.status_code < 400:
                         raise _KnowledgeTaskError(
                             "unsafe_artifact_redirect",
-                            "知识包下载发生了不安全的重定向",
-                        ) from exc
-                content_length = response.headers.get("content-length")
-                if content_length and int(content_length) > max_bytes:
-                    raise _KnowledgeTaskError(
-                        "artifact_too_large", "知识制品超过大小限制"
-                    )
-                async for chunk in response.aiter_bytes(64 * 1024):
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise _KnowledgeTaskError(
-                            "artifact_too_large", "知识制品超过大小限制"
+                            "知识包下载返回了不支持的重定向",
                         )
-                    chunks.append(chunk)
+                    response.raise_for_status()
+                    content_length = response.headers.get("content-length")
+                    if content_length:
+                        try:
+                            declared_size = int(content_length)
+                        except ValueError as exc:
+                            raise _KnowledgeTaskError(
+                                "invalid_artifact_response",
+                                "知识制品响应长度无效",
+                            ) from exc
+                        if declared_size > max_bytes:
+                            raise _KnowledgeTaskError(
+                                "artifact_too_large", "知识制品超过大小限制"
+                            )
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise _KnowledgeTaskError(
+                                "artifact_too_large", "知识制品超过大小限制"
+                            )
+                        chunks.append(chunk)
+                    return b"".join(chunks)
     except httpx.HTTPError as exc:
         raise _KnowledgeTaskError("download_failed", "知识包下载失败") from exc
-    return b"".join(chunks)
 
 
 async def _main_subscription_request(
@@ -560,6 +596,19 @@ def _validate_artifact_url(url: str, *, required_suffix: str = "") -> None:
         raise HTTPException(status_code=400, detail="artifact URL is not allowed")
     if required_suffix and not parsed.path.lower().endswith(required_suffix):
         raise HTTPException(status_code=400, detail="invalid knowledge artifact suffix")
+
+
+def _require_artifact_url(
+    url: str,
+    *,
+    code: str,
+    message: str,
+    required_suffix: str = "",
+) -> None:
+    try:
+        _validate_artifact_url(url, required_suffix=required_suffix)
+    except HTTPException as exc:
+        raise _KnowledgeTaskError(code, message) from exc
 
 
 def _stage(task: dict[str, Any], stage: str, progress: float, message: str) -> None:

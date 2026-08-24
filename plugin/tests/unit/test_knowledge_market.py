@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 
+import httpx
 import pytest
 
 from knowledge.api import canonical_pack_bytes
@@ -193,6 +194,90 @@ async def test_market_subscription_rejects_hash_mismatch(monkeypatch):
             required_suffix=".neko-knowledge.json",
         )
     assert exc_info.value.code == "artifact_hash_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_validates_redirect_before_request(monkeypatch):
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"Location": "https://127.0.0.1/private"},
+            request=request,
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._download_artifact(
+            "https://github.com/example/repo/releases/download/v1/fixture.bin"
+        )
+
+    assert exc_info.value.code == "unsafe_artifact_redirect"
+    assert requested == [
+        "https://github.com/example/repo/releases/download/v1/fixture.bin"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_follows_validated_github_redirect(monkeypatch):
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.host == "github.com":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://release-assets.githubusercontent.com/fixture.bin"
+                },
+                request=request,
+            )
+        return httpx.Response(200, content=b"verified", request=request)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    result = await module._download_artifact(
+        "https://github.com/example/repo/releases/download/v1/fixture.bin"
+    )
+
+    assert result == b"verified"
+    assert requested == [
+        "https://github.com/example/repo/releases/download/v1/fixture.bin",
+        "https://release-assets.githubusercontent.com/fixture.bin",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_verified_artifact_maps_invalid_initial_url():
+    descriptor = module.KnowledgeArtifactDescriptor(
+        url="https://example.invalid/fixture.neko-knowledge.json",
+        sha256="0" * 64,
+        bytes=1,
+    )
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._download_verified_artifact(
+            descriptor,
+            max_bytes=module.MAX_PACK_BYTES,
+            required_suffix=".neko-knowledge.json",
+        )
+
+    assert exc_info.value.code == "unsafe_artifact_url"
 
 
 @pytest.mark.asyncio
