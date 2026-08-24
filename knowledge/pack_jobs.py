@@ -66,6 +66,15 @@ def _write_state(
     return updated
 
 
+async def _write_state_async(
+    job_dir: Path,
+    current: dict[str, Any],
+    **changes: object,
+) -> dict[str, Any]:
+    """Persist job state without blocking the coordinator event loop."""
+    return await asyncio.to_thread(_write_state, job_dir, current, **changes)
+
+
 def stage_pack(
     service,
     pack: KnowledgePack,
@@ -441,7 +450,7 @@ async def process_pack_jobs(
         ready = int(status["chunks_ready"])
         has_prebuilt = state.get("index_validation") == "accepted" and ready == total
         if has_prebuilt and ready_vector_chunks + total > MAX_READY_VECTOR_CHUNKS:
-            state = _write_state(
+            state = await _write_state_async(
                 job_dir,
                 state,
                 index_origin="none",
@@ -463,7 +472,7 @@ async def process_pack_jobs(
             return {"state": "ready_bm25", "selected": 0, "stored": 0}
 
         if has_prebuilt:
-            state = _write_state(
+            state = await _write_state_async(
                 job_dir,
                 state,
                 chunks_ready=ready,
@@ -499,7 +508,7 @@ async def process_pack_jobs(
         if current.get("state") == "cancelled":
             _cleanup_payload(job_dir)
             return {"state": "cancelled", "selected": 0, "stored": 0}
-        _write_state(
+        await _write_state_async(
             job_dir,
             current,
             state="failed",
