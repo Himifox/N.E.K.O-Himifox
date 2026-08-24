@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -127,6 +128,37 @@ def test_management_api_uses_content_preview_when_summary_is_blank(monkeypatch, 
     assert item["content_preview"] == "Meaning - A typical use"
 
 
+def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+
+    client = _client(monkeypatch, tmp_path)
+    thread_ids = {}
+    original_validate = module._validate_local_pack_payload
+
+    def capture_request_thread(*_args, **_kwargs):
+        thread_ids["request"] = threading.get_ident()
+        return None
+
+    def capture_validation_thread(payload):
+        thread_ids["validation"] = threading.get_ident()
+        return original_validate(payload)
+
+    monkeypatch.setattr(module, "_validate_mutation", capture_request_thread)
+    monkeypatch.setattr(
+        module,
+        "_validate_local_pack_payload",
+        capture_validation_thread,
+    )
+
+    response = client.post(
+        "/api/public-knowledge/packs/import",
+        json={"pack": _pack(pack_id="threaded-validation")},
+    ).json()
+
+    assert response["ok"] is True
+    assert thread_ids["validation"] != thread_ids["request"]
+
+
 def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_path):
     import main_routers.public_knowledge_router as module
 
@@ -219,6 +251,8 @@ def test_subscription_rejects_pre_release_protocol(monkeypatch, tmp_path):
 
 
 def test_subscription_v1_stages_verified_sidecars(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+
     pack = _pack(pack_id="indexed-fixture")
     raw, artifacts = _prebuilt(pack)
     subscription = {
@@ -233,6 +267,19 @@ def test_subscription_v1_stages_verified_sidecars(monkeypatch, tmp_path):
         "trust": "trusted_market",
     }
     client = _client(monkeypatch, tmp_path)
+    thread_ids = {}
+    original_validate = module.validate_prebuilt_index
+
+    def capture_request_thread(*_args, **_kwargs):
+        thread_ids["request"] = threading.get_ident()
+        return None
+
+    def capture_prebuilt_thread(*args, **kwargs):
+        thread_ids["prebuilt"] = threading.get_ident()
+        return original_validate(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_validate_mutation", capture_request_thread)
+    monkeypatch.setattr(module, "validate_prebuilt_index", capture_prebuilt_thread)
 
     response = client.post(
         "/api/public-knowledge/subscriptions/apply",
@@ -256,6 +303,7 @@ def test_subscription_v1_stages_verified_sidecars(monkeypatch, tmp_path):
     job_root = tmp_path / ".staging" / response["job_id"]
     assert (job_root / "pack.neko-knowledge.index.json").is_file()
     assert (job_root / "pack.neko-knowledge.vectors.f16").is_file()
+    assert thread_ids["prebuilt"] != thread_ids["request"]
 
 
 def test_subscription_rejects_market_material_type_mismatch(

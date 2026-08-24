@@ -172,6 +172,21 @@ def test_cancelled_job_never_becomes_visible(tmp_path):
     assert service.search("Staged phrase", limit=1) == []
 
 
+@pytest.mark.asyncio
+async def test_remove_pack_cancels_its_staged_replacement_before_activation(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    service.install_pack(_pack(title="Installed phrase"))
+    job = service.stage_pack(_pack(title="Replacement phrase"))
+
+    assert service.remove_pack("staged-fixture") == 1
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "no_work"
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
+    assert service.list_packs() == ()
+    assert service.search("Replacement phrase") == []
+
+
 def test_pack_chunk_budget_is_enforced(monkeypatch):
     import knowledge.packs as packs
 

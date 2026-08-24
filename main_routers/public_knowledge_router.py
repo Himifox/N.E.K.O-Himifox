@@ -40,6 +40,26 @@ router = APIRouter(prefix="/api/public-knowledge", tags=["public-knowledge"])
 _PACK_ENVELOPE_OVERHEAD_BYTES = 64 * 1024
 
 
+def _validate_local_pack_payload(pack_payload):
+    if len(canonical_pack_bytes(pack_payload)) > MAX_PACK_BYTES:
+        return None
+    return validate_pack(pack_payload)
+
+
+def _validate_subscription_payload(subscription: str):
+    return validate_subscription(json.loads(subscription))
+
+
+def _validate_subscription_pack(pack_raw: bytes, validated_subscription):
+    pack_payload = load_canonical_pack_artifact(pack_raw)
+    if hashlib.sha256(pack_raw).hexdigest() != validated_subscription.artifact_sha256:
+        return None, "artifact_hash_mismatch"
+    pack = validate_pack(pack_payload)
+    if pack.material_type != validated_subscription.material_type:
+        return None, "material_type_mismatch"
+    return pack, ""
+
+
 async def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
     chunks: list[bytes] = []
     size = 0
@@ -320,9 +340,9 @@ async def import_public_knowledge_pack(request: Request):
         return rejected
     try:
         pack_payload = payload.get("pack")
-        if len(canonical_pack_bytes(pack_payload)) > MAX_PACK_BYTES:
+        pack = await asyncio.to_thread(_validate_local_pack_payload, pack_payload)
+        if pack is None:
             return {"ok": False, "reason": "pack_too_large"}
-        pack = validate_pack(pack_payload)
         service = await _service_async()
         result = await asyncio.to_thread(service.stage_pack, pack)
     except (OSError, ValueError) as exc:
@@ -352,20 +372,20 @@ async def apply_public_knowledge_subscription(
     if protocol_version != SUBSCRIPTION_PROTOCOL_VERSION:
         return {"ok": False, "reason": "unsupported_protocol"}
     try:
-        subscription_payload = json.loads(subscription)
-        validated_subscription = validate_subscription(subscription_payload)
+        validated_subscription = await asyncio.to_thread(
+            _validate_subscription_payload,
+            subscription,
+        )
         if validated_subscription.provider != "plugin-market":
             return {"ok": False, "reason": "untrusted_provider"}
         pack_raw = await _read_upload_limited(pack, max_bytes=MAX_PACK_BYTES)
-        pack_payload = load_canonical_pack_artifact(pack_raw)
-        if (
-            hashlib.sha256(pack_raw).hexdigest()
-            != validated_subscription.artifact_sha256
-        ):
-            return {"ok": False, "reason": "artifact_hash_mismatch"}
-        knowledge_pack = validate_pack(pack_payload)
-        if knowledge_pack.material_type != validated_subscription.material_type:
-            return {"ok": False, "reason": "material_type_mismatch"}
+        knowledge_pack, rejection = await asyncio.to_thread(
+            _validate_subscription_pack,
+            pack_raw,
+            validated_subscription,
+        )
+        if rejection:
+            return {"ok": False, "reason": rejection}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
 
@@ -384,7 +404,8 @@ async def apply_public_knowledge_subscription(
                 vectors,
                 max_bytes=MAX_PREBUILT_VECTOR_BYTES,
             )
-            validate_prebuilt_index(
+            await asyncio.to_thread(
+                validate_prebuilt_index,
                 pack_raw,
                 manifest_raw,
                 vectors_raw,

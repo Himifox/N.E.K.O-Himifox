@@ -478,6 +478,20 @@ def test_removing_pack_does_not_remove_another_source(tmp_path):
     assert service.list_packs() == ()
 
 
+def test_invalid_pack_registry_degrades_health_instead_of_looking_empty(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.database_path().with_name("packs.json").write_text(
+        "not-json",
+        encoding="utf-8",
+    )
+
+    status = service.get_status()
+
+    assert status["pack_registry_state"] == "invalid"
+    assert status["integrity_ok"] is False
+    assert status["packs"] == 0
+
+
 def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))

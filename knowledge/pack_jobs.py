@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -43,6 +44,12 @@ def _jobs_root(knowledge_root: str | Path) -> Path:
 
 def _state_path(job_dir: Path) -> Path:
     return job_dir / "state.json"
+
+
+def pack_operation_lock(knowledge_root: str | Path, pack_id: str):
+    """Serialize staging, activation, and removal for one pack identity."""
+    digest = hashlib.sha256(str(pack_id).encode("utf-8")).hexdigest()
+    return mutation_lock(_jobs_root(knowledge_root) / f".pack-operation-{digest}")
 
 
 def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
@@ -91,7 +98,7 @@ def stage_pack(
     preflight = preflight_pack(pack)
     ensure_install_capacity(root, preflight)
     jobs_root = _jobs_root(root)
-    with mutation_lock(jobs_root):
+    with pack_operation_lock(root, pack.pack_id), mutation_lock(jobs_root):
         _ensure_community_capacity(service, pack, preflight)
         jobs_root.mkdir(parents=True, exist_ok=True)
         job_id = f"{pack.pack_id}-{uuid.uuid4().hex[:12]}"
@@ -393,7 +400,10 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
 def _activate_job(
     service, job_dir: Path, state: dict[str, Any], *, mode: str
 ) -> dict[str, Any]:
-    with mutation_lock(_state_path(job_dir)):
+    pack_id = str(state.get("pack_id") or "")
+    with pack_operation_lock(service.knowledge_root, pack_id), mutation_lock(
+        _state_path(job_dir)
+    ):
         current = _read_json(_state_path(job_dir)) or state
         if current.get("state") == "cancelled":
             _cleanup_payload(job_dir)

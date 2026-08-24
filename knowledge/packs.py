@@ -348,6 +348,18 @@ def list_installed_packs(
     return tuple(items)
 
 
+def pack_registry_state(database_path: str | Path) -> str:
+    """Return missing/ready/invalid without collapsing corruption into empty."""
+    registry_path = get_pack_registry_path(database_path)
+    if not registry_path.is_file():
+        return "missing"
+    try:
+        _load_registry(registry_path)
+    except KnowledgePackRegistryError:
+        return "invalid"
+    return "ready"
+
+
 def list_installed_pack_routing_metadata(
     database_path: str | Path,
 ) -> tuple[dict[str, object], ...]:

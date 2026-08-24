@@ -935,6 +935,7 @@ class KnowledgeService:
 
     def get_status(self) -> dict:
         from .pack_jobs import MAX_READY_VECTOR_CHUNKS
+        from .packs import pack_registry_state
 
         database_path = self.database_path()
         database_exists = database_path.is_file()
@@ -974,6 +975,7 @@ class KnowledgeService:
             embedding_state = "disabled"
             embedding_model_id = ""
         pack_jobs = self.list_pack_jobs()
+        registry_state = pack_registry_state(database_path)
         installed_packs = self.list_packs()
         knowledge_packs = tuple(
             pack
@@ -1010,9 +1012,10 @@ class KnowledgeService:
             "entries": store.count() if store is not None else 0,
             "integrity_ok": (
                 store.integrity_ok() if store is not None else True
-            ) and override_state != "invalid",
+            ) and override_state != "invalid" and registry_state != "invalid",
             "disabled_entries": len(disabled),
             "catalog_override_state": override_state,
+            "pack_registry_state": registry_state,
             "sources": source_counts,
             "packs": len(installed_packs),
             "knowledge_packs": len(knowledge_packs),
@@ -1085,9 +1088,25 @@ class KnowledgeService:
         return result
 
     def remove_pack(self, pack_id: str) -> int:
+        from .pack_jobs import (
+            TERMINAL_STATES,
+            cancel_pack_job,
+            list_pack_jobs,
+            pack_operation_lock,
+        )
         from .packs import remove_pack
 
-        removed = remove_pack(self.database_path(), pack_id)
+        with pack_operation_lock(self.knowledge_root, pack_id):
+            for job in list_pack_jobs(self.knowledge_root):
+                if (
+                    job.get("pack_id") == pack_id
+                    and job.get("state") not in TERMINAL_STATES
+                ):
+                    cancel_pack_job(
+                        self.knowledge_root,
+                        str(job.get("job_id") or ""),
+                    )
+            removed = remove_pack(self.database_path(), pack_id)
         self._routing_state = None
         self.refresh_routing_index(background=True)
         return removed
