@@ -36,6 +36,7 @@ _JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 _MAX_INDEX_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_VECTOR_BYTES = 5_000 * 256 * 2
 _MAX_ARTIFACT_REDIRECTS = 5
+_ARTIFACT_DOWNLOAD_TIMEOUT_SECONDS = 180.0
 _ARTIFACT_REDIRECT_STATUSES = frozenset((301, 302, 303, 307, 308))
 _ALLOWED_ARTIFACT_HOSTS = {
     "github.com",
@@ -344,69 +345,83 @@ async def _download_verified_artifact(
 
 
 async def _download_artifact(url: str, *, max_bytes: int = MAX_PACK_BYTES) -> bytes:
+    try:
+        async with asyncio.timeout(_ARTIFACT_DOWNLOAD_TIMEOUT_SECONDS):
+            return await _download_artifact_with_redirects(url, max_bytes=max_bytes)
+    except TimeoutError as exc:
+        raise _KnowledgeTaskError(
+            "download_timeout",
+            "知识包下载超过总时间限制",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise _KnowledgeTaskError("download_failed", "知识包下载失败") from exc
+
+
+async def _download_artifact_with_redirects(
+    url: str,
+    *,
+    max_bytes: int,
+) -> bytes:
     headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
     current_url = url
     redirects = 0
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            follow_redirects=False,
-            trust_env=False,
-        ) as client:
-            while True:
-                _require_artifact_url(
-                    current_url,
-                    code="unsafe_artifact_redirect",
-                    message="知识包下载发生了不安全的重定向",
-                )
-                async with client.stream("GET", current_url, headers=headers) as response:
-                    if response.status_code in _ARTIFACT_REDIRECT_STATUSES:
-                        location = response.headers.get("location")
-                        if not location or redirects >= _MAX_ARTIFACT_REDIRECTS:
-                            raise _KnowledgeTaskError(
-                                "unsafe_artifact_redirect",
-                                "知识包下载重定向无效或次数过多",
-                            )
-                        next_url = urljoin(str(response.url), location)
-                        _require_artifact_url(
-                            next_url,
-                            code="unsafe_artifact_redirect",
-                            message="知识包下载发生了不安全的重定向",
-                        )
-                        current_url = next_url
-                        redirects += 1
-                        continue
-                    if 300 <= response.status_code < 400:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        while True:
+            _require_artifact_url(
+                current_url,
+                code="unsafe_artifact_redirect",
+                message="知识包下载发生了不安全的重定向",
+            )
+            async with client.stream("GET", current_url, headers=headers) as response:
+                if response.status_code in _ARTIFACT_REDIRECT_STATUSES:
+                    location = response.headers.get("location")
+                    if not location or redirects >= _MAX_ARTIFACT_REDIRECTS:
                         raise _KnowledgeTaskError(
-                            "unsafe_artifact_redirect",
-                            "知识包下载返回了不支持的重定向",
+                            code="unsafe_artifact_redirect",
+                            message="知识包下载重定向无效或次数过多",
                         )
-                    response.raise_for_status()
-                    content_length = response.headers.get("content-length")
-                    if content_length:
-                        try:
-                            declared_size = int(content_length)
-                        except ValueError as exc:
-                            raise _KnowledgeTaskError(
-                                "invalid_artifact_response",
-                                "知识制品响应长度无效",
-                            ) from exc
-                        if declared_size > max_bytes:
-                            raise _KnowledgeTaskError(
-                                "artifact_too_large", "知识制品超过大小限制"
-                            )
-                    chunks: list[bytes] = []
-                    size = 0
-                    async for chunk in response.aiter_bytes(64 * 1024):
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise _KnowledgeTaskError(
-                                "artifact_too_large", "知识制品超过大小限制"
-                            )
-                        chunks.append(chunk)
-                    return b"".join(chunks)
-    except httpx.HTTPError as exc:
-        raise _KnowledgeTaskError("download_failed", "知识包下载失败") from exc
+                    next_url = urljoin(str(response.url), location)
+                    _require_artifact_url(
+                        next_url,
+                        code="unsafe_artifact_redirect",
+                        message="知识包下载发生了不安全的重定向",
+                    )
+                    current_url = next_url
+                    redirects += 1
+                    continue
+                if 300 <= response.status_code < 400:
+                    raise _KnowledgeTaskError(
+                        "unsafe_artifact_redirect",
+                        "知识包下载返回了不支持的重定向",
+                    )
+                response.raise_for_status()
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError as exc:
+                        raise _KnowledgeTaskError(
+                            "invalid_artifact_response",
+                            "知识制品响应长度无效",
+                        ) from exc
+                    if declared_size > max_bytes:
+                        raise _KnowledgeTaskError(
+                            "artifact_too_large", "知识制品超过大小限制"
+                        )
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes(64 * 1024):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise _KnowledgeTaskError(
+                            "artifact_too_large", "知识制品超过大小限制"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
 
 
 async def _main_subscription_request(

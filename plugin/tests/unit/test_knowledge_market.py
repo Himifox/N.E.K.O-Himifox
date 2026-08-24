@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import httpx
@@ -260,6 +261,38 @@ async def test_artifact_download_follows_validated_github_redirect(monkeypatch):
         "https://github.com/example/repo/releases/download/v1/fixture.bin",
         "https://release-assets.githubusercontent.com/fixture.bin",
     ]
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_enforces_total_wall_clock_timeout(monkeypatch):
+    class EndlessSlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                await asyncio.sleep(0.005)
+                yield b"x"
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=EndlessSlowStream(), request=request)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(module, "_ARTIFACT_DOWNLOAD_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._download_artifact(
+            "https://github.com/example/repo/releases/download/v1/slow.bin",
+            max_bytes=1024,
+        )
+
+    assert exc_info.value.code == "download_timeout"
 
 
 @pytest.mark.asyncio
