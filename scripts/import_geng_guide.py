@@ -1,4 +1,4 @@
-"""One-shot, idempotent importer for a user-provided 梗指南 Markdown export."""
+"""Import a user-provided Geng Guide Markdown export exactly once."""
 
 from __future__ import annotations
 

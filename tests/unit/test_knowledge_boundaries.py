@@ -262,25 +262,38 @@ def test_mutation_locks_for_different_paths_do_not_block_each_other(tmp_path):
     assert not second.is_alive()
 
 
-def test_feature_branch_does_not_ship_bundled_knowledge_datasets():
+def test_unified_runtime_does_not_load_or_package_legacy_datasets():
     repository_root = Path(__file__).resolve().parents[2]
-    forbidden_assets = (
-        "knowledge/data/LICENSE-CORPORA.txt",
-        "knowledge/data/corpora_demo.jsonl",
-        "knowledge/moegirl_knowledge/data/LICENSE-CHIME.txt",
-        "knowledge/moegirl_knowledge/data/chime_full.jsonl",
-    )
     forbidden_runtime_modules = (
         "app/main_server/moegirl_knowledge_runtime.py",
         "knowledge/corpora_dataset.py",
         "knowledge/corpora_runtime.py",
         "knowledge/moegirl_knowledge/bundled_chime_runtime.py",
     )
+    active_runtime_modules = (
+        "knowledge/api.py",
+        "knowledge/service.py",
+        "knowledge/indexer.py",
+        "main_logic/knowledge_context.py",
+        "main_routers/public_knowledge_router.py",
+        "app/main_server/__init__.py",
+    )
+    forbidden_references = (
+        "chime_full",
+        "corpora_demo",
+        "moegirl_knowledge_runtime",
+        "corpora_dataset",
+        "corpora_runtime",
+        "bundled_chime_runtime",
+    )
     pyproject = (repository_root / "pyproject.toml").read_text(encoding="utf-8")
 
     assert all(
         not (repository_root / path).exists()
-        for path in (*forbidden_assets, *forbidden_runtime_modules)
+        for path in forbidden_runtime_modules
     )
+    for path in active_runtime_modules:
+        source = (repository_root / path).read_text(encoding="utf-8")
+        assert all(reference not in source for reference in forbidden_references), path
     assert "chime_full" not in pyproject
     assert "corpora_demo" not in pyproject

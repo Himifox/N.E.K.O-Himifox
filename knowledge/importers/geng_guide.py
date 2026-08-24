@@ -1,4 +1,4 @@
-"""Import a user-provided Markdown export from 梗指南 into public knowledge."""
+"""Import a user-provided Geng Guide Markdown export into public knowledge."""
 
 from __future__ import annotations
 
