@@ -348,6 +348,7 @@ const offset = ref(0)
 const pageSize = 50
 const hasMore = ref(false)
 const entriesRequestGate = createLatestRequestGate()
+const entryRequestGate = createLatestRequestGate()
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
 const packs = ref<KnowledgePackSummary[]>([])
@@ -577,11 +578,13 @@ function refreshOverviewInBackground(delayMs = 0) {
       loadStatus({ force: true, silent: true }),
       loadPacks({ force: true, silent: true }),
     ]).then(() => {})
-    overviewRefreshInFlight = (overviewRefreshInFlight || Promise.resolve())
-      .then(run)
-      .finally(() => {
+    const queuedRefresh = (overviewRefreshInFlight || Promise.resolve()).then(run)
+    overviewRefreshInFlight = queuedRefresh
+    void queuedRefresh.finally(() => {
+      if (overviewRefreshInFlight === queuedRefresh) {
         overviewRefreshInFlight = null
-      })
+      }
+    })
   }, delayMs)
 }
 
@@ -627,12 +630,16 @@ async function loadEntries(reset = false) {
 }
 
 async function openEntry(row: KnowledgeEntrySummary) {
+  const requestId = entryRequestGate.begin()
   try {
     const response = await knowledgeApi.entry({ source: row.source.tag, title: row.title })
+    if (disposed || !entryRequestGate.isLatest(requestId)) return
     selectedEntry.value = response.entry || null
     drawerOpen.value = Boolean(selectedEntry.value)
   } catch {
-    if (!disposed) ElMessage.error(t('knowledge.loadFailed'))
+    if (!disposed && entryRequestGate.isLatest(requestId)) {
+      ElMessage.error(t('knowledge.loadFailed'))
+    }
   }
 }
 
@@ -719,7 +726,7 @@ async function pollImportJobs() {
     const jobs = new Map(
       (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
     )
-    for (const [jobId, startedAt] of [...pendingImportJobs]) {
+    for (const [jobId] of [...pendingImportJobs]) {
       const job = jobs.get(jobId)
       const state = String(job?.state || '')
       if (state === 'active') {
@@ -730,9 +737,6 @@ async function pollImportJobs() {
         pendingImportJobs.delete(jobId)
         completed = true
         ElMessage.error(t('knowledge.operationFailed'))
-      } else if (Date.now() - startedAt >= PACK_JOB_POLL_LIMIT_MS) {
-        pendingImportJobs.delete(jobId)
-        ElMessage.warning(t('knowledge.importStillProcessing'))
       }
     }
     packJobPollAttempts = 0
@@ -740,6 +744,14 @@ async function pollImportJobs() {
     packJobPollAttempts += 1
   } finally {
     packJobPollInFlight = false
+  }
+  if (disposed) return
+  const now = Date.now()
+  for (const [jobId, startedAt] of [...pendingImportJobs]) {
+    if (now - startedAt >= PACK_JOB_POLL_LIMIT_MS) {
+      pendingImportJobs.delete(jobId)
+      ElMessage.warning(t('knowledge.importStillProcessing'))
+    }
   }
   if (completed) refreshOverviewInBackground()
   if (pendingImportJobs.size > 0 && !disposed) {
@@ -910,6 +922,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
+  entryRequestGate.begin()
   pendingImportJobs.clear()
   if (overviewRefreshTimer !== null) window.clearTimeout(overviewRefreshTimer)
   if (packJobPollTimer !== null) window.clearTimeout(packJobPollTimer)
