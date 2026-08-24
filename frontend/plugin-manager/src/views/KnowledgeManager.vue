@@ -308,7 +308,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
+import { KnowledgeApiError, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
@@ -692,7 +692,13 @@ async function importSelectedPack(event: Event) {
     } else {
       refreshOverviewInBackground(response.state === 'queued' ? 1500 : 0)
     }
-  } catch { ElMessage.error(t('knowledge.operationFailed')) }
+  } catch (error) {
+    ElMessage.error(t(
+      error instanceof KnowledgeApiError && error.reason === 'invalid_pack'
+        ? 'knowledge.invalidPack'
+        : 'knowledge.operationFailed',
+    ))
+  }
 }
 
 function watchImportJob(jobId: string) {
