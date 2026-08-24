@@ -51,6 +51,16 @@ describe('knowledge API response handling', () => {
     await expect(knowledgeApi.status()).resolves.toEqual(payload)
   })
 
+  it('requests durable pack job state through the knowledge bridge', async () => {
+    axiosMocks.request.mockResolvedValue({ data: { ok: true, jobs: [] } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.packJobs()).resolves.toEqual({ ok: true, jobs: [] })
+    expect(axiosMocks.request.mock.calls[0]![0].url).toBe(
+      '/market/knowledge/packs/jobs',
+    )
+  })
+
   it('preserves transport failures', async () => {
     const upstream = new Error('bad gateway')
     axiosMocks.request.mockRejectedValue(upstream)

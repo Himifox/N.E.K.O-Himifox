@@ -305,7 +305,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
@@ -319,10 +319,18 @@ type KnowledgeStatusView = KnowledgeStatus & { status: 'ready' | 'degraded' }
 
 const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
 const KNOWLEDGE_OVERVIEW_CACHE_KEY = 'neko.pluginManager.knowledgeOverview'
+const PACK_JOB_POLL_LIMIT_MS = 10 * 60_000
 let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
 let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
 let overviewRefreshTimer: number | null = null
 let overviewRefreshInFlight: Promise<void> | null = null
+let packJobPollTimer: number | null = null
+let packJobPollStartedAt = 0
+let packJobPollAttempts = 0
+let deferredIdleHandle: number | null = null
+let deferredLoadTimer: number | null = null
+let disposed = false
+const pendingImportJobIds = new Set<string>()
 
 const { t } = useI18n()
 const {
@@ -559,10 +567,12 @@ function markOverviewCacheStale() {
 }
 
 function refreshOverviewInBackground(delayMs = 0) {
+  if (disposed) return
   markOverviewCacheStale()
   if (overviewRefreshTimer) window.clearTimeout(overviewRefreshTimer)
   overviewRefreshTimer = window.setTimeout(() => {
     overviewRefreshTimer = null
+    if (disposed) return
     const run = () => Promise.allSettled([
       loadStatus({ force: true, silent: true }),
       loadPacks({ force: true, silent: true }),
@@ -582,11 +592,13 @@ async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
   }
   if (!options.silent) loading.value = true
   try {
-    status.value = (await knowledgeApi.status()).status || null
+    const nextStatus = (await knowledgeApi.status()).status || null
+    if (disposed) return
+    status.value = nextStatus
     if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
     writeOverviewCache()
   } catch {
-    ElMessage.error(t('knowledge.loadFailed'))
+    if (!disposed) ElMessage.error(t('knowledge.loadFailed'))
   } finally {
     if (!options.silent) loading.value = false
   }
@@ -639,11 +651,13 @@ async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
   if (packsLoading.value && !options.force) return
   if (!options.silent) packsLoading.value = true
   try {
-    packs.value = (await knowledgeApi.packs()).packs || []
+    const nextPacks = (await knowledgeApi.packs()).packs || []
+    if (disposed) return
+    packs.value = nextPacks
     cachedPacks = { value: packs.value, loadedAt: Date.now() }
     writeOverviewCache()
   }
-  catch { ElMessage.error(t('knowledge.loadFailed')) }
+  catch { if (!disposed) ElMessage.error(t('knowledge.loadFailed')) }
   finally {
     if (!options.silent) packsLoading.value = false
   }
@@ -662,8 +676,61 @@ async function importSelectedPack(event: Event) {
         ? t('knowledge.importQueued')
         : t('knowledge.importSuccess'),
     )
-    refreshOverviewInBackground(response.state === 'queued' ? 1500 : 0)
+    const jobId = String(response.job_id || '').trim()
+    if (response.state === 'queued' && jobId) {
+      watchImportJob(jobId)
+    } else {
+      refreshOverviewInBackground(response.state === 'queued' ? 1500 : 0)
+    }
   } catch { ElMessage.error(t('knowledge.invalidPack')) }
+}
+
+function watchImportJob(jobId: string) {
+  pendingImportJobIds.add(jobId)
+  if (!packJobPollStartedAt) packJobPollStartedAt = Date.now()
+  if (packJobPollTimer === null) {
+    packJobPollTimer = window.setTimeout(pollImportJobs, 1000)
+  }
+}
+
+async function pollImportJobs() {
+  packJobPollTimer = null
+  if (disposed || pendingImportJobIds.size === 0) return
+  let completed = false
+  try {
+    const response = await knowledgeApi.packJobs()
+    if (disposed) return
+    const jobs = new Map(
+      (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
+    )
+    for (const jobId of [...pendingImportJobIds]) {
+      const job = jobs.get(jobId)
+      const state = String(job?.state || '')
+      if (state === 'active') {
+        pendingImportJobIds.delete(jobId)
+        completed = true
+        ElMessage.success(t('knowledge.importSuccess'))
+      } else if (state === 'failed' || state === 'cancelled') {
+        pendingImportJobIds.delete(jobId)
+        completed = true
+        ElMessage.error(t('knowledge.operationFailed'))
+      }
+    }
+    packJobPollAttempts = 0
+  } catch {
+    packJobPollAttempts += 1
+  }
+  if (completed) refreshOverviewInBackground()
+  if (
+    pendingImportJobIds.size > 0 &&
+    Date.now() - packJobPollStartedAt < PACK_JOB_POLL_LIMIT_MS
+  ) {
+    const delay = Math.min(1000 * 2 ** packJobPollAttempts, 5000)
+    packJobPollTimer = window.setTimeout(pollImportJobs, delay)
+  } else {
+    pendingImportJobIds.clear()
+    packJobPollStartedAt = 0
+  }
 }
 
 async function setPackAuto(row: KnowledgePackSummary, enabled: boolean) {
@@ -800,15 +867,18 @@ watch(activeTab, (tab) => {
 
 function deferInitialSecondaryLoads(silent = false) {
   const run = () => {
+    deferredIdleHandle = null
+    deferredLoadTimer = null
+    if (disposed) return
     void loadPacks({ silent })
     void loadMarketAuthStatus()
   }
   const requestIdleCallback = window.requestIdleCallback
   if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(run, { timeout: 1200 })
+    deferredIdleHandle = requestIdleCallback(run, { timeout: 1200 })
     return
   }
-  window.setTimeout(run, 120)
+  deferredLoadTimer = window.setTimeout(run, 120)
 }
 
 onMounted(() => {
@@ -821,6 +891,21 @@ onMounted(() => {
   } else {
     void loadMarketAuthStatus()
   }
+})
+
+onUnmounted(() => {
+  disposed = true
+  pendingImportJobIds.clear()
+  if (overviewRefreshTimer !== null) window.clearTimeout(overviewRefreshTimer)
+  if (packJobPollTimer !== null) window.clearTimeout(packJobPollTimer)
+  if (deferredLoadTimer !== null) window.clearTimeout(deferredLoadTimer)
+  if (deferredIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(deferredIdleHandle)
+  }
+  overviewRefreshTimer = null
+  packJobPollTimer = null
+  deferredLoadTimer = null
+  deferredIdleHandle = null
 })
 </script>
 

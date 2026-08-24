@@ -139,12 +139,21 @@ export interface KnowledgePackIndexPolicy {
   local_embedding_enabled: boolean
 }
 
+export interface KnowledgePackJob {
+  job_id: string
+  pack_id: string
+  state: string
+  reason?: string
+  indexed_percent?: number
+}
+
 export const knowledgeApi = {
   status: () => request<{ ok: boolean; status: KnowledgeStatus }>('status'),
   entries: (params: any) => request<any>('entries', { params }),
   entry: (params: any) => request<any>('entry', { params }),
   setEntryDisabled: (data: any) => request<any>('entry/disabled', { method: 'POST', data }),
   packs: () => request<{ ok: boolean; packs: KnowledgePackSummary[] }>('packs'),
+  packJobs: () => request<{ ok: boolean; jobs: KnowledgePackJob[] }>('packs/jobs'),
   importPack: (pack: any) => request<any>('packs/import', { method: 'POST', data: { pack } }),
   setPackAutoContext: (data: any) => request<any>('packs/auto-context', { method: 'POST', data }),
   setPackMaterialType: (data: any) => request<any>('packs/material-type', { method: 'POST', data }),
