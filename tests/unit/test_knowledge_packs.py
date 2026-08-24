@@ -8,7 +8,12 @@ import pytest
 
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.source_registry import get_source
-from knowledge.packs import install_pack, pack_payload, validate_pack
+from knowledge.packs import (
+    install_pack,
+    installed_source_embedding_policies,
+    pack_payload,
+    validate_pack,
+)
 from knowledge.subscriptions import (
     canonical_pack_bytes,
     load_canonical_pack_artifact,
@@ -321,6 +326,47 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     assert restored[0]["embedding"] == previous_vector
 
 
+def test_remove_failure_restores_entries_policy_and_vectors(monkeypatch, tmp_path):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    pack = validate_pack(_payload())
+    service.install_pack(pack)
+    store = KnowledgeStore(service.database_path())
+    with store._connection() as connection:
+        chunk = connection.execute(
+            "SELECT chunk_id, content_hash FROM knowledge_chunks"
+        ).fetchone()
+    vector = b"\x00\x3c" * 256
+    store.store_chunk_embeddings_strict(
+        (
+            {
+                "chunk_id": str(chunk["chunk_id"]),
+                "content_hash": str(chunk["content_hash"]),
+                "model_id": "local-text-retrieval-v1-256d-int8-mlen1024",
+                "dimensions": 256,
+                "embedding": vector,
+            },
+        )
+    )
+    before_embeddings = store.ready_embedding_records(source_tag=pack.source_tag)
+    monkeypatch.setattr(
+        packs,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
+    )
+
+    with pytest.raises(OSError, match="fixture failure"):
+        service.remove_pack(pack.pack_id)
+
+    assert store.get_entry(pack.source_tag, "community phrase") is not None
+    assert store.embedding_policy_counts(source_tag=pack.source_tag) == {
+        "local": 0,
+        "prebuilt_only": 1,
+    }
+    assert store.ready_embedding_records(source_tag=pack.source_tag) == before_embeddings
+
+
 def test_subscription_metadata_is_stored_outside_entries(tmp_path):
     service = open_knowledge(tmp_path)
     payload = _payload()
@@ -453,6 +499,30 @@ def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
     assert (
         store.embedding_policy_counts(source_tag=installed["source_tag"])["local"] == 1
     )
+
+
+def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    database_path = service.database_path()
+    store = KnowledgeStore(database_path)
+    source_tag = "source:community.community-fixture"
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "DELETE FROM knowledge_chunks WHERE entry_rowid IN ("
+            "SELECT entries.rowid FROM entries WHERE EXISTS ("
+            "SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value=?))",
+            (source_tag,),
+        )
+
+    assert store.backfill_missing_chunks(
+        limit=1,
+        embedding_policy_by_source=installed_source_embedding_policies(database_path),
+    ) == 1
+    assert store.embedding_policy_counts(source_tag=source_tag) == {
+        "local": 0,
+        "prebuilt_only": 1,
+    }
 
 
 def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tmp_path):

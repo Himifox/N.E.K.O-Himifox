@@ -406,6 +406,22 @@ def test_prebuilt_only_chunks_are_not_local_embedding_work(tmp_path):
     assert len(store.pending_embedding_chunks(model_id="fixture", limit=8)) == 1
 
 
+def test_unregistered_community_backfill_fails_closed_to_prebuilt_only(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    source_tag = "source:community.unregistered"
+    entry = _entry(content="community content", tags=(source_tag,))
+    store.replace_source(source_tag, (entry,), embedding_policy="prebuilt_only")
+    with store._connection(writable=True) as connection:
+        connection.execute("DELETE FROM knowledge_chunks")
+
+    assert store.backfill_missing_chunks(limit=1) == 1
+    assert store.embedding_policy_counts(source_tag=source_tag) == {
+        "local": 0,
+        "prebuilt_only": 1,
+    }
+    assert store.has_embedding_work() is False
+
+
 def test_strict_embedding_batch_rolls_back_when_one_chunk_is_stale(tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))

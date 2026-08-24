@@ -32,6 +32,10 @@ _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
 
 
+class KnowledgePackRegistryError(ValueError):
+    """Raised when an existing pack registry cannot be trusted."""
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgePackSource:
     name: str
@@ -67,6 +71,13 @@ class PackPreflight:
     projected_chunks: int
     content_bytes: int
     estimated_working_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSnapshot:
+    entries: tuple[KnowledgeEntry, ...]
+    ready_embeddings: tuple[dict[str, object], ...]
+    embedding_policy: str
 
 
 def pack_payload(pack: KnowledgePack) -> dict[str, object]:
@@ -189,6 +200,42 @@ def ensure_install_capacity(root: str | Path, preflight: PackPreflight) -> None:
         raise ValueError("not enough free disk space for knowledge pack staging")
 
 
+def _snapshot_source(
+    store: KnowledgeStore,
+    source_tag: str,
+    metadata: object,
+) -> _SourceSnapshot:
+    embedding_policy = (
+        "local"
+        if isinstance(metadata, dict)
+        and metadata.get("local_embedding_enabled") is True
+        else "prebuilt_only"
+    )
+    return _SourceSnapshot(
+        entries=tuple(
+            entry
+            for entry in store.list_active_entries()
+            if entry.source_tag == source_tag
+        ),
+        ready_embeddings=store.ready_embedding_records(source_tag=source_tag),
+        embedding_policy=embedding_policy,
+    )
+
+
+def _restore_source(
+    store: KnowledgeStore,
+    source_tag: str,
+    snapshot: _SourceSnapshot,
+) -> None:
+    store.replace_source(
+        source_tag,
+        snapshot.entries,
+        embedding_policy=snapshot.embedding_policy,
+    )
+    if snapshot.ready_embeddings:
+        store.store_chunk_embeddings_strict(snapshot.ready_embeddings)
+
+
 def install_pack(
     database_path: str | Path,
     pack: KnowledgePack,
@@ -207,13 +254,6 @@ def install_pack(
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
-        store = KnowledgeStore(database_path)
-        old_entries = tuple(
-            entry
-            for entry in store.list_active_entries()
-            if entry.source_tag == pack.source_tag
-        )
-        old_embeddings = store.ready_embedding_records(source_tag=pack.source_tag)
         old_registry = _load_registry(registry_path)
         existing = old_registry.get("packs", {}).get(pack.pack_id)
         if isinstance(existing, dict):
@@ -221,6 +261,8 @@ def install_pack(
                 existing.get("subscription"),
                 subscription,
             )
+        store = KnowledgeStore(database_path)
+        snapshot = _snapshot_source(store, pack.source_tag, existing)
         local_embedding_enabled = embedding_policy == "local" or (
             isinstance(existing, dict)
             and existing.get("local_embedding_enabled") is True
@@ -248,19 +290,7 @@ def install_pack(
                     )
             atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
         except Exception:
-            old_policy = (
-                "local"
-                if isinstance(existing, dict)
-                and existing.get("local_embedding_enabled") is True
-                else "prebuilt_only"
-            )
-            store.replace_source(
-                pack.source_tag,
-                old_entries,
-                embedding_policy=old_policy,
-            )
-            if old_embeddings:
-                store.store_chunk_embeddings_strict(old_embeddings)
+            _restore_source(store, pack.source_tag, snapshot)
             raise
     return PackInstallResult(
         pack_id=pack.pack_id,
@@ -276,7 +306,10 @@ def list_installed_packs(
     *,
     busy_timeout_ms: int = 5_000,
 ) -> tuple[dict[str, Any], ...]:
-    packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
+    try:
+        packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
+    except KnowledgePackRegistryError:
+        return ()
     if not isinstance(packs, dict):
         return ()
     store = KnowledgeStore(database_path, busy_timeout_ms=busy_timeout_ms)
@@ -307,11 +340,35 @@ def list_installed_packs(
     return tuple(items)
 
 
+def installed_source_embedding_policies(
+    database_path: str | Path,
+) -> dict[str, str]:
+    """Return explicit generation ownership for installed community sources."""
+    try:
+        packs = _load_registry(get_pack_registry_path(database_path))["packs"]
+    except KnowledgePackRegistryError:
+        return {}
+    policies: dict[str, str] = {}
+    for metadata in packs.values():
+        source_tag = str(metadata.get("source_tag") or "")
+        if not source_tag.startswith("source:community."):
+            continue
+        policies[source_tag] = (
+            "local"
+            if metadata.get("local_embedding_enabled") is True
+            else "prebuilt_only"
+        )
+    return policies
+
+
 def migrate_legacy_pack_index_policies(database_path: str | Path) -> int:
     """Adopt installed community packs without scheduling new local inference."""
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
-    registry = _load_registry(registry_path)
+    try:
+        registry = _load_registry(registry_path)
+    except KnowledgePackRegistryError:
+        return 0
     packs = registry.get("packs")
     if not isinstance(packs, dict):
         return 0
@@ -440,11 +497,7 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
             raise ValueError("only community packs can be removed")
 
         store = KnowledgeStore(database_path)
-        old_entries = tuple(
-            entry
-            for entry in store.list_active_entries()
-            if entry.source_tag == source_tag
-        )
+        snapshot = _snapshot_source(store, source_tag, metadata)
         new_packs = dict(packs)
         new_packs.pop(pack_id, None)
         store.replace_source(source_tag, ())
@@ -456,9 +509,9 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
                 indent=2,
             )
         except Exception:
-            store.replace_source(source_tag, old_entries)
+            _restore_source(store, source_tag, snapshot)
             raise
-    return len(old_entries)
+    return len(snapshot.entries)
 
 
 def enabled_pack_source_tags(database_path: str | Path) -> tuple[str, ...]:
@@ -578,19 +631,40 @@ def _reject_unknown_keys(payload: dict, allowed: set[str], field: str) -> None:
 
 def _load_registry(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
+    except (OSError, UnicodeError) as exc:
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry is unreadable"
+        ) from exc
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry is corrupt"
+        ) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("packs"), dict):
-        return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry has an invalid structure"
+        )
     previous_schema_version = payload.get("schema_version")
+    if (
+        isinstance(previous_schema_version, int)
+        and previous_schema_version > PACK_REGISTRY_SCHEMA_VERSION
+    ):
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry uses a newer schema version"
+        )
     migrate_corpus_auto_context = (
         not isinstance(previous_schema_version, int)
         or previous_schema_version < PACK_REGISTRY_SCHEMA_VERSION
     )
     for pack_id, metadata in tuple(payload["packs"].items()):
         if not isinstance(metadata, dict):
-            continue
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} is invalid"
+            )
         declared = (
             str(metadata.get("declared_material_type"))
             if metadata.get("declared_material_type") in MATERIAL_TYPES

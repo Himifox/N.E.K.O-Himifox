@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Mapping, Sequence
 
 from knowledge.chunking import (
     CHUNKER_VERSION,
@@ -631,9 +631,15 @@ class KnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError):
             return 0
 
-    def backfill_missing_chunks(self, *, limit: int = 64) -> int:
+    def backfill_missing_chunks(
+        self,
+        *,
+        limit: int = 64,
+        embedding_policy_by_source: Mapping[str, str] | None = None,
+    ) -> int:
         """Derive chunks for legacy rows without doing model inference."""
         limit = min(max(int(limit), 1), 256)
+        policies = embedding_policy_by_source or {}
         processed = 0
         with self._connection(writable=True) as connection:
             rows = connection.execute(
@@ -648,7 +654,19 @@ class KnowledgeStore:
                     entry = _entry_from_row(row)
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
-                self._reconcile_chunks(connection, int(row["rowid"]), entry)
+                embedding_policy = policies.get(entry.source_tag)
+                if embedding_policy is None:
+                    embedding_policy = (
+                        "prebuilt_only"
+                        if entry.source_tag.startswith("source:community.")
+                        else "local"
+                    )
+                self._reconcile_chunks(
+                    connection,
+                    int(row["rowid"]),
+                    entry,
+                    embedding_policy=embedding_policy,
+                )
                 processed += 1
         return processed
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -45,11 +46,21 @@ def _rss_bytes() -> int | None:
         return None
 
 
-def _backfill_store(store: object, *, limit: int) -> int:
+def _backfill_store(
+    store: object,
+    *,
+    limit: int,
+    embedding_policy_by_source: Mapping[str, str],
+) -> int:
     from ._mutation_lock import mutation_lock
 
     with mutation_lock(store.database_path):
-        return int(store.backfill_missing_chunks(limit=limit))
+        return int(
+            store.backfill_missing_chunks(
+                limit=limit,
+                embedding_policy_by_source=embedding_policy_by_source,
+            )
+        )
 
 
 async def _wait_for_wake(event: asyncio.Event, timeout: float) -> None:
@@ -66,6 +77,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
 
     from .diagnostics import record_knowledge_index_batch
+    from .packs import installed_source_embedding_policies
     from .store import KnowledgeStore
     from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
     from .service import KnowledgeService
@@ -94,6 +106,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
         try:
             remaining = MAX_CHUNKS_PER_ROUND
             embedding_activity = False
+            embedding_policies = installed_source_embedding_policies(database_path)
             # Derive at most one legacy entry per round. This is deterministic
             # SQLite work and does not load the ONNX model.
             for store in stores:
@@ -101,6 +114,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     _backfill_store,
                     store,
                     limit=1,
+                    embedding_policy_by_source=embedding_policies,
                 )
                 if derived_entries:
                     backlog = True

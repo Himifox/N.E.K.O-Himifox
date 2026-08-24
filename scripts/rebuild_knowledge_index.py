@@ -437,9 +437,15 @@ def dry_run_plan(target: KnowledgeTarget, *, full: bool) -> dict[str, Any]:
 
 
 def _backfill_all(store: Any, *, batch_size: int) -> int:
+    from knowledge.packs import installed_source_embedding_policies
+
+    policies = installed_source_embedding_policies(store.database_path)
     processed = 0
     while True:
-        count = store.backfill_missing_chunks(limit=max(batch_size, 64))
+        count = store.backfill_missing_chunks(
+            limit=max(batch_size, 64),
+            embedding_policy_by_source=policies,
+        )
         processed += count
         if count == 0:
             return processed

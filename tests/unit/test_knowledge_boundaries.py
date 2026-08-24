@@ -10,6 +10,8 @@ import pytest
 from knowledge._mutation_lock import mutation_lock
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.packs import (
+    KnowledgePackRegistryError,
+    install_pack,
     list_installed_packs,
     load_pack,
     set_pack_auto_context,
@@ -193,10 +195,30 @@ def test_corrupt_pack_registry_fails_closed(tmp_path):
     database_path = tmp_path / "knowledge.db"
     registry_path = tmp_path / "packs.json"
     registry_path.write_text("not-json", encoding="utf-8")
+    original = registry_path.read_bytes()
 
     assert list_installed_packs(database_path) == ()
-    with pytest.raises(ValueError, match="not installed"):
+    with pytest.raises(KnowledgePackRegistryError, match="corrupt"):
         set_pack_auto_context(database_path, "missing-pack", enabled=True)
+    with pytest.raises(KnowledgePackRegistryError, match="corrupt"):
+        install_pack(database_path, validate_pack(_pack_payload()))
+
+    assert registry_path.read_bytes() == original
+    assert KnowledgeStore(database_path).count() == 0
+
+
+def test_newer_pack_registry_is_not_overwritten(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    registry_path = tmp_path / "packs.json"
+    registry_path.write_text(
+        json.dumps({"schema_version": 999, "packs": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KnowledgePackRegistryError, match="newer schema"):
+        install_pack(database_path, validate_pack(_pack_payload()))
+
+    assert json.loads(registry_path.read_text(encoding="utf-8"))["schema_version"] == 999
 
 
 def test_mutation_lock_serializes_the_same_normalized_path(tmp_path):
