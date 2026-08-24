@@ -1,8 +1,7 @@
-"""Community-login + forge-credit proxy routes for NEKO (``/api/card-drop`` prefix).
+"""Community login and local forge-memory routes (``/api/card-drop`` prefix).
 
-Drop decisions remain in the private NEKO-PC forge-dropper, while this service
-owns the installation-local credit ledger. The community may read and reserve
-credits only after its JWT has been synced through the native one-time ticket.
+Drop decisions remain in the private NEKO-PC forge-dropper. Forge credits are
+cloud authoritative; this service only exposes local character/memory context.
 Desktop community login is OAuth PKCE via ``main_routers.community_oauth``
 (``/api/card-drop/oauth/*`` + ``/oauth/callback``). Legacy password/Steam
 endpoints return 410. ``/auth-status`` remains here.
@@ -31,6 +30,8 @@ import httpx
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from main_logic import client_registration
+
 logger = logging.getLogger("neko.card_drop")
 
 router = APIRouter(prefix="/api/card-drop", tags=["card-drop"])
@@ -50,7 +51,7 @@ _SYNC_TICKET_MAX_ACTIVE = 16
 _NATIVE_DELEGATE_TTL_SEC = 10 * 60
 _NATIVE_DELEGATE_MAX_ACTIVE = 8
 _NATIVE_DELEGATE_SCOPES = frozenset(
-    {"credits:mutate", "credits:read", "facts:read"}
+    {"facts:read"}
 )
 _FACT_QUERY_MAX_EXCLUSIONS = 200
 _FACT_QUERY_MAX_EXCLUSION_LENGTH = 128
@@ -230,9 +231,8 @@ def _discard_native_delegate(value: object) -> None:
 
 
 def _social_base_url() -> str:
-    """Return the cloud base URL, falling back to the local dev default."""
-    raw = (os.environ.get("NEKO_SOCIAL_BASE_URL", "") or "").strip().rstrip("/")
-    return raw or _DEFAULT_SOCIAL_BASE_URL
+    """Return the cloud base URL, falling back to production."""
+    return client_registration.social_base_url()
 
 
 def _get_client_credentials() -> tuple[str, str] | None:
@@ -1265,14 +1265,14 @@ async def _native_delegate_session_snapshot() -> tuple[dict | None, str]:
     return snapshot, ""
 
 
-@router.get("/native-delegate", summary="签发短时 scoped native delegate（credits/facts）")
+@router.get("/native-delegate", summary="签发短时 scoped native delegate（facts）")
 async def native_delegate_endpoint(request: Request):
     """Mint a reusable short-lived proof for the community Web tab.
 
     Issued only from the trusted local NEKO UI (never from the community Origin).
-    The Web tab presents this bearer to credits/facts endpoints instead of the
-    platform OAuth access token, so a rogue localhost listener cannot harvest
-    refreshable Web credentials.
+    The Web tab presents this bearer to facts endpoints instead of the platform
+    OAuth access token, so a rogue localhost listener cannot harvest refreshable
+    Web credentials. Forge-credit reads go directly to the cloud with OAuth.
     """
     if not _local_ui_request_source_allowed(request):
         return JSONResponse(
@@ -1406,27 +1406,46 @@ async def bind_client_approve_endpoint(request: Request, payload: dict = Body(..
             {"detail": "client_not_registered"}, status_code=409, headers=cors
         )
     client_id, client_proof = credentials
-    try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SEC) as client:
-            response = await client.post(
-                f"{_social_base_url()}/api/clients/bind-approval",
-                json={
-                    "client_id": client_id,
-                    "binding_challenge": challenge,
-                    "client_proof": client_proof,
-                },
-            )
-    except (httpx.HTTPError, OSError):
+    base_url = _social_base_url()
+    approval_payload = {
+        "client_id": client_id,
+        "binding_challenge": challenge,
+        "client_proof": client_proof,
+    }
+
+    async def _approve():
+        try:
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SEC) as client:
+                res = await client.post(
+                    f"{base_url}/api/clients/bind-approval", json=approval_payload
+                )
+        except (httpx.HTTPError, OSError):
+            return None, None
+        try:
+            return res, res.json().get("detail")
+        except (ValueError, TypeError, AttributeError):
+            return res, None
+
+    response, detail = await _approve()
+    if response is None:
         return JSONResponse(
             {"detail": "cloud_unreachable"}, status_code=502, headers=cors
         )
+    # Register-then-retry once: the cloud reports an unknown client_id the same
+    # way it reports a bad proof, and this install may never have registered.
+    if client_registration.looks_unregistered(
+        response.status_code, detail
+    ) and await client_registration.ensure_client_registered(base_url, force=True):
+        response, detail = await _approve()
+        if response is None:
+            return JSONResponse(
+                {"detail": "cloud_unreachable"}, status_code=502, headers=cors
+            )
     if response.status_code >= 400:
-        try:
-            detail = response.json().get("detail") or f"http_{response.status_code}"
-        except (ValueError, TypeError, AttributeError):
-            detail = f"http_{response.status_code}"
         return JSONResponse(
-            {"detail": detail}, status_code=response.status_code, headers=cors
+            {"detail": detail or f"http_{response.status_code}"},
+            status_code=response.status_code,
+            headers=cors,
         )
     return JSONResponse({"ok": True}, headers=cors)
 
@@ -1767,11 +1786,7 @@ async def card_drop_capabilities_endpoint(request: Request):
                 "method": "POST",
                 "max_exclude_hashes": _FACT_QUERY_MAX_EXCLUSIONS,
             },
-            "credits": {
-                "path": "/api/card-drop/credits",
-                "read_scope": "credits:read",
-                "mutate_scope": "credits:mutate",
-            },
+            "credits": {"authority": "cloud"},
             "delegate": {
                 "scopes": sorted(_NATIVE_DELEGATE_SCOPES),
                 "principal_header": "x-neko-local-user-id",
@@ -1889,62 +1904,9 @@ async def steam_callback_endpoint(
     raise HTTPException(status_code=410, detail="legacy_community_login_removed")
 
 
-def _credit_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, ValueError):
-        return HTTPException(status_code=400, detail=str(exc))
-    if isinstance(exc, LookupError):
-        return HTTPException(status_code=404, detail=str(exc))
-    return HTTPException(status_code=409, detail=str(exc))
-
-
-async def _require_credit_browser(
-    request: Request,
-    required_scope: str,
-) -> tuple[dict[str, str], str]:
-    cors = _credit_cors_headers(request)
-    if cors is None:
-        raise HTTPException(status_code=403, detail="origin_not_allowed")
-    scoped = await _scoped_native_auth(request, required_scope)
-    if scoped.state == "match":
-        if scoped.local_user_id:
-            return cors, scoped.local_user_id
-        raise HTTPException(
-            status_code=401,
-            detail="local_session_mismatch",
-            headers=cors,
-        )
-    if scoped.state is not None:
-        raise HTTPException(
-            status_code=401,
-            detail="local_session_mismatch",
-            headers=cors,
-        )
-    # Not a scoped delegate: allow the Desktop-held session bearer only
-    # (never treat an unmatched Web platform token as authority).
-    supplied = _request_bearer_token(request)
-    if not supplied:
-        raise HTTPException(
-            status_code=401,
-            detail="local_session_mismatch",
-            headers=cors,
-        )
-    auth = await _request_desktop_session_auth(_social_base_url(), supplied)
-    if auth.state == "unavailable":
-        raise HTTPException(
-            status_code=503,
-            detail="identity_verification_unavailable",
-            headers=cors,
-        )
-    if auth.state != "match" or not auth.local_user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="local_session_mismatch",
-            headers=cors,
-        )
-    return cors, auth.local_user_id
-
-
 @router.options("/credits")
+@router.options("/credits/grant")
+@router.options("/credits/local-summary")
 @router.options("/credits/{credit_id}/reservations")
 @router.options("/credits/{credit_id}/reservations/{operation_id}/commit")
 @router.options("/credits/{credit_id}/reservations/{operation_id}")
@@ -1955,118 +1917,56 @@ async def credit_options(request: Request, credit_id: str = "", operation_id: st
     return JSONResponse({"ok": True}, headers=cors)
 
 
-@router.post("/credits/grant", summary="Electron 掉落引擎写入一张本机锻造券")
-async def grant_credit_endpoint(request: Request, payload: dict = Body(...)):
-    if not _local_mutation_origin_allowed(request):
-        raise HTTPException(status_code=403, detail="origin_not_allowed")
-    from main_logic.forge_credit_ledger import grant_credit
-
-    try:
-        result = await asyncio.to_thread(grant_credit, payload)
-        return result
-    except (ValueError, LookupError, RuntimeError) as exc:
-        raise _credit_error(exc) from exc
-
-
-@router.get("/credits", summary="读取 N.E.K.O 本机有效锻造券与待恢复预占")
-async def credits_endpoint(request: Request):
-    cors, local_user_id = await _require_credit_browser(request, "credits:read")
-    from main_logic.forge_credit_ledger import list_credits
-
-    snapshot = await asyncio.to_thread(
-        list_credits,
-        reservation_owner_id=local_user_id,
-    )
-    return JSONResponse(snapshot, headers=cors)
-
-
-@router.get("/credits/local-summary", summary="本体同源界面读取锻造券数量角标")
-async def local_credit_summary_endpoint(request: Request):
-    """Expose only a count and expiry hint to the trusted local N.E.K.O UI.
-
-    The community-facing ``/credits`` endpoint remains native-session Bearer protected;
-    this summary intentionally omits credit IDs, rarities and reservation operations.
-    """
-    if not _local_mutation_origin_allowed(request):
-        raise HTTPException(status_code=403, detail="origin_not_allowed")
-    from main_logic.forge_credit_ledger import list_credits
-
-    snapshot = await asyncio.to_thread(list_credits)
-    expiries = [
-        str(credit.get("expires_at"))
-        for credit in snapshot.get("credits", [])
-        if credit.get("expires_at")
-    ]
+@router.post("/credits/grant", summary="本地发券已退役")
+async def grant_credit_endpoint(request: Request):
     return JSONResponse(
-        {
-            "count": int(snapshot.get("count") or 0),
-            "next_expires_at": min(expiries) if expiries else None,
-        },
-        headers={"Cache-Control": "no-store"},
+        {"detail": "cloud_forge_credits_required"},
+        status_code=410,
+        headers=_credit_cors_headers(request) or {},
     )
 
 
-@router.post("/credits/{credit_id}/reservations", summary="为一次云端铸造幂等预占本机券")
-async def reserve_credit_endpoint(request: Request, credit_id: str, payload: dict = Body(...)):
-    cors, local_user_id = await _require_credit_browser(
-        request,
-        "credits:mutate",
+@router.get("/credits", summary="本地券账本已退役")
+async def credits_endpoint(request: Request):
+    cors = _credit_cors_headers(request) or {}
+    return JSONResponse(
+        {"detail": "cloud_forge_credits_required"}, status_code=410, headers=cors
     )
-    from main_logic.forge_credit_ledger import reserve_credit
-
-    try:
-        result = await asyncio.to_thread(
-            reserve_credit,
-            credit_id,
-            str(payload.get("operation_id") or ""),
-            local_user_id,
-        )
-    except (ValueError, LookupError, RuntimeError) as exc:
-        error = _credit_error(exc)
-        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=cors)
-    return JSONResponse(result, headers=cors)
 
 
-@router.post("/credits/{credit_id}/reservations/{operation_id}/commit", summary="云端铸卡成功后确认消费本机券")
+@router.get("/credits/local-summary", summary="已退役：券状态改由云端推送")
+async def local_credit_summary_endpoint(request: Request):
+    return JSONResponse(
+        {"detail": "cloud_forge_credits_required"},
+        status_code=410,
+        headers=_credit_cors_headers(request) or {},
+    )
+
+
+@router.post("/credits/{credit_id}/reservations", summary="已退役：云端事务直接锁券")
+async def reserve_credit_endpoint(request: Request, credit_id: str):
+    return JSONResponse(
+        {"detail": "cloud_forge_credits_required"},
+        status_code=410,
+        headers=_credit_cors_headers(request) or {},
+    )
+
+
+@router.post("/credits/{credit_id}/reservations/{operation_id}/commit", summary="已退役：云端事务原子消费券")
 async def commit_credit_endpoint(
-    request: Request, credit_id: str, operation_id: str, payload: dict = Body(...),
+    request: Request, credit_id: str, operation_id: str,
 ):
-    cors, local_user_id = await _require_credit_browser(
-        request,
-        "credits:mutate",
+    return JSONResponse(
+        {"detail": "cloud_forge_credits_required"},
+        status_code=410,
+        headers=_credit_cors_headers(request) or {},
     )
-    from main_logic.forge_credit_ledger import commit_credit
-
-    try:
-        result = await asyncio.to_thread(
-            commit_credit,
-            credit_id,
-            operation_id,
-            str(payload.get("card_id") or ""),
-            local_user_id,
-        )
-    except (ValueError, LookupError, RuntimeError) as exc:
-        error = _credit_error(exc)
-        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=cors)
-    return JSONResponse(result, headers=cors)
 
 
-@router.delete("/credits/{credit_id}/reservations/{operation_id}", summary="云端明确失败后释放本机券预占")
+@router.delete("/credits/{credit_id}/reservations/{operation_id}", summary="已退役：失败事务自动回滚券")
 async def release_credit_endpoint(request: Request, credit_id: str, operation_id: str):
-    cors, local_user_id = await _require_credit_browser(
-        request,
-        "credits:mutate",
+    return JSONResponse(
+        {"detail": "cloud_forge_credits_required"},
+        status_code=410,
+        headers=_credit_cors_headers(request) or {},
     )
-    from main_logic.forge_credit_ledger import release_credit
-
-    try:
-        result = await asyncio.to_thread(
-            release_credit,
-            credit_id,
-            operation_id,
-            local_user_id,
-        )
-    except (ValueError, LookupError, RuntimeError) as exc:
-        error = _credit_error(exc)
-        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=cors)
-    return JSONResponse(result, headers=cors)

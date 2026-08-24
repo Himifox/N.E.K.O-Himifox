@@ -15,6 +15,9 @@ import time
 from typing import Any, Optional
 
 
+_MAX_BUFFER_COUNT = 17
+
+
 class PendingReply:
     """待发送的回复（缓冲模式：收消息时不合成，等暂停后统一生成回复）"""
     __slots__ = ("buffered_texts", "buffered_user_texts", "materialized_user_count",
@@ -263,6 +266,22 @@ class QQReplyBufferService:
         p = self._pending.get(session_key)
         return p is not None and (p.task is None or not p.task.done())
 
+    def _set_pending(self, session_key: str, pending: Any) -> None:
+        """集中插入/更新 ``_pending``，每次实际变更后推一条 status 事件。
+
+        只监听 status 的前端靠它刷新缓冲面板；若只在个别入口推，schedule_reply
+        的重置、force-flush、正常投递出队等路径会漏，前端一直显示旧缓冲数。
+        """
+        self._pending[session_key] = pending
+        getattr(self.plugin, "_maybe_push_status_event", lambda: None)()
+
+    def _pop_pending(self, session_key: str) -> Any:
+        """集中删除 ``_pending``，仅当确实删掉了才推 status 事件。"""
+        removed = self._pending.pop(session_key, None)
+        if removed is not None:
+            getattr(self.plugin, "_maybe_push_status_event", lambda: None)()
+        return removed
+
     def pre_buffer(
         self,
         session_key: str,
@@ -317,7 +336,7 @@ class QQReplyBufferService:
         pending.task = None  # 尚未启动等待（等 schedule_reply 来启动）
         if not is_group and participant_memory_at_receipt is False:
             pending.has_nonconsent_input = True
-        self._pending[session_key] = pending
+        self._set_pending(session_key, pending)
         return False  # 首次消息，走 pipeline
 
     def get_state(self) -> dict:
@@ -419,7 +438,7 @@ class QQReplyBufferService:
                 hist_before = self._session_history_len(session_key)
                 try:
                     from .pipeline_models import QQReplyRequest
-                    combined = "\n".join(f"[{i+1}] {t[:100]}" for i, t in enumerate(existing.buffered_texts[-5:]))
+                    combined = "\n".join(f"[{i+1}] {t[:100]}" for i, t in enumerate(existing.buffered_user_texts[-5:]))
                     request = QQReplyRequest(
                         message_text=f"[系统] 对方连续发了多条消息，你需要发一句简短的话表示\"我在听\"吗？如果需要，只回复那句话（不超过10个字，要自然，符合人设）；如果不需要，回复空内容。以下是最近内容：\n{combined}",
                         sender_id=existing.sender_id or "0",
@@ -445,7 +464,7 @@ class QQReplyBufferService:
                     self._record_synthetic_prompt_rows(session_key, hist_before)
 
             # 17+ 条 → 走 pipeline 强制总结 + 清空缓冲
-            if n >= 17 and self._consent_revoked_since(existing):
+            if n >= _MAX_BUFFER_COUNT and self._consent_revoked_since(existing):
                 # 与 ack 同理：总结的 prompt 会原样引用这些记忆派生的旧
                 # 草稿。授权撤销后不总结、不投递，草稿保持未投递（排除
                 # 记录留存）并解除游标屏障——与 _deliver_after_wait 的
@@ -455,7 +474,7 @@ class QQReplyBufferService:
                 )
                 self._bind_draft_to_pending(draft_row, existing)
                 self._supersede(existing)
-                self._pending.pop(session_key, None)
+                self._pop_pending(session_key)
                 self._settle_provisional(
                     (getattr(self.plugin, "_user_sessions", {}) or {}).get(
                         session_key
@@ -463,17 +482,17 @@ class QQReplyBufferService:
                     existing,
                 )
                 return
-            if n >= 17:
+            if n >= _MAX_BUFFER_COUNT:
                 # 本分支提前 return，函数尾部的补关联不会执行——先把本轮
                 # 草稿行绑上，否则 settle 按 draft_rows 清 provisional 时
                 # 漏掉它，游标屏障永久卡死、此后所有消息进不了 scoped 记忆。
                 self._bind_draft_to_pending(draft_row, existing)
                 self._supersede(existing)
-                self._pending.pop(session_key, None)
+                self._pop_pending(session_key)
                 hist_before = self._session_history_len(session_key)
                 try:
                     from .pipeline_models import QQReplyRequest
-                    combined = "\n".join(f"[{i+1}] {t[:150]}" for i, t in enumerate(existing.buffered_texts))
+                    combined = "\n".join(f"[{i+1}] {t[:150]}" for i, t in enumerate(existing.buffered_user_texts))
                     request = QQReplyRequest(
                         message_text=f"[系统] 对方连续发了以下消息，请用一两句话自然总结回复：\n{combined}",
                         sender_id=existing.sender_id or "0",
@@ -537,7 +556,7 @@ class QQReplyBufferService:
                 existing.first_blocks = blocks
                 existing.message_count += max(0, extra_count)
                 existing.topic_hint = self._topic_hint(raw_text or reply_text)
-                self._pending[session_key] = existing
+                self._set_pending(session_key, existing)
 
         # 启动等待任务
         existing.sender_id = sender_id  # 更新（可能变化）
@@ -574,7 +593,7 @@ class QQReplyBufferService:
         keeps it out of memory) while the provisional barrier is released,
         so the digest cursor can move past a row nobody will ever deliver.
         Callers that need to join the cancellation use the return value."""
-        pending = self._pending.pop(session_key, None)
+        pending = self._pop_pending(session_key)
         if pending is None:
             return None
         task = getattr(pending, "task", None)
@@ -617,7 +636,7 @@ class QQReplyBufferService:
         if not self._is_current_generation(pending, generation):
             return False
         if self._pending.get(session_key) is pending:
-            self._pending.pop(session_key, None)
+            self._pop_pending(session_key)
         return True
 
     @staticmethod

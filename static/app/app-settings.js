@@ -560,7 +560,8 @@
         'userLanguage',
         'textGuardMaxLength',
         'renderQuality',
-        'targetFrameRate'
+        'targetFrameRate',
+        'forgeDropEffectsEnabled'
     ];
 
     function _defaultConversationSettingsForReset() {
@@ -578,7 +579,7 @@
             focusModeEnabled: false,
             focusCognitionEnabled: true,
             noiseReductionEnabled: true,
-            independentAsrEnabled: true,
+            independentAsrEnabled: false,
             voiceInputResourceOptimizationEnabled: true,
             avatarReactionBubbleEnabled: true,
             slopFilterEnabled: true,
@@ -1647,6 +1648,9 @@
         const currentLockedHoverFade = typeof window.lockedHoverFadeEnabled !== 'undefined'
             ? window.lockedHoverFadeEnabled
             : true;
+        const currentForgeDropEffects = typeof window.forgeDropEffectsEnabled !== 'undefined'
+            ? window.forgeDropEffectsEnabled
+            : true;
 
         // 读取字幕设置（统一走 subtitle-shared store，避免多处直接写 localStorage）
         const subtitleStore = window.nekoSubtitleShared;
@@ -1687,6 +1691,7 @@
             live2dFullscreenTrackingEnabled: currentLive2dFullscreenTracking,
             humanoidLocalTrackingEnabled: currentHumanoidLocalTracking,
             lockedHoverFadeEnabled: currentLockedHoverFade,
+            forgeDropEffectsEnabled: currentForgeDropEffects,
             subtitleEnabled: currentSubtitleEnabled,
             userLanguage: currentUserLanguage
         };
@@ -1896,7 +1901,7 @@
                 S.mergeMessagesEnabled = settings.mergeMessagesEnabled ?? false;
                 S.focusModeEnabled = settings.focusModeEnabled ?? false;
                 S.focusCognitionEnabled = settings.focusCognitionEnabled ?? true;
-                S.independentAsrEnabled = settings.independentAsrEnabled ?? true;
+                S.independentAsrEnabled = settings.independentAsrEnabled ?? false;
                 S.voiceInputResourceOptimizationEnabled =
                     settings.voiceInputResourceOptimizationEnabled ?? true;
                 S.avatarReactionBubbleEnabled = settings.avatarReactionBubbleEnabled ?? true;
@@ -1941,6 +1946,15 @@
                     window.lockedHoverFadeEnabled = settings.lockedHoverFadeEnabled === 'true';
                 } else {
                     window.lockedHoverFadeEnabled = true;
+                }
+
+                // 锻造券掉落动画与音效设置
+                if (typeof settings.forgeDropEffectsEnabled === 'boolean') {
+                    window.forgeDropEffectsEnabled = settings.forgeDropEffectsEnabled;
+                } else if (typeof settings.forgeDropEffectsEnabled === 'string') {
+                    window.forgeDropEffectsEnabled = settings.forgeDropEffectsEnabled === 'true';
+                } else {
+                    window.forgeDropEffectsEnabled = true;
                 }
 
                 // 同步到运行中的实例
@@ -1991,6 +2005,7 @@
                 window.live2dFullscreenTrackingEnabled = false;
                 window.humanoidLocalTrackingEnabled = false;
                 window.lockedHoverFadeEnabled = true;
+                window.forgeDropEffectsEnabled = true;
 
                 // 首启专属 marker：告诉下方异步合并块「这次仍在等首次 settings/telemetry
                 // 决议」。升级用户走的是 if (saved) 分支不会写这个，于是不会被误判成首启
@@ -2013,6 +2028,7 @@
             window.live2dFullscreenTrackingEnabled = false;
             window.humanoidLocalTrackingEnabled = false;
             window.lockedHoverFadeEnabled = true;
+            window.forgeDropEffectsEnabled = true;
         }
 
         // 以下逻辑不依赖本地 JSON 解析结果，始终执行

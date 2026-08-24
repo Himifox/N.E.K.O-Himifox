@@ -43,6 +43,7 @@ from config.prompts.prompts_proactive import (
     get_screen_img_hint,
     get_screen_section_footer,
     get_screen_section_header,
+    normalize_proactive_prompt_locale,
 )
 from config.prompts.prompts_sys import _loc
 from main_logic.omni_realtime_client import OmniRealtimeClient
@@ -270,17 +271,48 @@ def _command_language_candidates(
     )
 
 
+def _command_render_language(command_or_data: ProactiveChatCommand | dict) -> Any:
+    """Read a request-only template locale that must never become durable state."""
+    if isinstance(command_or_data, ProactiveChatCommand):
+        return command_or_data.render_language
+    return command_or_data.get("render_language")
+
+
 def _resolve_proactive_locale(
     data: ProactiveChatCommand | dict,
     mgr,
+    *,
+    fmt: str = "short",
 ) -> str:
     """Resolve the active user locale for proactive chat flows.
 
-    Request data wins first, websocket session language is the second source of
-    truth, and the process-level global language is only a final fallback. This
-    keeps proactive invite copy and Phase 1-2 LLM output aligned with the live
-    session whenever frontend i18n has already reported the user's language.
+    An explicit request preference wins first, followed by an explicit manager
+    preference. A request-only render locale may override only a non-explicit
+    manager fallback; process-level global language remains the final fallback.
+    This aligns render-only responses with the live UI without shadowing a
+    durable per-character preference.
+
+    Three output shapes, one precedence chain — which is the point of the parameter
+    rather than a second resolver (issue #2500):
+
+    - ``fmt="short"`` — a language family (``zh``). No room for a script, so
+      ``zh-TW`` and ``zh-CN`` both come out ``zh``.
+    - ``fmt="full"`` — a BCP-47 locale (``zh-CN`` / ``zh-TW``). This is the key
+      scheme of ``static/locales/*.json``.
+    - ``fmt="prompt"`` — a prompt-dict key (``zh`` / ``zh-TW``). This is the key
+      scheme of every table in ``config/prompts``, and it is NOT the same as
+      ``full``: those tables have no ``zh-CN`` row, so a full locale misses and
+      degrades Simplified users to English on the plain ``dict.get`` lookups
+      (``MUSIC_SEARCH_RESULT_TEXTS``, ``RECENT_PROACTIVE_TIME_LABELS``,
+      ``WORK_BREAK_GENERIC_WORK_LABEL``, ...). Use this wherever the result ends
+      up indexing a prompt dict; it keeps ``zh-TW`` reachable without stranding
+      ``zh-CN``.
     """
+    def _normalize(value: str) -> str:
+        if fmt == "prompt":
+            return normalize_proactive_prompt_locale(value)
+        return normalize_language_code(value, format=fmt)
+
     request_lang = next(
         (value for value in _command_language_candidates(data) if value),
         None,
@@ -290,14 +322,33 @@ def _resolve_proactive_locale(
     # ``normalize_language_code`` 对未识别值默认回退 ``'en'``——必须先用公共白名单
     # 挡掉，否则 proactive 邀请文案会被静默短路成英文，错过本应命中的 session 真值。
     if request_lang and is_supported_language_code(request_lang):
-        normalized = normalize_language_code(request_lang, format="short")
+        normalized = _normalize(request_lang)
         if normalized:
             return normalized
+
     session_lang = getattr(mgr, "user_language", None)
-    if session_lang:
-        normalized = normalize_language_code(session_lang, format="short")
+    session_language_is_explicit = bool(
+        getattr(mgr, "_user_language_explicit", False)
+    )
+    normalized_session_lang = None
+    if session_lang and is_supported_language_code(session_lang):
+        normalized_session_lang = _normalize(session_lang) or None
+
+    if session_language_is_explicit and normalized_session_lang:
+        return normalized_session_lang
+
+    render_lang = _command_render_language(data)
+    if render_lang and is_supported_language_code(render_lang):
+        normalized = _normalize(render_lang)
         if normalized:
             return normalized
+
+    if normalized_session_lang:
+        return normalized_session_lang
+    if fmt == "prompt":
+        return normalize_proactive_prompt_locale(get_global_language_full()) or "en"
+    if fmt == "full":
+        return get_global_language_full() or "en"
     return get_global_language() or "en"
 
 
@@ -311,6 +362,11 @@ def _resolve_topic_hook_locale(
     declared = _resolve_declared_topic_hook_locale(data, mgr)
     if declared:
         return declared
+    render_lang = _command_render_language(data)
+    if render_lang and is_supported_language_code(render_lang):
+        normalized = normalize_language_code(render_lang, format="full")
+        if normalized:
+            return normalized
     global_lang = normalize_language_code(get_global_language_full(), format="full")
     if global_lang:
         return global_lang
@@ -339,9 +395,44 @@ def _new_dialog_locale_params(
     data: ProactiveChatCommand | dict,
     mgr,
 ) -> dict[str, str] | None:
-    """Only explicit user locale evidence may update durable prompt state."""
+    """Pass durable and render-only locale evidence through separate fields."""
+    params: dict[str, str] = {}
     declared = _resolve_declared_topic_hook_locale(data, mgr)
-    return {"language": declared} if declared else None
+    if declared:
+        params["language"] = declared
+    render_language = _command_render_language(data)
+    if render_language and is_supported_language_code(render_language):
+        normalized_render_language = normalize_language_code(
+            render_language,
+            format="full",
+        )
+        if normalized_render_language:
+            params["render_language"] = normalized_render_language
+    return params or None
+
+
+def _resolve_phase2_avatar_position(fresh, request_avatar_position):
+    """Pick the avatar position to annotate a freshly fetched Phase 2 screenshot with.
+
+    Who is allowed to place the annotation depends on how the image was produced:
+
+    - ``'websocket'``: the frontend already judged THIS image. A position means
+      "annotate here"; ``None`` means it deliberately decided not to annotate
+      (window capture, camera, avatar collapsed, multi-monitor). Never substitute
+      the request's older position for that ``None`` -- it is a verdict, not a
+      missing value. Same rule as ``main_logic.core.streaming``, which refuses to
+      fall back to the cached position for exactly this reason.
+    - ``'backend_fallback'``: the frontend never saw this image, so it cannot have
+      objected. The position carried by the original request is the only avatar
+      information that exists for this path.
+
+    Neither branch of ``request_fresh_screenshot`` draws the annotation itself;
+    the caller does it with whatever this returns.
+    """
+    source = getattr(fresh, "source", "")
+    if source == "backend_fallback":
+        return request_avatar_position
+    return getattr(fresh, "avatar_position", None)
 
 
 async def handle_proactive_chat(
@@ -483,7 +574,10 @@ async def handle_proactive_chat(
                     body=entry_result.body,
                     status_code=entry_result.status_code,
                 )
-            delivered = await mgr.trigger_voice_proactive_nudge()
+            voice_language = _resolve_proactive_locale(command, mgr, fmt="full")
+            delivered = await mgr.trigger_voice_proactive_nudge(
+                language=voice_language,
+            )
             if delivered:
                 # 1h+10 chats 冷却的 chat counter：voice nudge 也算一次主动搭话，
                 # 与 text path 在 _record_proactive_chat 之后调 count 对称。
@@ -728,9 +822,18 @@ async def handle_proactive_chat(
             )
         ):
             try:
-                _break_lang = _resolve_proactive_locale(command, mgr)
+                # break reminder 的消费点全是 prompt dict（休息提醒模板、
+                # WORK_BREAK_* 兜底 label、_loc 出来的分隔符），一律要 prompt
+                # key 而不是短码，否则 zh-TW 行取不到（issue #2500）。
+                _break_lang = _resolve_proactive_locale(command, mgr, fmt="prompt")
+                # 邀请按钮 label 经 normalize_mini_game_invite_locale 二次归一，
+                # full locale 在那边同样收敛到 zh-TW，故保持 full 不动。
+                _break_invite_lang = _resolve_proactive_locale(
+                    command, mgr, fmt="full"
+                )
             except Exception:
                 _break_lang = "zh"
+                _break_invite_lang = "zh"
 
             # Resolve character_prompt up front and prepend it to every
             # break-reminder SystemMessage. Without this the model would
@@ -928,7 +1031,7 @@ async def handle_proactive_chat(
                         # 埋点 best-effort，失败不影响邀请投递
                         pass
                     options_payload = _build_mini_game_invite_options_payload(
-                        invite_lang=_break_lang,
+                        invite_lang=_break_invite_lang,
                         game_type=chosen_game_type,
                         session_id=invite_session_id,
                     )
@@ -1125,7 +1228,9 @@ async def handle_proactive_chat(
         # 不再掷骰。activity_snapshot is None（隐私模式 / tracker 不可用）保守
         # 不发——无法判断是否在工作状态。
         try:
-            invite_lang = _resolve_proactive_locale(command, mgr)
+            # fmt="full"：邀请文案与三个按钮 label 都走带 zh-TW 行的 prompt dict，
+            # 短码会把 zh-TW 折成 zh，那些行就永远取不到（issue #2500）。
+            invite_lang = _resolve_proactive_locale(command, mgr, fmt="full")
         except Exception:
             invite_lang = "zh"
         # _user_invite_toggle 已经在上面 _debug_force_invite 计算前算过——把
@@ -1232,7 +1337,9 @@ async def handle_proactive_chat(
 
         raw_memory_context = ""
         try:
-            proactive_lang = _resolve_proactive_locale(command, mgr)
+            # fmt="prompt"：proactive_lang 一路喂到 Phase 1/2 模板、屏幕/外部/
+            # 音乐/表情包分节、近期搭话记录、action note——全是 prompt dict。
+            proactive_lang = _resolve_proactive_locale(command, mgr, fmt="prompt")
         except Exception:
             proactive_lang = "zh"
         topic_hook_lang = _resolve_topic_hook_locale(
@@ -1946,13 +2053,15 @@ async def handle_proactive_chat(
         # --- 向前端请求最新截图，替换 Phase 1 时拿到的旧截图 ---
         screenshot_b64_for_phase2 = ""
         if vision_content and model_config.has_vision_model:
-            fresh_b64 = await mgr.request_fresh_screenshot(timeout=3.0)
-            if fresh_b64:
-                # 如果 request_fresh_screenshot 走了 WebSocket 路径，screenshot_response
-                # 已经在 websocket_router 中更新了 mgr._avatar_position，这里用最新的位置叠加。
-                # 如果走了 pyautogui 路径，overlay 已在 request_fresh_screenshot 内部完成。
-                # 为安全起见：若 WS 路径返回的 fresh_b64 尚未叠加，在此补叠。
-                av_pos = getattr(mgr, "_avatar_position", None) or avatar_position
+            fresh = await mgr.request_fresh_screenshot(timeout=3.0)
+            if fresh.b64:
+                fresh_b64 = fresh.b64
+                # 判据见 _resolve_phase2_avatar_position：WS 路径不给坐标 = 前端明确
+                # 说「别叠」，绝不回退请求里的旧坐标；pyautogui 兜底才用 Phase 1 坐标。
+                # ⚠️ request_fresh_screenshot 两条路径都不叠加，overlay 只在这里做。
+                # ⚠️ 已知上限：Phase1→Phase2 之间隔了一整轮 LLM（数秒），兜底路径复用
+                #    的坐标可能已经陈旧。
+                av_pos = _resolve_phase2_avatar_position(fresh, avatar_position)
                 if av_pos and isinstance(av_pos, dict):
                     try:
                         from utils.screenshot_utils import overlay_avatar_annotation

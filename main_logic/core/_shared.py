@@ -27,7 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from utils.language_utils import normalize_language_code, get_global_language
+from utils.language_utils import normalize_language_code, get_global_language_full
 from utils.logger_config import get_module_logger
 
 
@@ -180,7 +180,11 @@ def _load_locale_messages(locale_code: str) -> dict:
 
 
 def _get_chat_locale_text(language: str | None, key: str, fallback: str) -> str:
-    raw_lang = language or get_global_language()
+    # ⚠️ 兜底必须取 full。下面的 format='full' 只能保住已有的字形，救不回
+    # 已经丢掉的：get_global_language() 返回短码，繁中在进这个函数之前就成了
+    # zh，format='full' 再把它扩成 zh-CN，static/locales/zh-TW.json 永远读不到
+    # （issue #2500）。显式传进来的 language 照旧优先。
+    raw_lang = language or get_global_language_full()
     try:
         lang_full = normalize_language_code(raw_lang, format='full')
     except Exception:
@@ -226,6 +230,28 @@ class ContextAppendResult:
     deduped: bool = False
     targets: tuple[str, ...] = ()
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FreshScreenshot:
+    """One Phase-2 screenshot fetch, tagged with where the image came from.
+
+    ``source`` is the caller's only way to tell apart two situations that a plain
+    base64 return conflated:
+
+    - ``'websocket'``: the frontend answered. ``avatar_position`` is its verdict
+      about THIS image. ``None`` means the frontend deliberately decided the image
+      must not be annotated (window capture, camera, avatar collapsed, multi-monitor);
+      the caller must not substitute a position from anywhere else.
+    - ``'backend_fallback'``: the frontend never answered and the backend grabbed
+      the screen itself. The frontend had no opinion about this image, so the
+      caller MAY fall back to the position that came with the original request.
+    - ``''``: nothing was captured.
+    """
+
+    b64: str = ""
+    source: str = ""
+    avatar_position: dict | None = None
 
 
 def _purge_closed_tool_calls(history: list, *, start: int = 0) -> int:

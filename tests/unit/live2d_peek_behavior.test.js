@@ -20,14 +20,19 @@ function createHarness({
     physicalCropState = null,
     desktopRuntime = true,
     interactionActive = true,
-    reducedMotion = false
+    reducedMotion = false,
+    snapshotSettledSequence = null
 } = {}) {
     const rafQueue = [];
     const bodyClasses = new Set();
     const listeners = new Map();
     let stealthEnabledState = stealthModeEnabled;
+    let snapshotReadCount = 0;
 
     function Live2DManager() {}
+    Live2DManager.prototype.getModelDrawableScreenRects = function(_options, model) {
+        return model && typeof model.getBounds === 'function' ? [model.getBounds()] : [];
+    };
 
     const context = {
         Live2DManager,
@@ -59,7 +64,58 @@ function createHarness({
             } : null,
             electronScreen: currentDisplay ? {
                 async getCurrentDisplay() {
-                    return currentDisplay;
+                    return currentDisplay || null;
+                },
+                async getDesktopCoordinateSnapshot() {
+                    const settledSequence = Array.isArray(snapshotSettledSequence)
+                        ? snapshotSettledSequence
+                        : null;
+                    const settled = settledSequence
+                        ? settledSequence[Math.min(snapshotReadCount, settledSequence.length - 1)] === true
+                        : true;
+                    snapshotReadCount += 1;
+                    const display = currentDisplay || {
+                        screenX: 0,
+                        screenY: 0,
+                        bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
+                        workArea: { x: 0, y: 0, width: innerWidth, height: innerHeight }
+                    };
+                    const displayBounds = display.bounds || {
+                        x: Number(display.screenX) || 0,
+                        y: Number(display.screenY) || 0,
+                        width: innerWidth,
+                        height: innerHeight
+                    };
+                    const virtualBounds = physicalCropState && physicalCropState.enabled
+                        ? physicalCropState.virtualBounds
+                        : null;
+                    return {
+                        version: 2,
+                        revision: 1,
+                        display: {
+                            id: display.id || 'display-test',
+                            bounds: displayBounds,
+                            workArea: display.workArea || displayBounds,
+                            scaleFactor: display.scaleFactor || 1
+                        },
+                        window: { settled },
+                        renderer: {
+                            coordinateSpace: virtualBounds ? 'virtual-window-local' : 'window-local',
+                            screenOrigin: {
+                                x: virtualBounds
+                                    ? virtualBounds.x
+                                    : (Number.isFinite(Number(display.screenX))
+                                        ? Number(display.screenX)
+                                        : (Number(displayBounds.x) || 0)),
+                                y: virtualBounds
+                                    ? virtualBounds.y
+                                    : (Number.isFinite(Number(display.screenY))
+                                        ? Number(display.screenY)
+                                        : (Number(displayBounds.y) || 0))
+                            }
+                        },
+                        crop: virtualBounds ? { cropRevision: Number(physicalCropState.cropRevision) || 0 } : null
+                    };
                 }
             } : null,
             nekoWidgetMode: {
@@ -106,6 +162,10 @@ function createHarness({
         window: context.window,
         controls,
         getLive2DPeekViewport: context.getLive2DPeekViewport,
+        getLive2DPeekEdgeContact: context.getLive2DPeekEdgeContact,
+        getLive2DModelLocalGrabPoint: context.getLive2DModelLocalGrabPoint,
+        placeLive2DGrabPointAtPointer: context.placeLive2DGrabPointAtPointer,
+        waitForLive2DDesktopCoordinateSettlement: context.waitForLive2DDesktopCoordinateSettlement,
         isLive2DHostModelDragActive: context.isLive2DHostModelDragActive,
         setStealthModeEnabled(enabled) {
             stealthEnabledState = enabled === true;
@@ -322,6 +382,74 @@ test('physical-crop drag ownership fails closed only after the host declares sup
         throw new Error('bridge failure');
     };
     assert.equal(isLive2DHostModelDragActive(), true);
+});
+
+test('desktop drag settlement waits for two matching settled coordinate snapshots', async () => {
+    const harness = createHarness({
+        currentDisplay: {
+            screenX: 0,
+            screenY: 0,
+            bounds: { x: 0, y: 0, width: 1000, height: 800 },
+            workArea: { x: 0, y: 24, width: 1000, height: 776 }
+        },
+        snapshotSettledSequence: [false, true, true]
+    });
+    const settlement = harness.waitForLive2DDesktopCoordinateSettlement(5);
+
+    await waitForQueuedFrame(harness);
+    flushNextFrame(harness, 16);
+    await waitForQueuedFrame(harness);
+    flushNextFrame(harness, 32);
+
+    const context = await settlement;
+    assert.equal(context.settled, true);
+    assert.equal(context.screenX, 0);
+    assert.equal(context.workArea.y, 24);
+});
+
+test('edge contact follows drawable geometry instead of transparent model bounds', () => {
+    const harness = createHarness();
+    const manager = new harness.Live2DManager();
+    const model = createModel({ x: 140, width: 500 });
+
+    manager.getModelDrawableScreenRects = () => [{
+        left: 0,
+        top: 150,
+        right: 180,
+        bottom: 650,
+        width: 180,
+        height: 500
+    }];
+    assert.equal(harness.getLive2DPeekEdgeContact(manager, model).edge, 'left');
+
+    model.x = 0;
+    manager.getModelDrawableScreenRects = () => [{
+        left: 120,
+        top: 150,
+        right: 300,
+        bottom: 650,
+        width: 180,
+        height: 500
+    }];
+    assert.equal(harness.getLive2DPeekEdgeContact(manager, model), null);
+});
+
+test('restoring a peek transform keeps the grabbed model-local point under the pointer', () => {
+    const harness = createHarness();
+    const model = createRotatingModel({ x: -180, y: 100, width: 300, height: 600 });
+    model.rotation = Math.PI / 3;
+    model.scale.x = -1;
+    const pointer = model.toGlobal({ x: 70, y: 90 });
+    const localGrab = harness.getLive2DModelLocalGrabPoint(model, pointer);
+
+    model.x = 40;
+    model.y = 120;
+    model.rotation = 0;
+    model.scale.x = 1;
+    assert.equal(harness.placeLive2DGrabPointAtPointer(model, localGrab, pointer), true);
+    const restored = model.toGlobal(localGrab);
+    assert.ok(Math.abs(restored.x - pointer.x) < 1e-9, `x mismatch: ${restored.x} vs ${pointer.x}`);
+    assert.ok(Math.abs(restored.y - pointer.y) < 1e-9, `y mismatch: ${restored.y} vs ${pointer.y}`);
 });
 
 test('edge peek enter naturally moves model offscreen and reports visible bounds', async () => {
@@ -800,6 +928,41 @@ test('Widget Mode disabled event restores active edge peek to its base position'
     assert.equal(model.rotation, 0);
     assert.equal(model.scale.x, 1);
     assert.equal(harness.bodyClasses.has('neko-live2d-peek'), false);
+});
+
+test('restoreAnchor leaves the model untouched while Widget Mode is disabled', async () => {
+    const harness = createHarness({ widgetModeEnabled: false });
+    const manager = new harness.Live2DManager();
+    const model = createRotatingModel({ x: 0, y: 0, scaleX: 1 });
+    manager.currentModel = model;
+    manager.getHeadScreenAnchor = () => model.transformPoint(150, 110);
+    manager.getBodyScreenRectInfo = () => {
+        const waist = model.transformPoint(150, 330);
+        return { rect: { centerX: waist.x, bottom: waist.y } };
+    };
+    harness.window.live2dManager = manager;
+
+    // 猫形态期间用户关掉 Widget 模式后，return 仍残留探身锚点。restore 必须在
+    // 触碰模型坐标之前先拒绝，否则 _tryApplyLive2DPeek 会在对齐边缘后才因
+    // isLive2DPeekEnabled() 失败，把模型留在陈旧边缘位置。
+    const anchor = {
+        kind: 'live2d-edge-peek',
+        edge: 'left',
+        side: 'left',
+        edgeAnchorRatio: 0.5,
+        facing: 'inward'
+    };
+    model.x = 350;
+    model.y = 100;
+    const beforeX = model.x;
+    const beforeY = model.y;
+
+    const restored = await harness.window.nekoLive2DPeek.restoreAnchor(anchor);
+
+    assert.equal(restored, false);
+    assert.equal(manager.isLive2DPeekActive(), false);
+    assert.equal(model.x, beforeX);
+    assert.equal(model.y, beforeY);
 });
 
 test('top and bottom edges alone do not trigger edge peek', async () => {

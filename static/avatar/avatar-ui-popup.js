@@ -20,6 +20,7 @@ function isAvatarFramedSettingsWindowUrl(finalUrl) {
             finalUrl.startsWith('/character_card_manager')
             || finalUrl.startsWith('/chara_manager')
             || finalUrl.startsWith('/api_key')
+            || finalUrl.startsWith('/voice_identity')
             || finalUrl.startsWith('/memory_browser')
         );
 }
@@ -1009,6 +1010,8 @@ function createSidePanelMenuItem(manager, prefix, item) {
                         windowName = 'neko_chara_manager';
                     } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/api_key')) {
                         windowName = 'neko_api_key';
+                    } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/voice_identity')) {
+                        windowName = 'neko_voice_identity';
                     } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/memory_browser')) {
                         windowName = 'neko_memory_browser';
                     }
@@ -1532,6 +1535,66 @@ function createAnimationSettingsSidePanel(manager, prefix) {
     });
 
     trackingRow.appendChild(hoverFadeRow);
+
+    // ── 锻造券掉落动画与音效开关 ──
+    const forgeDropEffectsRow = document.createElement('div');
+    Object.assign(forgeDropEffectsRow.style, trackingToggleRowStyle);
+
+    const forgeDropEffectsCheckbox = document.createElement('input');
+    forgeDropEffectsCheckbox.type = 'checkbox';
+    forgeDropEffectsCheckbox.style.display = 'none';
+    forgeDropEffectsCheckbox.checked = window.forgeDropEffectsEnabled !== false;
+
+    const {
+        indicator: forgeDropEffectsIndicator,
+        updateStyle: updateForgeDropEffectsIndicatorStyle
+    } = manager._createCheckIndicator();
+    Object.assign(forgeDropEffectsIndicator.style, { width: '20px', height: '20px', flexShrink: '0' });
+
+    const updateForgeDropEffectsRowStyle = () => {
+        updateForgeDropEffectsIndicatorStyle(forgeDropEffectsCheckbox.checked);
+        updateTrackingToggleRowBackground(forgeDropEffectsRow, forgeDropEffectsCheckbox.checked);
+        forgeDropEffectsRow.setAttribute('aria-checked', String(forgeDropEffectsCheckbox.checked));
+    };
+    forgeDropEffectsCheckbox.updateStyle = updateForgeDropEffectsRowStyle;
+
+    const forgeDropEffectsLabel = document.createElement('span');
+    forgeDropEffectsLabel.textContent = window.t
+        ? window.t('settings.toggles.forgeDropEffects')
+        : '掉券动画与音效';
+    forgeDropEffectsLabel.setAttribute('data-i18n', 'settings.toggles.forgeDropEffects');
+    Object.assign(forgeDropEffectsLabel.style, { userSelect: 'none', fontSize: '12px', flex: '1' });
+
+    forgeDropEffectsRow.appendChild(forgeDropEffectsCheckbox);
+    forgeDropEffectsRow.appendChild(forgeDropEffectsIndicator);
+    forgeDropEffectsRow.appendChild(forgeDropEffectsLabel);
+    bindTrackingToggleRowHover(forgeDropEffectsRow, () => forgeDropEffectsCheckbox.checked);
+    updateForgeDropEffectsRowStyle();
+
+    const handleForgeDropEffectsChange = () => {
+        const enabled = !forgeDropEffectsCheckbox.checked;
+        forgeDropEffectsCheckbox.checked = enabled;
+        window.forgeDropEffectsEnabled = enabled;
+        updateForgeDropEffectsRowStyle();
+        if (typeof window.saveNEKOSettings === 'function') window.saveNEKOSettings();
+        window.dispatchEvent(new CustomEvent('neko-forge-drop-effects-changed', { detail: { enabled } }));
+    };
+
+    forgeDropEffectsRow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleForgeDropEffectsChange();
+    });
+    forgeDropEffectsRow.setAttribute('role', 'switch');
+    forgeDropEffectsRow.tabIndex = 0;
+    forgeDropEffectsRow.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            handleForgeDropEffectsChange();
+        }
+    });
+
+    trackingRow.appendChild(forgeDropEffectsRow);
 
     document.body.appendChild(container);
     return container;
@@ -2724,6 +2787,8 @@ const AvatarPopupMixin = {
         ManagerProto._createMenuItem = function (item, isSubmenuItem = false) {
             const menuItem = document.createElement('div');
             menuItem.className = `${prefix}-settings-menu-item`;
+            menuItem.setAttribute('role', 'button');
+            menuItem.tabIndex = 0;
             markAvatarPopupActionElement(menuItem, isSubmenuItem ? 'settings-submenu' : 'settings-menu');
             setAvatarPopupActionDebugMetadata(menuItem, item, isSubmenuItem ? 'settings-submenu' : 'settings-menu');
             var itemAnchorId = createMenuAnchorId(prefix, item && item.id);
@@ -2744,7 +2809,8 @@ const AvatarPopupMixin = {
             if (item.icon) {
                 const iconImg = document.createElement('img');
                 iconImg.src = item.icon;
-                iconImg.alt = item.label;
+                iconImg.alt = '';
+                iconImg.setAttribute('aria-hidden', 'true');
                 Object.assign(iconImg.style, {
                     width: isSubmenuItem ? '18px' : '24px',
                     height: isSubmenuItem ? '18px' : '24px',
@@ -2769,9 +2835,6 @@ const AvatarPopupMixin = {
                 menuItem._updateLabelText = () => {
                     if (window.t) {
                         labelText.textContent = window.t(item.labelKey);
-                        if (item.icon && menuItem.querySelector('img')) {
-                            menuItem.querySelector('img').alt = window.t(item.labelKey);
-                        }
                     }
                 };
             }
@@ -2780,6 +2843,12 @@ const AvatarPopupMixin = {
             menuItem.addEventListener('mouseleave', () => menuItem.style.background = 'transparent');
 
             let isOpening = false;
+
+            menuItem.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                menuItem.click();
+            });
 
             menuItem.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -2823,6 +2892,8 @@ const AvatarPopupMixin = {
                                 windowName = 'neko_chara_manager';
                             } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/api_key')) {
                                 windowName = 'neko_api_key';
+                            } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/voice_identity')) {
+                                windowName = 'neko_voice_identity';
                             } else if (typeof finalUrl === 'string' && finalUrl.startsWith('/memory_browser')) {
                                 windowName = 'neko_memory_browser';
                             }
@@ -3060,6 +3131,7 @@ const AvatarPopupMixin = {
 
             const settingsItems = [
                 { id: 'api-keys', label: window.t ? window.t('settings.menu.apiKeys') : 'API密钥', labelKey: 'settings.menu.apiKeys', icon: '/static/icons/api_key_icon.png', action: 'navigate', url: '/api_key' },
+            { id: 'voice-identity', label: window.t ? window.t('settings.menu.voiceIdentity') : '声纹身份', labelKey: 'settings.menu.voiceIdentity', icon: '/static/icons/voice_clone_icon.png', action: 'navigate', url: '/voice_identity' },
                 { id: 'memory', label: window.t ? window.t('settings.menu.memoryBrowser') : '记忆浏览', labelKey: 'settings.menu.memoryBrowser', icon: '/static/icons/memory_icon.png', action: 'navigate', url: '/memory_browser' },
             ];
 
@@ -3071,6 +3143,9 @@ const AvatarPopupMixin = {
 
         ManagerProto.renderScreenSourceList = async function (popup) {
             if (!popup) return false;
+            if (typeof window.renderFloatingScreenSourceList === 'function') {
+                return window.renderFloatingScreenSourceList(popup);
+            }
             const popupId = popup.id;
             const isPopupAvailable = () => {
                 if (!popup || !popup.isConnected) return false;

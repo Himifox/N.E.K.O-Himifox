@@ -112,7 +112,8 @@ MUSIC_SOURCE_DOMAINS = {
     'itunes.apple.com', 'audio-ssl.itunes.apple.com',
     'a.scdn.co', 'i.scdn.co', 'p.scdn.co',
     # QQ音乐
-    'y.qq.com', 'dl.stream.qqmusic.com',
+    'y.qq.com', 'u.y.qq.com', 'dl.stream.qqmusic.com', 'dl.stream.qqmusic.qq.com',
+    'isure.stream.qqmusic.qq.com',
     # 酷狗/其他
     'kugou.com', 'stream.kugou.com',
     # FMA (Free Music Archive)
@@ -145,6 +146,61 @@ NETEASE_PERSONALIZATION_SOURCE_ORDER = (
     'liked', 'daily_playlist', 'liked', 'daily', 'liked', 'artist',
 )
 
+
+# ── 智能调度的路由词表 ────────────────────────────────────────────
+# 提到模块级不是为了复用，是为了**可断言**：它们撞的是用户点歌时打出来的
+# 关键词，简繁不同码位，缺一侧就是整条路由失效（繁体关键词全部落到区域
+# 兜底）。函数内的局部列表没法被测试拿到，缺词只能靠人眼发现。
+# ⚠️ 这里只读不改；下面的调度逻辑按原样引用。
+# 1. 【强古典词】确保正确路由至 Musopen
+ROUTING_STRONG_CLASSICAL_KEYWORDS = [
+    # 简繁并列：这些词撞的是用户点歌时打出来的关键词，繁简不同码位。
+    # ⚠️ 台湾译名不是机械转换——Mozart 台湾作「莫札特」，s2t 只会给「莫扎特」。
+    "古典", "肖邦", "貝多芬", "贝多芬", "莫扎特", "莫札特",
+    "交响", "交響", "夜曲", "协奏曲", "協奏曲", "奏鸣曲", "奏鳴曲",
+    "classical", "chopin", "beethoven", "mozart", "symphony", "nocturne", "concerto", "sonata",
+    "クラシック", "ショパン", "ベートーヴェン", "モーツァルト", "交響", "夜想曲",
+    "클래식", "쇼팽", "베토벤", "모차르트", "교향곡", "야상곡",
+    "классическая", "шопен", "бетховен", "моцарт", "симфония", "ноктюрн",
+]
+
+# 2. 【乐器词】具有歧义，可能是古典也可能是现代
+ROUTING_INSTRUMENT_KEYWORDS = ["钢琴", "鋼琴", "piano", "ピアノ", "피아노", "фортепиано",
+               "violin", "小提琴", "cello", "大提琴"]
+
+# 3. 【现代风格词】只要出现这些词，即便有乐器，也绝对不走 Musopen
+ROUTING_MODERN_STYLE_KEYWORDS = ["lofi", "chill", "relax", "remix", "cover", "说唱", "說唱",
+                 "hiphop", "电子", "電子", "electronic", "放松", "放鬆", "伴奏"]
+
+ROUTING_INDIE_KEYWORDS = [
+    "独立", "獨立", "电音", "電音", "小众", "小眾", "环境音", "環境音",
+    "electronic", "chill", "lofi",
+    "インディーズ", "電子音楽",
+     "인디", "전자음악",
+    "инди", "электронная", "лоуфай",
+]
+ROUTING_CHINESE_KEYWORDS = [
+    # zh
+    "华语", "華語", "中文", "国语", "國語", "华语流行", "華語流行", "中文歌",
+    # en
+    "mandarin", "c-pop", "chinese pop",
+    # ja
+    "中国語", "中文", "華語",
+    # ko
+    "중국어", "중국 음악", "중국 팝",
+    # ru
+    "китайская музыка", "китайский поп",
+    # 华语歌手 (常见中文歌手名)
+    "周杰伦", "周杰倫", "jay chou", "蔡依林", "jolin tsai", "林俊杰", "林俊傑", "jj lin",
+    "王心凌", "cyndi wang", "五月天", "mayday", "告五人",
+    "邓紫棋", "鄧紫棋", "g.e.m.", "陈奕迅", "陳奕迅", "eason chan",
+    "张学友", "張學友", "jacky cheung",
+    "刘德华", "劉德華", "andy lau", "王菲", "faye wong", "梁静茹", "梁靜茹", "fish leong",
+    "李荣浩", "李榮浩", "毛不易", "薛之谦", "薛之謙", "赵雷", "趙雷",
+    "许嵩", "許嵩", "徐佳莹", "徐佳瑩",
+    # 台流
+    "台式", "台客", "闽南语", "閩南語", "台语", "台語",
+]
 
 def sync_pyncm_session_cookies(session, cookies: Dict[str, str]) -> bool:
     """Update NetEase credentials without clearing unrelated session cookies."""
@@ -1463,6 +1519,187 @@ class NeteaseCrawler(BaseMusicCrawler):
         return []
 
 
+class QQMusicCrawler(BaseMusicCrawler):
+    """QQ Music search and playable-stream resolver.
+
+    QQ Music exposes search metadata and temporary playback URLs through its
+    Musicu endpoint. Playback permissions are evaluated by QQ for every song,
+    so a result is only returned after a non-empty, HTTPS ``purl`` is resolved.
+    A locally imported QQ Music cookie is optional, but improves the range of
+    tracks that can receive a playable URL.
+    """
+
+    _MUSICU_API = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+    _STREAM_FALLBACK_BASE = "https://dl.stream.qqmusic.qq.com/"
+    _SEARCH_REQUEST_KEY = "music.search.SearchCgiService"
+
+    def __init__(self):
+        super().__init__("QQ音乐")
+        self._cookies: Dict[str, str] = {}
+        self._cookie_file_mtime = -1.0
+        self._guid = str(random.randint(10_000_000, 99_999_999))
+        self._refresh_cookies_if_needed(force=True)
+
+    def _refresh_cookies_if_needed(self, *, force: bool = False) -> None:
+        """Hot-reload optional QQ Music cookies without exposing their values."""
+        try:
+            from utils.cookies_login import COOKIE_FILES, load_cookies_from_file
+
+            cookie_path = COOKIE_FILES.get("qqmusic")
+            mtime = cookie_path.stat().st_mtime if cookie_path and cookie_path.exists() else 0.0
+            if not force and mtime == self._cookie_file_mtime:
+                return
+            cookies = load_cookies_from_file("qqmusic")
+            self._cookies = dict(cookies)
+            self._cookie_file_mtime = mtime
+            if cookies:
+                self.client.headers.update({
+                    "Cookie": "; ".join(f"{key}={value}" for key, value in cookies.items()),
+                    "Referer": "https://y.qq.com/",
+                    "Origin": "https://y.qq.com",
+                })
+                logger.info("[%s] 已加载 QQ 音乐登录凭证", self.platform_name)
+            else:
+                self.client.headers.pop("Cookie", None)
+                self.client.headers.pop("Referer", None)
+                self.client.headers.pop("Origin", None)
+        except Exception as exc:
+            logger.warning("[%s] 加载 QQ 音乐凭证失败，继续使用公开访问: %s", self.platform_name, type(exc).__name__)
+
+    def _uin(self) -> str:
+        """Return the numeric QQ UIN expected by Musicu, or ``0`` anonymously."""
+        raw_uin = str(self._cookies.get("uin") or self._cookies.get("p_uin") or "0")
+        return raw_uin.lstrip("o") if raw_uin.lstrip("o").isdigit() else "0"
+
+    async def _resolve_playable_url(self, song_mid: str, media_mid: str = "") -> str:
+        """Ask QQ Music for a short-lived direct URL; return empty when unavailable."""
+        stream_mid = media_mid.strip() or song_mid
+        payload = {
+            "comm": {
+                "ct": 24,
+                "cv": 0,
+                "uin": self._uin(),
+                "format": "json",
+                "platform": "yqq.json",
+                "needNewCode": 1,
+            },
+            "req_0": {
+                "module": "vkey.GetVkeyServer",
+                "method": "CgiGetVkey",
+                "param": {
+                    "guid": self._guid,
+                    "songmid": [song_mid],
+                    "songtype": [0],
+                    "filename": [f"C400{stream_mid}.m4a"],
+                    "uin": self._uin(),
+                    "loginflag": 1,
+                    "platform": "20",
+                },
+            },
+        }
+        try:
+            response = await self.client.post(self._MUSICU_API, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            response_data = (data.get("req_0") or {}).get("data") or {}
+            stream_info = (response_data.get("midurlinfo") or [{}])[0] or {}
+            purl = str(stream_info.get("purl") or "")
+            if not purl:
+                return ""
+            base_url = next(
+                (
+                    str(url)
+                    for url in (response_data.get("sip") or [])
+                    if isinstance(url, str) and url.startswith("https://")
+                ),
+                self._STREAM_FALLBACK_BASE,
+            )
+            url = urllib.parse.urljoin(base_url, purl)
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme != "https" or not parsed.hostname or url.lower().split("?", 1)[0].endswith(".m3u8"):
+                return ""
+            return url
+        except (httpx.HTTPError, TypeError, ValueError, KeyError, IndexError) as exc:
+            logger.debug("[%s] 曲目 %s 无法解析播放地址: %s", self.platform_name, song_mid, type(exc).__name__)
+            return ""
+
+    async def search(self, keyword: str = "", limit: int = 1) -> List[Dict[str, Any]]:
+        keyword = keyword.strip()
+        if not keyword:
+            return []
+        self._refresh_user_agent()
+        self._refresh_cookies_if_needed()
+        logger.info("[%s] 正在搜索: %s", self.platform_name, keyword)
+        payload = {
+            self._SEARCH_REQUEST_KEY: {
+                "module": self._SEARCH_REQUEST_KEY,
+                "method": "DoSearchForQQMusicDesktop",
+                "param": {
+                    "query": keyword,
+                    "page_num": 1,
+                    "num_per_page": min(max(limit * 3, 5), 50),
+                    "search_type": 0,
+                },
+            },
+        }
+        try:
+            response = await self.client.post(self._MUSICU_API, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            # The current endpoint normally echoes the service name as the
+            # response key.  ``req_0`` is retained for old deployments which
+            # still use the batched Musicu envelope.
+            response_entry = data.get(self._SEARCH_REQUEST_KEY) or data.get("req_0") or {}
+            response_data = response_entry.get("data") or {}
+            response_body = response_data.get("body") or {}
+            songs = (response_body.get("song") or {}).get("list") or []
+            candidates = []
+            for song in songs:
+                song_mid = str(song.get("mid") or "").strip()
+                duration_seconds = _parse_duration_seconds(song.get("interval"))
+                if not song_mid or not _is_recommendable_duration(duration_seconds):
+                    continue
+                media_mid = str((song.get("file") or {}).get("media_mid") or song_mid).strip()
+                candidates.append((song, song_mid, media_mid, duration_seconds))
+                if len(candidates) >= limit * 3:
+                    break
+
+            resolved_urls = await asyncio.gather(
+                *(self._resolve_playable_url(song_mid, media_mid) for _, song_mid, media_mid, _ in candidates),
+                return_exceptions=True,
+            )
+            results = []
+            for (song, _song_mid, _media_mid, duration_seconds), audio_url in zip(candidates, resolved_urls):
+                if not isinstance(audio_url, str) or not audio_url:
+                    continue
+                singers = song.get("singer") or []
+                artist = " / ".join(
+                    str(singer.get("name") or "").strip()
+                    for singer in singers
+                    if isinstance(singer, dict) and singer.get("name")
+                ) or "未知艺术家"
+                album_mid = str((song.get("album") or {}).get("mid") or "").strip()
+                cover = (
+                    f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg"
+                    if album_mid else ""
+                )
+                results.append(self._format_item(
+                    name=str(song.get("name") or "未知曲目"),
+                    url=audio_url,
+                    artist=artist,
+                    cover=cover,
+                    duration_seconds=duration_seconds,
+                ))
+                if len(results) >= limit:
+                    break
+            return results
+        except httpx.TimeoutException:
+            logger.warning("[%s] 搜索 %r 超时", self.platform_name, keyword)
+        except (httpx.HTTPError, TypeError, ValueError, KeyError) as exc:
+            logger.warning("[%s] 搜索 %r 失败: %s", self.platform_name, keyword, type(exc).__name__)
+        return []
+
+
 class SoundCloudCrawler(BaseMusicCrawler):
     """
     SoundCloud crawler, dynamically fetching the auth token automatically
@@ -2115,6 +2352,7 @@ def get_crawlers() -> Dict[str, BaseMusicCrawler]:
     if _crawlers_cache is None:
         _crawlers_cache = {
             'netease': NeteaseCrawler(),
+            'qqmusic': QQMusicCrawler(),
             'fma': FMACrawler(),
             'musopen': MusopenCrawler(),
             'soundcloud': SoundCloudCrawler(),
@@ -2156,6 +2394,40 @@ async def close_all_crawlers():
 # =======================================================
 # 4. 主调度函数
 # =======================================================
+
+def _sample_distinct_background_sources(
+    style_options: List[tuple[str, str | None]],
+    limit: int = 3,
+) -> List[tuple[str, str | None]]:
+    """Pick at most one randomized style from each selected provider."""
+    styles_by_source: Dict[str, List[str | None]] = {}
+    for source, keyword in style_options:
+        styles_by_source.setdefault(source, []).append(keyword)
+
+    selected_sources = random.sample(
+        list(styles_by_source),
+        min(limit, len(styles_by_source)),
+    )
+    return [
+        (source, random.choice(styles_by_source[source]))
+        for source in selected_sources
+    ]
+
+
+def _interleave_music_result_groups(
+    result_groups: List[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Round-robin provider results so early playback fallbacks stay independent."""
+    if not result_groups:
+        return []
+
+    interleaved: List[Dict[str, Any]] = []
+    for index in range(max(len(group) for group in result_groups)):
+        for group in result_groups:
+            if index < len(group):
+                interleaved.append(group[index])
+    return interleaved
+
 
 async def fetch_music_content(
     keyword: str,
@@ -2235,69 +2507,28 @@ async def fetch_music_content(
     if not all_results and keyword and not strict_personalization:
         # 场景 A: 用户指定了明确关键词 -> 开启"梯队降级"机制
         kw_lower = keyword.lower()
-        # 1. 【强古典词】确保正确路由至 Musopen
-        strong_classical = [
-            "古典", "肖邦", "贝多芬", "莫扎特", "交响", "夜曲", "协奏曲", "奏鸣曲",
-            "classical", "chopin", "beethoven", "mozart", "symphony", "nocturne", "concerto", "sonata",
-            "クラシック", "ショパン", "ベートーヴェン", "モーツァルト", "交響", "夜想曲",
-            "클래식", "쇼팽", "베토벤", "모차르트", "교향곡", "야상곡",
-            "классическая", "шопен", "бетховен", "моцарт", "симфония", "ноктюрн",
-        ]
-        
-        # 2. 【乐器词】具有歧义，可能是古典也可能是现代
-        instruments = ["钢琴", "piano", "ピアノ", "피아노", "фортепиано", "violin", "小提琴", "cello", "大提琴"]
-        
-        # 3. 【现代风格词】只要出现这些词，即便有乐器，也绝对不走 Musopen
-        modern_styles = ["lofi", "chill", "relax", "remix", "cover", "说唱", "hiphop", "电子", "electronic", "放松", "伴奏"]
-
-        indie_keywords = [
-            "独立",  "电音", "小众", "环境音", 
-            "electronic", "chill", "lofi",
-            "インディーズ", "電子音楽",
-             "인디", "전자음악",
-            "инди", "электронная", "лоуфай",
-        ]
-        raw_chinese_keywords = [
-            # zh
-            "华语", "中文", "国语", "华语流行", "中文歌",
-            # en
-            "mandarin", "c-pop", "chinese pop",
-            # ja
-            "中国語", "中文", "華語",
-            # ko
-            "중국어", "중국 음악", "중국 팝",
-            # ru
-            "китайская музыка", "китайский поп",
-            # 华语歌手 (常见中文歌手名)
-            "周杰伦", "jay chou", "蔡依林", "jolin tsai", "林俊杰", "jj lin",
-            "王心凌", "cyndi wang", "五月天", "mayday", "告五人",
-            "邓紫棋", "g.e.m.", "陈奕迅", "eason chan", "张学友", "jacky cheung",
-            "刘德华", "andy lau", "王菲", "faye wong", "梁静茹", "fish leong",
-            "李荣浩", "毛不易", "薛之谦", "赵雷", "许嵩", "徐佳莹",
-            # 台流
-            "台式", "台客", "闽南语", "台语",
-        ]
-        chinese_keywords = [kw.lower() for kw in raw_chinese_keywords]
+        chinese_keywords = [kw.lower() for kw in ROUTING_CHINESE_KEYWORDS]
         primary_tasks = []
         
         # --- 组建第一梯队（最优解竞速） ---
 
         # 1. 古典乐意图判定：强古典词 OR (包含乐器词且非现代风格词)
-        is_classical = any(kw in kw_lower for kw in strong_classical) or \
-                       (any(kw in kw_lower for kw in instruments) and not any(kw in kw_lower for kw in modern_styles))
+        is_classical = any(kw in kw_lower for kw in ROUTING_STRONG_CLASSICAL_KEYWORDS) or \
+                       (any(kw in kw_lower for kw in ROUTING_INSTRUMENT_KEYWORDS) and not any(kw in kw_lower for kw in ROUTING_MODERN_STYLE_KEYWORDS))
+        is_chinese_query = any(kw in kw_lower for kw in chinese_keywords)
         
         if is_classical:
             logger.info(f"[智能调度] 识别到古典/纯正乐器意图，优先调度 Musopen: {keyword}")
             primary_tasks.append(all_crawlers['musopen'].search(keyword, limit))
         
         # 2. 华语/流行路由：命中华语歌手或关键词
-        elif any(kw in kw_lower for kw in chinese_keywords):
+        elif is_chinese_query:
             logger.info(f"[智能调度] 识别到华语检索意图，优先调度网易云: {keyword}")
             primary_tasks.append(all_crawlers['netease'].search(keyword, limit))
             netease_used = True
 
         # 3. 独立/电子/Lofi 路由
-        elif any(kw in kw_lower for kw in indie_keywords):
+        elif any(kw in kw_lower for kw in ROUTING_INDIE_KEYWORDS):
             logger.info(f"[智能调度] 识别到独立/电子风格意图，优先调度 Bandcamp/SoundCloud: {keyword}")
             expanded_keywords = expand_style_keyword(keyword)
             for exp_kw in expanded_keywords[:2]:
@@ -2350,45 +2581,66 @@ async def fetch_music_content(
         # --- 组建第二梯队（兜底截断逻辑） ---
         if not all_results:
             logger.info("[智能调度] 第一梯队未命中，触发第二级兜底引擎...")
-            fallback_tasks = []
-            
             # 不要在这里将关键词篡改为 "relax"
             # 必须透传原始 keyword，这样搜不到才会真实返回空，让路由层去触发真正的随机逻辑
             # netease 不重试（cookies 失败重试也没意义），直接换其他平台兜底
-            fallback_tasks.append(all_crawlers['fma'].search(keyword, limit))
-            fallback_tasks.append(all_crawlers['soundcloud'].search(keyword, limit))
-            fallback_tasks.append(all_crawlers['bandcamp'].search(keyword, limit))
-            
-            # 兜底梯队也使用竞速模式
-            fallback_task_objs = [asyncio.create_task(coro) for coro in fallback_tasks]
-            # 【统一命名】将循环变量改为 completed_task，与主循环保持一致
-            for completed_task in asyncio.as_completed(fallback_task_objs):
+            qqmusic = all_crawlers.get('qqmusic')
+            if qqmusic and (china or is_chinese_query):
+                # QQ 音乐是中文曲库的首个备用源。先单独等待，避免开放音源
+                # 的竞速结果抢先取消 QQ 请求；没有可播放链接则继续下一级。
                 try:
-                    res = await completed_task
-                    if isinstance(res, list) and res:
-                        res = _filter_requested_music_results(
-                            res,
+                    qq_results = await qqmusic.search(keyword, limit)
+                    if isinstance(qq_results, list) and qq_results:
+                        qq_results = _filter_requested_music_results(
+                            qq_results,
                             requested_song=requested_song,
                             requested_artist=requested_artist,
                         )
-                    if isinstance(res, list) and res:
-                        all_results.extend(res)
-                        logger.info("[智能调度] 兜底源命中，取消其他任务")
-                        # 取消剩余任务
+                    if isinstance(qq_results, list) and qq_results:
+                        all_results.extend(qq_results)
+                        logger.info("[智能调度] QQ 音乐备用源命中")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[智能调度] QQ 音乐备用源异常: {e}")
+
+            if not all_results:
+                fallback_tasks = [
+                    all_crawlers['fma'].search(keyword, limit),
+                    all_crawlers['soundcloud'].search(keyword, limit),
+                    all_crawlers['bandcamp'].search(keyword, limit),
+                ]
+
+            # 兜底梯队也使用竞速模式
+                fallback_task_objs = [asyncio.create_task(coro) for coro in fallback_tasks]
+                # 【统一命名】将循环变量改为 completed_task，与主循环保持一致
+                for completed_task in asyncio.as_completed(fallback_task_objs):
+                    try:
+                        res = await completed_task
+                        if isinstance(res, list) and res:
+                            res = _filter_requested_music_results(
+                                res,
+                                requested_song=requested_song,
+                                requested_artist=requested_artist,
+                            )
+                        if isinstance(res, list) and res:
+                            all_results.extend(res)
+                            logger.info("[智能调度] 兜底源命中，取消其他任务")
+                            # 取消剩余任务
+                            for task in fallback_task_objs:
+                                if not task.done():
+                                    task.cancel()
+                            # 等待取消完成
+                            await asyncio.gather(*fallback_task_objs, return_exceptions=True)
+                            break
+                    except asyncio.CancelledError:
                         for task in fallback_task_objs:
                             if not task.done():
                                 task.cancel()
-                        # 等待取消完成
                         await asyncio.gather(*fallback_task_objs, return_exceptions=True)
-                        break
-                except asyncio.CancelledError:
-                    for task in fallback_task_objs:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*fallback_task_objs, return_exceptions=True)
-                    raise
-                except Exception as e:
-                    logger.warning(f"[智能调度] 兜底源异常: {e}")
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[智能调度] 兜底源异常: {e}")
 
     elif not all_results and not strict_request:
         # 场景 B: 纯背景音乐推荐 -> 并发盲抽
@@ -2396,17 +2648,20 @@ async def fetch_music_content(
         if china:
             china_styles = [
                 ('netease', '华语'), ('netease', '流行'), ('netease', '电子'), 
-                ('netease', '说唱'), ('musopen', None), ('fma', 'lofi'), 
+                ('netease', '说唱'), ('qqmusic', '华语'), ('qqmusic', '流行'),
+                ('musopen', None), ('fma', 'lofi'),
                 ('fma', 'chill'), ('fma', 'electronic'), ('fma', 'hiphop')
             ]
-            selected_styles = random.sample(china_styles, min(3, len(china_styles)))
+            selected_styles = _sample_distinct_background_sources([
+                item for item in china_styles if item[0] in all_crawlers
+            ])
         else:
             global_styles = [
                 ('itunes', 'lofi'), ('itunes', 'chill'), ('fma', 'ambient'), 
                 ('fma', 'electronic'), ('musopen', None), ('bandcamp', 'indie'), 
                 ('bandcamp', 'vgm'), ('bandcamp', 'lofi')
             ]
-            selected_styles = random.sample(global_styles, min(3, len(global_styles)))
+            selected_styles = _sample_distinct_background_sources(global_styles)
         
         for source, kw in selected_styles:
             if source == 'musopen':
@@ -2418,9 +2673,12 @@ async def fetch_music_content(
                 tasks.append(all_crawlers[source].search(kw, limit))
                 
         crawler_results = await asyncio.gather(*tasks, return_exceptions=True)
-        for res in crawler_results:
-            if isinstance(res, list) and res:
-                all_results.extend(res)
+        result_groups = [
+            res
+            for res in crawler_results
+            if isinstance(res, list) and res
+        ]
+        all_results.extend(_interleave_music_result_groups(result_groups))
 
     # 最终防线：即使未来某个 crawler 忘记在源头过滤，只要它带回标准化时长，
     # 超长内容也不会进入主动推荐和播放器。
@@ -2627,6 +2885,22 @@ def expand_style_keyword(keyword: str) -> List[str]:
         # ---- 韩文风格 ----
         '케이팝': ['k-pop', 'korean pop', 'k-r&b', 'korean music'],
     }
+
+    # ⚠️ 上面这张表是简体写的，而路由关键词表（ROUTING_* ）已经补了繁体。
+    # 结果是 `來點電音的歌` 能选中 indie 分支，到这里却拿不到英文扩展词，
+    # 只带着未翻译的原词去搜 Bandcamp/SoundCloud，常常 track_not_found
+    # （Codex P2）。这里按繁→简折叠补出繁体键，指向同一份扩展词。
+    # ⚠️ 只列**简繁写法不同**的键；折叠表放在这里而不是逐条手抄，
+    # 是因为上面那张表会长，手抄必然落后。
+    _STYLE_KEY_TWINS = str.maketrans({
+        '电': '電', '独': '獨', '环': '環', '说': '說', '轻': '輕', '乐': '樂',
+        '钢': '鋼', '众': '眾', '国': '國', '风': '風', '摇': '搖', '滚': '滾',
+        '经': '經',
+    })
+    for _key in list(style_expansions):
+        _twin = _key.translate(_STYLE_KEY_TWINS)
+        if _twin != _key and _twin not in style_expansions:
+            style_expansions[_twin] = style_expansions[_key]
     
     # 先收集语言互补词
     lang_extras = []

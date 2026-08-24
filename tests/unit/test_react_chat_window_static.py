@@ -1,8 +1,10 @@
 import json
 import re
+import shutil
 
 import pytest
 from pathlib import Path
+from tests.node_harness import run_node_script
 from tests.static_app_parts import read_js_parts
 
 
@@ -1045,6 +1047,8 @@ def test_compact_tool_fan_uses_shell_local_anchor_not_fixed_viewport_position():
 
     assert "position: absolute;" in fan_block
     assert "--compact-tool-wheel-hover-radius: 116px;" in fan_block
+    assert "--compact-tool-wheel-music-control-cutout-width: 160px;" in fan_block
+    assert "--compact-tool-wheel-music-control-cutout-height: 96px;" in fan_block
     assert "--compact-tool-wheel-orbit-radius: 80px;" in fan_block
     assert "--compact-tool-fan-focus-x: var(--compact-tool-wheel-hover-radius);" in fan_block
     assert "--compact-tool-fan-focus-y: var(--compact-tool-wheel-hover-radius);" in fan_block
@@ -1068,6 +1072,18 @@ def test_compact_tool_fan_uses_shell_local_anchor_not_fixed_viewport_position():
     assert ".compact-input-tool-wheel-charge" in styles
     assert "width: calc(var(--compact-tool-wheel-hover-radius) * 2);" in styles
     assert '.compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-fan-hit-region' in styles
+    assert '.app-shell:has(> #music-player-mount.compact-music-player-mount > .music-player-bar:not([hidden]))' in styles
+    assert "var(--compact-tool-wheel-music-control-cutout-width)" in styles
+    assert "var(--compact-tool-wheel-music-control-cutout-height)" in styles
+    assert "function getCompactToolFanMusicControlCutoutRect(element, parentRect)" in script
+    assert "#music-player-mount.compact-music-player-mount > .music-player-bar:not([hidden])" in script
+    assert "function subtractCompactRect(rect, cutoutRect)" in script
+    assert "COMPACT_TOOL_FAN_MUSIC_CONTROL_CUTOUT_WIDTH = 160;" in script
+    assert "COMPACT_TOOL_FAN_MUSIC_CONTROL_CUTOUT_HEIGHT = 96;" in script
+    assert "--compact-tool-wheel-music-control-cutout-width" in script
+    assert "--compact-tool-wheel-music-control-cutout-height" in script
+    assert "nativeRects = nativeRects.reduce" in collector_block
+    assert "subtractCompactRect(nativeRect, musicControlCutoutRect)" in collector_block
     assert '.compact-input-tool-fan[data-compact-tool-wheel-charge-active="true"] .compact-input-tool-wheel-charge' in styles
     assert "conic-gradient(" in styles
     assert "--compact-tool-wheel-charge-first-angle" in styles
@@ -1595,6 +1611,72 @@ def test_galgame_history_excludes_tutorial_guide_messages():
     assert history_block.index("if (!m) continue;") < history_block.index("if (isYuiGuideChatMessage(m)) continue;")
 
 
+def test_galgame_option_template_follows_interface_language():
+    react_host = APP_REACT_CHAT_WINDOW_PATH.read_text(encoding="utf-8")
+
+    language_tail = react_host.split("function pickAcceptLanguage()", 1)[1].split(
+        "var GALGAME_FETCH_TIMEOUT_MS",
+        1,
+    )[0]
+    language_block = "function pickAcceptLanguage()" + language_tail
+    assert "getConversationLanguagePreference" not in language_block
+    assert "window.getCurrentLocale" in language_block
+    assert "window.i18next.language" in language_block
+    assert "navigator.language" in language_block
+    assert language_block.index("window.getCurrentLocale") < language_block.index(
+        "window.i18next.language"
+    )
+    assert language_block.index("window.i18next.language") < language_block.index(
+        "navigator.language"
+    )
+
+    fetch_block = react_host.split("function fetchGalgameOptionsForLatestTurn()", 1)[1].split(
+        "I.handleGalgameModeToggle",
+        1,
+    )[0]
+    assert "language: pickAcceptLanguage()" in fetch_block
+
+    node_path = shutil.which("node")
+    if not node_path:
+        pytest.skip("node is required to verify GalGame language selection")
+    script = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const functionSource = {json.dumps(language_block)};
+
+function resolve(windowValue, navigatorLanguage) {{
+    const context = {{ window: windowValue }};
+    if (navigatorLanguage !== undefined) {{
+        context.navigator = {{ language: navigatorLanguage }};
+    }}
+    vm.createContext(context);
+    vm.runInContext(functionSource, context);
+    return vm.runInContext('pickAcceptLanguage()', context);
+}}
+
+assert.equal(resolve({{
+    getConversationLanguagePreference: () => 'pt',
+    getCurrentLocale: () => 'ja',
+    i18next: {{ language: 'en' }}
+}}, 'ko'), 'ja');
+assert.equal(resolve({{
+    getCurrentLocale: () => '',
+    i18next: {{ language: 'en' }}
+}}, 'ko'), 'en');
+assert.equal(resolve({{ i18next: {{}} }}, 'ko'), 'ko');
+assert.equal(resolve({{ i18next: {{}} }}, undefined), '');
+"""
+    result = run_node_script(
+        node_path,
+        script,
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_icebreaker_reset_clears_prompt_by_source_without_session_match():
     react_host = APP_REACT_CHAT_WINDOW_PATH.read_text(encoding="utf-8")
 
@@ -2041,6 +2123,17 @@ def test_desktop_compact_layout_change_resets_anchor_only_when_base_surface_chan
         "function normalizeCompactDesktopWorkArea(raw)",
         1,
     )[0]
+    resize_drag_script = (
+        Path(__file__).resolve().parents[2]
+        / "static"
+        / "app"
+        / "app-react-chat-window"
+        / "resize-drag-and-api.js"
+    ).read_text(encoding="utf-8")
+    stop_drag_block = resize_drag_script.split("I.stopDrag = function stopDrag(options)", 1)[1].split(
+        "function bindDragging()",
+        1,
+    )[0]
     listener_block = script.split("window.addEventListener('neko:desktop-compact-layout-change'", 1)[1].split(
         "window.addEventListener('neko:desktop-avatar-bounds-change'",
         1,
@@ -2052,6 +2145,23 @@ def test_desktop_compact_layout_change_resets_anchor_only_when_base_surface_chan
     assert "if (baseAnchorChanged && !compactSurfaceDesktopResizeActive)" in handler_block
     assert "compactSurfaceAnchorLocked = false;" in handler_block
     assert "compactSurfaceAnchorSnapshot = '';" in handler_block
+    assert "noteCompactSurfaceManualDragRelease" in script
+    assert "isCompactSurfaceManualDragReleaseGuardActive" in handler_block
+    assert "localCompactDragActive" in handler_block
+    release_index = stop_drag_block.index(
+        "I.noteCompactSurfaceManualDragRelease(compactRect);"
+    )
+    dispatch_index = stop_drag_block.index(
+        "I.dispatchCompactSurfaceLayoutChange(compactRect);"
+    )
+    assert release_index < dispatch_index
+    guard_start = handler_block.index(
+        "if (!localCompactDragActive && !manualDragReleaseGuardActive) {"
+    )
+    guard_end = handler_block.index("\n            }", guard_start)
+    guard_block = handler_block[guard_start:guard_end]
+    assert "compactSurfaceAnchorLocked = false;" in guard_block
+    assert "compactSurfaceAnchorSnapshot = '';" in guard_block
     assert "scheduleCompactMinimizeBallTracking();" in handler_block
     assert "var layout = event && event.detail ? event.detail : window.__nekoDesktopCompactLayout;" in listener_block
     assert "handleDesktopCompactLayoutChange(layout || null);" in listener_block
@@ -2645,10 +2755,33 @@ def test_subtitle_web_host_keeps_compact_history_transparent_wrappers_click_thro
         f'{compact_surface_prefix} [data-compact-geometry-owner="surface"],\n'
         f'{compact_surface_prefix} [data-compact-geometry-owner="surface"] *,\n'
         f'{compact_surface_prefix} #reactChatWindowMinimizeButton,\n'
-        f'{compact_surface_prefix} #reactChatWindowMinimizeButton *,\n'
-        f'{compact_surface_prefix} .compact-input-tool-fan[data-compact-input-tool-fan-open="true"],\n'
-        f'{compact_surface_prefix} .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] * {{\n'
+        f'{compact_surface_prefix} #reactChatWindowMinimizeButton * {{\n'
         "    pointer-events: auto;\n"
+        "}"
+    )
+    tool_fan_passthrough_rule = (
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] {{\n'
+        "    pointer-events: none !important;\n"
+        "}"
+    )
+    visible_tool_fan_interactive_rule = (
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-fan-hit-region,\n'
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item:not([data-compact-tool-wheel-slot="hidden"]):not([data-compact-tool-wheel-slot="hidden-forward"]):not([data-compact-tool-wheel-slot="hidden-backward"]),\n'
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .avatar-tool-quickbar,\n'
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .avatar-tool-quickbar * {{\n'
+        "    pointer-events: auto !important;\n"
+        "}"
+    )
+    hidden_tool_fan_slots_rule = (
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="hidden"],\n'
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="hidden-forward"],\n'
+        f'{compact_surface_prefix} #react-chat-window-root .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-item[data-compact-tool-wheel-slot="hidden-backward"] {{\n'
+        "    pointer-events: none !important;\n"
+        "}"
+    )
+    visible_music_tool_fan_cutout_rule = (
+        f'{compact_surface_prefix} #react-chat-window-root .app-shell:has(> #music-player-mount.compact-music-player-mount > .music-player-bar:not([hidden])) .compact-input-tool-fan[data-compact-input-tool-fan-open="true"] .compact-input-tool-fan-hit-region {{\n'
+        "    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 var(--compact-tool-wheel-music-control-cutout-height), var(--compact-tool-wheel-music-control-cutout-width) var(--compact-tool-wheel-music-control-cutout-height), var(--compact-tool-wheel-music-control-cutout-width) 0);\n"
         "}"
     )
     compact_music_interactive_rule = (
@@ -2696,6 +2829,10 @@ def test_subtitle_web_host_keeps_compact_history_transparent_wrappers_click_thro
     )
 
     assert broad_surface_rule in styles
+    assert tool_fan_passthrough_rule in styles
+    assert visible_tool_fan_interactive_rule in styles
+    assert hidden_tool_fan_slots_rule in styles
+    assert visible_music_tool_fan_cutout_rule in styles
     assert compact_music_interactive_rule in styles
     assert compact_music_hidden_rule in styles
     assert history_passthrough_rule in styles
@@ -2708,6 +2845,9 @@ def test_subtitle_web_host_keeps_compact_history_transparent_wrappers_click_thro
     assert styles.index(history_passthrough_rule) < styles.index(meme_passthrough_rule)
     assert styles.index(meme_passthrough_rule) < styles.index(meme_close_interactive_rule)
     assert styles.index(meme_close_interactive_rule) < styles.index(history_interactive_rule)
+    assert styles.index(broad_surface_rule) < styles.index(tool_fan_passthrough_rule)
+    assert styles.index(tool_fan_passthrough_rule) < styles.index(visible_tool_fan_interactive_rule)
+    assert styles.index(visible_tool_fan_interactive_rule) < styles.index(hidden_tool_fan_slots_rule)
     assert ".compact-export-history-scroll,\n" in history_passthrough_rule
 
 
@@ -2756,6 +2896,49 @@ def test_compact_inline_export_uses_windowless_app_chat_export_api():
     assert "handleDownloadClick" not in compact_api_block
     assert "openExportPreviewWindow" not in compact_api_block
     assert "window.open" not in compact_api_block
+
+
+def test_chat_export_keeps_meme_and_music_as_media():
+    script = APP_CHAT_EXPORT_PATH.read_text(encoding="utf-8")
+
+    plain_text_block = script.split("function extractBlocksPlainText(message)", 1)[1].split(
+        "function blocksToMarkdown(message)",
+        1,
+    )[0]
+    assert "if (memeOnly && block.type !== 'image') return;" in plain_text_block
+    assert "if (musicOnly && !isMusicExportBlock(message, block)) return;" in plain_text_block
+    assert "if (block.title) parts.push(String(block.title));" in plain_text_block
+    assert "if (block.description) parts.push(String(block.description));" in plain_text_block
+
+    selection_list_block = script.split("function renderSelectionList()", 1)[1].split(
+        "function renderControls()",
+        1,
+    )[0]
+    assert "extractBlocksPlainText(message)" in selection_list_block
+    assert "extractBlocksPlainText(message.blocks)" not in selection_list_block
+
+    markdown_block = script.split("function blocksToMarkdown(message)", 1)[1].split(
+        "function collectImageDescriptors(message)",
+        1,
+    )[0]
+    assert "getMusicExportCover(block)" in markdown_block
+    assert "String(block.url || '')" not in markdown_block.split("if (isMusicExportBlock(message, block))", 1)[1].split(
+        "return;",
+        1,
+    )[0]
+
+    media_block = script.split("function collectImageDescriptors(message)", 1)[1].split(
+        "function buildExportEntry(message)",
+        1,
+    )[0]
+    assert "fallbackSource: MUSIC_EXPORT_PLACEHOLDER_COVER" in media_block
+
+    lyrics_block = script.split("async function renderLyricsStyleCanvas(resolvedEntries, now)", 1)[1].split(
+        "async function renderImageCanvas(resolvedEntries, styleId, now)",
+        1,
+    )[0]
+    assert "ctx.drawImage(image.image, textX, y, image.width, image.height);" in lyrics_block
+    assert "translateLabel('chat.exportImageLabel'" not in lyrics_block
 
 
 def test_compact_history_drop_payload_suppresses_real_send_in_voice_mode_only_at_host_send_boundary():

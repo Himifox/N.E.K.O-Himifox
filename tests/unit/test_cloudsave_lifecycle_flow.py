@@ -304,6 +304,11 @@ def test_full_cloudsave_chain_runtime_snapshot_steam_cloud_and_manual_apply():
 @pytest.mark.asyncio
 async def test_main_server_manual_startup_performs_fallback_import_and_continues_boot():
     from app import main_server
+    from utils import steam_state
+
+    leaked_steamworks = SimpleNamespace(source="prior-test")
+    main_server.steamworks = leaked_steamworks
+    steam_state.set_steamworks(leaked_steamworks)
 
     fake_config_manager = SimpleNamespace(
         app_docs_dir=Path("/tmp/N.E.K.O"),
@@ -333,6 +338,7 @@ async def test_main_server_manual_startup_performs_fallback_import_and_continues
         stack.enter_context(patch.object(main_server, "_runtime_startup_init_completed", False))
         stack.enter_context(patch.object(main_server, "_preload_task", None))
         stack.enter_context(patch.object(main_server, "agent_event_bridge", None))
+        stack.enter_context(patch.object(main_server, "steamworks", None))
         stack.enter_context(patch.object(main_server, "_config_manager", fake_config_manager))
         stack.enter_context(
             patch.object(main_server, "get_storage_startup_blocking_reason", Mock(return_value=""))
@@ -594,13 +600,24 @@ def test_facts_sync_worker_start_failure_is_logged_as_warning():
             "main_logic.facts_sync.start_facts_sync_worker",
             Mock(return_value=object()),
         ),
+        patch(
+            "main_logic.client_registration.ensure_client_registered",
+            Mock(return_value=object()),
+        ),
         patch.object(main_server.asyncio, "create_task", create_task),
         patch.object(main_server.logger, "warning") as warning,
         patch.object(main_server, "_facts_sync_worker_task", None),
+        patch.object(main_server, "_client_registration_task", None),
     ):
         main_server._start_neko_servers_integration_workers()
 
-    warning.assert_called_once_with(
+    # Both workers share the same create_task mock, both log warnings
+    assert warning.call_count == 2
+    warning.assert_any_call(
+        "[client_registration] bootstrap failed: %s",
+        facts_error,
+    )
+    warning.assert_any_call(
         "[facts_sync] start worker failed: %s",
         facts_error,
     )

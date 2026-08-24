@@ -817,8 +817,8 @@ def test_yui_wakeup_delegates_action_boundary_to_avatar_stage():
     avatar_source = Path("static/tutorial/avatar/yui-stage.js").read_text(encoding="utf-8")
     live2d_source = Path("static/live2d/live2d-model.js").read_text(encoding="utf-8")
     style_source = Path("static/css/yui-guide.css").read_text(encoding="utf-8")
-    yui_model = json.loads(Path("static/yui-origin/yui-origin.model3.json").read_text(encoding="utf-8"))
-    yui_display_info = json.loads(Path("static/yui-origin/yui-origin.cdi3.json").read_text(encoding="utf-8"))
+    yui_model = json.loads(Path("static/yui-lolita/yui-lolita.model3.json").read_text(encoding="utf-8"))
+    yui_display_info = json.loads(Path("static/yui-lolita/yui-lolita.cdi3.json").read_text(encoding="utf-8"))
     yui_param_ids = {
         item.get("Id")
         for item in yui_display_info.get("Parameters", [])
@@ -904,8 +904,8 @@ def test_yui_wakeup_delegates_action_boundary_to_avatar_stage():
         assert param_id in avatar_source
 
     yui_file_refs = yui_model.get("FileReferences", {})
-    assert yui_file_refs.get("Moc") == "yui-origin.moc3"
-    assert yui_file_refs.get("DisplayInfo") == "yui-origin.cdi3.json"
+    assert yui_file_refs.get("Moc") == "yui-lolita.moc3"
+    assert yui_file_refs.get("DisplayInfo") == "yui-lolita.cdi3.json"
     for param_id in ("Param75", "Param90", "Param92", "Param95"):
         assert param_id in yui_param_ids
 
@@ -1618,7 +1618,7 @@ def test_home_yui_guide_avatar_override_does_not_persist_tutorial_model():
     assert "this.revealTutorialLive2dPrepared();" in teardown_block
     assert "this.revealPrepared();" in restore_block
     assert "live2d: this.tutorialModelName" in begin_block
-    assert "TUTORIAL_YUI_LIVE2D_MODEL_PATH = '/static/yui-origin/yui-origin.model3.json'" in tutorial_source
+    assert "TUTORIAL_YUI_LIVE2D_MODEL_PATH = '/static/yui-lolita/yui-lolita.model3.json'" in tutorial_source
     assert "const ROUND_COUNT = 7" in seven_day_state_source
     launch_block = tutorial_source.split("const launchTutorial = () => {", 1)[1].split(
         "if (this.isI18nReady())",
@@ -2302,6 +2302,130 @@ def test_plugin_terminal_status_defaults_and_run_data_overrides():
     assert _plugin_terminal_status(False, {"status": "error"}) == "failed"
     # observation_only also doesn't change the picture on raw fail.
     assert _plugin_terminal_status(False, {"status": "blocked", "observation_only": True}) == "failed"
+
+
+def test_plugin_result_contract_runtime_static_and_default(monkeypatch):
+    from app.agent_server.channels import user_plugin
+
+    executor = type(
+        "Executor",
+        (),
+        {
+            "plugin_list": [
+                {
+                    "id": "demo",
+                    "entries": [
+                        {
+                            "id": "status",
+                            "metadata": {
+                                "result_kind": "event",
+                                "expires_in_s": 30,
+                            },
+                        },
+                        {"id": "action", "metadata": {}},
+                    ],
+                }
+            ]
+        },
+    )()
+    monkeypatch.setattr(user_plugin._shared.Modules, "task_executor", executor)
+
+    assert user_plugin._resolve_plugin_result_contract("demo", "status", None) == (
+        "event",
+        30.0,
+    )
+    runtime = {
+        "meta": {
+            "agent": {
+                "result_kind": "task_result",
+                "expires_in_s": 5,
+            }
+        }
+    }
+    assert user_plugin._resolve_plugin_result_contract("demo", "status", runtime) == (
+        "task_result",
+        None,
+    )
+    assert user_plugin._resolve_plugin_result_contract("demo", "action", None) == (
+        "task_result",
+        None,
+    )
+
+
+def test_plugin_result_contract_invalid_runtime_falls_back_to_static(monkeypatch):
+    from app.agent_server.channels import user_plugin
+
+    executor = type(
+        "Executor",
+        (),
+        {
+            "plugin_list": [
+                {
+                    "id": "demo",
+                    "entries": [
+                        {
+                            "id": "status",
+                            "metadata": {
+                                "result_kind": "event",
+                                "expires_in_s": 20,
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+    )()
+    monkeypatch.setattr(user_plugin._shared.Modules, "task_executor", executor)
+    runtime = {
+        "meta": {
+            "agent": {
+                "result_kind": "not-a-kind",
+                "expires_in_s": float("nan"),
+            }
+        }
+    }
+
+    assert user_plugin._resolve_plugin_result_contract("demo", "status", runtime) == (
+        "event",
+        20.0,
+    )
+
+
+def test_plugin_contract_lookups_use_executor_resolved_entry_ids():
+    def _assert_resolved_entry_arg(func_node, result_name):
+        target_calls = {
+            "_lookup_llm_result_fields": [],
+            "_resolve_plugin_result_contract": [],
+        }
+        for node in ast.walk(func_node):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in target_calls
+            ):
+                target_calls[node.func.id].append(node)
+        for call_name, calls in target_calls.items():
+            assert len(calls) == 1, f"expected one {call_name} call"
+            entry_arg = calls[0].args[1]
+            assert isinstance(entry_arg, ast.Attribute)
+            assert entry_arg.attr == "entry_id"
+            assert isinstance(entry_arg.value, ast.Name)
+            assert entry_arg.value.id == result_name
+
+    _assert_resolved_entry_arg(
+        _get_function_def(
+            "app/agent_server/channels/user_plugin.py",
+            "dispatch",
+        ),
+        "up_result",
+    )
+    _assert_resolved_entry_arg(
+        _get_function_def(
+            "app/agent_server/api_runtime.py",
+            "plugin_execute_direct",
+        ),
+        "res",
+    )
 
 
 def test_callback_instruction_renders_blocked_plugin_result_as_not_executed():

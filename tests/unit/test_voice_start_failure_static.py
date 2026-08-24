@@ -202,9 +202,12 @@ class FakeButton {{
     this.classList = new FakeClassList();
     this.disabled = false;
     this.clickCount = 0;
+    this.onClick = null;
   }}
   click() {{
+    if (this.disabled) return;
     this.clickCount += 1;
+    if (typeof this.onClick === 'function') this.onClick();
   }}
 }}
 
@@ -241,6 +244,16 @@ global.window = {{
     const handlers = this._listeners.get(type) || [];
     handlers.push(handler);
     this._listeners.set(type, handlers);
+  }},
+  removeEventListener(type, handler) {{
+    const handlers = this._listeners.get(type) || [];
+    this._listeners.set(type, handlers.filter((candidate) => candidate !== handler));
+  }},
+  async dispatchNamed(type, detail = {{}}) {{
+    const handlers = [...(this._listeners.get(type) || [])];
+    for (const handler of handlers) {{
+      await handler({{ type, detail }});
+    }}
   }},
   async dispatchMicToggle(active) {{
     const handlers = this._listeners.get('live2d-mic-toggle') || [];
@@ -389,17 +402,26 @@ def test_floating_mic_popup_exposes_screen_share_start_and_stop_action():
     assert "button.setAttribute('aria-label', accessibleLabel);" in toggle_factory
     assert "button.setAttribute('aria-busy', 'true');" in toggle_factory
 
-    # 合并为一行：迷你胶囊开关嵌在「屏幕共享」设置行右侧（替换 chevron）
+    # 三个入口使用同一个非交互 action-row；行级开关与面板按钮互为兄弟。
     render_start = source.index("window.renderFloatingMicList = async function")
     render_end = source.index("function updateMicListSelection()", render_start)
     render = source[render_start:render_end]
-    screen_row = "leftColumn.insertBefore(screenActionButton, firstContent);"
-    mic_row = "leftColumn.insertBefore(micActionButton, firstContent);"
-    assert screen_row in render and mic_row in render
+    screen_row = "leftColumn.insertBefore(screenActionRow, firstContent);"
+    mic_row = "leftColumn.insertBefore(micActionRow, firstContent);"
+    voice_row = "leftColumn.insertBefore(asrActionRow, firstContent);"
+    assert screen_row in render and mic_row in render and voice_row in render
     assert render.index(screen_row) < render.index(mic_row)
+    assert render.index(mic_row) < render.index(voice_row)
     assert "createScreenShareToggleButton({ mini: true })" in render
-    assert "screenActionButton.replaceChild(shareToggleButton, screenActionButton.lastChild);" in render
+    assert "var screenActionRow = createMainActionRow(" in render
+    assert "var micActionRow = createMainActionRow(" in render
+    assert "var asrActionRow = createMainActionRow(" in render
+    assert "screenActionButton.replaceChild(" not in render
+    assert "asrActionButton.replaceChild(" not in render
     assert "leftColumn.insertBefore(shareToggleButton, firstContent);" not in render
+    assert "document.createElement('button')" in toggle_factory
+    assert "button.type = 'button';" in toggle_factory
+    assert "button.addEventListener('keydown'" not in toggle_factory
 
 
 def test_screen_share_start_is_single_flight_across_ui_entry_points():
@@ -710,7 +732,8 @@ def test_every_screen_share_toggle_treats_a_pending_start_as_on():
     activation_guard = start_once.rfind(
         "discardCancelledScreenSharingStart(attempt)", 0, activate
     )
-    assert activation_guard > start_once.index("fetchBackendScreenshot()")
+    fail_closed = start_once.index("streamError.name = 'NotReadableError'")
+    assert activation_guard > fail_closed
     commit_stream = start_once.index("S.screenCaptureStream = captureStream;")
     first_post_capture_guard = start_once.index(
         "if (discardCancelledScreenSharingStart(attempt)) return;",
@@ -783,6 +806,9 @@ def test_mic_main_action_matches_settings_chevron_and_hover_expands():
     assert "button.dataset.nekoMicMainAction = actionKey;" in action_button
     assert "openMicActionPanel(actionKey, onClick)" in action_button
     assert "button.addEventListener('mouseenter'" in action_button
+    assert "interactionOptions.openOnHover !== false" in action_button
+    assert "xdg-desktop-portal" in action_button
+    assert "button.addEventListener('click'" in action_button
     assert "scheduleMicActionHoverCollapse()" in action_button
     assert "createMainActionButton(" in source
     assert "'screen'" in source
@@ -793,7 +819,15 @@ def test_mic_main_action_matches_settings_chevron_and_hover_expands():
     assert "if (iconText) {" in action_button
     assert "screenActionButton.querySelector('.neko-mic-action-text')" in source
     assert "var screenActionButton = createMainActionButton(\n                null," in source
+    screen_action = source.split(
+        "var screenActionButton = createMainActionButton(", 1
+    )[1].split(");", 1)[0]
+    assert "openScreenSourceSubwindow" in screen_action
+    assert "{ openOnHover: false }" in screen_action
     assert "var micActionButton = createMainActionButton(\n                null," in source
+    assert "asrActionButton = createMainActionButton(\n                null," in source
+    assert "'voice-recognition'" in source
+    assert "openVoiceRecognitionSubwindow" in source
     subwindow = _js_function_block(source, "createMicSubwindow")
     assert "if (iconText) {" in subwindow
     assert "titleWrap.appendChild(icon);" in subwindow
@@ -805,6 +839,12 @@ def test_mic_main_action_matches_settings_chevron_and_hover_expands():
         "window.t ? window.t('buttons.screenShare') : 'Screen Share',\n"
         "                    null,"
     ) in source
+    voice_subwindow = _js_function_block(
+        source, "openVoiceRecognitionSubwindow"
+    )
+    assert "createMicSubwindow(" in voice_subwindow
+    assert "panel._nekoMicSubwindowBody" in voice_subwindow
+    assert "panel.classList.add('neko-mic-voice-subwindow')" in voice_subwindow
 
 
 def test_mic_device_subwindow_retries_permission_when_device_cache_is_empty():
@@ -971,6 +1011,86 @@ def test_floating_mic_toggle_actual_state_matrix(name, script_body, expected):
     assert result["mic"]["disabled"] is expected["disabled"], name
     assert result["mic"]["classes"] == expected["classes"], name
     assert result["stopCalls"] == expected["stopCalls"], name
+
+
+def test_floating_mic_click_during_cat_return_replays_after_return_completion():
+    result = _run_floating_mic_toggle_scenario(
+        """
+    await window.dispatchNamed('neko:cat-return-commit');
+    micButton.disabled = true;
+    const togglePromise = window.dispatchMicToggle(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const clicksBeforeReturnComplete = micButton.clickCount;
+
+    micButton.disabled = false;
+    micButton.onClick = function () {
+      S.isRecording = true;
+      micButton.classList.add('active', 'recording');
+    };
+    await window.dispatchNamed('neko:cat-return-complete');
+    await togglePromise;
+    return { clicksBeforeReturnComplete };
+        """
+    )
+
+    assert result["result"]["clicksBeforeReturnComplete"] == 0
+    assert result["mic"]["clicks"] == 1
+    assert result["mic"]["classes"] == ["active", "recording"]
+
+
+def test_floating_mic_click_during_aborted_cat_return_is_released_immediately():
+    result = _run_floating_mic_toggle_scenario(
+        """
+    await window.dispatchNamed('neko:cat-return-commit');
+    micButton.disabled = true;
+    const abortedTogglePromise = window.dispatchMicToggle(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await window.dispatchNamed('neko:cat-return-abort');
+    await abortedTogglePromise;
+    const clicksAfterAbort = micButton.clickCount;
+
+    micButton.disabled = false;
+    micButton.onClick = function () {
+      S.isRecording = true;
+      micButton.classList.add('active', 'recording');
+    };
+    await window.dispatchMicToggle(true);
+    return { clicksAfterAbort };
+        """
+    )
+
+    assert result["result"]["clicksAfterAbort"] == 0
+    assert result["mic"]["clicks"] == 1
+    assert result["mic"]["classes"] == ["active", "recording"]
+
+
+def test_cat_return_commit_always_publishes_complete_or_abort_terminal_event():
+    source = _read(APP_UI_PATH)
+    marker = "const handleReturnClick = async (event) => {"
+    start = source.index(marker)
+    brace = source.index("{", start)
+    handler = source[start : _balanced_js_block_end(source, brace) + 1]
+
+    commit_index = handler.index("new CustomEvent('neko:cat-return-commit'")
+    guard_index = handler.index("let returnTerminalPublished = false;", commit_index)
+    try_index = handler.index("try {", guard_index)
+    failed_model_return = handler.index("if (modelDisplayReady === false) {", try_index)
+    finally_index = handler.index("} finally {", failed_model_return)
+    abort_index = handler.index("new CustomEvent('neko:cat-return-abort'", finally_index)
+    complete_index = handler.index(
+        "new CustomEvent('neko:cat-return-complete'",
+        try_index,
+    )
+    published_index = handler.index(
+        "returnTerminalPublished = true;",
+        complete_index,
+    )
+    finally_brace = handler.index("{", finally_index)
+    finally_end = _balanced_js_block_end(handler, finally_brace)
+
+    assert commit_index < guard_index < try_index < failed_model_return < finally_index < abort_index
+    assert try_index < complete_index < published_index < finally_index
+    assert finally_brace < abort_index <= finally_end
 
 
 def test_voice_auto_screen_stops_owned_share_even_after_setting_is_disabled():
