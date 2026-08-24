@@ -335,15 +335,30 @@ def _score_snapshot(
     if norm <= 0:
         return []
     scores = snapshot.matrix @ (query / norm)
+    if allowed_source_tags is None:
+        eligible_indices = np.arange(len(scores), dtype=np.int64)
+    else:
+        eligible_rowids = store.entry_rowids_for_source_tags(allowed_source_tags)
+        if not eligible_rowids:
+            return []
+        eligible_indices = np.flatnonzero(
+            np.isin(snapshot.entry_rowids, tuple(eligible_rowids))
+        )
+        if not len(eligible_indices):
+            return []
+    eligible_scores = scores[eligible_indices]
     candidate_count = min(
-        len(scores),
+        len(eligible_indices),
         max(int(limit) * 8, 64),
     )
-    if candidate_count < len(scores):
-        candidate_indices = np.argpartition(scores, -candidate_count)[-candidate_count:]
+    if candidate_count < len(eligible_indices):
+        candidate_positions = np.argpartition(eligible_scores, -candidate_count)[
+            -candidate_count:
+        ]
+        candidate_indices = eligible_indices[candidate_positions]
         candidate_indices = candidate_indices[np.argsort(-scores[candidate_indices])]
     else:
-        candidate_indices = np.argsort(-scores)
+        candidate_indices = eligible_indices[np.argsort(-eligible_scores)]
     rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
     entries = store.load_entries_by_rowids(rowids)
     disabled = load_disabled_entries(get_catalog_override_path(store.database_path))

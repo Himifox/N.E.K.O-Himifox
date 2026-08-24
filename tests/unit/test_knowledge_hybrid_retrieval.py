@@ -148,6 +148,34 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     assert result[0].semantic_score == pytest.approx(1.0)
 
 
+def test_semantic_scan_filters_sources_before_top_k(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Crowding source", source="source:other"))
+    store.upsert(_entry("Allowed result", source="source:allowed"))
+    snapshot = VectorIndexSnapshot(
+        revision=1,
+        model_id="fixture",
+        matrix=np.asarray([[1.0, 0.0]] * 65 + [[0.8, 0.6]], dtype=np.float32),
+        entry_rowids=np.asarray([1] * 65 + [2], dtype=np.int64),
+        chunk_indices=np.arange(66, dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: frozenset(),
+    )
+
+    result = _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=1,
+        allowed_source_tags=("source:allowed",),
+    )
+
+    assert [hit.entry.title for hit in result] == ["Allowed result"]
+    assert result[0].semantic_score == pytest.approx(0.8)
+
+
 @pytest.mark.asyncio
 async def test_semantic_search_uses_versioned_query_input(tmp_path, monkeypatch):
     store = KnowledgeStore(tmp_path / "knowledge.db")

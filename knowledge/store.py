@@ -1283,6 +1283,25 @@ class KnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return {}
 
+    def entry_rowids_for_source_tags(
+        self,
+        source_tags: Sequence[str],
+    ) -> frozenset[int]:
+        unique = tuple(dict.fromkeys(str(tag).strip() for tag in source_tags))
+        if not unique or any(not tag.startswith("source:") for tag in unique):
+            return frozenset()
+        placeholders = ",".join("?" for _ in unique)
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT DISTINCT entries.rowid FROM entries, json_each(entries.tags) tag "
+                    f"WHERE tag.value IN ({placeholders})",
+                    unique,
+                ).fetchall()
+                return frozenset(int(row["rowid"]) for row in rows)
+        except (KnowledgeStoreError, sqlite3.OperationalError, TypeError, ValueError):
+            return frozenset()
+
     def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:
         """Read the database revision and routeable cards in one transaction."""
         try:
