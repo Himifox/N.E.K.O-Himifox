@@ -45,6 +45,41 @@ MAX_VECTOR_SNAPSHOT_CHUNKS = 20_000
 _T = TypeVar("_T")
 
 
+def _remaining_timeout(
+    deadline_monotonic: float | None,
+    maximum: float,
+) -> float:
+    if deadline_monotonic is None:
+        return maximum
+    return max(min(deadline_monotonic - time.monotonic(), maximum), 0.0)
+
+
+def _consume_task_result(task: asyncio.Task[object]) -> None:
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _wait_task_until(
+    task: asyncio.Task[_T],
+    deadline_monotonic: float | None,
+) -> tuple[bool, _T | None]:
+    if task.done():
+        return True, task.result()
+    if deadline_monotonic is None:
+        return True, await task
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        task.add_done_callback(_consume_task_result)
+        return False, None
+    done, _pending = await asyncio.wait({task}, timeout=remaining)
+    if not done:
+        task.add_done_callback(_consume_task_result)
+        return False, None
+    return True, task.result()
+
+
 @dataclass(frozen=True, slots=True)
 class EmbeddingBatchResult:
     selected: int = 0
@@ -350,6 +385,8 @@ async def prepare_semantic_query(
     query: str,
     *,
     stores: tuple[KnowledgeStore, ...],
+    load_model: bool = True,
+    deadline_monotonic: float | None = None,
 ) -> SemanticQueryEmbedding:
     """Encode one query at most once for the requested public-knowledge scan."""
     empty_status = LocalEmbeddingStatus(state="not_ready")
@@ -369,21 +406,35 @@ async def prepare_semantic_query(
         )
         if not any(int(value.get("chunks_ready", 0)) > 0 for value in statuses):
             return SemanticQueryEmbedding(None, status, "index_not_ready")
+        if not load_model:
+            return SemanticQueryEmbedding(None, status, "model_not_ready")
     service = get_local_embedding_service()
     if status.state == "not_ready":
+        timeout = _remaining_timeout(
+            deadline_monotonic,
+            QUERY_EMBEDDING_TIMEOUT_SECONDS,
+        )
+        if timeout <= 0:
+            return SemanticQueryEmbedding(None, status, "budget_exhausted")
         load_state = await _INFERENCE_COORDINATOR.ensure_loaded(
             service,
-            timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         if load_state != "ready":
             return SemanticQueryEmbedding(None, status, load_state)
         status = get_local_embedding_status()
     if not status.ready:
         return SemanticQueryEmbedding(None, status, status.state)
+    timeout = _remaining_timeout(
+        deadline_monotonic,
+        QUERY_EMBEDDING_TIMEOUT_SECONDS,
+    )
+    if timeout <= 0:
+        return SemanticQueryEmbedding(None, status, "budget_exhausted")
     vector, query_state = await _INFERENCE_COORDINATOR.run_query(
         service,
         knowledge_query_embedding_text(query),
-        timeout=QUERY_EMBEDDING_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
     if query_state != "ready":
         return SemanticQueryEmbedding(None, status, query_state)
@@ -398,20 +449,34 @@ async def semantic_search_prepared(
     *,
     limit: int = VECTOR_CANDIDATE_LIMIT,
     allowed_source_tags: tuple[str, ...] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> tuple[list[KnowledgeHit], str]:
     """Scan the public-knowledge index with an encoded request-scoped query."""
     if prepared.state != "ready" or prepared.vector is None:
         return [], prepared.state
     try:
-        snapshot = await asyncio.to_thread(_load_snapshot, store, prepared.status)
-        hits = await asyncio.to_thread(
-            _score_snapshot,
-            snapshot,
-            prepared.vector,
-            store=store,
-            limit=limit,
-            allowed_source_tags=allowed_source_tags,
+        snapshot_task = asyncio.create_task(
+            asyncio.to_thread(_load_snapshot, store, prepared.status)
         )
+        completed, snapshot = await _wait_task_until(
+            snapshot_task,
+            deadline_monotonic,
+        )
+        if not completed or snapshot is None:
+            return [], "snapshot_timeout"
+        score_task = asyncio.create_task(
+            asyncio.to_thread(
+                _score_snapshot,
+                snapshot,
+                prepared.vector,
+                store=store,
+                limit=limit,
+                allowed_source_tags=allowed_source_tags,
+            )
+        )
+        completed, hits = await _wait_task_until(score_task, deadline_monotonic)
+        if not completed or hits is None:
+            return [], "score_timeout"
     except Exception:
         return [], "invalid_response"
     return hits, "ready"

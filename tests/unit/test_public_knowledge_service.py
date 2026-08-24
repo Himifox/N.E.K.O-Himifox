@@ -130,6 +130,8 @@ async def test_automatic_conversation_uses_corpus_without_magic_words(
     context = await service.abuild_conversation_context("你这瓜保熟吗？")
 
     assert len(calls) == 1
+    assert calls[0]["load_model"] is False
+    assert calls[0]["deadline_monotonic"] is None
     assert context.corpus_hits == 1
     assert context.knowledge_hits == 0
     assert "保熟,不熟你提着瓜来找我" in context.text

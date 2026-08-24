@@ -77,3 +77,12 @@ def test_damaged_metadata_row_does_not_block_other_results(tmp_path):
 
     hits = KnowledgeRetriever(store).search("梗条目", limit=3)
     assert [hit.entry.title for hit in hits] == ["梗条目 2"]
+
+
+def test_store_applies_request_scoped_busy_timeout(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db", busy_timeout_ms=37)
+
+    with store._connection() as connection:
+        configured = int(connection.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    assert configured == 37

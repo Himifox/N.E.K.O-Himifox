@@ -271,11 +271,15 @@ def install_pack(
     )
 
 
-def list_installed_packs(database_path: str | Path) -> tuple[dict[str, Any], ...]:
+def list_installed_packs(
+    database_path: str | Path,
+    *,
+    busy_timeout_ms: int = 5_000,
+) -> tuple[dict[str, Any], ...]:
     packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
     if not isinstance(packs, dict):
         return ()
-    store = KnowledgeStore(database_path)
+    store = KnowledgeStore(database_path, busy_timeout_ms=busy_timeout_ms)
     items: list[dict[str, Any]] = []
     for pack_id, value in sorted(packs.items()):
         if not isinstance(value, dict):

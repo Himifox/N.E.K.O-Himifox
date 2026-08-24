@@ -688,7 +688,14 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
         state="not_ready",
     )
 
-    async def _prepare(_query, *, stores):
+    async def _prepare(
+        _query,
+        *,
+        stores,
+        load_model=True,
+        deadline_monotonic=None,
+    ):
+        del load_model, deadline_monotonic
         nonlocal preparation_calls
         preparation_calls += 1
         assert len(stores) == 1
@@ -715,3 +722,84 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
         "Corpus answer",
         "shared phrase knowledge",
     ]
+
+
+@pytest.mark.asyncio
+async def test_automatic_search_does_not_cold_load_embedding_model(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "knowledge.db"
+    store = KnowledgeStore(database_path)
+    store.upsert(_entry("Fallback target"))
+    chunk = store.pending_embedding_chunks(model_id="fixture", limit=1)[0]
+    store.store_chunk_embedding(
+        chunk_id=str(chunk["chunk_id"]),
+        content_hash=str(chunk["content_hash"]),
+        model_id="fixture",
+        dimensions=2,
+        embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
+    )
+    service = KnowledgeService.for_database(database_path)
+
+    class _NotReadyService:
+        load_calls = 0
+
+        async def request_load(self):
+            self.load_calls += 1
+            return True
+
+    runtime = _NotReadyService()
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_status",
+        lambda: LocalEmbeddingStatus(state="not_ready"),
+    )
+    monkeypatch.setattr(
+        vector_index,
+        "get_local_embedding_service",
+        lambda: runtime,
+    )
+
+    result = await service.asearch(
+        "Fallback target",
+        limit=3,
+        load_model=False,
+    )
+
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
+    assert runtime.load_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_asearch_returns_completed_bm25_when_semantic_budget_expires(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "knowledge.db"
+    KnowledgeStore(database_path).upsert(_entry("Fallback target"))
+    service = KnowledgeService.for_database(database_path)
+    release = asyncio.Event()
+
+    async def _prepare(_query, **_kwargs):
+        await release.wait()
+        return SemanticQueryEmbedding(
+            vector=None,
+            status=LocalEmbeddingStatus(state="not_ready"),
+            state="not_ready",
+        )
+
+    monkeypatch.setattr(service_module, "prepare_semantic_query", _prepare)
+    started_at = asyncio.get_running_loop().time()
+    try:
+        result = await service.asearch(
+            "Fallback target",
+            limit=3,
+            deadline_monotonic=started_at + 0.2,
+        )
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+
+    assert [item.hit.entry.title for item in result] == ["Fallback target"]
+    assert asyncio.get_running_loop().time() - started_at < 0.5

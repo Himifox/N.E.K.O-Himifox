@@ -7,7 +7,7 @@ import random
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, TypeVar
 import unicodedata
 from .catalog_overrides import (
     get_catalog_override_path,
@@ -35,6 +35,66 @@ from .vector_index import (
 
 
 _KNOWLEDGE_RRF_K = 60
+_T = TypeVar("_T")
+
+
+def _retrieval_busy_timeout_ms(
+    deadline_monotonic: float | None,
+    *,
+    load_model: bool,
+) -> int:
+    if deadline_monotonic is None:
+        return 5_000
+    remaining_ms = max(int((deadline_monotonic - time.monotonic()) * 1_000), 1)
+    return min(remaining_ms, 500 if load_model else 100)
+
+
+def _consume_task_result(task: asyncio.Task[object]) -> None:
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _wait_task_until(
+    task: asyncio.Task[_T],
+    deadline_monotonic: float | None,
+) -> tuple[bool, _T | None]:
+    if task.done():
+        return True, task.result()
+    if deadline_monotonic is None:
+        return True, await task
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        task.add_done_callback(_consume_task_result)
+        return False, None
+    done, _pending = await asyncio.wait({task}, timeout=remaining)
+    if not done:
+        task.add_done_callback(_consume_task_result)
+        return False, None
+    return True, task.result()
+
+
+def _record_search_diagnostic(
+    *,
+    started_at: float,
+    lexical_count: int,
+    semantic_count: int,
+    semantic_state: str,
+) -> None:
+    try:
+        from .diagnostics import record_knowledge_query
+
+        record_knowledge_query(
+            retrieval_mode="hybrid" if semantic_count else "bm25",
+            embedding_service_state=semantic_state,
+            lexical_candidates=lexical_count,
+            semantic_candidates=semantic_count,
+            fallback_reason="" if semantic_state == "ready" else semantic_state,
+            elapsed_ms=int((time.perf_counter() - started_at) * 1_000),
+        )
+    except Exception:
+        pass
 
 
 def _rrf_knowledge_hits(
@@ -478,6 +538,8 @@ class KnowledgeService:
         allowed_material_types: tuple[str, ...] = ("knowledge", "corpus"),
         target_material_type: str = "",
         allowed_source_tags: tuple[str, ...] | None = None,
+        load_model: bool = True,
+        deadline_monotonic: float | None = None,
     ) -> list[MaterialKnowledgeHit]:
         """Search one store with one query embedding and one fused candidate pool."""
         allowed_types = tuple(dict.fromkeys(allowed_material_types))
@@ -491,8 +553,26 @@ class KnowledgeService:
         started_at = time.perf_counter()
         limit = min(max(int(limit), 1), 100)
         candidate_limit = 12
-        store = self._store()
-        source_types = self._source_material_types(store)
+        busy_timeout_ms = _retrieval_busy_timeout_ms(
+            deadline_monotonic,
+            load_model=load_model,
+        )
+        store = self._store(busy_timeout_ms=busy_timeout_ms)
+        source_types_task = asyncio.create_task(
+            asyncio.to_thread(self._source_material_types, store)
+        )
+        metadata_ready, source_types = await _wait_task_until(
+            source_types_task,
+            deadline_monotonic,
+        )
+        if not metadata_ready or source_types is None:
+            _record_search_diagnostic(
+                started_at=started_at,
+                lexical_count=0,
+                semantic_count=0,
+                semantic_state="metadata_timeout",
+            )
+            return []
         allowed_sources = self._allowed_material_sources(source_types, allowed_types)
         if allowed_source_tags is not None:
             requested_sources = frozenset(allowed_source_tags)
@@ -508,29 +588,54 @@ class KnowledgeService:
                 value.strip() for value in (*lexical_queries, query) if value.strip()
             )
         )
-        lexical_future = asyncio.to_thread(
-            _search_lexical_candidates,
-            self._retriever(),
-            normalized_lexical_queries,
-            limit=candidate_limit * max(len(allowed_types), 1),
-            allowed_source_tags=allowed_sources,
+        lexical_task = asyncio.create_task(
+            asyncio.to_thread(
+                _search_lexical_candidates,
+                self._retriever(store),
+                normalized_lexical_queries,
+                limit=candidate_limit * max(len(allowed_types), 1),
+                allowed_source_tags=allowed_sources,
+            )
         )
-        prepared_future = asyncio.create_task(
+        prepared_task = asyncio.create_task(
             prepare_semantic_query(
                 query,
                 stores=(store,),
+                load_model=load_model,
+                deadline_monotonic=deadline_monotonic,
             )
         )
-        lexical, prepared = await asyncio.gather(
-            lexical_future,
-            prepared_future,
+        lexical_ready, lexical = await _wait_task_until(
+            lexical_task,
+            deadline_monotonic,
         )
-        semantic, semantic_state = await semantic_search_prepared(
-            store,
-            prepared,
-            limit=candidate_limit * max(len(allowed_types), 1),
-            allowed_source_tags=allowed_sources,
+        if not lexical_ready or lexical is None:
+            if prepared_task.done():
+                _consume_task_result(prepared_task)
+            else:
+                prepared_task.add_done_callback(_consume_task_result)
+            _record_search_diagnostic(
+                started_at=started_at,
+                lexical_count=0,
+                semantic_count=0,
+                semantic_state="lexical_timeout",
+            )
+            return []
+        prepared_ready, prepared = await _wait_task_until(
+            prepared_task,
+            deadline_monotonic,
         )
+        if not prepared_ready or prepared is None:
+            semantic = []
+            semantic_state = "semantic_budget_exhausted"
+        else:
+            semantic, semantic_state = await semantic_search_prepared(
+                store,
+                prepared,
+                limit=candidate_limit * max(len(allowed_types), 1),
+                allowed_source_tags=allowed_sources,
+                deadline_monotonic=deadline_monotonic,
+            )
         fused = _rrf_knowledge_hits(
             list(lexical),
             list(semantic),
@@ -560,20 +665,12 @@ class KnowledgeService:
         else:
             selected = material_hits[:limit]
 
-        try:
-            from .diagnostics import record_knowledge_query
-
-            semantic_count = len(semantic)
-            record_knowledge_query(
-                retrieval_mode="hybrid" if semantic_count else "bm25",
-                embedding_service_state=semantic_state,
-                lexical_candidates=len(lexical),
-                semantic_candidates=semantic_count,
-                fallback_reason="" if semantic_state == "ready" else semantic_state,
-                elapsed_ms=int((time.perf_counter() - started_at) * 1_000),
-            )
-        except Exception:
-            pass
+        _record_search_diagnostic(
+            started_at=started_at,
+            lexical_count=len(lexical),
+            semantic_count=len(semantic),
+            semantic_state=semantic_state,
+        )
         return selected
 
     async def aselect_conversation_materials(
@@ -583,6 +680,7 @@ class KnowledgeService:
         lexical_queries: tuple[str, ...] = (),
         knowledge_limit: int = 1,
         corpus_limit: int = 2,
+        deadline_monotonic: float | None = None,
     ) -> ConversationMaterialSelection:
         """Select reliable turn-local references without relying on LLM intent."""
         query = str(query or "").strip()
@@ -598,8 +696,21 @@ class KnowledgeService:
         )
 
         started_at = time.perf_counter()
-        allowed_sources = self._automatic_conversation_sources()
-        if not allowed_sources:
+        busy_timeout_ms = _retrieval_busy_timeout_ms(
+            deadline_monotonic,
+            load_model=False,
+        )
+        sources_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._automatic_conversation_sources,
+                busy_timeout_ms=busy_timeout_ms,
+            )
+        )
+        sources_ready, allowed_sources = await _wait_task_until(
+            sources_task,
+            deadline_monotonic,
+        )
+        if not sources_ready or not allowed_sources:
             return ConversationMaterialSelection(elapsed_ms=0)
         candidates = await self.asearch(
             query,
@@ -607,6 +718,8 @@ class KnowledgeService:
             lexical_queries=lexical_queries,
             allowed_material_types=("knowledge", "corpus"),
             allowed_source_tags=allowed_sources,
+            load_model=False,
+            deadline_monotonic=deadline_monotonic,
         )
         knowledge_candidates = [
             item for item in candidates if item.material_type == "knowledge"
@@ -642,6 +755,7 @@ class KnowledgeService:
         *,
         lexical_queries: tuple[str, ...] = (),
         limit: int = 2,
+        deadline_monotonic: float | None = None,
     ) -> KnowledgeTurnContext:
         """Build one ephemeral knowledge/corpus context before the LLM response."""
         if limit <= 0:
@@ -651,6 +765,7 @@ class KnowledgeService:
             lexical_queries=lexical_queries,
             knowledge_limit=1,
             corpus_limit=max(min(int(limit), 2), 0),
+            deadline_monotonic=deadline_monotonic,
         )
         total_limit = max(min(int(limit), 2), 0)
         knowledge = selection.knowledge[: min(total_limit, 1)]
@@ -1030,11 +1145,14 @@ class KnowledgeService:
     def database_path(self) -> Path:
         return self._database_path
 
-    def _store(self) -> KnowledgeStore:
-        return KnowledgeStore(self.database_path())
+    def _store(self, *, busy_timeout_ms: int = 5_000) -> KnowledgeStore:
+        return KnowledgeStore(
+            self.database_path(),
+            busy_timeout_ms=busy_timeout_ms,
+        )
 
-    def _retriever(self) -> KnowledgeRetriever:
-        return KnowledgeRetriever(self._store())
+    def _retriever(self, store: KnowledgeStore | None = None) -> KnowledgeRetriever:
+        return KnowledgeRetriever(store or self._store())
 
     def material_type_for_entry(
         self,
@@ -1058,7 +1176,10 @@ class KnowledgeService:
             for row in store.count_by_source_tags()
             if str(row.get("tag") or "").startswith("source:")
         }
-        for pack in list_installed_packs(self.database_path()):
+        for pack in list_installed_packs(
+            self.database_path(),
+            busy_timeout_ms=store.busy_timeout_ms,
+        ):
             source_tag = str(pack.get("source_tag") or "")
             if source_tag:
                 value = str(pack.get("effective_material_type") or "knowledge")
@@ -1109,13 +1230,20 @@ class KnowledgeService:
         )
         return replace(KNOWLEDGE_MATCH_POLICY, allowed_source_tags=allowed_sources)
 
-    def _automatic_conversation_sources(self) -> tuple[str, ...]:
+    def _automatic_conversation_sources(
+        self,
+        *,
+        busy_timeout_ms: int = 5_000,
+    ) -> tuple[str, ...]:
         from .packs import list_installed_packs
 
         sources = set(SOURCES)
         sources.update(
             str(pack.get("source_tag"))
-            for pack in list_installed_packs(self.database_path())
+            for pack in list_installed_packs(
+                self.database_path(),
+                busy_timeout_ms=busy_timeout_ms,
+            )
             if pack.get("auto_context") is True
             and str(pack.get("source_tag") or "").startswith("source:")
         )

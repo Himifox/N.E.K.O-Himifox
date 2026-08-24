@@ -35,8 +35,14 @@ class KnowledgeStoreError(RuntimeError):
 class KnowledgeStore:
     """Own a small rebuildable database without touching character memory."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        busy_timeout_ms: int = 5_000,
+    ) -> None:
         self.database_path = Path(database_path)
+        self.busy_timeout_ms = min(max(int(busy_timeout_ms), 1), 5_000)
 
     @contextmanager
     def _connection(self, *, writable: bool = False) -> Iterator[sqlite3.Connection]:
@@ -79,9 +85,12 @@ class KnowledgeStore:
                 connection.close()
 
     def _open_connection(self, *, writable: bool) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=self.busy_timeout_ms / 1_000,
+        )
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
         if writable:
             connection.execute("PRAGMA journal_mode=WAL")
         return connection

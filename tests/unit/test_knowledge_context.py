@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -193,17 +195,10 @@ async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_explicit_local_knowledge_miss_uses_host_lookup(monkeypatch):
+async def test_explicit_local_knowledge_uses_one_host_lookup(monkeypatch):
     import main_logic.knowledge_context as knowledge_tool
-    from knowledge.service import KnowledgeTurnContext
 
-    service = SimpleNamespace(
-        abuild_conversation_context=AsyncMock(
-            return_value=KnowledgeTurnContext(match_mode="automatic_miss")
-        )
-    )
     fallback = AsyncMock(return_value="local result")
-    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
     monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
     context = await knowledge_tool.build_public_knowledge_turn_context(
@@ -219,11 +214,12 @@ async def test_explicit_local_knowledge_miss_uses_host_lookup(monkeypatch):
             "limit": 3,
         },
         language="",
+        deadline_monotonic=ANY,
     )
 
 
 @pytest.mark.asyncio
-async def test_automatic_knowledge_hit_does_not_repeat_host_lookup(monkeypatch):
+async def test_automatic_knowledge_hit_does_not_use_explicit_lookup(monkeypatch):
     import main_logic.knowledge_context as knowledge_tool
     from knowledge.service import KnowledgeTurnContext
 
@@ -241,8 +237,80 @@ async def test_automatic_knowledge_hit_does_not_repeat_host_lookup(monkeypatch):
     monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
     context = await knowledge_tool.build_public_knowledge_turn_context(
-        "请查询本地知识库：电车难题是什么？",
+        "你急了",
     )
 
     assert context == "automatic result"
     fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_automatic_context_timeout_fails_open_without_stacking(monkeypatch):
+    import config.public_knowledge_settings as settings
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    class _SlowService:
+        async def abuild_conversation_context(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return KnowledgeTurnContext(match_mode="automatic_miss")
+
+    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASK", None)
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: _SlowService())
+    monkeypatch.setattr(
+        settings,
+        "PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS",
+        0.02,
+    )
+    started_at = asyncio.get_running_loop().time()
+    try:
+        assert await knowledge_tool.build_public_knowledge_turn_context("第一轮") == ""
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert await knowledge_tool.build_public_knowledge_turn_context("第二轮") == ""
+        assert calls == 1
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+
+    assert asyncio.get_running_loop().time() - started_at < 0.2
+
+
+@pytest.mark.asyncio
+async def test_slow_knowledge_open_does_not_block_the_event_loop(monkeypatch):
+    import config.public_knowledge_settings as settings
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    heartbeat = asyncio.Event()
+
+    class _Service:
+        async def abuild_conversation_context(self, *_args, **_kwargs):
+            return KnowledgeTurnContext(match_mode="automatic_miss")
+
+    def _slow_open(_root):
+        time.sleep(0.08)
+        return _Service()
+
+    async def _tick():
+        await asyncio.sleep(0.005)
+        heartbeat.set()
+
+    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASK", None)
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", _slow_open)
+    monkeypatch.setattr(
+        settings,
+        "PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS",
+        0.02,
+    )
+    tick = asyncio.create_task(_tick())
+    assert await knowledge_tool.build_public_knowledge_turn_context("普通聊天") == ""
+    await asyncio.wait_for(heartbeat.wait(), timeout=0.05)
+    await tick
+    await asyncio.sleep(0.1)
