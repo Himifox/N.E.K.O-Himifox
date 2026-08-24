@@ -45,16 +45,32 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
     return payload
 
 
-def _route_preflight(cases: list[dict[str, Any]], database: Path) -> list[dict[str, Any]]:
+async def _build_production_context(service, message: str):
+    from main_logic.knowledge_context import (
+        build_automatic_public_knowledge_context,
+    )
+
+    return await build_automatic_public_knowledge_context(service, message)
+
+
+async def _route_preflight(
+    cases: list[dict[str, Any]],
+    database: Path,
+) -> list[dict[str, Any]]:
     service = KnowledgeService.for_database(database)
     results: list[dict[str, Any]] = []
     for case in cases:
-        context = service.build_turn_context(str(case["message"]), limit=1)
-        term_match = re.search(r"^Term: (.+)$", context.text, flags=re.MULTILINE)
-        actual_mode = context.match_mode
+        context = await _build_production_context(service, str(case["message"]))
+        term_match = re.search(
+            r"^(?:Term|Knowledge term|Conversation trigger): (.+)$",
+            context.text,
+            flags=re.MULTILINE,
+        )
+        actual_mode = "strong" if context.hit_count else "none"
         results.append({
             **case,
             "actual_mode": actual_mode,
+            "production_match_mode": context.match_mode,
             "matched_term": term_match.group(1) if term_match else "",
             "route_pass": actual_mode == case["expected_mode"],
             "card_chars": len(context.text),
@@ -62,38 +78,61 @@ def _route_preflight(cases: list[dict[str, Any]], database: Path) -> list[dict[s
     return results
 
 
-async def _receive_until_complete(websocket, *, startup: bool = False) -> dict[str, Any]:
+async def _receive_until_complete(
+    websocket,
+    *,
+    startup: bool = False,
+    expected_request_id: str = "",
+) -> dict[str, Any]:
     chunks: list[str] = []
     event_types: set[str] = set()
     started = time.perf_counter()
     first_text_at: float | None = None
-    while time.perf_counter() - started < 90:
-        timeout = 3.0 if first_text_at is not None else 30.0
+    deadline = time.monotonic() + 90.0
+    completed = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
+            raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
         except asyncio.TimeoutError:
-            if first_text_at is not None:
-                break
-            continue
+            break
         if isinstance(raw, bytes):
             event_types.add("binary_audio")
             continue
         payload = json.loads(raw)
+        request_id = str(payload.get("request_id") or "")
+        if expected_request_id and request_id and request_id != expected_request_id:
+            continue
         event_type = str(payload.get("type") or "unknown")
         event_types.add(event_type)
         if startup and event_type == "session_started":
             return {"ready": True, "events": sorted(event_types)}
         if event_type == "session_failed":
-            return {"ready": False, "events": sorted(event_types), "failure": payload}
+            return {
+                "ready": False,
+                "completed": False,
+                "events": sorted(event_types),
+                "failure": payload,
+            }
         if event_type == "gemini_response":
             if first_text_at is None:
                 first_text_at = time.perf_counter()
             chunks.append(str(payload.get("text") or ""))
-        if chunks and event_type == "system" and payload.get("data") == "turn end":
+        if (
+            event_type == "turn end"
+            or (
+                event_type == "system"
+                and payload.get("data") in {"turn end", "turn end agent_callback"}
+            )
+        ):
+            completed = True
             break
     finished = time.perf_counter()
     return {
         "reply": "".join(chunks),
+        "completed": completed,
         "events": sorted(event_types),
         "ttft_ms": round((first_text_at - started) * 1000, 1) if first_text_at else None,
         "total_ms": round((finished - started) * 1000, 1),
@@ -118,14 +157,22 @@ async def _run_live(
             raise RuntimeError(f"text session failed: {startup}")
         results: list[dict[str, Any]] = []
         for index, case in enumerate(routed, start=1):
+            request_id = f"knowledge-quality-{index}"
             await websocket.send(json.dumps({
                 "action": "stream_data",
                 "input_type": "text",
                 "data": case["message"],
-                "request_id": f"knowledge-quality-{index}",
+                "request_id": request_id,
                 "language": language,
             }, ensure_ascii=False))
-            outcome = await _receive_until_complete(websocket)
+            outcome = await _receive_until_complete(
+                websocket,
+                expected_request_id=request_id,
+            )
+            if not outcome.get("completed"):
+                raise RuntimeError(
+                    f"knowledge quality turn did not complete: {outcome}"
+                )
             results.append({**case, **outcome, "manual_result": "pending"})
         await websocket.send(json.dumps({
             "action": "end_session",
@@ -195,7 +242,10 @@ async def _run_direct(
             chunks.clear()
             first_text_at = None
             turn_started = time.perf_counter()
-            context = knowledge.build_turn_context(str(case["message"]), limit=1)
+            context = await _build_production_context(
+                knowledge,
+                str(case["message"]),
+            )
             await client.stream_text(
                 str(case["message"]),
                 ephemeral_response_instruction=context.text,
@@ -233,7 +283,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     cases = _load_cases(args.cases)
-    routed = _route_preflight(cases, args.database)
+    routed = asyncio.run(_route_preflight(cases, args.database))
     if args.live:
         results = asyncio.run(_run_live(
             routed,

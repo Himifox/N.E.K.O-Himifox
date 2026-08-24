@@ -406,6 +406,34 @@ def _extract_explicit_local_knowledge_query(user_text: str) -> str:
     return match.group("query").strip() if match else ""
 
 
+async def build_automatic_public_knowledge_context(
+    service,
+    user_text: str,
+    *,
+    deadline_monotonic: float | None = None,
+):
+    """Build automatic context through the same selector used by production."""
+    from config.public_knowledge_settings import (
+        PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS,
+        PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
+        PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+    )
+
+    if not PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
+        from knowledge.service import KnowledgeTurnContext
+
+        return KnowledgeTurnContext()
+    deadline = deadline_monotonic or (
+        time.monotonic() + PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS
+    )
+    return await service.abuild_conversation_context(
+        user_text,
+        lexical_queries=_knowledge_query_candidates(user_text),
+        limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
+        deadline_monotonic=deadline,
+    )
+
+
 async def build_public_knowledge_turn_context(
     user_text: str,
 ) -> PublicKnowledgeTurnResult:
@@ -451,7 +479,6 @@ async def build_public_knowledge_turn_context(
         from config.public_knowledge_settings import (
             PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS,
             PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED,
-            PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
         )
 
         if not PUBLIC_KNOWLEDGE_AUTO_CONTEXT_ENABLED:
@@ -464,10 +491,9 @@ async def build_public_knowledge_turn_context(
                 open_knowledge,
                 get_config_manager().knowledge_dir,
             )
-            return await service.abuild_conversation_context(
+            return await build_automatic_public_knowledge_context(
+                service,
                 user_text,
-                lexical_queries=_knowledge_query_candidates(user_text),
-                limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
                 deadline_monotonic=deadline,
             )
 
