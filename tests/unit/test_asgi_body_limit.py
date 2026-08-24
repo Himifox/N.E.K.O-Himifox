@@ -48,6 +48,45 @@ async def _drive(middleware, scope):
     return called["hit"], sent
 
 
+async def _drive_chunks(middleware, scope, chunks):
+    called = {"hit": False, "body": b""}
+
+    async def downstream(_scope, receive, send):
+        called["hit"] = True
+        parts = []
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            parts.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        called["body"] = b"".join(parts)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware.app = downstream
+    messages = [
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": index < len(chunks) - 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+
+    async def receive():
+        return messages.pop(0)
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    await middleware(scope, receive, send)
+    return called, sent
+
+
 def _make(max_bytes=64):
     # Tiny cap keeps the test payloads small; the guard logic is size-agnostic.
     return InboundBodySizeLimitMiddleware(app=None, max_body_bytes=max_bytes)
@@ -144,3 +183,42 @@ def test_websocket_scope_passes_through():
 
 def test_default_cap_is_16_mib():
     assert DEFAULT_MAX_INBOUND_BODY_BYTES == 16 * 1024 * 1024
+
+
+def test_exact_streamed_path_rejects_declared_oversized_multipart():
+    path = "/api/public-knowledge/subscriptions/apply"
+    mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
+    scope = _http_scope(
+        [(b"content-length", b"65"), (b"content-type", b"multipart/form-data")]
+    )
+    scope["path"] = path
+
+    hit, sent = _run(_drive(mw, scope))
+
+    assert hit is False
+    assert sent[0]["status"] == 413
+    assert json.loads(sent[1]["body"])["error_code"] == "knowledge_request_too_large"
+
+
+def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart():
+    path = "/api/public-knowledge/subscriptions/apply"
+    mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
+    scope = _http_scope([(b"content-type", b"multipart/form-data")])
+    scope["path"] = path
+
+    called, sent = _run(_drive_chunks(mw, scope, [b"a" * 40, b"b" * 25]))
+
+    assert called["hit"] is False
+    assert sent[0]["status"] == 413
+
+
+def test_exact_streamed_path_replays_valid_body_without_changing_bytes():
+    path = "/api/public-knowledge/subscriptions/apply"
+    mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
+    scope = _http_scope([(b"content-type", b"multipart/form-data")])
+    scope["path"] = path
+
+    called, sent = _run(_drive_chunks(mw, scope, [b"first", b"second"]))
+
+    assert called == {"hit": True, "body": b"firstsecond"}
+    assert sent[0]["status"] == 200

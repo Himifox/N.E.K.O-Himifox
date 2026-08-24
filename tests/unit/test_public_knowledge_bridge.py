@@ -26,6 +26,7 @@ def _client(monkeypatch, captured: dict) -> TestClient:
             )
 
     monkeypatch.setattr(module, "_verify_token", lambda _token: None)
+    monkeypatch.setattr(module, "_require_local_bridge_token_access", lambda _request: 48910)
     monkeypatch.setattr(module, "_main_server_port", lambda: 48911)
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
     app = FastAPI()
@@ -78,6 +79,30 @@ def test_knowledge_bridge_rejects_oversized_body_before_forwarding(monkeypatch):
 
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "knowledge_request_too_large"
+    assert captured == {}
+
+
+def test_knowledge_management_bridge_rejects_remote_market_origin(monkeypatch):
+    from plugin.server.routes import market_bridge as module
+
+    captured = {}
+    client = _client(monkeypatch, captured)
+    monkeypatch.setattr(
+        module,
+        "_require_local_bridge_token_access",
+        lambda _request: (_ for _ in ()).throw(
+            HTTPException(status_code=403, detail="仅允许本地同源访问")
+        ),
+    )
+
+    response = client.post(
+        "/market/knowledge/packs/remove",
+        params={"token": "paired-market-token"},
+        json={"pack_id": "fixture"},
+        headers={"origin": "https://market.example"},
+    )
+
+    assert response.status_code == 403
     assert captured == {}
 
 

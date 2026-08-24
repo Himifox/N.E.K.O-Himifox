@@ -187,6 +187,7 @@ async def public_knowledge_bridge(
     token: str = Query(..., description="Bridge token"),
 ):
     """Bounded same-origin bridge from the manager UI to Main Server."""
+    _require_local_bridge_token_access(request)
     _verify_token(token)
     normalized_path = path.strip("/")
     if normalized_path not in _KNOWLEDGE_BRIDGE_PATHS:
