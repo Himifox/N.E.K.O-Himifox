@@ -194,15 +194,25 @@ class _KnowledgeInferenceCoordinator:
             return None, "inference_failed", exc
         return vectors, "ready", None
 
-    async def drain(self) -> None:
+    async def drain(self, *, deadline_monotonic: float | None = None) -> bool:
         with self._lock:
             task = self._task
         if task is None:
-            return
-        try:
-            await asyncio.shield(task)
-        except (asyncio.CancelledError, Exception):
-            pass
+            return True
+        if task.done():
+            return True
+        if deadline_monotonic is None:
+            try:
+                await asyncio.shield(task)
+            except (asyncio.CancelledError, Exception):
+                pass
+            return True
+
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            return False
+        done, _pending = await asyncio.wait({task}, timeout=remaining)
+        return bool(done)
 
 
 _INFERENCE_COORDINATOR = _KnowledgeInferenceCoordinator()
@@ -212,8 +222,14 @@ def knowledge_inference_state() -> str:
     return _INFERENCE_COORDINATOR.active_kind()
 
 
-async def drain_knowledge_embedding_inference() -> None:
-    await _INFERENCE_COORDINATOR.drain()
+async def drain_knowledge_embedding_inference(
+    *,
+    deadline_monotonic: float | None = None,
+) -> bool:
+    """Observe native inference without cancelling it when shutdown expires."""
+    return await _INFERENCE_COORDINATOR.drain(
+        deadline_monotonic=deadline_monotonic,
+    )
 
 
 @dataclass(frozen=True, slots=True)

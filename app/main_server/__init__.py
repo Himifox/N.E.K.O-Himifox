@@ -1206,17 +1206,37 @@ async def on_startup():
         _start_neko_servers_integration_workers()
 
 
+def _consume_shutdown_task_result(task: asyncio.Task[object]) -> None:
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 @app.on_event("shutdown")
 async def on_shutdown():
     """Clean up resources at server shutdown"""
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
+        arm_shutdown_watchdog = get_start_config().get(
+            "arm_standalone_shutdown_watchdog"
+        )
+        if callable(arm_shutdown_watchdog):
+            arm_shutdown_watchdog()
+        knowledge_stop_task = None
+        finish_knowledge_indexer_stop = None
+        knowledge_shutdown_timeout_seconds = 0.0
         try:
-            from knowledge.indexer import stop_knowledge_indexer
+            from knowledge.indexer import (
+                SHUTDOWN_TIMEOUT_SECONDS,
+                finish_knowledge_indexer_stop,
+                request_knowledge_indexer_stop,
+            )
 
-            await stop_knowledge_indexer()
+            knowledge_shutdown_timeout_seconds = SHUTDOWN_TIMEOUT_SECONDS
+            knowledge_stop_task = request_knowledge_indexer_stop()
         except Exception as e:
-            logger.debug(f"Knowledge background indexer cleanup failed: {e}")
+            logger.debug(f"Knowledge background indexer stop request failed: {e}")
         cleanup()
         try:
             # join_sync_connector_threads 内部已经 gather 并行 join，直接 await
@@ -1422,6 +1442,41 @@ async def on_shutdown():
             logger.warning("external_http_client 清理超时，已强制跳过。")
         except Exception as e:
             logger.debug(f"external_http_client 清理失败: {e}", exc_info=True)
+
+        # Knowledge indexing is cancelled at shutdown entry, but its native
+        # inference cleanup is deliberately observed last. A stuck ONNX call
+        # must not prevent connector, cloud-save, or memory-server cleanup.
+        if finish_knowledge_indexer_stop is not None:
+            try:
+                knowledge_finish_task = asyncio.create_task(
+                    finish_knowledge_indexer_stop(
+                        knowledge_stop_task,
+                        deadline_monotonic=(
+                            time.monotonic()
+                            + knowledge_shutdown_timeout_seconds
+                        ),
+                    ),
+                    name="knowledge-indexer-shutdown",
+                )
+                done, _pending = await asyncio.wait(
+                    {knowledge_finish_task},
+                    timeout=knowledge_shutdown_timeout_seconds + 0.5,
+                )
+                if not done:
+                    knowledge_finish_task.add_done_callback(
+                        _consume_shutdown_task_result
+                    )
+                    logger.warning(
+                        "Knowledge shutdown exceeded its outer guard; "
+                        "continuing process exit"
+                    )
+                else:
+                    knowledge_finish_task.result()
+            except Exception as e:
+                logger.debug(
+                    f"Knowledge background indexer cleanup failed: {e}",
+                    exc_info=True,
+                )
 
 
 # 使用 FastAPI 的 app.state 来管理启动配置

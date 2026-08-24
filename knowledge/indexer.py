@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from pathlib import Path
 
 
@@ -15,6 +16,8 @@ BACKLOG_DELAY_SECONDS = 30.0
 IDLE_DELAY_SECONDS = 60.0
 EMBEDDING_BATCH_SIZE = 4
 MAX_CHUNKS_PER_ROUND = 8
+SHUTDOWN_TIMEOUT_SECONDS = 2.0
+INDEXER_CANCEL_GRACE_SECONDS = 0.25
 _BLOCKED_STATES = frozenset(
     ("inference_busy", "embedding_unavailable", "not_ready", "disabled")
 )
@@ -23,6 +26,13 @@ _STATE_LOCK = threading.Lock()
 _TASK: asyncio.Task[None] | None = None
 _WAKE_EVENT: asyncio.Event | None = None
 _EVENT_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _consume_task_result(task: asyncio.Task[object]) -> None:
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 def _rss_bytes() -> int | None:
@@ -239,8 +249,8 @@ def notify_knowledge_index_changed() -> None:
         return
 
 
-async def stop_knowledge_indexer() -> None:
-    """Cancel the coordinator and release its process-local model runtime."""
+def request_knowledge_indexer_stop() -> asyncio.Task[None] | None:
+    """Detach and cancel the coordinator without waiting for native work."""
     global _TASK, _WAKE_EVENT, _EVENT_LOOP
 
     with _STATE_LOCK:
@@ -250,10 +260,29 @@ async def stop_knowledge_indexer() -> None:
         _EVENT_LOOP = None
     if task is not None and not task.done():
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    return task
+
+
+async def finish_knowledge_indexer_stop(
+    task: asyncio.Task[None] | None,
+    *,
+    deadline_monotonic: float,
+) -> bool:
+    """Best-effort cleanup bounded by one absolute shutdown deadline."""
+    if task is not None and not task.done():
+        remaining = max(deadline_monotonic - time.monotonic(), 0.0)
+        cancel_grace = min(remaining, INDEXER_CANCEL_GRACE_SECONDS)
+        done, _pending = await asyncio.wait({task}, timeout=cancel_grace)
+        if not done:
+            task.add_done_callback(_consume_task_result)
+            logger.warning(
+                "Knowledge indexer cancellation exceeded %.2fs; "
+                "embedding release skipped",
+                cancel_grace,
+            )
+            return False
+    if task is not None:
+        _consume_task_result(task)
 
     # This model instance belongs to main_server's knowledge runtime.  The
     # separately running memory-server process has its own lifecycle.
@@ -261,7 +290,49 @@ async def stop_knowledge_indexer() -> None:
         from .vector_index import drain_knowledge_embedding_inference
         from utils.local_embedding_runtime import release_local_embedding_service
 
-        await drain_knowledge_embedding_inference()
-        await release_local_embedding_service()
+        drained = await drain_knowledge_embedding_inference(
+            deadline_monotonic=deadline_monotonic,
+        )
+        if not drained:
+            logger.warning(
+                "Knowledge embedding inference exceeded its shutdown budget; "
+                "model release skipped",
+            )
+            return False
+
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            logger.warning(
+                "Knowledge shutdown budget expired before model release; "
+                "model release skipped",
+            )
+            return False
+        release_task = asyncio.create_task(
+            release_local_embedding_service(),
+            name="knowledge-embedding-release",
+        )
+        done, _pending = await asyncio.wait({release_task}, timeout=remaining)
+        if not done:
+            release_task.add_done_callback(_consume_task_result)
+            logger.warning(
+                "Knowledge embedding model release exceeded its shutdown budget; "
+                "continuing process cleanup",
+            )
+            return False
+        release_task.result()
+        return True
     except Exception as exc:
         logger.debug("Knowledge embedding runtime cleanup failed: %s", exc)
+        return False
+
+
+async def stop_knowledge_indexer(
+    *,
+    timeout_seconds: float = SHUTDOWN_TIMEOUT_SECONDS,
+) -> bool:
+    """Cancel the coordinator and bound all process-local model cleanup."""
+    task = request_knowledge_indexer_stop()
+    return await finish_knowledge_indexer_stop(
+        task,
+        deadline_monotonic=time.monotonic() + max(timeout_seconds, 0.0),
+    )

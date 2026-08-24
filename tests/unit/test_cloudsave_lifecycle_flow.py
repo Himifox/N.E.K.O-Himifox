@@ -414,12 +414,34 @@ async def test_main_server_shutdown_does_not_reexport_runtime_into_cloudsave_sna
     from app import main_server
 
     fake_tracker = SimpleNamespace(save=Mock())
+    cleanup_order: list[str] = []
+    arm_watchdog = Mock()
+    start_config = {
+        "arm_standalone_shutdown_watchdog": arm_watchdog,
+        "shutdown_memory_server_on_exit": False,
+    }
+
+    def request_knowledge_stop():
+        cleanup_order.append("knowledge_cancel")
+        return None
+
+    async def finish_knowledge_stop(_task, *, deadline_monotonic):
+        assert deadline_monotonic > 0
+        cleanup_order.append("knowledge_finish_started")
+        await asyncio.Event().wait()
+
+    async def upload_cloudsave(*_args, **_kwargs):
+        cleanup_order.append("cloudsave")
 
     with patch.object(main_server, "_IS_MAIN_PROCESS", True), \
          patch.object(main_server, "_preload_task", None), \
          patch.object(main_server, "agent_event_bridge", None), \
          patch.object(main_server.character_runtime, "role_state", _role_state_from_session_managers({})), \
-         patch.object(main_server, "_run_cloudsave_manager_action", AsyncMock()) as run_cloudsave_action, \
+         patch.object(main_server, "_run_cloudsave_manager_action", AsyncMock(side_effect=upload_cloudsave)) as run_cloudsave_action, \
+         patch.object(main_server, "get_start_config", Mock(return_value=start_config)), \
+         patch("knowledge.indexer.SHUTDOWN_TIMEOUT_SECONDS", 0.01), \
+         patch("knowledge.indexer.request_knowledge_indexer_stop", side_effect=request_knowledge_stop), \
+         patch("knowledge.indexer.finish_knowledge_indexer_stop", AsyncMock(side_effect=finish_knowledge_stop)), \
          patch("utils.music_crawlers.close_all_crawlers", AsyncMock(return_value=None)), \
          patch("utils.token_tracker.TokenTracker.get_instance", return_value=fake_tracker):
         await main_server.on_shutdown()
@@ -430,6 +452,12 @@ async def test_main_server_shutdown_does_not_reexport_runtime_into_cloudsave_sna
         reason="main_server_shutdown_remote_upload",
         budget_seconds=5.0,
     )
+    assert cleanup_order == [
+        "knowledge_cancel",
+        "cloudsave",
+        "knowledge_finish_started",
+    ]
+    arm_watchdog.assert_called_once_with()
 
 
 @pytest.mark.unit
