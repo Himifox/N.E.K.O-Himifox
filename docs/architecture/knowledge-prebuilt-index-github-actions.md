@@ -1,5 +1,7 @@
 # GitHub Actions：校验知识预构建索引
 
+> **工作流说明（2026-08-24）**：此示例只验证既有制品，不生成向量、不加载本地 Embedding 模型。若 CI 还负责生成制品，应另行运行 `scripts/build_knowledge_pack_index.py`，并固定与目标客户端一致的已审阅提交和 Python 3.11 环境。
+
 下面的工作流适合知识包发布仓库：先由受控的上游步骤生成三个制品，再使用 N.E.K.O 的同版本代码和 Python 3.11 重新校验，最后上传为不可变构建产物。示例只负责校验和归档，不把来源不明的向量提升为 `trusted_market`；信任状态仍由客户端的可信市场交接链决定。
 
 假设待发布文件为：
@@ -80,7 +82,7 @@ jobs:
       - name: Upload the immutable artifact set
         uses: actions/upload-artifact@v4
         with:
-          name: example-knowledge-v2
+          name: example-knowledge-v3
           if-no-files-found: error
           retention-days: 30
           path: |

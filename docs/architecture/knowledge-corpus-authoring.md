@@ -1,5 +1,7 @@
 # Knowledge / Corpus 知识包编写与发布
 
+> **运行时更新（2026-08-24）**：构建、评估和重建知识索引的命令会在自身进程入口显式绑定本地 Embedding 提供方；知识模块本身只依赖中立门面。仅执行制品校验不加载模型，提供方未配置或不可用时运行时安全降级为 BM25。
+
 ## 统一模型
 
 公共知识只使用一个数据库和一套检索接口。`material_type` 表示内容用途，不表示数据库、索引或工具：
@@ -79,7 +81,7 @@ uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.n
 uv run --python 3.11 python scripts/build_knowledge_pack_index.py dist/example.neko-knowledge.json --verify --manifest dist/example.neko-knowledge.index.json --vectors dist/example.neko-knowledge.vectors.f16
 ```
 
-索引缺失或校验失败不阻止原文安装：包立即以 BM25 工作。社区包只有在用户明确允许本机维护向量后才进入本地 Embedding 队列。
+不带 `--verify` 的构建命令会加载本地固定模型并生成向量；`--verify` 只重新派生 chunk 并检查摘要、清单和矩阵，不加载 Embedding 模型。索引缺失或校验失败不阻止原文安装：包立即以 BM25 工作。社区包只有在用户明确允许本机维护向量后才进入本地 Embedding 队列。
 
 ## 运行路径
 
@@ -108,13 +110,21 @@ Knowledge 与 corpus 共用一次 Query Embedding、一个融合候选池和一�
 
 ```text
 GET  /api/public-knowledge/status
+GET  /api/public-knowledge/entries
+GET  /api/public-knowledge/entry
 GET  /api/public-knowledge/packs
+GET  /api/public-knowledge/packs/jobs
+GET  /api/public-knowledge/diagnostics/recent
+POST /api/public-knowledge/entry/disabled
+POST /api/public-knowledge/packs/import
+POST /api/public-knowledge/packs/jobs/cancel
 POST /api/public-knowledge/packs/material-type
 POST /api/public-knowledge/packs/auto-context
 POST /api/public-knowledge/packs/index-policy
+POST /api/public-knowledge/packs/remove
 ```
 
-修改包用途只更新来源级策略，不改写原始词条。`knowledge` 与 `corpus` 都可通过 `packs/auto-context` 按包开启或关闭自动上下文；包首次切换为 `corpus` 时会按现行策略默认开启。
+写接口仅接受通过本地 CSRF 与 Origin 校验的请求。修改包用途只更新来源级策略，不改写原始词条。`knowledge` 与 `corpus` 都可通过 `packs/auto-context` 按包开启或关闭自动上下文；包首次切换为 `corpus` 时会按现行策略默认开启。可信市场的 `/subscriptions/apply-v3` 交接端点另见订阅契约，不是供浏览器直接提交任意 URL 的导入接口。
 
 完整制品协议另见：
 

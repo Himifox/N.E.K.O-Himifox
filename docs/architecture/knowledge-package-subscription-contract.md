@@ -1,5 +1,7 @@
 # 知识包订阅交接接口（可信市场 v3）
 
+> **版本与边界说明（2026-08-24）**：带预构建索引的市场交付协议是 v3，知识包 Schema 也是 v3；索引清单格式仍独立保持 v1。Main Server 校验预构建制品时不会加载本地 Embedding 模型，也不会调用 Memory Server。
+
 ## 定位
 
 知识包是纯数据制品，不是可执行插件。Main Server 统一负责存储和检索；Market Bridge 只解析可信目录、受限下载并把制品交给 Main Server 二次校验。
@@ -75,6 +77,7 @@ POST /api/public-knowledge/subscriptions/apply-v3
 - 自动上下文共用一次 BM25、Query Embedding 和 RRF 候选池，再按材料类型的独立高阈值筛选；弱相关候选不会仅凭低分语义相似度注入。
 - 社区包默认 `prebuilt_only`。可信索引可直接 Hybrid，否则 BM25。
 - 本机维护向量必须由用户按包明确开启。
+- 本机向量实现只由 Main Server 在进程组合入口绑定；知识域仅使用中立接口，未绑定时以 `provider_unconfigured` 安全关闭向量路径。
 - 显式查询始终走同一 BM25、Query Embedding 和 RRF 路径。
 - 不写用户记忆，不持久化用户对话，不修改 Memory Server 业务 API。
 
