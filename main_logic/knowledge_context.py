@@ -374,8 +374,6 @@ def _extract_explicit_local_knowledge_query(user_text: str) -> str:
 
 async def build_public_knowledge_turn_context(
     user_text: str,
-    *,
-    tool_calls_supported: bool = True,
 ) -> str:
     """Resolve one turn-local card without leaking knowledge concerns into core."""
     context_text = ""
@@ -423,7 +421,7 @@ async def build_public_knowledge_turn_context(
         except Exception:
             pass
 
-    if context_text or tool_calls_supported:
+    if context_text:
         return context_text
 
     fallback_query = _extract_explicit_local_knowledge_query(user_text)

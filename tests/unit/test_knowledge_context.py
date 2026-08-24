@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -173,26 +174,75 @@ async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypa
     import main_logic.knowledge_context as knowledge_tool
     from knowledge.service import KnowledgeTurnContext
 
-    received = []
-
-    class _Service:
-        async def abuild_conversation_context(
-            self,
-            user_text,
-            *,
-            lexical_queries,
-            limit,
-        ):
-            received.append((user_text, lexical_queries, limit))
-            return KnowledgeTurnContext(match_mode="automatic_miss")
-
-    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: _Service())
+    selector = AsyncMock(
+        return_value=KnowledgeTurnContext(match_mode="automatic_miss")
+    )
+    fallback = AsyncMock(return_value="unexpected")
+    service = SimpleNamespace(abuild_conversation_context=selector)
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
 
     context = await knowledge_tool.build_public_knowledge_turn_context(
         "你好呀",
-        tool_calls_supported=True,
     )
 
     assert context == ""
-    assert received
-    assert received[0][0] == "你好呀"
+    selector.assert_awaited_once()
+    assert selector.await_args.args == ("你好呀",)
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_local_knowledge_miss_uses_host_lookup(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    service = SimpleNamespace(
+        abuild_conversation_context=AsyncMock(
+            return_value=KnowledgeTurnContext(match_mode="automatic_miss")
+        )
+    )
+    fallback = AsyncMock(return_value="local result")
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
+
+    context = await knowledge_tool.build_public_knowledge_turn_context(
+        "请查询本地知识库：电车难题是什么？",
+    )
+
+    assert context == "local result"
+    fallback.assert_awaited_once_with(
+        {
+            "query": "电车难题是什么？",
+            "mode": "lookup",
+            "material_type": "auto",
+            "limit": 3,
+        },
+        language="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_automatic_knowledge_hit_does_not_repeat_host_lookup(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    service = SimpleNamespace(
+        abuild_conversation_context=AsyncMock(
+            return_value=KnowledgeTurnContext(
+                text="automatic result",
+                hit_count=1,
+                match_mode="automatic_hybrid",
+            )
+        )
+    )
+    fallback = AsyncMock(return_value="unexpected")
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
+
+    context = await knowledge_tool.build_public_knowledge_turn_context(
+        "请查询本地知识库：电车难题是什么？",
+    )
+
+    assert context == "automatic result"
+    fallback.assert_not_awaited()

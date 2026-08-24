@@ -25,7 +25,7 @@ import time
 from websockets import exceptions as web_exceptions
 from utils.screenshot_utils import overlay_avatar_annotation
 from main_logic.omni_realtime_client import OmniRealtimeClient
-from main_logic.omni_offline_client import OmniOfflineClient, route_supports_tool_calls
+from main_logic.omni_offline_client import OmniOfflineClient
 from main_logic.session_state import SessionEvent
 from utils.language_utils import get_global_language_full
 from uuid import uuid4
@@ -487,10 +487,6 @@ class StreamingMixin:
 
                     _knowledge_turn_context = await build_public_knowledge_turn_context(
                         record_data,
-                        tool_calls_supported=route_supports_tool_calls(
-                            getattr(self.session, "model", ""),
-                            getattr(self.session, "base_url", ""),
-                        ),
                     )
                     _focus_thinking = await self._focus_inline_decision(record_data)
 
