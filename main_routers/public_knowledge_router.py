@@ -67,6 +67,11 @@ def _service():
         ) from exc
 
 
+async def _service_async():
+    """Construct/migrate the knowledge service away from the event loop."""
+    return await asyncio.to_thread(_service)
+
+
 def _source_tag(value: str) -> str:
     value = str(value or "").strip()
     return value if not value or value.startswith("source:") else f"source:{value}"
@@ -135,7 +140,7 @@ def _validate_mutation(request: Request, payload: dict):
 @router.get("/status")
 async def get_public_knowledge_status():
     try:
-        service = _service()
+        service = await _service_async()
     except HTTPException as exc:
         return {
             "ok": False,
@@ -161,7 +166,7 @@ async def list_public_knowledge_entries(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10_000),
 ):
-    service = _service()
+    service = await _service_async()
     source_tag = _source_tag(source)
     database_path = service.database_path()
     try:
@@ -231,7 +236,7 @@ async def get_public_knowledge_entry(
     source: str = Query(..., min_length=1, max_length=100),
     title: str = Query(..., min_length=1, max_length=500),
 ):
-    service = _service()
+    service = await _service_async()
     entry = await asyncio.to_thread(
         service.get_entry,
         source_tag=_source_tag(source),
@@ -268,7 +273,7 @@ async def set_public_knowledge_entry_disabled(request: Request):
     disabled = payload.get("disabled")
     if not source_tag or not title or not isinstance(disabled, bool):
         return {"ok": False, "reason": "invalid_request"}
-    service = _service()
+    service = await _service_async()
     entry = await asyncio.to_thread(
         service.get_entry,
         source_tag=source_tag,
@@ -290,13 +295,15 @@ async def set_public_knowledge_entry_disabled(request: Request):
 
 @router.get("/packs")
 async def list_public_knowledge_packs():
-    packs = await asyncio.to_thread(_service().list_packs)
+    service = await _service_async()
+    packs = await asyncio.to_thread(service.list_packs)
     return {"ok": True, "packs": list(packs)}
 
 
 @router.get("/packs/jobs")
 async def list_public_knowledge_pack_jobs():
-    jobs = await asyncio.to_thread(_service().list_pack_jobs)
+    service = await _service_async()
+    jobs = await asyncio.to_thread(service.list_pack_jobs)
     return {"ok": True, "jobs": list(jobs)}
 
 
@@ -316,7 +323,8 @@ async def import_public_knowledge_pack(request: Request):
         if len(canonical_pack_bytes(pack_payload)) > MAX_PACK_BYTES:
             return {"ok": False, "reason": "pack_too_large"}
         pack = validate_pack(pack_payload)
-        result = await asyncio.to_thread(_service().stage_pack, pack)
+        service = await _service_async()
+        result = await asyncio.to_thread(service.stage_pack, pack)
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -395,8 +403,9 @@ async def apply_public_knowledge_subscription(
         fallback_reason = fallback_reason or "index_artifact_missing"
 
     try:
+        service = await _service_async()
         result = await asyncio.to_thread(
-            _service().stage_pack,
+            service.stage_pack,
             knowledge_pack,
             subscription=validated_subscription.to_dict(),
             index_manifest=manifest_raw,
@@ -425,7 +434,8 @@ async def cancel_public_knowledge_pack_job(request: Request):
     job_id = str(payload.get("job_id") or "").strip()
     if not job_id:
         return {"ok": False, "reason": "invalid_request"}
-    cancelled = await asyncio.to_thread(_service().cancel_pack_job, job_id)
+    service = await _service_async()
+    cancelled = await asyncio.to_thread(service.cancel_pack_job, job_id)
     return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
 
 
@@ -440,8 +450,9 @@ async def set_public_knowledge_pack_auto_context(request: Request):
     if not pack_id or not isinstance(enabled, bool):
         return {"ok": False, "reason": "invalid_request"}
     try:
+        service = await _service_async()
         await asyncio.to_thread(
-            _service().set_pack_auto_context,
+            service.set_pack_auto_context,
             pack_id,
             enabled=enabled,
         )
@@ -461,8 +472,9 @@ async def set_public_knowledge_pack_index_policy(request: Request):
     if not pack_id or not isinstance(enabled, bool):
         return {"ok": False, "reason": "invalid_request"}
     try:
+        service = await _service_async()
         await asyncio.to_thread(
-            _service().set_pack_index_policy,
+            service.set_pack_index_policy,
             pack_id,
             local_embedding_enabled=enabled,
         )
@@ -485,8 +497,9 @@ async def set_public_knowledge_pack_material_type(request: Request):
     if not pack_id or material_type not in {None, "knowledge", "corpus"}:
         return {"ok": False, "reason": "invalid_request"}
     try:
+        service = await _service_async()
         await asyncio.to_thread(
-            _service().set_pack_material_type_override,
+            service.set_pack_material_type_override,
             pack_id,
             material_type=material_type,
         )
@@ -505,8 +518,9 @@ async def remove_public_knowledge_pack(request: Request):
     if not pack_id:
         return {"ok": False, "reason": "invalid_request"}
     try:
+        service = await _service_async()
         removed = await asyncio.to_thread(
-            _service().remove_pack,
+            service.remove_pack,
             pack_id,
         )
     except ValueError:

@@ -310,20 +310,30 @@ async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
 
 
 @pytest.mark.asyncio
-async def test_embedding_batch_does_not_touch_runtime_without_pending_work(
+async def test_embedding_batch_prewarms_query_runtime_without_pending_work(
     tmp_path,
     monkeypatch,
 ):
     store = KnowledgeStore(tmp_path / "knowledge.db")
-    monkeypatch.setattr(
-        vector_index,
-        "get_local_embedding_service",
-        lambda: pytest.fail("completed indexes must not load the ONNX runtime"),
-    )
+    class _PrewarmService:
+        load_requests = 0
+
+        def is_available(self):
+            return False
+
+        def is_disabled(self):
+            return False
+
+        async def request_load(self):
+            self.load_requests += 1
+
+    service = _PrewarmService()
+    monkeypatch.setattr(vector_index, "get_local_embedding_service", lambda: service)
 
     result = await vector_index.index_embedding_batch(store, load_model=True)
 
     assert result.state == "no_work"
+    assert service.load_requests == 1
 
 
 @pytest.mark.asyncio
@@ -723,6 +733,15 @@ def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch)
     vector_index._CACHE.clear()
     monkeypatch.setattr(vector_index, "MAX_VECTOR_SNAPSHOT_BYTES", 1)
 
+    calls = 0
+    original = store.load_ready_chunk_vectors
+
+    def counted_load(*, model_id, limit):
+        nonlocal calls
+        calls += 1
+        return original(model_id=model_id, limit=limit)
+
+    monkeypatch.setattr(store, "load_ready_chunk_vectors", counted_load)
     with pytest.raises(MemoryError):
         vector_index._load_snapshot(
             store,
@@ -732,6 +751,12 @@ def test_vector_snapshot_fails_closed_above_memory_budget(tmp_path, monkeypatch)
                 dimensions=2,
             ),
         )
+    with pytest.raises(MemoryError):
+        vector_index._load_snapshot(
+            store,
+            LocalEmbeddingStatus(state="ready", model_id="fixture", dimensions=2),
+        )
+    assert calls == 1
 
 
 @pytest.mark.asyncio

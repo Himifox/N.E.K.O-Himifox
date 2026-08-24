@@ -209,6 +209,10 @@ def _merge_registries(
     store: KnowledgeStore,
 ) -> dict[str, object]:
     merged: dict[str, dict[str, object]] = {}
+    entry_counts = {
+        str(row.get("tag") or ""): int(row.get("entries") or 0)
+        for row in store.count_by_source_tags()
+    }
     for database in databases:
         try:
             payload = json.loads(database.with_name("packs.json").read_text("utf-8"))
@@ -261,11 +265,7 @@ def _merge_registries(
             ready = int(status.get("chunks_ready", 0))
             metadata.update(
                 {
-                    "entries": sum(
-                        1
-                        for entry in store.list_active_entries()
-                        if entry.source_tag == source_tag
-                    ),
+                    "entries": entry_counts.get(source_tag, 0),
                     "retrieval_mode": "hybrid" if total and ready == total else "bm25",
                     "prebuilt_chunks_ready": ready,
                     "prebuilt_chunks_missing": max(total - ready, 0),

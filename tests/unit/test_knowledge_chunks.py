@@ -62,6 +62,17 @@ def test_chunking_is_bounded_for_long_unbroken_content():
     assert chunks[0].chunk_text[-120:] == chunks[1].chunk_text[:120]
 
 
+def test_chunking_balances_a_one_character_tail():
+    chunks = derive_knowledge_chunks(
+        _entry(content="x" * 1_201),
+        entry_key="source:test:Hybrid retrieval",
+    )
+
+    assert len(chunks) == 2
+    assert min(len(chunk.chunk_text) for chunk in chunks) > 600
+    assert chunks[0].chunk_text[-120:] == chunks[1].chunk_text[:120]
+
+
 def test_schema_v6_migration_keeps_fts_and_backfills_lazily(tmp_path):
     path = tmp_path / "knowledge.db"
     connection = sqlite3.connect(path)

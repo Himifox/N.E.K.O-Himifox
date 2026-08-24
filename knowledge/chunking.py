@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -61,10 +62,18 @@ def _split_long_text(text: str) -> list[str]:
 
 
 def _sliding_windows(text: str) -> list[str]:
-    stride = MAX_CHARS - OVERLAP_CHARS
+    if len(text) <= MAX_CHARS:
+        return [text] if text else []
+    window_count = math.ceil(
+        (len(text) - OVERLAP_CHARS) / (MAX_CHARS - OVERLAP_CHARS)
+    )
+    window_size = math.ceil(
+        (len(text) + (window_count - 1) * OVERLAP_CHARS) / window_count
+    )
+    stride = window_size - OVERLAP_CHARS
     return [
-        text[index:index + MAX_CHARS]
-        for index in range(0, len(text), stride)
+        text[index * stride:min(index * stride + window_size, len(text))]
+        for index in range(window_count)
     ]
 
 
@@ -100,6 +109,8 @@ def _with_overlap(previous: str, current: str) -> str:
     if not previous or not current or len(current) >= MAX_CHARS:
         return current
     overlap = previous[-OVERLAP_CHARS:].lstrip()
+    if overlap and current.startswith(overlap):
+        return current
     room = MAX_CHARS - len(current) - 2
     if room <= 0:
         return current

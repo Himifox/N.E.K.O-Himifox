@@ -27,7 +27,7 @@ def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
         payload = json.loads(override_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return frozenset()
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CatalogOverrideError("catalog override is unreadable or invalid") from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("disabled"), list):
         raise CatalogOverrideError("catalog override must contain a disabled list")
@@ -73,9 +73,6 @@ def set_entry_disabled(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
         count = len(entries)
-    from knowledge.routing import notify_database_changed
-
-    notify_database_changed(output_path.with_name("knowledge.db"))
     return count
 
 

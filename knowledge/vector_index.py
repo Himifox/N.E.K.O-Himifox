@@ -243,6 +243,9 @@ class VectorIndexSnapshot:
 
 
 _CACHE: dict[str, VectorIndexSnapshot] = {}
+_REJECTED_CACHE: dict[
+    str, tuple[int, str, tuple[int, int, int, int] | tuple[()], str]
+] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -273,6 +276,13 @@ def _load_snapshot(
             and cached.database_identity == identity
         ):
             return cached
+        rejected = _REJECTED_CACHE.get(key)
+        if rejected is not None and rejected[:3] == (
+            revision,
+            status.model_id,
+            identity,
+        ):
+            raise MemoryError(rejected[3])
 
     revision, rows, truncated = store.load_ready_chunk_vectors(
         model_id=status.model_id,
@@ -312,9 +322,13 @@ def _load_snapshot(
         identity,
     )
     if truncated or matrix.nbytes > MAX_VECTOR_SNAPSHOT_BYTES:
-        raise MemoryError("knowledge vector snapshot exceeds the local budget")
+        reason = "knowledge vector snapshot exceeds the local budget"
+        with _CACHE_LOCK:
+            _REJECTED_CACHE[key] = (revision, status.model_id, identity, reason)
+        raise MemoryError(reason)
     with _CACHE_LOCK:
         _CACHE[key] = snapshot
+        _REJECTED_CACHE.pop(key, None)
     return snapshot
 
 
@@ -629,6 +643,14 @@ async def index_embedding_batch(
     load_model: bool = False,
 ) -> EmbeddingBatchResult:
     safe_batch_size = max(1, min(int(batch_size), MAX_EMBEDDING_MICROBATCH_SIZE))
+    service = None
+    if load_model:
+        try:
+            service = get_local_embedding_service()
+            if not service.is_available() and not service.is_disabled():
+                await service.request_load()
+        except Exception:
+            return EmbeddingBatchResult(state="embedding_unavailable")
     work = await asyncio.to_thread(_embedding_work_status, store)
     if not any(
         int(work.get(key, 0)) > 0
@@ -640,13 +662,9 @@ async def index_embedding_batch(
         )
     ):
         return EmbeddingBatchResult(state="no_work")
-    try:
-        service = get_local_embedding_service()
-    except Exception:
-        return EmbeddingBatchResult(state="embedding_unavailable")
-    if load_model and not service.is_available() and not service.is_disabled():
+    if service is None:
         try:
-            await service.request_load()
+            service = get_local_embedding_service()
         except Exception:
             return EmbeddingBatchResult(state="embedding_unavailable")
     try:

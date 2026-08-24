@@ -126,7 +126,14 @@ class KnowledgeRetriever:
             allowed_source_tags = tuple(dict.fromkeys(allowed_source_tags))
             if not allowed_source_tags:
                 return []
-        candidate_limit = max(12, limit * 4)
+        disabled = (
+            frozenset()
+            if include_disabled
+            else load_disabled_entries(
+                get_catalog_override_path(self.store.database_path)
+            )
+        )
+        candidate_limit = max(12, limit * 4) + len(disabled)
         rows_by_id = {}
         for row in self.store.query_fts(
             make_fts_query(query),
@@ -141,13 +148,6 @@ class KnowledgeRetriever:
         ):
             rows_by_id.setdefault(row["rowid"], row)
 
-        disabled = (
-            frozenset()
-            if include_disabled
-            else load_disabled_entries(
-                get_catalog_override_path(self.store.database_path)
-            )
-        )
         hits: list[KnowledgeHit] = []
         for row in rows_by_id.values():
             try:

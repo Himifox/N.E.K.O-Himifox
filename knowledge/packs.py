@@ -348,6 +348,32 @@ def list_installed_packs(
     return tuple(items)
 
 
+def list_installed_pack_routing_metadata(
+    database_path: str | Path,
+) -> tuple[dict[str, object], ...]:
+    """Read routing policy from the registry without opening SQLite."""
+    try:
+        packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
+    except KnowledgePackRegistryError:
+        return ()
+    if not isinstance(packs, dict):
+        return ()
+    items: list[dict[str, object]] = []
+    for pack_id, value in sorted(packs.items()):
+        if not isinstance(value, dict):
+            continue
+        source_tag = str(value.get("source_tag") or "")
+        if not source_tag.startswith("source:community."):
+            continue
+        items.append({
+            "pack_id": str(pack_id),
+            "source_tag": source_tag,
+            "auto_context": value.get("auto_context") is True,
+            "effective_material_type": _effective_material_type(value),
+        })
+    return tuple(items)
+
+
 def installed_source_embedding_policies(
     database_path: str | Path,
 ) -> dict[str, str]:

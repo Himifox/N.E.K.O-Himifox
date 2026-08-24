@@ -1009,7 +1009,7 @@ class KnowledgeService:
             "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
             "entries": store.count() if store is not None else 0,
             "integrity_ok": (
-                store.integrity_ok() if store is not None else False
+                store.integrity_ok() if store is not None else True
             ) and override_state != "invalid",
             "disabled_entries": len(disabled),
             "catalog_override_state": override_state,
@@ -1245,15 +1245,12 @@ class KnowledgeService:
         *,
         busy_timeout_ms: int = 5_000,
     ) -> tuple[str, ...]:
-        from .packs import list_installed_packs
+        from .packs import list_installed_pack_routing_metadata
 
         sources = set(SOURCES)
         sources.update(
             str(pack.get("source_tag"))
-            for pack in list_installed_packs(
-                self.database_path(),
-                busy_timeout_ms=busy_timeout_ms,
-            )
+            for pack in list_installed_pack_routing_metadata(self.database_path())
             if pack.get("auto_context") is True
             and str(pack.get("source_tag") or "").startswith("source:")
         )

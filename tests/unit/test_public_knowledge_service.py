@@ -55,6 +55,26 @@ def test_invalid_catalog_override_fails_closed_and_is_not_overwritten(tmp_path):
     assert status["integrity_ok"] is False
 
 
+def test_non_utf8_catalog_override_is_reported_as_invalid(tmp_path):
+    service = open_knowledge(tmp_path)
+    override_path = get_catalog_override_path(service.database_path())
+    override_path.write_bytes(b"\xff\xfe")
+
+    with pytest.raises(CatalogOverrideError):
+        load_disabled_entries(override_path)
+    assert service.get_status()["catalog_override_state"] == "invalid"
+
+
+def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_path):
+    service = open_knowledge(tmp_path)
+
+    status = service.get_status()
+
+    assert status["integrity_ok"] is True
+    assert status["entries"] == 0
+    assert not service.database_path().exists()
+
+
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):
     return validate_pack(
         {

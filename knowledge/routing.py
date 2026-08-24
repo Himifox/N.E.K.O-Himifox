@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
 import unicodedata
 from collections import OrderedDict
@@ -269,7 +270,7 @@ def _load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
 def _safe_load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
     try:
         return _load_records(config)
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
         return ()
 
 
