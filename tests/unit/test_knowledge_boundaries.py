@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -156,7 +157,7 @@ def test_legacy_database_migrates_to_five_fields_and_keeps_backup(tmp_path):
         assert migrated.aliases == ("legacy alias",)
         backup = database_path.with_suffix(".db.legacy.bak")
         assert backup.exists()
-        with sqlite3.connect(backup) as backup_connection:
+        with closing(sqlite3.connect(backup)) as backup_connection:
             assert backup_connection.execute(
                 "SELECT title FROM entries"
             ).fetchone() == ("legacy phrase",)

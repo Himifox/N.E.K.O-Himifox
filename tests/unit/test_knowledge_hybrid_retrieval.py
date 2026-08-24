@@ -341,8 +341,7 @@ async def test_embedding_batch_reads_sqlite_off_the_event_loop(tmp_path, monkeyp
     monkeypatch.setattr(store, "chunk_status", slow_status)
     task = asyncio.create_task(vector_index.index_embedding_batch(store))
 
-    while not entered.is_set():
-        await asyncio.sleep(0)
+    assert await asyncio.to_thread(entered.wait, 1.0)
     await asyncio.sleep(0)
     assert not task.done()
 
