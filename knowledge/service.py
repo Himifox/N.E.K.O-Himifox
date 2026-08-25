@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -38,6 +39,60 @@ from .vector_index import (
 _KNOWLEDGE_RRF_K = 60
 _MANAGEMENT_SEARCH_RESULT_LIMIT = 10_101
 _T = TypeVar("_T")
+_RUNTIME_INITIALIZATION_LOCK = threading.Lock()
+_RUNTIME_INITIALIZATION_TASKS: dict[str, asyncio.Task[int]] = {}
+_RUNTIME_INITIALIZED_DATABASES: set[str] = set()
+
+
+def _migrate_runtime_database(database_path: Path) -> int:
+    if not (
+        database_path.is_file()
+        and database_path.with_name("packs.json").is_file()
+    ):
+        return 0
+    from .packs import migrate_legacy_pack_index_policies
+
+    return migrate_legacy_pack_index_policies(database_path)
+
+
+async def initialize_knowledge_runtime(
+    knowledge_root: str | Path,
+    *,
+    database_path: str | Path | None = None,
+) -> int:
+    """Run explicit, retryable, process-local knowledge startup migration."""
+    selected_database = (
+        Path(database_path)
+        if database_path is not None
+        else Path(knowledge_root) / "knowledge.db"
+    )
+    resolved_database = await asyncio.to_thread(selected_database.resolve)
+    key = str(resolved_database)
+    with _RUNTIME_INITIALIZATION_LOCK:
+        if key in _RUNTIME_INITIALIZED_DATABASES:
+            return 0
+        task = _RUNTIME_INITIALIZATION_TASKS.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                asyncio.to_thread(_migrate_runtime_database, resolved_database),
+                name="knowledge-runtime-initialize",
+            )
+            _RUNTIME_INITIALIZATION_TASKS[key] = task
+    try:
+        migrated = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # One canceled waiter must not detach or duplicate shared initialization.
+        raise
+    except BaseException:
+        with _RUNTIME_INITIALIZATION_LOCK:
+            if _RUNTIME_INITIALIZATION_TASKS.get(key) is task:
+                _RUNTIME_INITIALIZATION_TASKS.pop(key, None)
+        raise
+    with _RUNTIME_INITIALIZATION_LOCK:
+        _RUNTIME_INITIALIZED_DATABASES.add(key)
+        if _RUNTIME_INITIALIZATION_TASKS.get(key) is task:
+            _RUNTIME_INITIALIZATION_TASKS.pop(key, None)
+    return migrated
 
 
 def _empty_chunk_status() -> dict[str, int | float]:
@@ -600,13 +655,6 @@ class KnowledgeService:
             else self.knowledge_root / "knowledge.db"
         )
         self._routing_state: KnowledgeRoutingState | None = None
-        from .packs import migrate_legacy_pack_index_policies
-
-        if (
-            self._database_path.is_file()
-            and self._database_path.with_name("packs.json").is_file()
-        ):
-            migrate_legacy_pack_index_policies(self._database_path)
 
     @classmethod
     def from_root(cls, knowledge_root: str | Path) -> "KnowledgeService":

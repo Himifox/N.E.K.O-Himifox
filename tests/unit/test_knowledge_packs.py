@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+from pathlib import Path
+import time
 
 import pytest
 
-from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
+from knowledge.api import (
+    KnowledgeEntry,
+    KnowledgeStore,
+    initialize_knowledge_runtime,
+    open_knowledge,
+)
 from knowledge.source_registry import get_source
 from knowledge.packs import (
     MAX_PACK_TAG_BYTES_PER_ENTRY,
@@ -785,7 +793,10 @@ def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
     }
 
 
-def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tmp_path):
+@pytest.mark.asyncio
+async def test_legacy_community_vectors_are_preserved_at_runtime_initialization(
+    tmp_path,
+):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
     database_path = service.database_path()
@@ -804,6 +815,7 @@ def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tm
         metadata.pop(field, None)
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
+    await initialize_knowledge_runtime(tmp_path)
     migrated = open_knowledge(tmp_path).list_packs()[0]
 
     assert migrated["local_embedding_enabled"] is False
@@ -814,3 +826,62 @@ def test_legacy_community_vectors_are_preserved_but_not_rebuilt_automatically(tm
         )["prebuilt_only"]
         == 1
     )
+
+
+def test_knowledge_service_constructor_performs_no_path_io(monkeypatch, tmp_path):
+    from knowledge.service import KnowledgeService
+
+    def _unexpected_io(_path):
+        raise AssertionError("constructor touched the filesystem")
+
+    monkeypatch.setattr(Path, "is_file", _unexpected_io)
+
+    service = KnowledgeService(tmp_path)
+
+    assert service.knowledge_root == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_runtime_initialization_is_shared_and_one_shot(monkeypatch, tmp_path):
+    import knowledge.service as service_module
+
+    calls = 0
+
+    def _migrate(_database_path):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.02)
+        return 4
+
+    monkeypatch.setattr(service_module, "_migrate_runtime_database", _migrate)
+
+    first, second = await asyncio.gather(
+        initialize_knowledge_runtime(tmp_path),
+        initialize_knowledge_runtime(tmp_path),
+    )
+
+    assert (first, second) == (4, 4)
+    assert await initialize_knowledge_runtime(tmp_path) == 0
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_initialization_can_be_retried(monkeypatch, tmp_path):
+    import knowledge.service as service_module
+
+    calls = 0
+
+    def _migrate(_database_path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("fixture failure")
+        return 2
+
+    monkeypatch.setattr(service_module, "_migrate_runtime_database", _migrate)
+
+    with pytest.raises(OSError, match="fixture failure"):
+        await initialize_knowledge_runtime(tmp_path)
+
+    assert await initialize_knowledge_runtime(tmp_path) == 2
+    assert calls == 2

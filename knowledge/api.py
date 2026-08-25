@@ -39,6 +39,7 @@ from .service import (
     KnowledgeService,
     KnowledgeTurnContext,
     ResponsePolicy,
+    initialize_knowledge_runtime,
 )
 
 
@@ -81,6 +82,7 @@ __all__ = [
     "canonical_prebuilt_manifest_bytes",
     "load_canonical_pack_artifact",
     "open_knowledge",
+    "initialize_knowledge_runtime",
     "validate_prebuilt_index",
     "validate_subscription",
 ]

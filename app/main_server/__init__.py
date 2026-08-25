@@ -1036,11 +1036,21 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
 
             try:
                 from knowledge.indexer import start_knowledge_indexer
+                from knowledge.service import initialize_knowledge_runtime
                 from memory.local_embedding_provider import (
                     bind_process_local_embedding_provider,
                 )
 
                 bind_process_local_embedding_provider()
+                try:
+                    await initialize_knowledge_runtime(
+                        _config_manager.knowledge_dir,
+                    )
+                except Exception as _knowledge_migration_exc:
+                    logger.warning(
+                        "Knowledge legacy policy migration was not completed: %s",
+                        type(_knowledge_migration_exc).__name__,
+                    )
                 start_knowledge_indexer(_config_manager.knowledge_dir)
             except Exception as _knowledge_index_exc:
                 logger.warning(
