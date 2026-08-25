@@ -378,7 +378,7 @@ async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
     assert service.list_packs() == ()
 
 
-def test_orphan_creation_directory_blocks_staging_until_explicit_discard(tmp_path):
+def test_incomplete_creation_directory_cannot_be_discarded_as_a_public_job(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     orphan = tmp_path / ".staging" / ".creating-crashed"
     orphan.mkdir(parents=True)
@@ -393,8 +393,8 @@ def test_orphan_creation_directory_blocks_staging_until_explicit_discard(tmp_pat
     listed = service.list_pack_jobs()[0]
     assert listed["state"] == "degraded"
     assert listed["orphan"] is True
-    assert discard_degraded_pack_job(tmp_path, listed["job_id"]) is True
-    assert service.stage_pack(_pack())["state"] == "queued"
+    assert discard_degraded_pack_job(tmp_path, listed["job_id"]) is False
+    assert orphan.is_dir()
 
 
 def test_discard_only_removes_degraded_jobs(tmp_path):
@@ -408,6 +408,31 @@ def test_discard_only_removes_degraded_jobs(tmp_path):
     assert discard_degraded_pack_job(tmp_path, "../outside") is False
     assert discard_degraded_pack_job(tmp_path, job_id) is True
     assert not job_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "unsafe_job_id",
+    (
+        ".",
+        "..",
+        "../outside",
+        "pack-0123456789AF",
+        "pack-0123456789ab/child",
+        "pack-0123456789ab\\child",
+    ),
+)
+def test_discard_rejects_non_generated_job_ids_without_touching_root(
+    tmp_path,
+    unsafe_job_id,
+):
+    database_path = tmp_path / "knowledge.db"
+    registry_path = tmp_path / "packs.json"
+    database_path.write_bytes(b"database")
+    registry_path.write_bytes(b"registry")
+
+    assert discard_degraded_pack_job(tmp_path, unsafe_job_id) is False
+    assert database_path.read_bytes() == b"database"
+    assert registry_path.read_bytes() == b"registry"
 
 
 def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(

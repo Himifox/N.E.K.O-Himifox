@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import closing
+import hashlib
 import json
 import multiprocessing
 from pathlib import Path
@@ -140,13 +140,9 @@ def test_replace_source_rejects_mixed_sources_without_modifying_data(tmp_path):
     assert store.get_entry("source:fixture", "existing") is not None
 
 
-def test_legacy_database_migrates_to_five_fields_and_keeps_backup(tmp_path):
+def test_unpublished_attributed_schema_fails_without_modifying_database(tmp_path):
     database_path = tmp_path / "knowledge.db"
-    writer = sqlite3.connect(database_path)
-    try:
-        writer.execute("PRAGMA journal_mode=WAL")
-        writer.execute("PRAGMA wal_autocheckpoint=0")
-        connection = writer
+    with sqlite3.connect(database_path) as connection:
         connection.execute(
             "CREATE TABLE entries (title TEXT, aliases TEXT, tags TEXT, summary TEXT, content TEXT)"
         )
@@ -161,24 +157,21 @@ def test_legacy_database_migrates_to_five_fields_and_keeps_backup(tmp_path):
             ),
         )
         connection.commit()
+    original = database_path.read_bytes()
+    original_hash = hashlib.sha256(original).hexdigest()
+    original_mtime = database_path.stat().st_mtime_ns
 
-        store = KnowledgeStore(database_path)
+    with pytest.raises(KnowledgeStoreError, match="unsupported_knowledge_schema"):
+        KnowledgeStore(database_path).assert_compatible()
 
-        assert store.count() == 1
-        migrated = store.get_entry("source:fixture", "legacy phrase")
-        assert migrated is not None
-        assert migrated.aliases == ("legacy alias",)
-        backup = database_path.with_suffix(".db.legacy.bak")
-        assert backup.exists()
-        with closing(sqlite3.connect(backup)) as backup_connection:
-            assert backup_connection.execute(
-                "SELECT title FROM entries"
-            ).fetchone() == ("legacy phrase",)
-        with store._connection() as connection:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
-            assert columns == {"title", "terms", "tags", "summary", "content"}
-    finally:
-        writer.close()
+    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == original_hash
+    assert database_path.stat().st_mtime_ns == original_mtime
+    assert not database_path.with_suffix(".db.legacy.bak").exists()
+    with sqlite3.connect(database_path) as connection:
+        assert {
+            row[1] for row in connection.execute("PRAGMA table_info(entries)")
+        } == {"title", "aliases", "tags", "summary", "content"}
+        assert connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 1
 
 
 def test_entry_listing_clamps_limit_and_negative_offset(tmp_path):

@@ -206,7 +206,7 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
     assert thread_ids["validation"] != thread_ids["request"]
 
 
-def test_corrupt_job_registry_blocks_import_until_explicit_discard(
+def test_incomplete_creation_directory_is_not_a_discardable_public_job(
     monkeypatch,
     tmp_path,
 ):
@@ -224,8 +224,8 @@ def test_corrupt_job_registry_blocks_import_until_explicit_discard(
     ).json()
 
     assert rejected == {"ok": False, "reason": "knowledge_job_registry_invalid"}
-    assert discarded == {"ok": True, "reason": ""}
-    assert not orphan.exists()
+    assert discarded == {"ok": False, "reason": "not_found"}
+    assert orphan.is_dir()
 
 
 @pytest.mark.parametrize("error_type", [ValueError, KnowledgeStoreError])

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -42,6 +43,7 @@ INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
+_JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}-[0-9a-f]{12}$")
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +67,29 @@ def _state_path(job_dir: Path) -> Path:
 
 def _identity_path(job_dir: Path) -> Path:
     return job_dir / IDENTITY_NAME
+
+
+def _external_job_dir(
+    knowledge_root: str | Path,
+    job_id: str,
+    *,
+    require_existing: bool = False,
+) -> Path | None:
+    """Resolve one generated job ID without permitting path traversal or links."""
+    if not _JOB_ID_RE.fullmatch(str(job_id)):
+        return None
+    jobs_root = _jobs_root(knowledge_root)
+    job_dir = jobs_root / job_id
+    if not require_existing:
+        return job_dir
+    try:
+        resolved_root = jobs_root.resolve(strict=True)
+        resolved_job = job_dir.resolve(strict=True)
+    except OSError:
+        return None
+    if job_dir.is_symlink() or resolved_job.parent != resolved_root:
+        return None
+    return job_dir
 
 
 def pack_operation_lock(knowledge_root: str | Path, pack_id: str):
@@ -475,9 +500,9 @@ def _prune_terminal_jobs(
 
 
 def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
-    if not job_id or Path(job_id).name != job_id:
+    job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
+    if job_dir is None:
         return False
-    job_dir = _jobs_root(knowledge_root) / job_id
     with mutation_lock(_state_path(job_dir)):
         state = _read_job(job_dir)
         if (
@@ -500,11 +525,11 @@ def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
 
 def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
     """Explicitly remove one quarantined job after validating its exact path."""
-    if not job_id or Path(job_id).name != job_id:
-        return False
     jobs_root = _jobs_root(knowledge_root)
-    job_dir = jobs_root / job_id
     with mutation_lock(jobs_root):
+        job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
+        if job_dir is None:
+            return False
         if not job_dir.is_dir() or _read_job(job_dir).get("state") != DEGRADED_STATE:
             return False
         shutil.rmtree(job_dir)

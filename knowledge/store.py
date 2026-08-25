@@ -27,6 +27,7 @@ EMBEDDING_POLICIES = frozenset(("local", "prebuilt_only"))
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
 _INITIALIZE_LOCK = threading.Lock()
 _FOLDED_COLLATION = "KNOWLEDGE_FOLDED"
+_ENTRY_COLUMNS = {"title", "terms", "tags", "summary", "content"}
 
 
 def _compare_folded_surfaces(left: str, right: str) -> int:
@@ -123,8 +124,8 @@ class KnowledgeStore:
             row["name"]
             for row in connection.execute("PRAGMA table_info(entries)").fetchall()
         }
-        if columns and "terms" not in columns:
-            self._migrate_legacy_entries(connection)
+        if columns and columns != _ENTRY_COLUMNS:
+            raise KnowledgeStoreError("unsupported_knowledge_schema")
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS metadata (
@@ -235,7 +236,6 @@ class KnowledgeStore:
         connection.execute(
             "DELETE FROM knowledge_chunks WHERE entry_rowid NOT IN (SELECT rowid FROM entries)"
         )
-        self._repair_legacy_source_tags(connection)
 
     @staticmethod
     def _assert_supported_schema(connection: sqlite3.Connection) -> None:
@@ -275,82 +275,6 @@ class KnowledgeStore:
         """Initialize supported schemas or raise before touching newer schemas."""
         with self._connection():
             return
-
-    @staticmethod
-    def _repair_legacy_source_tags(connection: sqlite3.Connection) -> None:
-        """Normalize the five-field migration's former source tag spelling."""
-        known = {"chime", "geng-guide", "moegirl", "geng8"}
-        changed = False
-        for row in connection.execute("SELECT rowid, tags FROM entries").fetchall():
-            tags = list(_json_values(row["tags"]))
-            if any(tag.startswith("source:") for tag in tags):
-                continue
-            source = next((tag for tag in tags if tag in known), "")
-            if not source:
-                continue
-            tags = [f"source:{source}", *(tag for tag in tags if tag != source)]
-            connection.execute(
-                "UPDATE entries SET tags=? WHERE rowid=?",
-                (_values_json(tags), row["rowid"]),
-            )
-            connection.execute(
-                "UPDATE entries_fts SET tags=? WHERE entry_rowid=?",
-                (" ".join(tags), row["rowid"]),
-            )
-            changed = True
-        if changed:
-            KnowledgeStore._increment_entries_revision(connection)
-
-    def _migrate_legacy_entries(self, connection: sqlite3.Connection) -> None:
-        """Copy the old attributed schema into a five-field table once.
-
-        The external backup is intentionally retained.  The guide importer later
-        replaces its source slice from the original export, removing historical
-        tag-as-alias pollution.
-        """
-        backup = self.database_path.with_suffix(
-            self.database_path.suffix + ".legacy.bak"
-        )
-        if self.database_path.exists() and not backup.exists():
-            connection.commit()
-            temporary_backup = backup.with_name(f"{backup.name}.tmp")
-            temporary_backup.unlink(missing_ok=True)
-            backup_connection: sqlite3.Connection | None = None
-            try:
-                backup_connection = sqlite3.connect(temporary_backup)
-                connection.backup(backup_connection)
-                backup_connection.commit()
-                backup_connection.close()
-                backup_connection = None
-                temporary_backup.replace(backup)
-            except Exception:
-                if backup_connection is not None:
-                    backup_connection.close()
-                temporary_backup.unlink(missing_ok=True)
-                raise
-        rows = connection.execute("SELECT * FROM entries").fetchall()
-        connection.execute("DROP TABLE IF EXISTS entries_fts")
-        connection.execute("ALTER TABLE entries RENAME TO entries_legacy")
-        connection.execute(
-            "CREATE TABLE entries (title TEXT NOT NULL, terms TEXT NOT NULL, tags TEXT NOT NULL, summary TEXT NOT NULL, content TEXT NOT NULL)"
-        )
-        for row in rows:
-            tags = _json_values(row["tags"])
-            aliases = (
-                () if "source:geng-guide" in tags else _json_values(row["aliases"])
-            )
-            terms = {"alias": list(aliases), "recognition": []}
-            connection.execute(
-                "INSERT INTO entries(title, terms, tags, summary, content) VALUES (?, ?, ?, ?, ?)",
-                (
-                    row["title"],
-                    json.dumps(terms, ensure_ascii=False),
-                    json.dumps(tags, ensure_ascii=False),
-                    row["summary"],
-                    row["content"],
-                ),
-            )
-        connection.execute("DROP TABLE entries_legacy")
 
     def upsert(self, entry: KnowledgeEntry) -> UpsertResult:
         with self._connection(writable=True) as connection:
