@@ -707,6 +707,19 @@ def _ready_chunks_replaced_by_job(service, pack_id: str) -> int:
     return int(status["chunks_ready"])
 
 
+def _list_jobs_for_processing(knowledge_root: Path) -> tuple[dict[str, object], ...]:
+    all_jobs = list_pack_jobs(knowledge_root)
+    for item in all_jobs:
+        item_job_id = str(item.get("job_id") or "")
+        if (
+            item.get("state") in TERMINAL_STATES
+            and item_job_id
+            and Path(item_job_id).name == item_job_id
+        ):
+            _cleanup_payload(_jobs_root(knowledge_root) / item_job_id)
+    return all_jobs
+
+
 async def process_pack_jobs(
     service,
     *,
@@ -715,15 +728,10 @@ async def process_pack_jobs(
 ) -> dict[str, object]:
     """Verify and activate at most one staged community pack."""
 
-    all_jobs = await asyncio.to_thread(list_pack_jobs, service.knowledge_root)
-    for item in all_jobs:
-        item_job_id = str(item.get("job_id") or "")
-        if (
-            item.get("state") in TERMINAL_STATES
-            and item_job_id
-            and Path(item_job_id).name == item_job_id
-        ):
-            _cleanup_payload(_jobs_root(service.knowledge_root) / item_job_id)
+    all_jobs = await asyncio.to_thread(
+        _list_jobs_for_processing,
+        service.knowledge_root,
+    )
     jobs = [
         item
         for item in reversed(all_jobs)

@@ -32,18 +32,25 @@ async def test_process_pack_jobs_lists_state_off_the_event_loop(tmp_path, monkey
     service = KnowledgeService.from_root(tmp_path)
     event_loop_thread = threading.get_ident()
     list_threads: list[int] = []
-    original = module.list_pack_jobs
+    cleanup_threads: list[int] = []
 
-    def tracked_list(root):
+    def tracked_list(_root):
         list_threads.append(threading.get_ident())
-        return original(root)
+        return ({"job_id": "finished-job", "state": "active", "created_at": 1},)
+
+    def tracked_cleanup(_job_dir):
+        cleanup_threads.append(threading.get_ident())
 
     monkeypatch.setattr(module, "list_pack_jobs", tracked_list)
+    monkeypatch.setattr(module, "_cleanup_payload", tracked_cleanup)
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
     assert result["state"] == "no_work"
     assert list_threads and all(thread_id != event_loop_thread for thread_id in list_threads)
+    assert cleanup_threads and all(
+        thread_id != event_loop_thread for thread_id in cleanup_threads
+    )
 
 
 def _pack(
