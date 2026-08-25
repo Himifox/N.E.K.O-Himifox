@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 
 def _client(monkeypatch, captured: dict) -> TestClient:
@@ -55,7 +56,7 @@ def test_knowledge_bridge_forwards_only_allowlisted_local_api(monkeypatch):
     assert ("token", "fixture") not in captured["params"]
     assert captured["headers"]["Origin"] == "http://127.0.0.1:48911"
     assert captured["headers"]["X-CSRF-Token"]
-    assert captured["client_options"]["timeout"].read > 30
+    assert captured["client_options"]["timeout"].read == 40
 
 
 def test_knowledge_bridge_forwards_degraded_job_discard(monkeypatch):
@@ -104,6 +105,39 @@ def test_knowledge_bridge_keeps_get_timeout_short(monkeypatch):
     )
 
 
+def test_local_bridge_accepts_only_plugin_or_dynamic_main_server_origin(monkeypatch):
+    from plugin.server.routes import market_bridge as module
+
+    monkeypatch.setattr(module, "_main_server_port", lambda: 49321)
+
+    def request(origin: str):
+        return SimpleNamespace(
+            headers={"host": "127.0.0.1:48910", "origin": origin},
+            client=SimpleNamespace(host="::1"),
+        )
+
+    assert module._require_local_bridge_token_access(
+        request("http://localhost:48910")
+    ) == 48910
+    assert module._require_local_bridge_token_access(
+        request("http://127.0.0.1:49321")
+    ) == 48910
+
+    denied_origins = (
+        "http://localhost:49322",
+        "https://localhost:49321",
+        "http://user@localhost:49321",
+        "http://localhost:49321/manager",
+        "http://localhost:49321?view=knowledge",
+        "http://market.example:49321",
+        "http://localhost:not-a-port",
+    )
+    for origin in denied_origins:
+        with pytest.raises(HTTPException) as failure:
+            module._require_local_bridge_token_access(request(origin))
+        assert failure.value.status_code == 403
+
+
 def test_knowledge_bridge_rejects_oversized_body_before_forwarding(monkeypatch):
     captured = {}
     client = _client(monkeypatch, captured)
@@ -142,6 +176,121 @@ def test_knowledge_management_bridge_rejects_remote_market_origin(monkeypatch):
 
     assert response.status_code == 403
     assert captured == {}
+
+
+def test_knowledge_mutation_timeout_is_stable_504_without_retry(monkeypatch):
+    from plugin.server.routes import market_bridge as module
+
+    attempts = 0
+
+    class TimeoutClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise httpx.ReadTimeout("fixture timeout")
+
+    monkeypatch.setattr(module, "_verify_token", lambda _token: None)
+    monkeypatch.setattr(module, "_require_local_bridge_token_access", lambda _request: 48910)
+    monkeypatch.setattr(module, "_main_server_port", lambda: 48911)
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_kwargs: TimeoutClient())
+    app = FastAPI()
+    app.include_router(module.router)
+
+    response = TestClient(app).post(
+        "/market/knowledge/packs/remove",
+        params={"token": "fixture"},
+        json={"pack_id": "fixture"},
+    )
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": {"code": "knowledge_mutation_timeout"}}
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_packaged_proxy_uses_knowledge_budgets_and_stable_timeout(monkeypatch):
+    from app.main_server import web_app as module
+    from knowledge.timeouts import (
+        KNOWLEDGE_BROWSER_MUTATION_TIMEOUT_SECONDS,
+        KNOWLEDGE_GET_TIMEOUT_SECONDS,
+        KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS,
+        KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS,
+    )
+    from knowledge._mutation_lock import MUTATION_LOCK_TIMEOUT_SECONDS
+
+    captured_timeouts: list[float] = []
+    attempts = 0
+
+    class FakeClient:
+        def __init__(self, *, timeout, **_kwargs):
+            captured_timeouts.append(timeout.read)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if captured_timeouts[-1] == KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS:
+                raise httpx.ReadTimeout("fixture timeout")
+            return httpx.Response(
+                200,
+                content=b'{"ok":true}',
+                headers={"content-type": "application/json"},
+            )
+
+    async def body():
+        return b"{}"
+
+    def request(method: str):
+        return SimpleNamespace(
+            method=method,
+            url=SimpleNamespace(query=""),
+            headers={"content-type": "application/json"},
+            body=body,
+        )
+
+    monkeypatch.setattr(module, "_resolve_user_plugin_base", lambda: "http://127.0.0.1:48910")
+    monkeypatch.setattr(module.httpx, "AsyncClient", FakeClient)
+
+    get_response = await module.proxy_user_plugin_market_bridge(
+        request("GET"),
+        "knowledge/status",
+    )
+    timeout_response = await module.proxy_user_plugin_market_bridge(
+        request("POST"),
+        "knowledge/packs/remove",
+    )
+    ordinary_response = await module.proxy_user_plugin_market_bridge(
+        request("GET"),
+        "status",
+    )
+
+    assert get_response.status_code == 200
+    assert captured_timeouts == [
+        KNOWLEDGE_GET_TIMEOUT_SECONDS,
+        KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS,
+        30.0,
+    ]
+    assert (
+        MUTATION_LOCK_TIMEOUT_SECONDS
+        < KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
+        < KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS
+        < KNOWLEDGE_BROWSER_MUTATION_TIMEOUT_SECONDS
+    )
+    assert timeout_response.status_code == 504
+    assert timeout_response.body == b'{"detail":{"code":"knowledge_mutation_timeout"}}'
+    assert ordinary_response.status_code == 200
+    assert attempts == 3
 
 
 def test_bridge_token_error_uses_stable_code():

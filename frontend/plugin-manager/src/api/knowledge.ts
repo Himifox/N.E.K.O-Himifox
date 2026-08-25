@@ -2,7 +2,7 @@ import axios from 'axios'
 
 export const MAX_KNOWLEDGE_PACK_FILE_BYTES = 10 * 1024 * 1024
 const KNOWLEDGE_GET_REQUEST_TIMEOUT_MS = 15_000
-const KNOWLEDGE_MUTATION_REQUEST_TIMEOUT_MS = 45_000
+const KNOWLEDGE_MUTATION_REQUEST_TIMEOUT_MS = 50_000
 
 let bridgeToken = ''
 let bridgeTokenRequest: Promise<string> | null = null

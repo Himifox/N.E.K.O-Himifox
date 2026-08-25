@@ -29,7 +29,6 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
-from knowledge._mutation_lock import MUTATION_LOCK_TIMEOUT_SECONDS
 from plugin.logging_config import get_logger
 from plugin.core.plugin_layout import resolve_plugin_layout
 from plugin.neko_plugin_cli.public import inspect_package
@@ -62,10 +61,17 @@ from knowledge.limits import (
     MAX_PREBUILT_MANIFEST_BYTES,
     MAX_PREBUILT_VECTOR_BYTES,
 )
+from knowledge.timeouts import (
+    KNOWLEDGE_GET_TIMEOUT_SECONDS,
+    KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS,
+)
 
+# Kept as a compatibility export for the subscription bridge, which shares the
+# same plugin-to-Main mutation hop.
+KNOWLEDGE_POST_TIMEOUT_SECONDS = (
+    KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
+)
 router = APIRouter(prefix="/market", tags=["market-bridge"])
-KNOWLEDGE_GET_TIMEOUT_SECONDS = 15.0
-KNOWLEDGE_POST_TIMEOUT_SECONDS = MUTATION_LOCK_TIMEOUT_SECONDS + 10.0
 logger = get_logger("server.routes.market_bridge")
 
 _cli_service = PluginCliService()
@@ -222,7 +228,7 @@ async def public_knowledge_bridge(
         )
     try:
         request_timeout = (
-            KNOWLEDGE_POST_TIMEOUT_SECONDS
+            KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
             if request.method == "POST"
             else KNOWLEDGE_GET_TIMEOUT_SECONDS
         )
@@ -238,6 +244,11 @@ async def public_knowledge_bridge(
                 content=body,
                 headers=headers,
             )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "knowledge_mutation_timeout"},
+        ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Main Server unavailable") from exc
     return Response(
@@ -301,18 +312,20 @@ def _is_loopback_host(host: str) -> bool:
     return normalized in {"localhost", "127.0.0.1", "::1"}
 
 
-def _is_local_bridge_origin(origin: str, expected_port: int) -> bool:
+def _is_local_bridge_origin(origin: str, expected_ports: Iterable[int]) -> bool:
     try:
         parsed = urlparse(origin)
+        parsed_host = parsed.hostname or ""
+        parsed_port = parsed.port or 80
     except ValueError:
         return False
-    if parsed.scheme != "http" or not parsed.hostname or not _is_loopback_host(parsed.hostname):
+    if parsed.scheme != "http" or not parsed_host or not _is_loopback_host(parsed_host):
         return False
     if parsed.username or parsed.password or parsed.path not in ("", "/"):
         return False
     if parsed.params or parsed.query or parsed.fragment:
         return False
-    return (parsed.port or 80) == expected_port
+    return parsed_port in expected_ports
 
 
 def _require_local_bridge_token_access(request: Request) -> int:
@@ -335,7 +348,8 @@ def _require_local_bridge_token_access(request: Request) -> int:
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
 
     origin = request.headers.get("origin")
-    if origin and not _is_local_bridge_origin(origin, request_port):
+    expected_origin_ports = {request_port, _main_server_port()}
+    if origin and not _is_local_bridge_origin(origin, expected_origin_ports):
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
     return request_port
 

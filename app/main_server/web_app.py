@@ -24,6 +24,10 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from knowledge.timeouts import (
+    KNOWLEDGE_GET_TIMEOUT_SECONDS,
+    KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS,
+)
 
 from ._shared import runtime
 
@@ -447,9 +451,21 @@ async def proxy_user_plugin_market_bridge(request: Request, path: str = ""):
         if key.lower() not in hop_by_hop_request
     }
 
+    is_knowledge_path = path == "knowledge" or path.startswith("knowledge/")
+    is_knowledge_mutation = request.method != "GET" and is_knowledge_path
+    proxy_timeout = (
+        KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS
+        if is_knowledge_mutation
+        else KNOWLEDGE_GET_TIMEOUT_SECONDS
+        if request.method == "GET" and is_knowledge_path
+        else 30.0
+    )
+
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=3.0), proxy=None, trust_env=False
+            timeout=httpx.Timeout(proxy_timeout, connect=3.0),
+            proxy=None,
+            trust_env=False,
         ) as client:
             upstream = await client.request(
                 request.method,
@@ -457,6 +473,17 @@ async def proxy_user_plugin_market_bridge(request: Request, path: str = ""):
                 content=await request.body(),
                 headers=headers,
             )
+    except httpx.TimeoutException as exc:
+        logger.warning("Market bridge proxy timed out: target=%s", target)
+        if is_knowledge_mutation:
+            return JSONResponse(
+                status_code=504,
+                content={"detail": {"code": "knowledge_mutation_timeout"}},
+            )
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Market bridge timeout"},
+        )
     except httpx.HTTPError as exc:
         logger.warning("Market bridge proxy failed: target=%s error=%s", target, exc)
         return JSONResponse(

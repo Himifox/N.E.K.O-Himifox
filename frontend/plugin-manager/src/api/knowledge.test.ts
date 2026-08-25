@@ -97,7 +97,7 @@ describe('knowledge API response handling', () => {
     const { KnowledgeApiError, knowledgeApi } = await loadKnowledgeApi()
 
     await expect(knowledgeApi.importPack({})).rejects.toBeInstanceOf(KnowledgeApiError)
-    expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(45000)
+    expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(50000)
   })
 
   it('requests durable pack job state through the knowledge bridge', async () => {
@@ -130,6 +130,16 @@ describe('knowledge API response handling', () => {
     const { knowledgeApi } = await loadKnowledgeApi()
 
     await expect(knowledgeApi.status()).rejects.toBe(upstream)
+  })
+
+  it('does not retry a timed-out mutation that may already have committed', async () => {
+    const timeout = Object.assign(new Error('timeout'), { code: 'ECONNABORTED' })
+    axiosMocks.request.mockRejectedValue(timeout)
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.removePack({ pack_id: 'fixture' })).rejects.toBe(timeout)
+    expect(axiosMocks.request).toHaveBeenCalledTimes(1)
+    expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(50000)
   })
 
   it('refreshes an invalid bridge token and retries once', async () => {
