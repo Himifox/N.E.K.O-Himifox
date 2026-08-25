@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第九轮均已实施，第十轮方案已归档、等待实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十一轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1481,3 +1481,70 @@ BL–BV 已按上述顺序拆为四个实现提交并推送到 `origin/codex/uni
 9. Python 回归只用项目 Python 3.11 的 `uv run pytest`，优先扩展现有 pack job、retrieval、service、market bridge、knowledge market、streaming/cross-server 测试文件；如确需新建 test 文件，实施前单独说明理由。同步运行相关 Ruff、前端 Knowledge API 测试、`vue-tsc --build` 与 `git diff --check`。
 
 关闭条件：每个线程对应的实现已推送到 PR 远端，精确反例与相邻负例通过，线程回复包含提交和测试证据，并成功 resolve。BY 的两条重复线程必须分别回复和关闭。最终核对必须重新遍历全部 timeline/GraphQL 分页，确认 unresolved 为 0，并单独检查 CodeRabbit review body 的 outside-diff 评论；119/108/11 仅是本轮开始时快照。第十轮实施完成后再追加提交矩阵和最终回归结果，并把文档头部及索引改为“第一至第十轮均已实施”。
+
+## 第十一轮：制品身份、回滚完整性与评测轮次隔离
+
+第十轮实现推送后重新分页得到 11 个未解决线程：其中 6 个是第十轮尚待证据回复的原线程，1 个是已经由 BW 覆盖的 staging 根重复评论，另有 4 个新问题成立。本轮只处理新增边界，不重新打开已经通过回归的第十轮实现。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3853190946` | CG | staged artifact 只核对 chunk 数，完整容量身份未绑定，成立 |
+| `discussion_r3853190949` | CH | registry source tag 未绑定 pack ID，成立 |
+| `discussion_r3853190959` | BW duplicate | 当前分支已拒绝 staging root symlink/junction/reparse，重复评论 |
+| `discussion_r3853190966` | CI | rollback snapshot 的宽松读取会把读取失败折叠为空快照，成立 |
+| `discussion_r3853190974` | CJ | live 质量评测会接收无 request ID 的旁路轮次，成立 |
+
+### 修复单元 CG：staged artifact 绑定完整容量身份
+
+- `identity.json` 中的 `entries_total`、`chunks_total` 与 `content_bytes` 都是准入时不可变证据；处理前必须从当前 artifact 重新执行同一套 preflight 并逐项相等比较。
+- 完整比较必须发生在构建 staging 数据库与激活之前；任何字段缺失、损坏或不一致都进入稳定拒绝终态，不得以重新计算值扩大既有准入额度。
+- 保持现有 hash、pack ID 与订阅身份检查；容量身份是补充约束，不替代制品内容身份。
+
+验收：只增加 entry、只增加 content bytes、保持 chunk 数不变的篡改均在首次数据库 mutation 前失败；未改制品仍可恢复处理。
+
+### 修复单元 CH：registry source tag 必须由 pack ID 唯一导出
+
+- 读取 `packs.json` 时逐项验证 key 是合法 pack ID，且 `source_tag` 严格等于 `source:community.<pack_id>`；不得信任任意 parseable dictionary。
+- 损坏映射 fail closed，删除、policy mutation 与列表读取都不能借错误 tag 操作另一个包。
+- 写入路径继续只使用 canonical source tag，读取校验与写入规则共享同一 helper，避免两套合法性定义漂移。
+
+验收：A 的 registry 行指向 B 的 source tag 时，删除 A 与修改 A policy 均在数据库 mutation 前失败，B 的 entries、chunks、vectors 与 registry 字节保持不变。
+
+### 修复单元 CI：替换前 rollback snapshot 必须完整可证明
+
+- `_snapshot_source()` 使用 strict entries/vector 读取；malformed row、SQLite/transient read failure 与不完整向量记录必须显式失败，不能折叠成空集合。
+- snapshot 成功是首次替换 mutation 的前置条件。不能证明旧来源完整状态时保留旧包并中止安装。
+- rollback 仍可恢复真实空来源；只有 strict 读取成功得到的空集合才是可信空快照。
+
+验收：entries 读取失败、vector 读取失败和 malformed row 都不调用 replace/import/registry write；旧包数据库与 registry 保持不变。正常替换后的后续失败仍按完整 snapshot 回滚。
+
+### 修复单元 CJ：live 质量评测只消费目标 request
+
+- 一旦 `expected_request_id` 已设置，文本响应、错误与完成事件都必须携带完全相同的 request ID；无 ID 事件不再作为兼容事件接收。
+- proactive、callback 与其他并发请求不能追加目标 case 文本，也不能提前终止其 latency 计时。
+- 非 live fixture 路径与尚未建立 expected ID 的握手阶段保持现状。
+
+验收：目标响应前后插入无 ID proactive 文本/turn-end、错误 ID callback 与正确 ID 事件，最终只记录正确 ID 文本并由正确 completion 结束。
+
+## 第十一轮实施与关闭条件
+
+CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack registry 与 quality evaluator 测试文件。全部实现推送后，对 5 个新增线程分别回复对应提交和精确反例；BW duplicate 使用第十轮既有提交证据关闭。随后重新分页确认整个 PR unresolved 为 0，再记录最终提交矩阵和回归结果。
+
+## 第十、十一轮实施证据
+
+| 提交 | 单元 | 实施结果 |
+| --- | --- | --- |
+| `182639596` | BW、CA | staging 根与 job reparse 全面 fail closed；可信根锁后复验；异步状态写锁内重读并保持终态 |
+| `c96816ae1` | BX、CB | Main Server/插件双入口 Origin allowlist；30/40/45/50 秒 mutation 预算和稳定 504 |
+| `bb39787d4` | BY | 只信任顺序与时间一致的最新订阅尝试，歧义回退 durable registry |
+| `51f1fc2a5` | BZ | Offline 保持 sample-only，Realtime 按最终 session 类型获得 lookup/sample |
+| `f50397fe8` | CC | analyzer owner 绑定用户 request ID，proactive/new turn 清除旧 owner |
+| `4871b7cb6` | CD | 服务构造零迁移 I/O；显式 off-loop、共享、可重试 runtime initialization |
+| `db432daeb` | CE、CF | 词法候选按 12/24/48/96/128 有界扩窗并贯穿 deadline；recognition exact 提前 |
+| `324ea2493` | CG | prepare 与 activate 均重算完整 preflight 并核对 pack/capacity identity |
+| `decb1d9a2` | CH、CI | registry key/source tag 强绑定；rollback snapshot 全部 strict 读取 |
+| `2d10e7d89` | CJ | live evaluator 的 response/completion 必须精确匹配目标 request ID |
+
+最终相关回归使用项目 Python 3.11 执行 `uv run pytest`，结果为 278 passed、1 skipped；skip 仅因本机 Windows 无目录 symlink 权限，另有不依赖权限的 junction/reparse 模拟反例通过。前端 Knowledge API 13 项通过，`vue-tsc --build` 与相关 Python Ruff 均通过，`git diff --check` 通过。未新增测试文件，只扩展已有回归文件。
+
+实现提交推送并逐条回复证据后，GraphQL 重新遍历 PR #2951 全部 reviewThreads 分页，最终 unresolved 为 0；核对时远端 head 为 `decb1d9a215bd7b25563c4ae1f4a972a83063131`。该计数仍是 2026-08-25 的完成快照；任何后续复审新增线程必须重新分页处理。
