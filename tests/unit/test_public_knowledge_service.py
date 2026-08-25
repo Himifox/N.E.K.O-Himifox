@@ -90,6 +90,18 @@ def test_lexical_exact_match_preserves_meaningful_punctuation(tmp_path):
     assert service.search("C#", limit=1)[0].entry.title == "C#"
 
 
+def test_punctuated_exact_match_is_recalled_before_broad_candidate_cap(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    for index in range(13):
+        store.upsert(_entry(f"C {index:02d}", "source:fixture"))
+    store.upsert(_entry("C++", "source:fixture"))
+
+    result = service.search("C++", limit=1)
+
+    assert result[0].entry.title == "C++"
+
+
 def test_empty_and_populated_status_share_chunk_fields(tmp_path):
     empty_status = open_knowledge(tmp_path / "empty").get_status()
     populated_service = open_knowledge(tmp_path / "populated")

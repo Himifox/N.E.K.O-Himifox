@@ -146,6 +146,12 @@ class KnowledgeRetriever:
             return []
         candidate_limit = max(12, limit * 4) + len(disabled)
         rows_by_id = {}
+        for row in self.store.query_exact_title_or_alias(
+            query,
+            limit=candidate_limit,
+            allowed_source_tags=allowed_source_tags,
+        ):
+            rows_by_id[row["rowid"]] = row
         for row in self.store.query_fts(
             make_fts_query(query),
             limit=candidate_limit,

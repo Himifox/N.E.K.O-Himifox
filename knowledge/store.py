@@ -1588,6 +1588,41 @@ class KnowledgeStore:
         except (KnowledgeStoreError, sqlite3.OperationalError):
             return ()
 
+    def query_exact_title_or_alias(
+        self,
+        query: str,
+        *,
+        limit: int,
+        allowed_source_tags: tuple[str, ...] | None = None,
+    ):
+        """Recall punctuation-preserving exact candidates before broad caps."""
+        query = str(query or "").strip()
+        if not query:
+            return ()
+        if allowed_source_tags is not None and not allowed_source_tags:
+            return ()
+        source_clause = ""
+        source_parameters: tuple[str, ...] = ()
+        if allowed_source_tags is not None:
+            placeholders = ", ".join("?" for _ in allowed_source_tags)
+            source_clause = (
+                " AND EXISTS (SELECT 1 FROM json_each(entries.tags) source_filter "
+                f"WHERE source_filter.value IN ({placeholders}))"
+            )
+            source_parameters = allowed_source_tags
+        try:
+            with self._connection() as connection:
+                return connection.execute(
+                    "SELECT rowid, * FROM entries WHERE ("
+                    "title = ? COLLATE NOCASE OR EXISTS ("
+                    "SELECT 1 FROM json_each(entries.terms, '$.alias') alias "
+                    "WHERE CAST(alias.value AS TEXT) = ? COLLATE NOCASE))"
+                    f"{source_clause} ORDER BY rowid LIMIT ?",
+                    (query, query, *source_parameters, limit),
+                ).fetchall()
+        except (KnowledgeStoreError, sqlite3.OperationalError):
+            return ()
+
     def query_like(
         self,
         normalized_query: str,
