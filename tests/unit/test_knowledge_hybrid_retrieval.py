@@ -116,7 +116,7 @@ def test_semantic_scan_collapses_chunks_and_applies_filters(tmp_path, monkeypatc
     for entry in (kept, disabled, wrong_source):
         store.upsert(entry)
     snapshot = VectorIndexSnapshot(
-        revision=1,
+        revision=store.chunks_revision(),
         model_id="fixture",
         matrix=np.asarray(
             [
@@ -153,7 +153,7 @@ def test_semantic_scan_filters_sources_before_top_k(tmp_path, monkeypatch):
     store.upsert(_entry("Crowding source", source="source:other"))
     store.upsert(_entry("Allowed result", source="source:allowed"))
     snapshot = VectorIndexSnapshot(
-        revision=1,
+        revision=store.chunks_revision(),
         model_id="fixture",
         matrix=np.asarray([[1.0, 0.0]] * 65 + [[0.8, 0.6]], dtype=np.float32),
         entry_rowids=np.asarray([1] * 65 + [2], dtype=np.int64),
@@ -181,7 +181,7 @@ def test_semantic_scan_filters_disabled_chunks_before_top_k(tmp_path, monkeypatc
     store.upsert(_entry("Disabled crowd"))
     store.upsert(_entry("Enabled result"))
     snapshot = VectorIndexSnapshot(
-        revision=1,
+        revision=store.chunks_revision(),
         model_id="fixture",
         matrix=np.asarray([[1.0, 0.0]] * 65 + [[0.8, 0.6]], dtype=np.float32),
         entry_rowids=np.asarray([1] * 65 + [2], dtype=np.int64),
@@ -213,7 +213,7 @@ def test_semantic_scan_caps_unique_entries_after_collapsing_chunks(
         store.upsert(_entry(title))
     scores = [1.0] * 32 + [0.99] * 32 + [0.8]
     snapshot = VectorIndexSnapshot(
-        revision=1,
+        revision=store.chunks_revision(),
         model_id="fixture",
         matrix=np.asarray(
             [[score, np.sqrt(1.0 - score**2)] for score in scores],
@@ -240,6 +240,37 @@ def test_semantic_scan_caps_unique_entries_after_collapsing_chunks(
         "Crowd two",
         "Distinct result",
     ]
+
+
+def test_semantic_scan_rejects_entries_from_a_newer_chunk_revision(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Old entry"))
+    snapshot = VectorIndexSnapshot(
+        revision=store.chunks_revision(),
+        model_id="fixture",
+        matrix=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        entry_rowids=np.asarray([1], dtype=np.int64),
+        chunk_indices=np.asarray([0], dtype=np.int32),
+    )
+    store.replace_source("source:test", (_entry("Replacement entry"),))
+    assert store.load_entries_by_rowids((1,))[1].title == "Replacement entry"
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: frozenset(),
+    )
+
+    result = _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=1,
+        allowed_source_tags=None,
+    )
+
+    assert result == []
 
 
 @pytest.mark.asyncio

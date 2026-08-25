@@ -36,6 +36,7 @@ from .vector_index import (
 
 
 _KNOWLEDGE_RRF_K = 60
+_MANAGEMENT_SEARCH_RESULT_LIMIT = 10_101
 _T = TypeVar("_T")
 
 
@@ -890,7 +891,7 @@ class KnowledgeService:
         offset = min(max(int(offset), 0), 10_000)
         hits = self._retriever().search(
             query,
-            limit=offset + limit + 1,
+            limit=_MANAGEMENT_SEARCH_RESULT_LIMIT,
             allowed_source_tags=(source_tag,) if source_tag else None,
             include_disabled=include_disabled,
         )

@@ -22,6 +22,7 @@ from knowledge.catalog_overrides import (
 )
 from knowledge.pack_jobs import KnowledgeJobRegistryError
 from knowledge.source_registry import get_source, get_sources
+from knowledge.store import KnowledgeStoreError
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
 from knowledge.prebuilt_index import (
     MAX_PREBUILT_MANIFEST_BYTES,
@@ -79,7 +80,7 @@ async def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
 def _service():
     try:
         return open_knowledge(get_config_manager().knowledge_dir)
-    except (OSError, ValueError) as exc:
+    except (KnowledgeStoreError, OSError, ValueError) as exc:
         raise HTTPException(
             status_code=503,
             detail={

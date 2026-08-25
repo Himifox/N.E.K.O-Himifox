@@ -102,6 +102,48 @@ def test_punctuated_exact_match_is_recalled_before_broad_candidate_cap(tmp_path)
     assert result[0].entry.title == "C++"
 
 
+def test_unicode_folded_exact_match_is_recalled_before_broad_candidate_cap(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    for index in range(13):
+        store.upsert(_entry(f"STRASSE {index:02d}", "source:fixture"))
+    store.upsert(_entry("Straße", "source:fixture"))
+    alias_entry = KnowledgeEntry(
+        title="Measured concept",
+        terms={"alias": ("Maße",), "recognition": ()},
+        tags=("source:fixture",),
+        summary="Unicode alias",
+        content="Unicode alias fixture",
+    )
+    store.upsert(alias_entry)
+
+    assert service.search("STRASSE", limit=1)[0].entry.title == "Straße"
+    assert service.search("MASSE", limit=1)[0].entry.title == "Measured concept"
+
+
+def test_search_page_uses_one_stable_ranked_window(tmp_path, monkeypatch):
+    service = open_knowledge(tmp_path)
+    ranked = [
+        KnowledgeHit(entry=_entry(f"Result {index}", "source:fixture"), score=1.0)
+        for index in range(120)
+    ]
+    requested_limits: list[int] = []
+
+    class _Retriever:
+        def search(self, _query, *, limit, **_kwargs):
+            requested_limits.append(limit)
+            return ranked[:limit]
+
+    monkeypatch.setattr(service, "_retriever", lambda: _Retriever())
+
+    first = service.search_page("query", limit=50, offset=0)
+    second = service.search_page("query", limit=50, offset=50)
+
+    assert requested_limits == [10_101, 10_101]
+    assert [hit.entry.title for hit in first[-2:]] == ["Result 49", "Result 50"]
+    assert [hit.entry.title for hit in second[:2]] == ["Result 50", "Result 51"]
+
+
 def test_empty_and_populated_status_share_chunk_fields(tmp_path):
     empty_status = open_knowledge(tmp_path / "empty").get_status()
     populated_service = open_knowledge(tmp_path / "populated")

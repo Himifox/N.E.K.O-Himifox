@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -13,7 +12,7 @@ from .catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
-from .filters import make_fts_query, normalize_search_text
+from .filters import folded_exact_surface, make_fts_query, normalize_search_text
 from .models import KnowledgeHit
 from .store import KnowledgeStore, _entry_from_row
 
@@ -178,7 +177,7 @@ class KnowledgeRetriever:
             score = _score(
                 entry,
                 query_text,
-                _folded_exact_surface(query),
+                folded_exact_surface(query),
                 float(row["rank"]) if "rank" in row.keys() else 0.0,
             )
             hits.append(KnowledgeHit(entry=entry, score=score))
@@ -260,10 +259,6 @@ def _get_cached_mention_matcher(
     return cached.matcher
 
 
-def _folded_exact_surface(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
-
-
 def _score(
     entry,
     normalized_query: str,
@@ -274,10 +269,10 @@ def _score(
     aliases = [normalize_search_text(value) for value in entry.aliases]
     recognition_terms = [normalize_search_text(value) for value in entry.recognition_terms]
     tags = [normalize_search_text(value) for value in entry.tags]
-    if query_surface == _folded_exact_surface(entry.title):
+    if query_surface == folded_exact_surface(entry.title):
         return 1_000.0
     if query_surface in {
-        _folded_exact_surface(value)
+        folded_exact_surface(value)
         for value in entry.aliases
     }:
         return 950.0

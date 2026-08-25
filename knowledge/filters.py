@@ -30,6 +30,11 @@ def normalize_search_text(value: str) -> str:
     return "".join(_FTS_TOKEN_RE.split(unicodedata.normalize("NFKC", str(value or "")).casefold()))
 
 
+def folded_exact_surface(value: str) -> str:
+    """Normalize exact-match surfaces without discarding meaningful punctuation."""
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
 def make_fts_query(value: str) -> str:
     """Build a conservative FTS5 query from user-supplied text.
 

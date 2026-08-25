@@ -397,7 +397,12 @@ def _score_snapshot(
     )
     candidate_indices = unique_indices[:candidate_count]
     rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
-    entries = store.load_entries_by_rowids(rowids)
+    entries = store.load_entries_by_rowids_at_chunks_revision(
+        rowids,
+        expected_revision=snapshot.revision,
+    )
+    if entries is None:
+        return []
     best: dict[tuple[str, str], KnowledgeHit] = {}
     for index in candidate_indices:
         score = float(scores[index])

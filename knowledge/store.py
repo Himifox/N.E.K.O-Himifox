@@ -16,6 +16,7 @@ from knowledge.chunking import (
     derive_knowledge_chunks,
     knowledge_embedding_text,
 )
+from knowledge.filters import folded_exact_surface
 
 from .models import KnowledgeEntry, UpsertResult
 
@@ -25,6 +26,13 @@ MAX_EMBEDDING_ATTEMPTS = 8
 EMBEDDING_POLICIES = frozenset(("local", "prebuilt_only"))
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
 _INITIALIZE_LOCK = threading.Lock()
+_FOLDED_COLLATION = "KNOWLEDGE_FOLDED"
+
+
+def _compare_folded_surfaces(left: str, right: str) -> int:
+    left_key = folded_exact_surface(left)
+    right_key = folded_exact_surface(right)
+    return (left_key > right_key) - (left_key < right_key)
 
 
 class KnowledgeStoreError(RuntimeError):
@@ -99,6 +107,7 @@ class KnowledgeStore:
         )
         try:
             connection.row_factory = sqlite3.Row
+            connection.create_collation(_FOLDED_COLLATION, _compare_folded_surfaces)
             connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
             self._assert_supported_schema(connection)
             if writable:
@@ -1380,6 +1389,34 @@ class KnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return {}
 
+    def load_entries_by_rowids_at_chunks_revision(
+        self,
+        rowids: Sequence[int],
+        *,
+        expected_revision: int,
+    ) -> dict[int, KnowledgeEntry] | None:
+        """Load rows only when they share the vector snapshot's DB revision."""
+        unique = tuple(dict.fromkeys(int(rowid) for rowid in rowids if int(rowid) > 0))
+        if not unique:
+            return {}
+        placeholders = ",".join("?" for _ in unique)
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN")
+                revision_row = connection.execute(
+                    "SELECT value FROM metadata WHERE key='chunks_revision'"
+                ).fetchone()
+                revision = int(revision_row["value"]) if revision_row else 0
+                if revision != int(expected_revision):
+                    return None
+                rows = connection.execute(
+                    f"SELECT rowid, * FROM entries WHERE rowid IN ({placeholders})",
+                    unique,
+                ).fetchall()
+                return {int(row["rowid"]): _entry_from_row(row) for row in rows}
+        except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
     def entry_rowids_for_source_tags(
         self,
         source_tags: Sequence[str],
@@ -1614,9 +1651,9 @@ class KnowledgeStore:
             with self._connection() as connection:
                 return connection.execute(
                     "SELECT rowid, * FROM entries WHERE ("
-                    "title = ? COLLATE NOCASE OR EXISTS ("
+                    f"title = ? COLLATE {_FOLDED_COLLATION} OR EXISTS ("
                     "SELECT 1 FROM json_each(entries.terms, '$.alias') alias "
-                    "WHERE CAST(alias.value AS TEXT) = ? COLLATE NOCASE))"
+                    f"WHERE CAST(alias.value AS TEXT) = ? COLLATE {_FOLDED_COLLATION}))"
                     f"{source_clause} ORDER BY rowid LIMIT ?",
                     (query, query, *source_parameters, limit),
                 ).fetchall()

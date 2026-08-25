@@ -7,6 +7,7 @@ import threading
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,6 +20,7 @@ from knowledge.prebuilt_index import (
     build_prebuilt_index_artifacts,
 )
 from knowledge.subscriptions import canonical_pack_bytes
+from knowledge.store import KnowledgeStoreError
 
 
 def _entry(title: str, source: str, *, summary: str = "A compact summary") -> KnowledgeEntry:
@@ -226,14 +228,19 @@ def test_corrupt_job_registry_blocks_import_until_explicit_discard(
     assert not orphan.exists()
 
 
-def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error_type", [ValueError, KnowledgeStoreError])
+def test_management_api_reports_migration_failure_without_500(
+    monkeypatch,
+    tmp_path,
+    error_type,
+):
     import main_routers.public_knowledge_router as module
 
     client = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(
         module,
         "open_knowledge",
-        lambda _root: (_ for _ in ()).throw(ValueError("migration conflict")),
+        lambda _root: (_ for _ in ()).throw(error_type("migration conflict")),
     )
 
     status = client.get("/api/public-knowledge/status")
