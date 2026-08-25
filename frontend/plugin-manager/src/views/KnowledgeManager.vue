@@ -379,6 +379,7 @@ const pageSize = 50
 const hasMore = ref(false)
 const entriesRequestGate = createLatestRequestGate()
 const entryRequestGate = createLatestRequestGate()
+const packJobsRequestGate = createLatestRequestGate()
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
 const packs = ref<KnowledgePackSummary[]>([])
@@ -530,6 +531,7 @@ async function openKnowledgeMarket() {
 async function refreshAll() {
   loading.value = true
   packsLoading.value = true
+  const packJobsRequestId = packJobsRequestGate.begin()
   try {
     const [statusResult, packsResult, jobsResult] = await Promise.allSettled([
       knowledgeApi.status(),
@@ -544,11 +546,17 @@ async function refreshAll() {
       packs.value = packsResult.value.packs || []
       cachedPacks = { value: packs.value, loadedAt: Date.now() }
     }
-    if (jobsResult.status === 'fulfilled') {
+    if (
+      jobsResult.status === 'fulfilled'
+      && !disposed
+      && packJobsRequestGate.isLatest(packJobsRequestId)
+    ) {
       packJobs.value = jobsResult.value.jobs || []
     }
     writeOverviewCache()
-    if (statusResult.status === 'rejected' || packsResult.status === 'rejected' || jobsResult.status === 'rejected') {
+    const currentJobsFailed = jobsResult.status === 'rejected'
+      && packJobsRequestGate.isLatest(packJobsRequestId)
+    if (statusResult.status === 'rejected' || packsResult.status === 'rejected' || currentJobsFailed) {
       ElMessage.error(t('knowledge.loadFailed'))
     }
   } catch {
@@ -713,11 +721,16 @@ async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
 }
 
 async function loadPackJobs(options: { silent?: boolean } = {}) {
+  const requestId = packJobsRequestGate.begin()
   try {
     const response = await knowledgeApi.packJobs()
-    if (!disposed) packJobs.value = response.jobs || []
+    if (!disposed && packJobsRequestGate.isLatest(requestId)) {
+      packJobs.value = response.jobs || []
+    }
   } catch {
-    if (!disposed && !options.silent) ElMessage.error(t('knowledge.loadFailed'))
+    if (!disposed && packJobsRequestGate.isLatest(requestId) && !options.silent) {
+      ElMessage.error(t('knowledge.loadFailed'))
+    }
   }
 }
 
@@ -732,6 +745,7 @@ async function discardDegradedJob(job: KnowledgePackJob) {
     )
     discardingJobId.value = jobId
     await knowledgeApi.discardPackJob({ job_id: jobId })
+    packJobsRequestGate.invalidate()
     packJobs.value = packJobs.value.filter((item) => item.job_id !== jobId)
     ElMessage.success(t('knowledge.jobDiscarded'))
     refreshOverviewInBackground()
@@ -793,10 +807,11 @@ async function pollImportJobs() {
   packJobPollTimer = null
   if (disposed || pendingImportJobs.size === 0 || packJobPollInFlight) return
   packJobPollInFlight = true
+  const requestId = packJobsRequestGate.begin()
   let completed = false
   try {
     const response = await knowledgeApi.packJobs()
-    if (disposed) return
+    if (disposed || !packJobsRequestGate.isLatest(requestId)) return
     packJobs.value = response.jobs || []
     const jobs = new Map(
       (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
@@ -1003,6 +1018,7 @@ onMounted(() => {
 onUnmounted(() => {
   disposed = true
   entryRequestGate.begin()
+  packJobsRequestGate.invalidate()
   pendingImportJobs.clear()
   if (overviewRefreshTimer !== null) window.clearTimeout(overviewRefreshTimer)
   if (packJobPollTimer !== null) window.clearTimeout(packJobPollTimer)

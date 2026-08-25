@@ -715,7 +715,7 @@ async def process_pack_jobs(
 ) -> dict[str, object]:
     """Verify and activate at most one staged community pack."""
 
-    all_jobs = list_pack_jobs(service.knowledge_root)
+    all_jobs = await asyncio.to_thread(list_pack_jobs, service.knowledge_root)
     for item in all_jobs:
         item_job_id = str(item.get("job_id") or "")
         if (

@@ -143,4 +143,40 @@ describe('knowledge API response handling', () => {
     expect(axiosMocks.get).toHaveBeenCalledTimes(1)
     expect(axiosMocks.request).toHaveBeenCalledTimes(2)
   })
+
+  it('does not clear a refreshed token when a delayed stale 403 arrives', async () => {
+    let rejectFirst!: (reason: unknown) => void
+    let rejectSecond!: (reason: unknown) => void
+    const invalidToken = {
+      response: {
+        status: 403,
+        data: { detail: { code: 'invalid_bridge_token' } },
+      },
+    }
+    axiosMocks.get
+      .mockResolvedValueOnce({ data: { bridge_token: 'stale-token' } })
+      .mockResolvedValueOnce({ data: { bridge_token: 'fresh-token' } })
+    axiosMocks.request
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectFirst = reject
+      }))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectSecond = reject
+      }))
+      .mockResolvedValue({ data: { ok: true } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    const first = knowledgeApi.status()
+    const second = knowledgeApi.packs()
+    await vi.waitFor(() => expect(axiosMocks.request).toHaveBeenCalledTimes(2))
+    rejectFirst(invalidToken)
+    await vi.waitFor(() => expect(axiosMocks.request).toHaveBeenCalledTimes(3))
+    rejectSecond(invalidToken)
+    await Promise.all([first, second])
+
+    expect(axiosMocks.get).toHaveBeenCalledTimes(2)
+    expect(axiosMocks.request).toHaveBeenCalledTimes(4)
+    expect(axiosMocks.request.mock.calls[2]![0].params.token).toBe('fresh-token')
+    expect(axiosMocks.request.mock.calls[3]![0].params.token).toBe('fresh-token')
+  })
 })

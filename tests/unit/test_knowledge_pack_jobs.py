@@ -25,6 +25,27 @@ from knowledge.service import KnowledgeService
 from knowledge.subscriptions import canonical_pack_bytes
 
 
+@pytest.mark.asyncio
+async def test_process_pack_jobs_lists_state_off_the_event_loop(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as module
+
+    service = KnowledgeService.from_root(tmp_path)
+    event_loop_thread = threading.get_ident()
+    list_threads: list[int] = []
+    original = module.list_pack_jobs
+
+    def tracked_list(root):
+        list_threads.append(threading.get_ident())
+        return original(root)
+
+    monkeypatch.setattr(module, "list_pack_jobs", tracked_list)
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "no_work"
+    assert list_threads and all(thread_id != event_loop_thread for thread_id in list_threads)
+
+
 def _pack(
     *,
     title: str = "Staged phrase",

@@ -23,8 +23,7 @@ export class KnowledgeApiError extends Error {
   }
 }
 
-async function token(forceRefresh = false): Promise<string> {
-  if (forceRefresh) bridgeToken = ''
+async function token(): Promise<string> {
   if (bridgeToken) return bridgeToken
   if (!bridgeTokenRequest) {
     bridgeTokenRequest = axios
@@ -81,11 +80,13 @@ async function request<T extends KnowledgeEnvelope>(
   options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {},
 ): Promise<T> {
   let data: T
+  const usedToken = await token()
   try {
-    data = await executeRequest<T>(path, options, await token())
+    data = await executeRequest<T>(path, options, usedToken)
   } catch (error) {
     if (!isInvalidBridgeToken(error)) throw error
-    data = await executeRequest<T>(path, options, await token(true))
+    if (bridgeToken === usedToken) bridgeToken = ''
+    data = await executeRequest<T>(path, options, await token())
   }
   if (data?.ok === false) {
     throw new KnowledgeApiError(
