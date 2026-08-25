@@ -1,10 +1,10 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：已实施设计记录。本文先记录 PR #2951 第一轮 23 条审查评论的边界收敛，并在末尾追加第二轮 13 项复审结论。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码和测试是最终事实来源。
+> 状态：实施记录与待实施补充。第一、二轮已经实施；第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，尚未实施的项目必须以代码、测试和 CI 通过为完成依据。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量。
 
 ## 目标与非目标
 
-本轮不逐条堆叠补丁，而是把评论收敛为 11 个拥有明确责任边界的修复单元。目标是：
+第一轮不逐条堆叠补丁，而是把评论收敛为 11 个拥有明确责任边界的修复单元。目标是：
 
 - 已提交的数据不能被后续辅助步骤改写成失败；
 - 异步路由不直接执行可能阻塞的磁盘或 SQLite 操作；
@@ -330,3 +330,290 @@
 | 文档提交 | #8 | 本文和设计索引只把已实施内容列入 implemented records |
 
 第二轮定向 Python 测试必须使用 `uv run pytest`；前端至少通过 `vue-tsc --build` 与 i18n 完整性检查。最终回归通过后，10 个行级线程可以逐项 resolved；3 个 outside 建议只能通过代码更新与 review 回复说明已处理。
+
+## 第三轮复审：剩余边界的待实施设计
+
+本轮以 `2381e79b8` 为代码快照，复核 GitHub 上全部 unresolved 行级线程（包括已经 outdated 但仍未手动解决的线程）及 review body 中的 outside-diff 评论。按“当前代码是否已经覆盖评论所述失败路径”重新归并后，结果为：
+
+- 6 项原问题已经由当前代码解决；
+- 1 项只完成了外围耗时校验的线程化，JSON 解码仍在事件循环中，属于半修复；
+- 7 项问题在当前代码中仍成立；
+- 另有 2 个不对应新 review thread、但会阻断 PR 合并的 Windows CI 回归。
+
+这里的“已解决”只表示原评论描述的准确失败路径已经消失，不表示相邻实现没有继续优化空间。第三轮实现不得为了顺手优化而扩大 PR；下面明确列为“后续增强”的内容不作为本轮线程关闭条件。
+
+### 复核分类
+
+| 类别 | 问题 | 当前结论 | 第三轮动作 |
+| --- | --- | --- | --- |
+| 已解决 | 不兼容的 `prebuilt_only` 向量继续占 ready 预算 | 代码已同时 stale `local` 与 `prebuilt_only` | 增加精确策略回归测试后关闭线程 |
+| 已解决 | disabled chunk 在 semantic top-K 后才过滤 | eligible mask 已在截断前排除 disabled rowid | 保留现有 65-chunk 测试；条目多样性另列后续增强 |
+| 已解决 | 非法 `packs.json` 被当作健康空安装 | status 已暴露 `pack_registry_state=invalid` 并降级 integrity | 关闭线程 |
+| 已解决 | 远端 Origin 可进入本地管理 bridge | catch-all 已先执行本地同源校验 | 关闭线程 |
+| 已解决 | remove 返回后 staged replacement 再激活 | stage、activate、remove 已共享 pack lock | 增加真实并发时序测试后关闭线程 |
+| 已解决 | entry detail 晚响应覆盖新选择 | latest-request gate 已同时保护成功、失败及卸载 | 关闭线程 |
+| 半修复 | 本地 pack 导入在事件循环执行重 CPU 工作 | pack/prebuilt 校验已进线程；最大约 10 MiB JSON 仍同步解码 | 修复单元 L |
+| 仍成立 | path-specific 413 文案误称“全局上限” | 稳定错误码和上限值正确，仅文案错误 | 修复单元 M |
+| 仍成立 | unsubscribe 信任调用方 `pack_id` | 可误删本地导入包或其他订阅包 | 修复单元 N |
+| 仍成立 | unsubscribe 不取消活动订阅 worker | 下载、安装和删除可并发交错 | 修复单元 O |
+| 仍成立 | 损坏的 staged `state.json` 被静默忽略 | 作业、容量和同包冲突均会消失 | 修复单元 P |
+| 仍成立 | takeover completion 泄漏 route owner | takeover 分支未消费 `_text_route_owners` | 修复单元 Q |
+| 仍成立 | 未来数据库 Schema 被当前版本原地降级 | 版本检查发生在 DDL/修复写入之后，且最终覆盖为 7 | 修复单元 R |
+| 仍成立 | 拉丁词直接匹配没有词边界 | `java` 会命中 `javascript` | 修复单元 S |
+| CI 阻断 | 3 个 unit tests 构造了不完整 manager | 测试夹具缺少生产构造器已初始化的 owner map | 修复单元 T |
+| CI 阻断 | Study Companion 纯注册导入加载 NumPy | route 聚合导入把 `knowledge.vector_index` 带入进程 | 修复单元 T |
+
+### 第三轮新增不变量
+
+8. 删除知识包的授权身份必须来自本地持久化订阅元数据或可信 Market descriptor；请求中的 `pack_id` 只能做一致性校验，不能作为删除授权。
+9. 持久化作业一旦创建目录，就必须处于“可解析”或“显式隔离”状态；损坏、缺失或暂时不可读的状态不得从列表、容量和同包互斥中消失。
+10. 高于当前 `SCHEMA_VERSION` 的数据库必须在任何 DDL、DML、journal mode 切换或修复动作之前被拒绝，旧程序不得尝试解释或降级新格式。
+11. 取消内存 worker 后必须等待其真正结束，并把任务写成可观察的终态；取消期间不得允许同一 `package_id` 启动新订阅。
+12. 拉丁词的自动直接匹配按拉丁字母/数字边界判断；CJK 相邻字符不是拉丁边界阻挡，因此 `Java开发` 可以命中 `Java`，`JavaScript` 不可以。
+
+## 修复单元 L：有界 JSON 的事件循环边界
+
+涉及：`main_routers/public_knowledge_router.py::_bounded_json_payload()` 的半修复评论。
+
+### 边界
+
+流式读取和字节累计继续由事件循环协调；UTF-8 解码、`json.loads()` 和根对象判定合并为纯同步 helper `_decode_json_object(raw: bytes | bytearray) -> dict`，统一通过 `await asyncio.to_thread(...)` 执行。把已累计的 `bytearray` 原样传给 `to_thread`，不能在参数求值时先调用 `bytes(raw)`，否则大对象复制仍发生在事件循环。helper 不访问 request、service 或全局状态。
+
+返回契约保持 `(payload, too_large)`：只有实际或声明体积超限时 `too_large=True`；非法 UTF-8、非法 JSON 或非对象根仍返回 `({}, False)`，不借这次修复改变现有 API 错误语义。
+
+### 验收
+
+- 在线程标识测试中，`_decode_json_object` 不运行在事件循环线程；
+- 超限输入在进入 decoder 前返回，不能分配第二份 JSON 字符串；
+- 合法对象、数组根、非法 UTF-8、非法 JSON 和恰好等于上限的输入保持原响应；
+- 解码接近上限的 JSON 时，一个并行 event-loop tick 能继续运行。
+
+## 修复单元 M：请求体上限的稳定错误语义
+
+涉及：`utils/asgi_body_limit.py::_reject()` 的 path-specific 文案评论。
+
+### 边界
+
+同一个 `_reject()` 同时服务全局上限和精确路径上限，错误文本不得声称是哪一类配置触发。统一改为“请求体超过允许的体积上限。”；`payload_too_large`、`knowledge_request_too_large` 和响应中的实际 `max_bytes` 保持不变。
+
+这是后端机器可读错误契约，不新增前端文案，也不引入 i18n key。前端应继续依据 `error_code` 映射本地化提示，不能解析中文 `error`。
+
+### 验收
+
+- 全局 JSON 上限返回 `payload_too_large`、全局 `max_bytes` 和中性文案；
+- 订阅 multipart 精确路径返回 `knowledge_request_too_large`、路径专用 `max_bytes` 和同一中性文案；
+- 声明长度超限与实际流式累计超限的 payload 完全一致。
+
+## 修复单元 N：订阅删除的可信所有权
+
+涉及：`plugin/server/routes/knowledge_market.py::unsubscribe_knowledge_package()` 信任调用方 `pack_id` 的 P1 评论。
+
+### 身份模型
+
+为订阅元数据增加 `provider_package_id`。由于现有订阅 hand-off 是字符串字典，该值使用无前导零的正十进制字符串；新安装的 `plugin-market` 订阅必须写入该字段。`provider`、`provider_package_id` 和 `remote_id` 共同构成不可变提供方身份，`version` 与 `channel` 是可更新版本信息。
+
+兼容规则如下：
+
+- `validate_subscription()` 接受旧记录缺少 `provider_package_id`，但 Plugin Market 发起的新 apply 必须提供；
+- 已有非空 `provider_package_id` 不得在 replacement 中改变；
+- 旧记录从空值升级到非空值，只能发生在当前请求已经通过可信 descriptor 校验时；
+- 本地导入包没有 subscription 元数据，永远不具备 Market unsubscribe 资格。
+
+`provider_package_id` 是现有 subscription 子对象的向后兼容可选字段，`PACK_REGISTRY_SCHEMA_VERSION` 保持 4，`SUBSCRIPTION_PROTOCOL_VERSION` 保持 1：旧 registry 可以缺少它，新 Main Server 能读取旧记录；但新 Plugin Market apply 必须携带它。读取旧 registry 时不原地重写，等可信 replacement 时再持久化，避免一次列表操作产生写入。
+
+### 所有权解析
+
+新增 `_resolve_owned_subscription(package_id, claimed_pack_id)`，返回服务端确认的 `pack_id`，不直接删除：
+
+1. 从 Main Server 的已安装 pack 列表中筛选 `subscription.provider == "plugin-market"` 且 `provider_package_id` 等于请求 `package_id` 的记录；
+2. 找到唯一记录后，以该记录的真实 pack ID 为删除目标；调用方 `claimed_pack_id` 不一致时返回 `subscription_identity_mismatch`，绝不改用调用方值；
+3. 没有新字段匹配时，只允许检查 caller 指向的旧订阅候选。候选必须是 `plugin-market` 订阅，并具有 version、channel 和 remote_id；随后按请求 `package_id` 获取可信 descriptor，且 descriptor 的 `pack_id`、`remote_id`、version、channel 全部一致才授权；
+4. 旧记录无法联网验证、descriptor 不一致或元数据不足时返回 `subscription_ownership_unverifiable`，失败关闭；
+5. 没有对应订阅时返回 `subscription_not_found`。本地包即使恰好同名也走该分支。
+
+Main Server 删除接口只接收解析后的真实 pack ID。Market 上报使用原 `package_id`，但上报失败仍是 best-effort，不回滚已经完成的本地删除。
+
+### 验收
+
+- 用某个本地导入包的 pack ID 调用 unsubscribe 不会删除它；
+- `package_id=A, pack_id=B` 不能删除 B，也不能删除 A 对应包；
+- 新格式订阅在离线状态下仍能凭持久化身份安全删除；
+- 旧格式订阅在线且 descriptor 完全一致时可删除，离线或不一致时失败关闭；
+- replacement 可为旧记录补入 provider package ID，但不能改变既有非空值；
+- 重复或冲突的 provider package ID 被诊断为 registry identity error，不任选第一条删除。
+
+## 修复单元 O：unsubscribe 与活动任务的线性化取消
+
+涉及：unsubscribe 忽略 `_active_package_tasks` / `_task_workers` 的 P2 评论，并与修复单元 N 共用可信身份。
+
+### 并发顺序
+
+新增 `_unsubscribing_package_ids: set[int]`。unsubscribe 在第一次 `await` 前完成冲突检查并登记 package ID；subscribe 也必须先检查该集合，命中时返回 409 `knowledge_subscription_conflict`。单事件循环内“检查并登记”之间没有让出点，因此不需要额外 asyncio lock。
+
+登记后的顺序固定为：
+
+1. 读取当前活动 task/worker 快照；
+2. 若 worker 存在，调用 `cancel()` 并 `await asyncio.gather(worker, return_exceptions=True)`，确认下载、校验或等待 job 的协程已经退出；
+3. cancellation handler 或 done callback 把任务写成 `status=stage="cancelled"`，设置 `completed_at`、`error_code="cancelled_by_unsubscribe"`，再清理 worker 和 active-package 映射；
+4. 解析可信 pack 身份。worker 已经拿到 descriptor 时，必须在下一次 await 前把 `resolved_pack_id` 与 `resolved_remote_id` 写入 task，因此取消方可以直接使用；尚未解析 descriptor 的 worker 不可能已经提交 durable job，可按修复单元 N 的旧记录/可信 descriptor 流程继续；
+5. 调用 Main Server 的 cancel-and-remove 语义：同一个 pack lock 内先取消该 pack 的全部非终态 durable jobs，再删除在线包；只取消到 staged job、尚无在线安装时也返回成功。结果显式返回 `removed_pack`、`removed_entries` 与 `cancelled_jobs`；只有 `removed_pack=False` 且 `cancelled_jobs=0` 才是 not found，不能把已删除的零条目空包误判为不存在；
+6. 最后执行 Market best-effort 上报，并在 `finally` 清除 `_unsubscribing_package_ids`。
+
+`asyncio.CancelledError` 必须单独处理，不能落入当前通用 Exception 分支并把用户取消误记成 internal failure。done callback 仍负责消费非取消异常，但不得覆盖已经写入的 cancelled 终态。
+
+### 验收
+
+- resolving、downloading、verifying 阶段取消后 worker 结束，task 保留 cancelled 终态；
+- Main Server 已创建 durable job、Plugin worker 正在等待时，unsubscribe 能取消 job，且该包之后不会激活；
+- 已激活后 unsubscribe 删除在线包；
+- unsubscribe 登记后、删除返回前，同 package subscribe 始终返回 409；
+- 两个并发 unsubscribe 只有一个执行删除，另一个在 reservation 存续时稳定返回 409 conflict；
+- 取消到 staged-only 状态返回成功而不是表面 not found；
+- `finally` 在网络、身份解析和 Main Server 失败时都释放 reservation，允许用户重试。
+
+## 修复单元 P：损坏作业日志的隔离与容量守恒
+
+涉及：`knowledge/pack_jobs.py::_read_json()` 把所有读取失败折叠为空字典的 P2 评论。
+
+### 持久化结构
+
+新 job 不直接在最终目录中边写边公开。持有 jobs-root mutation lock 时，先创建 `.creating-<uuid>` 临时目录，原子写入不可变的 `identity.json`，再写 pack/index artifacts，最后写初始 `state.json`；全部成功后在同一文件系统内把目录原子重命名为最终 `<job_id>`。这样并发列表不会把正常创建中的 job 误判成 missing state。identity 至少包含：`job_id`、`pack_id`、`created_at`、`entries_total`、`chunks_total`、`content_bytes`。processor 不修改 identity；mutable state 只记录阶段、进度、重试和结果。
+
+JSON 读取改为判别结果而非空字典：`valid | missing | invalid | unreadable`。对共享/杀毒软件造成的临时 `OSError` 只做小次数、短间隔同步重试；仍失败后归类 unreadable，不能假装目录不存在。
+
+### 隔离语义
+
+- state 无效但 identity 有效：列表暴露 `state="degraded"`、`reason="invalid_job_state"` 及 identity 预算；容量统计和同 pack 互斥继续计入；processor 跳过，不自动清理；
+- state 缺失但 identity 有效：同样 degraded，reason 为 `missing_job_state`；
+- identity 与 state 都无法建立可信身份：暴露 orphan 诊断，并全局拒绝新 staging，错误码 `knowledge_job_registry_invalid`。此时无法安全判断它属于哪个 pack 或占用多少容量，不能按零处理；
+- 启动时发现遗留 `.creating-*` 目录也按 orphan 暴露并失败关闭；它可能来自进程崩溃，不能在不知道另一个进程是否仍写入时自动删除；
+- terminal auto-cleanup 不处理 degraded/orphan。管理端提供显式 discard 动作，按经过目录穿越校验的 job ID 删除隔离目录；不在后台自动修复或删除证据；
+- 本轮不实现从损坏 state 自动恢复执行。若以后增加 repair，必须重新验证 pack artifact、容量和订阅身份后生成新 state。
+
+为兼容旧 job：没有 identity 但 state 有效时，先按 state 正常展示和处理；只有在持有 job state lock、字段完整且 artifacts 可验证时才可补写 identity。不能仅凭目录名推断 pack ID。
+
+### 验收
+
+- `state.json` 为截断 JSON、数组、缺失或持续 unreadable 时，job 均出现在诊断中而不是消失；
+- identity 有效的 degraded job 继续占 entries/chunks/content 容量，并阻止同 pack 重复 staging；
+- identity 也无效时，任意新 staging 失败关闭，不创建第二个 job 目录；
+- 列表与 staging 并发时，完整 job 只在原子 rename 后出现，不产生瞬时 degraded 记录；崩溃遗留的 `.creating-*` 明确成为 orphan；
+- processor 重启不会执行或自动删除隔离 job；
+- 显式 discard 只能删除选定的 `.staging/<job_id>`，成功后容量与冲突解除；
+- 旧格式有效 job 可继续完成，兼容补写失败不破坏原 state。
+
+## 修复单元 Q：takeover 完成路径的 route-owner 释放
+
+涉及：`main_logic/core/turn.py::handle_response_complete()` takeover 分支的 P2 评论。
+
+### 边界
+
+在 takeover 分支的第一个 `await` 之前捕获 `active_request_id`，同步消费该 request 的 `_text_route_owners`，并清空只属于旧轮的 pending meta/text。`_active_text_request_id` 使用 compare-and-clear：仅当共享字段仍等于快照时置空。随后才 `await _clear_tts_pipeline()`。
+
+这样既不发送旧轮 `turn_end`，也不在 TTS cleanup 的让出窗口删除新请求刚登记的 owner 或 request ID。不要用 `getattr(..., {})` 掩盖测试夹具缺字段；生产构造器已经保证 owner map 存在，CI 夹具应按修复单元 T 补齐。
+
+### 验收
+
+- takeover completion 后旧 request owner、pending meta 和旧文本均不存在；
+- 在 `_clear_tts_pipeline()` await 期间注入新 request，新 owner 与新 active ID 保留；
+- takeover 路径不发 `turn_end`，普通完成路径仍只消费一次 owner；
+- TTS cleanup 抛错时也不能让旧 owner 永久残留，因此共享状态清理必须发生在 await 前。
+
+## 修复单元 R：数据库 Schema 的向前兼容拒绝
+
+涉及：`knowledge/store.py::_initialize()` 在确认版本前执行迁移和覆盖版本的 P1 评论。
+
+### 版本探测
+
+新增 `KnowledgeSchemaTooNewError(KnowledgeStoreError)` 和只读 `_read_schema_markers(connection)`。连接建立后只允许设置 row factory 与 busy timeout；在下列探测完成前，不得执行 `journal_mode=WAL`、CREATE、ALTER、DELETE、修复 source tag 或 metadata UPDATE：
+
+1. 读取 `PRAGMA user_version`；0 表示旧版本尚未使用该标记；
+2. 查询 sqlite schema 判断 metadata 表是否存在；存在时读取唯一 `schema_version` 值；
+3. metadata 值存在但不是规范正整数时，抛 `KnowledgeStoreError`，不猜测；
+4. 任一非零标记大于 `SCHEMA_VERSION` 时抛 `KnowledgeSchemaTooNewError`；
+5. 两个非零标记不一致时失败关闭，不能选择较小值继续；
+6. metadata 表或 schema row 缺失、且 user_version 为 0 时视为可迁移 legacy 数据库。
+
+探测通过后才进入现有 migration/repair，并在成功提交时同时写 `metadata.schema_version` 与 `PRAGMA user_version=SCHEMA_VERSION`。当前数据库的 metadata=7、user_version=0 是合法过渡态，会在一次成功初始化后补齐 user_version。初始化失败不写 `_INITIALIZED_DATABASES`；连接由现有 `finally` 关闭。
+
+status/管理 API 捕获 `KnowledgeSchemaTooNewError`，返回 degraded 及稳定诊断 `knowledge_schema_too_new`，包含 `supported_schema_version`，但不把数据库内容或异常堆栈暴露给前端。读、写、status 和后台 indexer 都必须经过同一 guard，不能只保护 mutation。
+
+### 验收
+
+- 构造 metadata 或 user_version 为 8 的数据库，分别调用读取、写入、status 和后台索引入口，均拒绝且错误稳定；
+- 拒绝前后数据库文件 identity、schema、表内容、schema_version、user_version 和 journal mode 均不变；
+- 非整数/负数 metadata marker 失败关闭；两个非零 marker 不一致失败关闭；
+- 只有 metadata marker 的当前 v7 数据库可正常打开并补齐 user_version；
+- 无 marker 的真实 legacy fixture 能迁移，空目录的健康语义不回归；
+- 失败连接不会污染 initialized cache，替换为受支持数据库后可重新初始化。
+
+## 修复单元 S：自动直接匹配的拉丁词边界
+
+涉及：`knowledge/service.py::_normalized_direct_text()` 删除所有分隔符后执行 substring 的 P2 评论。
+
+### 匹配模型
+
+保留两套规范化，不能用一个“删除所有非字母数字”的字符串同时服务所有语言：
+
+- compact normalization：NFKC + casefold + 仅保留字母数字，用于完整查询等价和含 CJK/非拉丁 term 的既有紧凑子串匹配；
+- folded surface：NFKC + casefold + 规范空白，但保留标点，用于纯拉丁/数字 term 的字面查找和边界判断。
+
+term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式匹配的左右邻接字符不能是拉丁字母、组合音标或十进制数字。CJK 字符、空白和标点都构成合法边界，因此 `Java开发` 与 `学习Java` 可匹配，`JavaScript`、`myjava2` 不可匹配。不要使用 Python `\b`：Unicode 正则会把汉字也视为 word character，从而错误拒绝 `Java开发`。
+
+含 CJK 的 term 保留 compact 子串路径。混合 term 因自身已有非拉丁区分度，也走 compact 路径。`_is_short_query_embedded_in_term()` 必须复用同一拉丁边界 helper，避免 direct 分支修好后 corpus semantic 辅助分支仍把 `java` 当作 `javascript` 的一部分。
+
+长度规则保持现状：普通嵌入式 direct term 仍至少 4 个字母数字；短 query-in-term 仍只在 corpus + semantic 前提下使用。带语义标点的技术名词（如 `node.js`）按 folded surface 精确标点匹配；`C++`、`C#` 只允许完整查询等价，不因单字母 `c` 触发嵌入匹配。此处不引入可配置分词器。
+
+### 验收
+
+- `java` 不匹配 `javascript`、`myjava2`，匹配 `Java 开发`、`Java开发` 和标点包围的 Java；
+- 中文 term 继续按紧凑子串匹配；NFKC、大小写折叠和带音标拉丁字母按同一边界工作；
+- `node.js` 不因删除点号而命中 `nodejs`；`C++` 完整查询可命中，但普通 `c` 不可；
+- direct 和 corpus short-query 两条路径使用同一组反例；
+- 原有 2 字符最低阈值、4 字符嵌入阈值和 semantic score 阈值不改变。
+
+## 修复单元 T：合并阻断的测试夹具与轻量导入
+
+### Unit pytest
+
+3 个失败测试通过 `object.__new__(LLMSessionManager)` 绕过生产构造器，夹具没有 `_text_route_owners`，而生产 `manager.py` 已在构造时初始化该字段。修复测试 `_make_manager()`，显式设为空字典；不得为了不完整测试对象在生产路径添加 defensive `getattr`。同时把 takeover 用例扩展为修复单元 Q 的 owner 清理和并发保留断言。
+
+### Plugin pytest
+
+`study_companion` 注册导入经过 `plugin.server.routes` package 后加载 `knowledge_market`；该模块从聚合层 `knowledge.api` 导入两个轻量订阅符号，聚合层继续加载 service、vector index 和 NumPy。将 `SUBSCRIPTION_PROTOCOL_VERSION` 与 `load_canonical_pack_artifact` 改为直接从 `knowledge.subscriptions` 导入；`MAX_PACK_BYTES` 继续来自 `knowledge.packs`。不为一个导入边界回归重构整个 routes package，也不添加运行时 sys.modules 清理。
+
+### 验收
+
+- 3 个当前失败的 manager unit tests 通过，且新 takeover 竞态测试通过；
+- `test_study_plugin_registration_import_does_not_load_numpy` 通过；
+- Plugin Market 的订阅 descriptor、canonical artifact 和下载上限行为不变；
+- 在 fresh interpreter 中导入 Study Companion 注册模块后，`numpy` 与 `knowledge.vector_index` 均未出现在 `sys.modules`。
+
+## 第三轮兼容、并发与失败矩阵
+
+| 场景 | 可信事实 | 允许结果 | 禁止结果 |
+| --- | --- | --- | --- |
+| 新格式 Market unsubscribe | registry 的 provider package ID | 取消同包任务并删除解析出的真实 pack | 按 caller pack ID 删除 |
+| 旧格式 unsubscribe，Market 离线 | 无法完成所有权证明 | 明确失败、保留数据 | 猜测 remote ID 或 pack ID 后删除 |
+| unsubscribe 与 subscribe 并发 | 先登记的 package reservation | 旧任务完全结束后才允许重试 | 删除期间启动新 worker |
+| staged state 损坏 | immutable identity 或 orphan 事实 | degraded/quarantine、计入预算、显式清理 | 静默跳过、自动删除、按零计费 |
+| 数据库 Schema > 7 | 数据库自身版本标记 | 只读探测后 degraded | WAL/DDL/DML/版本覆盖 |
+| takeover cleanup 期间新请求到达 | active request 快照与 owner map | 仅清旧 request | 清掉新 request 状态 |
+| 拉丁 term 嵌在更长拉丁 token | 邻接拉丁字符/数字 | 不视为 direct match | `java` 自动命中 `javascript` |
+| path-specific body 超限 | error code 与实际 limit | 中性人类文案 | 声称触发全局配置 |
+
+## 第三轮实施顺序、提交边界与关闭条件
+
+1. CI 与低风险边界提交：L、M、T。先恢复可用验证信号，不混入数据迁移。
+2. 数据库兼容提交：R。独立提交便于审查“拒绝前零写入”的证据。
+3. 作业持久化提交：P。包含旧 job 兼容、隔离展示、容量和显式 discard 的完整闭环。
+4. 订阅身份与并发提交：N、O。二者共享身份和取消顺序，不能只实现“取消 worker”而仍信任 caller pack ID。
+5. 会话与匹配提交：Q、S。它们互不共享状态，测试文件可清晰归属。
+6. 回归修正提交：仅处理上述定向测试与全量 CI 暴露的必要问题，不顺带扩大检索或路由架构。
+
+每个提交先运行对应定向测试，再运行受影响测试组。Python 使用项目 Python 3.11 的 `uv run pytest`；Plugin 测试在独立进程验证 import graph。只有满足以下全部条件后才可回复并 resolve 对应评论：实现已提交、评论所述反例有精确测试、相邻失败语义有至少一个负例、相关 CI 通过。
+
+### 不属于第三轮关闭条件的后续增强
+
+- semantic top-K 已在截断前排除 disabled chunks；“单个启用 entry 的大量 chunks 挤出其他启用 entry”属于结果多样性问题。若产品要求每个 entry 至少一个候选，应在 vector snapshot 中按 entry rowid 取最大分后再做 entry top-K，或渐进扩大 chunk 窗口直到得到足够不同 entry。该变化会影响相关性排序与性能，不与本轮 disabled 正确性评论绑定。
+- stage/remove 已有共享 pack lock；本轮只补真实并发回归，不改为数据库级分布式锁。当前桌面单进程模型不需要扩大锁范围。

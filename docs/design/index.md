@@ -21,7 +21,6 @@ These documents preserve design intent and implementation context. They are grou
 
 - [ASR client phase record](./asr-client-phase1)
 - [Compact chat mode](./compact-chat-mode-design)
-- [PR #2951 public-knowledge boundary remediation](./public-knowledge-pr2951-boundary-remediation)
 - [Memory event journal](./memory-event-log-rfc)
 - [User-driven memory evidence](./memory-evidence-rfc)
 - [PNGTuber lightweight avatar](./pngtuber-lightweight-avatar-plan)
@@ -29,6 +28,10 @@ These documents preserve design intent and implementation context. They are grou
 - [TTS provider and voice-source unification](./tts-voice-source-unification)
 - [Live2D idle motion selection and recovery](/live2d_motion_plan)
 - [PNGTubeRemix layered physics compatibility](/pngtuber-remix-physics-plan)
+
+## Active remediation plans
+
+- [PR #2951 public-knowledge boundary remediation](./public-knowledge-pr2951-boundary-remediation) — rounds 1–2 implemented; round 3 planned
 
 ## Product-flow and interaction records
 
