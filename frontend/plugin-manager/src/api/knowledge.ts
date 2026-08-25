@@ -1,6 +1,8 @@
 import axios from 'axios'
 
 export const MAX_KNOWLEDGE_PACK_FILE_BYTES = 10 * 1024 * 1024
+const KNOWLEDGE_GET_REQUEST_TIMEOUT_MS = 15_000
+const KNOWLEDGE_MUTATION_REQUEST_TIMEOUT_MS = 45_000
 
 let bridgeToken = ''
 let bridgeTokenRequest: Promise<string> | null = null
@@ -70,7 +72,9 @@ async function executeRequest<T extends KnowledgeEnvelope>(
     method: options.method || 'GET',
     params: { ...(options.params || {}), token: value },
     data: options.data,
-    timeout: 15000,
+    timeout: options.method === 'POST'
+      ? KNOWLEDGE_MUTATION_REQUEST_TIMEOUT_MS
+      : KNOWLEDGE_GET_REQUEST_TIMEOUT_MS,
   })
   return response.data
 }

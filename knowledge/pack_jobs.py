@@ -17,7 +17,7 @@ from typing import Any, Literal
 from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
-from .store import KnowledgeStore
+from .store import KnowledgeStore, KnowledgeStoreError
 from .packs import (
     KnowledgePack,
     ensure_install_capacity,
@@ -397,7 +397,12 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
     database_path = service.database_path()
     store = KnowledgeStore(database_path)
     if database_path.is_file():
-        usage = store.community_usage()
+        try:
+            usage = store.community_usage(strict=True)
+        except KnowledgeStoreError as exc:
+            raise KnowledgeJobRegistryError(
+                "knowledge_capacity_unavailable"
+            ) from exc
         for key in totals:
             totals[key] += int(usage[key])
 
@@ -407,7 +412,15 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
     for pack_id in replacement_keys:
         if not pack_id:
             continue
-        usage = store.community_usage(source_tag=f"source:community.{pack_id}")
+        try:
+            usage = store.community_usage(
+                source_tag=f"source:community.{pack_id}",
+                strict=True,
+            )
+        except KnowledgeStoreError as exc:
+            raise KnowledgeJobRegistryError(
+                "knowledge_capacity_unavailable"
+            ) from exc
         for key in replacement:
             replacement[key] += int(usage[key])
 

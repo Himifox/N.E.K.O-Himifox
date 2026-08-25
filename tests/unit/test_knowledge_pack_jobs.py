@@ -591,6 +591,30 @@ def test_pending_replacement_does_not_double_count_active_pack(tmp_path, monkeyp
     assert job["state"] == "queued"
 
 
+def test_capacity_admission_fails_closed_without_publishing_job(tmp_path, monkeypatch):
+    from knowledge.store import KnowledgeStoreError
+
+    service = KnowledgeService.from_root(tmp_path)
+
+    def unavailable_usage(_store, *, source_tag="", strict=False):
+        del source_tag
+        assert strict is True
+        raise KnowledgeStoreError("database locked")
+
+    monkeypatch.setattr(KnowledgeStore, "community_usage", unavailable_usage)
+
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_capacity_unavailable",
+    ):
+        service.stage_pack(_pack())
+
+    jobs_root = tmp_path / ".staging"
+    assert not jobs_root.exists() or not any(
+        path.is_dir() for path in jobs_root.iterdir()
+    )
+
+
 @pytest.mark.asyncio
 async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     tmp_path,

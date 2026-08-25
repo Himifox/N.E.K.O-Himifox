@@ -29,6 +29,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
+from knowledge._mutation_lock import MUTATION_LOCK_TIMEOUT_SECONDS
 from plugin.logging_config import get_logger
 from plugin.core.plugin_layout import resolve_plugin_layout
 from plugin.neko_plugin_cli.public import inspect_package
@@ -63,6 +64,8 @@ from knowledge.limits import (
 )
 
 router = APIRouter(prefix="/market", tags=["market-bridge"])
+KNOWLEDGE_GET_TIMEOUT_SECONDS = 15.0
+KNOWLEDGE_POST_TIMEOUT_SECONDS = MUTATION_LOCK_TIMEOUT_SECONDS + 10.0
 logger = get_logger("server.routes.market_bridge")
 
 _cli_service = PluginCliService()
@@ -218,8 +221,13 @@ async def public_knowledge_bridge(
             max_bytes=_knowledge_body_limit(normalized_path),
         )
     try:
+        request_timeout = (
+            KNOWLEDGE_POST_TIMEOUT_SECONDS
+            if request.method == "POST"
+            else KNOWLEDGE_GET_TIMEOUT_SECONDS
+        )
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, connect=2.0),
+            timeout=httpx.Timeout(request_timeout, connect=2.0),
             proxy=None,
             trust_env=False,
         ) as client:

@@ -21,6 +21,8 @@ from knowledge.limits import MAX_PACK_BYTES
 from plugin.logging_config import get_logger
 from plugin.settings import MARKET_API_URL, NEKO_AUTH_CLIENT_ID
 from plugin.server.routes.market_bridge import (
+    KNOWLEDGE_GET_TIMEOUT_SECONDS,
+    KNOWLEDGE_POST_TIMEOUT_SECONDS,
     _ensure_valid_oauth_token,
     _main_server_port,
     get_bridge_token,
@@ -57,6 +59,7 @@ class KnowledgeSubscribeRequest(BaseModel):
     package_id: int = Field(gt=0, le=PROVIDER_PACKAGE_ID_MAX)
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$")
     channel: Literal["stable", "beta"] = "stable"
+    pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
 
 class KnowledgeArtifactDescriptor(BaseModel):
@@ -157,6 +160,7 @@ async def subscribe_knowledge_package(
         "created_at": time.time(),
         "completed_at": None,
         "package_id": payload.package_id,
+        "requested_pack_id": payload.pack_id,
         "version": payload.version,
         "channel": payload.channel,
     }
@@ -245,6 +249,16 @@ async def unsubscribe_knowledge_package(
             payload.package_id,
             claimed_pack_id=payload.pack_id,
         )
+        if active_task is not None and active_task.get("preinstall_cancelled") is True:
+            await _report_unsubscribe_best_effort(payload.package_id)
+            return {
+                "ok": True,
+                "cancelled": True,
+                "removed": False,
+                "removed_pack": False,
+                "removed_entries": 0,
+                "cancelled_jobs": 0,
+            }
         pack_id, remote_id = await _resolve_owned_subscription(
             package_id=payload.package_id,
             claimed_pack_id=payload.pack_id,
@@ -282,13 +296,40 @@ async def _cancel_active_subscription(
 ) -> dict[str, Any] | None:
     task_id = _active_package_tasks.get(package_id)
     task = _tasks.get(task_id) if task_id else None
+    if task is None:
+        task = next(
+            (
+                candidate
+                for candidate in reversed(tuple(_tasks.values()))
+                if candidate.get("package_id") == package_id
+                and candidate.get("preinstall_cancelled") is True
+            ),
+            None,
+        )
+        if task is not None:
+            trusted_pack_id = str(
+                task.get("resolved_pack_id")
+                or task.get("requested_pack_id")
+                or ""
+            )
+            if trusted_pack_id != claimed_pack_id:
+                _raise_unsubscribe_error("subscription_identity_mismatch")
+        return task
     resolved_pack_id = str((task or {}).get("resolved_pack_id") or "")
-    if resolved_pack_id and resolved_pack_id != claimed_pack_id:
+    requested_pack_id = str((task or {}).get("requested_pack_id") or "")
+    trusted_pack_id = resolved_pack_id or requested_pack_id
+    if trusted_pack_id and trusted_pack_id != claimed_pack_id:
         _raise_unsubscribe_error("subscription_identity_mismatch")
+    stage = str((task or {}).get("stage") or "")
+    preinstall = stage in {"pending", "resolving", "downloading", "verifying"}
+    if preinstall and not trusted_pack_id:
+        _raise_unsubscribe_error("subscription_ownership_unverifiable")
     worker = _task_workers.get(task_id) if task_id else None
     if worker is not None:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+    if preinstall and task is not None:
+        task["preinstall_cancelled"] = True
     return task
 
 
@@ -355,6 +396,7 @@ async def _resolve_owned_subscription(
                 package_id=package_id,
                 version=str(subscription.get("version") or ""),
                 channel=str(subscription.get("channel") or "stable"),
+                pack_id=claimed_pack_id,
             )
         )
     except (ValueError, _KnowledgeTaskError):
@@ -514,6 +556,7 @@ async def _fetch_version_descriptor(
         ) from exc
     if (
         descriptor.package_id != request.package_id
+        or descriptor.pack_id != request.pack_id
         or descriptor.version != request.version
         or descriptor.channel != request.channel
     ):
@@ -664,7 +707,7 @@ async def _main_subscription_request(
         )
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=2.0),
+            timeout=httpx.Timeout(KNOWLEDGE_POST_TIMEOUT_SECONDS, connect=2.0),
             trust_env=False,
         ) as client:
             response = await client.post(
@@ -688,7 +731,7 @@ async def _main_request(
     *,
     params: dict[str, Any] | None = None,
     json: dict[str, Any] | None = None,
-    timeout: float = 15.0,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     import config
 
@@ -702,9 +745,14 @@ async def _main_request(
                 "X-CSRF-Token": str(config.AUTOSTART_CSRF_TOKEN),
             }
         )
+    request_timeout = timeout if timeout is not None else (
+        KNOWLEDGE_POST_TIMEOUT_SECONDS
+        if method == "POST"
+        else KNOWLEDGE_GET_TIMEOUT_SECONDS
+    )
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=2.0),
+            timeout=httpx.Timeout(request_timeout, connect=2.0),
             trust_env=False,
         ) as client:
             response = await client.request(

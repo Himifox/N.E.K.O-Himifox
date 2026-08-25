@@ -28,7 +28,11 @@ def _client(monkeypatch, captured: dict) -> TestClient:
     monkeypatch.setattr(module, "_verify_token", lambda _token: None)
     monkeypatch.setattr(module, "_require_local_bridge_token_access", lambda _request: 48910)
     monkeypatch.setattr(module, "_main_server_port", lambda: 48911)
-    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    def fake_client(**kwargs):
+        captured["client_options"] = kwargs
+        return FakeClient()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", fake_client)
     app = FastAPI()
     app.include_router(module.router)
     return TestClient(app)
@@ -51,6 +55,7 @@ def test_knowledge_bridge_forwards_only_allowlisted_local_api(monkeypatch):
     assert ("token", "fixture") not in captured["params"]
     assert captured["headers"]["Origin"] == "http://127.0.0.1:48911"
     assert captured["headers"]["X-CSRF-Token"]
+    assert captured["client_options"]["timeout"].read > 30
 
 
 def test_knowledge_bridge_forwards_degraded_job_discard(monkeypatch):
@@ -80,6 +85,23 @@ def test_knowledge_bridge_rejects_arbitrary_proxy_paths(monkeypatch):
 
     assert response.status_code == 404
     assert captured == {}
+
+
+def test_knowledge_bridge_keeps_get_timeout_short(monkeypatch):
+    from plugin.server.routes import market_bridge as module
+
+    captured = {}
+    client = _client(monkeypatch, captured)
+
+    response = client.get(
+        "/market/knowledge/status",
+        params={"token": "fixture"},
+    )
+
+    assert response.status_code == 200
+    assert captured["client_options"]["timeout"].read == (
+        module.KNOWLEDGE_GET_TIMEOUT_SECONDS
+    )
 
 
 def test_knowledge_bridge_rejects_oversized_body_before_forwarding(monkeypatch):

@@ -71,11 +71,13 @@ def test_market_package_id_is_bounded_to_the_persisted_ascii_contract():
     assert module.KnowledgeSubscribeRequest(
         package_id=module.PROVIDER_PACKAGE_ID_MAX,
         version="1.0.0",
+        pack_id="fixture-pack",
     ).package_id == module.PROVIDER_PACKAGE_ID_MAX
     with pytest.raises(ValueError):
         module.KnowledgeSubscribeRequest(
             package_id=module.PROVIDER_PACKAGE_ID_MAX + 1,
             version="1.0.0",
+            pack_id="fixture-pack",
         )
 
 
@@ -87,6 +89,7 @@ async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch)
         package_id=7,
         version="1.0.0",
         channel="stable",
+        pack_id="fixture-pack",
     )
     descriptor = module.KnowledgeVersionDescriptor.model_validate(
         {
@@ -220,6 +223,7 @@ async def test_market_subscription_rejects_material_type_mismatch(monkeypatch):
         package_id=7,
         version="1.0.0",
         channel="stable",
+        pack_id="fixture-pack",
     )
     await module._execute_subscription("material-type-mismatch", request)
 
@@ -327,23 +331,33 @@ async def test_subscriptions_are_single_flight_and_globally_bounded(monkeypatch)
     monkeypatch.setattr(module, "_execute_subscription", blocked)
 
     first = await module.subscribe_knowledge_package(
-        module.KnowledgeSubscribeRequest(package_id=1, version="1.0.0"),
+        module.KnowledgeSubscribeRequest(
+            package_id=1, version="1.0.0", pack_id="fixture-pack"
+        ),
         token="fixture",
     )
     duplicate = await module.subscribe_knowledge_package(
-        module.KnowledgeSubscribeRequest(package_id=1, version="1.0.0"),
+        module.KnowledgeSubscribeRequest(
+            package_id=1, version="1.0.0", pack_id="fixture-pack"
+        ),
         token="fixture",
     )
     assert duplicate["task_id"] == first["task_id"]
 
     for package_id in (2, 3, 4):
         await module.subscribe_knowledge_package(
-            module.KnowledgeSubscribeRequest(package_id=package_id, version="1.0.0"),
+            module.KnowledgeSubscribeRequest(
+                package_id=package_id,
+                version="1.0.0",
+                pack_id=f"fixture-pack-{package_id}",
+            ),
             token="fixture",
         )
     with pytest.raises(HTTPException) as busy:
         await module.subscribe_knowledge_package(
-            module.KnowledgeSubscribeRequest(package_id=5, version="1.0.0"),
+            module.KnowledgeSubscribeRequest(
+                package_id=5, version="1.0.0", pack_id="fixture-pack-5"
+            ),
             token="fixture",
         )
     assert busy.value.status_code == 429
@@ -512,6 +526,7 @@ async def test_unsubscribe_cancels_active_worker_and_records_terminal_state(monk
         task = module._tasks[task_id]
         task["resolved_pack_id"] = "fixture-pack"
         task["resolved_remote_id"] = "knowledge/fixture-pack"
+        task["stage"] = "installing"
         started.set()
         await asyncio.Event().wait()
 
@@ -533,7 +548,9 @@ async def test_unsubscribe_cancels_active_worker_and_records_terminal_state(monk
         lambda _package_id: asyncio.sleep(0),
     )
     created = await module.subscribe_knowledge_package(
-        module.KnowledgeSubscribeRequest(package_id=7, version="1.0.0"),
+        module.KnowledgeSubscribeRequest(
+            package_id=7, version="1.0.0", pack_id="fixture-pack"
+        ),
         token="fixture",
     )
     await started.wait()
@@ -550,6 +567,90 @@ async def test_unsubscribe_cancels_active_worker_and_records_terminal_state(monk
     assert task["completed_at"] is not None
     assert module._task_workers == {}
     assert module._active_package_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeypatch):
+    started = asyncio.Event()
+
+    async def blocked(_task_id, _payload):
+        started.set()
+        await asyncio.Event().wait()
+
+    async def unexpected_main(*_args, **_kwargs):
+        raise AssertionError("pre-install cancellation must not inspect local artifacts")
+
+    reports = []
+
+    async def report(package_id):
+        reports.append(package_id)
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_execute_subscription", blocked)
+    monkeypatch.setattr(module, "_main_request", unexpected_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", report)
+    await module.subscribe_knowledge_package(
+        module.KnowledgeSubscribeRequest(
+            package_id=7,
+            version="1.0.0",
+            pack_id="fixture-pack",
+        ),
+        token="fixture",
+    )
+    await started.wait()
+    request = module.KnowledgeUnsubscribeRequest(
+        package_id=7,
+        pack_id="fixture-pack",
+    )
+
+    first = await module.unsubscribe_knowledge_package(request, token="fixture")
+    second = await module.unsubscribe_knowledge_package(request, token="fixture")
+
+    assert first == second == {
+        "ok": True,
+        "cancelled": True,
+        "removed": False,
+        "removed_pack": False,
+        "removed_entries": 0,
+        "cancelled_jobs": 0,
+    }
+    assert reports == [7, 7]
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_does_not_cancel_wrong_preinstall_identity(monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked(_task_id, _payload):
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_execute_subscription", blocked)
+    await module.subscribe_knowledge_package(
+        module.KnowledgeSubscribeRequest(
+            package_id=7,
+            version="1.0.0",
+            pack_id="fixture-pack",
+        ),
+        token="fixture",
+    )
+    await started.wait()
+
+    with pytest.raises(HTTPException) as mismatch:
+        await module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="other-pack",
+            ),
+            token="fixture",
+        )
+
+    assert mismatch.value.detail["code"] == "subscription_identity_mismatch"
+    assert len(module._task_workers) == 1
+    release.set()
+    await asyncio.gather(*tuple(module._task_workers.values()))
 
 
 @pytest.mark.asyncio
@@ -584,7 +685,9 @@ async def test_subscribe_conflicts_while_unsubscribe_is_reserved(monkeypatch):
 
     with pytest.raises(HTTPException) as conflict:
         await module.subscribe_knowledge_package(
-            module.KnowledgeSubscribeRequest(package_id=7, version="1.0.0"),
+            module.KnowledgeSubscribeRequest(
+                package_id=7, version="1.0.0", pack_id="fixture-pack"
+            ),
             token="fixture",
         )
 

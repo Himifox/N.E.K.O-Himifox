@@ -585,7 +585,12 @@ class KnowledgeStore:
                 raise
             return ()
 
-    def community_usage(self, *, source_tag: str = "") -> dict[str, int]:
+    def community_usage(
+        self,
+        *,
+        source_tag: str = "",
+        strict: bool = False,
+    ) -> dict[str, int]:
         """Count user-pack source data without materializing entry text."""
         source_match = "= ?" if source_tag else "LIKE 'source:community.%'"
         parameters = (source_tag,) if source_tag else ()
@@ -613,6 +618,8 @@ class KnowledgeStore:
                     "content_bytes": int(entry_row["content_bytes"]),
                 }
         except KnowledgeStoreError:
+            if strict:
+                raise
             return {
                 "entries_total": 0,
                 "chunks_total": 0,

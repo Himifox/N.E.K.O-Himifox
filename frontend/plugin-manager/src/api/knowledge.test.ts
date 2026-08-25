@@ -49,6 +49,7 @@ describe('knowledge API response handling', () => {
     const { knowledgeApi } = await loadKnowledgeApi()
 
     await expect(knowledgeApi.status()).resolves.toEqual(payload)
+    expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(15000)
   })
 
   it('returns a structured degraded status despite ok false', async () => {
@@ -96,6 +97,7 @@ describe('knowledge API response handling', () => {
     const { KnowledgeApiError, knowledgeApi } = await loadKnowledgeApi()
 
     await expect(knowledgeApi.importPack({})).rejects.toBeInstanceOf(KnowledgeApiError)
+    expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(45000)
   })
 
   it('requests durable pack job state through the knowledge bridge', async () => {
@@ -145,7 +147,7 @@ describe('knowledge API response handling', () => {
             },
           },
         },
-      }),
+      })
       .mockResolvedValueOnce({ data: { ok: true } })
     const { knowledgeApi } = await loadKnowledgeApi()
 

@@ -11,6 +11,7 @@ import portalocker
 
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[str, "_MutationLock"] = {}
+MUTATION_LOCK_TIMEOUT_SECONDS = 30.0
 
 
 class _MutationLock:
@@ -28,7 +29,7 @@ class _MutationLock:
                 file_lock = portalocker.Lock(
                     self._lock_path,
                     mode="a",
-                    timeout=30,
+                    timeout=MUTATION_LOCK_TIMEOUT_SECONDS,
                 )
                 file_lock.acquire()
                 self._local.file_lock = file_lock
