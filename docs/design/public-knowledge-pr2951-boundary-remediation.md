@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其 review-body 补充由 `43c138ce4`、`2a114dd23`、`5557d1760` 与 `4b75b24b4` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -847,8 +847,12 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 | `2a114dd23` | AI、AL、AJ | semantic 在 entry 去重后截断；词法精确匹配保留标点；以唯一生产构造链证明混合脚本评论不成立 |
 | `5557d1760` | AK | Bridge、管理界面和维护 CLI 统一暴露既有严格 discard；网页提供确认、反馈和八语言文案 |
 | `4b75b24b4` | AN | identity 的创建时间在可信返回前按 state 同一规则规范化，拒绝布尔值与浮点 fallback |
+| `e5979c43e` | AO | 标点精确标题/alias 在 FTS/LIKE 截断前召回，避免被同一 compact token 的宽候选挤出 |
+| `34e05caed` | AP | 缺失 identity 的 legacy state 复用严格目录身份校验；合法旧任务保持兼容，篡改任务隔离 |
+| `d76c9447a` | AQ | 管理目录按请求批量解析来源映射，社区 registry 最多读取一次且离开事件循环 |
+| `079375f14` | AR | Marketplace terminal 任务增加 200 条上限，创建和完成后裁剪且保留活动 worker |
 
-本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 414 项测试通过；本轮 Python 改动 Ruff 检查通过。前端 `vue-tsc --build`、API Vitest（8 项）和 i18n 完整性检查通过，八种语言均为 736 个键。
+本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 420 项测试通过；本轮 Python 改动 Ruff 检查通过。前端 `vue-tsc --build`、API Vitest（8 项）和 i18n 完整性检查通过，八种语言均为 736 个键。
 
 恢复入口另在 390px 与 1024px 视口完成真实渲染。两种宽度的横向溢出均为 0，删除按钮保持 72×44px；窄屏底部增加含 safe-area 的滚动安全区后，按钮与固定浮层不再碰撞。独立 fresh-eyes 复审未发现新的 blocker 或 major。测试退出后的 telemetry 日志在受限沙盒中仍会报告既存的本机配置目录写入失败，但 pytest 返回码为 0。GitHub CI 结果以本节文档提交所在远端头部的检查为准。
 
