@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第五轮均已实施；第六轮方案已归档，等待对应实现结果回填。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -903,3 +903,84 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 - 裁剪 terminal 时不触碰正在 unsubscribe 的 package reservation；活动映射继续由 `_subscription_done()` 的所有权检查清理。
 
 验收：201 条 terminal 只保留最新 200 条；混合活动与 terminal 时只删除最旧 terminal；TTL、同包去重、4 worker 上限和任务查询行为不回归。
+
+## 第六轮：跨层竞态、快照一致性与输入成本
+
+第五轮后续提交 `33f40e971` 的复审新增 7 条行内线程和 2 条 review-body outside-diff 评论。逐条沿生产调用链复核后均存在可构造反例，纳入本轮实际修复；它们不改变知识包 Schema、容量总额或显式恢复原则。
+
+### 修复单元 AS：作业列表只接受最新请求结果
+
+- `refreshAll()`、`loadPackJobs()` 与 `pollImportJobs()` 共用同一个 latest-request gate；任何较早请求完成后都不得覆盖较新列表。
+- degraded 作业 discard 成功时先使所有已发出的列表请求失效，再本地移除该项并刷新概览。discard 成功后才发出的请求可正常写回。
+- gate 只裁决 `packJobs` 及由该响应派生的轮询状态，不取消网络请求，也不改变服务端作业生命周期。
+
+验收：挂起旧请求、成功 discard、再让旧请求返回时，被删除作业不会重新出现；三个入口互相交错时只有最后开始且未失效的请求可提交结果。
+
+### 修复单元 AT：403 刷新不能清除更新后的 Bridge token
+
+- 每次请求保存实际使用的 token。收到 token-invalid 403 时，仅当全局缓存仍等于该旧 token 才清空；随后调用普通 `token()`，复用现有的 in-flight refresh。
+- 一个较晚返回的旧 403 不得清除另一个请求刚取得的新 token，也不得启动第二次刷新；每个业务请求仍最多重试一次。
+- 其他 403、网络错误和服务端错误继续保持现有错误映射。
+
+验收：两个并发请求使用同一旧 token，首个 403 完成刷新后第二个旧 403 才返回时，token endpoint 总调用数仍只有初取与一次刷新，新 token 不被清空。
+
+### 修复单元 AU：维护状态读取容忍损坏时间字段
+
+- `inspect_pack_jobs()` 对 `created_at` 使用与运行时相同的安全非负整数规范：拒绝布尔值、浮点、容器、负数和非规范字符串，并回退为 0 排序。
+- `--status` 的职责是暴露诊断信息；单个合法 JSON state 的损坏时间字段不能令整个命令崩溃，也不能触发写入或自动修复。
+
+验收：字符串、列表、布尔、浮点和负值混合存在时命令稳定返回，合法时间仍按新到旧排列。
+
+### 修复单元 AV：标题与 alias 的精确召回使用 Unicode folded 等价
+
+- 把 NFKC、Unicode casefold 与空白规范化的 exact-surface helper 放入共享过滤模块；最终判分和数据库精确候选使用同一实现。
+- 每个 SQLite 连接注册确定性的只读自定义 collation，标题和 `json_each(alias)` 的等值比较显式使用该 collation。它只影响精确候选，不改变 FTS、LIKE 或持久化 Schema。
+- 不依赖 SQLite 内建 `NOCASE` 的 ASCII 范围；`Straße`/`STRASSE`、兼容字符和大小写变体应在宽候选截断前召回。
+
+验收：以大量宽候选挤占预算时，Unicode folded 等价的标题和 alias 仍能进入候选并获得精确分；来源和 disabled 过滤不回归。
+
+### 修复单元 AW：legacy 迁移错误进入结构化降级面
+
+- `_service()` 把 `KnowledgeStoreError` 与现有 `OSError`、`ValueError` 一并记录为服务初始化错误；status 返回稳定 degraded 描述，读写业务端点返回既有 503，而不是泄漏 HTTP 500。
+- 此处只转换服务边界，不吞掉迁移内部错误，也不发布空迁移结果或覆盖损坏输入。
+
+验收：损坏、过新或暂时不可读的 legacy 数据库触发 `KnowledgeStoreError` 时，status 可诊断且 entries/mutation 均为结构化 503。
+
+### 修复单元 AX：管理搜索分页基于固定候选窗口
+
+- 管理目录的 `search_page()` 使用覆盖 API 最大 offset、最大页长和尾部探测项的固定排名窗口；不同页不得通过改变 retriever limit 改变候选池。
+- 固定窗口仅用于管理搜索分页；聊天检索继续按调用 limit 使用小候选预算。offset 超出 API 约束仍由路由拒绝。
+- 排名与稳定 tie-break 规则不变，分页只在同一固定结果序列上切片。
+
+验收：相同查询的相邻页向 retriever 传入相同窗口，结果无重复、无因页码变化产生的重排；空页和 has-more 探测不回归。
+
+### 修复单元 AY：向量快照与 entry 行必须属于同一 revision
+
+- KnowledgeStore 提供按预期 chunk revision 批量读取 entry 的事务入口：先在同一 SQLite 读事务中验证 revision，再读取 rowid；不匹配返回显式 stale，而不是把旧向量分数贴到新 entry。
+- VectorIndex 使用该入口装配命中。revision 已变化时本轮 semantic 结果 fail closed，并使下一次查询重载快照；BM25 合并仍可提供结果。
+- 不以读后再检查替代事务快照，因为 rowid 可在两个独立读取之间被删除和复用。
+
+验收：在载入向量快照后替换数据库并复用 rowid，旧分数绝不返回新 entry；revision 一致时批量装配和最佳 chunk 标记不回归。
+
+### 修复单元 AZ：每条知识的识别词元数据有独立上限
+
+- 每个 term role 最多 64 项；三类 term 的 UTF-8 聚合字节最多 32 KiB。计数和字节校验在复制、规范化、分块与 prompt 拼接前完成。
+- term 上限独立于正文 content budget，并继续受 10 MiB artifact 总上限保护；超限包以稳定校验错误拒绝，不截断、不静默丢词。
+- 合法条目的去重与 normalization 语义不变。
+
+验收：第 65 个同 role term 和超过 32 KiB 聚合值均在 staging 早期失败；边界值、Unicode 字节计数和正常包不回归。
+
+### 修复单元 BA：作业目录枚举不等待在 indexer 事件循环
+
+- `process_pack_jobs()` 通过 `asyncio.to_thread` 调用 `list_pack_jobs()`；等待跨进程 jobs-root 文件锁、解析状态文件和裁剪目录都发生在工作线程。
+- 后续调度仍在原事件循环串行决定；不新增 worker、不改变每轮激活数和 pending/degraded 语义。
+
+验收：线程标识证明列表读取不在 indexer loop；人为持有文件锁时并行 tick 仍可运行，调度结果不回归。
+
+## 第六轮实施顺序与关闭条件
+
+1. AV、AW、AX、AY 先收敛检索、迁移和快照一致性，分别用可复现数据反例锁定。
+2. AS、AT、BA 修复跨请求和事件循环竞态；前端两个 gate 使用独立并发测试，后台枚举验证线程身份。
+3. AU、AZ 收紧损坏元数据与不可信包输入，拒绝策略不得顺带修改磁盘内容。
+4. 运行知识库、路由、维护脚本和前端 API/组件回归，并复查 Python lint、前端类型与 i18n。
+5. 实现提交推送且远端相关检查通过后，在每条行内线程回复对应设计单元、提交和测试依据再 resolve；两条 outside-diff 在 review summary 留下同等证据。
