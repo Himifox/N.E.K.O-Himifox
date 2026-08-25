@@ -233,6 +233,24 @@ def test_sample_entries_draws_from_complete_enabled_tag_population(
     assert service.sample_entries(tag, limit=1)[0].title == "card 099"
 
 
+def test_sample_entries_excludes_normalized_disabled_title(tmp_path, monkeypatch):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    tag = "dataset:tarot-interpretations"
+    store.upsert(_entry("Apollo", "source:corpora", tag))
+    store.upsert(_entry("Zeus", "source:corpora", tag))
+    service.set_entry_disabled(
+        source_tag="source:corpora",
+        title="ＡＰＯＬＬＯ",
+        disabled=True,
+    )
+    monkeypatch.setattr(random, "randrange", lambda _population: 0)
+
+    assert service.sample_entries(tag, limit=2) == (
+        store.get_entry("source:corpora", "Zeus"),
+    )
+
+
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):
     return validate_pack(
         {

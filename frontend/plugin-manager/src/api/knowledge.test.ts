@@ -51,6 +51,53 @@ describe('knowledge API response handling', () => {
     await expect(knowledgeApi.status()).resolves.toEqual(payload)
   })
 
+  it('returns a structured degraded status despite ok false', async () => {
+    const payload = {
+      ok: false,
+      status: {
+        name: 'Public Knowledge',
+        status: 'degraded',
+        available: false,
+        integrity_ok: false,
+        error_code: 'knowledge_unavailable',
+      },
+    }
+    axiosMocks.request.mockResolvedValue({ data: payload })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.status()).resolves.toEqual(payload)
+  })
+
+  it('rejects malformed degraded status envelopes', async () => {
+    axiosMocks.request.mockResolvedValue({
+      data: {
+        ok: false,
+        status: { status: 'degraded', available: false },
+      },
+    })
+    const { KnowledgeApiError, knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.status()).rejects.toBeInstanceOf(KnowledgeApiError)
+  })
+
+  it('does not accept degraded status-shaped mutation failures', async () => {
+    axiosMocks.request.mockResolvedValue({
+      data: {
+        ok: false,
+        status: {
+          name: 'Public Knowledge',
+          status: 'degraded',
+          available: false,
+          integrity_ok: false,
+          error_code: 'knowledge_unavailable',
+        },
+      },
+    })
+    const { KnowledgeApiError, knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(knowledgeApi.importPack({})).rejects.toBeInstanceOf(KnowledgeApiError)
+  })
+
   it('requests durable pack job state through the knowledge bridge', async () => {
     axiosMocks.request.mockResolvedValue({ data: { ok: true, jobs: [] } })
     const { knowledgeApi } = await loadKnowledgeApi()
@@ -98,7 +145,7 @@ describe('knowledge API response handling', () => {
             },
           },
         },
-      })
+      }),
       .mockResolvedValueOnce({ data: { ok: true } })
     const { knowledgeApi } = await loadKnowledgeApi()
 
@@ -130,7 +177,7 @@ describe('knowledge API response handling', () => {
     axiosMocks.get.mockReturnValue(
       new Promise((resolve) => {
         resolveToken = resolve
-      }),
+      })
     )
     axiosMocks.request.mockResolvedValue({ data: { ok: true } })
     const { knowledgeApi } = await loadKnowledgeApi()

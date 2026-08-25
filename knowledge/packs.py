@@ -625,7 +625,7 @@ def _entry_from_payload(
         raise ValueError(f"entries[{index}].terms contains unsupported roles")
     term_bytes = 0
     for role in sorted(_TERM_ROLES):
-        values = terms.get(role, ())
+        values = terms.get(role, [])
         if not isinstance(values, list) or any(
             not isinstance(value, str) for value in values
         ):
@@ -639,7 +639,7 @@ def _entry_from_payload(
             field=f"entries[{index}].terms",
         )
     normalized_terms = {
-        role: tuple(terms.get(role, ()))
+        role: tuple(terms.get(role, []))
         for role in sorted(_TERM_ROLES)
     }
     tags = payload.get("tags", [])

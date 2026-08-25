@@ -177,8 +177,10 @@ async def get_public_knowledge_status():
         return {
             "ok": False,
             "status": {
+                "name": "Public Knowledge",
                 "status": "degraded",
                 "available": False,
+                "integrity_ok": False,
                 "migration_state": "failed",
                 "error_code": "knowledge_unavailable",
                 "error_type": str(exc.detail.get("error_type") or "")

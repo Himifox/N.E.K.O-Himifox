@@ -17,6 +17,7 @@ from knowledge.chunking import (
     knowledge_embedding_text,
 )
 from knowledge.filters import folded_exact_surface
+from knowledge.catalog_overrides import entry_key
 
 from .models import KnowledgeEntry, UpsertResult, normalize_knowledge_title
 
@@ -1506,7 +1507,7 @@ class KnowledgeStore:
                 )
                 for row in rows:
                     entry = _entry_from_row(row)
-                    if (entry.source_tag, entry.title) in excluded:
+                    if entry_key(entry) in excluded:
                         continue
                     eligible_count += 1
                     if len(sample) < limit:

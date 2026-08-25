@@ -197,6 +197,39 @@ def test_pack_accepts_the_term_cardinality_boundary():
     assert len(pack.entries[0].aliases) == MAX_PACK_TERMS_PER_ROLE
 
 
+@pytest.mark.parametrize(
+    "terms",
+    (
+        None,
+        {},
+        {"alias": ["alias"]},
+        {"recognition": ["recognition"]},
+    ),
+)
+def test_pack_normalizes_missing_term_roles_to_empty_lists(terms):
+    payload = _payload()
+    if terms is None:
+        payload["entries"][0].pop("terms")
+    else:
+        payload["entries"][0]["terms"] = terms
+
+    entry = validate_pack(payload).entries[0]
+
+    assert entry.terms == {
+        "alias": tuple((terms or {}).get("alias", [])),
+        "recognition": tuple((terms or {}).get("recognition", [])),
+    }
+
+
+@pytest.mark.parametrize("terms", ({"alias": None}, {"recognition": "term"}))
+def test_pack_rejects_explicit_invalid_term_role_types(terms):
+    payload = _payload()
+    payload["entries"][0]["terms"] = terms
+
+    with pytest.raises(ValueError, match="must be a string array"):
+        validate_pack(payload)
+
+
 def test_pack_rejects_too_many_tags_before_normalization():
     payload = _payload()
     payload["entries"][0]["tags"] = [

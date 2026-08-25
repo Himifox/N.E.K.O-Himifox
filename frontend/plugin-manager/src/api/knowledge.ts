@@ -78,6 +78,7 @@ async function executeRequest<T extends KnowledgeEnvelope>(
 async function request<T extends KnowledgeEnvelope>(
   path: string,
   options: { method?: 'GET' | 'POST'; params?: any; data?: any } = {},
+  acceptFailure?: (data: T) => boolean,
 ): Promise<T> {
   let data: T
   const usedToken = await token()
@@ -88,7 +89,7 @@ async function request<T extends KnowledgeEnvelope>(
     if (bridgeToken === usedToken) bridgeToken = ''
     data = await executeRequest<T>(path, options, await token())
   }
-  if (data?.ok === false) {
+  if (data?.ok === false && !acceptFailure?.(data)) {
     throw new KnowledgeApiError(
       String(data.reason || 'operation_failed'),
       data.error_type ? String(data.error_type) : undefined,
@@ -102,6 +103,7 @@ export interface KnowledgeStatus {
   entries?: number
   integrity_ok: boolean
   status: 'ready' | 'degraded'
+  available?: boolean
   disabled_entries?: number
   packs?: number
   knowledge_packs?: number
@@ -110,6 +112,28 @@ export interface KnowledgeStatus {
   corpus_entries?: number
   sources?: Array<{ tag: string; entries: number }>
   error_type?: string
+  error_code?: string
+}
+
+interface KnowledgeStatusEnvelope extends KnowledgeEnvelope {
+  ok: boolean
+  status: KnowledgeStatus
+}
+
+function isConsumableDegradedStatus(data: KnowledgeStatusEnvelope): boolean {
+  const status = data?.status
+  return (
+    data?.ok === false &&
+    status !== null &&
+    typeof status === 'object' &&
+    status.status === 'degraded' &&
+    status.available === false &&
+    status.integrity_ok === false &&
+    typeof status.name === 'string' &&
+    status.name.trim().length > 0 &&
+    typeof status.error_code === 'string' &&
+    status.error_code.length > 0
+  )
 }
 
 export interface KnowledgeEntrySummary {
@@ -151,7 +175,11 @@ export interface KnowledgePackJob {
 }
 
 export const knowledgeApi = {
-  status: () => request<{ ok: boolean; status: KnowledgeStatus }>('status'),
+  status: () => request<KnowledgeStatusEnvelope>(
+    'status',
+    {},
+    isConsumableDegradedStatus,
+  ),
   entries: (params: any) => request<any>('entries', { params }),
   entry: (params: any) => request<any>('entry', { params }),
   setEntryDisabled: (data: any) => request<any>('entry/disabled', { method: 'POST', data }),
