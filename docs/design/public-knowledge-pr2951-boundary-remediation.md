@@ -788,3 +788,52 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 - 状态统计使用 `TERMINAL_STATES | {DEGRADED_STATE}` 作为“不再 pending”的单一表达，同时保留 degraded 与可自动裁剪 terminal 的生命周期差异。
 
 同一 review body 的三个维护性建议一并按最小范围处理：删除 Schema marker 校验中不可达的空字符串分支；用 helper 共享空 chunk status 字段；用 pack job 常量构造非 pending 状态集合。它们不单独改变外部契约，也不扩大本轮边界。
+
+## 第五轮：持久化恢复与检索精度
+
+第五轮来自提交 `0d727115c` 完成后新增的 7 条 review thread。逐项对照当前实现后均成立；其中 semantic entry 去重曾作为第三轮后续增强记录，本轮既然已有可构造的漏召回反例，正式纳入正确性边界。
+
+### 修复单元 AG：作业状态时间字段必须先验证再参与排序
+
+- `_read_job()` 在返回可信 state 前统一规范 `created_at` 与 `updated_at`：仅接受非负整数语义，布尔值、浮点、空值、非数字字符串和负数均把作业隔离为 `degraded`，原因码为 `invalid_job_timestamps`。
+- identity 中可信的 `created_at` 仍可用于 degraded 展示；不可把损坏 state 的时间值传给 `int()` 排序或 TTL 裁剪。
+- `list_pack_jobs()`、status 和 terminal prune 对任意合法 JSON state 都不能抛出类型转换异常。
+
+### 修复单元 AH：健康响应的 chunk 字段集合固定
+
+- `_empty_chunk_status()` 与 `KnowledgeStore.chunk_status()` 保持同一字段集合，补齐 `chunks_local`、`chunks_prebuilt_only` 以及所有 `chunks_local_*` 计数。
+- 空数据库、未来 Schema、普通数据库不可用和健康数据库的 status 只允许数值不同，不允许字段缺失。用集合等价测试锁定契约。
+
+### 修复单元 AI：semantic 截断以 entry 而非 chunk 为单位
+
+- 完成来源与 disabled 过滤后，先扫描所有合格 chunk，为每个 entry rowid 保留最高分 chunk；随后才对唯一 entry 候选排序并应用现有候选预算和最终 `limit`。
+- 相同分数使用 entry rowid 与 chunk index 建立稳定次序；`best_chunk_index` 继续指向该 entry 的最高分 chunk。
+- 总向量上限仍为 20,000，单次扫描 O(chunks)，候选映射 O(unique entries)；不扩大快照和返回预算。
+
+### 修复单元 AJ：仅纯 Latin/ASCII 数字术语使用边界匹配
+
+- Latin boundary 入口要求规范化术语至少含一个 ASCII 字母或数字，且不存在其他脚本的字母或数字。空格、`+`、`#`、`.`、`-` 等标点允许保留为分隔符。
+- `C语言`、`Python教程` 等混合脚本走 compact strong term，不能退化为 `c` 或 `python`；`C++`、`C#`、`.NET`、`Win32` 继续使用 Latin token 边界。
+
+### 修复单元 AK：degraded 作业必须有受控恢复入口
+
+- Bridge allowlist 暴露既有 `POST packs/jobs/discard`，仍受 loopback、token、CSRF、64 KiB 正文上限和 Main Server 二次 mutation 校验保护。
+- 前端 API 增加 discard 方法；管理页在知识包页展示隔离作业的 job/pack/reason，并要求用户确认后逐个丢弃。成功后刷新 status、pack 与 job 状态，失败显示既有操作失败反馈。
+- 维护 CLI 增加互斥动作 `--discard-job JOB_ID`，只调用既有 `discard_degraded_pack_job()`；非 degraded、非法路径或不存在作业返回非零，不提供任意目录删除能力。
+
+### 修复单元 AL：词法精确匹配保留有意义标点
+
+- 搜索同时构造 Unicode NFKC、casefold、空白规范化但保留标点的 folded surface。标题和 alias 的 1000/950 精确分只比较该 surface；compact normalization 继续用于 contains、recognition 和 tag fallback。
+- `C++`、`C#`、`.NET` 等不再折叠成同一个精确键；大小写和兼容字符仍可等价。FTS/LIKE 只负责候选召回，不改变最终精确排序。
+
+### 修复单元 AM：degraded 不阻断无关向量维护
+
+- indexer 的 pending gate 使用 `TERMINAL_STATES | {DEGRADED_STATE}`，与 `process_pack_jobs()` 和 status 的非 pending 语义一致。
+- degraded 仍使 registry health 为 invalid 并保留人工恢复提示，但不会占用可推进作业、不会令无关 bundled/installed source 的 `index_embedding_batch()` 永久停摆。
+
+## 第五轮实施顺序与关闭条件
+
+1. AG、AH、AM 先修持久化和健康面，确保损坏作业不会让诊断与后台维护同时失效。
+2. AI、AJ、AL 独立收敛检索语义，分别覆盖 chunk 拥塞、混合脚本和标点术语的反例。
+3. AK 贯通 Main Server、Bridge、前端和 CLI；不复制删除逻辑，只暴露既有严格 discard 能力。
+4. 完整回归、前端类型/i18n、窄屏横向溢出与远端 CI 通过后，逐条回复提交和测试依据，再 resolve 7 条线程。
