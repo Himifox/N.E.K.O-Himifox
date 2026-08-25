@@ -953,6 +953,11 @@ class KnowledgeService:
             except KnowledgeSchemaTooNewError as exc:
                 registry_state = pack_registry_state(database_path)
                 pack_jobs = self.list_pack_jobs()
+                job_registry_state = (
+                    "invalid"
+                    if any(job.get("state") == "degraded" for job in pack_jobs)
+                    else ("ready" if pack_jobs else "missing")
+                )
                 return {
                     "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
                     "entries": 0,
@@ -960,6 +965,7 @@ class KnowledgeService:
                     "disabled_entries": len(disabled),
                     "catalog_override_state": override_state,
                     "pack_registry_state": registry_state,
+                    "pack_job_registry_state": job_registry_state,
                     "schema_state": "too_new",
                     "error_code": "knowledge_schema_too_new",
                     "detected_schema_version": exc.detected_version,
@@ -1019,6 +1025,11 @@ class KnowledgeService:
             embedding_state = "disabled"
             embedding_model_id = ""
         pack_jobs = self.list_pack_jobs()
+        job_registry_state = (
+            "invalid"
+            if any(job.get("state") == "degraded" for job in pack_jobs)
+            else ("ready" if pack_jobs else "missing")
+        )
         registry_state = pack_registry_state(database_path)
         installed_packs = self.list_packs()
         knowledge_packs = tuple(
@@ -1056,10 +1067,14 @@ class KnowledgeService:
             "entries": store.count() if store is not None else 0,
             "integrity_ok": (
                 store.integrity_ok() if store is not None else True
-            ) and override_state != "invalid" and registry_state != "invalid",
+            )
+            and override_state != "invalid"
+            and registry_state != "invalid"
+            and job_registry_state != "invalid",
             "disabled_entries": len(disabled),
             "catalog_override_state": override_state,
             "pack_registry_state": registry_state,
+            "pack_job_registry_state": job_registry_state,
             "sources": source_counts,
             "packs": len(installed_packs),
             "knowledge_packs": len(knowledge_packs),
@@ -1117,6 +1132,11 @@ class KnowledgeService:
         from .pack_jobs import cancel_pack_job
 
         return cancel_pack_job(self.knowledge_root, job_id)
+
+    def discard_degraded_pack_job(self, job_id: str) -> bool:
+        from .pack_jobs import discard_degraded_pack_job
+
+        return discard_degraded_pack_job(self.knowledge_root, job_id)
 
     def count_entries(self, *, source_tag: str = "") -> int:
         store = self._store()

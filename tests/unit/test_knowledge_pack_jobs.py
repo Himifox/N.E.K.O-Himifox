@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import threading
 
 import pytest
 
 from knowledge.store import KnowledgeStore
 from knowledge.pack_jobs import _pack_payload, _prepare_job
-from knowledge.pack_jobs import cancel_pack_job, process_pack_jobs
+from knowledge.pack_jobs import (
+    KnowledgeJobRegistryError,
+    cancel_pack_job,
+    discard_degraded_pack_job,
+    process_pack_jobs,
+)
 from knowledge.packs import validate_pack
 from knowledge.prebuilt_index import (
     PREBUILT_DIMENSIONS,
@@ -204,6 +211,120 @@ def test_community_entry_budget_counts_pending_packs(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="too many entries"):
         service.stage_pack(_pack(pack_id="second-pack"))
+
+
+def test_corrupt_job_state_is_quarantined_and_still_counts_capacity(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack(pack_id="first-pack"))
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    assert (job_dir / "identity.json").is_file()
+    assert not tuple((tmp_path / ".staging").glob(".creating-*"))
+    (job_dir / "state.json").write_text("{", encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_state"
+    assert listed["entries_total"] == 1
+    assert service.get_status()["pack_job_registry_state"] == "invalid"
+    monkeypatch.setattr(pack_jobs, "MAX_COMMUNITY_ENTRIES", 1)
+
+    with pytest.raises(ValueError, match="too many entries"):
+        service.stage_pack(_pack(pack_id="second-pack"))
+
+
+@pytest.mark.asyncio
+async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    (job_dir / "state.json").unlink()
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "no_work"
+    assert job_dir.is_dir()
+    assert service.list_pack_jobs()[0]["reason"] == "missing_job_state"
+    assert service.list_packs() == ()
+
+
+def test_orphan_creation_directory_blocks_staging_until_explicit_discard(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    orphan = tmp_path / ".staging" / ".creating-crashed"
+    orphan.mkdir(parents=True)
+    (orphan / "partial").write_bytes(b"partial")
+
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_invalid",
+    ):
+        service.stage_pack(_pack())
+
+    listed = service.list_pack_jobs()[0]
+    assert listed["state"] == "degraded"
+    assert listed["orphan"] is True
+    assert discard_degraded_pack_job(tmp_path, listed["job_id"]) is True
+    assert service.stage_pack(_pack())["state"] == "queued"
+
+
+def test_discard_only_removes_degraded_jobs(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_id = str(job["job_id"])
+    job_dir = tmp_path / ".staging" / job_id
+
+    assert discard_degraded_pack_job(tmp_path, job_id) is False
+    (job_dir / "state.json").write_text("[]", encoding="utf-8")
+    assert discard_degraded_pack_job(tmp_path, "../outside") is False
+    assert discard_degraded_pack_job(tmp_path, job_id) is True
+    assert not job_dir.exists()
+
+
+def test_job_is_only_listed_after_atomic_publication(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    listed = []
+    original_write = pack_jobs.atomic_write_bytes
+
+    def paused_write(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=3)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(pack_jobs, "atomic_write_bytes", paused_write)
+    stage_thread = threading.Thread(target=lambda: service.stage_pack(_pack()))
+    list_thread = threading.Thread(target=lambda: listed.extend(service.list_pack_jobs()))
+    stage_thread.start()
+    assert entered.wait(timeout=3)
+    list_thread.start()
+    assert list_thread.is_alive()
+    release.set()
+    stage_thread.join(timeout=3)
+    list_thread.join(timeout=3)
+
+    assert not stage_thread.is_alive()
+    assert not list_thread.is_alive()
+    assert [job["state"] for job in listed] == ["queued"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_valid_job_without_identity_still_activates(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    (job_dir / "identity.json").unlink()
+    persisted = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert service.list_pack_jobs()[0] == persisted
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    assert result["state"] == "ready_bm25"
 
 
 def test_community_budget_allows_replacing_the_active_pack(tmp_path, monkeypatch):

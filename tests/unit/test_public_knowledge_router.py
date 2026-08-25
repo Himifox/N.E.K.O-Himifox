@@ -167,6 +167,28 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
     assert thread_ids["validation"] != thread_ids["request"]
 
 
+def test_corrupt_job_registry_blocks_import_until_explicit_discard(
+    monkeypatch,
+    tmp_path,
+):
+    orphan = tmp_path / ".staging" / ".creating-crashed"
+    orphan.mkdir(parents=True)
+    client = _client(monkeypatch, tmp_path)
+
+    rejected = client.post(
+        "/api/public-knowledge/packs/import",
+        json={"pack": _pack(pack_id="blocked-by-orphan")},
+    ).json()
+    discarded = client.post(
+        "/api/public-knowledge/packs/jobs/discard",
+        json={"job_id": ".creating-crashed"},
+    ).json()
+
+    assert rejected == {"ok": False, "reason": "knowledge_job_registry_invalid"}
+    assert discarded == {"ok": True, "reason": ""}
+    assert not orphan.exists()
+
+
 def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_path):
     import main_routers.public_knowledge_router as module
 

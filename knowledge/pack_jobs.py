@@ -6,10 +6,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import shutil
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from utils.file_utils import atomic_write_bytes, atomic_write_json
 
@@ -32,10 +34,22 @@ MAX_COMMUNITY_ENTRIES = 20_000
 MAX_COMMUNITY_CHUNKS = 20_000
 MAX_COMMUNITY_CONTENT_BYTES = 64 * 1024 * 1024
 TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
+DEGRADED_STATE = "degraded"
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
+IDENTITY_NAME = "identity.json"
 logger = logging.getLogger(__name__)
+
+
+class KnowledgeJobRegistryError(ValueError):
+    """Raised when staging state cannot be trusted for capacity decisions."""
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonReadResult:
+    state: Literal["valid", "missing", "invalid", "unreadable"]
+    payload: dict[str, Any]
 
 
 def _jobs_root(knowledge_root: str | Path) -> Path:
@@ -44,6 +58,10 @@ def _jobs_root(knowledge_root: str | Path) -> Path:
 
 def _state_path(job_dir: Path) -> Path:
     return job_dir / "state.json"
+
+
+def _identity_path(job_dir: Path) -> Path:
+    return job_dir / IDENTITY_NAME
 
 
 def pack_operation_lock(knowledge_root: str | Path, pack_id: str):
@@ -57,12 +75,126 @@ def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
     return pack_payload(pack)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _read_json_result(path: Path) -> _JsonReadResult:
+    for attempt in range(3):
+        try:
+            text = path.read_text(encoding="utf-8")
+            break
+        except FileNotFoundError:
+            return _JsonReadResult("missing", {})
+        except OSError:
+            if attempt == 2:
+                return _JsonReadResult("unreadable", {})
+            time.sleep(0.01)
+        except UnicodeError:
+            return _JsonReadResult("invalid", {})
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return _JsonReadResult("invalid", {})
+    if not isinstance(payload, dict):
+        return _JsonReadResult("invalid", {})
+    return _JsonReadResult("valid", payload)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return _read_json_result(path).payload
+
+
+def _validated_identity(job_dir: Path) -> _JsonReadResult:
+    result = _read_json_result(_identity_path(job_dir))
+    if result.state != "valid":
+        return result
+    payload = result.payload
+    job_id = str(payload.get("job_id") or "")
+    pack_id = str(payload.get("pack_id") or "")
+    try:
+        counters = {
+            key: int(payload.get(key))
+            for key in ("created_at", "entries_total", "chunks_total", "content_bytes")
+        }
+    except (TypeError, ValueError):
+        return _JsonReadResult("invalid", {})
+    if (
+        job_id != job_dir.name
+        or Path(job_id).name != job_id
+        or not pack_id
+        or Path(pack_id).name != pack_id
+        or any(value < 0 for value in counters.values())
+    ):
+        return _JsonReadResult("invalid", {})
+    return _JsonReadResult(
+        "valid",
+        {"job_id": job_id, "pack_id": pack_id, **counters},
+    )
+
+
+def _degraded_job(
+    job_dir: Path,
+    *,
+    reason: str,
+    identity: dict[str, Any] | None = None,
+    orphan: bool = False,
+) -> dict[str, object]:
+    try:
+        created_at = int(job_dir.stat().st_mtime)
+    except OSError:
+        created_at = 0
+    return {
+        **(identity or {}),
+        "job_id": str((identity or {}).get("job_id") or job_dir.name),
+        "state": DEGRADED_STATE,
+        "retrieval_mode": "none",
+        "reason": reason,
+        "created_at": int((identity or {}).get("created_at") or created_at),
+        "updated_at": created_at,
+        "orphan": bool(orphan),
+    }
+
+
+def _read_job(job_dir: Path) -> dict[str, object]:
+    if job_dir.name.startswith(".creating-"):
+        return _degraded_job(
+            job_dir,
+            reason="incomplete_job_creation",
+            orphan=True,
+        )
+    state_result = _read_json_result(_state_path(job_dir))
+    identity_result = _validated_identity(job_dir)
+    if identity_result.state in {"invalid", "unreadable"}:
+        return _degraded_job(
+            job_dir,
+            reason="invalid_job_identity",
+            orphan=True,
+        )
+    if state_result.state == "valid":
+        state = state_result.payload
+        if identity_result.state == "valid" and any(
+            str(state.get(key) or "") != str(identity_result.payload.get(key) or "")
+            for key in ("job_id", "pack_id")
+        ):
+            return _degraded_job(
+                job_dir,
+                reason="job_identity_mismatch",
+                identity=identity_result.payload,
+            )
+        return state
+    if identity_result.state == "valid":
+        reason = {
+            "missing": "missing_job_state",
+            "invalid": "invalid_job_state",
+            "unreadable": "unreadable_job_state",
+        }[state_result.state]
+        return _degraded_job(
+            job_dir,
+            reason=reason,
+            identity=identity_result.payload,
+        )
+    return _degraded_job(
+        job_dir,
+        reason="invalid_job_identity",
+        orphan=True,
+    )
 
 
 def _write_state(
@@ -103,7 +235,8 @@ def stage_pack(
         jobs_root.mkdir(parents=True, exist_ok=True)
         job_id = f"{pack.pack_id}-{uuid.uuid4().hex[:12]}"
         job_dir = jobs_root / job_id
-        job_dir.mkdir()
+        creating_dir = jobs_root / f".creating-{uuid.uuid4().hex}"
+        creating_dir.mkdir()
         now = int(time.time())
         has_prebuilt = index_manifest is not None and vectors is not None
         state: dict[str, object] = {
@@ -129,26 +262,38 @@ def stage_pack(
             "updated_at": now,
         }
         try:
+            atomic_write_json(
+                _identity_path(creating_dir),
+                {
+                    "job_id": job_id,
+                    "pack_id": pack.pack_id,
+                    "created_at": now,
+                    "entries_total": preflight.entries,
+                    "chunks_total": preflight.projected_chunks,
+                    "content_bytes": preflight.content_bytes,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
             atomic_write_bytes(
-                job_dir / PACK_ARTIFACT_NAME,
+                creating_dir / PACK_ARTIFACT_NAME,
                 canonical_pack_bytes(_pack_payload(pack)),
             )
             if has_prebuilt:
-                atomic_write_bytes(job_dir / INDEX_MANIFEST_NAME, index_manifest)
-                atomic_write_bytes(job_dir / VECTOR_ARTIFACT_NAME, vectors)
+                atomic_write_bytes(creating_dir / INDEX_MANIFEST_NAME, index_manifest)
+                atomic_write_bytes(creating_dir / VECTOR_ARTIFACT_NAME, vectors)
             if subscription is not None:
                 atomic_write_json(
-                    job_dir / "subscription.json",
+                    creating_dir / "subscription.json",
                     subscription,
                     ensure_ascii=False,
                 )
-            atomic_write_json(_state_path(job_dir), state, ensure_ascii=False, indent=2)
+            atomic_write_json(
+                _state_path(creating_dir), state, ensure_ascii=False, indent=2
+            )
+            creating_dir.replace(job_dir)
         except Exception:
-            _cleanup_payload(job_dir)
-            try:
-                job_dir.rmdir()
-            except OSError:
-                pass
+            shutil.rmtree(creating_dir, ignore_errors=True)
             raise
     from .indexer import notify_knowledge_index_changed
 
@@ -157,11 +302,10 @@ def stage_pack(
 
 
 def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
-    pending = [
-        job
-        for job in list_pack_jobs(service.knowledge_root)
-        if job.get("state") not in TERMINAL_STATES
-    ]
+    all_jobs = list_pack_jobs(service.knowledge_root)
+    if any(job.get("orphan") is True for job in all_jobs):
+        raise KnowledgeJobRegistryError("knowledge_job_registry_invalid")
+    pending = [job for job in all_jobs if job.get("state") not in TERMINAL_STATES]
     if any(
         job.get("pack_id") == pack.pack_id
         for job in pending
@@ -216,16 +360,14 @@ def list_pack_jobs(
     knowledge_root: str | Path,
 ) -> tuple[dict[str, object], ...]:
     jobs_root = _jobs_root(knowledge_root)
-    if not jobs_root.is_dir():
-        return ()
-    items: list[dict[str, object]] = []
-    for job_dir in jobs_root.iterdir():
-        if not job_dir.is_dir():
-            continue
-        state = _read_json(_state_path(job_dir))
-        if not state:
-            continue
-        items.append(state)
+    with mutation_lock(jobs_root):
+        if not jobs_root.is_dir():
+            return ()
+        items = [
+            _read_job(job_dir)
+            for job_dir in jobs_root.iterdir()
+            if job_dir.is_dir()
+        ]
     return tuple(
         sorted(
             items,
@@ -254,6 +396,19 @@ def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
         )
         if state.get("state") != "embedding":
             _cleanup_payload(job_dir)
+    return True
+
+
+def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
+    """Explicitly remove one quarantined job after validating its exact path."""
+    if not job_id or Path(job_id).name != job_id:
+        return False
+    jobs_root = _jobs_root(knowledge_root)
+    job_dir = jobs_root / job_id
+    with mutation_lock(jobs_root):
+        if not job_dir.is_dir() or _read_job(job_dir).get("state") != DEGRADED_STATE:
+            return False
+        shutil.rmtree(job_dir)
     return True
 
 
@@ -294,7 +449,9 @@ def _cleanup_payload(job_dir: Path) -> None:
 def _prepare_job(job_dir: Path) -> dict[str, Any]:
     """Build the staging FTS/chunks off the event loop and resume idempotently."""
     with mutation_lock(_state_path(job_dir)):
-        state = _read_json(_state_path(job_dir))
+        state = _read_job(job_dir)
+        if state.get("state") == DEGRADED_STATE:
+            return state
         if not state or state.get("state") in TERMINAL_STATES:
             return state
         staging_store: KnowledgeStore | None = None
@@ -404,7 +561,9 @@ def _activate_job(
     with pack_operation_lock(service.knowledge_root, pack_id), mutation_lock(
         _state_path(job_dir)
     ):
-        current = _read_json(_state_path(job_dir)) or state
+        current = _read_job(job_dir)
+        if current.get("state") == DEGRADED_STATE:
+            return current
         if current.get("state") == "cancelled":
             _cleanup_payload(job_dir)
             return current
@@ -485,7 +644,9 @@ async def process_pack_jobs(
         ):
             _cleanup_payload(_jobs_root(service.knowledge_root) / item_job_id)
     jobs = [
-        item for item in reversed(all_jobs) if item.get("state") not in TERMINAL_STATES
+        item
+        for item in reversed(all_jobs)
+        if item.get("state") not in TERMINAL_STATES | {DEGRADED_STATE}
     ]
     if not jobs:
         return {"state": "no_work", "selected": 0, "stored": 0}
@@ -493,6 +654,8 @@ async def process_pack_jobs(
     job_dir = _jobs_root(service.knowledge_root) / str(state["job_id"])
     try:
         state = await asyncio.to_thread(_prepare_job, job_dir)
+        if state.get("state") == DEGRADED_STATE:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if not state or state.get("state") in TERMINAL_STATES:
             return {"state": "no_work", "selected": 0, "stored": 0}
 
@@ -522,6 +685,8 @@ async def process_pack_jobs(
                 state,
                 mode="bm25",
             )
+            if activated.get("state") == DEGRADED_STATE:
+                return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
             if activated.get("state") == "cancelled":
                 return {"state": "cancelled", "selected": 0, "stored": 0}
             return {"state": "ready_bm25", "selected": 0, "stored": 0}
@@ -540,6 +705,8 @@ async def process_pack_jobs(
                 state,
                 mode="hybrid",
             )
+            if activated.get("state") == DEGRADED_STATE:
+                return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
             activation_state = (
                 "cancelled" if activated.get("state") == "cancelled" else "ready_hybrid"
             )
@@ -555,11 +722,15 @@ async def process_pack_jobs(
             state,
             mode="bm25",
         )
+        if activated.get("state") == DEGRADED_STATE:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if activated.get("state") == "cancelled":
             return {"state": "cancelled", "selected": 0, "stored": 0}
         return {"state": "ready_bm25", "selected": 0, "stored": 0}
     except Exception as exc:
-        current = _read_json(_state_path(job_dir)) or state
+        current = _read_job(job_dir)
+        if current.get("state") == DEGRADED_STATE:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if current.get("state") == "cancelled":
             _cleanup_payload(job_dir)
             return {"state": "cancelled", "selected": 0, "stored": 0}

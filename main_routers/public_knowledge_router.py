@@ -20,6 +20,7 @@ from knowledge.catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
+from knowledge.pack_jobs import KnowledgeJobRegistryError
 from knowledge.source_registry import get_source
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
 from knowledge.prebuilt_index import (
@@ -345,6 +346,8 @@ async def import_public_knowledge_pack(request: Request):
             return {"ok": False, "reason": "pack_too_large"}
         service = await _service_async()
         result = await asyncio.to_thread(service.stage_pack, pack)
+    except KnowledgeJobRegistryError:
+        return {"ok": False, "reason": "knowledge_job_registry_invalid"}
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -433,6 +436,8 @@ async def apply_public_knowledge_subscription(
             vectors=vectors_raw,
             index_fallback_reason=fallback_reason,
         )
+    except KnowledgeJobRegistryError:
+        return {"ok": False, "reason": "knowledge_job_registry_invalid"}
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -458,6 +463,20 @@ async def cancel_public_knowledge_pack_job(request: Request):
     service = await _service_async()
     cancelled = await asyncio.to_thread(service.cancel_pack_job, job_id)
     return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
+
+
+@router.post("/packs/jobs/discard")
+async def discard_degraded_public_knowledge_pack_job(request: Request):
+    payload = await _json_payload(request)
+    rejected = _validate_mutation(request, payload)
+    if rejected is not None:
+        return rejected
+    job_id = str(payload.get("job_id") or "").strip()
+    if not job_id:
+        return {"ok": False, "reason": "invalid_request"}
+    service = await _service_async()
+    discarded = await asyncio.to_thread(service.discard_degraded_pack_job, job_id)
+    return {"ok": discarded, "reason": "" if discarded else "not_found"}
 
 
 @router.post("/packs/auto-context")
