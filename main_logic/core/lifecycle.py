@@ -1476,7 +1476,9 @@ class LifecycleMixin:
         # user_language —— __init__ 时 user_language 可能还是 None
         # 走的英文占位，这里 user_language 已经定型了，重新注册
         # 一份覆盖 registry 里的旧描述，再被下面的 snapshot 读走。
-        self._register_builtin_tools()
+        self._register_builtin_tools(
+            public_knowledge_lookup_enabled=input_mode != "text",
+        )
         # Snapshot the registry once per session create so the
         # tools list seen by the wire matches what the registry
         # held at connect time. ``set_tools`` keeps it live for
@@ -1813,7 +1815,9 @@ class LifecycleMixin:
             # 跨 session 持久），保证热切换前后工具集合保持一致。
             # 热切换可能跨语言（用户切了 user_language 后再热切换猫娘），
             # 抓快照前 refresh 一下内置工具的 description。
-            self._register_builtin_tools()
+            self._register_builtin_tools(
+                public_knowledge_lookup_enabled=self.input_mode != "text",
+            )
             _pending_tool_defs = self.tool_registry.all()
             if self.input_mode == 'text':
                 # 文本模式：使用 OmniOfflineClient

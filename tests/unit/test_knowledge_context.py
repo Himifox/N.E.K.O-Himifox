@@ -203,6 +203,41 @@ async def test_companion_chat_public_knowledge_tool_is_sample_only(monkeypatch):
     assert captured["mode"] == "sample"
 
 
+def test_realtime_public_knowledge_tool_exposes_lookup_and_sample():
+    from main_logic.knowledge_context import register_public_knowledge_tool
+    from main_logic.tool_calling import ToolRegistry
+
+    registry = ToolRegistry()
+    register_public_knowledge_tool(
+        registry,
+        language="zh",
+        lookup_enabled=True,
+    )
+
+    tool = registry.get("query_public_knowledge")
+    assert tool is not None
+    assert tool.parameters["properties"]["mode"]["enum"] == [
+        "lookup",
+        "sample",
+    ]
+    assert tool.parameters["properties"]["mode"]["default"] == "lookup"
+
+
+def test_public_knowledge_capability_follows_final_session_type():
+    from main_logic.core.tool_calling import ToolCallingMixin
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from main_logic.omni_realtime_client import OmniRealtimeClient
+
+    manager = SimpleNamespace(
+        session=OmniOfflineClient.__new__(OmniOfflineClient),
+        pending_session=None,
+    )
+    assert ToolCallingMixin._public_knowledge_lookup_enabled(manager) is False
+
+    manager.pending_session = OmniRealtimeClient.__new__(OmniRealtimeClient)
+    assert ToolCallingMixin._public_knowledge_lookup_enabled(manager) is True
+
+
 @pytest.mark.asyncio
 async def test_every_plain_user_turn_runs_host_owned_material_selection(monkeypatch):
     import main_logic.knowledge_context as knowledge_tool

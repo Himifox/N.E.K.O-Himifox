@@ -121,7 +121,16 @@ class ToolCallingMixin:
     # handler 当前固定返回"没有找到相关记忆"，等真实记忆检索接好后只
     # 替换 ``_handle_recall_memory_call`` 即可，不动注册 / 同步链路。
 
-    def _register_builtin_tools(self) -> None:
+    def _public_knowledge_lookup_enabled(self) -> bool:
+        """Choose the schema from the session that will own the next turn."""
+        session = getattr(self, "pending_session", None) or getattr(self, "session", None)
+        return isinstance(session, OmniRealtimeClient)
+
+    def _register_builtin_tools(
+        self,
+        *,
+        public_knowledge_lookup_enabled: bool | None = None,
+    ) -> None:
         """Re-register the built-in tools, with description / parameter docs in the current
         ``user_language``. Calls ``tool_registry.register(replace=True)`` directly
         rather than the public ``register_tool``, to avoid firing unnecessary
@@ -169,13 +178,17 @@ class ToolCallingMixin:
         try:
             from main_logic.knowledge_context import register_public_knowledge_tool
 
-            # Ordinary lookup is resolved deterministically before the response,
-            # so exposing lookup here would invite a redundant LLM tool round-trip.
-            # Keep only the action-like random material sampler in companion chat.
+            if public_knowledge_lookup_enabled is None:
+                public_knowledge_lookup_enabled = (
+                    self._public_knowledge_lookup_enabled()
+                )
+            # Text sessions resolve ordinary lookup deterministically before the
+            # response. Realtime sessions cannot safely inject late transcript
+            # context, so their tool owns the explicit lookup capability.
             register_public_knowledge_tool(
                 self.tool_registry,
                 language=_lang,
-                lookup_enabled=False,
+                lookup_enabled=public_knowledge_lookup_enabled,
             )
         except Exception as exc:
             logger.warning(
