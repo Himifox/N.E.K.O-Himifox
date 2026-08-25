@@ -35,6 +35,7 @@ _task_workers: dict[str, asyncio.Task[None]] = {}
 _active_package_tasks: dict[int, str] = {}
 _unsubscribing_package_ids: set[int] = set()
 _TASK_TTL_SECONDS = 60 * 60
+_TASK_MAX_ENTRIES = 200
 _MAX_ACTIVE_SUBSCRIPTIONS = 4
 _JOB_POLL_SECONDS = 5.0
 _JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
@@ -169,6 +170,7 @@ async def subscribe_knowledge_package(
         lambda completed, *, task_id=task_id, package_id=payload.package_id:
         _subscription_done(task_id, package_id, completed)
     )
+    _cleanup_tasks()
     return {"task_id": task_id, "status": "pending"}
 
 
@@ -190,6 +192,7 @@ def _subscription_done(
             completed.exception()
         except Exception:
             logger.exception("failed to consume knowledge subscription task result")
+    _cleanup_tasks()
 
 
 def _mark_subscription_cancelled(task: dict[str, Any]) -> None:
@@ -844,6 +847,24 @@ def _cleanup_tasks() -> None:
         and now - float(task["completed_at"]) > _TASK_TTL_SECONDS
     ]
     for task_id in expired:
+        _tasks.pop(task_id, None)
+
+    overflow = len(_tasks) - _TASK_MAX_ENTRIES
+    if overflow <= 0:
+        return
+    terminal = sorted(
+        (
+            (task_id, task)
+            for task_id, task in _tasks.items()
+            if task_id not in _task_workers and task.get("completed_at") is not None
+        ),
+        key=lambda item: (
+            float(item[1].get("completed_at") or 0),
+            float(item[1].get("created_at") or 0),
+            item[0],
+        ),
+    )
+    for task_id, _task in terminal[:overflow]:
         _tasks.pop(task_id, None)
 
 

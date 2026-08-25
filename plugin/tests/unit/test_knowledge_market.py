@@ -44,6 +44,29 @@ def _pack():
     }
 
 
+def test_cleanup_bounds_terminal_tasks_without_removing_active(monkeypatch):
+    monkeypatch.setattr(module, "_TASK_TTL_SECONDS", 10**9)
+    now = module.time.time()
+    for index in range(201):
+        task_id = f"terminal-{index:03d}"
+        module._tasks[task_id] = {
+            "created_at": now + index,
+            "completed_at": now + index + 1,
+        }
+    module._tasks["active"] = {
+        "created_at": 10_000.0,
+        "completed_at": None,
+    }
+
+    module._cleanup_tasks()
+
+    assert len(module._tasks) == module._TASK_MAX_ENTRIES
+    assert "active" in module._tasks
+    assert "terminal-000" not in module._tasks
+    assert "terminal-001" not in module._tasks
+    assert "terminal-200" in module._tasks
+
+
 def test_market_package_id_is_bounded_to_the_persisted_ascii_contract():
     assert module.KnowledgeSubscribeRequest(
         package_id=module.PROVIDER_PACKAGE_ID_MAX,
