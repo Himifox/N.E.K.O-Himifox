@@ -216,6 +216,24 @@ def _search_lexical_candidates(
     ]
 
 
+def _search_lexical_candidate_pools(
+    retriever: KnowledgeRetriever,
+    queries: tuple[str, ...],
+    *,
+    limit: int,
+    source_pools: tuple[tuple[str, ...] | None, ...],
+) -> tuple[list[KnowledgeHit], ...]:
+    return tuple(
+        _search_lexical_candidates(
+            retriever,
+            queries,
+            limit=limit,
+            allowed_source_tags=allowed_sources,
+        )
+        for allowed_sources in source_pools
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsePolicy:
     """Trusted instructions for rendering one matched knowledge card."""
@@ -672,13 +690,44 @@ class KnowledgeService:
                 value.strip() for value in (*lexical_queries, query) if value.strip()
             )
         )
+        if target_material_type:
+            requested_sources = (
+                None
+                if allowed_source_tags is None
+                else frozenset(allowed_source_tags)
+            )
+            primary_sources = tuple(
+                sorted(
+                    source_tag
+                    for source_tag, material_type in source_types.items()
+                    if material_type == target_material_type
+                    and (requested_sources is None or source_tag in requested_sources)
+                )
+            )
+            fallback_sources = tuple(
+                sorted(
+                    source_tag
+                    for source_tag, material_type in source_types.items()
+                    if material_type in allowed_types
+                    and material_type != target_material_type
+                    and (requested_sources is None or source_tag in requested_sources)
+                )
+            )
+            source_pools: tuple[tuple[str, ...] | None, ...] = (
+                primary_sources,
+                fallback_sources,
+            )
+            pool_candidate_limit = candidate_limit
+        else:
+            source_pools = (allowed_sources,)
+            pool_candidate_limit = candidate_limit * max(len(allowed_types), 1)
         lexical_task = asyncio.create_task(
             asyncio.to_thread(
-                _search_lexical_candidates,
+                _search_lexical_candidate_pools,
                 self._retriever(store),
                 normalized_lexical_queries,
-                limit=candidate_limit * max(len(allowed_types), 1),
-                allowed_source_tags=allowed_sources,
+                limit=pool_candidate_limit,
+                source_pools=source_pools,
             )
         )
         prepared_task = asyncio.create_task(
@@ -689,11 +738,11 @@ class KnowledgeService:
                 deadline_monotonic=deadline_monotonic,
             )
         )
-        lexical_ready, lexical = await _wait_task_until(
+        lexical_ready, lexical_pools = await _wait_task_until(
             lexical_task,
             deadline_monotonic,
         )
-        if not lexical_ready or lexical is None:
+        if not lexical_ready or lexical_pools is None:
             if prepared_task.done():
                 _consume_task_result(prepared_task)
             else:
@@ -710,49 +759,59 @@ class KnowledgeService:
             deadline_monotonic,
         )
         if not prepared_ready or prepared is None:
-            semantic = []
+            semantic_pools = tuple([] for _pool in source_pools)
             semantic_state = "semantic_budget_exhausted"
         else:
-            semantic, semantic_state = await semantic_search_prepared(
-                store,
-                prepared,
-                limit=candidate_limit * max(len(allowed_types), 1),
-                allowed_source_tags=allowed_sources,
-                deadline_monotonic=deadline_monotonic,
+            semantic_results = [
+                await semantic_search_prepared(
+                    store,
+                    prepared,
+                    limit=pool_candidate_limit,
+                    allowed_source_tags=pool_sources,
+                    deadline_monotonic=deadline_monotonic,
+                )
+                for pool_sources in source_pools
+            ]
+            semantic_pools = tuple(result[0] for result in semantic_results)
+            semantic_states = tuple(result[1] for result in semantic_results)
+            semantic_state = next(
+                (state for state in semantic_states if state != "ready"),
+                "ready",
             )
-        fused = _rrf_knowledge_hits(
-            list(lexical),
-            list(semantic),
-            limit=max(len(lexical) + len(semantic), limit),
+        material_pools = tuple(
+            [
+                MaterialKnowledgeHit(
+                    hit=hit,
+                    material_type=source_types.get(
+                        hit.entry.source_tag,
+                        "knowledge",
+                    ),
+                )
+                for hit in _rrf_knowledge_hits(
+                    list(lexical),
+                    list(semantic),
+                    limit=max(len(lexical) + len(semantic), limit),
+                )
+            ]
+            for lexical, semantic in zip(
+                lexical_pools,
+                semantic_pools,
+                strict=True,
+            )
         )
-        material_hits = [
-            MaterialKnowledgeHit(
-                hit=hit,
-                material_type=source_types.get(hit.entry.source_tag, "knowledge"),
-            )
-            for hit in fused
-        ]
 
         if target_material_type:
-            primary = [
-                item
-                for item in material_hits
-                if item.material_type == target_material_type
-            ]
-            fallback = [
-                item
-                for item in material_hits
-                if item.material_type != target_material_type
-            ]
-            selected = primary[:limit]
-            selected.extend(fallback[: max(limit - len(selected), 0)])
+            selected = material_pools[0][:limit]
+            selected.extend(
+                material_pools[1][: max(limit - len(selected), 0)]
+            )
         else:
-            selected = material_hits[:limit]
+            selected = material_pools[0][:limit]
 
         _record_search_diagnostic(
             started_at=started_at,
-            lexical_count=len(lexical),
-            semantic_count=len(semantic),
+            lexical_count=sum(len(pool) for pool in lexical_pools),
+            semantic_count=sum(len(pool) for pool in semantic_pools),
             semantic_state=semantic_state,
         )
         return selected

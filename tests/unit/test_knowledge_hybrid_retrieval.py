@@ -891,7 +891,7 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
         )
     )
     preparation_calls = 0
-    scan_calls: list[SemanticQueryEmbedding] = []
+    scan_calls: list[tuple[SemanticQueryEmbedding, tuple[str, ...]]] = []
     prepared = SemanticQueryEmbedding(
         vector=None,
         status=None,
@@ -911,8 +911,14 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
         assert len(stores) == 1
         return prepared
 
-    async def _scan(_store, query_embedding, **_kwargs):
-        scan_calls.append(query_embedding)
+    async def _scan(
+        _store,
+        query_embedding,
+        *,
+        allowed_source_tags,
+        **_kwargs,
+    ):
+        scan_calls.append((query_embedding, allowed_source_tags))
         return [], query_embedding.state
 
     monkeypatch.setattr(service_module, "prepare_semantic_query", _prepare)
@@ -926,12 +932,57 @@ async def test_single_store_search_reuses_one_query_embedding_across_material_ty
     )
 
     assert preparation_calls == 1
-    assert scan_calls == [prepared]
+    assert scan_calls == [
+        (prepared, ("source:community.reply-samples",)),
+        (prepared, ("source:chime",)),
+    ]
     assert [item.material_type for item in result] == ["corpus", "knowledge"]
     assert [item.hit.entry.title for item in result] == [
         "Corpus answer",
         "shared phrase knowledge",
     ]
+
+
+@pytest.mark.asyncio
+async def test_target_material_has_an_independent_lexical_candidate_budget(tmp_path):
+    service = KnowledgeService(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    store.upsert_many(
+        tuple(
+            _entry(f"shared phrase knowledge {index:02d}", source="source:chime")
+            for index in range(30)
+        )
+    )
+    service.install_pack(
+        validate_pack(
+            {
+                "schema_version": 1,
+                "pack_id": "target-corpus",
+                "material_type": "corpus",
+                "source": {"name": "Target", "homepage": "", "license": "CC0"},
+                "entries": [
+                    {
+                        "title": "shared phrase corpus",
+                        "terms": {"alias": [], "recognition": []},
+                        "tags": [],
+                        "summary": "shared phrase",
+                        "content": "shared phrase",
+                    }
+                ],
+            }
+        )
+    )
+
+    result = await service.asearch(
+        "shared phrase",
+        allowed_material_types=("knowledge", "corpus"),
+        target_material_type="corpus",
+        limit=1,
+        load_model=False,
+    )
+
+    assert [item.material_type for item in result] == ["corpus"]
+    assert result[0].hit.entry.title == "shared phrase corpus"
 
 
 @pytest.mark.asyncio

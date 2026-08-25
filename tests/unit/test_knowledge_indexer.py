@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import pytest
@@ -195,6 +196,22 @@ def test_indexer_work_limits_are_bounded() -> None:
 def test_degraded_job_is_not_pending_for_unrelated_index_work() -> None:
     assert indexer._has_pending_pack_jobs(({"state": "degraded"},)) is False
     assert indexer._has_pending_pack_jobs(({"state": "queued"},)) is True
+
+
+@pytest.mark.asyncio
+async def test_post_processing_job_enumeration_runs_off_the_event_loop() -> None:
+    event_loop_thread = threading.get_ident()
+    call_threads: list[int] = []
+
+    class FakeService:
+        def list_pack_jobs(self):
+            call_threads.append(threading.get_ident())
+            return ({"state": "queued"},)
+
+    jobs = await indexer._list_pack_jobs_off_loop(FakeService())
+
+    assert jobs == ({"state": "queued"},)
+    assert call_threads and call_threads[0] != event_loop_thread
 
 
 @pytest.mark.asyncio

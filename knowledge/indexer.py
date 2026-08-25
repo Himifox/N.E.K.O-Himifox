@@ -72,6 +72,10 @@ def _has_pending_pack_jobs(jobs: tuple[Mapping[str, object], ...]) -> bool:
     return any(job.get("state") not in non_pending_states for job in jobs)
 
 
+async def _list_pack_jobs_off_loop(service: object) -> tuple[Mapping[str, object], ...]:
+    return await asyncio.to_thread(service.list_pack_jobs)
+
+
 async def _wait_for_wake(event: asyncio.Event, timeout: float) -> None:
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -165,7 +169,9 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     break
                 await asyncio.sleep(0)
 
-            pending_jobs = _has_pending_pack_jobs(service.list_pack_jobs())
+            pending_jobs = _has_pending_pack_jobs(
+                await _list_pack_jobs_off_loop(service)
+            )
             backlog = backlog or (pending_jobs and not blocked)
 
             if (
