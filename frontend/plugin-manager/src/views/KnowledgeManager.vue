@@ -340,6 +340,11 @@ import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, type Kn
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
+import {
+  createOverviewRequestGate,
+  type OverviewRequestTicket,
+  type OverviewResource,
+} from '@/utils/overviewRequestGate'
 import { openExternalUrl } from '@/utils/openExternal'
 import dayjs from 'dayjs'
 
@@ -380,6 +385,7 @@ const hasMore = ref(false)
 const entriesRequestGate = createLatestRequestGate()
 const entryRequestGate = createLatestRequestGate()
 const packJobsRequestGate = createLatestRequestGate()
+const overviewRequestGate = createOverviewRequestGate()
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
 const packs = ref<KnowledgePackSummary[]>([])
@@ -529,6 +535,9 @@ async function openKnowledgeMarket() {
 }
 
 async function refreshAll() {
+  const epoch = invalidateOverviewRequests()
+  const statusTicket = overviewRequestGate.begin('status', epoch)!
+  const packsTicket = overviewRequestGate.begin('packs', epoch)!
   loading.value = true
   packsLoading.value = true
   const packJobsRequestId = packJobsRequestGate.begin()
@@ -538,13 +547,15 @@ async function refreshAll() {
       knowledgeApi.packs(),
       knowledgeApi.packJobs(),
     ])
-    if (statusResult.status === 'fulfilled') {
+    if (statusResult.status === 'fulfilled' && isCurrentOverviewRequest('status', statusTicket)) {
       status.value = statusResult.value.status || null
       if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
+      writeOverviewCache()
     }
-    if (packsResult.status === 'fulfilled') {
+    if (packsResult.status === 'fulfilled' && isCurrentOverviewRequest('packs', packsTicket)) {
       packs.value = packsResult.value.packs || []
       cachedPacks = { value: packs.value, loadedAt: Date.now() }
+      writeOverviewCache()
     }
     if (
       jobsResult.status === 'fulfilled'
@@ -553,18 +564,39 @@ async function refreshAll() {
     ) {
       packJobs.value = jobsResult.value.jobs || []
     }
-    writeOverviewCache()
     const currentJobsFailed = jobsResult.status === 'rejected'
+      && !disposed
       && packJobsRequestGate.isLatest(packJobsRequestId)
-    if (statusResult.status === 'rejected' || packsResult.status === 'rejected' || currentJobsFailed) {
+    const currentStatusFailed = statusResult.status === 'rejected'
+      && isCurrentOverviewRequest('status', statusTicket)
+    const currentPacksFailed = packsResult.status === 'rejected'
+      && isCurrentOverviewRequest('packs', packsTicket)
+    if (currentStatusFailed || currentPacksFailed || currentJobsFailed) {
       ElMessage.error(t('knowledge.loadFailed'))
     }
   } catch {
-    ElMessage.error(t('knowledge.loadFailed'))
+    if (
+      isCurrentOverviewRequest('status', statusTicket)
+      || isCurrentOverviewRequest('packs', packsTicket)
+    ) ElMessage.error(t('knowledge.loadFailed'))
   } finally {
-    loading.value = false
-    packsLoading.value = false
+    if (isCurrentOverviewRequest('status', statusTicket)) loading.value = false
+    if (isCurrentOverviewRequest('packs', packsTicket)) packsLoading.value = false
   }
+}
+
+function invalidateOverviewRequests(): number {
+  const epoch = overviewRequestGate.invalidate()
+  loading.value = false
+  packsLoading.value = false
+  return epoch
+}
+
+function isCurrentOverviewRequest(
+  resource: OverviewResource,
+  ticket: OverviewRequestTicket,
+): boolean {
+  return !disposed && overviewRequestGate.isCurrent(resource, ticket)
 }
 
 function isFresh(loadedAt: number): boolean {
@@ -615,14 +647,15 @@ function markOverviewCacheStale() {
 
 function refreshOverviewInBackground(delayMs = 0) {
   if (disposed) return
+  const epoch = invalidateOverviewRequests()
   markOverviewCacheStale()
   if (overviewRefreshTimer) window.clearTimeout(overviewRefreshTimer)
   overviewRefreshTimer = window.setTimeout(() => {
     overviewRefreshTimer = null
     if (disposed) return
     const run = () => Promise.allSettled([
-      loadStatus({ force: true, silent: true }),
-      loadPacks({ force: true, silent: true }),
+      loadStatus({ force: true, silent: true, epoch }),
+      loadPacks({ force: true, silent: true, epoch }),
     ]).then(() => {})
     const queuedRefresh = (overviewRefreshInFlight || Promise.resolve()).then(run)
     overviewRefreshInFlight = queuedRefresh
@@ -634,22 +667,24 @@ function refreshOverviewInBackground(delayMs = 0) {
   }, delayMs)
 }
 
-async function loadStatus(options: { force?: boolean; silent?: boolean } = {}) {
+async function loadStatus(options: { force?: boolean; silent?: boolean; epoch?: number } = {}) {
   if (!options.force && cachedStatus && isFresh(cachedStatus.loadedAt)) {
     status.value = cachedStatus.value
     return
   }
+  const ticket = overviewRequestGate.begin('status', options.epoch)
+  if (!ticket || disposed) return
   if (!options.silent) loading.value = true
   try {
     const nextStatus = (await knowledgeApi.status()).status || null
-    if (disposed) return
+    if (!isCurrentOverviewRequest('status', ticket)) return
     status.value = nextStatus
     if (status.value) cachedStatus = { value: status.value, loadedAt: Date.now() }
     writeOverviewCache()
   } catch {
-    if (!disposed) ElMessage.error(t('knowledge.loadFailed'))
+    if (isCurrentOverviewRequest('status', ticket)) ElMessage.error(t('knowledge.loadFailed'))
   } finally {
-    if (!options.silent) loading.value = false
+    if (!options.silent && isCurrentOverviewRequest('status', ticket)) loading.value = false
   }
 }
 
@@ -705,23 +740,25 @@ async function toggleEntry(row: KnowledgeEntrySummary) {
 function previousPage() { offset.value = Math.max(0, offset.value - pageSize); loadEntries() }
 function nextPage() { offset.value += pageSize; loadEntries() }
 
-async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
+async function loadPacks(options: { force?: boolean; silent?: boolean; epoch?: number } = {}) {
   if (!options.force && cachedPacks && isFresh(cachedPacks.loadedAt)) {
     packs.value = cachedPacks.value
     return
   }
   if (packsLoading.value && !options.force) return
+  const ticket = overviewRequestGate.begin('packs', options.epoch)
+  if (!ticket || disposed) return
   if (!options.silent) packsLoading.value = true
   try {
     const nextPacks = (await knowledgeApi.packs()).packs || []
-    if (disposed) return
+    if (!isCurrentOverviewRequest('packs', ticket)) return
     packs.value = nextPacks
     cachedPacks = { value: packs.value, loadedAt: Date.now() }
     writeOverviewCache()
   }
-  catch { if (!disposed) ElMessage.error(t('knowledge.loadFailed')) }
+  catch { if (isCurrentOverviewRequest('packs', ticket)) ElMessage.error(t('knowledge.loadFailed')) }
   finally {
-    if (!options.silent) packsLoading.value = false
+    if (!options.silent && isCurrentOverviewRequest('packs', ticket)) packsLoading.value = false
   }
 }
 
@@ -1023,6 +1060,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
+  overviewRequestGate.invalidate()
   entryRequestGate.begin()
   packJobsRequestGate.invalidate()
   pendingImportJobs.clear()
