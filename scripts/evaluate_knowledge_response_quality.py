@@ -103,9 +103,21 @@ async def _receive_until_complete(
             continue
         payload = json.loads(raw)
         request_id = str(payload.get("request_id") or "")
-        if expected_request_id and request_id and request_id != expected_request_id:
-            continue
         event_type = str(payload.get("type") or "unknown")
+        is_completion = (
+            event_type == "turn end"
+            or (
+                event_type == "system"
+                and payload.get("data") in {"turn end", "turn end agent_callback"}
+            )
+        )
+        if expected_request_id and request_id != expected_request_id:
+            # Once a live corpus turn has an id, assistant content and terminal
+            # signals must prove that they belong to that exact request. In
+            # particular, id-less proactive/callback traffic must not satisfy
+            # or terminate the user turn currently under evaluation.
+            if request_id or event_type == "gemini_response" or is_completion:
+                continue
         event_types.add(event_type)
         if startup and event_type == "session_started":
             return {"ready": True, "events": sorted(event_types)}
@@ -120,13 +132,7 @@ async def _receive_until_complete(
             if first_text_at is None:
                 first_text_at = time.perf_counter()
             chunks.append(str(payload.get("text") or ""))
-        if (
-            event_type == "turn end"
-            or (
-                event_type == "system"
-                and payload.get("data") in {"turn end", "turn end agent_callback"}
-            )
-        ):
+        if is_completion:
             completed = True
             break
     finished = time.perf_counter()

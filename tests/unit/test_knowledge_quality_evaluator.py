@@ -58,3 +58,46 @@ async def test_live_receiver_waits_for_explicit_turn_end():
 
     assert outcome["completed"] is True
     assert outcome["reply"] == "first second"
+
+
+@pytest.mark.asyncio
+async def test_live_receiver_requires_exact_request_id_for_content_and_completion():
+    class InterleavedWebSocket:
+        def __init__(self):
+            self.messages = iter(
+                (
+                    {"type": "gemini_response", "text": "proactive"},
+                    {"type": "system", "data": "turn end agent_callback"},
+                    {
+                        "type": "gemini_response",
+                        "text": "wrong",
+                        "request_id": "other-request",
+                    },
+                    {
+                        "type": "system",
+                        "data": "turn end",
+                        "request_id": "other-request",
+                    },
+                    {
+                        "type": "gemini_response",
+                        "text": "target",
+                        "request_id": "target-request",
+                    },
+                    {
+                        "type": "system",
+                        "data": "turn end",
+                        "request_id": "target-request",
+                    },
+                )
+            )
+
+        async def recv(self):
+            return json.dumps(next(self.messages))
+
+    outcome = await evaluator._receive_until_complete(
+        InterleavedWebSocket(),
+        expected_request_id="target-request",
+    )
+
+    assert outcome["completed"] is True
+    assert outcome["reply"] == "target"
