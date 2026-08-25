@@ -56,8 +56,8 @@ from plugin.settings import (
     NEKO_AUTH_CLIENT_ID,
     NEKO_AUTH_URL,
 )
-from knowledge.packs import MAX_PACK_BYTES
-from knowledge.prebuilt_index import (
+from knowledge.limits import (
+    MAX_PACK_BYTES,
     MAX_PREBUILT_MANIFEST_BYTES,
     MAX_PREBUILT_VECTOR_BYTES,
 )

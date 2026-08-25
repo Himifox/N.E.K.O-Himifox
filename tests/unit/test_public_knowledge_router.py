@@ -134,6 +134,7 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
     client = _client(monkeypatch, tmp_path)
     thread_ids = {}
     original_validate = module._validate_local_pack_payload
+    original_decode = module._decode_json_object
 
     def capture_request_thread(*_args, **_kwargs):
         thread_ids["request"] = threading.get_ident()
@@ -143,12 +144,17 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
         thread_ids["validation"] = threading.get_ident()
         return original_validate(payload)
 
+    def capture_decode_thread(raw):
+        thread_ids["decode"] = threading.get_ident()
+        return original_decode(raw)
+
     monkeypatch.setattr(module, "_validate_mutation", capture_request_thread)
     monkeypatch.setattr(
         module,
         "_validate_local_pack_payload",
         capture_validation_thread,
     )
+    monkeypatch.setattr(module, "_decode_json_object", capture_decode_thread)
 
     response = client.post(
         "/api/public-knowledge/packs/import",
@@ -156,6 +162,7 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
     ).json()
 
     assert response["ok"] is True
+    assert thread_ids["decode"] != thread_ids["request"]
     assert thread_ids["validation"] != thread_ids["request"]
 
 

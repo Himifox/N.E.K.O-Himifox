@@ -583,8 +583,13 @@ async def _bounded_json_payload(
         if len(raw) + len(chunk) > max_bytes:
             return {}, True
         raw.extend(chunk)
+    return await asyncio.to_thread(_decode_json_object, raw), False
+
+
+def _decode_json_object(raw: bytes | bytearray) -> dict:
+    """Decode a bounded JSON object away from the request event loop."""
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        payload = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return {}, False
-    return (payload if isinstance(payload, dict) else {}), False
+        return {}
+    return payload if isinstance(payload, dict) else {}

@@ -11,18 +11,21 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from .chunking import CHUNKER_VERSION, EMBEDDING_INPUT_VERSION, derive_knowledge_chunks
-from .packs import MAX_PACK_BYTES, KnowledgePack, pack_payload, validate_pack
+from .limits import (
+    MAX_PACK_BYTES,
+    MAX_PREBUILT_CHUNKS,
+    MAX_PREBUILT_MANIFEST_BYTES,
+    MAX_PREBUILT_VECTOR_BYTES,
+    PREBUILT_DIMENSIONS,
+    PREBUILT_VECTOR_ROW_BYTES,
+)
+from .packs import KnowledgePack, pack_payload, validate_pack
 from .subscriptions import canonical_pack_bytes, load_canonical_pack_artifact
 
 
 PREBUILT_INDEX_SCHEMA_VERSION = 1
 PREBUILT_MODEL_ID = "local-text-retrieval-v1-256d-int8-mlen1024"
-PREBUILT_DIMENSIONS = 256
 PREBUILT_ENCODING = "float16-le-row-major"
-MAX_PREBUILT_MANIFEST_BYTES = 2 * 1024 * 1024
-MAX_PREBUILT_CHUNKS = 5_000
-PREBUILT_VECTOR_ROW_BYTES = PREBUILT_DIMENSIONS * 2
-MAX_PREBUILT_VECTOR_BYTES = MAX_PREBUILT_CHUNKS * PREBUILT_VECTOR_ROW_BYTES
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_KEYS = frozenset(

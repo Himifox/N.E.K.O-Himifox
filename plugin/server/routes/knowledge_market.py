@@ -12,11 +12,11 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from knowledge.api import (
+from knowledge.subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,
     load_canonical_pack_artifact,
 )
-from knowledge.packs import MAX_PACK_BYTES
+from knowledge.limits import MAX_PACK_BYTES
 from plugin.logging_config import get_logger
 from plugin.settings import MARKET_API_URL, NEKO_AUTH_CLIENT_ID
 from plugin.server.routes.market_bridge import (

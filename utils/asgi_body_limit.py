@@ -217,7 +217,7 @@ class InboundBodySizeLimitMiddleware:
                 "ok": False,
                 "error_code": error_code,
                 "max_bytes": max_bytes,
-                "error": "请求体超过全局体积上限。",
+                "error": "请求体超过允许的体积上限。",
             },
             ensure_ascii=False,
         ).encode("utf-8")

@@ -14,6 +14,7 @@ from utils.file_utils import atomic_write_json
 from ._mutation_lock import mutation_lock
 from .chunking import derive_knowledge_chunks
 from .filters import sanitize_external_text
+from .limits import MAX_PACK_BYTES
 from .models import (
     KnowledgeEntry,
     normalize_knowledge_title,
@@ -24,7 +25,6 @@ from .store import KnowledgeStore
 PACK_SCHEMA_VERSION = 1
 PACK_REGISTRY_SCHEMA_VERSION = 4
 MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
-MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_PACK_ENTRIES = 5_000
 MAX_PACK_PROJECTED_CHUNKS = 5_000
 MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024

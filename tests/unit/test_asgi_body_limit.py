@@ -197,7 +197,13 @@ def test_exact_streamed_path_rejects_declared_oversized_multipart():
 
     assert hit is False
     assert sent[0]["status"] == 413
-    assert json.loads(sent[1]["body"])["error_code"] == "knowledge_request_too_large"
+    payload = json.loads(sent[1]["body"])
+    assert payload == {
+        "ok": False,
+        "error_code": "knowledge_request_too_large",
+        "max_bytes": 64,
+        "error": "请求体超过允许的体积上限。",
+    }
 
 
 def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart():
@@ -210,6 +216,7 @@ def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart():
 
     assert called["hit"] is False
     assert sent[0]["status"] == 413
+    assert json.loads(sent[1]["body"])["error"] == "请求体超过允许的体积上限。"
 
 
 def test_exact_streamed_path_replays_valid_body_without_changing_bytes():

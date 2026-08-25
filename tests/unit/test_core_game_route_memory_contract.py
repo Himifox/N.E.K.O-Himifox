@@ -154,6 +154,7 @@ def _make_manager():
     mgr._tts_done_pending_until_ready = False
     mgr.state = _FakeState()
     mgr._active_text_request_id = None
+    mgr._text_route_owners = {}
     mgr._magic_command_image_drop_request_ids = set()
     mgr._magic_command_image_drop_request_order = deque()
     mgr._pending_turn_meta = None
