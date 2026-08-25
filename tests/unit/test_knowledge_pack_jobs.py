@@ -536,7 +536,7 @@ def test_state_capacity_cannot_override_identity(
     assert listed["reason"] == "job_capacity_identity_mismatch"
     assert listed[field] == identity[field]
     monkeypatch.setattr(pack_jobs, limit_name, identity[field])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="community knowledge"):
         service.stage_pack(_pack(pack_id="second-pack"))
 
 

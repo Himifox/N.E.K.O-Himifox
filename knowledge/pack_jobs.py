@@ -111,8 +111,11 @@ def _validated_identity_payload(
     job_id = str(payload.get("job_id") or "")
     pack_id = str(payload.get("pack_id") or "")
     identity_values = {
-        key: _normalized_job_timestamp(payload.get(key))
-        for key in ("created_at", *IDENTITY_CAPACITY_FIELDS)
+        "created_at": _normalized_job_timestamp(payload.get("created_at")),
+        **{
+            key: _normalized_nonnegative_int(payload.get(key))
+            for key in IDENTITY_CAPACITY_FIELDS
+        },
     }
     if any(value is None for value in identity_values.values()):
         return _JsonReadResult("invalid", {})
@@ -164,7 +167,7 @@ def _degraded_job(
     }
 
 
-def _normalized_job_timestamp(value: object) -> int | None:
+def _normalized_nonnegative_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -172,6 +175,10 @@ def _normalized_job_timestamp(value: object) -> int | None:
     if isinstance(value, str) and value.isascii() and value.isdecimal():
         return int(value)
     return None
+
+
+def _normalized_job_timestamp(value: object) -> int | None:
+    return _normalized_nonnegative_int(value)
 
 
 def _read_job(job_dir: Path) -> dict[str, object]:
@@ -204,7 +211,7 @@ def _read_job(job_dir: Path) -> dict[str, object]:
         for key in IDENTITY_CAPACITY_FIELDS:
             if key not in state:
                 continue
-            state_value = _normalized_job_timestamp(state.get(key))
+            state_value = _normalized_nonnegative_int(state.get(key))
             if state_value != identity[key]:
                 return _degraded_job(
                     job_dir,
