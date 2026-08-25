@@ -632,12 +632,12 @@ def _entry_from_payload(
             raise ValueError(f"entries[{index}].terms.{role} must be a string array")
         if len(values) > MAX_PACK_TERMS_PER_ROLE:
             raise ValueError(f"entries[{index}].terms.{role} contains too many terms")
-        try:
-            term_bytes += sum(len(value.encode("utf-8")) for value in values)
-        except UnicodeEncodeError as exc:
-            raise ValueError(f"entries[{index}].terms must contain valid UTF-8") from exc
-    if term_bytes > MAX_PACK_TERM_BYTES_PER_ENTRY:
-        raise ValueError(f"entries[{index}].terms exceeds the metadata size limit")
+        term_bytes = _bounded_utf8_size(
+            values,
+            used_bytes=term_bytes,
+            max_bytes=MAX_PACK_TERM_BYTES_PER_ENTRY,
+            field=f"entries[{index}].terms",
+        )
     normalized_terms = {
         role: tuple(terms.get(role, ()))
         for role in sorted(_TERM_ROLES)
@@ -647,12 +647,12 @@ def _entry_from_payload(
         raise ValueError(f"entries[{index}].tags must be a string array")
     if len(tags) > MAX_PACK_TAGS_PER_ENTRY:
         raise ValueError(f"entries[{index}].tags contains too many tags")
-    try:
-        tag_bytes = sum(len(tag.encode("utf-8")) for tag in tags)
-    except UnicodeEncodeError as exc:
-        raise ValueError(f"entries[{index}].tags must contain valid UTF-8") from exc
-    if tag_bytes > MAX_PACK_TAG_BYTES_PER_ENTRY:
-        raise ValueError(f"entries[{index}].tags exceeds the metadata size limit")
+    _bounded_utf8_size(
+        tags,
+        used_bytes=0,
+        max_bytes=MAX_PACK_TAG_BYTES_PER_ENTRY,
+        field=f"entries[{index}].tags",
+    )
     if any(tag.startswith("source:") for tag in tags):
         raise ValueError("community entries cannot declare source tags")
     return KnowledgeEntry(
@@ -666,6 +666,28 @@ def _entry_from_payload(
             payload.get("content"), f"entries[{index}].content", 80_000
         ),
     )
+
+
+def _bounded_utf8_size(
+    values: list[str],
+    *,
+    used_bytes: int,
+    max_bytes: int,
+    field: str,
+) -> int:
+    total = used_bytes
+    for value in values:
+        remaining = max_bytes - total
+        if len(value) > remaining:
+            raise ValueError(f"{field} exceeds the metadata size limit")
+        try:
+            encoded_size = len(value.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError(f"{field} must contain valid UTF-8") from exc
+        if encoded_size > remaining:
+            raise ValueError(f"{field} exceeds the metadata size limit")
+        total += encoded_size
+    return total
 
 
 def _identifier(value: object, field: str) -> str:

@@ -217,6 +217,45 @@ def test_pack_rejects_oversized_tag_metadata_by_utf8_bytes():
         validate_pack(payload)
 
 
+def test_pack_rejects_obviously_oversized_tag_before_encoding():
+    class OversizedTag(str):
+        def encode(self, *_args, **_kwargs):
+            pytest.fail("an obviously oversized tag must not be encoded")
+
+    payload = _payload()
+    payload["entries"][0]["tags"] = [
+        OversizedTag("x" * (MAX_PACK_TAG_BYTES_PER_ENTRY + 1))
+    ]
+
+    with pytest.raises(ValueError, match="metadata size limit"):
+        validate_pack(payload)
+
+
+@pytest.mark.parametrize("field", ("terms", "tags"))
+def test_pack_rejects_invalid_utf8_metadata_within_budget(field):
+    payload = _payload()
+    if field == "terms":
+        payload["entries"][0]["terms"]["alias"] = ["\ud800"]
+    else:
+        payload["entries"][0]["tags"] = ["\ud800"]
+
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        validate_pack(payload)
+
+
+def test_pack_accepts_exact_utf8_metadata_byte_boundaries():
+    payload = _payload()
+    payload["entries"][0]["terms"]["alias"] = [
+        "x" * MAX_PACK_TERM_BYTES_PER_ENTRY
+    ]
+    payload["entries"][0]["tags"] = ["x" * MAX_PACK_TAG_BYTES_PER_ENTRY]
+
+    pack = validate_pack(payload)
+
+    assert pack.entries[0].aliases
+    assert pack.entries[0].tags[1]
+
+
 def test_pack_accepts_the_tag_cardinality_boundary():
     payload = _payload()
     payload["entries"][0]["tags"] = [
