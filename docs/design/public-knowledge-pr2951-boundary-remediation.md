@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：实施记录与待实施补充。第一、二轮已经实施；第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，尚未实施的项目必须以代码、测试和 CI 通过为完成依据。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量。
+> 状态：已实施设计记录。第一、二轮及第三轮均已实施；第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -331,7 +331,7 @@
 
 第二轮定向 Python 测试必须使用 `uv run pytest`；前端至少通过 `vue-tsc --build` 与 i18n 完整性检查。最终回归通过后，10 个行级线程可以逐项 resolved；3 个 outside 建议只能通过代码更新与 review 回复说明已处理。
 
-## 第三轮复审：剩余边界的待实施设计
+## 第三轮复审：剩余边界的实施设计
 
 本轮以 `2381e79b8` 为代码快照，复核 GitHub 上全部 unresolved 行级线程（包括已经 outdated 但仍未手动解决的线程）及 review body 中的 outside-diff 评论。按“当前代码是否已经覆盖评论所述失败路径”重新归并后，结果为：
 
@@ -617,3 +617,15 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 
 - semantic top-K 已在截断前排除 disabled chunks；“单个启用 entry 的大量 chunks 挤出其他启用 entry”属于结果多样性问题。若产品要求每个 entry 至少一个候选，应在 vector snapshot 中按 entry rowid 取最大分后再做 entry top-K，或渐进扩大 chunk 窗口直到得到足够不同 entry。该变化会影响相关性排序与性能，不与本轮 disabled 正确性评论绑定。
 - stage/remove 已有共享 pack lock；本轮只补真实并发回归，不改为数据库级分布式锁。当前桌面单进程模型不需要扩大锁范围。
+
+## 第三轮实施结果
+
+| 提交 | 覆盖单元 | 关键结果 |
+| --- | --- | --- |
+| `7b972d227` | L、M、T | JSON 解码离开事件循环；413 文案统一；manager 测试夹具完整；知识轻量导入不再加载 NumPy/vector index |
+| `425d118b1` | R | 未来 Schema 在 WAL/DDL/DML 前拒绝，status 暴露稳定 degraded 诊断 |
+| `d56d2c778` | P | job 原子发布；损坏状态隔离且计入容量；orphan 失败关闭；显式 discard |
+| `682f2cd40` | N、O | provider package identity 持久化；unsubscribe reservation、worker 终态、durable job 取消及 Main Server 二次所有权校验 |
+| `f4a9aaf31` | Q、S | takeover 同步释放旧 owner 并保护新请求；拉丁词按脚本边界匹配 |
+
+本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 354 项测试通过。本次改动文件 Ruff 检查通过。全仓 Ruff 仍有一个既存、范围外的 `ASYNC220`（CosyVoice server 在 async 函数中调用 `subprocess.Popen`）以及旧 `noqa` 格式警告，不在本 PR 中顺带修改。GitHub CI 结果仍以对应提交上的远端检查为准。
