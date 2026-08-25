@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：已实施设计记录。第一、二轮及第三轮均已实施；第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一、二轮及第三轮已实施；第四轮 12 项方案已归档并进入实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -629,3 +629,131 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 | `f4a9aaf31` | Q、S | takeover 同步释放旧 owner 并保护新请求；拉丁词按脚本边界匹配 |
 
 本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 354 项测试通过。本次改动文件 Ruff 检查通过。全仓 Ruff 仍有一个既存、范围外的 `ASYNC220`（CosyVoice server 在 async 函数中调用 `subprocess.Popen`）以及旧 `noqa` 格式警告，不在本 PR 中顺带修改。GitHub CI 结果仍以对应提交上的远端检查为准。
+
+## 第四轮：迁移、资源与并发边界
+
+第四轮来自第三轮实现后重新收集的 12 个有效未解决线程。两个关于 `package_id` 字符串/整数直接比较和 subscribe/unsubscribe 检查窗口的评论经实际控制流复核不成立：持久化身份比较前显式执行 `str(package_id)`；subscribe 从 reservation 检查到 worker 映射登记之间没有 `await`，单事件循环不能在该同步区间插入 unsubscribe。两条线程已回复依据并关闭，不计入本轮。
+
+### 修复单元 U：legacy 迁移输入必须全部可证实
+
+涉及：旧数据库读取失败被折叠为空集合、旧 `packs.json` 无效时被静默跳过两条 P1 评论。
+
+迁移采用“先验证全部输入、再创建候选结果、最后原子发布”三阶段。任何一个已发现的 legacy 数据库或注册表无法读取，都不能用其余输入生成权威目标库。
+
+- 为迁移增加严格读取入口；`list_active_entries()` 等面向自动检索的安全降级 API 不得用于迁移。严格入口传播 `KnowledgeStoreError`、`sqlite3.Error` 和锁超时，并在读词条、来源策略、向量前执行只读完整性与 Schema 兼容检查。
+- legacy 数据库缺失与“路径存在但不是可读 SQLite 数据库”是不同状态。后者中止迁移并保留恢复副本；不得发布空 `knowledge.db`，也不得写入表示迁移完成的目标文件。
+- legacy `packs.json` 缺失表示该来源没有注册表，可以继续；路径存在但读取失败、JSON 非对象、Schema 不支持或 `packs` 非对象时中止迁移。复用 pack registry 的严格解析契约，不能在 migration 中维护第二套宽松 parser。
+- 全部输入验证成功后才创建 stage。stage 内的数据库、registry 和 override 完成 `quick_check`、计数与引用一致性检查后，才 `os.replace()` 发布。失败只清理未发布 stage，不修改 legacy 输入和既有目标。
+- 服务状态将迁移失败映射为稳定的 `knowledge_legacy_migration_failed`，只暴露输入类别和安全原因码，不暴露本地路径、SQL 或原始 JSON。
+
+验收：损坏、锁定和临时不可读数据库分别使迁移失败且不生成目标；缺失 registry 可迁移，存在但损坏/不可读/未来版本 registry 必须失败；修复输入后重试可成功；失败前后恢复副本内容不变。
+
+### 修复单元 V：前端导入体积的第一道防线
+
+涉及：`file.text()` 前未检查 `File.size` 的 P2 评论。
+
+- Plugin Manager 在任何 `await file.text()` 或 `JSON.parse()` 前比较文件字节数与知识包制品上限。空文件仍交给格式错误路径；超限文件不读取、不解析、不发送 Bridge 请求。
+- 前端常量明确表示“知识包文件上限”，与后端 `MAX_PACK_BYTES` 保持 10 MiB。增加契约测试防止两端数值漂移；Bridge envelope 的额外预算不混入文件上限。
+- 增加 `knowledge.importTooLarge` i18n key，并同步所有现有语言。不能把体积错误伪装成 JSON 格式错误。
+- 后端流式限制仍是权威安全边界；客户端检查只改善页面可用性，不能替代 Bridge/Main Server 校验。
+
+验收：上限加一字节的 File 不调用 `text()` 和 API；恰好上限仍进入解析；提示走本地化体积错误；伪造前端仍被后端拒绝。
+
+### 修复单元 W：LIKE 查询必须按字面量解释
+
+涉及：规范化查询中的 `_`、`%` 被 SQLite 当作通配符的 P2 评论。
+
+- 新增单一 `_escape_like_pattern()`，按“先转义 escape 字符，再转义 `%`、`_`”的顺序处理用户片段，再在两端添加 `%` 作为系统控制的 contains 通配符。
+- 所有五个 LIKE 分支使用同一参数和显式 `ESCAPE '\\'`；继续参数化查询，不能字符串拼接 SQL。
+- FTS 失败后进入 LIKE fallback 时同样使用字面语义。普通字母、CJK、空格和连字符规范化行为不变。
+
+验收：仅含 `_`、`%`、反斜杠及其组合的查询只命中字面包含者；普通 contains 查询不回归；恶意引号不改变 SQL 结构；来源过滤仍生效。
+
+### 修复单元 X：degraded 必须是可终止、可诊断状态
+
+涉及：Market 轮询忽略 degraded job、status 只捕获 future Schema 两条 P2 评论。
+
+- `_wait_for_pack_job()` 将 `degraded` 与 `cancelled/failed` 一样视为终态失败，抛稳定 `job_degraded`；保留服务返回的安全 `reason` 供日志诊断，但不把路径或异常正文传给远端 Market。worker 立即结束并释放四个订阅槽之一，隔离 job 仍只能由显式 discard 删除。
+- `KnowledgeService.get_status()` 将数据库兼容探测包在统一错误边界。`KnowledgeSchemaTooNewError` 保持专用 `knowledge_schema_too_new`；其余 `KnowledgeStoreError`/SQLite 打开、锁定、损坏、非法或冲突 marker 返回 `integrity_ok=False`、`schema_state="invalid_or_unavailable"`、`error_code="knowledge_database_unavailable"`。
+- 抽取零数据 degraded payload builder，保证不同失败路径都含前端依赖的计数、registry/job 状态和向量预算字段，避免修复 500 时制造响应 shape 分叉。
+- status 不尝试修复、迁移或覆盖错误数据库；后台索引仍失败关闭。暂时锁定与持久损坏使用同一外部错误码，详细类别只进入本地日志。
+
+验收：degraded job 一次轮询即结束任务并释放 active 映射；显式 discard 仍可用；损坏、锁定、非法 marker、marker 冲突和未来 Schema 的 status 均返回结构化 degraded，其中未来 Schema 保持专用字段；新安装空目录仍健康。
+
+### 修复单元 Y：provider package ID 的唯一规范形式
+
+涉及：`isdecimal()` 接受 Unicode 十进制数字的 Minor 评论。
+
+- 公共契约为 ASCII 正十进制字符串：`[1-9][0-9]{0,18}`。导出一个规范化/校验 helper，由 subscription 解析、Main Server 删除边界和需要持久化身份的路径共同使用。
+- 不使用 `isdecimal()`、`isdigit()` 或先 `int()` 再判断原字符串；全角数字、阿拉伯-印度数字、符号、空白、前导零和 20 位以上值全部拒绝。
+- Market 请求模型与 descriptor 的整数上限同步为 19 位最大值。合法整数持久化时只通过 `str(value)` 生成规范 ASCII。
+- 既存非 ASCII 值不可能由受支持写路径产生，按损坏身份失败关闭，不做猜测式转换。
+
+验收：`1`、19 位最大值通过；`0`、前导零、20 位、全角和阿拉伯-印度数字在 subscription 与 remove 两处得到相同拒绝；新安装、replacement 和离线 unsubscribe 的合法身份不回归。
+
+### 修复单元 Z：TTS 清理按 speech 所有权执行
+
+涉及：takeover 旧请求在 `_clear_tts_pipeline()` 等待后清空新请求 pending chunks 的 Major 评论。
+
+- `_clear_tts_pipeline()` 接收调用入口在首个 `await` 前捕获的 `expected_speech_id`。清理只拥有该 speech 的 pending text、done 记账、回放状态和可识别响应；不得在等待后无条件清空共享新世代状态。
+- `tts_pending_chunks` 已携带 speech ID，清理时过滤旧 ID 而非 `clear()`。等待 worker 处理 interrupt 后，在 `tts_cache_lock` 内比较 `current_speech_id`；若已切换，只删除旧 ID 项并保留新 ID chunks 与新轮 done flags。
+- 对不能按 speech ID 区分的 worker interrupt/响应队列，定义一个单调递增 TTS generation。interrupt 记录目标 generation，后续请求入队携带新 generation；迟到的旧响应由 handler 丢弃，不能通过“等待后清空整个响应队列”保护正确性。
+- 所有清理调用点必须显式传入旧 speech 快照。确实要关闭整个 worker 的 lifecycle shutdown 使用单独 `clear_all=True`，避免普通 takeover 借用全局销毁语义。
+
+验收：旧 cleanup 的等待窗口内启动新请求，新 `tts_pending_chunks`、done 状态和音频均保留；旧 speech 的 pending/迟到响应被丢弃；连续两次 takeover、worker 未 ready、worker 已 ready 和 shutdown 全清理路径均有测试。
+
+### 修复单元 AA：终态作业历史有界保留
+
+涉及：成功、失败、取消的 staging 目录永久增长的 P2 评论。
+
+- terminal job 保留短期诊断价值，但采用双界限：默认保留 7 天且每类知识根最多保留最近 100 个 terminal 目录。超过任一界限的旧目录可删除；非终态和 degraded/orphan 永不自动删除。
+- prune 在持有 jobs-root 跨进程 mutation lock 时执行；先按可信 `updated_at/created_at`、再按目录 mtime 排序。identity/state 无法可信读取的目录已经属于 degraded，不得作为过期 terminal 清理。
+- 删除目标必须是 `_jobs_root` 的直接子目录且名称等于已验证 job ID；不跟随 symlink，不接受路径穿越。失败记录日志并留待下轮，不阻断本轮索引。
+- `/packs/jobs` 仅返回保留窗口中的 terminal history；当前 active、pending、degraded 始终完整返回。
+
+验收：第 101 个 terminal job 删除最旧项；超过 TTL 的 terminal 被删；新 terminal、非终态、degraded、orphan、symlink 均不被误删；并发 list/process/prune 不产生半删除状态。
+
+### 修复单元 AB：mutation lock 的跨进程线性化
+
+涉及：维护 CLI 与 Main Server 共享路径时 `threading.RLock` 无法互斥的 P2 评论。
+
+- 保留当前按规范化路径共享的进程内 `RLock`，在最外层进入时再获取同路径 sidecar lock file 的 OS advisory exclusive lock；最外层退出时释放。嵌套同线程调用只增加深度，不能对同一文件锁二次阻塞。
+- POSIX 使用 `fcntl.flock`，Windows 使用 `msvcrt.locking` 锁定预先写入的单字节。锁文件位于目标同目录并使用稳定、无用户输入的派生名称；锁文件持久存在是正常状态，不以删除 lock file 表示释放。
+- 获取顺序固定为进程内锁后文件锁；多路径操作继续使用既有上层 pack-operation 锁顺序，禁止在持有具体 state/registry 锁后反向获取 pack root 锁。
+- 维护 CLI 的所有 mutation 复用同一 helper。只读诊断不取独占锁；会基于读结果写回的 read-modify-write 必须把读取和提交放在同一锁区间。
+- 文件锁获取失败或超时应明确终止维护操作，不退化为无锁执行。服务路径继续在工作线程等待，不能阻塞事件循环。
+
+验收：两个独立 Python 3.11 进程对同一路径互斥；不同路径可并行；同线程嵌套不死锁；cancel 与 activate、policy 与 registry 更新的受控竞态最终状态一致；异常退出由 OS 自动释放锁。
+
+### 修复单元 AC：bounded spool 的磁盘 I/O 不占事件循环
+
+涉及：`SpooledTemporaryFile` rollover 后同步读写的 P2 评论。
+
+- 网络 `receive()` 仍在事件循环协调；spool 的 `write`、`seek`、`read`、`close` 全部通过 `asyncio.to_thread` 执行。为避免每个小 chunk 都产生线程切换，可在内存阶段累计到固定 64 KiB 块后批量写，但内存累计仍受总上限控制。
+- replay receive 改为 async 读取 helper，一次读取并判定 `more_body`，不使用同步“多读一个字节再 seek 回退”。spool 访问保持单消费者，关闭发生在下游 ASGI app 完成后的 `finally`。
+- 超限、disconnect、下游异常和正常完成都必须关闭 spool；413 payload 与现有稳定错误语义不变。
+
+验收：强制 rollover 后 write/read/seek/close 均在线程池线程执行；伪造或缺失长度仍受实际字节限制；边界值可逐字节重放；disconnect、413 和下游异常不泄漏临时文件。
+
+### 修复单元 AD：从完整的有效标签总体随机抽样
+
+涉及：先取 ranked top-100 再随机抽样造成永久偏差的 P2 评论。
+
+- KnowledgeStore 增加按精确 tag 选择启用 entry rowid 的有界随机查询，使用 JSON tag 成员匹配而非文本 search 排名。禁用集合在抽样前排除。
+- 不使用 `ORDER BY RANDOM()` 扫描并排序完整大表。先取得符合条件的 rowid 总体或使用 reservoir sampling；当前社区总 entry 上限 20,000，可在工作线程中对 rowid 流做等概率 reservoir，内存保持 O(limit)。随后按选中 rowid 批量加载 entry。
+- `CORPORA_SAMPLE_TAGS` 白名单、调用方 limit 1..3 和 material type 路由保持不变。相同 entry 不重复；少于 limit 时返回全部。
+- 为可重复测试允许向内部 helper 注入 RNG，但产品路径继续使用进程随机源。
+
+验收：构造 101+ 同标签条目并控制 RNG，原 top-100 外条目可被选中；禁用项永不出现；其他 tag、正文中仅出现标签文字但 tags 不含该值的 entry 不进入总体；1/3 上限和空集合行为不回归。
+
+## 第四轮实施顺序、提交边界与关闭条件
+
+1. 先提交本文和索引，冻结失败语义与测试口径。
+2. 数据安全提交：U。迁移两个 P1 必须同一提交闭环，防止只保护数据库却继续丢 registry。
+3. 查询与健康提交：W、X、AD。三者共享 KnowledgeStore/Service 读取边界，但测试按问题分组。
+4. 身份与前端提交：V、Y。V 必须同步全部 i18n；Y 必须同步 Market 请求上限和 Main Server 校验。
+5. 生命周期提交：Z、AA。TTS 只改 speech 所有权，job prune 只处理可信 terminal，不互相耦合。
+6. 并发与 I/O 提交：AB、AC。先让 file lock 有独立跨进程测试，再把所有 spool 文件操作移出事件循环。
+7. 全量回归后补写“第四轮实施结果”。只有实现提交已推送、精确反例测试通过、相邻失败语义有负例且远端相关 CI 通过，才回复并 resolve 对应线程。
+
+第四轮不改变知识包五字段内容 Schema、不自动修复损坏数据库/作业、不扩大 20,000 chunk 与 10 MiB 文件预算，也不以自动删除 degraded 证据换取容量恢复。
