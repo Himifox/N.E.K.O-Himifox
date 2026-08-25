@@ -544,6 +544,18 @@ async def _run_embedding_work_round(
     return selected, stored, failed, stale_writebacks, last_state
 
 
+def _ready_vector_work_budget(
+    status: dict[str, Any],
+    *,
+    batch_size: int,
+    max_ready_vectors: int,
+) -> int:
+    return min(
+        batch_size,
+        max(max_ready_vectors - int(status.get("chunks_ready", 0)), 0),
+    )
+
+
 async def rebuild_target(
     target: KnowledgeTarget,
     *,
@@ -551,6 +563,7 @@ async def rebuild_target(
     batch_size: int,
 ) -> tuple[dict[str, Any], bool]:
     """Reconcile chunks and generate all currently eligible embeddings."""
+    from knowledge.pack_jobs import MAX_READY_VECTOR_CHUNKS
     from knowledge.store import KnowledgeStore
     from utils.local_embedding_runtime import get_local_embedding_status
 
@@ -570,9 +583,20 @@ async def rebuild_target(
     failed_chunks = 0
     stale_writebacks = 0
     last_batch_state = "no_work"
+    capacity_limited = False
     while True:
-        eligible_before = _eligible_chunk_count(inspect_database(target.database_path))
+        status_before = inspect_database(target.database_path)
+        eligible_before = _eligible_chunk_count(status_before)
         if eligible_before == 0:
+            break
+        work_budget = _ready_vector_work_budget(
+            status_before,
+            batch_size=batch_size,
+            max_ready_vectors=MAX_READY_VECTOR_CHUNKS,
+        )
+        if work_budget == 0:
+            capacity_limited = True
+            last_batch_state = "capacity_limited"
             break
         (
             selected,
@@ -582,7 +606,7 @@ async def rebuild_target(
             last_batch_state,
         ) = await _run_embedding_work_round(
             store,
-            work_budget=batch_size,
+            work_budget=work_budget,
         )
         embedded_chunks += stored
         failed_chunks += failed
@@ -597,7 +621,11 @@ async def rebuild_target(
     after = inspect_database(target.database_path)
     embedding_status = get_local_embedding_status()
     eligible_remaining = _eligible_chunk_count(after)
-    result_state = _completion_state(after, last_batch_state=last_batch_state)
+    result_state = (
+        "capacity_limited"
+        if capacity_limited and eligible_remaining > 0
+        else _completion_state(after, last_batch_state=last_batch_state)
+    )
     complete = result_state == "complete"
     return {
         **after,
@@ -608,6 +636,10 @@ async def rebuild_target(
         "failed_chunks_this_run": failed_chunks,
         "stale_writebacks": stale_writebacks,
         "eligible_chunks_remaining": eligible_remaining,
+        "vector_budget_remaining": max(
+            MAX_READY_VECTOR_CHUNKS - int(after.get("chunks_ready", 0)),
+            0,
+        ),
         "embedding_service_state": embedding_status.state,
         "runtime_model_id": embedding_status.model_id,
         "runtime_dimensions": embedding_status.dimensions,

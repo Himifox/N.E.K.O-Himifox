@@ -249,6 +249,22 @@ def test_default_batch_size_is_safe_microbatch() -> None:
     assert args.batch_size == 4
 
 
+@pytest.mark.parametrize(
+    ("ready", "batch_size", "expected"),
+    ((19_999, 4, 1), (20_000, 4, 0), (19_990, 4, 4)),
+)
+def test_ready_vector_work_budget_never_crosses_global_cap(
+    ready: int,
+    batch_size: int,
+    expected: int,
+) -> None:
+    assert MODULE._ready_vector_work_budget(
+        {"chunks_ready": ready},
+        batch_size=batch_size,
+        max_ready_vectors=20_000,
+    ) == expected
+
+
 def test_enable_local_pack_requires_rebuild_action(tmp_path: Path) -> None:
     args = MODULE._build_parser().parse_args(
         [
@@ -334,10 +350,11 @@ def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> 
 
 
 def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> None:
-    job_dir = tmp_path / ".staging" / "cancel-fixture"
+    job_id = "cancel-pack-0123456789ab"
+    job_dir = tmp_path / ".staging" / job_id
     job_dir.mkdir(parents=True)
     identity = {
-        "job_id": "cancel-fixture",
+            "job_id": job_id,
         "pack_id": "cancel-pack",
         "created_at": 1,
         "entries_total": 1,
@@ -351,7 +368,7 @@ def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> Non
     (job_dir / "state.json").write_text(
         json.dumps(
             {
-                "job_id": "cancel-fixture",
+                    "job_id": job_id,
                 "pack_id": "cancel-pack",
                 "state": "queued",
                 "created_at": 1,
@@ -364,7 +381,7 @@ def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> Non
     args = MODULE._build_parser().parse_args(
         [
             "--cancel-job",
-            "cancel-fixture",
+            job_id,
             "--knowledge-root",
             str(tmp_path),
         ]
@@ -382,13 +399,14 @@ def test_discard_job_action_only_removes_quarantined_job(
     tmp_path: Path,
     capsys,
 ) -> None:
-    job_dir = tmp_path / ".staging" / "degraded-fixture"
+    job_id = "degraded-pack-0123456789ab"
+    job_dir = tmp_path / ".staging" / job_id
     job_dir.mkdir(parents=True)
     (job_dir / "state.json").write_text("[]", encoding="utf-8")
     args = MODULE._build_parser().parse_args(
         [
             "--discard-job",
-            "degraded-fixture",
+            job_id,
             "--knowledge-root",
             str(tmp_path),
         ]
@@ -542,3 +560,61 @@ async def test_work_budget_is_split_into_four_item_microbatches(
 
     assert calls == [4, 4, 1]
     assert result == (9, 9, 0, 0, "ready")
+
+
+@pytest.mark.asyncio
+async def test_rebuild_reports_capacity_limited_without_embedding(monkeypatch, tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+    import knowledge.store as store_module
+    import utils.local_embedding_runtime as embedding_runtime
+
+    database = tmp_path / "knowledge.db"
+    database.write_bytes(b"fixture")
+    status = {
+        "chunks_ready": 20_000,
+        "chunks_pending": 1,
+        "chunks_stale": 0,
+        "chunks_failed": 0,
+        "chunks_failed_retryable_now": 0,
+        "chunks_failed_waiting": 0,
+        "chunks_failed_exhausted": 0,
+        "chunks_local_pending": 1,
+        "chunks_local_stale": 0,
+        "chunks_local_failed": 0,
+        "chunks_local_failed_retryable_now": 0,
+        "chunks_local_failed_waiting": 0,
+        "chunks_local_failed_exhausted": 0,
+    }
+
+    class FakeStore:
+        def __init__(self, _path):
+            self.database_path = database
+
+        def reset_chunk_index(self, *, full):
+            assert full is True
+            return 0
+
+    async def unexpected_embedding(*_args, **_kwargs):
+        raise AssertionError("embedding must not run at the ready-vector cap")
+
+    monkeypatch.setattr(pack_jobs, "MAX_READY_VECTOR_CHUNKS", 20_000)
+    monkeypatch.setattr(store_module, "KnowledgeStore", FakeStore)
+    monkeypatch.setattr(MODULE, "inspect_database", lambda _path: dict(status))
+    monkeypatch.setattr(MODULE, "_backfill_all", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(MODULE, "_run_embedding_work_round", unexpected_embedding)
+    monkeypatch.setattr(
+        embedding_runtime,
+        "get_local_embedding_status",
+        lambda: SimpleNamespace(state="ready", model_id="fixture", dimensions=2),
+    )
+
+    result, complete = await MODULE.rebuild_target(
+        MODULE.KnowledgeTarget(database),
+        full=True,
+        batch_size=4,
+    )
+
+    assert result["result_state"] == "capacity_limited"
+    assert result["eligible_chunks_remaining"] == 1
+    assert result["vector_budget_remaining"] == 0
+    assert complete is False

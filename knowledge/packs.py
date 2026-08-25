@@ -325,18 +325,23 @@ def list_installed_packs(
     if not isinstance(packs, dict):
         return ()
     store = KnowledgeStore(database_path, busy_timeout_ms=busy_timeout_ms)
+    source_tags = tuple(
+        dict.fromkeys(
+            str(value.get("source_tag") or "")
+            for value in packs.values()
+            if isinstance(value, dict)
+            and str(value.get("source_tag") or "").startswith("source:")
+        )
+    )
+    statuses = store.source_chunk_statuses(source_tags)
     items: list[dict[str, Any]] = []
     for pack_id, value in sorted(packs.items()):
         if not isinstance(value, dict):
             continue
         source_tag = str(value.get("source_tag") or "")
-        status = (
-            store.source_chunk_status(source_tag)
-            if source_tag
-            else {
-                "chunks_total": 0,
-                "chunks_ready": 0,
-            }
+        status = statuses.get(
+            source_tag,
+            {"chunks_total": 0, "chunks_ready": 0},
         )
         items.append(
             {

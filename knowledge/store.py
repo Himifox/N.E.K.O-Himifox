@@ -863,31 +863,56 @@ class KnowledgeStore:
 
     def source_chunk_status(self, source_tag: str) -> dict[str, int]:
         """Return compact activation counts for one source namespace."""
-        if not source_tag.startswith("source:"):
+        return self.source_chunk_statuses((source_tag,))[source_tag]
+
+    def source_chunk_statuses(
+        self,
+        source_tags: Sequence[str],
+    ) -> dict[str, dict[str, int]]:
+        """Return chunk activation counts for all requested sources in one query."""
+        normalized = tuple(dict.fromkeys(str(tag) for tag in source_tags))
+        if any(not tag.startswith("source:") for tag in normalized):
             raise ValueError("source_tag must start with source:")
-        try:
-            with self._connection() as connection:
-                row = connection.execute(
-                    "SELECT COUNT(*) chunks_total, "
-                    "SUM(CASE WHEN embedding_status='ready' THEN 1 ELSE 0 END) "
-                    "chunks_ready, "
-                    "SUM(CASE WHEN embedding_policy='prebuilt_only' THEN 1 ELSE 0 END) "
-                    "chunks_prebuilt_only FROM knowledge_chunks JOIN entries "
-                    "ON entries.rowid=knowledge_chunks.entry_rowid WHERE EXISTS ("
-                    "SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value=?)",
-                    (source_tag,),
-                ).fetchone()
-                return {
-                    "chunks_total": int(row["chunks_total"] or 0),
-                    "chunks_ready": int(row["chunks_ready"] or 0),
-                    "chunks_prebuilt_only": int(row["chunks_prebuilt_only"] or 0),
-                }
-        except KnowledgeStoreError:
-            return {
+        empty = {
+            tag: {
                 "chunks_total": 0,
                 "chunks_ready": 0,
                 "chunks_prebuilt_only": 0,
             }
+            for tag in normalized
+        }
+        if not normalized:
+            return empty
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "WITH requested(source_tag) AS ("
+                    "SELECT CAST(value AS TEXT) FROM json_each(?)) "
+                    "SELECT requested.source_tag, COUNT(knowledge_chunks.chunk_id) "
+                    "chunks_total, "
+                    "SUM(CASE WHEN embedding_status='ready' THEN 1 ELSE 0 END) "
+                    "chunks_ready, "
+                    "SUM(CASE WHEN embedding_policy='prebuilt_only' THEN 1 ELSE 0 END) "
+                    "chunks_prebuilt_only FROM requested LEFT JOIN entries ON EXISTS ("
+                    "SELECT 1 FROM json_each(entries.tags) tag "
+                    "WHERE tag.value=requested.source_tag) "
+                    "LEFT JOIN knowledge_chunks ON "
+                    "knowledge_chunks.entry_rowid=entries.rowid "
+                    "GROUP BY requested.source_tag ORDER BY requested.source_tag",
+                    (json.dumps(normalized),),
+                ).fetchall()
+                return {
+                    str(row["source_tag"]): {
+                        "chunks_total": int(row["chunks_total"] or 0),
+                        "chunks_ready": int(row["chunks_ready"] or 0),
+                        "chunks_prebuilt_only": int(
+                            row["chunks_prebuilt_only"] or 0
+                        ),
+                    }
+                    for row in rows
+                }
+        except KnowledgeStoreError:
+            return empty
 
     def set_source_embedding_policy(self, source_tag: str, policy: str) -> int:
         """Switch generation ownership for every existing chunk in one source."""

@@ -15,6 +15,7 @@ from knowledge.packs import (
     MAX_PACK_TERMS_PER_ROLE,
     install_pack,
     installed_source_embedding_policies,
+    list_installed_packs,
     pack_payload,
     validate_pack,
 )
@@ -59,6 +60,40 @@ def _material_payload(*, pack_id="community-tarot"):
 def _write_pack(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+def test_list_installed_packs_batches_all_source_statuses(tmp_path, monkeypatch):
+    service = open_knowledge(tmp_path)
+    for index in range(3):
+        service.install_pack(
+            validate_pack(
+                _payload(
+                    title=f"community phrase {index}",
+                    pack_id=f"community-fixture-{index}",
+                )
+            )
+        )
+    calls = []
+    original = KnowledgeStore.source_chunk_statuses
+
+    def capture(store, source_tags):
+        calls.append(tuple(source_tags))
+        return original(store, source_tags)
+
+    monkeypatch.setattr(KnowledgeStore, "source_chunk_statuses", capture)
+    monkeypatch.setattr(
+        KnowledgeStore,
+        "source_chunk_status",
+        lambda *_args, **_kwargs: pytest.fail("per-pack status query was used"),
+    )
+
+    installed = list_installed_packs(service.database_path())
+
+    assert len(installed) == 3
+    assert len(calls) == 1
+    assert set(calls[0]) == {
+        f"source:community.community-fixture-{index}" for index in range(3)
+    }
 
 
 def test_imported_pack_is_searchable_but_not_automatic_until_enabled(tmp_path):

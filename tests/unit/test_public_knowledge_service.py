@@ -472,6 +472,7 @@ async def test_automatic_conversation_shares_one_search_for_knowledge_and_corpus
     async def _asearch(*_args, **_kwargs):
         nonlocal calls
         calls += 1
+        assert _kwargs["reserve_material_type_candidates"] is True
         return [
             MaterialKnowledgeHit(
                 hit=KnowledgeHit(
@@ -502,6 +503,41 @@ async def test_automatic_conversation_shares_one_search_for_knowledge_and_corpus
     assert context.corpus_hits == 1
     assert "Knowledge term: 周三电池" in context.text
     assert "Conversation trigger: 猫猫回应" in context.text
+
+
+@pytest.mark.asyncio
+async def test_automatic_conversation_reserves_candidates_for_each_material(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    store.upsert_many(
+        tuple(
+            KnowledgeEntry(
+                title=f"shared phrase knowledge {index:02d}",
+                terms={"alias": ("shared phrase",), "recognition": ()},
+                tags=("source:chime",),
+                summary="shared phrase",
+                content="shared phrase",
+            )
+            for index in range(30)
+        )
+    )
+    service.install_pack(
+        _pack(
+            pack_id="reserved-corpus",
+            material_type="corpus",
+            title="shared phrase",
+        )
+    )
+
+    selection = await service.aselect_conversation_materials(
+        "shared phrase",
+        knowledge_limit=1,
+        corpus_limit=1,
+    )
+
+    assert len(selection.knowledge) == 1
+    assert len(selection.corpus) == 1
+    assert selection.corpus[0].hit.entry.title == "shared phrase"
 
 
 def test_material_type_override_rebuilds_auto_route_without_rewriting_entry(tmp_path):

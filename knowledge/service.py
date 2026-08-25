@@ -639,6 +639,7 @@ class KnowledgeService:
         lexical_queries: tuple[str, ...] = (),
         allowed_material_types: tuple[str, ...] = ("knowledge", "corpus"),
         target_material_type: str = "",
+        reserve_material_type_candidates: bool = False,
         allowed_source_tags: tuple[str, ...] | None = None,
         load_model: bool = True,
         deadline_monotonic: float | None = None,
@@ -716,6 +717,25 @@ class KnowledgeService:
             source_pools: tuple[tuple[str, ...] | None, ...] = (
                 primary_sources,
                 fallback_sources,
+            )
+            pool_candidate_limit = candidate_limit
+        elif reserve_material_type_candidates:
+            allowed_source_set = (
+                None if allowed_sources is None else frozenset(allowed_sources)
+            )
+            source_pools = tuple(
+                tuple(
+                    sorted(
+                        source_tag
+                        for source_tag, material_type in source_types.items()
+                        if material_type == requested_type
+                        and (
+                            allowed_source_set is None
+                            or source_tag in allowed_source_set
+                        )
+                    )
+                )
+                for requested_type in allowed_types
             )
             pool_candidate_limit = candidate_limit
         else:
@@ -805,6 +825,12 @@ class KnowledgeService:
             selected.extend(
                 material_pools[1][: max(limit - len(selected), 0)]
             )
+        elif reserve_material_type_candidates:
+            selected = [
+                item
+                for material_pool in material_pools
+                for item in material_pool
+            ][:limit]
         else:
             selected = material_pools[0][:limit]
 
@@ -860,6 +886,7 @@ class KnowledgeService:
             limit=48,
             lexical_queries=lexical_queries,
             allowed_material_types=("knowledge", "corpus"),
+            reserve_material_type_candidates=True,
             allowed_source_tags=allowed_sources,
             load_model=False,
             deadline_monotonic=deadline_monotonic,
