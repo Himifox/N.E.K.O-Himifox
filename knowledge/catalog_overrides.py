@@ -8,6 +8,7 @@ from pathlib import Path
 from utils.file_utils import atomic_write_json
 
 from knowledge._mutation_lock import mutation_lock
+from knowledge.models import normalize_knowledge_title
 
 
 EntryKey = tuple[str, str]
@@ -37,7 +38,7 @@ def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
         if not isinstance(row, dict):
             raise CatalogOverrideError("catalog override contains an invalid entry")
         source = str(row.get("source") or "").strip()
-        title = str(row.get("title") or "").strip()
+        title = normalize_knowledge_title(str(row.get("title") or ""))
         if not source.startswith("source:") or not title:
             raise CatalogOverrideError("catalog override contains an invalid entry")
         result.add((source, title))
@@ -53,7 +54,7 @@ def set_entry_disabled(
 ) -> int:
     """Atomically update one source/title override and return the disabled count."""
     source_tag = str(source_tag or "").strip()
-    title = str(title or "").strip()
+    title = normalize_knowledge_title(str(title or ""))
     if not source_tag.startswith("source:") or not title:
         raise ValueError("source and title are required")
     output_path = Path(path)
@@ -77,4 +78,4 @@ def set_entry_disabled(
 
 
 def entry_key(entry) -> EntryKey:
-    return entry.source_tag, entry.title
+    return entry.source_tag, normalize_knowledge_title(entry.title)

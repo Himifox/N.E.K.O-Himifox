@@ -70,6 +70,41 @@ def test_non_utf8_catalog_override_is_reported_as_invalid(tmp_path):
     assert service.get_status()["catalog_override_state"] == "invalid"
 
 
+def test_disabled_identity_survives_equivalent_pack_title_update(tmp_path):
+    service = open_knowledge(tmp_path)
+    pack_id = "normalized-override"
+    source_tag = f"source:community.{pack_id}"
+    service.install_pack(
+        _pack(pack_id=pack_id, material_type="knowledge", title="Straße  Term")
+    )
+    service.set_pack_auto_context(pack_id, enabled=True)
+    service.set_entry_disabled(
+        source_tag=source_tag,
+        title="Straße  Term",
+        disabled=True,
+    )
+
+    service.install_pack(
+        _pack(pack_id=pack_id, material_type="knowledge", title="STRASSE Term")
+    )
+
+    normalized_key = (source_tag, "strasse term")
+    override_path = get_catalog_override_path(service.database_path())
+    assert load_disabled_entries(override_path) == frozenset({normalized_key})
+    assert service.search("STRASSE Term", limit=1) == []
+    assert service.build_conversation_context("STRASSE Term").hit_count == 0
+    assert KnowledgeStore(service.database_path()).entry_rowids_for_keys(
+        (normalized_key,)
+    )
+
+    service.set_entry_disabled(
+        source_tag=source_tag,
+        title="ＳＴＲＡＳＳＥ\nTerm",
+        disabled=False,
+    )
+    assert service.search("STRASSE Term", limit=1)[0].entry.title == "STRASSE Term"
+
+
 def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_path):
     service = open_knowledge(tmp_path)
 

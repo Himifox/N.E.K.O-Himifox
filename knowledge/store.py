@@ -18,7 +18,7 @@ from knowledge.chunking import (
 )
 from knowledge.filters import folded_exact_surface
 
-from .models import KnowledgeEntry, UpsertResult
+from .models import KnowledgeEntry, UpsertResult, normalize_knowledge_title
 
 
 SCHEMA_VERSION = 7
@@ -1442,7 +1442,8 @@ class KnowledgeStore:
     ) -> frozenset[int]:
         """Resolve source/title override identities before vector top-K."""
         wanted = frozenset(
-            (str(source).strip(), str(title).strip()) for source, title in keys
+            (str(source).strip(), normalize_knowledge_title(title))
+            for source, title in keys
         )
         if not wanted:
             return frozenset()
@@ -1459,7 +1460,7 @@ class KnowledgeStore:
                 ]
                 if len(source_tags) == 1 and (
                     source_tags[0],
-                    str(row["title"]),
+                    normalize_knowledge_title(row["title"]),
                 ) in wanted:
                     matched.add(int(row["rowid"]))
             return frozenset(matched)
