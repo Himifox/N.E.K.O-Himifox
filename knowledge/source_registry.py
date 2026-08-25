@@ -38,31 +38,52 @@ def get_source(
     *,
     database_path: str | Path | None = None,
 ) -> KnowledgeSource:
-    source = SOURCES.get(tag)
-    if source is not None:
-        return source
-    if database_path is not None:
-        source = _get_pack_source(tag, Path(database_path).with_name("packs.json"))
-        if source is not None:
-            return source
-    return KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown")
+    return get_sources((tag,), database_path=database_path)[tag]
+
+
+def get_sources(
+    tags: tuple[str, ...] | list[str],
+    *,
+    database_path: str | Path | None = None,
+) -> dict[str, KnowledgeSource]:
+    """Resolve source display metadata with at most one registry read."""
+    unique_tags = tuple(dict.fromkeys(str(tag) for tag in tags))
+    pack_sources = (
+        _get_pack_sources(Path(database_path).with_name("packs.json"))
+        if database_path is not None
+        else {}
+    )
+    return {
+        tag: SOURCES.get(tag)
+        or pack_sources.get(tag)
+        or KnowledgeSource(tag, tag.removeprefix("source:"), "", "Unknown")
+        for tag in unique_tags
+    }
 
 
 def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
+    return _get_pack_sources(registry_path).get(tag)
+
+
+def _get_pack_sources(registry_path: Path) -> dict[str, KnowledgeSource]:
     try:
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
+        return {}
     packs = payload.get("packs") if isinstance(payload, dict) else None
     if not isinstance(packs, dict):
-        return None
+        return {}
+    sources: dict[str, KnowledgeSource] = {}
     for pack in packs.values():
-        if not isinstance(pack, dict) or pack.get("source_tag") != tag:
+        if not isinstance(pack, dict):
+            continue
+        tag = str(pack.get("source_tag") or "")
+        if not tag:
             continue
         source = pack.get("source")
         if not isinstance(source, dict):
-            return None
-        return KnowledgeSource(
+            continue
+        sources[tag] = KnowledgeSource(
             tag=tag,
             name=sanitize_external_text(
                 str(source.get("name") or tag.removeprefix("source:")),
@@ -79,4 +100,4 @@ def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
                 else "knowledge"
             ),
         )
-    return None
+    return sources

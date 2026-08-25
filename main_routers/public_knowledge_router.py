@@ -21,7 +21,7 @@ from knowledge.catalog_overrides import (
     load_disabled_entries,
 )
 from knowledge.pack_jobs import KnowledgeJobRegistryError
-from knowledge.source_registry import get_source
+from knowledge.source_registry import get_source, get_sources
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
 from knowledge.prebuilt_index import (
     MAX_PREBUILT_MANIFEST_BYTES,
@@ -120,7 +120,7 @@ def _entry_payload(
         source_cache = {}
     source = source_cache.get(entry.source_tag)
     if source is None:
-        source = get_source(entry.source_tag, database_path=database_path)
+        source = get_source(entry.source_tag)
         source_cache[entry.source_tag] = source
     if disabled_entries is None:
         disabled_entries = load_disabled_entries(
@@ -147,6 +147,15 @@ def _entry_payload(
     if score is not None:
         payload["score"] = score
     return payload
+
+
+async def _source_cache_for_entries(service, entries):
+    tags = tuple(dict.fromkeys(entry.source_tag for entry in entries))
+    return await asyncio.to_thread(
+        get_sources,
+        tags,
+        database_path=service.database_path(),
+    )
 
 
 def _validate_mutation(request: Request, payload: dict):
@@ -198,7 +207,6 @@ async def list_public_knowledge_entries(
         )
     except CatalogOverrideError:
         return {"ok": False, "reason": "catalog_override_invalid"}
-    source_cache = {}
     if query.strip():
         page = await asyncio.to_thread(
             service.search_page,
@@ -209,6 +217,8 @@ async def list_public_knowledge_entries(
             include_disabled=True,
         )
         has_more = len(page) > limit
+        page_entries = [hit.entry for hit in page[:limit]]
+        source_cache = await _source_cache_for_entries(service, page_entries)
         items = [
             _entry_payload(
                 service,
@@ -233,6 +243,7 @@ async def list_public_knowledge_entries(
             offset=offset,
         )
         has_more = total > offset + len(entries)
+        source_cache = await _source_cache_for_entries(service, entries)
         items = [
             _entry_payload(
                 service,
@@ -273,6 +284,7 @@ async def get_public_knowledge_entry(
         )
     except CatalogOverrideError:
         return {"ok": False, "reason": "catalog_override_invalid"}
+    source_cache = await _source_cache_for_entries(service, (entry,))
     return {
         "ok": True,
         "entry": _entry_payload(
@@ -280,6 +292,7 @@ async def get_public_knowledge_entry(
             entry,
             detail=True,
             disabled_entries=disabled_entries,
+            source_cache=source_cache,
         ),
     }
 

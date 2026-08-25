@@ -114,6 +114,43 @@ def test_management_api_exposes_one_store(monkeypatch, tmp_path):
     assert detail["entry"]["content"] == "Meaning\n- A typical use"
 
 
+def test_catalog_source_metadata_loads_once_off_request_thread(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_pack(pack_id="source-one")))
+    service.install_pack(validate_pack(_pack(pack_id="source-two")))
+    thread_ids = {}
+    source_calls = 0
+    original_get_sources = module.get_sources
+    original_entry_payload = module._entry_payload
+
+    def capture_sources(*args, **kwargs):
+        nonlocal source_calls
+        source_calls += 1
+        thread_ids["sources"] = threading.get_ident()
+        return original_get_sources(*args, **kwargs)
+
+    def capture_payload(*args, **kwargs):
+        thread_ids.setdefault("payload", threading.get_ident())
+        return original_entry_payload(*args, **kwargs)
+
+    monkeypatch.setattr(module, "get_sources", capture_sources)
+    monkeypatch.setattr(module, "_entry_payload", capture_payload)
+    response = _client(monkeypatch, tmp_path).get(
+        "/api/public-knowledge/entries",
+        params={"limit": 10},
+    )
+
+    assert response.status_code == 200
+    assert source_calls == 1
+    assert thread_ids["sources"] != thread_ids["payload"]
+    assert {item["source"]["name"] for item in response.json()["items"]} == {
+        "source-one",
+        "source-two",
+    }
+
+
 def test_management_api_uses_content_preview_when_summary_is_blank(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(
