@@ -1048,18 +1048,7 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 
 本轮不扩大知识包文件、entry、chunk 或向量容量，不改变五字段内容 Schema，不自动修复损坏的持久化证据，也不通过增加无界候选或主线程工作量换取正确性。
 
-### 修复单元 BE：作业容量只信任不可变 identity
-
-涉及：`knowledge/pack_jobs.py::_read_job()` 只比较 `job_id`、`pack_id`，未验证 mutable state 容量计数的 P2 评论。
-
-- 对具有有效 `identity.json` 的作业，`entries_total`、`chunks_total` 和 `content_bytes` 必须先按非负 ASCII 整数规则规范化，再与 identity 中的不可变值逐项相等。state 缺失字段、类型非法、负值或数值不一致均隔离为 `degraded`，使用稳定原因 `job_capacity_identity_mismatch`。
-- degraded payload 从可信 identity 携带三项容量，不得保留 state 中被篡改的零值或负值。这样 `_ensure_community_capacity()` 继续把隔离作业计入预算，并保持同 pack 互斥；processor 不执行该作业。
-- `identity.json` 缺失、不可读或无效时统一视为 orphan/degraded，并全局拒绝新 staging，直到用户通过严格 discard 清除证据。删除修复单元 AP 为本 PR 中间 staged job 保留的 state-only 兼容分支；新功能首次发布不接受缺少不可变身份的作业格式。
-- staging 后写入的实际 chunk 总数必须与 preflight 的确定性 projected chunk 数一致；若不一致，视为实现或制品不一致并隔离，不能修改 identity 来追随 mutable state。
-
-验收：分别把三项 state 计数改为 0、负数、布尔、浮点和不同正整数，列表均返回带 identity 原始预算的 degraded；新 staging 仍按该预算拒绝越过 20,000 entries/chunks 与 64 MiB content；未篡改作业不回归；缺失 identity 的 state-only 作业只可诊断和显式 discard，绝不调度。
-
-### 修复单元 BF：撤销未发布旧布局的自动兼容
+### 修复单元 BE：删除自动旧库迁移
 
 涉及：`knowledge/legacy_layout.py::_collect_legacy_data()` 对恢复源调用 `KnowledgeStore.assert_compatible()`，可能原地迁移旧 Schema 的 P2 评论。
 
@@ -1080,6 +1069,19 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 若最终出现真实外部分发证据，替代方案必须是独立、显式、一次性的离线维护工具：用户先备份并主动运行，工具在 staging 副本上升级和合并，成功后明确选择发布目标；不得恢复为每次服务构造时自动探测和改写旧库。该工具需要另立设计和测试，不属于本轮默认实现。
 
 验收：旧 split/previous-unified 目录存在时，构造 KnowledgeService 不访问它们、不创建统一数据库，也不改变旧文件；仓库不再包含 runtime migration import/call 和迁移专用测试；全新安装、最终统一路径读取及重新导入知识包通过。若维护者在实施前提供外部分发证据，本单元停止执行并记录证据，不能半保留自动迁移。
+
+### 修复单元 BF：取消无 identity 作业兼容
+
+涉及：`knowledge/pack_jobs.py::_read_job()` 允许缺少 identity 的 state-only 作业，并且 mutable state 重复携带容量计数的 P2 评论。
+
+- `identity.json` 成为所有 staged job 的强制信任根。文件缺失、不可读、字段非法或 `job_id` 与目录不一致时，一律进入 `degraded/orphan`；删除修复单元 AP 从 `state.json` 反推身份的兼容分支。
+- 隔离作业不参与 processor，不自动修复或删除，只能通过管理端、Bridge 或维护 CLI 的既有严格 discard 显式清理。身份不可证实时继续全局拒绝新 staging，避免把未知容量按零处理。
+- 新导入继续在 `.creating-<uuid>` 临时目录内完整写入 identity、pack/index artifacts 和初始 state；全部成功后才在同一文件系统原子重命名为公开 job 目录。列表不观察半成品目录为正常作业。
+- `entries_total`、`chunks_total` 和 `content_bytes` 只在 identity 中持久化。state 不再重复保存这些不可变字段；`_read_job()` 在构造内存响应时从可信 identity 注入它们，容量准入只读取该可信视图。
+- 为明确诊断已存在的 identity 作业，若 state 仍带有旧重复计数，字段必须先按严格非负整数规则验证并与 identity 相等；不一致时隔离为 `job_capacity_identity_mismatch`，但容量和展示仍使用 identity 值。新写 state 不再产生重复字段。
+- staging 后的实际 chunk 数必须与 identity 中 preflight 的确定性 projected chunk 数一致；不一致表示实现或制品契约破坏，作业隔离，不能修改 identity 追随 mutable state。
+
+验收：缺失、损坏或目录身份不一致的 identity 只能诊断和 discard，绝不调度；分别篡改 state 三项重复计数为 0、负数、布尔、浮点和不同正整数，均不能改变 20,000 entries/chunks 与 64 MiB content 的容量准入；新作业 state 不再持久化重复容量字段，列表和管理响应仍显示 identity 中的可信计数。
 
 ### 修复单元 BG：disabled override 使用规范化 entry 身份
 
@@ -1144,5 +1146,7 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 4. 输入和前端提交完成 BJ、BK：bounded UTF-8 helper 覆盖 terms/tags；概览并发测试使用可控延迟 Promise 覆盖 epoch、resource gate 和 loading 所有权。
 5. 运行 Python 3.11 下相关 pack/job/service/retrieval/indexer/router 回归、Ruff 和 diff 检查；确认迁移专用测试已删除且最终统一路径仍有覆盖。运行前端知识 API/request-gate 测试与 `vue-tsc --build`。若新增用户可见文案，必须同步全部 i18n；按当前方案不需要新增文案。
 6. 实现提交推送且 PR 远端相关检查通过后，逐条回复设计单元、提交和精确反例测试，再 resolve 6 条行内线程。BK 是 review-body outside-diff，没有 GitHub Conversation 对象；通过 PR 评论留下同等实现与验证依据，并等待下一轮 review 不再报告。
+
+BE、BF 只有同时满足以下证据才允许关闭：Git 历史证明没有 tag、release 或正式远端分支包含旧布局；备份分支和本 PR 历史提交不构成发布兼容承诺；启动服务不再扫描或打开旧分库；新安装空目录和最终统一数据库均正常工作；无 identity 作业只能隔离和显式清理；篡改 state 容量计数不能影响容量准入。若第一项出现反证，立即停止 BE 的 runtime 删除方案，另立显式离线迁移设计。
 
 任何一条仅有文档方案、没有远端可见实现和通过证据时都不得关闭。第八轮实施结果应在完成后追加为提交矩阵，不用计划文本冒充已实施状态。
