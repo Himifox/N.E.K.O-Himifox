@@ -1166,3 +1166,147 @@ BE、BF 只有同时满足以下证据才允许关闭：Git 历史证明没有 t
 验证证据：BE 相关回归 40 项通过；BF 作业测试 50 项及相邻回归 98 项通过；BG 相关回归 71 项通过；BH/BI 目标测试 41 项及相邻回归 91 项通过；BJ 回归 38 项通过；BK 的 `vue-tsc --build` 通过，请求门控与可控延迟响应测试 8 项通过。Python 改动均通过对应 Ruff 检查，BK 新增工具与测试通过 ESLint 和 Prettier 检查，未新增用户可见文案或 i18n key。上述实现提交均已推送到 `origin/codex/unify-public-knowledge`。
 
 BE 的删除决策以仓库历史核验为前提：共同基线不包含公共知识库实现，旧分库和迁移代码只存在于本 PR 的开发提交，没有 tag、release 或正式远端分支构成兼容承诺。若以后出现外部分发反证，应另行提供显式、离线、先备份的迁移工具，不恢复启动时自动探测和改写。
+
+## 第九轮：分页审查补充与剩余边界
+
+本轮纠正一次审查收集错误：PR 当前共有 117 个 review threads，前 100 个均已解决，但第二页 17 个线程中仍有 16 个未解决。今后关闭轮次必须通过 `reviewThreads.pageInfo.hasNextPage` 遍历至末页；单页返回零条未解决线程不构成“全量清零”证据。CI、自动审查 check 和 `reviewDecision` 也不能替代 conversation 分页结果或 review-body outside-diff 核对。
+
+16 个线程经当前代码复核后分为两组：
+
+| 状态 | 评论 | 结论与证据 |
+| --- | --- | --- |
+| 已实现待关闭 | `r3850069845`：indexer 第二次作业枚举阻塞事件循环 | BI 已由 `ab4b9073d` 将轮后 fresh enumeration 移入工作线程，并覆盖两次枚举线程身份。 |
+| 已实现待关闭 | `r3850069853`：显式目标素材候选被共享池挤出 | BH 已由 `ab4b9073d` 为 primary/fallback 分配独立 lexical、semantic 与 RRF 预算。 |
+| 已实现待关闭 | `r3850069859`：自动旧布局迁移原地修改源库 | BE 已由 `bcbabbf29` 删除 `legacy_layout.py`、启动调用和迁移测试，旧目录不再被扫描或打开。 |
+| 已实现待关闭 | `r3850069865`：mutable state 容量计数绕过 identity | BF 已由 `53ddbf478` 固定 identity 容量信任根；不一致 state 隔离且准入始终采用 identity。 |
+| 已实现待关闭 | `r3850069872`：disabled override 未规范化标题身份 | BG 已由 `15abf7d5f` 统一 override、entry key 和 rowid 映射的规范化身份。 |
+| 仍成立 | 其余 11 条 | 按 BL–BV 实施；只有远端实现、精确反例测试和相邻失败语义均可见后才允许关闭。 |
+
+### 修复单元 BL：discard 只接受可信的直接子作业目录
+
+涉及：`knowledge/pack_jobs.py::discard_degraded_pack_job()` 接受 `job_id=".."`，可把 `.staging/..` 当成 degraded orphan 并递归删除知识库根目录的 P1 评论。
+
+- 抽取 staged job ID 的单一严格解析器。公开 job ID 必须匹配生成器契约：合法 pack ID、一个分隔符和 12 位小写十六进制随机后缀；`.`、`..`、绝对路径、分隔符、空白、大小写十六进制和额外路径片段全部拒绝。
+- 所有接收外部 job ID 的 get、cancel、discard 路径共用该解析器，不能继续以 `Path(job_id).name == job_id` 作为路径安全判断。
+- destructive discard 在加锁后解析 `jobs_root` 与 `job_dir`；要求解析后的 `job_dir.parent` 精确等于解析后的 jobs root，并拒绝符号链接、junction 或解析到 root 外的目录。身份读取和 degraded 判定只能发生在路径约束通过之后。
+- `shutil.rmtree()` 的目标只能是上述已验证直接子目录；不得对 root、`.creating-*`、锁文件或未知普通目录执行递归删除。失败保持目录原样并返回稳定失败，不尝试扩大清理范围。
+
+验收：对 `..`、`.`、绝对路径、正反斜杠、合法前缀加路径尾巴、symlink/junction 和 jobs root 本身逐一调用 discard，知识库数据库、注册表和其他作业字节级不变；合法 degraded job 仍可显式删除，正常 job 仍不可 discard。
+
+### 修复单元 BM：删除未发布的 attributed-entry schema 自动迁移
+
+涉及：`KnowledgeStore._migrate_legacy_entries()` 丢弃并重建 entries 表后没有回填 FTS 的 P1 评论。
+
+- 该 attributed-entry schema 与旧布局一样只来自本 PR 的中间开发提交；共同基线、tag、release 和正式远端分支均没有公共知识库。沿用 BE 的发布边界，删除 `_migrate_legacy_entries()`、`_repair_legacy_source_tags()`、`.legacy.bak` 写入和相应迁移测试，不继续完善未发布格式的 FTS 回填。
+- 已存在 entries 表时，初始化先只读核对最终五字段形状。若存在旧 `aliases` 等 attributed schema，抛出结构化 `unsupported_knowledge_schema` 并停止；不得 drop、rename、backup、更新 schema marker 或创建空 FTS。
+- 空数据库仍可原子创建最终 schema；已经是最终 entries 形状的统一数据库继续执行当前受支持的派生表/marker 校验。本单元不删除正式 schema 内必要的同版本派生数据修复。
+- 若以后出现外部分发反证，只能另做显式、离线、先备份并在 staging 中转换的工具；不得恢复服务启动时自动原地迁移。
+
+验收：旧 attributed fixture 启动失败且源文件 hash、mtime、schema、FTS 和 marker 全部不变；新安装空目录与最终 schema 正常；代码和文档中不再出现 attributed 自动迁移或 `.legacy.bak` 承诺。
+
+### 修复单元 BN：status 的 degraded envelope 是可消费的健康结果
+
+涉及：前端通用 `request()` 对任何 `ok: false` 抛错，导致后端刻意返回的 structured degraded status 无法展示的 P2 评论。
+
+- 不放宽 mutation 和普通查询的失败语义。仅 status API 使用专用判别：当响应包含合法 `status.status="degraded"` 健康对象时返回该对象；缺少 status、结构非法、token 失败或其他 `ok: false` 仍抛 `KnowledgeApiError`。
+- 后端 unavailable status 补齐稳定展示字段：`name`、`integrity_ok=false`、`available=false`、`error_type/error_code`；前端类型把 available 与诊断字段建模，不以 stale cache 覆盖当前 degraded 事实。
+- status 仍参与 BK 的 epoch/resource gate；迟到 degraded 响应不能覆盖更新世代，迟到异常也不能显示旧错误。
+- 复用现有 degraded/ready 文案，不新增 i18n key；若最终确需新增可见诊断文案，必须同步 8 个 locale。
+
+验收：service 初始化失败时管理页展示 degraded 而非 generic load failure；普通 packs/import 的 `ok:false` 仍拒绝；非法 status envelope、旧响应竞态和 token refresh 回归均通过。
+
+### 修复单元 BO：一次查询生成全部 pack chunk 状态
+
+涉及：`list_installed_packs()` 为每个 pack 调用一次 `source_chunk_status()`，形成逐包 SQLite 打开和 `json_each` 扫描的 P2 评论。
+
+- 在 `KnowledgeStore` 增加 batch source status 查询。将去重后的 source tags 作为一个 JSON 参数传给 SQLite `json_each(?)`，与 entry tags 和 chunks 一次 join/group，避免 SQLite 参数数量上限和逐包连接。
+- 单次只读连接返回 `source_tag -> {chunks_total, chunks_ready, chunks_prebuilt_only}`；无命中 source 在内存补零。重复 registry source、空 source 和非 source tag 在查询前稳定过滤。
+- `list_installed_packs()` 先解析可信 registry，再进行一次 batch 查询并合并；不得因 pack 数量增加而增加数据库连接数。数据库不可用时保持该展示接口既有降级语义，不把本单元偷偷变成容量准入策略。
+
+验收：1、100 和数千个一词条 pack 均只打开一次数据库并执行一次 grouped status 查询；各 pack ready/missing 结果与旧逐包实现相同；重复 source、零 chunks、prebuilt-only 和损坏 registry 回归通过。
+
+### 修复单元 BP：端到端请求超时覆盖写锁预算
+
+涉及：Main Server mutation 最多等待 30 秒跨进程锁，但 Bridge 与管理端当前都在 15 秒放弃请求，可能出现“前端失败、后台稍后提交”的 P2 评论。
+
+- 抽取知识 mutation lock timeout 常量，消除 Bridge 对内部 30 秒预算的隐式猜测。POST 转发的 connect timeout 保持短值，read/write/overall timeout 必须大于锁预算并留出受限 body 读取、校验与提交余量；GET 继续使用短超时。
+- 同步调整管理端 `executeRequest()`：知识 POST 的客户端预算必须严格大于 Bridge POST 预算，GET 保持 15 秒。不能只放宽中间一跳，让浏览器先取消。
+- 超时仍返回稳定 unavailable/timeout 错误，不把不确定结果宣称为回滚成功。import 依靠 staged job identity 保持重试可诊断；remove/policy mutation 在超时后由下一次 packs/status 刷新核实最终事实。
+- 不用无限超时，也不在本轮引入新的 durable RPC 系统；若受限 mutation 在新预算内仍可能无界运行，应另立异步作业契约。
+
+验收：锁竞争超过 15 秒但小于 30 秒时 POST 最终返回真实提交结果，不出现 502；GET 仍快速失败；Bridge 和浏览器预算顺序有静态测试，超出最终预算后的状态刷新可观察实际结果。
+
+### 修复单元 BQ：缺失 term role 规范为空列表
+
+涉及：`terms.get(role, ())` 的默认 tuple 随后被 list 校验拒绝，导致省略 terms 或仅提供一个 role 的合法 pack 无法导入的 Major 评论。
+
+- 缺失整个 `terms` 字段规范为 `{}`，缺失 `alias` 或 `recognition` 规范为 `[]`；规范后再执行现有数量、字符串类型和 bounded UTF-8 累计预算。
+- 只有缺失可默认。显式 `null`、tuple、string、object、非字符串数组和未知 role 继续严格拒绝；不自动修复调用方显式提供的错误类型。
+- 内存模型仍输出两个 tuple role，canonical artifact 的确定性序列化与 hash 不因“缺失”和“显式空数组”产生身份漂移。
+
+验收：无 terms、仅 alias、仅 recognition 和两个空列表均通过且得到等价规范模型；显式错误类型、64 项/32 KiB 边界和 canonical round trip 均通过。
+
+### 修复单元 BR：安装前取消订阅是成功的 unsubscribe
+
+涉及：active subscription 在 resolving/downloading/verifying 阶段被取消后仍强制查找本地 pack/job，最终返回 subscription_not_found 且不报告取消的 P2 评论。
+
+- task 创建时持久化本次请求的 `requested_pack_id`；unsubscribe 必须先验证 package ID 对应的 active task 与 claimed pack ID 一致，不能仅凭 package ID 取消其他身份。
+- 若取消发生在 `pending/resolving/downloading/verifying`，这些阶段尚未调用 Main Server mutation；worker 清理完成后直接返回 `{ok:true, cancelled:true, removed:false}` 并 best-effort 上报 unsubscribe，不再要求本地 artifact 存在。
+- `installing/indexing/completed` 阶段可能已有 durable job 或 pack，不走上述快捷成功路径；继续解析可信 resolved identity，并通过严格 remove/job 状态核实，避免把仍可能提交的 mutation 当成已撤销。
+- 重复 unsubscribe 对已成功取消且无 artifact 的同一 task 返回幂等成功；身份不匹配、不可验证 ownership 和真正不存在且从未有 active task 的请求保持现有失败语义。
+
+验收：在 descriptor 返回前、下载中、校验中取消均成功且无本地 job/pack；错误 claimed pack 不得取消；installing 竞态不能遗留已订阅 pack 却报告 removed；上报失败不改变本地成功结果。
+
+### 修复单元 BS：自动会话选择也使用分素材候选池
+
+涉及：BH 只保护显式 target；`aselect_conversation_materials()` 的无 target 双类型搜索仍共享候选池，knowledge 可挤出全部 corpus 的 P2 评论。
+
+- 不改变所有普通无 target 搜索。为自动会话选择增加明确的 per-material candidate reservation 模式，仅该调用在请求 knowledge/corpus 配额时按 material type 拆分 source pools。
+- lexical、prepared semantic 与 RRF 对每个素材池分别保留固定候选预算；query embedding 仍只生成一次，source allowlist、deadline 和 disabled 集合在各池一致应用。
+- 各池结果保留可比较的原始证据，交给现有会话选择器按 knowledge/corpus quota 分配；任一素材无合格结果时允许另一类型按现有规则补足，但不得在候选截断前相互驱逐。
+- 显式 target 继续走 BH primary/fallback；普通单类型或不要求素材配额的搜索保持当前共享排序，避免全局相关性漂移。
+
+验收：BM25-only、semantic-only 和融合模式下，至少 24 个更高 knowledge 候选不能让一个合格 corpus 从自动会话 quota 消失；反向 crowding、allowlist、deadline、disabled 和单类型排序均回归。
+
+### 修复单元 BT：容量准入读取失败必须 fail closed
+
+涉及：`KnowledgeStore.community_usage()` 捕获数据库错误并返回全零，stage admission 可在锁定或损坏时错误接受超限 job 的 P2 评论。
+
+- 为 `community_usage()` 增加与其他 store 统计一致的 strict 模式；展示/诊断调用可保留 fail-soft 零值，所有容量和替换扣减计算必须使用 strict 模式。
+- `_ensure_community_capacity()` 读取总量或任一 replacement source 失败时转换为稳定 `knowledge_capacity_unavailable`/registry admission error，禁止创建 `.creating-*` 或公开 job 目录。
+- 不使用缓存零值，不在读取失败时假设数据库不存在；只有路径确实不存在才按空安装处理。容量证据必须来自同一受信写锁窗口，避免读取后到 staging 之间被另一个进程修改。
+- 锁恢复后允许调用方显式重试；不得后台自动补 stage，也不得把失败请求晚提交。
+
+验收：locked、corrupt、marker conflict 和临时 I/O failure 均拒绝 staging 且目录无变化；数据库恢复后重试使用真实 installed usage；展示 status 的既有 degraded/fail-soft 行为不被容量严格模式误改。
+
+### 修复单元 BU：维护重建遵守全局 ready-vector 上限
+
+涉及：`--rebuild/--full` 循环持续生成本地向量，可能超过 20,000 ready 上限并使 snapshot 永久 truncated 的 P2 评论。
+
+- 维护脚本与后台 indexer 共用 `MAX_READY_VECTOR_CHUNKS`，不得复制第二个数值。每轮在选择 work 前读取全库 ready 数，`work_budget=min(batch_size, cap-ready)`；预算为零立即停止。
+- prebuilt 与 local ready 向量共同计入上限。`--rebuild` 保留的 ready 向量先占预算；`--full` 若重置派生数据，则按重置后的真实 ready 数重新计算，不能预先假设为零。
+- 因 cap 停止时结果明确标记 `capacity_limited`，保留 eligible remaining 供诊断；不得错误报告 complete，也不得继续生成一个越界 batch。
+- snapshot 上限继续作为防御性 fail-closed，不以提高 snapshot cap 掩盖维护脚本越界。
+
+验收：已有 19,999 ready 时最多新增 1；恰好 20,000 时不调用 embedding；prebuilt+local 混合计数正确；cap 停止、普通完成、失败重试和 `--full` 重置语义均可区分。
+
+### 修复单元 BV：随机素材排除使用共享规范化 entry key
+
+涉及：disabled 集合保存规范化标题，但 `sample_entries_by_tag()` 以展示标题构造 raw tuple，导致 Apollo 等词条仍可被随机抽到的 P2 评论。
+
+- 随机采样排除判断改用 `catalog_overrides.entry_key(entry)`；不得在 store 内再次手写一套 title normalization。该依赖只指向模型与规范化 helper，不引入 store 循环依赖。
+- reservoir sampling 的完整候选遍历、均匀性和 limit 语义保持不变；只在增加 eligible count 前排除规范化 disabled key。
+- 展示标题继续保留原文，override 文件继续保存规范身份；本单元不改变返回条目内容。
+
+验收：禁用 `Apollo`、`Straße` 和 NFKC/空白变体后，在确定性 randrange 与多轮采样中均永不返回；重新启用后恢复候选资格；超过 100 条的完整 reservoir 公平性测试保持通过。
+
+## 第九轮实施顺序与关闭条件
+
+1. 先提交本节设计，随后只回复并 resolve 表中 5 个已有远端实现和反例测试的线程；11 个仍成立线程保持 open。
+2. 第一实现提交处理 BL 与 BM：先消除递归删除 P1，再删除未发布 attributed schema 自动迁移。两者不与功能优化混交。
+3. 第二提交处理 BQ、BV、BN：修复确定性输入/身份和 degraded 展示；若无新用户文案，不改 i18n。
+4. 第三提交处理 BT、BP、BR：容量、超时和取消统一遵循 fail-closed 或可证明的阶段边界，重点覆盖“请求失败但后台晚提交”反例。
+5. 第四提交处理 BO、BS、BU：批量查询、自动素材候选预算和维护向量上限分别验证，不借性能修复改变普通搜索排序。
+6. Python 必须使用 3.11 项目环境；运行相关 pack/job/store/service/indexer/router/maintenance 回归、Ruff、前端 API/request gate 测试、`vue-tsc --build`、i18n 校验与分页 conversation 核对。
+
+关闭一条线程必须同时满足：远端提交包含当前行对应实现；精确反例测试在当前头提交通过；相邻失败语义有负例；线程内回复说明提交和测试；GraphQL resolve 成功。最终清零检查必须遍历全部 117+ threads，并单独检查 review body 的 outside-diff 评论。CI 全绿或自动 review check 通过本身不满足关闭条件。
