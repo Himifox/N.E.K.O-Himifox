@@ -268,7 +268,12 @@ def test_community_entry_budget_counts_pending_packs(tmp_path, monkeypatch):
 
     service = KnowledgeService.from_root(tmp_path)
     monkeypatch.setattr(pack_jobs, "MAX_COMMUNITY_ENTRIES", 1)
-    service.stage_pack(_pack(pack_id="first-pack"))
+    job = service.stage_pack(_pack(pack_id="first-pack"))
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    persisted = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
+
+    assert not set(pack_jobs.IDENTITY_CAPACITY_FIELDS).intersection(persisted)
+    assert service.list_pack_jobs()[0]["entries_total"] == 1
 
     with pytest.raises(ValueError, match="too many entries"):
         service.stage_pack(_pack(pack_id="second-pack"))
@@ -296,6 +301,28 @@ def test_corrupt_job_state_is_quarantined_and_still_counts_capacity(
 
     with pytest.raises(ValueError, match="too many entries"):
         service.stage_pack(_pack(pack_id="second-pack"))
+
+
+def test_staged_chunk_total_must_match_identity(tmp_path, monkeypatch):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    original_chunk_status = KnowledgeStore.chunk_status
+
+    def mismatched_chunk_status(store):
+        status = original_chunk_status(store)
+        if store.database_path.parent == job_dir:
+            status["chunks_total"] = int(status["chunks_total"]) + 1
+        return status
+
+    monkeypatch.setattr(KnowledgeStore, "chunk_status", mismatched_chunk_status)
+
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "job_capacity_identity_mismatch"
+    persisted = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
+    assert "chunks_total" not in persisted
 
 
 @pytest.mark.parametrize("field", ("created_at", "updated_at"))
@@ -458,36 +485,59 @@ def test_job_is_only_listed_after_atomic_publication(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_legacy_valid_job_without_identity_still_activates(tmp_path):
+async def test_job_without_identity_is_only_quarantined_and_discarded(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     job = service.stage_pack(_pack())
     job_dir = tmp_path / ".staging" / str(job["job_id"])
     (job_dir / "identity.json").unlink()
-    persisted = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
-
-    assert service.list_pack_jobs()[0] == persisted
-    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
-    assert result["state"] == "ready_bm25"
-
-
-@pytest.mark.asyncio
-async def test_legacy_job_without_identity_must_match_its_directory(tmp_path):
-    service = KnowledgeService.from_root(tmp_path)
-    job = service.stage_pack(_pack())
-    job_dir = tmp_path / ".staging" / str(job["job_id"])
-    (job_dir / "identity.json").unlink()
-    state_path = job_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["job_id"] = "../other-job"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
 
     listed = service.list_pack_jobs()[0]
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
     assert listed["state"] == "degraded"
     assert listed["reason"] == "invalid_job_identity"
+    assert listed["orphan"] is True
     assert result["state"] == "no_work"
+    assert cancel_pack_job(tmp_path, str(job["job_id"])) is False
     assert service.list_packs() == ()
+    assert discard_degraded_pack_job(tmp_path, str(job["job_id"])) is True
+
+
+@pytest.mark.parametrize(
+    ("field", "limit_name"),
+    (
+        ("entries_total", "MAX_COMMUNITY_ENTRIES"),
+        ("chunks_total", "MAX_COMMUNITY_CHUNKS"),
+        ("content_bytes", "MAX_COMMUNITY_CONTENT_BYTES"),
+    ),
+)
+@pytest.mark.parametrize("value", (0, -1, True, 1.5, 2))
+def test_state_capacity_cannot_override_identity(
+    tmp_path,
+    monkeypatch,
+    field,
+    limit_name,
+    value,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack(pack_id="first-pack"))
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    identity = json.loads((job_dir / "identity.json").read_text(encoding="utf-8"))
+    state_path = job_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = value
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "job_capacity_identity_mismatch"
+    assert listed[field] == identity[field]
+    monkeypatch.setattr(pack_jobs, limit_name, identity[field])
+    with pytest.raises(ValueError):
+        service.stage_pack(_pack(pack_id="second-pack"))
 
 
 def test_community_budget_allows_replacing_the_active_pack(tmp_path, monkeypatch):

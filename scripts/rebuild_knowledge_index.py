@@ -342,18 +342,16 @@ def inspect_database(database_path: Path) -> dict[str, Any]:
 
 def inspect_pack_jobs(root: Path) -> list[dict[str, Any]]:
     """Read persistent job metadata without opening or migrating staging databases."""
+    from knowledge.pack_jobs import _read_job
+
     jobs_root = root / ".staging"
     if not jobs_root.is_dir():
         return []
-    items: list[dict[str, Any]] = []
-    for path in jobs_root.glob("*/state.json"):
-        try:
-            item = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(item, dict):
-            continue
-        items.append(item)
+    items = [
+        _read_job(job_dir)
+        for job_dir in jobs_root.iterdir()
+        if job_dir.is_dir() and not job_dir.is_symlink()
+    ]
     return sorted(
         items,
         key=lambda item: (

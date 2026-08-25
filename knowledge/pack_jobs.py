@@ -41,6 +41,7 @@ PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
+IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
 logger = logging.getLogger(__name__)
 
 
@@ -109,11 +110,11 @@ def _validated_identity_payload(
 ) -> _JsonReadResult:
     job_id = str(payload.get("job_id") or "")
     pack_id = str(payload.get("pack_id") or "")
-    counters = {
+    identity_values = {
         key: _normalized_job_timestamp(payload.get(key))
-        for key in ("created_at", "entries_total", "chunks_total", "content_bytes")
+        for key in ("created_at", *IDENTITY_CAPACITY_FIELDS)
     }
-    if any(value is None for value in counters.values()):
+    if any(value is None for value in identity_values.values()):
         return _JsonReadResult("invalid", {})
     if (
         job_id != job_dir.name
@@ -124,7 +125,7 @@ def _validated_identity_payload(
         return _JsonReadResult("invalid", {})
     return _JsonReadResult(
         "valid",
-        {"job_id": job_id, "pack_id": pack_id, **counters},
+        {"job_id": job_id, "pack_id": pack_id, **identity_values},
     )
 
 
@@ -146,13 +147,18 @@ def _degraded_job(
         created_at = int(job_dir.stat().st_mtime)
     except OSError:
         created_at = 0
+    trusted_created_at = (
+        int(identity["created_at"])
+        if identity is not None and "created_at" in identity
+        else created_at
+    )
     return {
         **(identity or {}),
         "job_id": str((identity or {}).get("job_id") or job_dir.name),
         "state": DEGRADED_STATE,
         "retrieval_mode": "none",
         "reason": reason,
-        "created_at": int((identity or {}).get("created_at") or created_at),
+        "created_at": trusted_created_at,
         "updated_at": created_at,
         "orphan": bool(orphan),
     }
@@ -177,65 +183,63 @@ def _read_job(job_dir: Path) -> dict[str, object]:
         )
     state_result = _read_json_result(_state_path(job_dir))
     identity_result = _validated_identity(job_dir)
-    if identity_result.state == "missing" and state_result.state == "valid":
-        identity_result = _validated_identity_payload(job_dir, state_result.payload)
-    if identity_result.state in {"invalid", "unreadable"}:
+    if identity_result.state != "valid":
         return _degraded_job(
             job_dir,
             reason="invalid_job_identity",
             orphan=True,
         )
+    identity = identity_result.payload
     if state_result.state == "valid":
         state = state_result.payload
-        if identity_result.state == "valid" and any(
-            str(state.get(key) or "") != str(identity_result.payload.get(key) or "")
+        if any(
+            str(state.get(key) or "") != str(identity.get(key) or "")
             for key in ("job_id", "pack_id")
         ):
             return _degraded_job(
                 job_dir,
                 reason="job_identity_mismatch",
-                identity=identity_result.payload,
+                identity=identity,
             )
-        fallback_created_at = (
-            identity_result.payload.get("created_at")
-            if identity_result.state == "valid"
-            else None
-        )
-        created_at = _normalized_job_timestamp(
-            state.get("created_at", fallback_created_at)
-        )
+        for key in IDENTITY_CAPACITY_FIELDS:
+            if key not in state:
+                continue
+            state_value = _normalized_job_timestamp(state.get(key))
+            if state_value != identity[key]:
+                return _degraded_job(
+                    job_dir,
+                    reason="job_capacity_identity_mismatch",
+                    identity=identity,
+                )
+        if "created_at" not in state:
+            created_at = int(identity["created_at"])
+        else:
+            created_at = _normalized_job_timestamp(state.get("created_at"))
+            if created_at is None or created_at != identity["created_at"]:
+                return _degraded_job(
+                    job_dir,
+                    reason="invalid_job_timestamps",
+                    identity=identity,
+                )
         updated_at = _normalized_job_timestamp(
             state.get("updated_at", created_at)
         )
-        if created_at is None or updated_at is None:
+        if updated_at is None:
             return _degraded_job(
                 job_dir,
                 reason="invalid_job_timestamps",
-                identity=(
-                    identity_result.payload
-                    if identity_result.state == "valid"
-                    else None
-                ),
-                orphan=identity_result.state != "valid",
+                identity=identity,
             )
-        state["created_at"] = created_at
-        state["updated_at"] = updated_at
-        return state
-    if identity_result.state == "valid":
-        reason = {
-            "missing": "missing_job_state",
-            "invalid": "invalid_job_state",
-            "unreadable": "unreadable_job_state",
-        }[state_result.state]
-        return _degraded_job(
-            job_dir,
-            reason=reason,
-            identity=identity_result.payload,
-        )
+        return {**state, **identity, "updated_at": updated_at}
+    reason = {
+        "missing": "missing_job_state",
+        "invalid": "invalid_job_state",
+        "unreadable": "unreadable_job_state",
+    }[state_result.state]
     return _degraded_job(
         job_dir,
-        reason="invalid_job_identity",
-        orphan=True,
+        reason=reason,
+        identity=identity,
     )
 
 
@@ -245,7 +249,12 @@ def _write_state(
     **changes: object,
 ) -> dict[str, Any]:
     updated = {**current, **changes, "updated_at": int(time.time())}
-    atomic_write_json(_state_path(job_dir), updated, ensure_ascii=False, indent=2)
+    persisted = {
+        key: value
+        for key, value in updated.items()
+        if key not in IDENTITY_CAPACITY_FIELDS
+    }
+    atomic_write_json(_state_path(job_dir), persisted, ensure_ascii=False, indent=2)
     return updated
 
 
@@ -281,15 +290,20 @@ def stage_pack(
         creating_dir.mkdir()
         now = int(time.time())
         has_prebuilt = index_manifest is not None and vectors is not None
+        identity: dict[str, object] = {
+            "job_id": job_id,
+            "pack_id": pack.pack_id,
+            "created_at": now,
+            "entries_total": preflight.entries,
+            "chunks_total": preflight.projected_chunks,
+            "content_bytes": preflight.content_bytes,
+        }
         state: dict[str, object] = {
             "job_id": job_id,
             "pack_id": pack.pack_id,
             "material_type": pack.material_type,
             "state": "queued",
             "retrieval_mode": "pending",
-            "entries_total": preflight.entries,
-            "chunks_total": preflight.projected_chunks,
-            "content_bytes": preflight.content_bytes,
             "chunks_ready": 0,
             "indexed_percent": 0.0,
             "reason": "",
@@ -306,14 +320,7 @@ def stage_pack(
         try:
             atomic_write_json(
                 _identity_path(creating_dir),
-                {
-                    "job_id": job_id,
-                    "pack_id": pack.pack_id,
-                    "created_at": now,
-                    "entries_total": preflight.entries,
-                    "chunks_total": preflight.projected_chunks,
-                    "content_bytes": preflight.content_bytes,
-                },
+                identity,
                 ensure_ascii=False,
                 indent=2,
             )
@@ -340,7 +347,7 @@ def stage_pack(
     from .indexer import notify_knowledge_index_changed
 
     notify_knowledge_index_changed()
-    return state
+    return {**state, **identity}
 
 
 def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
@@ -465,8 +472,12 @@ def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
         return False
     job_dir = _jobs_root(knowledge_root) / job_id
     with mutation_lock(_state_path(job_dir)):
-        state = _read_json(_state_path(job_dir))
-        if not state or state.get("state") in TERMINAL_STATES:
+        state = _read_job(job_dir)
+        if (
+            not state
+            or state.get("state") in TERMINAL_STATES
+            or state.get("state") == DEGRADED_STATE
+        ):
             return False
         _write_state(
             job_dir,
@@ -527,6 +538,19 @@ def _cleanup_payload(job_dir: Path) -> None:
             pass
 
 
+def _capacity_mismatch_state(
+    job_dir: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    return _write_state(
+        job_dir,
+        state,
+        state=DEGRADED_STATE,
+        retrieval_mode="none",
+        reason="job_capacity_identity_mismatch",
+    )
+
+
 def _prepare_job(job_dir: Path) -> dict[str, Any]:
     """Build the staging FTS/chunks off the event loop and resume idempotently."""
     with mutation_lock(_state_path(job_dir)):
@@ -546,11 +570,12 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
                 embedding_policy="prebuilt_only",
             )
             status = staging_store.chunk_status()
+            if int(status["chunks_total"]) != int(state["chunks_total"]):
+                return _capacity_mismatch_state(job_dir, state)
             state = _write_state(
                 job_dir,
                 state,
                 state="verifying_index",
-                chunks_total=int(status["chunks_total"]),
             )
         if state.get("state") == "verifying_index":
             if staging_store is None:
@@ -565,11 +590,8 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
                     embedding_policy="prebuilt_only",
                 )
                 status = staging_store.chunk_status()
-                state = _write_state(
-                    job_dir,
-                    state,
-                    chunks_total=int(status["chunks_total"]),
-                )
+                if int(status["chunks_total"]) != int(state["chunks_total"]):
+                    return _capacity_mismatch_state(job_dir, state)
             manifest_path = job_dir / INDEX_MANIFEST_NAME
             vectors_path = job_dir / VECTOR_ARTIFACT_NAME
             has_manifest = manifest_path.is_file()
