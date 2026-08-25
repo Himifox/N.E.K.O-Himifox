@@ -690,9 +690,14 @@ async function openEntry(row: KnowledgeEntrySummary) {
 }
 
 async function toggleEntry(row: KnowledgeEntrySummary) {
+  const requestedDisabled = !row.disabled
   try {
-    await knowledgeApi.setEntryDisabled({ source: row.source.tag, title: row.title, disabled: !row.disabled })
-    row.disabled = !row.disabled
+    await knowledgeApi.setEntryDisabled({
+      source: row.source.tag,
+      title: row.title,
+      disabled: requestedDisabled,
+    })
+    row.disabled = requestedDisabled
     refreshOverviewInBackground()
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
@@ -811,25 +816,26 @@ async function pollImportJobs() {
   let completed = false
   try {
     const response = await knowledgeApi.packJobs()
-    if (disposed || !packJobsRequestGate.isLatest(requestId)) return
-    packJobs.value = response.jobs || []
-    const jobs = new Map(
-      (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
-    )
-    for (const [jobId] of [...pendingImportJobs]) {
-      const job = jobs.get(jobId)
-      const state = String(job?.state || '')
-      if (state === 'active') {
-        pendingImportJobs.delete(jobId)
-        completed = true
-        ElMessage.success(t('knowledge.importSuccess'))
-      } else if (state === 'failed' || state === 'cancelled' || state === 'degraded') {
-        pendingImportJobs.delete(jobId)
-        completed = true
-        ElMessage.error(t('knowledge.operationFailed'))
+    if (!disposed && packJobsRequestGate.isLatest(requestId)) {
+      packJobs.value = response.jobs || []
+      const jobs = new Map(
+        (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
+      )
+      for (const [jobId] of [...pendingImportJobs]) {
+        const job = jobs.get(jobId)
+        const state = String(job?.state || '')
+        if (state === 'active') {
+          pendingImportJobs.delete(jobId)
+          completed = true
+          ElMessage.success(t('knowledge.importSuccess'))
+        } else if (state === 'failed' || state === 'cancelled' || state === 'degraded') {
+          pendingImportJobs.delete(jobId)
+          completed = true
+          ElMessage.error(t('knowledge.operationFailed'))
+        }
       }
+      packJobPollAttempts = 0
     }
-    packJobPollAttempts = 0
   } catch {
     packJobPollAttempts += 1
   } finally {
