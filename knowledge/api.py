@@ -10,7 +10,7 @@ from .retrieval import (
     KnowledgeRetriever,
     MatchPolicy,
 )
-from .store import KnowledgeStore, KnowledgeStoreError
+from .store import KnowledgeSchemaTooNewError, KnowledgeStore, KnowledgeStoreError
 from .packs import KnowledgePack, KnowledgePackSource, PackInstallResult
 from .prebuilt_index import (
     MAX_PREBUILT_CHUNKS,
@@ -57,6 +57,7 @@ __all__ = [
     "KnowledgeService",
     "KnowledgeStore",
     "KnowledgeStoreError",
+    "KnowledgeSchemaTooNewError",
     "KnowledgeSubscription",
     "KnowledgeTurnContext",
     "MatchPolicy",

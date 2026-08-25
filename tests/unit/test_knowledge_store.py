@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
+
+import pytest
+
 from knowledge import (
     KnowledgeEntry,
     KnowledgeRetriever,
     KnowledgeStore,
 )
 from knowledge.catalog_overrides import get_catalog_override_path
+from knowledge.store import KnowledgeSchemaTooNewError, KnowledgeStoreError
 
 
 def _entry(index: int, *, content: str | None = None) -> KnowledgeEntry:
@@ -99,3 +104,76 @@ def test_store_applies_request_scoped_busy_timeout(tmp_path):
         configured = int(connection.execute("PRAGMA busy_timeout").fetchone()[0])
 
     assert configured == 37
+
+
+def _write_schema_marker_database(path, *, metadata="8", user_version=0):
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    if metadata is not None:
+        connection.execute(
+            "INSERT INTO metadata(key, value) VALUES ('schema_version', ?)",
+            (metadata,),
+        )
+    connection.execute(f"PRAGMA user_version={int(user_version)}")
+    connection.commit()
+    connection.close()
+
+
+@pytest.mark.parametrize(
+    ("metadata", "user_version", "detected"),
+    (("8", 0, 8), ("7", 8, 8)),
+)
+def test_future_schema_is_rejected_without_mutating_database(
+    tmp_path,
+    metadata,
+    user_version,
+    detected,
+):
+    database_path = tmp_path / "knowledge.db"
+    _write_schema_marker_database(
+        database_path,
+        metadata=metadata,
+        user_version=user_version,
+    )
+    before = database_path.read_bytes()
+    store = KnowledgeStore(database_path)
+
+    with pytest.raises(KnowledgeSchemaTooNewError) as caught:
+        store.assert_compatible()
+    with pytest.raises(KnowledgeSchemaTooNewError):
+        store.upsert(_entry(0))
+
+    assert caught.value.detected_version == detected
+    assert database_path.read_bytes() == before
+    connection = sqlite3.connect(database_path)
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == user_version
+    assert connection.execute(
+        "SELECT value FROM metadata WHERE key='schema_version'"
+    ).fetchone()[0] == metadata
+    connection.close()
+
+
+@pytest.mark.parametrize("metadata", ("not-a-number", "-1", "07"))
+def test_invalid_schema_marker_fails_closed(tmp_path, metadata):
+    database_path = tmp_path / "knowledge.db"
+    _write_schema_marker_database(database_path, metadata=metadata)
+    before = database_path.read_bytes()
+
+    with pytest.raises(KnowledgeStoreError):
+        KnowledgeStore(database_path).assert_compatible()
+
+    assert database_path.read_bytes() == before
+
+
+def test_current_metadata_only_schema_backfills_user_version(tmp_path):
+    database_path = tmp_path / "knowledge.db"
+    _write_schema_marker_database(database_path, metadata="7", user_version=0)
+
+    KnowledgeStore(database_path).assert_compatible()
+
+    connection = sqlite3.connect(database_path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+    connection.close()

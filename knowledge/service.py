@@ -22,7 +22,7 @@ from .retrieval import (
     KnowledgeRetriever,
 )
 from .source_registry import SOURCES, get_source
-from .store import KnowledgeStore
+from .store import KnowledgeSchemaTooNewError, KnowledgeStore
 from .routing import (
     KnowledgeRoutingState,
     RoutingConfig,
@@ -947,6 +947,50 @@ class KnowledgeService:
         except CatalogOverrideError:
             disabled = frozenset()
             override_state = "invalid"
+        if store is not None:
+            try:
+                store.assert_compatible()
+            except KnowledgeSchemaTooNewError as exc:
+                registry_state = pack_registry_state(database_path)
+                pack_jobs = self.list_pack_jobs()
+                return {
+                    "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
+                    "entries": 0,
+                    "integrity_ok": False,
+                    "disabled_entries": len(disabled),
+                    "catalog_override_state": override_state,
+                    "pack_registry_state": registry_state,
+                    "schema_state": "too_new",
+                    "error_code": "knowledge_schema_too_new",
+                    "detected_schema_version": exc.detected_version,
+                    "supported_schema_version": exc.supported_version,
+                    "sources": (),
+                    "packs": 0,
+                    "knowledge_packs": 0,
+                    "corpus_packs": 0,
+                    "knowledge_entries": 0,
+                    "corpus_entries": 0,
+                    "retrieval_mode": "bm25",
+                    "embedding_service_state": "disabled",
+                    "embedding_model_id": "",
+                    "pack_jobs_pending": sum(
+                        job.get("state") not in {"active", "cancelled", "failed"}
+                        for job in pack_jobs
+                    ),
+                    "vector_budget_chunks": MAX_READY_VECTOR_CHUNKS,
+                    "entries_total": 0,
+                    "entries_missing_chunks": 0,
+                    "chunks_total": 0,
+                    "chunks_pending": 0,
+                    "chunks_ready": 0,
+                    "chunks_stale": 0,
+                    "chunks_failed": 0,
+                    "chunks_failed_retryable_now": 0,
+                    "chunks_failed_waiting": 0,
+                    "chunks_failed_exhausted": 0,
+                    "indexed_percent": 0.0,
+                    "chunks_revision": 0,
+                }
         chunk_status = (
             store.chunk_status()
             if store is not None

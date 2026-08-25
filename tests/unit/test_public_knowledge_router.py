@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 from types import SimpleNamespace
 
@@ -183,6 +184,35 @@ def test_management_api_reports_migration_failure_without_500(monkeypatch, tmp_p
     assert status.json()["status"]["migration_state"] == "failed"
     assert entries.status_code == 503
     assert entries.json()["detail"]["code"] == "knowledge_unavailable"
+
+
+def test_management_status_reports_future_schema_without_mutating_it(
+    monkeypatch,
+    tmp_path,
+):
+    database_path = tmp_path / "knowledge.db"
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO metadata(key, value) VALUES ('schema_version', '8')"
+    )
+    connection.commit()
+    connection.close()
+    before = database_path.read_bytes()
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.get("/api/public-knowledge/status")
+
+    assert response.status_code == 200
+    status = response.json()["status"]
+    assert status["status"] == "degraded"
+    assert status["schema_state"] == "too_new"
+    assert status["error_code"] == "knowledge_schema_too_new"
+    assert status["detected_schema_version"] == 8
+    assert status["supported_schema_version"] == 7
+    assert database_path.read_bytes() == before
 
 
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):

@@ -31,6 +31,15 @@ class KnowledgeStoreError(RuntimeError):
     pass
 
 
+class KnowledgeSchemaTooNewError(KnowledgeStoreError):
+    def __init__(self, detected_version: int) -> None:
+        self.detected_version = int(detected_version)
+        self.supported_version = SCHEMA_VERSION
+        super().__init__(
+            "knowledge database schema is newer than this application supports"
+        )
+
+
 class KnowledgeStore:
     """Own a small rebuildable database without touching character memory."""
 
@@ -88,13 +97,19 @@ class KnowledgeStore:
             self.database_path,
             timeout=self.busy_timeout_ms / 1_000,
         )
-        connection.row_factory = sqlite3.Row
-        connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
-        if writable:
-            connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+            self._assert_supported_schema(connection)
+            if writable:
+                connection.execute("PRAGMA journal_mode=WAL")
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     def _initialize(self, connection: sqlite3.Connection) -> None:
+        self._assert_supported_schema(connection)
         columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(entries)").fetchall()
@@ -190,6 +205,7 @@ class KnowledgeStore:
             "UPDATE metadata SET value=? WHERE key='schema_version'",
             (str(SCHEMA_VERSION),),
         )
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         input_version_row = connection.execute(
             "SELECT value FROM metadata WHERE key='embedding_input_version'"
         ).fetchone()
@@ -211,6 +227,45 @@ class KnowledgeStore:
             "DELETE FROM knowledge_chunks WHERE entry_rowid NOT IN (SELECT rowid FROM entries)"
         )
         self._repair_legacy_source_tags(connection)
+
+    @staticmethod
+    def _assert_supported_schema(connection: sqlite3.Connection) -> None:
+        user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        metadata_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
+        ).fetchone()
+        metadata_version: int | None = None
+        if metadata_table is not None:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'"
+            ).fetchone()
+            if row is not None:
+                raw = str(row["value"])
+                if not raw.isdecimal() or not raw or str(int(raw)) != raw or int(raw) <= 0:
+                    raise KnowledgeStoreError(
+                        "knowledge database schema version is invalid"
+                    )
+                metadata_version = int(raw)
+
+        detected_versions = tuple(
+            version
+            for version in (user_version, metadata_version)
+            if version not in (None, 0)
+        )
+        too_new = tuple(
+            version for version in detected_versions if version > SCHEMA_VERSION
+        )
+        if too_new:
+            raise KnowledgeSchemaTooNewError(max(too_new))
+        if len(set(detected_versions)) > 1:
+            raise KnowledgeStoreError("knowledge database schema markers disagree")
+        if user_version and metadata_version is None:
+            raise KnowledgeStoreError("knowledge database schema metadata is missing")
+
+    def assert_compatible(self) -> None:
+        """Initialize supported schemas or raise before touching newer schemas."""
+        with self._connection():
+            return
 
     @staticmethod
     def _repair_legacy_source_tags(connection: sqlite3.Connection) -> None:
