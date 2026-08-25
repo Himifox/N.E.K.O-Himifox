@@ -442,6 +442,26 @@ async def test_legacy_valid_job_without_identity_still_activates(tmp_path):
     assert result["state"] == "ready_bm25"
 
 
+@pytest.mark.asyncio
+async def test_legacy_job_without_identity_must_match_its_directory(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    (job_dir / "identity.json").unlink()
+    state_path = job_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["job_id"] = "../other-job"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_identity"
+    assert result["state"] == "no_work"
+    assert service.list_packs() == ()
+
+
 def test_community_budget_allows_replacing_the_active_pack(tmp_path, monkeypatch):
     import knowledge.pack_jobs as pack_jobs
 

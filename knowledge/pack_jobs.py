@@ -103,35 +103,36 @@ def _read_json(path: Path) -> dict[str, Any]:
     return _read_json_result(path).payload
 
 
-def _validated_identity(job_dir: Path) -> _JsonReadResult:
-    result = _read_json_result(_identity_path(job_dir))
-    if result.state != "valid":
-        return result
-    payload = result.payload
+def _validated_identity_payload(
+    job_dir: Path,
+    payload: dict[str, Any],
+) -> _JsonReadResult:
     job_id = str(payload.get("job_id") or "")
     pack_id = str(payload.get("pack_id") or "")
-    created_at = _normalized_job_timestamp(payload.get("created_at"))
-    if created_at is None:
-        return _JsonReadResult("invalid", {})
-    try:
-        counters = {
-            key: int(payload.get(key))
-            for key in ("entries_total", "chunks_total", "content_bytes")
-        }
-    except (TypeError, ValueError):
+    counters = {
+        key: _normalized_job_timestamp(payload.get(key))
+        for key in ("created_at", "entries_total", "chunks_total", "content_bytes")
+    }
+    if any(value is None for value in counters.values()):
         return _JsonReadResult("invalid", {})
     if (
         job_id != job_dir.name
         or Path(job_id).name != job_id
         or not pack_id
         or Path(pack_id).name != pack_id
-        or any(value < 0 for value in counters.values())
     ):
         return _JsonReadResult("invalid", {})
     return _JsonReadResult(
         "valid",
-        {"job_id": job_id, "pack_id": pack_id, "created_at": created_at, **counters},
+        {"job_id": job_id, "pack_id": pack_id, **counters},
     )
+
+
+def _validated_identity(job_dir: Path) -> _JsonReadResult:
+    result = _read_json_result(_identity_path(job_dir))
+    if result.state != "valid":
+        return result
+    return _validated_identity_payload(job_dir, result.payload)
 
 
 def _degraded_job(
@@ -176,6 +177,8 @@ def _read_job(job_dir: Path) -> dict[str, object]:
         )
     state_result = _read_json_result(_state_path(job_dir))
     identity_result = _validated_identity(job_dir)
+    if identity_result.state == "missing" and state_result.state == "valid":
+        identity_result = _validated_identity_payload(job_dir, state_result.payload)
     if identity_result.state in {"invalid", "unreadable"}:
         return _degraded_job(
             job_dir,
