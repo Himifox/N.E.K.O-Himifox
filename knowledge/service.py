@@ -581,10 +581,6 @@ class KnowledgeService:
             if database_path is not None
             else self.knowledge_root / "knowledge.db"
         )
-        if database_path is None:
-            from .legacy_layout import migrate_legacy_knowledge_layout
-
-            migrate_legacy_knowledge_layout(self.knowledge_root, self._database_path)
         self._routing_state: KnowledgeRoutingState | None = None
         from .packs import migrate_legacy_pack_index_policies
 

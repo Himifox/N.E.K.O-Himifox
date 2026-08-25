@@ -11,7 +11,6 @@ import pytest
 
 from knowledge._mutation_lock import mutation_lock
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
-from knowledge.legacy_layout import migrate_legacy_knowledge_layout
 from knowledge.packs import (
     KnowledgePackRegistryError,
     install_pack,
@@ -232,33 +231,6 @@ def test_corrupt_pack_registry_fails_closed(tmp_path):
 
     assert registry_path.read_bytes() == original
     assert KnowledgeStore(database_path).count() == 0
-
-
-def test_legacy_layout_migration_aborts_on_unreadable_database(tmp_path):
-    legacy_database = tmp_path / "moegirl-knowledge" / "knowledge.db"
-    legacy_database.parent.mkdir()
-    legacy_database.write_bytes(b"not a sqlite database")
-    destination = tmp_path / "knowledge" / "knowledge.db"
-
-    with pytest.raises(KnowledgeStoreError):
-        migrate_legacy_knowledge_layout(tmp_path, destination)
-
-    assert not destination.exists()
-
-
-def test_legacy_layout_migration_aborts_on_corrupt_existing_registry(tmp_path):
-    legacy_database = tmp_path / "moegirl-knowledge" / "knowledge.db"
-    legacy_database.parent.mkdir()
-    KnowledgeStore(legacy_database).upsert(_entry("legacy registered entry"))
-    registry_path = legacy_database.with_name("packs.json")
-    registry_path.write_text("not-json", encoding="utf-8")
-    destination = tmp_path / "knowledge" / "knowledge.db"
-
-    with pytest.raises(KnowledgePackRegistryError):
-        migrate_legacy_knowledge_layout(tmp_path, destination)
-
-    assert not destination.exists()
-    assert registry_path.read_text(encoding="utf-8") == "not-json"
 
 
 def test_frontend_rejects_oversized_pack_before_reading_and_has_i18n():

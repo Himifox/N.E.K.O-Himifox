@@ -466,173 +466,18 @@ def test_material_type_override_rebuilds_auto_route_without_rewriting_entry(tmp_
     assert service.list_packs()[0]["effective_material_type"] == "corpus"
 
 
-def test_split_layout_migrates_entries_vectors_packs_and_overrides(tmp_path):
-    meme_database = tmp_path / "moegirl-knowledge" / "knowledge.db"
-    corpora_database = tmp_path / "corpora" / "knowledge.db"
-    meme_store = KnowledgeStore(meme_database)
-    corpus_store = KnowledgeStore(corpora_database)
-    meme_entry = _entry("Legacy meme", "source:community.legacy-meme", "domain:meme")
-    corpus_entry = _entry("Legacy corpus", "source:community.legacy-corpus")
-    meme_store.replace_source(meme_entry.source_tag, (meme_entry,))
-    corpus_store.replace_source(
-        corpus_entry.source_tag,
-        (corpus_entry,),
-        embedding_policy="prebuilt_only",
+def test_service_ignores_unpublished_legacy_layouts(tmp_path):
+    legacy_paths = (
+        tmp_path / "public-knowledge" / "knowledge.db",
+        tmp_path / "moegirl-knowledge" / "knowledge.db",
+        tmp_path / "corpora" / "knowledge.db",
     )
-    chunk = corpus_store.pending_embedding_chunks(
-        limit=1,
-        model_id="local-text-retrieval-v1-256d-int8-mlen1024",
-        embedding_policy="prebuilt_only",
-    )[0]
-    corpus_store.store_chunk_embeddings_strict(
-        (
-            {
-                "chunk_id": chunk["chunk_id"],
-                "content_hash": chunk["content_hash"],
-                "model_id": "local-text-retrieval-v1-256d-int8-mlen1024",
-                "dimensions": 256,
-                "embedding": b"\x00\x3c" * 256,
-            },
-        )
-    )
-    for database, pack_id, source_tag, material_type in (
-        (meme_database, "legacy-meme", meme_entry.source_tag, "knowledge"),
-        (corpora_database, "legacy-corpus", corpus_entry.source_tag, "corpus"),
-    ):
-        database.with_name("packs.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "packs": {
-                        pack_id: {
-                            "collection_id": "meme"
-                            if material_type == "knowledge"
-                            else "corpora",
-                            "source_tag": source_tag,
-                            "declared_material_type": material_type,
-                            "effective_material_type": material_type,
-                            "auto_context": material_type == "knowledge",
-                            "local_embedding_enabled": material_type == "knowledge",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-    set_entry_disabled(
-        get_catalog_override_path(corpora_database),
-        source_tag=corpus_entry.source_tag,
-        title=corpus_entry.title,
-        disabled=True,
-    )
-
-    service = open_knowledge(tmp_path)
-    migrated_store = KnowledgeStore(service.database_path())
-
-    assert {entry.title for entry in migrated_store.list_active_entries()} == {
-        "Legacy meme",
-        "Legacy corpus",
-    }
-    assert migrated_store.chunk_status()["chunks_ready"] == 1
-    assert meme_database.is_file()
-    assert corpora_database.is_file()
-    packs = {pack["pack_id"]: pack for pack in service.list_packs()}
-    assert set(packs) == {"legacy-meme", "legacy-corpus"}
-    assert packs["legacy-corpus"]["effective_material_type"] == "corpus"
-    assert packs["legacy-corpus"]["auto_context"] is True
-    assert "collection_id" not in packs["legacy-corpus"]
-    assert (
-        corpus_entry.source_tag,
-        corpus_entry.title,
-    ) in load_disabled_entries(get_catalog_override_path(service.database_path()))
-
-
-def test_split_layout_conflict_does_not_publish_partial_database(tmp_path):
-    meme_database = tmp_path / "moegirl-knowledge" / "knowledge.db"
-    corpora_database = tmp_path / "corpora" / "knowledge.db"
-    KnowledgeStore(meme_database).upsert(_entry("Collision", "source:community.same"))
-    KnowledgeStore(corpora_database).upsert(
-        KnowledgeEntry(
-            title="Collision",
-            terms={"alias": (), "recognition": ()},
-            tags=("source:community.same",),
-            summary="Different",
-            content="Different content",
-        )
-    )
-
-    with pytest.raises(ValueError, match="conflicting source/title"):
-        open_knowledge(tmp_path)
-
-    assert not (tmp_path / "knowledge.db").exists()
-
-
-def test_split_layout_discards_corrupt_vectors_without_losing_entries(tmp_path):
-    legacy_database = tmp_path / "corpora" / "knowledge.db"
-    legacy_store = KnowledgeStore(legacy_database)
-    entry = _entry("Recoverable corpus", "source:corpora")
-    legacy_store.replace_source(entry.source_tag, (entry,))
-    with legacy_store._connection(writable=True) as connection:
-        connection.execute(
-            "UPDATE knowledge_chunks SET embedding_status='ready', "
-            "embedding_model_id='legacy-model', embedding_dimensions=256, embedding=?",
-            (b"invalid",),
-        )
-
-    service = open_knowledge(tmp_path)
-    migrated_store = KnowledgeStore(service.database_path())
-
-    assert migrated_store.get_entry(entry.source_tag, entry.title) is not None
-    assert migrated_store.chunk_status()["chunks_ready"] == 0
-    assert legacy_database.is_file()
-
-
-def test_previous_unified_layout_moves_to_flat_knowledge_root(tmp_path):
-    old_database = tmp_path / "public-knowledge" / "knowledge.db"
-    old_store = KnowledgeStore(old_database)
-    old_store.upsert(_entry("Previously unified", "source:chime"))
+    for path in legacy_paths:
+        path.parent.mkdir()
+        path.write_bytes(b"unpublished development data")
 
     service = open_knowledge(tmp_path)
 
     assert service.database_path() == tmp_path / "knowledge.db"
-    assert KnowledgeStore(service.database_path()).get_entry(
-        "source:chime",
-        "Previously unified",
-    ) is not None
-    assert old_database.is_file()
-
-
-def test_split_layout_keeps_later_same_database_title_conflict(tmp_path):
-    database = tmp_path / "moegirl-knowledge" / "knowledge.db"
-    store = KnowledgeStore(database)
-    earlier = _entry("Collision", "source:chime")
-    later = KnowledgeEntry(
-        title="Collision",
-        terms=earlier.terms,
-        tags=earlier.tags,
-        summary="Newer summary",
-        content="Newer content",
-    )
-    store.upsert(earlier)
-    with store._connection(writable=True) as connection:
-        connection.execute(
-            "INSERT INTO entries(title, terms, tags, summary, content) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                later.title,
-                json.dumps({key: list(value) for key, value in later.terms.items()}),
-                json.dumps(list(later.tags)),
-                later.summary,
-                later.content,
-            ),
-        )
-
-    service = open_knowledge(tmp_path)
-    migrated = KnowledgeStore(service.database_path()).get_entry(
-        later.source_tag,
-        later.title,
-    )
-
-    assert migrated is not None
-    assert migrated.summary == "Newer summary"
-    assert migrated.content == "Newer content"
+    assert not service.database_path().exists()
+    assert all(path.read_bytes() == b"unpublished development data" for path in legacy_paths)

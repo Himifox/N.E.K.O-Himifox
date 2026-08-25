@@ -10,11 +10,10 @@
 - `material_type=corpus`：回复、对话和写作参考；
 - `domain:meme`：可选主题标签，只影响回答风格，不创建独立数据库或检索接口。
 
-首次打开新版时，如果尚未创建统一数据库，应用会优先迁移旧的
-`public-knowledge/knowledge.db`；否则合并更早的 `moegirl-knowledge/knowledge.db`
-与 `corpora/knowledge.db`。条目、可复用的 ready 向量、包注册信息和禁用状态
-会一并迁移到 `knowledge/knowledge.db`；旧数据库不会删除，继续作为恢复副本。
-检测到同一来源和标题存在内容冲突时，迁移会停止且不会发布半成品数据库。
+正式版本只识别最终统一数据库路径 `knowledge/knowledge.db`。本 PR 开发期间出现过的
+`public-knowledge/knowledge.db`、`moegirl-knowledge/knowledge.db` 和
+`corpora/knowledge.db` 不属于已发布格式；运行时不会读取、改写、迁移或删除这些目录。
+开发者若运行过早期分支，应删除本地测试数据并从原知识包重新导入。
 
 ## Embedding 所有权与进程组合
 
