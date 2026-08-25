@@ -73,6 +73,7 @@ from .telemetry import (
 )
 from .storage import StorageMixin as _StorageMixin
 from .recording import RecordingMixin as _RecordingMixin
+from .recording import register_usage_observer, unregister_usage_observer
 from .reporting import (
     ReportingMixin as _ReportingMixin,
     _DO_NOT_TRACK,

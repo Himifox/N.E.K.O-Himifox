@@ -85,6 +85,7 @@ browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/po
 proactive chat → quality/relevance/summary-quality gate → aggregate evidence + sensitive gate → Core ranks up to 3
                → adapter takes rank 1 → existing Phase 1 (one OBC slot; timing only)
                → existing Phase 2 (one title/topic/summary/why-now projection)
+               → provider usage → TokenTracker observer → Core llm_usage ledger
                → committed text + delivered link → tracking-only acknowledgement
 ```
 
@@ -96,6 +97,8 @@ frontend failure, empty pool, timeout, and degraded Core do not acknowledge a
 candidate. N.E.K.O remains the only user-visible speaker and never calls
 `core.chat()` in this product path. The embedded Core starts with
 `surface_copy_mode="lazy"`; background expression copy is disabled.
+N.E.K.O also injects bounded maintenance: capacity 30, soft target 10, refill
+trigger below 4, one batch of at most 10, and a persisted cooldown/backoff.
 
 ## Agent event flow
 

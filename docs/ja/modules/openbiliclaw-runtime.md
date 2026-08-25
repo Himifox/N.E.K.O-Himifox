@@ -80,8 +80,16 @@ N.E.K.O proactive chat → privacy gate + Core が最大 3 件を順位付け
   だけを許可します。
 - confidence 0.75 未満、summary/topic 欠落、期限不正/期限切れ、sensitive policy 不一致は
   adapter でも fail closed しますが、再 scoring や summary 推測はしません。
-- usage は `proactive.phase1` / `proactive.phase2` に分け、`openbiliclaw` billed total と
-  OBC caller diagnostics を二重加算しません。
+- usage は `proactive.phase1` / `proactive.phase2` に分け、process-local observer が
+  provider-reported input/output/cache token を Core の
+  `embedded.proactive.phase1/phase2` caller に mirror します。同じ call の別 view なので
+  二重加算しません。
+- embedded host は valid pool capacity を 30、soft target を 10 に制限し、ready が 4 未満の
+  ときだけ single worker で最大 10 件を補充します。試行後は最低 15 分 cooldown、空 batch は
+  最大 6 時間まで指数 backoff します。OBC background input は local calendar day ごとに
+  total 100,000 tokens、Discovery 50,000、Recommendation 20,000、Soul 30,000 で fail closed
+  し、background output にも 20,000 tokens/day の hard ceiling を適用します。N.E.K.O
+  Phase 1/2 はこの budget に含めません。
 
 browser extension は引き続き platform behavior と browser session を収集する「手足」です。
 N.E.K.O plugin system と MCP は不要ですが、extension 自体の install／設定は必要です。

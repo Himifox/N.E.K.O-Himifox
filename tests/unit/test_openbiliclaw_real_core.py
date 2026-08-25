@@ -171,6 +171,18 @@ async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
         assert "legacy-secret-never-survives" not in config_path.read_text(encoding="utf-8")
         assert core.config.llm.default_chain == ["neko-conversation"]
         assert core.context.surface_copy_mode == "lazy"
+        policy = core.context.maintenance_policy
+        assert policy is not None
+        assert policy.pool_capacity == 30
+        assert policy.ready_soft_target == 10
+        assert policy.ready_stop_threshold == 4
+        assert policy.refill_batch_size == 10
+        assert policy.daily_input_token_budget == 100_000
+        assert policy.discovery_daily_input_budget == 50_000
+        assert policy.recommendation_daily_input_budget == 20_000
+        assert policy.soul_daily_input_budget == 30_000
+        assert policy.daily_output_token_budget == 20_000
+        assert policy.is_proactive_bounded is True
         assert core.context.runtime_controller.expression_copy_coordinator is None
 
         await core.reload(raw)
@@ -178,6 +190,7 @@ async def test_embedded_config_scrubs_legacy_key_and_reload_keeps_neko_route(
         assert core.config.llm.default_chain == ["neko-conversation"]
         assert set(core.config.llm.instances) == {"neko-conversation"}
         assert core.context.surface_copy_mode == "lazy"
+        assert core.context.maintenance_policy is policy
         assert core.context.runtime_controller.expression_copy_coordinator is None
     finally:
         await core.stop()
@@ -217,6 +230,7 @@ async def test_real_core_ranks_three_but_phase1_receives_only_first() -> None:
     from openbiliclaw import OpenBiliClawCore
     from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.recommendation.engine import Recommendation
+    from openbiliclaw.runtime.maintenance_policy import MaintenancePolicy
     from openbiliclaw.soul.profile import InterestTag, PreferenceLayer, SoulProfile
     from main_logic.proactive_chat.openbiliclaw_candidate import (
         format_phase1_candidate,
@@ -298,6 +312,8 @@ async def test_real_core_ranks_three_but_phase1_receives_only_first() -> None:
             soul_engine=_Soul(),
             recommendation_engine=_Engine(),
             database=database,
+            surface_copy_mode="lazy",
+            maintenance_policy=MaintenancePolicy.embedded_proactive(),
             degraded=False,
         )
     )

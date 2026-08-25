@@ -22,7 +22,7 @@ recommendation object directly.
 Normal chat and proactive chat still never call `core.chat()`. Existing public
 response links remain `title/url/source/mode`. The plugin system, MCP, browser
 extension endpoint, model ownership, and two-call Phase 1/Phase 2 architecture
-are unchanged. N.E.K.O pins OpenBiliClaw Core commit `3c180eae5` and starts it
+are unchanged. N.E.K.O pins OpenBiliClaw Core commit `af98eae5a` and starts it
 with lazy surface copy, so background `recommendation.write_expression` is zero.
 
 The pinned Core now uses `content-eval-v8`: summary reliability is scored in the

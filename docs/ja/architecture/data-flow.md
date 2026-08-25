@@ -85,6 +85,7 @@ browser extension → 127.0.0.1:8420 → embedded Core → profile/evaluation/po
 proactive chat → quality/relevance/summary-quality gate → aggregate evidence + sensitive gate → Core が最大 3 件を順位付け
                → adapter は rank 1 のみ → 既存 Phase 1（OBC 最大 1 slot）
                → 既存 Phase 2（選択 1 件の title/topic/summary/why-now）
+               → provider usage → TokenTracker observer → Core llm_usage ledger
                → text と link の commit 成功 → tracking reference だけで確認
 ```
 
@@ -94,6 +95,10 @@ Tracking、URL、free-form expression、full profile、raw behavior は Phase 1/
 generation/TTS/frontend failure、empty/degraded/timeout は candidate を確認しません。
 N.E.K.O が唯一の user-visible speaker で、この経路は `core.chat()` を呼びません。
 embedded Core は `surface_copy_mode="lazy"` で background copy owner を起動しません。
+N.E.K.O は capacity 30、soft target 10、ready 4 未満で最大 10 件を補充する bounded
+maintenance policy、background input 100k/day、output 20k/day と永続 cooldown/backoff
+を注入します。Phase 1/2 usage は audit のため shared ledger に mirror しますが background
+budget を消費しません。
 
 ## Agent イベントフロー
 

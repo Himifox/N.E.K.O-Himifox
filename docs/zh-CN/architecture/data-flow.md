@@ -89,6 +89,7 @@
 主动聊天 → 内容质量/相关性/摘要可靠度门禁 → 聚合兴趣 + 敏感门禁 → Core 最多排序 3 条
         → 适配层只取排名第 1 条 → 现有 Phase 1（最多 1 个 OBC 槽位）
         → 现有 Phase 2（只接收该条 4 字段投影）→ 唯一用户可见台词
+        → provider usage → TokenTracker observer → Core llm_usage 台账
         → 文本成功提交且响应包含该链接 → Tracking 引用确认展示
 ```
 
@@ -97,6 +98,9 @@ OpenBiliClaw 的后台画像与内容评估可以产生独立模型请求，但�
 `[PASS]`、抢占、发送失败、空池或降级都不会确认展示。完整 OpenBiliClaw 画像不会进入
 Phase 1/2 prompt；URL 和内部身份只由投递代码使用。内容向量库与 NEKO 角色记忆
 向量库也继续独立。内嵌 Core 固定使用 `surface_copy_mode="lazy"`，不会启动后台推荐文案 owner。
+NEKO 同时注入有界维护策略：容量 30、软目标 10、ready 低于 4 才补货、每批最多 10，
+每日后台输入 100k、输出 20k，并持久化冷却与指数退避状态。Phase 1/2 usage 写入共享
+台账用于审计，但不占后台预算。
 
 ## Agent 事件流
 

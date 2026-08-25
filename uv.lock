@@ -1650,7 +1650,7 @@ requires-dist = [
     { name = "numpy", specifier = "~=1.26.4" },
     { name = "onnxruntime" },
     { name = "openai" },
-    { name = "openbiliclaw", git = "https://github.com/Himifox/OpenBiliClaw.git?rev=3c180eae5" },
+    { name = "openbiliclaw", git = "https://github.com/Himifox/OpenBiliClaw.git?rev=af98eae5a" },
     { name = "orjson", specifier = ">=3.11.8" },
     { name = "ormsgpack", specifier = ">=1.4.0" },
     { name = "pillow" },
@@ -1790,7 +1790,7 @@ wheels = [
 [[package]]
 name = "openbiliclaw"
 version = "0.3.207"
-source = { git = "https://github.com/Himifox/OpenBiliClaw.git?rev=3c180eae5#3c180eae5dc863d958ce54d82519f2455a8c2bec" }
+source = { git = "https://github.com/Himifox/OpenBiliClaw.git?rev=af98eae5a#af98eae5a90a90c562205c3b2b93b9f77c66e124" }
 dependencies = [
     { name = "anthropic" },
     { name = "apscheduler" },

@@ -74,6 +74,8 @@ one OBC slot. Phase 2 sees only the selected title, topic,
 summary, and selection motive. URLs and delivery identities stay in code.
 Core's summary-quality score is diagnostic-only; it is neither exposed to
 N.E.K.O prompts nor combined with N.E.K.O memory.
+The daily background budget reads caller and token-count rows only. It does not
+persist prompts, candidate bodies, profile text, or model credentials.
 
 For sensitive health, finance, politics, or religion topics, Core may inspect
 only the last three active-session user messages in memory to determine whether

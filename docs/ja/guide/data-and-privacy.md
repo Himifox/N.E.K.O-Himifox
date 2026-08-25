@@ -74,6 +74,8 @@ watch-later record を N.E.K.O model に送りません。Core 内部では最�
 受けます。URL と delivery identity は code layer に残ります。
 Core の summary-quality component は内部 gate 専用で、N.E.K.O prompt に渡さず、
 N.E.K.O memory とも統合しません。
+daily background budget は caller と token count だけを読み、prompt、candidate body、
+profile text、model credential を追加保存しません。
 
 health、finance、politics、religion の gate は active session memory の直近 3 user
 message だけを確認できます。この handoff は message を永続化も model 送信もしません。

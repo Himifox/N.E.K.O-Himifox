@@ -5,6 +5,7 @@ context beyond the API reference. It is not the repository release changelog.
 
 ## Built-in integrations
 
+- [OpenBiliClaw budgeted pool maintenance](./openbiliclaw-budgeted-pool)
 - [OpenBiliClaw proactive candidate contract](./openbiliclaw-candidate-contract)
 
 ## Plugin SDK

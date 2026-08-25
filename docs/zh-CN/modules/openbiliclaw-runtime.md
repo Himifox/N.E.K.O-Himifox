@@ -74,8 +74,14 @@ NEKO 主动聊天 → 隐私门禁 + Core 最多预览排序 3 条（无 LLM、�
   放行中性信息更新。
 - 适配层二次拒绝低于 0.75、缺摘要/主题、过期时间损坏或已过期、敏感策略不一致的
   候选，但不重新评分或猜摘要；内容是否值得推荐仍完全由 OBC 决定。
-- Token 账本把两个阶段分别记为 `proactive.phase1` / `proactive.phase2`；
-  `openbiliclaw` 是 OBC 模型调用的实际计费总量，OBC caller 细分只诊断、不重复相加。
+- NEKO Token 账本把两个阶段分别记为 `proactive.phase1` / `proactive.phase2`；进程内
+  observer 会把每次成功调用的 provider 实际输入、输出和缓存 Token 同步写入 Core 的
+  `embedded.proactive.phase1/phase2` caller。两边是同一调用的不同报表视图，不得相加。
+- 内建宿主把有效池容量限制为 30、软目标设为 10；只有 ready 数量低于 4 才启动
+  单 worker、最多 10 条的一批补货。每次尝试后至少冷却 15 分钟，空批次指数退避，
+  最长 6 小时。OBC 后台输入按本地自然日失败关闭：总计 100,000 Tokens，其中
+  Discovery 50,000、Recommendation 20,000、Soul 30,000；另有每日 20,000 输出 Token
+  硬上限。两项后台预算均不包含 NEKO Phase 1/2。
 
 浏览器扩展仍是 OpenBiliClaw 采集平台行为和浏览器会话的“手脚”。NEKO 插件系统与
 MCP 无需开启；但扩展本身仍需安装和配置。NEKO 关闭期间扩展持久缓存行为事件，

@@ -339,6 +339,7 @@ def _load_openbiliclaw_backend(data_root: Path, port: int) -> tuple[Any, Any]:
     from openbiliclaw import OpenBiliClawCore
     from openbiliclaw.api.app import create_app
     from openbiliclaw.config import load_config, save_config
+    from openbiliclaw.runtime.maintenance_policy import MaintenancePolicy
 
     data_root.mkdir(parents=True, exist_ok=True)
     data_dir = data_root / "data"
@@ -365,6 +366,7 @@ def _load_openbiliclaw_backend(data_root: Path, port: int) -> tuple[Any, Any]:
         },
         host_config_transform=_apply_neko_model_config,
         surface_copy_mode="lazy",
+        maintenance_policy=MaintenancePolicy.embedded_proactive(),
         allow_degraded=True,
     )
     return core, create_app(core=core)
@@ -407,6 +409,9 @@ class NekoOpenBiliClawRuntime:
         self._core: Any | None = None
         self._server: Any | None = None
         self._server_task: asyncio.Task[None] | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._usage_mirror_tasks: set[asyncio.Task[None]] = set()
+        self._usage_observer_registered = False
         self._status = self._new_status("stopped" if self.enabled else "disabled")
 
     def _new_status(self, state: str, **changes: object) -> OpenBiliClawStatus:
@@ -439,6 +444,7 @@ class NekoOpenBiliClawRuntime:
 
             self._status = self._new_status("starting")
             try:
+                self._event_loop = asyncio.get_running_loop()
                 self._core, bridge_app = await asyncio.to_thread(
                     self._backend_loader,
                     self.data_root,
@@ -471,6 +477,7 @@ class NekoOpenBiliClawRuntime:
                 bridge_running=True,
                 degraded=degraded,
             )
+            self._register_usage_observer()
             logger.info(
                 "OpenBiliClaw built-in bridge is ready at %s",
                 self._status.endpoint,
@@ -495,6 +502,8 @@ class NekoOpenBiliClawRuntime:
         await asyncio.wait_for(_poll(), timeout=_STARTUP_TIMEOUT_SECONDS)
 
     async def _cleanup_failed_start(self) -> None:
+        self._unregister_usage_observer()
+        await self._flush_usage_mirror_tasks()
         task = self._server_task
         server = self._server
         if server is not None:
@@ -516,6 +525,7 @@ class NekoOpenBiliClawRuntime:
         self._server_task = None
         self._server = None
         self._core = None
+        self._event_loop = None
 
     async def stop(self) -> None:
         """Stop the bridge and let its ASGI shutdown close the embedded Core."""
@@ -528,6 +538,8 @@ class NekoOpenBiliClawRuntime:
                 return
 
             self._status = replace(self._status, state="stopping", bridge_running=False)
+            self._unregister_usage_observer()
+            await self._flush_usage_mirror_tasks()
             if server is not None:
                 server.should_exit = True
             if task is not None and not task.done():
@@ -550,6 +562,7 @@ class NekoOpenBiliClawRuntime:
             self._server_task = None
             self._server = None
             self._core = None
+            self._event_loop = None
             self._status = self._new_status("stopped")
 
     async def get_profile(self) -> Any:
@@ -591,6 +604,85 @@ class NekoOpenBiliClawRuntime:
                 surface=surface,
             )
         )
+
+    def _register_usage_observer(self) -> None:
+        if self._usage_observer_registered:
+            return
+        from utils.token_tracker import register_usage_observer
+
+        register_usage_observer(self._observe_neko_usage)
+        self._usage_observer_registered = True
+
+    def _unregister_usage_observer(self) -> None:
+        if not self._usage_observer_registered:
+            return
+        from utils.token_tracker import unregister_usage_observer
+
+        unregister_usage_observer(self._observe_neko_usage)
+        self._usage_observer_registered = False
+
+    def _observe_neko_usage(self, record: dict[str, object]) -> None:
+        """Mirror proactive phase usage onto the Core event loop."""
+        call_type = str(record.get("type") or "")
+        if call_type not in {"proactive.phase1", "proactive.phase2"}:
+            return
+        if not bool(record.get("ok", True)):
+            return
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._schedule_usage_mirror, dict(record))
+
+    def _schedule_usage_mirror(self, record: dict[str, object]) -> None:
+        task = asyncio.create_task(
+            self._mirror_proactive_usage(record),
+            name="neko-openbiliclaw-usage-mirror",
+        )
+        self._usage_mirror_tasks.add(task)
+        task.add_done_callback(self._usage_mirror_tasks.discard)
+
+    async def _mirror_proactive_usage(self, record: dict[str, object]) -> None:
+        core = self._core
+        record_usage = getattr(core, "record_proactive_llm_usage", None)
+        if not callable(record_usage):
+            logger.warning("OpenBiliClaw Core cannot record proactive phase usage")
+            return
+        model = str(record.get("model") or "unknown")
+        try:
+            provider = await asyncio.to_thread(self._provider_type_for_model, model)
+            await record_usage(
+                phase=str(record.get("type") or "").rsplit(".", 1)[-1],
+                provider=provider,
+                model=model,
+                prompt_tokens=max(0, int(record.get("pt") or 0)),
+                completion_tokens=max(0, int(record.get("ct") or 0)),
+                cached_input_tokens=max(0, int(record.get("cch") or 0)),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to mirror N.E.K.O proactive usage into OpenBiliClaw",
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _provider_type_for_model(model: str) -> str:
+        from utils.config_manager import get_config_manager
+
+        manager = get_config_manager()
+        fallback = "unknown"
+        for route in ("conversation", "vision"):
+            config = dict(manager.get_model_api_config(route) or {})
+            provider = _openbiliclaw_provider_type(config.get("provider_type"))
+            if route == "conversation":
+                fallback = provider
+            if str(config.get("model") or "").strip() == model:
+                return provider
+        return fallback
+
+    async def _flush_usage_mirror_tasks(self) -> None:
+        tasks = tuple(self._usage_mirror_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def publish_behavior_event(self, event: dict[str, object]) -> None:
         await self._require_core().publish_event(event)

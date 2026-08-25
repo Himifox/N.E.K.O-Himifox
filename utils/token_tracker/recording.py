@@ -14,11 +14,41 @@
 # limitations under the License.
 """In-memory usage and application-lifecycle recording methods."""
 
+import threading
 import time
 from datetime import date, timedelta
+from typing import Callable
 
 from ._shared import _deep_copy_day, _merge_day_stats
 from .reporting import record_settings_state
+
+UsageObserver = Callable[[dict[str, object]], None]
+_usage_observers: set[UsageObserver] = set()
+_usage_observers_lock = threading.Lock()
+
+
+def register_usage_observer(observer: UsageObserver) -> None:
+    """Register one process-local, best-effort per-call usage observer."""
+    with _usage_observers_lock:
+        _usage_observers.add(observer)
+
+
+def unregister_usage_observer(observer: UsageObserver) -> None:
+    """Remove a previously registered usage observer."""
+    with _usage_observers_lock:
+        _usage_observers.discard(observer)
+
+
+def notify_usage_observers(record: dict[str, object]) -> None:
+    """Publish a copy without allowing observers to break token tracking."""
+    with _usage_observers_lock:
+        observers = tuple(_usage_observers)
+    for observer in observers:
+        try:
+            observer(dict(record))
+        except Exception:
+            continue
+
 
 class RecordingMixin:
     """In-memory usage and application-lifecycle recording methods."""
@@ -110,6 +140,8 @@ class RecordingMixin:
 
             self._delta_records.append(rec)
             self._dirty = True
+
+        notify_usage_observers(rec)
 
     def get_stats(self, days: int = 7) -> dict:
         """Return usage statistics for the last N days.

@@ -90,8 +90,17 @@ N.E.K.O proactive chat → privacy gate + Core preview up to 3 (no LLM/no consum
   malformed expiry, expired candidates, or a sensitive-policy mismatch. It
   never rescores or repairs a candidate; OBC remains responsible for quality.
 - N.E.K.O usage records Phase 1 and Phase 2 as `proactive.phase1` and
-  `proactive.phase2`. The outer `openbiliclaw` entry is the billed total for
-  OBC model calls; OBC caller rows are diagnostics and are not added again.
+  `proactive.phase2`. A process-local TokenTracker observer mirrors each
+  successful call's provider-reported input, output, and cached tokens into
+  Core as `embedded.proactive.phase1/phase2`. These are the same calls viewed
+  through two reports and must not be added together.
+- The embedded host caps valid inventory at 30, treats 10 as a soft target,
+  and schedules one refill batch of at most 10 only when ready inventory falls
+  below 4. A successful or empty attempt starts at a 15-minute cooldown; empty
+  attempts back off to at most 6 hours. Background OBC input is fail-closed at
+  100,000 tokens per local calendar day: Discovery 50,000, Recommendation
+  20,000, and Soul 30,000; background output has an additional 20,000-token
+  daily hard ceiling. These limits do not apply to N.E.K.O Phase 1/2.
 - The last three user messages may be read from active in-memory chat state only
   for Core's deterministic sensitive-topic gate. They are not persisted or
   sent to a model. Sensitive browsing inferences are rejected; an explicit

@@ -27,6 +27,7 @@ class _FakeCore:
     def __init__(self) -> None:
         self.stop_calls = 0
         self.events: list[dict[str, object]] = []
+        self.proactive_usage: list[dict[str, object]] = []
 
     async def stop(self) -> None:
         self.stop_calls += 1
@@ -39,6 +40,10 @@ class _FakeCore:
 
     async def publish_event(self, event: dict[str, object]) -> None:
         self.events.append(event)
+
+    async def record_proactive_llm_usage(self, **usage: object) -> int:
+        self.proactive_usage.append(usage)
+        return len(self.proactive_usage)
 
 
 class _FakeBridgeApp:
@@ -113,6 +118,44 @@ async def test_runtime_owns_one_core_and_bridge_lifecycle(tmp_path: Path) -> Non
     assert runtime.status.bridge_running is False
     assert runtime.core is None
     assert core.stop_calls == 1
+
+
+async def test_runtime_mirrors_neko_phase_usage_into_core_ledger(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime, core, _load_calls, _servers = _runtime(tmp_path)
+    await runtime.start()
+    monkeypatch.setattr(
+        runtime,
+        "_provider_type_for_model",
+        lambda model: "openai" if model == "gpt-test" else "unknown",
+    )
+
+    runtime._observe_neko_usage(
+        {
+            "model": "gpt-test",
+            "pt": 120,
+            "ct": 30,
+            "cch": 20,
+            "type": "proactive.phase2",
+            "ok": True,
+        }
+    )
+    await asyncio.sleep(0)
+    await asyncio.gather(*runtime._usage_mirror_tasks)
+
+    assert core.proactive_usage == [
+        {
+            "phase": "phase2",
+            "provider": "openai",
+            "model": "gpt-test",
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "cached_input_tokens": 20,
+        }
+    ]
+    await runtime.stop()
 
 
 async def test_disabled_runtime_never_loads_backend(tmp_path: Path) -> None:
