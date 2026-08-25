@@ -287,6 +287,27 @@ def test_invalid_job_timestamps_are_quarantined(tmp_path, field, value):
     assert service.get_status()["pack_job_registry_state"] == "invalid"
 
 
+@pytest.mark.parametrize("value", (True, 1.5))
+def test_invalid_identity_timestamp_cannot_supply_state_fallback(tmp_path, value):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    identity_path = job_dir / "identity.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity["created_at"] = value
+    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+    state_path = job_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("created_at")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_identity"
+    assert service.get_status()["pack_job_registry_state"] == "invalid"
+
+
 @pytest.mark.asyncio
 async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
     service = KnowledgeService.from_root(tmp_path)

@@ -110,10 +110,13 @@ def _validated_identity(job_dir: Path) -> _JsonReadResult:
     payload = result.payload
     job_id = str(payload.get("job_id") or "")
     pack_id = str(payload.get("pack_id") or "")
+    created_at = _normalized_job_timestamp(payload.get("created_at"))
+    if created_at is None:
+        return _JsonReadResult("invalid", {})
     try:
         counters = {
             key: int(payload.get(key))
-            for key in ("created_at", "entries_total", "chunks_total", "content_bytes")
+            for key in ("entries_total", "chunks_total", "content_bytes")
         }
     except (TypeError, ValueError):
         return _JsonReadResult("invalid", {})
@@ -127,7 +130,7 @@ def _validated_identity(job_dir: Path) -> _JsonReadResult:
         return _JsonReadResult("invalid", {})
     return _JsonReadResult(
         "valid",
-        {"job_id": job_id, "pack_id": pack_id, **counters},
+        {"job_id": job_id, "pack_id": pack_id, "created_at": created_at, **counters},
     )
 
 
