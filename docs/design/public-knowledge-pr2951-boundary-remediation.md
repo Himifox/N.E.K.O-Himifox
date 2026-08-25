@@ -1150,3 +1150,19 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 BE、BF 只有同时满足以下证据才允许关闭：Git 历史证明没有 tag、release 或正式远端分支包含旧布局；备份分支和本 PR 历史提交不构成发布兼容承诺；启动服务不再扫描或打开旧分库；新安装空目录和最终统一数据库均正常工作；无 identity 作业只能隔离和显式清理；篡改 state 容量计数不能影响容量准入。若第一项出现反证，立即停止 BE 的 runtime 删除方案，另立显式离线迁移设计。
 
 任何一条仅有文档方案、没有远端可见实现和通过证据时都不得关闭。第八轮实施结果应在完成后追加为提交矩阵，不用计划文本冒充已实施状态。
+
+## 第八轮实施结果
+
+| 单元 | 实现提交 | 落地结果 |
+| --- | --- | --- |
+| BE | `bcbabbf29` | 删除运行时旧布局迁移模块和启动调用；正式实现只识别统一数据库，旧开发目录保持未读取、未改写、未删除。 |
+| BF | `53ddbf478` | `identity.json` 成为 staged job 强制信任根；缺失或不一致作业隔离为 degraded/orphan；容量只信任 identity，state 重复计数仅作一致性校验。 |
+| BG | `15abf7d5f` | disabled override、entry key 和 rowid 映射统一使用标题规范化身份，pack replacement 的大小写、NFKC 与空白变化不再绕过禁用状态。 |
+| BH | `ab4b9073d` | 显式目标素材查询为 primary/fallback 分别分配 lexical、semantic 与 RRF 候选预算；query embedding 仍只生成一次。 |
+| BI | `ab4b9073d` | indexer 的轮后 fresh job enumeration 移入工作线程，保留同轮观察终态的语义且不阻塞事件循环。 |
+| BJ | `7fa478d9f` | terms 与 tags 共用 bounded UTF-8 累计校验；字符下界先拒绝明显超限输入，单次编码受 32 KiB 剩余预算约束。 |
+| BK | `b7c350c27` | 概览刷新使用共享 epoch 与 status/packs 分资源 latest gate；响应、缓存、错误与 loading 收尾全部要求票据仍属当前世代。 |
+
+验证证据：BE 相关回归 40 项通过；BF 作业测试 50 项及相邻回归 98 项通过；BG 相关回归 71 项通过；BH/BI 目标测试 41 项及相邻回归 91 项通过；BJ 回归 38 项通过；BK 的 `vue-tsc --build` 通过，请求门控与可控延迟响应测试 8 项通过。Python 改动均通过对应 Ruff 检查，BK 新增工具与测试通过 ESLint 和 Prettier 检查，未新增用户可见文案或 i18n key。上述实现提交均已推送到 `origin/codex/unify-public-knowledge`。
+
+BE 的删除决策以仓库历史核验为前提：共同基线不包含公共知识库实现，旧分库和迁移代码只存在于本 PR 的开发提交，没有 tag、release 或正式远端分支构成兼容承诺。若以后出现外部分发反证，应另行提供显式、离线、先备份的迁移工具，不恢复启动时自动探测和改写。
