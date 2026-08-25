@@ -103,6 +103,38 @@ async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
     assert manager._text_route_owners == {}
 
 
+def test_analyzer_route_owner_is_bound_to_one_user_turn():
+    from main_logic.cross_server import (
+        _pending_analyze_owner,
+        _session_end_analyze_owner,
+    )
+
+    pending = _pending_analyze_owner("req-user", "public_knowledge")
+
+    assert pending == {"turn_id": "req-user", "owner": "public_knowledge"}
+    assert _session_end_analyze_owner(
+        pending,
+        [{"role": "user", "content": "query"}],
+    ) == "public_knowledge"
+    assert _pending_analyze_owner("", "public_knowledge") is None
+    assert _pending_analyze_owner("req-next", None) is None
+
+
+def test_proactive_or_userless_session_end_cannot_inherit_route_owner():
+    from main_logic.cross_server import _session_end_analyze_owner
+
+    stale = {"turn_id": "req-old", "owner": "public_knowledge"}
+
+    assert _session_end_analyze_owner(
+        stale,
+        [{"role": "assistant", "content": "proactive"}],
+    ) is None
+    assert _session_end_analyze_owner(
+        None,
+        [{"role": "user", "content": "new"}],
+    ) is None
+
+
 # ---------------------------------------------------------------------------
 # 1. _patch_usage: explicit nulls must not raise and must be zero-filled
 # ---------------------------------------------------------------------------

@@ -437,6 +437,30 @@ def _select_pending_user_images_for_session_end(pending_user_images: list, reque
     return _select_pending_user_images_for_turn(pending_user_images, session_request_id)
 
 
+def _pending_analyze_owner(
+    request_id: object,
+    route_owner: object,
+) -> dict[str, str] | None:
+    """Bind a retained analyzer owner to one concrete user turn."""
+    owner = normalize_analyze_route_owner(route_owner)
+    turn_id = str(request_id or "").strip()
+    if not owner or not turn_id:
+        return None
+    return {"turn_id": turn_id, "owner": owner}
+
+
+def _session_end_analyze_owner(
+    pending: dict[str, str] | None,
+    recent: list[dict],
+) -> str | None:
+    """Reuse an owner only while its failed user turn is still pending."""
+    if not pending or not any(item.get("role") == "user" for item in recent):
+        return None
+    if not pending.get("turn_id"):
+        return None
+    return normalize_analyze_route_owner(pending.get("owner"))
+
+
 def _build_recent_analyze_messages(
     chat_history: list,
     pending_user_images: list,
@@ -898,7 +922,7 @@ async def run_sync_connector(
     current_turn_start_index = 0
     last_screen = None
     pending_user_images: list = []
-    pending_analyze_route_owner: str | None = None
+    pending_analyze_route_owner: dict[str, str] | None = None
     last_synced_index = 0  # 用于 turn end 时仅同步新增消息到 memory，避免 memory_browser 不更新
     avatar_interaction_memory_cache: dict[str, dict[str, int | str]] = {}
     memory_cache_health_state = {
@@ -1244,6 +1268,20 @@ async def run_sync_connector(
                                             consume_untagged=had_user_input_this_turn,
                                         )
                                     )
+                                    _turn_had_user_input = (
+                                        had_user_input_this_turn
+                                        or bool(selected_pending_user_images)
+                                    )
+                                    current_pending_owner = (
+                                        _pending_analyze_owner(
+                                            turn_request_id,
+                                            message.get("route_owner"),
+                                        )
+                                        if _turn_had_user_input
+                                        else None
+                                    )
+                                    # A new turn always invalidates an older owner.
+                                    pending_analyze_route_owner = None
                                     try:
                                         # 构造最近的消息摘要，并保留本轮最近的图片附件
                                         recent = _build_recent_analyze_messages(
@@ -1263,16 +1301,14 @@ async def run_sync_connector(
                                             f"agent_callback_turn={is_agent_callback_turn_end} "
                                             f"avatar_drop_turn={latest_user_is_avatar_drop}"
                                         )
-                                        _turn_had_user_input = (
-                                            had_user_input_this_turn
-                                            or bool(selected_pending_user_images)
+                                        # Every turn owns its routing decision.  A new user
+                                        # turn invalidates a failed predecessor; a genuinely
+                                        # proactive turn must never inherit a user's owner.
+                                        dispatch_route_owner = (
+                                            current_pending_owner["owner"]
+                                            if current_pending_owner
+                                            else None
                                         )
-                                        if _turn_had_user_input:
-                                            pending_analyze_route_owner = (
-                                                normalize_analyze_route_owner(
-                                                    message.get("route_owner")
-                                                )
-                                            )
                                         if recent and has_user and latest_user_is_avatar_drop:
                                             logger.info(f"[{lanlan_name}] analyze_request skipped (avatar_drop turn_end), messages={len(recent)}")
                                         elif recent and not is_agent_callback_turn_end:
@@ -1289,21 +1325,24 @@ async def run_sync_connector(
                                                 conversation_id=uuid.uuid4().hex,
                                                 had_user_input=_turn_had_user_input,
                                                 language=_current_analyze_language(),
-                                                route_owner=pending_analyze_route_owner,
+                                                route_owner=dispatch_route_owner,
                                             )
                                             if sent:
-                                                pending_analyze_route_owner = None
                                                 logger.debug(f"[{lanlan_name}] analyze_request dispatch success (turn_end), messages={len(recent)}")
                                             else:
+                                                pending_analyze_route_owner = current_pending_owner
                                                 logger.info(f"[{lanlan_name}] analyze_request dispatch failed (turn_end), messages={len(recent)}")
                                     except asyncio.TimeoutError:
+                                        pending_analyze_route_owner = current_pending_owner
                                         logger.debug(f"[{lanlan_name}] 发送到analyzer超时")
                                     except RuntimeError as e:
                                         if "shutdown" in str(e).lower() or "closed" in str(e).lower():
                                             logger.info(f"[{lanlan_name}] 进程正在关闭，跳过analyzer请求")
                                         else:
+                                            pending_analyze_route_owner = current_pending_owner
                                             logger.debug(f"[{lanlan_name}] 发送到analyzer失败: {e}")
                                     except Exception as e:
+                                        pending_analyze_route_owner = current_pending_owner
                                         logger.debug(f"[{lanlan_name}] 发送到analyzer失败: {e}")
                                     finally:
                                         pending_user_images = remaining_pending_user_images
@@ -1399,7 +1438,10 @@ async def run_sync_connector(
                                                 messages=recent,
                                                 conversation_id=uuid.uuid4().hex,
                                                 language=_current_analyze_language(),
-                                                route_owner=pending_analyze_route_owner,
+                                                route_owner=_session_end_analyze_owner(
+                                                    pending_analyze_route_owner,
+                                                    recent,
+                                                ),
                                                 # session_end is terminal — never treated as proactive
                                                 # (had_user_input defaults True), so it always takes the
                                                 # ordinary user-turn path.
