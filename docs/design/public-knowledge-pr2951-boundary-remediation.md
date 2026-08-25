@@ -769,3 +769,21 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 | `50495e40d` | AB、AC | mutation lock 增加可重入跨进程文件锁；spool 的 write/seek/read/close 全部离开事件循环 |
 
 本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 375 项测试通过；本轮所有改动文件 Ruff 检查通过。前端 `vue-tsc --build` 与 i18n 完整性检查通过，八种语言均为 732 个键。测试退出后的 telemetry 日志在受限沙盒中仍会报告既存的本机配置目录写入失败，但 pytest 返回码为 0，不影响上述结果。GitHub CI 结果仍以对应提交上的远端检查为准。
+
+## 第四轮审查正文补充
+
+重新检查 review body 后发现两条未生成独立 review thread 的 outside-diff 有效评论。它们不改变 U–AD 的总体方案，但补齐 AC 的所有权异常路径和 X 的前端终态一致性。
+
+### 修复单元 AE：spool 构造方在所有权移交前负责异常清理
+
+- `_spool_bounded_body()` 创建 spool 后、成功返回给调用方前，是临时文件的唯一所有者。`receive()`、异步 `write()` 或最终 `seek()` 抛出任何 `BaseException`（包括取消）时，它必须在线程中关闭 spool 后重新抛出原异常。
+- 正常、disconnect 和超限返回表示所有权已移交给 `__call__()`；仍由外层既有分支或 `finally` 关闭，避免双重关闭成为正确性前提。
+- close 自身失败不能覆盖原始接收、写入或取消异常。测试分别注入 receive 取消与 write 失败，并断言 close 已执行且原异常保持不变。
+
+### 修复单元 AF：管理界面与后端使用同一作业终态
+
+- 前端导入轮询将 `degraded` 与 `failed/cancelled` 一样从 pending 集合移除，显示已有的操作失败提示并触发概览刷新；不得继续等待十分钟后显示“仍在处理”。
+- 后端仍保留 degraded 作业证据，只有显式 discard 才删除；前端这里只停止自动轮询，不自动清理服务端状态。
+- 状态统计使用 `TERMINAL_STATES | {DEGRADED_STATE}` 作为“不再 pending”的单一表达，同时保留 degraded 与可自动裁剪 terminal 的生命周期差异。
+
+同一 review body 的三个维护性建议一并按最小范围处理：删除 Schema marker 校验中不可达的空字符串分支；用 helper 共享空 chunk status 字段；用 pack job 常量构造非 pending 状态集合。它们不单独改变外部契约，也不扩大本轮边界。
