@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮由 `43c138ce4`、`2a114dd23` 与 `5557d1760` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其 review-body 补充由 `43c138ce4`、`2a114dd23`、`5557d1760` 与 `4b75b24b4` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -846,6 +846,7 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 | `43c138ce4` | AG、AH、AM | 严格验证作业时间字段；空状态补齐本地向量策略字段；degraded 不再占用 pending gate |
 | `2a114dd23` | AI、AL、AJ | semantic 在 entry 去重后截断；词法精确匹配保留标点；以唯一生产构造链证明混合脚本评论不成立 |
 | `5557d1760` | AK | Bridge、管理界面和维护 CLI 统一暴露既有严格 discard；网页提供确认、反馈和八语言文案 |
+| `4b75b24b4` | AN | identity 的创建时间在可信返回前按 state 同一规则规范化，拒绝布尔值与浮点 fallback |
 
 本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 414 项测试通过；本轮 Python 改动 Ruff 检查通过。前端 `vue-tsc --build`、API Vitest（8 项）和 i18n 完整性检查通过，八种语言均为 736 个键。
 
@@ -862,3 +863,39 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 - 保留对合法旧 identity 数字字符串的兼容，不改变 job/pack identity、容量计数或显式 discard 边界。
 
 验收：state 缺少 `created_at` 且 identity 分别为 `true`、`1.5` 时，作业均进入 degraded，列表与 status 不抛异常；合法整数 identity 的恢复行为不回归。
+
+## 第五轮后续线程：候选召回、作业身份与有界读取
+
+提交 `4b75b24b4` 后重新收集全部未解决线程，又出现 4 条可构造的有效边界。它们不改变前述容量和失败语义，只补齐候选生成、legacy 作业认证、管理查询线程边界和内存任务保留上限。
+
+### 修复单元 AO：标点精确项必须在通用候选截断前召回
+
+- KnowledgeStore 增加按原始标题或 alias 精确查询的参数化入口，保留标点并支持 SQLite ASCII 不区分大小写；来源过滤与通用 FTS/LIKE 使用同一约束。
+- KnowledgeRetriever 先合并精确候选，再补充各自有上限的 FTS/LIKE 候选；最终仍由 `_folded_exact_surface()` 做 NFKC、casefold 和空白规范化判分。精确查询不替代通用召回，也不扩大最终返回 limit。
+- 精确候选自身仍使用现有 `candidate_limit`。同一 surface 有大量重复项时任取其中稳定前缀不影响“查询项被较宽 compact token 挤掉”的边界；disabled 余量继续计入上限。
+
+验收：构造超过 candidate limit 的较早 `C` 候选，再插入 `C++`，查询 `C++` 且 limit=1 必须返回 `C++`；来源与 disabled 过滤不回归。
+
+### 修复单元 AP：缺失 identity 的 legacy state 必须自证目录身份
+
+- 保留当前对本 PR 早期 staged job 的兼容，但只有 state 自身完整满足 identity 契约时，缺失 `identity.json` 的作业才可继续：`job_id` 必须等于目录名且无路径语义，`pack_id` 合法，创建时间与容量计数均可验证。
+- 抽取单一 identity payload 校验器，磁盘 identity 与 legacy state 共用；不得出现“有 identity 严格、无 identity 反而直接信任”的分叉。
+- legacy state 认证失败后进入 `invalid_job_identity` degraded/orphan，不参与调度、不解析它声明的其他目录；仍可通过严格 discard 恢复。
+
+验收：合法无 identity 的早期作业仍可激活；缺失 identity 且 state 的 job_id 指向其他目录或非法路径时只隔离当前目录，不能处理目标目录。
+
+### 修复单元 AQ：管理目录的来源元数据一次读取且离开事件循环
+
+- source registry 提供批量解析入口：一次读取并解析 `packs.json`，合并内置来源、社区来源和未知来源 fallback，返回请求所需 tag 的完整映射。
+- entries 搜索页、普通目录页和单条详情在构造响应前，通过 `asyncio.to_thread` 批量加载来源映射；`_entry_payload()` 只做纯内存格式化，不再在事件循环中触发文件读取。
+- registry 不可读时保持既有展示降级：社区来源显示安全的 tag/Unknown，不在只读目录请求中覆盖或修复文件。
+
+验收：100 条、多个社区来源的页面只读取 registry 一次，读取发生在非请求线程；内置和未知来源展示不回归。
+
+### 修复单元 AR：Marketplace 订阅任务记录同时受 TTL 与数量上限约束
+
+- 与相邻安装任务注册表一致，内存 `_tasks` 最多保留 200 条；TTL 清理后仍超限时，按可信 `completed_at`、再按 `created_at` 删除最旧 terminal 记录。
+- `_task_workers` 中的活动任务和尚无 `completed_at` 的记录永不因数量裁剪。创建与 done callback 后都执行裁剪，使快速成功/失败序列不能等一小时才释放。
+- 裁剪 terminal 时不触碰正在 unsubscribe 的 package reservation；活动映射继续由 `_subscription_done()` 的所有权检查清理。
+
+验收：201 条 terminal 只保留最新 200 条；混合活动与 terminal 时只删除最旧 terminal；TTL、同包去重、4 worker 上限和任务查询行为不回归。
