@@ -209,7 +209,10 @@ def _snapshot_source(
     source_tag: str,
     metadata: object,
 ) -> _SourceSnapshot:
-    policy_counts = store.embedding_policy_counts(source_tag=source_tag)
+    policy_counts = store.embedding_policy_counts(
+        source_tag=source_tag,
+        strict=True,
+    )
     active_policies = tuple(
         policy for policy, count in policy_counts.items() if int(count) > 0
     )
@@ -226,10 +229,13 @@ def _snapshot_source(
     return _SourceSnapshot(
         entries=tuple(
             entry
-            for entry in store.list_active_entries()
+            for entry in store.list_active_entries_strict()
             if entry.source_tag == source_tag
         ),
-        ready_embeddings=store.ready_embedding_records(source_tag=source_tag),
+        ready_embeddings=store.ready_embedding_records(
+            source_tag=source_tag,
+            strict=True,
+        ),
         embedding_policy=embedding_policy,
     )
 
@@ -784,9 +790,18 @@ def _load_registry(
         or previous_schema_version < PACK_REGISTRY_SCHEMA_VERSION
     )
     for pack_id, metadata in tuple(payload["packs"].items()):
+        if not isinstance(pack_id, str) or not _PACK_ID_RE.fullmatch(pack_id):
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry key {pack_id!r} is invalid"
+            )
         if not isinstance(metadata, dict):
             raise KnowledgePackRegistryError(
                 f"knowledge pack registry entry {pack_id!r} is invalid"
+            )
+        expected_source_tag = f"source:community.{pack_id}"
+        if metadata.get("source_tag") != expected_source_tag:
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid source_tag"
             )
         declared = (
             str(metadata.get("declared_material_type"))

@@ -21,12 +21,15 @@ from knowledge.packs import (
     MAX_PACK_TAGS_PER_ENTRY,
     MAX_PACK_TERM_BYTES_PER_ENTRY,
     MAX_PACK_TERMS_PER_ROLE,
+    KnowledgePackRegistryError,
     install_pack,
     installed_source_embedding_policies,
     list_installed_packs,
+    pack_registry_state,
     pack_payload,
     validate_pack,
 )
+from knowledge.store import KnowledgeStoreError
 from knowledge.subscriptions import (
     canonical_pack_bytes,
     load_canonical_pack_artifact,
@@ -686,6 +689,103 @@ def test_invalid_pack_registry_degrades_health_instead_of_looking_empty(tmp_path
     assert status["pack_registry_state"] == "invalid"
     assert status["integrity_ok"] is False
     assert status["packs"] == 0
+
+
+@pytest.mark.parametrize(
+    ("registry_key", "source_tag"),
+    (
+        ("../outside", "source:community.community-fixture"),
+        ("other-pack", "source:community.community-fixture"),
+        ("community-fixture", "source:community.other-pack"),
+    ),
+)
+def test_registry_rejects_invalid_pack_source_identity_before_replacement(
+    tmp_path,
+    registry_key,
+    source_tag,
+):
+    service = open_knowledge(tmp_path)
+    previous = validate_pack(_payload(title="previous title"))
+    service.install_pack(previous)
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"].pop(previous.pack_id)
+    metadata["source_tag"] = source_tag
+    registry["packs"][registry_key] = metadata
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    tampered_registry = registry_path.read_bytes()
+
+    with pytest.raises(KnowledgePackRegistryError):
+        service.install_pack(validate_pack(_payload(title="replacement title")))
+
+    store = KnowledgeStore(database_path)
+    assert store.get_entry(previous.source_tag, "previous title") is not None
+    assert store.get_entry(previous.source_tag, "replacement title") is None
+    assert registry_path.read_bytes() == tampered_registry
+    assert pack_registry_state(database_path) == "invalid"
+
+
+def test_malformed_entry_aborts_replacement_before_empty_snapshot(tmp_path):
+    service = open_knowledge(tmp_path)
+    previous = validate_pack(_payload(title="previous title"))
+    service.install_pack(previous)
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    registry_before = registry_path.read_bytes()
+    store = KnowledgeStore(database_path)
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "UPDATE entries SET terms='not-json' WHERE title='previous title'"
+        )
+
+    with pytest.raises(json.JSONDecodeError):
+        service.install_pack(validate_pack(_payload(title="replacement title")))
+
+    with store._connection() as connection:
+        rows = connection.execute(
+            "SELECT title, terms FROM entries ORDER BY title"
+        ).fetchall()
+    assert [(row["title"], row["terms"]) for row in rows] == [
+        ("previous title", "not-json")
+    ]
+    assert registry_path.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "snapshot_method",
+    (
+        "embedding_policy_counts",
+        "list_active_entries_strict",
+        "ready_embedding_records",
+    ),
+)
+def test_transient_snapshot_read_aborts_before_source_mutation(
+    monkeypatch,
+    tmp_path,
+    snapshot_method,
+):
+    service = open_knowledge(tmp_path)
+    previous = validate_pack(_payload(title="previous title"))
+    service.install_pack(previous)
+    registry_path = service.database_path().with_name("packs.json")
+    registry_before = registry_path.read_bytes()
+
+    def fail_snapshot_read(_store, *_args, **kwargs):
+        if snapshot_method != "list_active_entries_strict":
+            assert kwargs.get("strict") is True
+        raise KnowledgeStoreError("transient snapshot read")
+
+    def reject_mutation(*_args, **_kwargs):
+        pytest.fail("source mutation started before the snapshot was complete")
+
+    monkeypatch.setattr(KnowledgeStore, snapshot_method, fail_snapshot_read)
+    monkeypatch.setattr(KnowledgeStore, "replace_source", reject_mutation)
+
+    with pytest.raises(KnowledgeStoreError, match="transient snapshot read"):
+        service.install_pack(validate_pack(_payload(title="replacement title")))
+
+    assert registry_path.read_bytes() == registry_before
 
 
 def test_community_pack_requires_explicit_local_embedding_consent(tmp_path):
