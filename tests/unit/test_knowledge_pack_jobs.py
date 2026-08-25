@@ -317,6 +317,50 @@ def test_discard_only_removes_degraded_jobs(tmp_path):
     assert not job_dir.exists()
 
 
+def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    jobs_root = tmp_path / ".staging"
+    jobs_root.mkdir()
+    for index in range(3):
+        job_id = f"terminal-{index}"
+        job_dir = jobs_root / job_id
+        job_dir.mkdir()
+        identity = {
+            "job_id": job_id,
+            "pack_id": f"pack-{index}",
+            "created_at": index + 1,
+            "entries_total": 1,
+            "chunks_total": 1,
+            "content_bytes": 1,
+        }
+        (job_dir / "identity.json").write_text(json.dumps(identity), encoding="utf-8")
+        (job_dir / "state.json").write_text(
+            json.dumps({**identity, "state": "cancelled", "updated_at": index + 1}),
+            encoding="utf-8",
+        )
+    degraded = jobs_root / "degraded-job"
+    degraded.mkdir()
+    (degraded / "state.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_DIRECTORIES", 2)
+    monkeypatch.setattr(pack_jobs, "TERMINAL_JOB_TTL_SECONDS", 10**12)
+
+    listed = pack_jobs.list_pack_jobs(tmp_path)
+
+    assert not (jobs_root / "terminal-0").exists()
+    assert (jobs_root / "terminal-1").is_dir()
+    assert (jobs_root / "terminal-2").is_dir()
+    assert degraded.is_dir()
+    assert {item["job_id"] for item in listed} == {
+        "terminal-1",
+        "terminal-2",
+        "degraded-job",
+    }
+
+
 def test_job_is_only_listed_after_atomic_publication(tmp_path, monkeypatch):
     import knowledge.pack_jobs as pack_jobs
 

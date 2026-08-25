@@ -2335,6 +2335,7 @@ async def test_takeover_response_complete_clears_interrupted_ordinary_turn():
     mgr._text_route_owners["req-old"] = "ordinary-owner"
     mgr._pending_turn_meta = {"source": "ordinary"}
     mgr._current_ai_turn_text = "ordinary text before takeover"
+    mgr.current_speech_id = "sid-old"
     mgr.tts_pending_chunks = [("sid-old", "queued text")]
     mgr._takeover_active = True
 
@@ -2350,23 +2351,36 @@ async def test_takeover_response_complete_clears_interrupted_ordinary_turn():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_takeover_cleanup_does_not_clear_request_started_during_tts_await():
+async def test_takeover_cleanup_does_not_clear_request_started_during_tts_await(
+    monkeypatch,
+):
     mgr = _make_manager()
     mgr._active_text_request_id = "req-old"
     mgr._text_route_owners["req-old"] = "ordinary-owner"
     mgr._pending_turn_meta = {"request_id": "req-old"}
     mgr._current_ai_turn_text = "old text"
+    mgr.current_speech_id = "sid-old"
+    mgr.tts_thread = _FakeAliveThread()
+    mgr.tts_pending_chunks = [("sid-old", "old pending")]
     mgr._takeover_active = True
 
-    async def clear_tts_and_start_new_request():
+    async def start_new_request_during_interrupt(_seconds):
         assert mgr._active_text_request_id is None
         assert "req-old" not in mgr._text_route_owners
         mgr._active_text_request_id = "req-new"
         mgr._text_route_owners["req-new"] = "new-owner"
         mgr._pending_turn_meta = {"request_id": "req-new"}
         mgr._current_ai_turn_text = "new text"
+        mgr.current_speech_id = "sid-new"
+        mgr.tts_pending_chunks.append(("sid-new", "new pending"))
+        mgr._tts_done_queued_for_turn = True
+        mgr._tts_done_pending_until_ready = True
 
-    mgr._clear_tts_pipeline = clear_tts_and_start_new_request
+    monkeypatch.setattr(
+        tts_runtime_module.asyncio,
+        "sleep",
+        start_new_request_during_interrupt,
+    )
 
     await core_module.LLMSessionManager.handle_response_complete(mgr)
 
@@ -2374,6 +2388,9 @@ async def test_takeover_cleanup_does_not_clear_request_started_during_tts_await(
     assert mgr._text_route_owners == {"req-new": "new-owner"}
     assert mgr._pending_turn_meta == {"request_id": "req-new"}
     assert mgr._current_ai_turn_text == "new text"
+    assert mgr.tts_pending_chunks == [("sid-new", "new pending")]
+    assert mgr._tts_done_queued_for_turn is True
+    assert mgr._tts_done_pending_until_ready is True
     assert mgr.sync_message_queue.messages == []
 
 

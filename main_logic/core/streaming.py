@@ -370,7 +370,9 @@ class StreamingMixin:
                         interrupted_speech_id = self.current_speech_id
 
                     self.audio_resampler.clear()
-                    await self._clear_tts_pipeline()
+                    await self._clear_tts_pipeline(
+                        expected_speech_id=interrupted_speech_id,
+                    )
                     await self.send_user_activity(interrupted_speech_id)
 
                     # 再为本次新回复生成新的speech_id（用于TTS和lipsync）

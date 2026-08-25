@@ -64,8 +64,11 @@ class TurnMixin:
             return
 
         # 重置音频重采样器状态（新轮次音频不应与上轮次连续）
+        interrupted_speech_id = self.current_speech_id
         self.audio_resampler.clear()
-        await self._clear_tts_pipeline()
+        await self._clear_tts_pipeline(
+            expected_speech_id=interrupted_speech_id,
+        )
         # _tts_done_queued_for_turn 的权威清零已经在 _clear_tts_pipeline 入口、
         # 与 __interrupt__ 入队同步完成（取消落在它内部的 sleep 上也不会留下
         # "worker 已中断、记账还说已排队"的残留）。这里保留一次重复清零，兜底那
@@ -426,12 +429,15 @@ class TurnMixin:
         if self._takeover_active:
             logger.info("[%s] session takeover active: dropping ordinary realtime response completion", self.lanlan_name)
             active_request_id = self._active_text_request_id
+            interrupted_speech_id = self.current_speech_id
             self._text_route_owners.pop(str(active_request_id or ""), None)
             self._pending_turn_meta = None
             self._current_ai_turn_text = ""
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
-            await self._clear_tts_pipeline()
+            await self._clear_tts_pipeline(
+                expected_speech_id=interrupted_speech_id,
+            )
             return
 
         active_request_id = self._active_text_request_id
@@ -617,7 +623,9 @@ class TurnMixin:
         # 已经开始 publish 之后，无门控地清会连 B 的前缀一起抹掉。
         if may_clear_shared_output():
             self._current_ai_turn_text = ''
-            await self._clear_tts_pipeline()
+            await self._clear_tts_pipeline(
+                expected_speech_id=self.current_speech_id,
+            )
 
         # A request-bound discard is only relevant while that request still owns
         # the shared response. Emitting a stale A notification after B becomes
@@ -1750,7 +1758,9 @@ class TurnMixin:
             # ``self.use_tts``, so always clear it on interrupt — the inner
             # liveness gate inside ``_clear_tts_pipeline`` makes this safe
             # when no worker is actually running.
-            await self._clear_tts_pipeline()
+            await self._clear_tts_pipeline(
+                expected_speech_id=interrupted_speech_id,
+            )
             # Realtime native voice: also tell the provider to stop generating
             # so further audio.delta / output_audio.delta won't keep streaming
             # past the interruption point.  Local takeover guards drop these

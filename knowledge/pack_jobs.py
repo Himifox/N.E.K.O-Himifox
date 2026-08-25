@@ -35,6 +35,8 @@ MAX_COMMUNITY_CHUNKS = 20_000
 MAX_COMMUNITY_CONTENT_BYTES = 64 * 1024 * 1024
 TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
 DEGRADED_STATE = "degraded"
+TERMINAL_JOB_TTL_SECONDS = 7 * 24 * 60 * 60
+MAX_TERMINAL_JOB_DIRECTORIES = 100
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
@@ -363,9 +365,16 @@ def list_pack_jobs(
     with mutation_lock(jobs_root):
         if not jobs_root.is_dir():
             return ()
-        items = [
-            _read_job(job_dir)
+        job_dirs = tuple(
+            job_dir
             for job_dir in jobs_root.iterdir()
+            if job_dir.is_dir() and not job_dir.is_symlink()
+        )
+        items = [_read_job(job_dir) for job_dir in job_dirs]
+        _prune_terminal_jobs(jobs_root, job_dirs, items)
+        items = [
+            item
+            for job_dir, item in zip(job_dirs, items, strict=True)
             if job_dir.is_dir()
         ]
     return tuple(
@@ -377,6 +386,38 @@ def list_pack_jobs(
             ),
         )
     )
+
+
+def _prune_terminal_jobs(
+    jobs_root: Path,
+    job_dirs: tuple[Path, ...],
+    items: list[dict[str, object]],
+) -> None:
+    now = int(time.time())
+    candidates: list[tuple[int, Path]] = []
+    for job_dir, item in zip(job_dirs, items, strict=True):
+        job_id = str(item.get("job_id") or "")
+        if (
+            item.get("state") not in TERMINAL_STATES
+            or not job_id
+            or job_id != job_dir.name
+            or Path(job_id).name != job_id
+        ):
+            continue
+        updated_at = int(item.get("updated_at") or item.get("created_at") or 0)
+        candidates.append((updated_at, job_dir))
+    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1].name))
+    for index, (updated_at, job_dir) in enumerate(candidates):
+        expired = updated_at > 0 and now - updated_at > TERMINAL_JOB_TTL_SECONDS
+        over_count = index >= MAX_TERMINAL_JOB_DIRECTORIES
+        if not expired and not over_count:
+            continue
+        if job_dir.is_symlink() or job_dir.parent.resolve() != jobs_root.resolve():
+            continue
+        try:
+            shutil.rmtree(job_dir)
+        except OSError:
+            logger.warning("failed to prune terminal knowledge job %s", job_dir.name)
 
 
 def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
