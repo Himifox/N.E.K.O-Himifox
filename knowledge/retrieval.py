@@ -129,6 +129,7 @@ class KnowledgeRetriever:
         allowed_source_tags: tuple[str, ...] | None = None,
         include_disabled: bool = False,
         deadline_monotonic: float | None = None,
+        candidate_limit_cap: int = LEXICAL_CANDIDATE_LIMIT,
     ) -> list[KnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
@@ -149,9 +150,13 @@ class KnowledgeRetriever:
             # Automatic retrieval fails closed; management/status endpoints
             # still expose the invalid override as a diagnosable condition.
             return []
+        candidate_limit_cap = max(
+            int(candidate_limit_cap),
+            _LEXICAL_CANDIDATE_MINIMUM,
+        )
         candidate_limit = min(
             max(_LEXICAL_CANDIDATE_MINIMUM, limit * _LEXICAL_CANDIDATE_MULTIPLIER),
-            LEXICAL_CANDIDATE_LIMIT,
+            candidate_limit_cap,
         )
         rows_by_id: dict[int, object] = {}
         while not _deadline_expired(deadline_monotonic):
@@ -190,11 +195,11 @@ class KnowledgeRetriever:
             if (
                 len(hits) >= limit
                 or not saturated
-                or candidate_limit >= LEXICAL_CANDIDATE_LIMIT
+                or candidate_limit >= candidate_limit_cap
                 or _deadline_expired(deadline_monotonic)
             ):
                 return hits[:limit]
-            candidate_limit = min(candidate_limit * 2, LEXICAL_CANDIDATE_LIMIT)
+            candidate_limit = min(candidate_limit * 2, candidate_limit_cap)
 
         return _rank_rows(rows_by_id.values(), query, query_text, disabled)[:limit]
 

@@ -1029,6 +1029,7 @@ class KnowledgeService:
             limit=_MANAGEMENT_SEARCH_RESULT_LIMIT,
             allowed_source_tags=(source_tag,) if source_tag else None,
             include_disabled=include_disabled,
+            candidate_limit_cap=_MANAGEMENT_SEARCH_RESULT_LIMIT,
         )
         return tuple(hits[offset : offset + limit + 1])
 

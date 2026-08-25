@@ -178,7 +178,7 @@ def test_knowledge_management_bridge_rejects_remote_market_origin(monkeypatch):
     assert captured == {}
 
 
-def test_knowledge_mutation_timeout_is_stable_504_without_retry(monkeypatch):
+def test_knowledge_timeouts_distinguish_mutation_from_read_without_retry(monkeypatch):
     from plugin.server.routes import market_bridge as module
 
     attempts = 0
@@ -210,7 +210,13 @@ def test_knowledge_mutation_timeout_is_stable_504_without_retry(monkeypatch):
 
     assert response.status_code == 504
     assert response.json() == {"detail": {"code": "knowledge_mutation_timeout"}}
-    assert attempts == 1
+    read_response = TestClient(app).get(
+        "/market/knowledge/status",
+        params={"token": "fixture"},
+    )
+    assert read_response.status_code == 504
+    assert read_response.json() == {"detail": {"code": "knowledge_request_timeout"}}
+    assert attempts == 2
 
 
 @pytest.mark.asyncio

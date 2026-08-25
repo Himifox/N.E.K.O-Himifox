@@ -162,11 +162,11 @@ def test_search_page_uses_one_stable_ranked_window(tmp_path, monkeypatch):
         KnowledgeHit(entry=_entry(f"Result {index}", "source:fixture"), score=1.0)
         for index in range(120)
     ]
-    requested_limits: list[int] = []
+    requested_windows: list[tuple[int, int]] = []
 
     class _Retriever:
-        def search(self, _query, *, limit, **_kwargs):
-            requested_limits.append(limit)
+        def search(self, _query, *, limit, candidate_limit_cap, **_kwargs):
+            requested_windows.append((limit, candidate_limit_cap))
             return ranked[:limit]
 
     monkeypatch.setattr(service, "_retriever", lambda: _Retriever())
@@ -174,7 +174,7 @@ def test_search_page_uses_one_stable_ranked_window(tmp_path, monkeypatch):
     first = service.search_page("query", limit=50, offset=0)
     second = service.search_page("query", limit=50, offset=50)
 
-    assert requested_limits == [10_101, 10_101]
+    assert requested_windows == [(10_101, 10_101), (10_101, 10_101)]
     assert [hit.entry.title for hit in first[-2:]] == ["Result 49", "Result 50"]
     assert [hit.entry.title for hit in second[:2]] == ["Result 50", "Result 51"]
 

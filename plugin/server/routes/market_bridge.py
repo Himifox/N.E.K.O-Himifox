@@ -247,7 +247,13 @@ async def public_knowledge_bridge(
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
-            detail={"code": "knowledge_mutation_timeout"},
+            detail={
+                "code": (
+                    "knowledge_request_timeout"
+                    if request.method == "GET"
+                    else "knowledge_mutation_timeout"
+                )
+            },
         ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Main Server unavailable") from exc
