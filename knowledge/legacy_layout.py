@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -19,8 +18,8 @@ from .models import (
     KnowledgeEntry,
     normalize_knowledge_title,
 )
-from .packs import PACK_REGISTRY_SCHEMA_VERSION
-from .store import KnowledgeStore
+from .packs import PACK_REGISTRY_SCHEMA_VERSION, _load_registry
+from .store import KnowledgeStore, KnowledgeStoreError
 
 
 _LEGACY_SPLIT_DIRECTORIES = ("moegirl-knowledge", "corpora")
@@ -140,7 +139,10 @@ def _collect_legacy_data(
     conflicting_vector_ids: set[str] = set()
     for database in databases:
         store = KnowledgeStore(database)
-        for entry in store.list_active_entries():
+        store.assert_compatible()
+        if not store.integrity_ok():
+            raise KnowledgeStoreError("legacy knowledge database is not intact")
+        for entry in store.list_active_entries_strict():
             normalized_title = normalize_knowledge_title(entry.title)
             identity = (entry.source_tag, normalized_title)
             previous = entries_by_source[entry.source_tag].get(normalized_title)
@@ -161,15 +163,18 @@ def _collect_legacy_data(
                 )
             entries_by_source[entry.source_tag][normalized_title] = entry
             entry_origins[identity] = database
-        for row in store.count_by_source_tags():
+        for row in store.count_by_source_tags(strict=True):
             source_tag = str(row.get("tag") or "")
             if not source_tag:
                 continue
-            counts = store.embedding_policy_counts(source_tag=source_tag)
+            counts = store.embedding_policy_counts(
+                source_tag=source_tag,
+                strict=True,
+            )
             policy_votes[source_tag].update(
                 policy for policy, count in counts.items() if int(count) > 0
             )
-        for record in store.ready_embedding_records():
+        for record in store.ready_embedding_records(strict=True):
             chunk_id = str(record.get("chunk_id") or "")
             if not chunk_id or chunk_id in conflicting_vector_ids:
                 continue
@@ -214,13 +219,11 @@ def _merge_registries(
         for row in store.count_by_source_tags()
     }
     for database in databases:
-        try:
-            payload = json.loads(database.with_name("packs.json").read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
+        registry_path = database.with_name("packs.json")
+        if not registry_path.exists():
             continue
-        packs = payload.get("packs") if isinstance(payload, dict) else None
-        if not isinstance(packs, dict):
-            continue
+        payload = _load_registry(registry_path, missing_ok=False)
+        packs = payload["packs"]
         for pack_id, raw in packs.items():
             if not isinstance(raw, dict):
                 continue

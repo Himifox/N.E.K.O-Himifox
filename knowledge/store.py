@@ -625,7 +625,11 @@ class KnowledgeStore:
         except KnowledgeStoreError:
             return 0
 
-    def count_by_source_tags(self) -> tuple[dict[str, object], ...]:
+    def count_by_source_tags(
+        self,
+        *,
+        strict: bool = False,
+    ) -> tuple[dict[str, object], ...]:
         """Return compact source counts without materializing entry rows."""
         try:
             with self._connection() as connection:
@@ -643,6 +647,8 @@ class KnowledgeStore:
                     for row in rows
                 )
         except KnowledgeStoreError:
+            if strict:
+                raise
             return ()
 
     def community_usage(self, *, source_tag: str = "") -> dict[str, int]:
@@ -881,7 +887,12 @@ class KnowledgeStore:
                 "chunks_revision": 0,
             }
 
-    def embedding_policy_counts(self, *, source_tag: str = "") -> dict[str, int]:
+    def embedding_policy_counts(
+        self,
+        *,
+        source_tag: str = "",
+        strict: bool = False,
+    ) -> dict[str, int]:
         """Count derived chunks by generation policy without loading their text."""
         parameters: tuple[object, ...] = ()
         source_clause = ""
@@ -905,6 +916,8 @@ class KnowledgeStore:
                 )
                 return counts
         except KnowledgeStoreError:
+            if strict:
+                raise
             return {policy: 0 for policy in EMBEDDING_POLICIES}
 
     def source_chunk_status(self, source_tag: str) -> dict[str, int]:
@@ -1168,6 +1181,7 @@ class KnowledgeStore:
         self,
         *,
         source_tag: str = "",
+        strict: bool = False,
     ) -> tuple[dict[str, object], ...]:
         """Return compact vectors for staging activation; never includes text."""
         try:
@@ -1204,6 +1218,8 @@ class KnowledgeStore:
                     for row in rows
                 )
         except KnowledgeStoreError:
+            if strict:
+                raise
             return ()
 
     def mark_chunk_embedding_failed(
@@ -1457,6 +1473,14 @@ class KnowledgeStore:
                 return tuple(_entry_from_row(row) for row in rows)
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
+
+    def list_active_entries_strict(self) -> tuple[KnowledgeEntry, ...]:
+        """Return every active entry, propagating migration-critical failures."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT rowid, * FROM entries ORDER BY rowid"
+            ).fetchall()
+            return tuple(_entry_from_row(row) for row in rows)
 
     def get_entry(self, source_tag: str, title: str) -> KnowledgeEntry | None:
         try:

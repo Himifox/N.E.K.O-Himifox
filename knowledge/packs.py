@@ -694,10 +694,18 @@ def _reject_unknown_keys(payload: dict, allowed: set[str], field: str) -> None:
         raise ValueError(f"{field} contains unsupported fields")
 
 
-def _load_registry(path: Path) -> dict[str, Any]:
+def _load_registry(
+    path: Path,
+    *,
+    missing_ok: bool = True,
+) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if not missing_ok:
+            raise KnowledgePackRegistryError(
+                "knowledge pack registry disappeared during migration"
+            ) from exc
         return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
     except (OSError, UnicodeError) as exc:
         raise KnowledgePackRegistryError(
