@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -19,6 +20,9 @@ from .store import KnowledgeStore, _entry_from_row
 
 _AUTO_MENTION_MIN_LENGTH = 3
 _AUTO_RECOGNITION_MIN_LENGTH = 2
+LEXICAL_CANDIDATE_LIMIT = 128
+_LEXICAL_CANDIDATE_MINIMUM = 12
+_LEXICAL_CANDIDATE_MULTIPLIER = 4
 _STALE_USAGE_TAG = "quality:stale-usage"
 
 
@@ -110,6 +114,7 @@ class KnowledgeMentionMatcher:
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
 
+
 class KnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
 
@@ -123,6 +128,7 @@ class KnowledgeRetriever:
         limit: int = 3,
         allowed_source_tags: tuple[str, ...] | None = None,
         include_disabled: bool = False,
+        deadline_monotonic: float | None = None,
     ) -> list[KnowledgeHit]:
         query_text = normalize_search_text(query)
         if not query_text or limit <= 0:
@@ -143,46 +149,54 @@ class KnowledgeRetriever:
             # Automatic retrieval fails closed; management/status endpoints
             # still expose the invalid override as a diagnosable condition.
             return []
-        candidate_limit = max(12, limit * 4) + len(disabled)
-        rows_by_id = {}
-        for row in self.store.query_exact_title_or_alias(
-            query,
-            limit=candidate_limit,
-            allowed_source_tags=allowed_source_tags,
-        ):
-            rows_by_id[row["rowid"]] = row
-        for row in self.store.query_fts(
-            make_fts_query(query),
-            limit=candidate_limit,
-            allowed_source_tags=allowed_source_tags,
-        ):
-            rows_by_id[row["rowid"]] = row
-        for row in self.store.query_like(
-            query_text,
-            limit=candidate_limit,
-            allowed_source_tags=allowed_source_tags,
-        ):
-            rows_by_id.setdefault(row["rowid"], row)
-
-        hits: list[KnowledgeHit] = []
-        for row in rows_by_id.values():
-            try:
-                entry = _entry_from_row(row)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                # A damaged row must not make public-knowledge lookup block a
-                # conversation.  Later management tooling can report it.
-                continue
-            if entry_key(entry) in disabled:
-                continue
-            score = _score(
-                entry,
-                query_text,
-                folded_exact_surface(query),
-                float(row["rank"]) if "rank" in row.keys() else 0.0,
+        candidate_limit = min(
+            max(_LEXICAL_CANDIDATE_MINIMUM, limit * _LEXICAL_CANDIDATE_MULTIPLIER),
+            LEXICAL_CANDIDATE_LIMIT,
+        )
+        rows_by_id: dict[int, object] = {}
+        while not _deadline_expired(deadline_monotonic):
+            rows = self.store.query_exact_title_or_alias(
+                query,
+                limit=candidate_limit,
+                allowed_source_tags=allowed_source_tags,
             )
-            hits.append(KnowledgeHit(entry=entry, score=score))
-        hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
-        return hits[:limit]
+            for row in rows:
+                rows_by_id.setdefault(row["rowid"], row)
+            saturated = len(rows) >= candidate_limit
+            if _deadline_expired(deadline_monotonic):
+                break
+
+            rows = self.store.query_fts(
+                make_fts_query(query),
+                limit=candidate_limit,
+                allowed_source_tags=allowed_source_tags,
+            )
+            for row in rows:
+                rows_by_id[row["rowid"]] = row
+            saturated = saturated or len(rows) >= candidate_limit
+            if _deadline_expired(deadline_monotonic):
+                break
+
+            rows = self.store.query_like(
+                query_text,
+                limit=candidate_limit,
+                allowed_source_tags=allowed_source_tags,
+            )
+            for row in rows:
+                rows_by_id.setdefault(row["rowid"], row)
+            saturated = saturated or len(rows) >= candidate_limit
+
+            hits = _rank_rows(rows_by_id.values(), query, query_text, disabled)
+            if (
+                len(hits) >= limit
+                or not saturated
+                or candidate_limit >= LEXICAL_CANDIDATE_LIMIT
+                or _deadline_expired(deadline_monotonic)
+            ):
+                return hits[:limit]
+            candidate_limit = min(candidate_limit * 2, LEXICAL_CANDIDATE_LIMIT)
+
+        return _rank_rows(rows_by_id.values(), query, query_text, disabled)[:limit]
 
     def find_mentions(
         self,
@@ -217,6 +231,38 @@ class KnowledgeRetriever:
         if strong:
             return "strong", strong
         return "none", []
+
+
+def _deadline_expired(deadline_monotonic: float | None) -> bool:
+    return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+
+
+def _rank_rows(
+    rows: Iterable[object],
+    query: str,
+    query_text: str,
+    disabled: frozenset[tuple[str, str]],
+) -> list[KnowledgeHit]:
+    hits: list[KnowledgeHit] = []
+    for row in rows:
+        try:
+            entry = _entry_from_row(row)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            # A damaged row must not make public-knowledge lookup block a
+            # conversation.  Later management tooling can report it.
+            continue
+        if entry_key(entry) in disabled:
+            continue
+        score = _score(
+            entry,
+            query_text,
+            folded_exact_surface(query),
+            float(row["rank"]) if "rank" in row.keys() else 0.0,
+        )
+        hits.append(KnowledgeHit(entry=entry, score=score))
+    hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
+    return hits
+
 
 @dataclass(slots=True)
 class _CachedMentionMatcher:
@@ -276,12 +322,12 @@ def _score(
         for value in entry.aliases
     }:
         return 950.0
+    if normalized_query in recognition_terms:
+        return 900.0
     if normalized_query in title:
         return 850.0
     if any(normalized_query in alias for alias in aliases):
         return 800.0
-    if normalized_query in recognition_terms:
-        return 900.0
     if any(normalized_query in value for value in recognition_terms):
         return 780.0
     if any(normalized_query in tag for tag in tags):

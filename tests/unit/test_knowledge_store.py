@@ -4,13 +4,16 @@ import sqlite3
 
 import pytest
 
+import knowledge.retrieval as retrieval_module
 from knowledge import (
     KnowledgeEntry,
     KnowledgeRetriever,
     KnowledgeStore,
 )
-from knowledge.catalog_overrides import get_catalog_override_path
+from knowledge.catalog_overrides import entry_key, get_catalog_override_path
+from knowledge.retrieval import LEXICAL_CANDIDATE_LIMIT, _score
 from knowledge.store import KnowledgeSchemaTooNewError, KnowledgeStoreError
+from tests.fake_clock import patch_module_clock
 
 
 def _entry(index: int, *, content: str | None = None) -> KnowledgeEntry:
@@ -127,6 +130,208 @@ def test_damaged_metadata_row_does_not_block_other_results(tmp_path):
 
     hits = KnowledgeRetriever(store).search("梗条目", limit=3)
     assert [hit.entry.title for hit in hits] == ["梗条目 2"]
+
+
+def _record_query_limits(monkeypatch, store, rows):
+    calls = {
+        "query_exact_title_or_alias": [],
+        "query_fts": [],
+        "query_like": [],
+    }
+    for method_name in calls:
+        method_calls = calls[method_name]
+
+        def query(*_args, limit, _calls=method_calls, **_kwargs):
+            _calls.append(limit)
+            return rows[:limit]
+
+        monkeypatch.setattr(store, method_name, query)
+    return calls
+
+
+def test_disabled_catalog_size_does_not_expand_candidate_queries(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(0))
+    rows = tuple(store.query_like("急了", limit=1))
+    calls = _record_query_limits(monkeypatch, store, rows)
+    monkeypatch.setattr(
+        "knowledge.retrieval.load_disabled_entries",
+        lambda _path: frozenset(
+            ("source:unused", f"disabled {index}") for index in range(20_000)
+        ),
+    )
+
+    hits = KnowledgeRetriever(store).search("急了", limit=1)
+
+    assert [hit.entry.title for hit in hits] == ["急了"]
+    assert set(tuple(limits) for limits in calls.values()) == {(12,)}
+
+
+def test_disabled_candidates_stop_at_fixed_lexical_cap(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    entries = tuple(
+        KnowledgeEntry(
+            title=f"Candidate {index:03d}",
+            terms={},
+            tags=("source:bounded",),
+            summary="bounded lexical fixture",
+            content="shared needle",
+        )
+        for index in range(LEXICAL_CANDIDATE_LIMIT + 1)
+    )
+    store.upsert_many(entries)
+    rows = tuple(store.query_like("needle", limit=len(entries)))
+    assert len(rows) == len(entries)
+    calls = _record_query_limits(monkeypatch, store, rows)
+    monkeypatch.setattr(
+        "knowledge.retrieval.load_disabled_entries",
+        lambda _path: frozenset(entry_key(entry) for entry in entries[:-1]),
+    )
+
+    assert KnowledgeRetriever(store).search("needle", limit=1) == []
+    assert all(max(limits) == LEXICAL_CANDIDATE_LIMIT for limits in calls.values())
+    assert all(limits == [12, 24, 48, 96, 128] for limits in calls.values())
+
+
+def test_expired_deadline_stops_lexical_candidate_expansion(tmp_path, monkeypatch):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    entries = tuple(
+        KnowledgeEntry(
+            title=f"Deadline {index:02d}",
+            terms={},
+            tags=("source:bounded",),
+            summary="deadline lexical fixture",
+            content="shared deadline needle",
+        )
+        for index in range(20)
+    )
+    store.upsert_many(entries)
+    rows = tuple(store.query_like("needle", limit=len(entries)))
+    calls = _record_query_limits(monkeypatch, store, rows)
+    monkeypatch.setattr(
+        "knowledge.retrieval.load_disabled_entries",
+        lambda _path: frozenset(entry_key(entry) for entry in entries),
+    )
+    clock = iter((0.0, 0.0, 0.0, 2.0))
+    patch_module_clock(monkeypatch, retrieval_module, monotonic=lambda: next(clock))
+
+    hits = KnowledgeRetriever(store).search(
+        "needle",
+        limit=1,
+        deadline_monotonic=1.0,
+    )
+
+    assert hits == []
+    assert all(limits == [12] for limits in calls.values())
+
+
+def test_recognition_exact_outranks_title_substring_at_limit_one(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    title_substring = KnowledgeEntry(
+        title="A needle guide",
+        terms={},
+        tags=("source:score",),
+        summary="title substring",
+        content="score fixture",
+    )
+    recognition_exact = KnowledgeEntry(
+        title="Z needle guide",
+        terms={"recognition": ("ＮＥＥＤＬＥ",)},
+        tags=("source:score",),
+        summary="recognition exact",
+        content="score fixture",
+    )
+    store.upsert_many((title_substring, recognition_exact))
+
+    hits = KnowledgeRetriever(store).search("needle", limit=1)
+
+    assert hits[0].entry.title == "Z needle guide"
+    assert hits[0].score == 900.0
+
+
+def test_lexical_score_precedence_is_stable():
+    def score(entry, query):
+        return _score(entry, query, query, 0.0)
+
+    cases = (
+        (
+            KnowledgeEntry(
+                title="needle",
+                terms={"alias": ("needle",), "recognition": ("needle",)},
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            1_000.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="unrelated",
+                terms={"alias": ("needle",), "recognition": ("needle",)},
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            950.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="needle title",
+                terms={"recognition": ("needle",)},
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            900.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="needle title",
+                terms={},
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            850.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="unrelated",
+                terms={
+                    "alias": ("needle alias",),
+                    "recognition": ("needle recognition",),
+                },
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            800.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="unrelated",
+                terms={"recognition": ("needle recognition",)},
+                tags=("source:score",),
+                summary="fixture",
+                content="fixture",
+            ),
+            780.0,
+        ),
+        (
+            KnowledgeEntry(
+                title="unrelated",
+                terms={},
+                tags=("source:score", "topic:needle"),
+                summary="fixture",
+                content="fixture",
+            ),
+            700.0,
+        ),
+    )
+
+    assert [score(entry, "needle") for entry, _expected in cases] == [
+        expected for _entry, expected in cases
+    ]
 
 
 def test_store_applies_request_scoped_busy_timeout(tmp_path):

@@ -247,6 +247,7 @@ def _search_lexical_candidates(
     *,
     limit: int,
     allowed_source_tags: tuple[str, ...] | None,
+    deadline_monotonic: float | None,
 ) -> list[KnowledgeHit]:
     """Merge deterministic BM25 candidates without generating extra embeddings."""
     merged: dict[tuple[str, str], tuple[int, KnowledgeHit]] = {}
@@ -256,6 +257,7 @@ def _search_lexical_candidates(
             query,
             limit=limit,
             allowed_source_tags=allowed_source_tags,
+            deadline_monotonic=deadline_monotonic,
         ):
             sequence += 1
             key = (hit.entry.source_tag, hit.entry.title)
@@ -277,6 +279,7 @@ def _search_lexical_candidate_pools(
     *,
     limit: int,
     source_pools: tuple[tuple[str, ...] | None, ...],
+    deadline_monotonic: float | None,
 ) -> tuple[list[KnowledgeHit], ...]:
     return tuple(
         _search_lexical_candidates(
@@ -284,6 +287,7 @@ def _search_lexical_candidate_pools(
             queries,
             limit=limit,
             allowed_source_tags=allowed_sources,
+            deadline_monotonic=deadline_monotonic,
         )
         for allowed_sources in source_pools
     )
@@ -796,6 +800,7 @@ class KnowledgeService:
                 normalized_lexical_queries,
                 limit=pool_candidate_limit,
                 source_pools=source_pools,
+                deadline_monotonic=deadline_monotonic,
             )
         )
         prepared_task = asyncio.create_task(
