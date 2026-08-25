@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第九轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第九轮均已实施，第十轮方案已归档、等待实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1325,3 +1325,159 @@ BL–BV 已按上述顺序拆为四个实现提交并推送到 `origin/codex/uni
 精确反例包括：`..`/分隔符/大写后缀 job ID 不得删除根目录；旧 attributed fixture 启动失败但字节和 mtime 不变；无 terms、单 role 与显式错误类型；NFKC/casefold disabled 素材永不被抽样；损坏 status envelope 和 mutation 失败不被放行；容量读取失败不公开任何 job；锁预算顺序；pre-install 取消的幂等与身份反例；多 pack 只进行一次 batch status；30 个更高 knowledge 候选不能挤掉 corpus；19,999 ready 只允许新增 1，20,000 ready 不调用 embedding。
 
 最终相邻回归：Python 3.11 下 282 项通过；前端 Knowledge API 12 项通过；`vue-tsc --build` 通过；8 个 locale 共 756 个 i18n key 无缺失或占位符不一致；相关 Python 文件 Ruff 通过。未新增用户可见文案或 i18n key。
+
+## 第十轮：作业根信任、代理拓扑与会话能力等价
+
+本轮以远端头提交 `6b14e479f` 为代码基线。通过 PR timeline 的 5 个分页读取到 119 个带解决状态的 review thread，其中 108 个已解决、11 个未解决；REST 同时返回 188 条行级 review comment。11 个未解决线程中，CodeRabbit 与 Codex 对“旧预安装取消覆盖后续成功订阅”给出了两条等价评论，因此本轮归并为 10 个独立修复单元。计数是 2026-08-25 的历史快照，后续复审必须重新分页，不能把本节数字当作当前值。
+
+| 线程 | 来源与级别 | 单元 | 结论 |
+| --- | --- | --- | --- |
+| `discussion_r3851340737` | CodeRabbit Major / Security | BW | `.staging` 根可以是指向外部目录的链接，成立 |
+| `discussion_r3851603140` | Codex P1 | BX | Main Server 代理后的合法 Origin 被按插件端口拒绝，成立 |
+| `discussion_r3851552914`、`discussion_r3851603151` | CodeRabbit Major + Codex P1 | BY | 旧取消任务可覆盖较新的成功订阅，同一根因 |
+| `discussion_r3851603164` | Codex P1 | BZ | voice transcript 无 lookup 能力，成立 |
+| `discussion_r3851153779` | Codex P2 | CA | 异步状态写与取消写未线性化，成立 |
+| `discussion_r3851603145` | Codex P2 | CB | 外层 30 秒代理早于内层 40 秒 mutation 截止，成立 |
+| `discussion_r3851603172` | Codex P2 | CC | 失败用户轮次的 route owner 可污染主动轮次，成立 |
+| `discussion_r3851603155` | Codex P2 | CD | 普通服务构造重复取得 legacy migration 写锁，成立 |
+| `discussion_r3851153804` | Codex P2 | CE | disabled 总量无界放大每次候选窗口，成立 |
+| `discussion_r3851153790` | Codex P2 | CF | recognition exact 被较弱 substring 分支抢先返回，成立 |
+
+### 第十轮新增不变量
+
+1. 任何会写入或递归删除 staged job 的路径，都必须先证明 `.staging` 是知识根的真实直接子目录，而不是符号链接、junction 或其他 reparse point。
+2. `cancelled`、`active`、`failed`、`degraded` 等终态只能在持有同一状态锁并读取最新快照后决定；迟到的异步写不得用旧快照复活终态。
+3. 同一 mutation 调用链的超时预算必须严格满足“内层提交边界 < 外层转发 < 浏览器等待”，且只在 knowledge mutation 路径扩大预算。
+4. 文本与语音不要求使用相同注入机制，但都必须拥有调用公共知识 lookup 的可达路径；普通文本仍由 host 确定性解析，Realtime 会话由 lookup-capable tool 提供能力。
+5. `KnowledgeService` 构造只绑定路径和内存状态，不做迁移、不等待文件锁、不打开 SQLite；迁移只能由显式生命周期入口触发。
+6. 自动检索的工作量只由请求预算和固定上限决定，不得与 disabled catalog 的总基数线性增长。
+
+### 修复单元 BW：staging 根目录必须是受信真实目录
+
+涉及：`knowledge/pack_jobs.py` 的 `.staging` 根可链接到外部目录，随后 cancel 写状态或 discard 递归删除外部 job 的 Major 安全评论。
+
+- 新增单一 `_validated_jobs_root()` 边界，在解析 job 子目录前检查 `.staging` 存在时是目录、不是符号链接，并在 Windows 上拒绝 directory junction / reparse point；不存在时只有明确的 staging 创建路径可以创建真实目录。
+- 解析后的 `.staging` 必须满足 `resolved_root.parent == resolved_knowledge_root`，job 必须满足 `resolved_job.parent == resolved_root`。只验证 job 自身不是链接不再足够。
+- cancel、discard、list、stage 和恢复入口共享该 helper；任何验证失败均 fail closed，不创建锁文件、不写 `state.json`、不清理 payload，也不尝试“修复”外部目标。
+- mutation lock 锚定在已验证的知识根内；不能先沿不可信 `.staging` 取锁，再进行链接检查。进入锁后重新验证一次根身份，关闭检查与删除之间的替换窗口。
+- 本轮不删除可疑链接。诊断只返回稳定的 registry/path-invalid 结果，由用户在应用外人工处理。
+
+验收：`.staging` 指向外部目录、job 子目录是链接、Windows junction/reparse、检查后替换根目录四类反例均不得改变外部文件；真实直接子目录中的合法 cancel/discard/stage 保持可用；路径失败不得留下 `.creating-*` 或新锁文件。
+
+### 修复单元 BX：本地 Origin 校验理解 Main Server 代理拓扑
+
+涉及：打包 UI 从 Main Server 发出的 `/market/*` 请求保留浏览器 Origin、删除原 Host 后，被插件服务按插件端口拒绝的 P1 评论。
+
+- `_require_local_bridge_token_access()` 继续要求 client、Host 和 Origin host 都是 loopback，继续拒绝远端 Market Origin、HTTPS、userinfo、路径、query 与 fragment；bridge token 校验保持不变。
+- Origin 端口允许集合固定为 `{request_port, _main_server_port()}`：前者覆盖 Vite/插件服务直连，后者覆盖打包 UI 经 Main Server 代理。不得放宽为任意 loopback 端口，也不得信任 `X-Forwarded-*` 决定安全边界。
+- `_main_server_port()` 继续动态读取 launcher 可能改写的实际端口；不能硬编码 48911。
+- Main Server 代理仍删除原 Host，避免把浏览器 Host 伪装成插件服务 Host；本修复只让插件服务识别已知的第二个本地入口。
+
+验收：插件端口直连 Origin 与 Main Server Origin 均通过；第三个 loopback 端口、远端域名、HTTPS、带凭据或路径的 Origin 均 403；`/market/pair-code` 和 knowledge POST 在打包代理链路可用，远端 Market 仍只能走 token exchange。
+
+### 修复单元 BY：幂等取消只参考最新相关订阅尝试
+
+涉及：同一 package 先预安装取消、再成功订阅、再 unsubscribe 时，旧 `preinstall_cancelled` 记录使调用方提前成功且不删除新包的两条重复评论。
+
+- `_cancel_active_subscription()` 在没有 active worker 时先取得该 `package_id` 的最新 retained task，而不是先筛选“任意 cancelled task”。只有最新 task 自身是 `preinstall_cancelled=True` 时才允许幂等快捷返回。
+- 最新 task 已 completed/installed、进入 installing/indexing，或已持有 `resolved_pack_id` 的情况下，旧取消记录完全不可见；流程必须继续解析 durable pack 并调用 `packs/remove`。
+- 快捷返回前仍校验 `requested_pack_id` / `resolved_pack_id` 与 claimed pack identity；身份不一致继续稳定失败，不能因幂等语义放宽 ownership。
+- task 新旧以现有插入顺序与 `created_at` 双重约束。若时间字段损坏或顺序无法证明，禁用快捷成功并走 durable lookup，失败方向必须是多做一次可信核实而不是漏删。
+- 成功取消、重新订阅、再取消的 Market report 只在实际最新状态完成后发送；不得报告远端 unsubscribed 而本地 pack 仍 active。
+
+验收：`cancel → resubscribe completed → unsubscribe` 必须调用一次 `packs/remove`；连续重复取消同一个未安装 attempt 仍幂等成功；旧取消与新 installing 竞态、错误 claimed pack、损坏时间字段、task TTL 清理均有负例。两条远端线程使用同一实现和测试证据关闭。
+
+### 修复单元 BZ：Realtime 会话获得公共知识 lookup 能力
+
+涉及：host resolver 只运行在文本输入分支，而内置 `query_public_knowledge` 工具固定 `lookup_enabled=False`，导致语音请求没有公共知识 lookup 可达路径的 P1 评论。
+
+- 保留文本模式现状：普通文本在响应前调用 `build_public_knowledge_turn_context()`，其工具只暴露 `sample`，避免一次请求既 host lookup 又重复发起 LLM lookup。
+- Realtime/voice session 同步工具时，把 `query_public_knowledge` 注册为 `lookup_enabled=True`，schema 同时暴露 `lookup` 与 `sample`；handler 继续复用既有显式 lookup 预算、来源标注、禁用条目和 fail-soft 语义。
+- 能力选择由最终 session 类型决定，而不是最初输入猜测。session 创建、text/voice rebuild 和语言切换后的 tool resync 必须原子替换 schema，不能让旧 session mode 的工具定义残留。
+- 工具说明明确要求显式“查询本地知识/资料库”类语音请求使用 lookup；普通闲聊仍不强制工具调用。自动随机素材继续由 sample 提供。
+- 不在 `handle_input_transcript()` 中直接运行 host resolver：Realtime provider 可能已经开始响应，迟到上下文会进入错误轮次。本轮用 session capability 达成语音可用性，不引入 response buffering 或新的 transcript gate。
+
+验收：Realtime session 的 tool schema 含 `lookup`/`sample`，Offline text 只含 `sample`；语音显式知识调用能返回带来源的结果；text↔voice 重建后 schema 立即切换；lookup 超时、BM25 降级和空结果不阻塞音频响应；文本 host lookup 不发生重复工具调用。
+
+### 修复单元 CA：异步 job state 写入与取消线性化
+
+涉及：`_write_state_async()` 在线程中使用调用前快照直接覆盖 `state.json`，没有取得 cancel 所用状态锁的 P2 评论。
+
+- 保留 `_write_state()` 作为“调用方已持锁”的底层原子写 helper；新增同步 `_update_state_locked()`，在 `mutation_lock(_state_path(job_dir))` 内重新读取最新 state、检查终态，再应用变更。
+- `_write_state_async()` 改为 `to_thread(_update_state_locked, ...)`。锁等待与 JSON I/O 全部留在工作线程，事件循环只协调结果。
+- 若锁内发现 `cancelled`、`active` 或 `degraded`，迟到的 validating/embedding/failed 写返回当前终态且不覆盖。是否允许 `failed` 后人工恢复继续由既有显式恢复入口决定，普通 worker 不复活。
+- exception handler 写 failed 前也必须在锁内比较最新状态；若已 cancelled，只执行与 cancelled 兼容的 payload 清理并返回 cancelled，不再写 failed。
+- 调用方不得依据写入前的 `state` 决定后续激活；必须使用 locked update 返回的新快照，并在进入 `_activate_job()` 后继续遵守其提交点规则。
+
+验收：在三处 `_write_state_async()` 前后分别注入 cancel，终态始终为 cancelled 且 payload 不被错误复活；failed 与 cancel 竞争、prebuilt rejection 与 cancel 竞争、锁等待不阻塞 event-loop tick；正常 hybrid/BM25 激活结果不变。
+
+### 修复单元 CB：mutation 超时预算覆盖完整代理链
+
+涉及：打包 UI 的调用链为 browser → Main Server `/market` → plugin bridge → Main Server knowledge API；外层 Main Server 固定 30 秒，比内层 POST 40 秒更早超时的 P2 评论。
+
+- 统一记录四层预算：跨进程 mutation lock 30 秒、plugin→Main knowledge POST 40 秒、Main→plugin 的 packaged knowledge mutation 代理 45 秒、浏览器 mutation 50 秒。每层至少给下一层 5 秒收尾余量。
+- `app/main_server/web_app.py` 只对非 GET 的 `/market/knowledge/*` 使用 45 秒；普通 Market、OAuth、静态与 GET 请求保持原预算，避免一次知识修复扩大全部插件请求的资源占用。
+- 前端 Knowledge API mutation gate 更新为 50 秒；GET 继续 15 秒。所有数值从共享 knowledge timeout 常量导入或由一个基础常量推导，禁止三处复制漂移。
+- 下游已返回稳定业务错误时原样转发。真正的外层 timeout 返回稳定 504/`knowledge_mutation_timeout`，不伪装为连接失败 502，也不自动重试可能已提交的 mutation。
+- 本单元不承诺任意失控 I/O 都能撤销；它保证正常锁预算内外层不会先放弃。超过最外层预算时，状态查询仍是唯一恢复事实来源。
+
+验收：持锁 29 秒后 mutation 成功且浏览器不先失败；内层 40 秒前返回的错误被完整转发；普通 `/market/*` 仍使用原预算；GET 仍为 15 秒；超时后不自动重试，并可通过后续 status 查询确认是否提交。
+
+### 修复单元 CC：route owner 只属于可证明的当前用户轮次
+
+涉及：用户轮次 analyzer publish 失败后 scalar `pending_analyze_route_owner` 保留，下一次 proactive turn 没有覆盖它，导致无关分析被标成 `public_knowledge` 的 P2 评论。
+
+- pending owner 从裸字符串改为至少包含 `request_id`/turn identity 与 owner 的结构；只有同一用户轮次的即时重试或其 session_end 收尾可以复用。
+- 每次 turn_end 都显式赋值 dispatch owner。存在用户输入时从当前 message 规范化；真正 proactive turn 一律传 `None`，并清除不属于当前 turn identity 的旧 pending owner。
+- publish 成功清除对应 pending；publish 失败只为同一 user turn 保留。新用户轮次、proactive turn、session rebuild 与 shutdown 都使旧 identity 失效。
+- session_end 只有在 recent user evidence 与 pending turn identity 一致时携带 owner；不能仅因 scalar 非空就继承。
+
+验收：public-knowledge user turn publish 失败后紧接 proactive turn，后者 owner 必为 `None`；同一 user turn 的 session_end 重试仍可携带 owner；新用户轮次、图片用户轮次、avatar-drop 跳过、callback turn 和 shutdown 均无跨轮污染。
+
+### 修复单元 CD：legacy policy migration 离开服务构造
+
+涉及：`KnowledgeService.__init__()` 每次看到数据库与 `packs.json` 都调用 migration，并取得 registry 跨进程写锁；聊天自动检索和管理 GET 因而可能等待 30 秒的 P2 评论。
+
+- 删除构造函数内的 migration import、文件探测与调用。构造函数只规范路径并初始化内存字段，可在事件循环外或内被廉价调用，但都不产生 I/O。
+- 在公共知识 runtime 启动/维护入口增加显式 `initialize_knowledge_runtime()` 阶段，并通过 `asyncio.to_thread()` 执行一次 legacy policy migration；脚本入口按需显式调用，不借普通查询隐式迁移。
+- 进程内按 resolved database path 记录“成功完成”的 one-shot；并发初始化共享同一 future/lock。失败不写成功哨兵，可在下一次显式初始化重试，但普通 `open_knowledge()` 永不代为重试。
+- 新安装 pack 已写完整 policy 元数据，不需要运行 legacy migration；运行期后来创建 registry 也不能触发每次查询迁移。
+- migration 失败进入现有 health/degraded 诊断，不中断 BM25 只读可用性；不得为了 fail-soft 把迁移重新塞回构造函数。
+
+验收：构造 `KnowledgeService` 不调用 `Path.is_file()`、SQLite 或 mutation lock；并发启动只迁移一次；失败后显式重试可成功；聊天 lookup 与管理 GET 在 registry 写锁被占用时不因 service construction 等待；legacy fixture 仍在启动阶段正确补 policy。
+
+### 修复单元 CE：disabled 排除的候选开销固定有界
+
+涉及：`candidate_limit = max(12, limit * 4) + len(disabled)`，当 disabled catalog 接近 20,000 时每次自动检索会物化大部分数据库的 P2 评论。
+
+- candidate limit 不再加 disabled 总量。初始窗口仍由请求 limit 推导；过滤后不足时允许按固定倍数增大窗口，但 lexical/FTS/LIKE 每路都受同一硬上限与已有 deadline 约束。
+- 第十轮硬上限先定为每路 128 个 row，作为 3 条自动上下文结果的防御预算；后续若有质量证据可改共享常量，但不能按 catalog 总量动态扩张。
+- 每轮扩大前检查 deadline；达到上限后允许少返回或空返回，不在后台继续扫描。自动上下文的失败方向是“少知识”，不是阻塞后续 turn。
+- dedupe、allowed source、material type 和 disabled `entry_key` 语义不变。管理搜索不复用自动检索的 128 上限，避免改变用户显式分页浏览。
+- 若未来改为 SQL 侧排除 rowid，必须处理 SQLite 参数上限与 override revision；本轮不为性能评论引入临时表或第二份 disabled 身份缓存。
+
+验收：20,000 个 disabled 条目时三类查询 limit 均不超过 128；大部分 disabled 不匹配时不增加工作；前 128 个候选全 disabled 时有界返回空；deadline 到期不继续 worker 扩窗；普通无 disabled 排序与 allowlist 回归保持。
+
+### 修复单元 CF：exact recognition 优先于 substring
+
+涉及：query 与 recognition term 完全相等，同时又是 title/alias 子串时，850/800 分支先于 recognition exact 900 返回的 P2 评论。
+
+- 评分顺序固定为：title exact 1000、alias exact 950、recognition exact 900、title substring 850、alias substring 800、recognition substring 780、tag substring 700、FTS fallback。
+- exact comparison 继续使用现有 Unicode folded/normalized surface，不新增第三套大小写或 NFKC 规则；只调整优先级，不改变分值。
+- 一个 entry 命中多个条件时取上述最高优先级；小 limit 截断必须发生在正确评分之后。
+
+验收：recognition exact 同时为 title/alias substring 时得 900；title/alias exact 仍分别保持 1000/950；recognition substring 仍低于 alias substring；大小写、NFKC、混合脚本和 limit=1 排名均有回归。
+
+## 第十轮实施顺序与关闭条件
+
+1. 首个提交只归档本节与设计索引，不提前回复或 resolve 任何线程。
+2. 第一实现提交处理 BW，单独验证外部目录绝不被写删；该安全边界不与普通重构混交。
+3. 第二实现提交处理 CA，统一异步 state 写锁与终态守恒；必须覆盖 cancel 竞争后再进入后续实现。
+4. 第三实现提交处理 BX 与 CB：同一代理拓扑内一起修正可信 Origin 和四层 timeout，但安全 allowlist 与超时常量分别测试。
+5. 第四实现提交处理 BY；两个重复线程共享一次实现提交和“取消→重订阅→再取消”反例。
+6. 第五实现提交处理 BZ 与 CC：分别验证 session tool capability 和 analyzer route-owner 生命周期，不把语音 lookup 与路由所有权耦合成一个 helper。
+7. 第六实现提交处理 CD；构造函数 I/O 清零与启动迁移 one-shot 必须同时完成，禁止留下临时双路径。
+8. 第七实现提交处理 CE 与 CF；候选工作上限和评分优先级各自有独立回归，不借性能修复改变既有分值。
+9. Python 回归只用项目 Python 3.11 的 `uv run pytest`，优先扩展现有 pack job、retrieval、service、market bridge、knowledge market、streaming/cross-server 测试文件；如确需新建 test 文件，实施前单独说明理由。同步运行相关 Ruff、前端 Knowledge API 测试、`vue-tsc --build` 与 `git diff --check`。
+
+关闭条件：每个线程对应的实现已推送到 PR 远端，精确反例与相邻负例通过，线程回复包含提交和测试证据，并成功 resolve。BY 的两条重复线程必须分别回复和关闭。最终核对必须重新遍历全部 timeline/GraphQL 分页，确认 unresolved 为 0，并单独检查 CodeRabbit review body 的 outside-diff 评论；119/108/11 仅是本轮开始时快照。第十轮实施完成后再追加提交矩阵和最终回归结果，并把文档头部及索引改为“第一至第十轮均已实施”。
