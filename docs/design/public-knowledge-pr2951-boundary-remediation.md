@@ -1310,3 +1310,18 @@ BE 的删除决策以仓库历史核验为前提：共同基线不包含公共�
 6. Python 必须使用 3.11 项目环境；运行相关 pack/job/store/service/indexer/router/maintenance 回归、Ruff、前端 API/request gate 测试、`vue-tsc --build`、i18n 校验与分页 conversation 核对。
 
 关闭一条线程必须同时满足：远端提交包含当前行对应实现；精确反例测试在当前头提交通过；相邻失败语义有负例；线程内回复说明提交和测试；GraphQL resolve 成功。最终清零检查必须遍历全部 117+ threads，并单独检查 review body 的 outside-diff 评论。CI 全绿或自动 review check 通过本身不满足关闭条件。
+
+## 第九轮实施结果
+
+BL–BV 已按上述顺序拆为四个实现提交并推送到 `origin/codex/unify-public-knowledge`：
+
+| 提交 | 修复单元 | 实施证据 |
+| --- | --- | --- |
+| `b663f327a` | BL、BM | 外部 job ID 只接受合法 pack ID 加 12 位小写十六进制后缀，discard 在删除前验证真实直接子目录；未发布 attributed schema 自动迁移、备份和 source tag 修复已删除，旧 schema 只读失败且源文件 hash、mtime、表结构和数据保持不变。 |
+| `2f7b2c1ba` | BQ、BV、BN | 缺失 term role 规范为空列表，显式错误类型继续拒绝；随机素材排除统一使用规范化 `entry_key`；只有字段完整的 degraded status envelope 可被 status API 消费，mutation 和非法 envelope 仍抛错。 |
+| `2b300a8da` | BT、BP、BR | 容量准入使用 strict usage 并在不可读时 fail closed；30 秒写锁、40 秒服务转发和 45 秒浏览器 mutation 预算形成严格层级，GET 保持 15 秒；subscribe 强制保存 pack identity，pre-install 取消幂等成功，错误身份和 installing 后路径继续 fail closed。 |
+| `f67093f4a` | BO、BS、BU | pack chunk 状态使用一个 JSON 参数和一次 grouped SQLite 查询；自动会话选择为 knowledge/corpus 分配独立 lexical、semantic 与 RRF 候选池且 query embedding 仍只准备一次；维护重建逐轮按全库 ready 数扣减 20,000 上限并显式返回 `capacity_limited`。 |
+
+精确反例包括：`..`/分隔符/大写后缀 job ID 不得删除根目录；旧 attributed fixture 启动失败但字节和 mtime 不变；无 terms、单 role 与显式错误类型；NFKC/casefold disabled 素材永不被抽样；损坏 status envelope 和 mutation 失败不被放行；容量读取失败不公开任何 job；锁预算顺序；pre-install 取消的幂等与身份反例；多 pack 只进行一次 batch status；30 个更高 knowledge 候选不能挤掉 corpus；19,999 ready 只允许新增 1，20,000 ready 不调用 embedding。
+
+最终相邻回归：Python 3.11 下 282 项通过；前端 Knowledge API 12 项通过；`vue-tsc --build` 通过；8 个 locale 共 756 个 i18n key 无缺失或占位符不一致；相关 Python 文件 Ruff 通过。未新增用户可见文案或 i18n key。
