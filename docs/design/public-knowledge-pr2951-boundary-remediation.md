@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十一轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十二轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1530,7 +1530,13 @@ BL–BV 已按上述顺序拆为四个实现提交并推送到 `origin/codex/uni
 
 CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack registry 与 quality evaluator 测试文件。全部实现推送后，对 5 个新增线程分别回复对应提交和精确反例；BW duplicate 使用第十轮既有提交证据关闭。随后重新分页确认整个 PR unresolved 为 0，再记录最终提交矩阵和回归结果。
 
-## 第十、十一轮实施证据
+## 第十二轮：管理搜索与只读超时契约
+
+第十一轮完成文档推送后，复审新增两个有效线程：管理端 `search_page()` 错误复用了自动检索的 128 候选硬上限，plugin→Main bridge 又把 GET timeout 标成 mutation timeout。两项由提交 `0e033249f` 一起修复：自动上下文继续使用 128 防御上限，管理搜索显式使用 10,101 候选上限以覆盖最大 offset；GET 返回 `knowledge_request_timeout`，只有 mutation 返回 `knowledge_mutation_timeout`，两者均不自动重试。
+
+验收：管理端稳定窗口测试同时断言 result limit 与 candidate cap 为 10,101；自动 disabled/deadline 回归仍证明每路不超过 128；GET 与 POST timeout 分别返回正确 504 code。相关 service/store/hybrid/bridge 精确集合 87 项通过，随后统一相关集合仍为 278 passed、1 skipped。
+
+## 第十至十二轮实施证据
 
 | 提交 | 单元 | 实施结果 |
 | --- | --- | --- |
@@ -1544,7 +1550,8 @@ CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack
 | `324ea2493` | CG | prepare 与 activate 均重算完整 preflight 并核对 pack/capacity identity |
 | `decb1d9a2` | CH、CI | registry key/source tag 强绑定；rollback snapshot 全部 strict 读取 |
 | `2d10e7d89` | CJ | live evaluator 的 response/completion 必须精确匹配目标 request ID |
+| `0e033249f` | CK、CL | 管理搜索使用独立深分页候选上限；GET 与 mutation timeout code 分离 |
 
 最终相关回归使用项目 Python 3.11 执行 `uv run pytest`，结果为 278 passed、1 skipped；skip 仅因本机 Windows 无目录 symlink 权限，另有不依赖权限的 junction/reparse 模拟反例通过。前端 Knowledge API 13 项通过，`vue-tsc --build` 与相关 Python Ruff 均通过，`git diff --check` 通过。未新增测试文件，只扩展已有回归文件。
 
-实现提交推送并逐条回复证据后，GraphQL 重新遍历 PR #2951 全部 reviewThreads 分页，最终 unresolved 为 0；核对时远端 head 为 `decb1d9a215bd7b25563c4ae1f4a972a83063131`。该计数仍是 2026-08-25 的完成快照；任何后续复审新增线程必须重新分页处理。
+实现提交推送并逐条回复证据后，GraphQL 重新遍历 PR #2951 全部 reviewThreads 分页，最终 unresolved 为 0；第十二轮代码完成核对时远端 head 为 `0e033249f37c85f5d64604a477edb5e4b8c74d51`。该计数仍是 2026-08-25 的完成快照；任何后续复审新增线程必须重新分页处理。
