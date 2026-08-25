@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Callable, Iterable, Iterator, Mapping, Sequence
 
 from knowledge.chunking import (
     CHUNKER_VERSION,
@@ -1521,6 +1521,42 @@ class KnowledgeStore:
         except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
+    def sample_entries_by_tag(
+        self,
+        tag: str,
+        *,
+        limit: int,
+        excluded: frozenset[tuple[str, str]] = frozenset(),
+        randrange: Callable[[int], int],
+    ) -> tuple[KnowledgeEntry, ...]:
+        """Reservoir-sample entries from the complete enabled exact-tag set."""
+        if not tag or limit <= 0:
+            return ()
+        sample: list[KnowledgeEntry] = []
+        eligible_count = 0
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT rowid, * FROM entries WHERE EXISTS "
+                    "(SELECT 1 FROM json_each(entries.tags) tag WHERE tag.value = ?) "
+                    "ORDER BY rowid",
+                    (tag,),
+                )
+                for row in rows:
+                    entry = _entry_from_row(row)
+                    if (entry.source_tag, entry.title) in excluded:
+                        continue
+                    eligible_count += 1
+                    if len(sample) < limit:
+                        sample.append(entry)
+                        continue
+                    replacement = randrange(eligible_count)
+                    if replacement < limit:
+                        sample[replacement] = entry
+        except (KnowledgeStoreError, TypeError, ValueError, json.JSONDecodeError):
+            return ()
+        return tuple(sample)
+
     def query_fts(
         self,
         fts_query: str,
@@ -1572,16 +1608,21 @@ class KnowledgeStore:
                 f"WHERE source_filter.value IN ({placeholders}))"
             )
             source_parameters = allowed_source_tags
-        pattern = f"%{normalized_query}%"
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped_query}%"
         try:
             with self._connection() as connection:
                 return connection.execute(
                     "SELECT rowid, * FROM entries WHERE ("
-                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? "
-                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ?)"
+                    "lower(replace(replace(title, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(terms, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(tags, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(content, ' ', ''), '-', '')) LIKE ? ESCAPE '\\' "
+                    "OR lower(replace(replace(summary, ' ', ''), '-', '')) LIKE ? ESCAPE '\\')"
                     f"{source_clause} LIMIT ?",
                     (
                         pattern,

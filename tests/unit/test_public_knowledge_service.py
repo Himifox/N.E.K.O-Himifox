@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 
 import pytest
 
@@ -77,6 +78,44 @@ def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_pat
     assert status["integrity_ok"] is True
     assert status["entries"] == 0
     assert not service.database_path().exists()
+
+
+def test_corrupt_database_status_is_structured_degraded(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.database_path().write_bytes(b"not a sqlite database")
+
+    status = service.get_status()
+
+    assert status["integrity_ok"] is False
+    assert status["schema_state"] == "invalid_or_unavailable"
+    assert status["error_code"] == "knowledge_database_unavailable"
+    assert status["entries"] == status["chunks_total"] == 0
+
+
+def test_sample_entries_draws_from_complete_enabled_tag_population(
+    tmp_path,
+    monkeypatch,
+):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    tag = "dataset:tarot-interpretations"
+    store.upsert_many(
+        tuple(
+            _entry(f"card {index:03d}", "source:corpora", tag)
+            for index in range(101)
+        )
+    )
+    monkeypatch.setattr(random, "randrange", lambda _population: 0)
+
+    selected = service.sample_entries(tag, limit=1)
+
+    assert selected[0].title == "card 100"
+    service.set_entry_disabled(
+        source_tag="source:corpora",
+        title="card 100",
+        disabled=True,
+    )
+    assert service.sample_entries(tag, limit=1)[0].title == "card 099"
 
 
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):

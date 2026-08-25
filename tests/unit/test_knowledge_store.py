@@ -74,6 +74,38 @@ def test_corrupt_database_degrades_reads_without_deleting_it(tmp_path):
     assert KnowledgeRetriever(store).search("急了") == []
 
 
+def test_like_fallback_treats_sql_wildcards_as_literals(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    titles = (
+        "literal_under_score",
+        "literal%percent",
+        r"literal\slash",
+        "ordinary text",
+    )
+    store.upsert_many(
+        tuple(
+            KnowledgeEntry(
+                title=title,
+                terms={},
+                tags=("source:moegirl",),
+                summary="literal query fixture",
+                content="literal query fixture",
+            )
+            for title in titles
+        )
+    )
+
+    assert [row["title"] for row in store.query_like("_", limit=10)] == [
+        "literal_under_score"
+    ]
+    assert [row["title"] for row in store.query_like("%", limit=10)] == [
+        "literal%percent"
+    ]
+    assert [row["title"] for row in store.query_like("\\", limit=10)] == [
+        r"literal\slash"
+    ]
+
+
 def test_invalid_catalog_override_fails_automatic_search_closed(tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(0))

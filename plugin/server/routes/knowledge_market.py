@@ -741,7 +741,7 @@ async def _wait_for_pack_job(
         state = str(job.get("state") or "")
         if state == "active":
             return job
-        if state in {"cancelled", "failed"}:
+        if state in {"cancelled", "failed", "degraded"}:
             raise _KnowledgeTaskError(
                 f"job_{state}",
                 "knowledge job did not complete",

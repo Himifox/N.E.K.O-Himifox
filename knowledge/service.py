@@ -22,7 +22,7 @@ from .retrieval import (
     KnowledgeRetriever,
 )
 from .source_registry import SOURCES, get_source
-from .store import KnowledgeSchemaTooNewError, KnowledgeStore
+from .store import KnowledgeSchemaTooNewError, KnowledgeStore, KnowledgeStoreError
 from .routing import (
     KnowledgeRoutingState,
     RoutingConfig,
@@ -888,13 +888,19 @@ class KnowledgeService:
         if sample_tag not in CORPORA_SAMPLE_TAGS:
             raise ValueError("sample tag is not enabled for public knowledge")
         limit = min(max(int(limit), 1), 3)
-        # Tags are already indexed by FTS. The largest bundled material group has
-        # fewer than 100 entries, so this remains bounded and avoids a full scan.
-        hits = self._retriever().search(sample_tag, limit=100)
-        candidates = [hit.entry for hit in hits if sample_tag in hit.entry.tags]
-        if len(candidates) <= limit:
-            return tuple(candidates)
-        return tuple(random.sample(candidates, limit))
+        database_path = self.database_path()
+        try:
+            disabled = load_disabled_entries(
+                get_catalog_override_path(database_path)
+            )
+        except CatalogOverrideError:
+            return ()
+        return self._store().sample_entries_by_tag(
+            sample_tag,
+            limit=limit,
+            excluded=disabled,
+            randrange=random.randrange,
+        )
 
     def match_turn(
         self,
@@ -1010,7 +1016,7 @@ class KnowledgeService:
         if store is not None:
             try:
                 store.assert_compatible()
-            except KnowledgeSchemaTooNewError as exc:
+            except (KnowledgeSchemaTooNewError, KnowledgeStoreError) as exc:
                 registry_state = pack_registry_state(database_path)
                 pack_jobs = self.list_pack_jobs()
                 job_registry_state = (
@@ -1018,7 +1024,8 @@ class KnowledgeService:
                     if any(job.get("state") == "degraded" for job in pack_jobs)
                     else ("ready" if pack_jobs else "missing")
                 )
-                return {
+                too_new = isinstance(exc, KnowledgeSchemaTooNewError)
+                degraded = {
                     "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
                     "entries": 0,
                     "integrity_ok": False,
@@ -1026,10 +1033,10 @@ class KnowledgeService:
                     "catalog_override_state": override_state,
                     "pack_registry_state": registry_state,
                     "pack_job_registry_state": job_registry_state,
-                    "schema_state": "too_new",
-                    "error_code": "knowledge_schema_too_new",
-                    "detected_schema_version": exc.detected_version,
-                    "supported_schema_version": exc.supported_version,
+                    "schema_state": "too_new" if too_new else "invalid_or_unavailable",
+                    "error_code": "knowledge_schema_too_new"
+                    if too_new
+                    else "knowledge_database_unavailable",
                     "sources": (),
                     "packs": 0,
                     "knowledge_packs": 0,
@@ -1040,7 +1047,8 @@ class KnowledgeService:
                     "embedding_service_state": "disabled",
                     "embedding_model_id": "",
                     "pack_jobs_pending": sum(
-                        job.get("state") not in {"active", "cancelled", "failed"}
+                        job.get("state")
+                        not in {"active", "cancelled", "failed", "degraded"}
                         for job in pack_jobs
                     ),
                     "vector_budget_chunks": MAX_READY_VECTOR_CHUNKS,
@@ -1057,6 +1065,12 @@ class KnowledgeService:
                     "indexed_percent": 0.0,
                     "chunks_revision": 0,
                 }
+                if too_new:
+                    degraded.update(
+                        detected_schema_version=exc.detected_version,
+                        supported_schema_version=exc.supported_version,
+                    )
+                return degraded
         chunk_status = (
             store.chunk_status()
             if store is not None
@@ -1119,7 +1133,7 @@ class KnowledgeService:
             == "corpus"
         )
         pending_pack_jobs = sum(
-            job.get("state") not in {"active", "cancelled", "failed"}
+            job.get("state") not in {"active", "cancelled", "failed", "degraded"}
             for job in pack_jobs
         )
         return {

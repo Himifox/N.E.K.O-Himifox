@@ -644,3 +644,21 @@ async def test_market_task_waits_for_staged_pack_activation(monkeypatch):
     assert task["stage"] == "indexing"
     assert task["progress"] == pytest.approx(0.895)
     assert result["state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_market_task_stops_polling_when_staged_job_is_degraded(monkeypatch):
+    task = {"stage": "installing", "progress": 0.75, "message": ""}
+
+    async def fake_main(_method, _path, **_kwargs):
+        return {
+            "ok": True,
+            "jobs": [{"job_id": "fixture-job", "state": "degraded"}],
+        }
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._wait_for_pack_job(task, job_id="fixture-job")
+
+    assert exc_info.value.code == "job_degraded"
