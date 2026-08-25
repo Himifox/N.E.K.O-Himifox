@@ -425,10 +425,13 @@ class TurnMixin:
         """Qwen completion callback: handles the Core API's response-complete event, including TTS and hot-swap logic"""
         if self._takeover_active:
             logger.info("[%s] session takeover active: dropping ordinary realtime response completion", self.lanlan_name)
-            await self._clear_tts_pipeline()
+            active_request_id = self._active_text_request_id
+            self._text_route_owners.pop(str(active_request_id or ""), None)
             self._pending_turn_meta = None
             self._current_ai_turn_text = ""
-            self._active_text_request_id = None
+            if self._active_text_request_id == active_request_id:
+                self._active_text_request_id = None
+            await self._clear_tts_pipeline()
             return
 
         active_request_id = self._active_text_request_id

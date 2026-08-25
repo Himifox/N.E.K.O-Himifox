@@ -12,7 +12,11 @@ from knowledge.catalog_overrides import (
     set_entry_disabled,
 )
 from knowledge.packs import validate_pack
-from knowledge.service import MaterialKnowledgeHit
+from knowledge.service import (
+    MaterialKnowledgeHit,
+    _is_direct_material_match,
+    _is_short_query_embedded_in_term,
+)
 from knowledge.models import KnowledgeHit
 
 
@@ -114,6 +118,44 @@ def test_builtin_knowledge_auto_injects_but_builtin_corpus_does_not(tmp_path):
 
     assert service.build_conversation_context("Exact knowledge appears").hit_count == 1
     assert service.build_conversation_context("Exact corpus appears").hit_count == 0
+
+
+def test_latin_direct_match_uses_latin_boundaries_but_allows_cjk_adjacency():
+    java = _entry("Java", "source:chime")
+
+    assert _is_direct_material_match("Java 开发", java)
+    assert _is_direct_material_match("Java开发", java)
+    assert _is_direct_material_match("学习Ｊａｖａ", java)
+    assert not _is_direct_material_match("JavaScript", java)
+    assert not _is_direct_material_match("myjava2", java)
+
+
+def test_latin_direct_match_preserves_meaningful_punctuation_and_short_symbols():
+    node = _entry("node.js", "source:chime")
+    cpp = _entry("C++", "source:chime")
+
+    assert _is_direct_material_match("学习 node.js。", node)
+    assert not _is_direct_material_match("学习 nodejs。", node)
+    assert _is_direct_material_match("C++", cpp)
+    assert not _is_direct_material_match("c", cpp)
+    assert not _is_direct_material_match("C++ 开发", cpp)
+
+
+def test_corpus_short_query_reuses_latin_boundaries_and_keeps_cjk_substrings():
+    javascript = _entry("JavaScript 入门", "source:corpora")
+    java_cjk = _entry("Java开发入门", "source:corpora")
+    chinese = _entry("现在全网都在刷你急了你急了的梗", "source:corpora")
+
+    assert not _is_short_query_embedded_in_term("java", javascript)
+    assert _is_short_query_embedded_in_term("java", java_cjk)
+    assert _is_short_query_embedded_in_term("你急了", chinese)
+
+
+def test_accented_latin_direct_match_uses_casefolded_boundaries():
+    cafe = _entry("Café", "source:chime")
+
+    assert _is_direct_material_match("CAFÉ教程", cafe)
+    assert not _is_direct_material_match("caféteria", cafe)
 
 
 def test_meme_domain_tag_changes_style_not_routing_permission(tmp_path):

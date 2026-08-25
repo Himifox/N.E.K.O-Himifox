@@ -2332,6 +2332,7 @@ async def test_takeover_dispatcher_falls_back_when_unhandled(dispatcher_outcome)
 async def test_takeover_response_complete_clears_interrupted_ordinary_turn():
     mgr = _make_manager()
     mgr._active_text_request_id = "req-old"
+    mgr._text_route_owners["req-old"] = "ordinary-owner"
     mgr._pending_turn_meta = {"source": "ordinary"}
     mgr._current_ai_turn_text = "ordinary text before takeover"
     mgr.tts_pending_chunks = [("sid-old", "queued text")]
@@ -2340,9 +2341,39 @@ async def test_takeover_response_complete_clears_interrupted_ordinary_turn():
     await core_module.LLMSessionManager.handle_response_complete(mgr)
 
     assert mgr._active_text_request_id is None
+    assert "req-old" not in mgr._text_route_owners
     assert mgr._pending_turn_meta is None
     assert mgr._current_ai_turn_text == ""
     assert mgr.tts_pending_chunks == []
+    assert mgr.sync_message_queue.messages == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_takeover_cleanup_does_not_clear_request_started_during_tts_await():
+    mgr = _make_manager()
+    mgr._active_text_request_id = "req-old"
+    mgr._text_route_owners["req-old"] = "ordinary-owner"
+    mgr._pending_turn_meta = {"request_id": "req-old"}
+    mgr._current_ai_turn_text = "old text"
+    mgr._takeover_active = True
+
+    async def clear_tts_and_start_new_request():
+        assert mgr._active_text_request_id is None
+        assert "req-old" not in mgr._text_route_owners
+        mgr._active_text_request_id = "req-new"
+        mgr._text_route_owners["req-new"] = "new-owner"
+        mgr._pending_turn_meta = {"request_id": "req-new"}
+        mgr._current_ai_turn_text = "new text"
+
+    mgr._clear_tts_pipeline = clear_tts_and_start_new_request
+
+    await core_module.LLMSessionManager.handle_response_complete(mgr)
+
+    assert mgr._active_text_request_id == "req-new"
+    assert mgr._text_route_owners == {"req-new": "new-owner"}
+    assert mgr._pending_turn_meta == {"request_id": "req-new"}
+    assert mgr._current_ai_turn_text == "new text"
     assert mgr.sync_message_queue.messages == []
 
 

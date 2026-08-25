@@ -243,14 +243,68 @@ def _normalized_direct_text(value: str) -> str:
     return "".join(character for character in folded if character.isalnum())
 
 
+def _folded_direct_surface(value: str) -> str:
+    folded = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return " ".join(folded.split())
+
+
+def _is_latin_token_character(character: str) -> bool:
+    category = unicodedata.category(character)
+    return (
+        category == "Nd"
+        or category.startswith("M")
+        or "LATIN" in unicodedata.name(character, "")
+    )
+
+
+def _is_latin_surface_term(value: str) -> bool:
+    has_latin_or_digit = False
+    for character in value:
+        if _is_latin_token_character(character):
+            has_latin_or_digit = True
+            continue
+        if character.isspace() or character in ".+#-":
+            continue
+        return False
+    return has_latin_or_digit
+
+
+def _contains_bounded_latin_term(haystack: str, needle: str) -> bool:
+    offset = 0
+    while (index := haystack.find(needle, offset)) >= 0:
+        before = haystack[index - 1] if index else ""
+        end = index + len(needle)
+        after = haystack[end] if end < len(haystack) else ""
+        if (
+            not before or not _is_latin_token_character(before)
+        ) and (not after or not _is_latin_token_character(after)):
+            return True
+        offset = index + 1
+    return False
+
+
 def _is_direct_material_match(query: str, entry: KnowledgeEntry) -> bool:
     normalized_query = _normalized_direct_text(query)
-    if len(normalized_query) < 2:
-        return False
+    query_surface = _folded_direct_surface(query)
     terms = (entry.title, *entry.aliases, *entry.recognition_terms)
     for term in terms:
         normalized_term = _normalized_direct_text(term)
-        if len(normalized_term) < 2:
+        term_surface = _folded_direct_surface(term)
+        if (
+            query_surface == term_surface
+            and term_surface in {"c++", "c#"}
+        ):
+            return True
+        if len(normalized_query) < 2 or len(normalized_term) < 2:
+            continue
+        if _is_latin_surface_term(term_surface):
+            if len(normalized_term) >= 4 and _contains_bounded_latin_term(
+                query_surface,
+                term_surface,
+            ):
+                return True
+            if query_surface == term_surface:
+                return True
             continue
         if normalized_query == normalized_term:
             return True
@@ -273,6 +327,12 @@ def _is_short_query_embedded_in_term(
     normalized_query = _normalized_direct_text(query)
     if not 2 <= len(normalized_query) <= 6:
         return False
+    query_surface = _folded_direct_surface(query)
+    if _is_latin_surface_term(query_surface):
+        return any(
+            _contains_bounded_latin_term(_folded_direct_surface(term), query_surface)
+            for term in (entry.title, *entry.aliases, *entry.recognition_terms)
+        )
     return any(
         normalized_query in _normalized_direct_text(term)
         for term in (entry.title, *entry.aliases, *entry.recognition_terms)
