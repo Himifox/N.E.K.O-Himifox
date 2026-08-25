@@ -618,6 +618,179 @@ async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_unsubscribe_old_cancellation_does_not_override_new_subscription(
+    monkeypatch,
+):
+    module._tasks["old-cancel"] = {
+        "task_id": "old-cancel",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "preinstall_cancelled": True,
+        "created_at": 1.0,
+        "completed_at": 2.0,
+    }
+    module._tasks["new-completed"] = {
+        "task_id": "new-completed",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "resolved_pack_id": "fixture-pack",
+        "resolved_remote_id": "knowledge/fixture-pack",
+        "status": "completed",
+        "stage": "completed",
+        "created_at": 3.0,
+        "completed_at": 4.0,
+    }
+    calls = []
+
+    async def fake_main(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        assert (method, path) == ("POST", "packs/remove")
+        return {
+            "ok": True,
+            "removed_pack": True,
+            "removed_entries": 1,
+            "cancelled_jobs": 0,
+        }
+
+    reports = []
+
+    async def report(package_id):
+        reports.append(package_id)
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", report)
+
+    result = await module.unsubscribe_knowledge_package(
+        module.KnowledgeUnsubscribeRequest(
+            package_id=7,
+            pack_id="fixture-pack",
+        ),
+        token="fixture",
+    )
+
+    assert result["removed_pack"] is True
+    assert calls == [
+        (
+            "POST",
+            "packs/remove",
+            {
+                "json": {
+                    "pack_id": "fixture-pack",
+                    "expected_provider": "plugin-market",
+                    "expected_provider_package_id": "7",
+                    "expected_remote_id": "knowledge/fixture-pack",
+                }
+            },
+        )
+    ]
+    assert reports == [7]
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_corrupt_latest_task_timestamp_uses_durable_registry(
+    monkeypatch,
+):
+    module._tasks["old-cancel"] = {
+        "task_id": "old-cancel",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "preinstall_cancelled": True,
+        "created_at": 1.0,
+        "completed_at": 2.0,
+    }
+    module._tasks["corrupt-latest"] = {
+        "task_id": "corrupt-latest",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "preinstall_cancelled": True,
+        "created_at": "not-a-time",
+        "completed_at": 4.0,
+    }
+    calls = []
+
+    async def fake_main(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "GET":
+            return {"ok": True, "packs": [_installed_subscription()]}
+        return {
+            "ok": True,
+            "removed_pack": True,
+            "removed_entries": 1,
+            "cancelled_jobs": 0,
+        }
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module,
+        "_report_unsubscribe_best_effort",
+        lambda _package_id: asyncio.sleep(0),
+    )
+
+    result = await module.unsubscribe_knowledge_package(
+        module.KnowledgeUnsubscribeRequest(
+            package_id=7,
+            pack_id="fixture-pack",
+        ),
+        token="fixture",
+    )
+
+    assert result["removed_pack"] is True
+    assert [call[:2] for call in calls] == [
+        ("GET", "packs"),
+        ("POST", "packs/remove"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_out_of_order_task_times_use_durable_registry(monkeypatch):
+    module._tasks["newer-time-first"] = {
+        "task_id": "newer-time-first",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "preinstall_cancelled": True,
+        "created_at": 5.0,
+    }
+    module._tasks["older-time-last"] = {
+        "task_id": "older-time-last",
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "preinstall_cancelled": True,
+        "created_at": 3.0,
+    }
+    calls = []
+
+    async def fake_main(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "GET":
+            return {"ok": True, "packs": [_installed_subscription()]}
+        return {"ok": True, "removed_pack": True, "removed_entries": 1}
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module,
+        "_report_unsubscribe_best_effort",
+        lambda _package_id: asyncio.sleep(0),
+    )
+
+    result = await module.unsubscribe_knowledge_package(
+        module.KnowledgeUnsubscribeRequest(
+            package_id=7,
+            pack_id="fixture-pack",
+        ),
+        token="fixture",
+    )
+
+    assert result["removed_pack"] is True
+    assert [call[:2] for call in calls] == [
+        ("GET", "packs"),
+        ("POST", "packs/remove"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_does_not_cancel_wrong_preinstall_identity(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()

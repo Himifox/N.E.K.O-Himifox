@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import secrets
 import time
 from typing import Any, Literal
@@ -297,24 +298,38 @@ async def _cancel_active_subscription(
     task_id = _active_package_tasks.get(package_id)
     task = _tasks.get(task_id) if task_id else None
     if task is None:
-        task = next(
-            (
-                candidate
-                for candidate in reversed(tuple(_tasks.values()))
-                if candidate.get("package_id") == package_id
-                and candidate.get("preinstall_cancelled") is True
-            ),
-            None,
+        retained_tasks = tuple(
+            candidate
+            for candidate in _tasks.values()
+            if candidate.get("package_id") == package_id
         )
-        if task is not None:
+        if not retained_tasks:
+            return None
+        created_at_values = tuple(
+            candidate.get("created_at") for candidate in retained_tasks
+        )
+        if any(
+            isinstance(created_at, bool)
+            or not isinstance(created_at, (int, float))
+            or not math.isfinite(float(created_at))
+            for created_at in created_at_values
+        ) or any(
+            float(earlier) > float(later)
+            for earlier, later in zip(created_at_values, created_at_values[1:])
+        ):
+            # Retained task ordering is only trusted when its timestamp is
+            # structurally valid. Fall back to the durable pack registry.
+            return None
+        latest_task = retained_tasks[-1]
+        if latest_task.get("preinstall_cancelled") is True:
             trusted_pack_id = str(
-                task.get("resolved_pack_id")
-                or task.get("requested_pack_id")
+                latest_task.get("resolved_pack_id")
+                or latest_task.get("requested_pack_id")
                 or ""
             )
             if trusted_pack_id != claimed_pack_id:
                 _raise_unsubscribe_error("subscription_identity_mismatch")
-        return task
+        return latest_task
     resolved_pack_id = str((task or {}).get("resolved_pack_id") or "")
     requested_pack_id = str((task or {}).get("requested_pack_id") or "")
     trusted_pack_id = resolved_pack_id or requested_pack_id
