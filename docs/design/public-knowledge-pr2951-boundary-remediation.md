@@ -850,3 +850,15 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 本地合并前回归覆盖知识库、公共知识路由、请求体守门、Plugin Market、Study Companion 轻量导入及核心 takeover 生命周期，共 414 项测试通过；本轮 Python 改动 Ruff 检查通过。前端 `vue-tsc --build`、API Vitest（8 项）和 i18n 完整性检查通过，八种语言均为 736 个键。
 
 恢复入口另在 390px 与 1024px 视口完成真实渲染。两种宽度的横向溢出均为 0，删除按钮保持 72×44px；窄屏底部增加含 safe-area 的滚动安全区后，按钮与固定浮层不再碰撞。独立 fresh-eyes 复审未发现新的 blocker 或 major。测试退出后的 telemetry 日志在受限沙盒中仍会报告既存的本机配置目录写入失败，但 pytest 返回码为 0。GitHub CI 结果以本节文档提交所在远端头部的检查为准。
+
+## 第五轮审查正文补充：identity 时间戳信任边界
+
+提交 `2a114dd23` 后的 review body 指出，AG 虽已严格验证 state 时间字段，但 `_validated_identity()` 仍先用 `int()` 转换 identity 的 `created_at`。这会接受 `true` 和 `1.5`；当 state 缺少 `created_at` 时，该值可能作为 fallback 进入正常作业。
+
+### 修复单元 AN：identity 时间戳必须在可信返回前规范化
+
+- `_validated_identity()` 在返回 `state="valid"` 前，使用与 state 相同的时间戳规范化函数检查 `created_at`。只接受非负整数或规范 ASCII 十进制字符串；布尔值、浮点、负数和其他字符串均使 identity 无效。
+- 无效 identity 统一隔离为 `invalid_job_identity`，展示时间回退到可信目录 mtime；不得把不可信 identity 时间传给 state fallback、排序或裁剪。
+- 保留对合法旧 identity 数字字符串的兼容，不改变 job/pack identity、容量计数或显式 discard 边界。
+
+验收：state 缺少 `created_at` 且 identity 分别为 `true`、`1.5` 时，作业均进入 degraded，列表与 status 不抛异常；合法整数 identity 的恢复行为不回归。
