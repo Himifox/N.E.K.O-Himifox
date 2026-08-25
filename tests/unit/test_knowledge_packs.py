@@ -407,6 +407,7 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
 def test_subscription_requires_supported_material_type():
     payload = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": "knowledge/community-fixture",
         "version": "1.2.3",
         "channel": "stable",
@@ -419,8 +420,11 @@ def test_subscription_requires_supported_material_type():
 
     subscription = validate_subscription(payload)
     assert subscription.material_type == "corpus"
+    assert subscription.provider_package_id == "7"
     with pytest.raises(ValueError, match="material_type"):
         validate_subscription({**payload, "material_type": "meme"})
+    with pytest.raises(ValueError, match="provider_package_id"):
+        validate_subscription({**payload, "provider_package_id": "07"})
 
 
 def test_market_artifact_must_use_canonical_json_bytes():
@@ -440,6 +444,7 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
     digest = hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
     subscription = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": "knowledge/community-fixture",
         "version": "1.0.0",
         "channel": "stable",
@@ -451,6 +456,11 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
         service.install_pack(
             pack,
             subscription={**subscription, "remote_id": "knowledge/impostor"},
+        )
+    with pytest.raises(ValueError, match="identity"):
+        service.install_pack(
+            pack,
+            subscription={**subscription, "provider_package_id": "8"},
         )
     with pytest.raises(ValueError, match="identity"):
         service.install_pack(pack)

@@ -267,6 +267,7 @@ def test_raw_subscription_v1_stages_without_index(monkeypatch, tmp_path):
     digest = hashlib.sha256(raw).hexdigest()
     subscription = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": "knowledge/market-fixture",
         "version": "1.0.0",
         "channel": "stable",
@@ -295,6 +296,34 @@ def test_raw_subscription_v1_stages_without_index(monkeypatch, tmp_path):
     )
 
 
+def test_new_market_subscription_requires_provider_package_identity(
+    monkeypatch,
+    tmp_path,
+):
+    pack = _pack()
+    raw = canonical_pack_bytes(pack)
+    subscription = {
+        "provider": "plugin-market",
+        "remote_id": "knowledge/market-fixture",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+        "material_type": "knowledge",
+        "index_manifest_sha256": "",
+        "vectors_sha256": "",
+        "trust": "trusted_market",
+    }
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/public-knowledge/subscriptions/apply",
+        data={"protocol_version": "1", "subscription": json.dumps(subscription)},
+        files={"pack": ("pack.neko-knowledge.json", raw, "application/json")},
+    ).json()
+
+    assert response == {"ok": False, "reason": "invalid_subscription_identity"}
+
+
 def test_subscription_rejects_pre_release_protocol(monkeypatch, tmp_path):
     pack = _pack()
     raw = canonical_pack_bytes(pack)
@@ -316,6 +345,7 @@ def test_subscription_v1_stages_verified_sidecars(monkeypatch, tmp_path):
     raw, artifacts = _prebuilt(pack)
     subscription = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": "knowledge/indexed-fixture",
         "version": "1.0.0",
         "channel": "stable",
@@ -372,6 +402,7 @@ def test_subscription_rejects_market_material_type_mismatch(
     raw, artifacts = _prebuilt(pack)
     subscription = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": "knowledge/indexed-type-mismatch",
         "version": "1.0.0",
         "channel": "stable",

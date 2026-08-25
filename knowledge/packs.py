@@ -833,3 +833,13 @@ def _validate_subscription_identity(
     for field in ("provider", "remote_id"):
         if str(previous.get(field) or "") != str(replacement.get(field) or ""):
             raise ValueError("knowledge pack subscription identity cannot change")
+    previous_package_id = str(previous.get("provider_package_id") or "")
+    replacement_package_id = str(replacement.get("provider_package_id") or "")
+    if previous_package_id and previous_package_id != replacement_package_id:
+        raise ValueError("knowledge pack subscription identity cannot change")
+    if (
+        not previous_package_id
+        and replacement_package_id
+        and str(replacement.get("trust") or "") != "trusted_market"
+    ):
+        raise ValueError("knowledge pack subscription identity cannot change")

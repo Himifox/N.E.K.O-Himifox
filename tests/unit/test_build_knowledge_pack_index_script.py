@@ -150,6 +150,7 @@ def test_builder_output_is_validation_stable_and_staging_compatible(
         published_pack,
         subscription={
             "provider": "plugin-market",
+            "provider_package_id": "7",
             "remote_id": "knowledge/publisher-fixture",
             "version": "1.0.0",
             "channel": "stable",

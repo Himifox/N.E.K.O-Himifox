@@ -19,6 +19,7 @@ class KnowledgeSubscription:
     channel: str
     artifact_sha256: str
     material_type: str
+    provider_package_id: str = ""
     index_manifest_sha256: str = ""
     vectors_sha256: str = ""
     trust: str = "trusted_market"
@@ -37,6 +38,7 @@ def validate_subscription(payload: object) -> KnowledgeSubscription:
         "channel",
         "artifact_sha256",
         "material_type",
+        "provider_package_id",
         "index_manifest_sha256",
         "vectors_sha256",
         "trust",
@@ -65,6 +67,9 @@ def validate_subscription(payload: object) -> KnowledgeSubscription:
     trust = _required_text(payload.get("trust"), "trust", 40)
     if trust != "trusted_market":
         raise ValueError("subscription trust is unsupported")
+    provider_package_id = _optional_provider_package_id(
+        payload.get("provider_package_id")
+    )
     return KnowledgeSubscription(
         provider=provider,
         remote_id=remote_id,
@@ -72,6 +77,7 @@ def validate_subscription(payload: object) -> KnowledgeSubscription:
         channel=channel,
         artifact_sha256=digest,
         material_type=material_type,
+        provider_package_id=provider_package_id,
         index_manifest_sha256=manifest_digest,
         vectors_sha256=vectors_digest,
         trust=trust,
@@ -116,3 +122,12 @@ def _optional_digest(value: object, field: str) -> str:
     if not _SHA256_RE.fullmatch(digest):
         raise ValueError(f"subscription {field} is invalid")
     return digest
+
+
+def _optional_provider_package_id(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if not text.isdecimal() or text.startswith("0") or int(text) <= 0:
+        raise ValueError("subscription provider_package_id is invalid")
+    return text

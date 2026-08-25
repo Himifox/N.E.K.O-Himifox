@@ -32,6 +32,7 @@ logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
 _task_workers: dict[str, asyncio.Task[None]] = {}
 _active_package_tasks: dict[int, str] = {}
+_unsubscribing_package_ids: set[int] = set()
 _TASK_TTL_SECONDS = 60 * 60
 _MAX_ACTIVE_SUBSCRIPTIONS = 4
 _JOB_POLL_SECONDS = 5.0
@@ -118,6 +119,11 @@ async def subscribe_knowledge_package(
 ):
     _verify_bridge_token(token)
     _cleanup_tasks()
+    if payload.package_id in _unsubscribing_package_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "knowledge_subscription_conflict"},
+        )
     existing_id = _active_package_tasks.get(payload.package_id)
     if existing_id:
         existing = _tasks.get(existing_id)
@@ -170,6 +176,10 @@ def _subscription_done(
     package_id: int,
     completed: asyncio.Task[None],
 ) -> None:
+    if completed.cancelled():
+        task = _tasks.get(task_id)
+        if task is not None and task.get("completed_at") is None:
+            _mark_subscription_cancelled(task)
     if _task_workers.get(task_id) is completed:
         _task_workers.pop(task_id, None)
     if _active_package_tasks.get(package_id) == task_id:
@@ -179,6 +189,17 @@ def _subscription_done(
             completed.exception()
         except Exception:
             logger.exception("failed to consume knowledge subscription task result")
+
+
+def _mark_subscription_cancelled(task: dict[str, Any]) -> None:
+    task.update(
+        status="cancelled",
+        stage="cancelled",
+        message="知识包订阅已取消",
+        error="知识包订阅已取消",
+        error_code="cancelled_by_unsubscribe",
+        completed_at=time.time(),
+    )
 
 
 @router.get("/tasks/{task_id}", response_model=KnowledgeTaskResponse)
@@ -209,17 +230,143 @@ async def unsubscribe_knowledge_package(
     token: str = Query(...),
 ):
     _verify_bridge_token(token)
-    result = await _main_request(
-        "POST",
-        "packs/remove",
-        json={"pack_id": payload.pack_id},
-    )
-    if result.get("ok") is not True:
+    if payload.package_id in _unsubscribing_package_ids:
         raise HTTPException(
-            status_code=409, detail=result.get("reason") or "unsubscribe failed"
+            status_code=409,
+            detail={"code": "knowledge_subscription_conflict"},
         )
-    await _report_unsubscribe_best_effort(payload.package_id)
-    return result
+    _unsubscribing_package_ids.add(payload.package_id)
+    try:
+        active_task = await _cancel_active_subscription(
+            payload.package_id,
+            claimed_pack_id=payload.pack_id,
+        )
+        pack_id, remote_id = await _resolve_owned_subscription(
+            package_id=payload.package_id,
+            claimed_pack_id=payload.pack_id,
+            active_task=active_task,
+        )
+        try:
+            result = await _main_request(
+                "POST",
+                "packs/remove",
+                json={
+                    "pack_id": pack_id,
+                    "expected_provider": "plugin-market",
+                    "expected_provider_package_id": str(payload.package_id),
+                    "expected_remote_id": remote_id,
+                },
+            )
+        except _KnowledgeTaskError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code},
+            ) from exc
+        if result.get("ok") is not True:
+            code = str(result.get("reason") or "subscription_not_found")
+            raise HTTPException(status_code=409, detail={"code": code})
+        await _report_unsubscribe_best_effort(payload.package_id)
+        return result
+    finally:
+        _unsubscribing_package_ids.discard(payload.package_id)
+
+
+async def _cancel_active_subscription(
+    package_id: int,
+    *,
+    claimed_pack_id: str,
+) -> dict[str, Any] | None:
+    task_id = _active_package_tasks.get(package_id)
+    task = _tasks.get(task_id) if task_id else None
+    resolved_pack_id = str((task or {}).get("resolved_pack_id") or "")
+    if resolved_pack_id and resolved_pack_id != claimed_pack_id:
+        _raise_unsubscribe_error("subscription_identity_mismatch")
+    worker = _task_workers.get(task_id) if task_id else None
+    if worker is not None:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    return task
+
+
+async def _resolve_owned_subscription(
+    *,
+    package_id: int,
+    claimed_pack_id: str,
+    active_task: dict[str, Any] | None,
+) -> tuple[str, str]:
+    if active_task is not None:
+        resolved_pack_id = str(active_task.get("resolved_pack_id") or "")
+        if resolved_pack_id:
+            if resolved_pack_id != claimed_pack_id:
+                _raise_unsubscribe_error("subscription_identity_mismatch")
+            resolved_remote_id = str(active_task.get("resolved_remote_id") or "")
+            if not resolved_remote_id:
+                _raise_unsubscribe_error("subscription_ownership_unverifiable")
+            return resolved_pack_id, resolved_remote_id
+
+    try:
+        response = await _main_request("GET", "packs")
+    except _KnowledgeTaskError:
+        _raise_unsubscribe_error("subscription_ownership_unverifiable")
+    packs = tuple(
+        item for item in response.get("packs", ()) if isinstance(item, dict)
+    )
+    package_key = str(package_id)
+    matches = tuple(
+        item
+        for item in packs
+        if isinstance(item.get("subscription"), dict)
+        and item["subscription"].get("provider") == "plugin-market"
+        and str(item["subscription"].get("provider_package_id") or "")
+        == package_key
+    )
+    if len(matches) > 1:
+        _raise_unsubscribe_error("subscription_ownership_unverifiable")
+    if matches:
+        resolved_pack_id = str(matches[0].get("pack_id") or "")
+        if not resolved_pack_id or resolved_pack_id != claimed_pack_id:
+            _raise_unsubscribe_error("subscription_identity_mismatch")
+        remote_id = str(matches[0]["subscription"].get("remote_id") or "")
+        if not remote_id:
+            _raise_unsubscribe_error("subscription_ownership_unverifiable")
+        return resolved_pack_id, remote_id
+
+    legacy = next(
+        (
+            item
+            for item in packs
+            if str(item.get("pack_id") or "") == claimed_pack_id
+            and isinstance(item.get("subscription"), dict)
+            and item["subscription"].get("provider") == "plugin-market"
+            and not item["subscription"].get("provider_package_id")
+        ),
+        None,
+    )
+    if legacy is None:
+        _raise_unsubscribe_error("subscription_not_found", status_code=404)
+    subscription = legacy["subscription"]
+    try:
+        descriptor = await _fetch_version_descriptor(
+            KnowledgeSubscribeRequest(
+                package_id=package_id,
+                version=str(subscription.get("version") or ""),
+                channel=str(subscription.get("channel") or "stable"),
+            )
+        )
+    except (ValueError, _KnowledgeTaskError):
+        _raise_unsubscribe_error("subscription_ownership_unverifiable")
+    if (
+        descriptor.pack_id != claimed_pack_id
+        or descriptor.remote_id != str(subscription.get("remote_id") or "")
+        or descriptor.version != str(subscription.get("version") or "")
+        or descriptor.channel != str(subscription.get("channel") or "")
+    ):
+        _raise_unsubscribe_error("subscription_ownership_unverifiable")
+    return descriptor.pack_id, descriptor.remote_id
+
+
+def _raise_unsubscribe_error(code: str, *, status_code: int = 409) -> None:
+    raise HTTPException(status_code=status_code, detail={"code": code})
 
 
 async def _execute_subscription(
@@ -229,6 +376,8 @@ async def _execute_subscription(
     try:
         _stage(task, "resolving", 0.05, "正在读取可信市场版本信息")
         descriptor = await _fetch_version_descriptor(payload)
+        task["resolved_pack_id"] = descriptor.pack_id
+        task["resolved_remote_id"] = descriptor.remote_id
         _stage(task, "downloading", 0.15, "正在下载知识包")
         raw = await _download_verified_artifact(
             descriptor.artifacts.knowledge,
@@ -278,6 +427,7 @@ async def _execute_subscription(
         result = await _main_subscription_request(
             subscription={
                 "provider": "plugin-market",
+                "provider_package_id": str(descriptor.package_id),
                 "remote_id": descriptor.remote_id,
                 "version": descriptor.version,
                 "channel": descriptor.channel,
@@ -312,6 +462,9 @@ async def _execute_subscription(
         task["message"] = "知识包订阅完成"
         task["completed_at"] = time.time()
         await _report_subscription_best_effort(descriptor, result)
+    except asyncio.CancelledError:
+        _mark_subscription_cancelled(task)
+        raise
     except _KnowledgeTaskError as exc:
         task["status"] = "failed"
         task["stage"] = "failed"

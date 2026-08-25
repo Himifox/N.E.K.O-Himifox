@@ -76,6 +76,7 @@ def _prebuilt(pack):
     )
     subscription = {
         "provider": "plugin-market",
+        "provider_package_id": "7",
         "remote_id": f"knowledge/{pack.pack_id}",
         "version": "1.0.0",
         "channel": "stable",
@@ -177,6 +178,38 @@ def test_cancelled_job_never_becomes_visible(tmp_path):
     assert service.list_pack_jobs()[0]["state"] == "cancelled"
     assert not (tmp_path / ".staging" / str(job["job_id"]) / "pack.json").exists()
     assert service.search("Staged phrase", limit=1) == []
+
+
+def test_cancel_and_remove_reports_staged_only_success(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+
+    result = service.cancel_and_remove_pack("staged-fixture")
+
+    assert result == {
+        "removed_pack": False,
+        "removed_entries": 0,
+        "cancelled_jobs": 1,
+    }
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
+
+
+def test_market_cancel_and_remove_preserves_same_named_local_pack(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    service.install_pack(pack)
+    service.stage_pack(pack)
+
+    with pytest.raises(PermissionError, match="identity"):
+        service.cancel_and_remove_pack(
+            "staged-fixture",
+            expected_provider="plugin-market",
+            expected_provider_package_id="7",
+            expected_remote_id="knowledge/staged-fixture",
+        )
+
+    assert service.list_packs()[0]["pack_id"] == "staged-fixture"
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
 
 
 @pytest.mark.asyncio

@@ -1152,6 +1152,19 @@ class KnowledgeService:
         return result
 
     def remove_pack(self, pack_id: str) -> int:
+        result = self.cancel_and_remove_pack(pack_id)
+        if result["removed_pack"] is not True:
+            raise ValueError("knowledge pack is not installed")
+        return int(result["removed_entries"])
+
+    def cancel_and_remove_pack(
+        self,
+        pack_id: str,
+        *,
+        expected_provider: str = "",
+        expected_provider_package_id: str = "",
+        expected_remote_id: str = "",
+    ) -> dict[str, object]:
         from .pack_jobs import (
             TERMINAL_STATES,
             cancel_pack_job,
@@ -1161,19 +1174,65 @@ class KnowledgeService:
         from .packs import remove_pack
 
         with pack_operation_lock(self.knowledge_root, pack_id):
+            cancelled_jobs = 0
             for job in list_pack_jobs(self.knowledge_root):
                 if (
                     job.get("pack_id") == pack_id
                     and job.get("state") not in TERMINAL_STATES
                 ):
-                    cancel_pack_job(
+                    cancelled_jobs += int(cancel_pack_job(
                         self.knowledge_root,
                         str(job.get("job_id") or ""),
+                    ))
+            if expected_provider:
+                installed = next(
+                    (
+                        item
+                        for item in self.list_packs()
+                        if str(item.get("pack_id") or "") == pack_id
+                    ),
+                    None,
+                )
+                if installed is not None:
+                    subscription = installed.get("subscription")
+                    provider_matches = (
+                        isinstance(subscription, dict)
+                        and str(subscription.get("provider") or "")
+                        == expected_provider
                     )
-            removed = remove_pack(self.database_path(), pack_id)
+                    stored_package_id = (
+                        str(subscription.get("provider_package_id") or "")
+                        if isinstance(subscription, dict)
+                        else ""
+                    )
+                    identity_matches = (
+                        stored_package_id == expected_provider_package_id
+                        if stored_package_id
+                        else bool(expected_remote_id)
+                        and isinstance(subscription, dict)
+                        and str(subscription.get("remote_id") or "")
+                        == expected_remote_id
+                    )
+                    if not provider_matches or not identity_matches:
+                        raise PermissionError(
+                            "knowledge pack subscription identity does not match"
+                        )
+            try:
+                removed = remove_pack(self.database_path(), pack_id)
+            except ValueError:
+                if not cancelled_jobs:
+                    raise
+                removed_pack = False
+                removed = 0
+            else:
+                removed_pack = True
         self._routing_state = None
         self.refresh_routing_index(background=True)
-        return removed
+        return {
+            "removed_pack": removed_pack,
+            "removed_entries": removed,
+            "cancelled_jobs": cancelled_jobs,
+        }
 
     def list_packs(self) -> tuple[dict, ...]:
         from .packs import list_installed_packs

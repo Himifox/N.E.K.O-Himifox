@@ -381,6 +381,8 @@ async def apply_public_knowledge_subscription(
         )
         if validated_subscription.provider != "plugin-market":
             return {"ok": False, "reason": "untrusted_provider"}
+        if not validated_subscription.provider_package_id:
+            return {"ok": False, "reason": "invalid_subscription_identity"}
         pack_raw = await _read_upload_limited(pack, max_bytes=MAX_PACK_BYTES)
         knowledge_pack, rejection = await asyncio.to_thread(
             _validate_subscription_pack,
@@ -557,15 +559,32 @@ async def remove_public_knowledge_pack(request: Request):
     pack_id = str(payload.get("pack_id") or "").strip()
     if not pack_id:
         return {"ok": False, "reason": "invalid_request"}
+    expected_provider = str(payload.get("expected_provider") or "").strip()
+    expected_provider_package_id = str(
+        payload.get("expected_provider_package_id") or ""
+    ).strip()
+    expected_remote_id = str(payload.get("expected_remote_id") or "").strip()
+    if expected_provider and (
+        expected_provider != "plugin-market"
+        or not expected_provider_package_id.isdecimal()
+        or expected_provider_package_id.startswith("0")
+        or not expected_remote_id
+    ):
+        return {"ok": False, "reason": "invalid_request"}
     try:
         service = await _service_async()
-        removed = await asyncio.to_thread(
-            service.remove_pack,
+        result = await asyncio.to_thread(
+            service.cancel_and_remove_pack,
             pack_id,
+            expected_provider=expected_provider,
+            expected_provider_package_id=expected_provider_package_id,
+            expected_remote_id=expected_remote_id,
         )
+    except PermissionError:
+        return {"ok": False, "reason": "subscription_identity_mismatch"}
     except ValueError:
         return {"ok": False, "reason": "not_found"}
-    return {"ok": True, "removed_entries": removed}
+    return {"ok": True, **result}
 
 
 @router.get("/diagnostics/recent")
