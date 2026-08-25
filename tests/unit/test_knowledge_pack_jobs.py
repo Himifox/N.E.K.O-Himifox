@@ -30,13 +30,15 @@ async def test_process_pack_jobs_lists_state_off_the_event_loop(tmp_path, monkey
     import knowledge.pack_jobs as module
 
     service = KnowledgeService.from_root(tmp_path)
+    job_id = "finished-0123456789ab"
+    (tmp_path / ".staging" / job_id).mkdir(parents=True)
     event_loop_thread = threading.get_ident()
     list_threads: list[int] = []
     cleanup_threads: list[int] = []
 
     def tracked_list(_root):
         list_threads.append(threading.get_ident())
-        return ({"job_id": "finished-job", "state": "active", "created_at": 1},)
+        return ({"job_id": job_id, "state": "active", "created_at": 1},)
 
     def tracked_cleanup(_job_dir):
         cleanup_threads.append(threading.get_ident())
@@ -408,6 +410,189 @@ def test_discard_only_removes_degraded_jobs(tmp_path):
     assert discard_degraded_pack_job(tmp_path, "../outside") is False
     assert discard_degraded_pack_job(tmp_path, job_id) is True
     assert not job_dir.exists()
+
+
+def test_staging_root_link_is_rejected_without_touching_external_files(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    job_id = "external-0123456789ab"
+    job_dir = outside / job_id
+    job_dir.mkdir()
+    identity = {
+        "job_id": job_id,
+        "pack_id": "external",
+        "created_at": 1,
+        "entries_total": 1,
+        "chunks_total": 1,
+        "content_bytes": 1,
+    }
+    (job_dir / "identity.json").write_text(json.dumps(identity), encoding="utf-8")
+    (job_dir / "state.json").write_text(
+        json.dumps({**identity, "state": "queued", "updated_at": 1}),
+        encoding="utf-8",
+    )
+    sentinel = job_dir / "sentinel"
+    sentinel.write_bytes(b"external-data")
+    try:
+        (tmp_path / ".staging").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    before = {
+        path.relative_to(outside): path.read_bytes()
+        for path in outside.rglob("*")
+        if path.is_file()
+    }
+
+    assert service.list_pack_jobs() == ()
+    assert cancel_pack_job(tmp_path, job_id) is False
+    assert discard_degraded_pack_job(tmp_path, job_id) is False
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_path_invalid",
+    ):
+        service.stage_pack(_pack())
+
+    after = {
+        path.relative_to(outside): path.read_bytes()
+        for path in outside.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert sentinel.read_bytes() == b"external-data"
+
+
+def test_staging_root_reparse_marker_is_rejected(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    jobs_root = tmp_path / ".staging"
+    jobs_root.mkdir()
+    sentinel = jobs_root / "sentinel"
+    sentinel.write_bytes(b"unchanged")
+    original_check = pack_jobs._is_link_or_reparse
+
+    monkeypatch.setattr(
+        pack_jobs,
+        "_is_link_or_reparse",
+        lambda path: path == jobs_root or original_check(path),
+    )
+
+    assert service.list_pack_jobs() == ()
+    assert cancel_pack_job(tmp_path, "external-0123456789ab") is False
+    assert discard_degraded_pack_job(
+        tmp_path,
+        "external-0123456789ab",
+    ) is False
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_path_invalid",
+    ):
+        service.stage_pack(_pack())
+    assert sentinel.read_bytes() == b"unchanged"
+    assert not (tmp_path / ".knowledge-job-registry.mutation.lock").exists()
+    assert not tuple(tmp_path.glob(".knowledge-pack-operation-*.mutation.lock"))
+
+
+def test_reparse_job_directory_is_not_listed_cancelled_or_discarded(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_id = str(job["job_id"])
+    job_dir = tmp_path / ".staging" / job_id
+    state_before = (job_dir / "state.json").read_bytes()
+    original_check = pack_jobs._is_link_or_reparse
+
+    monkeypatch.setattr(
+        pack_jobs,
+        "_is_link_or_reparse",
+        lambda path: path == job_dir or original_check(path),
+    )
+
+    assert service.list_pack_jobs() == ()
+    assert cancel_pack_job(tmp_path, job_id) is False
+    assert discard_degraded_pack_job(tmp_path, job_id) is False
+    assert (job_dir / "state.json").read_bytes() == state_before
+
+
+def test_cancel_revalidates_staging_root_after_registry_lock(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_id = str(job["job_id"])
+    job_dir = tmp_path / ".staging" / job_id
+    state_before = (job_dir / "state.json").read_bytes()
+    original_validate = pack_jobs._validated_jobs_root
+    calls = 0
+
+    def invalidate_after_first_check(knowledge_root):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return None
+        return original_validate(knowledge_root)
+
+    monkeypatch.setattr(
+        pack_jobs,
+        "_validated_jobs_root",
+        invalidate_after_first_check,
+    )
+
+    assert cancel_pack_job(tmp_path, job_id) is False
+    assert calls >= 2
+    assert (job_dir / "state.json").read_bytes() == state_before
+
+
+@pytest.mark.asyncio
+async def test_async_state_update_does_not_revive_cancelled_job(tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_id = str(job["job_id"])
+    job_dir = tmp_path / ".staging" / job_id
+
+    assert cancel_pack_job(tmp_path, job_id) is True
+    updated = await pack_jobs._write_state_async(
+        job_dir,
+        state="failed",
+        retrieval_mode="none",
+        reason="late_worker_failure",
+    )
+
+    assert updated["state"] == "cancelled"
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_failed_state_race_observes_concurrent_cancel(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_id = str(job["job_id"])
+    original_update = pack_jobs._write_state_async
+
+    def fail_capacity(*_args, **_kwargs):
+        raise OSError("capacity unavailable")
+
+    async def cancel_before_failed_update(job_dir, **changes):
+        assert cancel_pack_job(tmp_path, job_id) is True
+        return await original_update(job_dir, **changes)
+
+    monkeypatch.setattr(pack_jobs, "_activation_capacity_snapshot", fail_capacity)
+    monkeypatch.setattr(pack_jobs, "_write_state_async", cancel_before_failed_update)
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "cancelled"
+    assert service.list_pack_jobs()[0]["state"] == "cancelled"
 
 
 @pytest.mark.parametrize(

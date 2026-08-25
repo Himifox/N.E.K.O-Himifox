@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import shutil
+import stat
 import time
 import uuid
 from dataclasses import dataclass
@@ -61,6 +62,53 @@ def _jobs_root(knowledge_root: str | Path) -> Path:
     return Path(knowledge_root) / STAGING_DIRECTORY
 
 
+def _is_link_or_reparse(path: Path) -> bool:
+    """Return whether ``path`` redirects filesystem access elsewhere."""
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return True
+    file_attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return path.is_symlink() or bool(file_attributes & reparse_attribute)
+
+
+def _validated_jobs_root(knowledge_root: str | Path) -> Path | None:
+    """Return the staging root only when it is a real child of knowledge root.
+
+    A missing staging root is valid for read-only callers and may only be
+    created by ``stage_pack`` after it has acquired the trusted registry lock.
+    """
+    knowledge_root = Path(knowledge_root)
+    jobs_root = _jobs_root(knowledge_root)
+    try:
+        resolved_knowledge_root = knowledge_root.resolve(strict=True)
+    except OSError:
+        return None
+    if not resolved_knowledge_root.is_dir():
+        return None
+    try:
+        jobs_root.lstat()
+    except FileNotFoundError:
+        return jobs_root
+    except OSError:
+        return None
+    if _is_link_or_reparse(jobs_root) or not jobs_root.is_dir():
+        return None
+    try:
+        resolved_jobs_root = jobs_root.resolve(strict=True)
+    except OSError:
+        return None
+    if resolved_jobs_root.parent != resolved_knowledge_root:
+        return None
+    return jobs_root
+
+
+def _jobs_registry_lock(knowledge_root: str | Path):
+    """Lock staging mutations without placing a lock below untrusted staging."""
+    return mutation_lock(Path(knowledge_root) / "knowledge-job-registry")
+
+
 def _state_path(job_dir: Path) -> Path:
     return job_dir / "state.json"
 
@@ -78,7 +126,9 @@ def _external_job_dir(
     """Resolve one generated job ID without permitting path traversal or links."""
     if not _JOB_ID_RE.fullmatch(str(job_id)):
         return None
-    jobs_root = _jobs_root(knowledge_root)
+    jobs_root = _validated_jobs_root(knowledge_root)
+    if jobs_root is None:
+        return None
     job_dir = jobs_root / job_id
     if not require_existing:
         return job_dir
@@ -87,15 +137,28 @@ def _external_job_dir(
         resolved_job = job_dir.resolve(strict=True)
     except OSError:
         return None
-    if job_dir.is_symlink() or resolved_job.parent != resolved_root:
+    if _is_link_or_reparse(job_dir) or resolved_job.parent != resolved_root:
         return None
     return job_dir
+
+
+def _revalidated_job_dir(job_dir: Path) -> Path | None:
+    """Re-resolve an internal job path through the public staging boundary."""
+    if job_dir.parent.name != STAGING_DIRECTORY:
+        return None
+    return _external_job_dir(
+        job_dir.parent.parent,
+        job_dir.name,
+        require_existing=True,
+    )
 
 
 def pack_operation_lock(knowledge_root: str | Path, pack_id: str):
     """Serialize staging, activation, and removal for one pack identity."""
     digest = hashlib.sha256(str(pack_id).encode("utf-8")).hexdigest()
-    return mutation_lock(_jobs_root(knowledge_root) / f".pack-operation-{digest}")
+    return mutation_lock(
+        Path(knowledge_root) / f"knowledge-pack-operation-{digest}"
+    )
 
 
 def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
@@ -292,11 +355,31 @@ def _write_state(
 
 async def _write_state_async(
     job_dir: Path,
-    current: dict[str, Any],
     **changes: object,
 ) -> dict[str, Any]:
-    """Persist job state without blocking the coordinator event loop."""
-    return await asyncio.to_thread(_write_state, job_dir, current, **changes)
+    """Update the latest non-terminal state off the coordinator event loop."""
+    return await asyncio.to_thread(_update_state_locked, job_dir, **changes)
+
+
+def _update_state_locked(job_dir: Path, **changes: object) -> dict[str, Any]:
+    """Apply changes to a fresh state snapshot without reviving a terminal job."""
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return {}
+    knowledge_root = safe_job_dir.parent.parent
+    with _jobs_registry_lock(knowledge_root):
+        safe_job_dir = _revalidated_job_dir(safe_job_dir)
+        if safe_job_dir is None:
+            return {}
+        with mutation_lock(_state_path(safe_job_dir)):
+            current = _read_job(safe_job_dir)
+            if (
+                not current
+                or current.get("state") in TERMINAL_STATES
+                or current.get("state") == DEGRADED_STATE
+            ):
+                return current
+            return _write_state(safe_job_dir, current, **changes)
 
 
 def stage_pack(
@@ -312,10 +395,18 @@ def stage_pack(
     root = Path(service.knowledge_root)
     preflight = preflight_pack(pack)
     ensure_install_capacity(root, preflight)
-    jobs_root = _jobs_root(root)
-    with pack_operation_lock(root, pack.pack_id), mutation_lock(jobs_root):
+    jobs_root = _validated_jobs_root(root)
+    if jobs_root is None:
+        raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+    with pack_operation_lock(root, pack.pack_id), _jobs_registry_lock(root):
+        jobs_root = _validated_jobs_root(root)
+        if jobs_root is None:
+            raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+        jobs_root.mkdir(parents=False, exist_ok=True)
+        jobs_root = _validated_jobs_root(root)
+        if jobs_root is None:
+            raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
         _ensure_community_capacity(service, pack, preflight)
-        jobs_root.mkdir(parents=True, exist_ok=True)
         job_id = f"{pack.pack_id}-{uuid.uuid4().hex[:12]}"
         job_dir = jobs_root / job_id
         creating_dir = jobs_root / f".creating-{uuid.uuid4().hex}"
@@ -453,14 +544,19 @@ def _ensure_community_capacity(service, pack: KnowledgePack, preflight) -> None:
 def list_pack_jobs(
     knowledge_root: str | Path,
 ) -> tuple[dict[str, object], ...]:
-    jobs_root = _jobs_root(knowledge_root)
-    with mutation_lock(jobs_root):
+    jobs_root = _validated_jobs_root(knowledge_root)
+    if jobs_root is None:
+        return ()
+    with _jobs_registry_lock(knowledge_root):
+        jobs_root = _validated_jobs_root(knowledge_root)
+        if jobs_root is None:
+            return ()
         if not jobs_root.is_dir():
             return ()
         job_dirs = tuple(
             job_dir
             for job_dir in jobs_root.iterdir()
-            if job_dir.is_dir() and not job_dir.is_symlink()
+            if job_dir.is_dir() and not _is_link_or_reparse(job_dir)
         )
         items = [_read_job(job_dir) for job_dir in job_dirs]
         _prune_terminal_jobs(jobs_root, job_dirs, items)
@@ -516,30 +612,39 @@ def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
     job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
     if job_dir is None:
         return False
-    with mutation_lock(_state_path(job_dir)):
-        state = _read_job(job_dir)
-        if (
-            not state
-            or state.get("state") in TERMINAL_STATES
-            or state.get("state") == DEGRADED_STATE
-        ):
+    with _jobs_registry_lock(knowledge_root):
+        job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
+        if job_dir is None:
             return False
-        _write_state(
-            job_dir,
-            state,
-            state="cancelled",
-            retrieval_mode="none",
-            reason="cancelled_by_user",
-        )
-        if state.get("state") != "embedding":
-            _cleanup_payload(job_dir)
+        with mutation_lock(_state_path(job_dir)):
+            state = _read_job(job_dir)
+            if (
+                not state
+                or state.get("state") in TERMINAL_STATES
+                or state.get("state") == DEGRADED_STATE
+            ):
+                return False
+            _write_state(
+                job_dir,
+                state,
+                state="cancelled",
+                retrieval_mode="none",
+                reason="cancelled_by_user",
+            )
+            if state.get("state") != "embedding":
+                _cleanup_payload(job_dir)
     return True
 
 
 def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
     """Explicitly remove one quarantined job after validating its exact path."""
-    jobs_root = _jobs_root(knowledge_root)
-    with mutation_lock(jobs_root):
+    jobs_root = _validated_jobs_root(knowledge_root)
+    if jobs_root is None:
+        return False
+    with _jobs_registry_lock(knowledge_root):
+        jobs_root = _validated_jobs_root(knowledge_root)
+        if jobs_root is None:
+            return False
         job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
         if job_dir is None:
             return False
@@ -567,6 +672,18 @@ def _subscription(job_dir: Path) -> dict[str, str] | None:
 
 
 def _cleanup_payload(job_dir: Path) -> None:
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return
+    knowledge_root = safe_job_dir.parent.parent
+    with _jobs_registry_lock(knowledge_root):
+        safe_job_dir = _revalidated_job_dir(safe_job_dir)
+        if safe_job_dir is None:
+            return
+        _cleanup_payload_validated(safe_job_dir)
+
+
+def _cleanup_payload_validated(job_dir: Path) -> None:
     for name in (
         "pack.json",
         PACK_ARTIFACT_NAME,
@@ -597,6 +714,19 @@ def _capacity_mismatch_state(
 
 
 def _prepare_job(job_dir: Path) -> dict[str, Any]:
+    """Validate staging again under its trusted-root lock before processing."""
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return {}
+    knowledge_root = safe_job_dir.parent.parent
+    with _jobs_registry_lock(knowledge_root):
+        safe_job_dir = _revalidated_job_dir(safe_job_dir)
+        if safe_job_dir is None:
+            return {}
+        return _prepare_job_validated(safe_job_dir)
+
+
+def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
     """Build the staging FTS/chunks off the event loop and resume idempotently."""
     with mutation_lock(_state_path(job_dir)):
         state = _read_job(job_dir)
@@ -706,14 +836,28 @@ def _activate_job(
     service, job_dir: Path, state: dict[str, Any], *, mode: str
 ) -> dict[str, Any]:
     pack_id = str(state.get("pack_id") or "")
-    with pack_operation_lock(service.knowledge_root, pack_id), mutation_lock(
-        _state_path(job_dir)
-    ):
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return {"state": DEGRADED_STATE, "reason": "registry_path_invalid"}
+    with pack_operation_lock(
+        service.knowledge_root, pack_id
+    ), _jobs_registry_lock(service.knowledge_root):
+        safe_job_dir = _revalidated_job_dir(safe_job_dir)
+        if safe_job_dir is None:
+            return {"state": DEGRADED_STATE, "reason": "registry_path_invalid"}
+        return _activate_job_validated(service, safe_job_dir, state, mode=mode)
+
+
+def _activate_job_validated(
+    service, job_dir: Path, state: dict[str, Any], *, mode: str
+) -> dict[str, Any]:
+    with mutation_lock(_state_path(job_dir)):
         current = _read_job(job_dir)
         if current.get("state") == DEGRADED_STATE:
             return current
-        if current.get("state") == "cancelled":
-            _cleanup_payload(job_dir)
+        if current.get("state") in TERMINAL_STATES:
+            if current.get("state") == "cancelled":
+                _cleanup_payload(job_dir)
             return current
         pack = _load_job_pack(job_dir)
         staging_store = KnowledgeStore(job_dir / "knowledge.db")
@@ -783,7 +927,13 @@ def _list_jobs_for_processing(knowledge_root: Path) -> tuple[dict[str, object], 
             and item_job_id
             and Path(item_job_id).name == item_job_id
         ):
-            _cleanup_payload(_jobs_root(knowledge_root) / item_job_id)
+            job_dir = _external_job_dir(
+                knowledge_root,
+                item_job_id,
+                require_existing=True,
+            )
+            if job_dir is not None:
+                _cleanup_payload(job_dir)
     return all_jobs
 
 
@@ -807,7 +957,13 @@ async def process_pack_jobs(
     if not jobs:
         return {"state": "no_work", "selected": 0, "stored": 0}
     state = jobs[0]
-    job_dir = _jobs_root(service.knowledge_root) / str(state["job_id"])
+    job_dir = _external_job_dir(
+        service.knowledge_root,
+        str(state["job_id"]),
+        require_existing=True,
+    )
+    if job_dir is None:
+        return {"state": "no_work", "selected": 0, "stored": 0}
     try:
         state = await asyncio.to_thread(_prepare_job, job_dir)
         if state.get("state") == DEGRADED_STATE:
@@ -826,7 +982,6 @@ async def process_pack_jobs(
         if has_prebuilt and projected_ready > MAX_READY_VECTOR_CHUNKS:
             state = await _write_state_async(
                 job_dir,
-                state,
                 index_origin="none",
                 index_trust="none",
                 index_validation="rejected",
@@ -845,12 +1000,13 @@ async def process_pack_jobs(
                 return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
             if activated.get("state") == "cancelled":
                 return {"state": "cancelled", "selected": 0, "stored": 0}
+            if activated.get("state") == "failed":
+                return {"state": "failed", "selected": 0, "stored": 0}
             return {"state": "ready_bm25", "selected": 0, "stored": 0}
 
         if has_prebuilt:
             state = await _write_state_async(
                 job_dir,
-                state,
                 chunks_ready=ready,
                 indexed_percent=100.0,
             )
@@ -863,6 +1019,8 @@ async def process_pack_jobs(
             )
             if activated.get("state") == DEGRADED_STATE:
                 return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
+            if activated.get("state") == "failed":
+                return {"state": "failed", "selected": 0, "stored": 0}
             activation_state = (
                 "cancelled" if activated.get("state") == "cancelled" else "ready_hybrid"
             )
@@ -882,32 +1040,55 @@ async def process_pack_jobs(
             return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if activated.get("state") == "cancelled":
             return {"state": "cancelled", "selected": 0, "stored": 0}
+        if activated.get("state") == "failed":
+            return {"state": "failed", "selected": 0, "stored": 0}
         return {"state": "ready_bm25", "selected": 0, "stored": 0}
     except Exception as exc:
+        safe_job_dir = _revalidated_job_dir(job_dir)
+        if safe_job_dir is None:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
+        job_dir = safe_job_dir
         current = _read_job(job_dir)
         if current.get("state") == DEGRADED_STATE:
             return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if current.get("state") == "cancelled":
             _cleanup_payload(job_dir)
             return {"state": "cancelled", "selected": 0, "stored": 0}
-        await _write_state_async(
+        final_state = await _write_state_async(
             job_dir,
-            current,
             state="failed",
             retrieval_mode="none",
             reason=type(exc).__name__,
         )
+        if final_state.get("state") == DEGRADED_STATE:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
+        if final_state.get("state") == "cancelled":
+            _cleanup_payload(job_dir)
+            return {"state": "cancelled", "selected": 0, "stored": 0}
+        if not final_state:
+            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         _cleanup_payload(job_dir)
-        return {"state": "failed", "selected": 0, "stored": 0}
+        return {
+            "state": str(final_state.get("state") or "failed"),
+            "selected": 0,
+            "stored": 0,
+        }
 
 
 def _activation_capacity_snapshot(
     service, job_dir: Path, pack_id: str
 ) -> tuple[int, int, int]:
     """Read activation capacity inputs off the event-loop thread."""
-    status = KnowledgeStore(job_dir / "knowledge.db").chunk_status()
-    return (
-        int(status["chunks_total"]),
-        int(status["chunks_ready"]),
-        _ready_chunks_replaced_by_job(service, pack_id),
-    )
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+    with _jobs_registry_lock(service.knowledge_root):
+        safe_job_dir = _revalidated_job_dir(safe_job_dir)
+        if safe_job_dir is None:
+            raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+        status = KnowledgeStore(safe_job_dir / "knowledge.db").chunk_status()
+        return (
+            int(status["chunks_total"]),
+            int(status["chunks_ready"]),
+            _ready_chunks_replaced_by_job(service, pack_id),
+        )
