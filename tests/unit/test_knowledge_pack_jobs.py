@@ -327,6 +327,65 @@ def test_staged_chunk_total_must_match_identity(tmp_path, monkeypatch):
     assert "chunks_total" not in persisted
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("entries", "content_bytes", "chunks", "pack_id"),
+)
+def test_staged_artifact_must_match_immutable_capacity_identity(
+    tmp_path,
+    mutation,
+):
+    content = "A" * 1_000 if mutation == "chunks" else "A staged entry body."
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack(content=content))
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    artifact_path = job_dir / "pack.neko-knowledge.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    if mutation == "entries":
+        extra = {**artifact["entries"][0], "title": "A second staged entry"}
+        artifact["entries"].append(extra)
+    elif mutation == "content_bytes":
+        artifact["entries"][0]["content"] += "!"
+    elif mutation == "chunks":
+        # Preserve entries and UTF-8 byte count while crossing a chunk boundary.
+        artifact["entries"][0]["content"] = "A" * 900 + "\n\n" + "B" * 98
+    else:
+        artifact["pack_id"] = "different-fixture"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "job_capacity_identity_mismatch"
+    assert not (job_dir / "knowledge.db").exists()
+    assert service.list_packs() == ()
+
+
+def test_activation_rechecks_staged_artifact_capacity_identity(tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    prepared = _prepare_job(job_dir)
+    assert prepared["state"] == "verifying_index"
+    artifact_path = job_dir / "pack.neko-knowledge.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact["entries"][0]["content"] += "tampered"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    activated = pack_jobs._activate_job(
+        service,
+        job_dir,
+        prepared,
+        mode="bm25",
+    )
+
+    assert activated["state"] == "degraded"
+    assert activated["reason"] == "job_capacity_identity_mismatch"
+    assert service.list_packs() == ()
+
+
 @pytest.mark.parametrize("field", ("created_at", "updated_at"))
 @pytest.mark.parametrize("value", ("not-a-time", -1, 1.5, True))
 def test_invalid_job_timestamps_are_quarantined(tmp_path, field, value):

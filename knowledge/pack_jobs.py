@@ -664,6 +664,31 @@ def _load_job_pack(job_dir: Path) -> KnowledgePack:
     return validate_pack(_read_json(job_dir / "pack.json"))
 
 
+def _load_capacity_validated_job_pack(
+    job_dir: Path,
+    identity: dict[str, Any],
+) -> KnowledgePack | None:
+    """Reload staged source and prove it still matches immutable admission data."""
+    try:
+        pack = _load_job_pack(job_dir)
+        preflight = preflight_pack(pack)
+    except (OSError, UnicodeError, ValueError):
+        return None
+    actual_capacity = {
+        "entries_total": preflight.entries,
+        "chunks_total": preflight.projected_chunks,
+        "content_bytes": preflight.content_bytes,
+    }
+    if pack.pack_id != str(identity.get("pack_id") or ""):
+        return None
+    if any(
+        actual_capacity[field] != identity.get(field)
+        for field in IDENTITY_CAPACITY_FIELDS
+    ):
+        return None
+    return pack
+
+
 def _subscription(job_dir: Path) -> dict[str, str] | None:
     payload = _read_json(job_dir / "subscription.json")
     if not payload:
@@ -734,10 +759,12 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
             return state
         if not state or state.get("state") in TERMINAL_STATES:
             return state
+        pack = _load_capacity_validated_job_pack(job_dir, state)
+        if pack is None:
+            return _capacity_mismatch_state(job_dir, state)
         staging_store: KnowledgeStore | None = None
         if state.get("state") in {"queued", "validating", "building_fts"}:
             state = _write_state(job_dir, state, state="building_fts")
-            pack = _load_job_pack(job_dir)
             staging_store = KnowledgeStore(job_dir / "knowledge.db")
             staging_store.replace_source(
                 pack.source_tag,
@@ -757,7 +784,6 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
                 # ``verifying_index`` is a durable restart boundary.  Reopen and
                 # reconcile the staging database instead of relying on locals
                 # created by the preceding in-process state transition.
-                pack = _load_job_pack(job_dir)
                 staging_store = KnowledgeStore(job_dir / "knowledge.db")
                 staging_store.replace_source(
                     pack.source_tag,
@@ -859,7 +885,9 @@ def _activate_job_validated(
             if current.get("state") == "cancelled":
                 _cleanup_payload(job_dir)
             return current
-        pack = _load_job_pack(job_dir)
+        pack = _load_capacity_validated_job_pack(job_dir, current)
+        if pack is None:
+            return _capacity_mismatch_state(job_dir, current)
         staging_store = KnowledgeStore(job_dir / "knowledge.db")
         embeddings = staging_store.ready_embedding_records() if mode != "bm25" else ()
         result = install_pack(
