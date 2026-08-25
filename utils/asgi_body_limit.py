@@ -45,6 +45,7 @@ body into memory before validating its shape.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 from collections.abc import Mapping
@@ -109,7 +110,7 @@ class InboundBodySizeLimitMiddleware:
                 max_bytes=streamed_limit,
             )
             if exceeded:
-                spool.close()
+                await asyncio.to_thread(spool.close)
                 await self._reject(
                     send,
                     max_bytes=streamed_limit,
@@ -123,7 +124,7 @@ class InboundBodySizeLimitMiddleware:
                     send,
                 )
             finally:
-                spool.close()
+                await asyncio.to_thread(spool.close)
             return
 
         if self._exceeds_limit(content_length, content_type):
@@ -172,10 +173,10 @@ class InboundBodySizeLimitMiddleware:
             size += len(body)
             if size > max_bytes:
                 return spool, True, disconnected
-            spool.write(body)
+            await asyncio.to_thread(spool.write, body)
             if not message.get("more_body", False):
                 break
-        spool.seek(0)
+        await asyncio.to_thread(spool.seek, 0)
         return spool, False, disconnected
 
     @staticmethod
@@ -186,12 +187,10 @@ class InboundBodySizeLimitMiddleware:
             nonlocal finished
             if finished:
                 return {"type": "http.disconnect"}
-            chunk = spool.read(64 * 1024)
+            chunk = await asyncio.to_thread(spool.read, 64 * 1024)
             if chunk:
-                more_body = spool.read(1) != b""
-                if more_body:
-                    spool.seek(-1, 1)
-                else:
+                more_body = len(chunk) == 64 * 1024
+                if not more_body:
                     finished = True
                 return {
                     "type": "http.request",

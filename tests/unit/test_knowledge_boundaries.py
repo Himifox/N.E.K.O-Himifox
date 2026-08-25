@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import multiprocessing
 from pathlib import Path
 import sqlite3
 import threading
@@ -20,6 +21,17 @@ from knowledge.packs import (
     validate_pack,
 )
 from knowledge.store import KnowledgeStoreError
+
+
+def _hold_process_mutation_lock(path, entered, release):
+    with mutation_lock(path):
+        entered.set()
+        release.wait(timeout=5)
+
+
+def _enter_process_mutation_lock(path, entered):
+    with mutation_lock(path):
+        entered.set()
 
 
 def _entry(
@@ -340,6 +352,33 @@ def test_mutation_locks_for_different_paths_do_not_block_each_other(tmp_path):
         second.join(timeout=2)
     assert not first.is_alive()
     assert not second.is_alive()
+
+
+def test_mutation_lock_serializes_independent_processes(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    first_entered = context.Event()
+    release_first = context.Event()
+    second_entered = context.Event()
+    lock_path = str(tmp_path / "shared-registry.json")
+    first = context.Process(
+        target=_hold_process_mutation_lock,
+        args=(lock_path, first_entered, release_first),
+    )
+    second = context.Process(
+        target=_enter_process_mutation_lock,
+        args=(lock_path, second_entered),
+    )
+    first.start()
+    assert first_entered.wait(timeout=5)
+    second.start()
+    try:
+        assert not second_entered.wait(timeout=0.2)
+    finally:
+        release_first.set()
+    assert second_entered.wait(timeout=5)
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert first.exitcode == second.exitcode == 0
 
 
 def test_unified_runtime_does_not_load_or_package_legacy_datasets():

@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+import threading
+
+import utils.asgi_body_limit as body_limit_module
 
 from utils.asgi_body_limit import (
     DEFAULT_MAX_INBOUND_BODY_BYTES,
@@ -229,3 +233,57 @@ def test_exact_streamed_path_replays_valid_body_without_changing_bytes():
 
     assert called == {"hit": True, "body": b"firstsecond"}
     assert sent[0]["status"] == 200
+
+
+def test_streamed_spool_file_io_runs_off_the_event_loop(monkeypatch):
+    event_thread = threading.get_ident()
+    real_spooled_temporary_file = tempfile.SpooledTemporaryFile
+    calls: dict[str, list[int]] = {
+        "write": [],
+        "seek": [],
+        "read": [],
+        "close": [],
+    }
+
+    class RecordingSpool:
+        def __init__(self):
+            self._spool = real_spooled_temporary_file(max_size=1)
+
+        def write(self, body):
+            calls["write"].append(threading.get_ident())
+            return self._spool.write(body)
+
+        def seek(self, offset):
+            calls["seek"].append(threading.get_ident())
+            return self._spool.seek(offset)
+
+        def read(self, size):
+            calls["read"].append(threading.get_ident())
+            return self._spool.read(size)
+
+        def close(self):
+            calls["close"].append(threading.get_ident())
+            return self._spool.close()
+
+    monkeypatch.setattr(
+        body_limit_module.tempfile,
+        "SpooledTemporaryFile",
+        lambda **_kwargs: RecordingSpool(),
+    )
+    path = "/api/public-knowledge/subscriptions/apply"
+    middleware = InboundBodySizeLimitMiddleware(
+        None,
+        streamed_path_limits={path: 128},
+    )
+    scope = _http_scope([(b"content-type", b"multipart/form-data")])
+    scope["path"] = path
+
+    called, _sent = _run(_drive_chunks(middleware, scope, [b"a" * 64, b"b"]))
+
+    assert called["body"] == b"a" * 64 + b"b"
+    assert all(calls.values())
+    assert all(
+        thread_id != event_thread
+        for method_calls in calls.values()
+        for thread_id in method_calls
+    )
