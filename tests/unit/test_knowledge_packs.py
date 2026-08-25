@@ -9,6 +9,8 @@ import pytest
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.source_registry import get_source
 from knowledge.packs import (
+    MAX_PACK_TAG_BYTES_PER_ENTRY,
+    MAX_PACK_TAGS_PER_ENTRY,
     MAX_PACK_TERM_BYTES_PER_ENTRY,
     MAX_PACK_TERMS_PER_ROLE,
     install_pack,
@@ -193,6 +195,37 @@ def test_pack_accepts_the_term_cardinality_boundary():
     pack = validate_pack(payload)
 
     assert len(pack.entries[0].aliases) == MAX_PACK_TERMS_PER_ROLE
+
+
+def test_pack_rejects_too_many_tags_before_normalization():
+    payload = _payload()
+    payload["entries"][0]["tags"] = [
+        f"topic:tag-{index}" for index in range(MAX_PACK_TAGS_PER_ENTRY + 1)
+    ]
+
+    with pytest.raises(ValueError, match="contains too many tags"):
+        validate_pack(payload)
+
+
+def test_pack_rejects_oversized_tag_metadata_by_utf8_bytes():
+    payload = _payload()
+    payload["entries"][0]["tags"] = [
+        "topic:" + "猫" * (MAX_PACK_TAG_BYTES_PER_ENTRY // 3)
+    ]
+
+    with pytest.raises(ValueError, match="metadata size limit"):
+        validate_pack(payload)
+
+
+def test_pack_accepts_the_tag_cardinality_boundary():
+    payload = _payload()
+    payload["entries"][0]["tags"] = [
+        f"topic:tag-{index}" for index in range(MAX_PACK_TAGS_PER_ENTRY)
+    ]
+
+    pack = validate_pack(payload)
+
+    assert len(pack.entries[0].tags) == MAX_PACK_TAGS_PER_ENTRY + 1
 
 
 def test_material_type_override_changes_routing_without_rewriting_entries(tmp_path):

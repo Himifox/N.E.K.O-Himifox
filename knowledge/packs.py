@@ -29,6 +29,8 @@ MAX_PACK_ENTRIES = 5_000
 MAX_PACK_PROJECTED_CHUNKS = 5_000
 MAX_PACK_TERMS_PER_ROLE = 64
 MAX_PACK_TERM_BYTES_PER_ENTRY = 32 * 1024
+MAX_PACK_TAGS_PER_ENTRY = 64
+MAX_PACK_TAG_BYTES_PER_ENTRY = 32 * 1024
 MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024
 _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
@@ -643,6 +645,14 @@ def _entry_from_payload(
     tags = payload.get("tags", [])
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
         raise ValueError(f"entries[{index}].tags must be a string array")
+    if len(tags) > MAX_PACK_TAGS_PER_ENTRY:
+        raise ValueError(f"entries[{index}].tags contains too many tags")
+    try:
+        tag_bytes = sum(len(tag.encode("utf-8")) for tag in tags)
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"entries[{index}].tags must contain valid UTF-8") from exc
+    if tag_bytes > MAX_PACK_TAG_BYTES_PER_ENTRY:
+        raise ValueError(f"entries[{index}].tags exceeds the metadata size limit")
     if any(tag.startswith("source:") for tag in tags):
         raise ValueError("community entries cannot declare source tags")
     return KnowledgeEntry(
