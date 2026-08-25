@@ -791,7 +791,7 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 
 ## 第五轮：持久化恢复与检索精度
 
-第五轮来自提交 `0d727115c` 完成后新增的 7 条 review thread。逐项对照当前实现后均成立；其中 semantic entry 去重曾作为第三轮后续增强记录，本轮既然已有可构造的漏召回反例，正式纳入正确性边界。
+第五轮来自提交 `0d727115c` 完成后新增的 7 条 review thread。逐项追踪生产调用链后 6 条成立，混合脚本 routing 一条不成立；其中 semantic entry 去重曾作为第三轮后续增强记录，本轮既然已有可构造的漏召回反例，正式纳入正确性边界。
 
 ### 修复单元 AG：作业状态时间字段必须先验证再参与排序
 
@@ -810,10 +810,11 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 - 相同分数使用 entry rowid 与 chunk index 建立稳定次序；`best_chunk_index` 继续指向该 entry 的最高分 chunk。
 - 总向量上限仍为 20,000，单次扫描 O(chunks)，候选映射 O(unique entries)；不扩大快照和返回预算。
 
-### 修复单元 AJ：仅纯 Latin/ASCII 数字术语使用边界匹配
+### 复核结论 AJ：混合脚本 routing 评论不成立
 
-- Latin boundary 入口要求规范化术语至少含一个 ASCII 字母或数字，且不存在其他脚本的字母或数字。空格、`+`、`#`、`.`、`-` 等标点允许保留为分隔符。
-- `C语言`、`Python教程` 等混合脚本走 compact strong term，不能退化为 `c` 或 `python`；`C++`、`C#`、`.NET`、`Win32` 继续使用 Latin token 边界。
+- `KnowledgeService._get_routing_state()` 是产品中唯一的 `RoutingConfig` 构造点；它使用 `_effective_match_policy()`，而该函数只在 `KNOWLEDGE_MATCH_POLICY` 上替换来源集合，保留 `latin_word_boundaries=False`。
+- 因此评论所指 `_contains_latin()` 分支当前产品路径不可达。`C语言` 会进入完整的 compact strong term `c语言`，单独的 `C` 不会命中；仓库也没有第二个启用 Latin boundary 的 `MatchPolicy` 实例。
+- 不为不可达的预留分支扩大本轮实现。在线程中回复完整调用依据并 resolve；若未来启用该开关，启用提交必须先定义纯 Latin 与混合脚本契约及回归测试。
 
 ### 修复单元 AK：degraded 作业必须有受控恢复入口
 
@@ -834,6 +835,6 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 ## 第五轮实施顺序与关闭条件
 
 1. AG、AH、AM 先修持久化和健康面，确保损坏作业不会让诊断与后台维护同时失效。
-2. AI、AJ、AL 独立收敛检索语义，分别覆盖 chunk 拥塞、混合脚本和标点术语的反例。
+2. AI、AL 独立收敛检索语义，分别覆盖 chunk 拥塞和标点术语的反例；AJ 只回复不可达调用链证据。
 3. AK 贯通 Main Server、Bridge、前端和 CLI；不复制删除逻辑，只暴露既有严格 discard 能力。
 4. 完整回归、前端类型/i18n、窄屏横向溢出与远端 CI 通过后，逐条回复提交和测试依据，再 resolve 7 条线程。

@@ -368,26 +368,39 @@ def _score_snapshot(
         ]
         if not len(eligible_indices):
             return []
-    eligible_scores = scores[eligible_indices]
+    best_chunk_by_rowid: dict[int, int] = {}
+    for raw_index in eligible_indices:
+        index = int(raw_index)
+        score = float(scores[index])
+        if score < SEMANTIC_THRESHOLD:
+            continue
+        rowid = int(snapshot.entry_rowids[index])
+        previous = best_chunk_by_rowid.get(rowid)
+        if previous is None or (score, -int(snapshot.chunk_indices[index])) > (
+            float(scores[previous]),
+            -int(snapshot.chunk_indices[previous]),
+        ):
+            best_chunk_by_rowid[rowid] = index
+    if not best_chunk_by_rowid:
+        return []
+    unique_indices = sorted(
+        best_chunk_by_rowid.values(),
+        key=lambda index: (
+            -float(scores[index]),
+            int(snapshot.entry_rowids[index]),
+            int(snapshot.chunk_indices[index]),
+        ),
+    )
     candidate_count = min(
-        len(eligible_indices),
+        len(unique_indices),
         max(int(limit) * 8, 64),
     )
-    if candidate_count < len(eligible_indices):
-        candidate_positions = np.argpartition(eligible_scores, -candidate_count)[
-            -candidate_count:
-        ]
-        candidate_indices = eligible_indices[candidate_positions]
-        candidate_indices = candidate_indices[np.argsort(-scores[candidate_indices])]
-    else:
-        candidate_indices = eligible_indices[np.argsort(-eligible_scores)]
+    candidate_indices = unique_indices[:candidate_count]
     rowids = [int(snapshot.entry_rowids[int(index)]) for index in candidate_indices]
     entries = store.load_entries_by_rowids(rowids)
     best: dict[tuple[str, str], KnowledgeHit] = {}
     for index in candidate_indices:
         score = float(scores[index])
-        if score < SEMANTIC_THRESHOLD:
-            break
         entry = entries.get(int(snapshot.entry_rowids[int(index)]))
         if entry is None:
             continue

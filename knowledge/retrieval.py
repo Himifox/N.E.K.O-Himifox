@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -168,7 +169,12 @@ class KnowledgeRetriever:
                 continue
             if entry_key(entry) in disabled:
                 continue
-            score = _score(entry, query_text, float(row["rank"]) if "rank" in row.keys() else 0.0)
+            score = _score(
+                entry,
+                query_text,
+                _folded_exact_surface(query),
+                float(row["rank"]) if "rank" in row.keys() else 0.0,
+            )
             hits.append(KnowledgeHit(entry=entry, score=score))
         hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
         return hits[:limit]
@@ -248,14 +254,26 @@ def _get_cached_mention_matcher(
     return cached.matcher
 
 
-def _score(entry, normalized_query: str, fts_rank: float) -> float:
+def _folded_exact_surface(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
+def _score(
+    entry,
+    normalized_query: str,
+    query_surface: str,
+    fts_rank: float,
+) -> float:
     title = normalize_search_text(entry.title)
     aliases = [normalize_search_text(value) for value in entry.aliases]
     recognition_terms = [normalize_search_text(value) for value in entry.recognition_terms]
     tags = [normalize_search_text(value) for value in entry.tags]
-    if normalized_query == title:
+    if query_surface == _folded_exact_surface(entry.title):
         return 1_000.0
-    if normalized_query in aliases:
+    if query_surface in {
+        _folded_exact_surface(value)
+        for value in entry.aliases
+    }:
         return 950.0
     if normalized_query in title:
         return 850.0

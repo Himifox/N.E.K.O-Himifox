@@ -80,6 +80,16 @@ def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_pat
     assert not service.database_path().exists()
 
 
+def test_lexical_exact_match_preserves_meaningful_punctuation(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    store.upsert(_entry("C++", "source:fixture"))
+    store.upsert(_entry("C#", "source:fixture"))
+
+    assert service.search("C++", limit=1)[0].entry.title == "C++"
+    assert service.search("C#", limit=1)[0].entry.title == "C#"
+
+
 def test_empty_and_populated_status_share_chunk_fields(tmp_path):
     empty_status = open_knowledge(tmp_path / "empty").get_status()
     populated_service = open_knowledge(tmp_path / "populated")

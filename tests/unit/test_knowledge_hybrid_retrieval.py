@@ -204,6 +204,44 @@ def test_semantic_scan_filters_disabled_chunks_before_top_k(tmp_path, monkeypatc
     assert result[0].semantic_score == pytest.approx(0.8)
 
 
+def test_semantic_scan_caps_unique_entries_after_collapsing_chunks(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    for title in ("Crowd one", "Crowd two", "Distinct result"):
+        store.upsert(_entry(title))
+    scores = [1.0] * 32 + [0.99] * 32 + [0.8]
+    snapshot = VectorIndexSnapshot(
+        revision=1,
+        model_id="fixture",
+        matrix=np.asarray(
+            [[score, np.sqrt(1.0 - score**2)] for score in scores],
+            dtype=np.float32,
+        ),
+        entry_rowids=np.asarray([1] * 32 + [2] * 32 + [3], dtype=np.int64),
+        chunk_indices=np.asarray([*range(32), *range(32), 0], dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: frozenset(),
+    )
+
+    result = _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=3,
+        allowed_source_tags=None,
+    )
+
+    assert [hit.entry.title for hit in result] == [
+        "Crowd one",
+        "Crowd two",
+        "Distinct result",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_semantic_search_uses_versioned_query_input(tmp_path, monkeypatch):
     store = KnowledgeStore(tmp_path / "knowledge.db")
