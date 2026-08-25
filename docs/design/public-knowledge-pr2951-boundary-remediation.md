@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第七轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第七轮均已实施，第八轮方案已归档、等待实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1041,3 +1041,108 @@ term 仅包含拉丁字母、数字、组合音标及允许标点时，嵌入式
 | `aef63512d` | BD | 每条社区 entry 的 tag 限制为 64 项、32 KiB UTF-8 聚合成本，并在 KnowledgeEntry 构造前拒绝 |
 
 第七轮 Pack 回归 34 项通过；前端知识 API 与 request-gate 回归 11 项及 `vue-tsc --build` 通过；对应 Python 文件 Ruff 与 diff whitespace 检查通过。最终远端检查结果以本节实施记录提交所在 PR 头部为准。
+
+## 第八轮：未发布兼容撤销、身份守恒与候选隔离
+
+第七轮实施提交 `ec0b29e17` 的复审产生 6 条未解决行内线程，并在 CodeRabbit review body 中产生 1 条 outside-diff 有效评论。分页读取全部 review threads 并沿生产调用链复核后，7 条均成立；因此本节只冻结修复边界和关闭条件，不提前 resolve。此前已经回复并修复的线程在 GitHub 上均为 resolved。
+
+本轮不扩大知识包文件、entry、chunk 或向量容量，不改变五字段内容 Schema，不自动修复损坏的持久化证据，也不通过增加无界候选或主线程工作量换取正确性。
+
+### 修复单元 BE：作业容量只信任不可变 identity
+
+涉及：`knowledge/pack_jobs.py::_read_job()` 只比较 `job_id`、`pack_id`，未验证 mutable state 容量计数的 P2 评论。
+
+- 对具有有效 `identity.json` 的作业，`entries_total`、`chunks_total` 和 `content_bytes` 必须先按非负 ASCII 整数规则规范化，再与 identity 中的不可变值逐项相等。state 缺失字段、类型非法、负值或数值不一致均隔离为 `degraded`，使用稳定原因 `job_capacity_identity_mismatch`。
+- degraded payload 从可信 identity 携带三项容量，不得保留 state 中被篡改的零值或负值。这样 `_ensure_community_capacity()` 继续把隔离作业计入预算，并保持同 pack 互斥；processor 不执行该作业。
+- `identity.json` 缺失、不可读或无效时统一视为 orphan/degraded，并全局拒绝新 staging，直到用户通过严格 discard 清除证据。删除修复单元 AP 为本 PR 中间 staged job 保留的 state-only 兼容分支；新功能首次发布不接受缺少不可变身份的作业格式。
+- staging 后写入的实际 chunk 总数必须与 preflight 的确定性 projected chunk 数一致；若不一致，视为实现或制品不一致并隔离，不能修改 identity 来追随 mutable state。
+
+验收：分别把三项 state 计数改为 0、负数、布尔、浮点和不同正整数，列表均返回带 identity 原始预算的 degraded；新 staging 仍按该预算拒绝越过 20,000 entries/chunks 与 64 MiB content；未篡改作业不回归；缺失 identity 的 state-only 作业只可诊断和显式 discard，绝不调度。
+
+### 修复单元 BF：撤销未发布旧布局的自动兼容
+
+涉及：`knowledge/legacy_layout.py::_collect_legacy_data()` 对恢复源调用 `KnowledgeStore.assert_compatible()`，可能原地迁移旧 Schema 的 P2 评论。
+
+#### 发布事实与决策门
+
+- PR 与 `upstream/main` 的共同基线是 `fb78210ada`。该基线只有原始数据文件，没有本 PR 新增的统一公共知识运行时；`knowledge/legacy_layout.py` 到本 PR 的 `7d3b16a0f` 才出现。
+- `moegirl-knowledge/knowledge.db`、`corpora/knowledge.db` 和 `public-knowledge/knowledge.db` 是本 PR 早期至中期的开发布局。当前 Git 历史中没有 tag 包含 `7d3b16a0f`，包含它的远端引用只有本 PR 分支及其备份分支。
+- 因此默认结论是：这些格式没有形成已发布兼容合同。为未发布中间格式保留启动时自动迁移，会永久引入源库改写、注册表合并、策略继承、向量兼容、冲突恢复和失败发布边界，收益不足以覆盖风险。
+- 实施前由维护者做最后一次外部分发确认。只有提供测试包、预览版或其他分发渠道及明确的数据保留承诺，才暂停删除；不能以“也许有人运行过 PR 分支”建立生产兼容合同。
+
+#### 删除范围
+
+- 删除 `knowledge/legacy_layout.py` 及 `KnowledgeService.__init__()` 中的自动探测和调用。服务首次发布只认识调用方传入的 database path 或最终统一的 `<knowledge_root>/knowledge.db`。
+- 删除仅为 split/previous-unified 布局存在的 entries、registry、override、embedding policy 和 vector 合并代码；删除相应迁移专用测试及架构文档中的自动迁移承诺。
+- 旧目录在运行时完全忽略：不读取、不移动、不改写，也不自动删除。开发期间运行过早期分支的人应删除自己的测试数据并从原制品重新导入；产品代码不为开发工作区提供隐式恢复。
+- 保留最终统一数据库自身的 Schema guard、损坏状态诊断和当前格式内的事务更新；修复单元 R 等正式统一格式边界不因删除 layout migration 而撤销。修复单元 U、AW 中只服务旧布局合并的部分成为历史记录，由本单元取代；通用数据库错误的结构化 degraded 语义继续保留。
+
+若最终出现真实外部分发证据，替代方案必须是独立、显式、一次性的离线维护工具：用户先备份并主动运行，工具在 staging 副本上升级和合并，成功后明确选择发布目标；不得恢复为每次服务构造时自动探测和改写旧库。该工具需要另立设计和测试，不属于本轮默认实现。
+
+验收：旧 split/previous-unified 目录存在时，构造 KnowledgeService 不访问它们、不创建统一数据库，也不改变旧文件；仓库不再包含 runtime migration import/call 和迁移专用测试；全新安装、最终统一路径读取及重新导入知识包通过。若维护者在实施前提供外部分发证据，本单元停止执行并记录证据，不能半保留自动迁移。
+
+### 修复单元 BG：disabled override 使用规范化 entry 身份
+
+涉及：`knowledge/catalog_overrides.py` 以原始展示标题作为 key，pack 更新仅改变大小写、NFKC 或空白时会重新启用词条的 P2 评论。
+
+- `EntryKey` 的语义固定为 `(source_tag, normalize_knowledge_title(title))`。`entry_key()`、`set_entry_disabled()` 和 `load_disabled_entries()` 使用同一规范化函数；读取旧 override 时在内存中规范化并折叠等价重复项，但不因只读操作改写文件。
+- override 文件只保存身份键；当前展示标题继续来自 entries 表，不把规范化字符串显示给用户。下一次显式 enable/disable mutation 会以规范形式原子写回整个集合，实现惰性收敛。
+- `KnowledgeStore.entry_rowids_for_keys()` 必须按同一 NFKC、casefold、空白规范匹配数据库展示标题，可复用已注册的确定性 Unicode folded collation；不能把规范 key 与原始 SQL title 做二进制等值比较。
+- 词法、semantic、routing、随机素材、目录展示和 status 的 disabled 判断全部继续通过共享 `entry_key()`/rowid 映射，不允许某条路径保留原始 title 比较。
+
+验收：禁用 `Straße` 后以 `STRASSE`、兼容字符或不同空白更新同一来源词条，词法、semantic、routing 和随机素材都仍排除它；管理页仍显示新标题且可重新启用；旧格式 override 首次读取有效、首次 mutation 后收敛为规范 key。
+
+### 修复单元 BH：目标素材类型拥有独立候选预算
+
+涉及：`KnowledgeService.asearch()` 在区分 `target_material_type` 前使用共享候选池，knowledge 候选可把 corpus 全部挤出的 P2 评论。
+
+- 仅当调用方指定 `target_material_type` 时，根据已读取的 `source_types` 把允许来源拆成 primary 与 fallback 两组；两组分别执行词法候选召回、semantic entry 去重、RRF 融合和固定候选截断，随后按 primary 优先、fallback 补足的既有返回契约组合。
+- query embedding 仍只准备一次。prepared semantic query 可对两组来源分别评分，不能为每种素材重新加载模型或重复生成 embedding。
+- 每组使用当前固定候选预算，不把预算乘成无界值。没有 primary 来源或 primary 无命中时允许 fallback；存在合格 primary 时，任意数量的高分 fallback 都不能在截断前删除它。
+- 未指定 target 的自动会话双类型检索保持现有共享融合与排序，避免本轮改变普通聊天相关性。
+
+验收：BM25-only 下构造至少 24 个更早或同分 knowledge 候选和一个 corpus 候选，显式 corpus 查询必须先返回 corpus；semantic-only 和双路融合具有同一保证；primary 不足、来源白名单、deadline 及无 target 排序不回归。
+
+### 修复单元 BI：indexer 的第二次作业枚举离开事件循环
+
+涉及：`knowledge/indexer.py` 在 `process_pack_jobs()` 后直接调用 `service.list_pack_jobs()` 的 P2 评论。
+
+- 保留 post-processing fresh enumeration，因为当前轮可能刚改变作业终态；通过 `await asyncio.to_thread(service.list_pack_jobs)` 执行，不复用可能过期的轮前快照。
+- 文件锁等待、目录遍历、JSON 解析和 terminal prune 全部留在工作线程；事件循环只接收返回快照并计算 `pending_jobs`、`backlog` 与是否进入普通 embedding batch。
+- 不新增后台 worker、不改变每轮作业推进数量，也不放宽 degraded/terminal 的 pending 语义。
+
+验收：分别覆盖轮前和轮后两次枚举的线程标识；另一进程持有 jobs-root lock 时并行 event-loop tick 可运行；作业刚完成后同轮可以正确进入普通向量维护。
+
+### 修复单元 BJ：UTF-8 元数据在编码前受剩余预算约束
+
+涉及：`knowledge/packs.py` 在编码全部 tag 后才检查 32 KiB 聚合上限的 Minor 评论；相同输入成本规则同时适用于修复单元 AZ 的 terms。
+
+- 抽取只计算、不保留编码副本的 bounded UTF-8 累计 helper。对每个原始字符串先计算剩余预算；由于合法 UTF-8 每个 Unicode code point 至少占一个字节，`len(value) > remaining` 时可在编码前立即拒绝。
+- 通过字符下界检查后才执行一次 `value.encode("utf-8")`；捕获预算内字符串的 `UnicodeEncodeError`，再以实际 bytes 长度检查 remaining 并累计。单次临时编码至多由 32 KiB 字符预算约束，不再由 10 MiB artifact 上限决定峰值。
+- tag 与两个 term role 共用 helper 和各自既有 32 KiB entry 预算；数量上限、重复项计费、source tag 禁止、错误字段名和边界值语义保持不变。
+- 不截断、不自动丢弃超限 metadata，也不把 Python 字符数误当最终 UTF-8 字节数。
+
+验收：超长 ASCII tag 在 encode 前拒绝；字符数在预算内但 UTF-8 字节超限的多字节 tag 在有界编码后拒绝；孤立 surrogate 返回 UTF-8 校验错误；terms 的同类反例、恰好 32 KiB 和 64 项边界均通过。
+
+### 修复单元 BK：概览刷新使用共享世代和分资源 latest gate
+
+涉及：`KnowledgeManager.vue::refreshOverviewInBackground()` 只使缓存 stale，无法阻止旧 `loadStatus()`、`loadPacks()` 或 `refreshAll()` 响应覆盖新状态的 outside-diff 评论。
+
+- 引入共享 `overviewEpoch`，代表 status、packs 与 session cache 所属的服务端事实世代。任何成功 mutation 安排后台刷新时，必须在 timer/queue/网络 await 之前同步推进 epoch，使此前所有在途概览响应立即失效。
+- status 与 packs 各自保留 latest-request gate。每次网络请求同时捕获当前 epoch 和该资源 request ID；只有组件未销毁、epoch 仍相同且资源 gate 仍 latest 时，才能写 ref、对应 cache、loading/error 状态。
+- `refreshAll()` 开始一个新 epoch，并让 status/packs 两个请求共享该 epoch，但分别取得资源 request ID。这样同一次全量刷新可同时提交两个结果，后发的 packs-only 请求也只取代旧 packs，不会错误阻止仍有效的 status。
+- `refreshOverviewInBackground()` 在排队前推进 epoch并标 stale；实际执行时使用该 epoch 发起成对刷新。若等待串行 refresh chain 期间又产生 mutation，新 epoch 会使旧排队任务即使执行也不能提交。
+- stale 请求的 `finally` 不得清除更新请求的 loading 标志；只有拥有对应 resource request ID 的请求可结束该资源 loading。卸载时推进 epoch并使两个资源 gate 失效。
+
+验收：删除 pack 后让删除前 `loadPacks()` 最晚返回，已删除项不能重新出现；mutation 前 status 与 mutation 后 packs 交错时缓存不能混入旧世代；同一 `refreshAll()` 的 status/packs 都可提交；后发 packs-only 不饿死 status；旧请求的 finally 不提前关闭新请求 loading。
+
+## 第八轮实施顺序与关闭条件
+
+1. 先提交本节和设计索引，冻结 BE–BK 的信任来源、失败语义和回归反例。
+2. 数据安全提交优先完成 BE、BF、BG：容量篡改必须失败关闭，未发布旧布局必须从 runtime 移除，disabled 身份必须跨 pack replacement 保持。
+3. 检索与调度提交完成 BH、BI：目标类型独立预算与轮后目录枚举分别验证，不混入排序调参或 worker 架构调整。
+4. 输入和前端提交完成 BJ、BK：bounded UTF-8 helper 覆盖 terms/tags；概览并发测试使用可控延迟 Promise 覆盖 epoch、resource gate 和 loading 所有权。
+5. 运行 Python 3.11 下相关 pack/job/service/retrieval/indexer/router 回归、Ruff 和 diff 检查；确认迁移专用测试已删除且最终统一路径仍有覆盖。运行前端知识 API/request-gate 测试与 `vue-tsc --build`。若新增用户可见文案，必须同步全部 i18n；按当前方案不需要新增文案。
+6. 实现提交推送且 PR 远端相关检查通过后，逐条回复设计单元、提交和精确反例测试，再 resolve 6 条行内线程。BK 是 review-body outside-diff，没有 GitHub Conversation 对象；通过 PR 评论留下同等实现与验证依据，并等待下一轮 review 不再报告。
+
+任何一条仅有文档方案、没有远端可见实现和通过证据时都不得关闭。第八轮实施结果应在完成后追加为提交矩阵，不用计划文本冒充已实施状态。

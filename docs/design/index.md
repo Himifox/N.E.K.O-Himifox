@@ -31,7 +31,7 @@ These documents preserve design intent and implementation context. They are grou
 
 ## Active remediation plans
 
-- [PR #2951 public-knowledge boundary remediation](./public-knowledge-pr2951-boundary-remediation) — rounds 1–7 implemented
+- [PR #2951 public-knowledge boundary remediation](./public-knowledge-pr2951-boundary-remediation) — rounds 1–7 implemented; round 8 archived for implementation
 
 ## Product-flow and interaction records
 
