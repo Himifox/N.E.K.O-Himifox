@@ -737,7 +737,7 @@ async function pollImportJobs() {
         pendingImportJobs.delete(jobId)
         completed = true
         ElMessage.success(t('knowledge.importSuccess'))
-      } else if (state === 'failed' || state === 'cancelled') {
+      } else if (state === 'failed' || state === 'cancelled' || state === 'degraded') {
         pendingImportJobs.delete(jobId)
         completed = true
         ElMessage.error(t('knowledge.operationFailed'))

@@ -39,6 +39,23 @@ _KNOWLEDGE_RRF_K = 60
 _T = TypeVar("_T")
 
 
+def _empty_chunk_status() -> dict[str, int | float]:
+    return {
+        "entries_total": 0,
+        "entries_missing_chunks": 0,
+        "chunks_total": 0,
+        "chunks_pending": 0,
+        "chunks_ready": 0,
+        "chunks_stale": 0,
+        "chunks_failed": 0,
+        "chunks_failed_retryable_now": 0,
+        "chunks_failed_waiting": 0,
+        "chunks_failed_exhausted": 0,
+        "indexed_percent": 0.0,
+        "chunks_revision": 0,
+    }
+
+
 def _retrieval_busy_timeout_ms(
     deadline_monotonic: float | None,
     *,
@@ -1000,9 +1017,14 @@ class KnowledgeService:
         return count
 
     def get_status(self) -> dict:
-        from .pack_jobs import MAX_READY_VECTOR_CHUNKS
+        from .pack_jobs import (
+            DEGRADED_STATE,
+            MAX_READY_VECTOR_CHUNKS,
+            TERMINAL_STATES,
+        )
         from .packs import pack_registry_state
 
+        non_pending_job_states = TERMINAL_STATES | {DEGRADED_STATE}
         database_path = self.database_path()
         database_exists = database_path.is_file()
         store = self._store() if database_exists else None
@@ -1047,23 +1069,11 @@ class KnowledgeService:
                     "embedding_service_state": "disabled",
                     "embedding_model_id": "",
                     "pack_jobs_pending": sum(
-                        job.get("state")
-                        not in {"active", "cancelled", "failed", "degraded"}
+                        job.get("state") not in non_pending_job_states
                         for job in pack_jobs
                     ),
                     "vector_budget_chunks": MAX_READY_VECTOR_CHUNKS,
-                    "entries_total": 0,
-                    "entries_missing_chunks": 0,
-                    "chunks_total": 0,
-                    "chunks_pending": 0,
-                    "chunks_ready": 0,
-                    "chunks_stale": 0,
-                    "chunks_failed": 0,
-                    "chunks_failed_retryable_now": 0,
-                    "chunks_failed_waiting": 0,
-                    "chunks_failed_exhausted": 0,
-                    "indexed_percent": 0.0,
-                    "chunks_revision": 0,
+                    **_empty_chunk_status(),
                 }
                 if too_new:
                     degraded.update(
@@ -1074,20 +1084,7 @@ class KnowledgeService:
         chunk_status = (
             store.chunk_status()
             if store is not None
-            else {
-                "entries_total": 0,
-                "entries_missing_chunks": 0,
-                "chunks_total": 0,
-                "chunks_pending": 0,
-                "chunks_ready": 0,
-                "chunks_stale": 0,
-                "chunks_failed": 0,
-                "chunks_failed_retryable_now": 0,
-                "chunks_failed_waiting": 0,
-                "chunks_failed_exhausted": 0,
-                "indexed_percent": 0.0,
-                "chunks_revision": 0,
-            }
+            else _empty_chunk_status()
         )
         try:
             from utils.local_embedding_runtime import get_local_embedding_status
@@ -1133,7 +1130,7 @@ class KnowledgeService:
             == "corpus"
         )
         pending_pack_jobs = sum(
-            job.get("state") not in {"active", "cancelled", "failed", "degraded"}
+            job.get("state") not in non_pending_job_states
             for job in pack_jobs
         )
         return {

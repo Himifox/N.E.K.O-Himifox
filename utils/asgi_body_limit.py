@@ -162,22 +162,29 @@ class InboundBodySizeLimitMiddleware:
         spool = tempfile.SpooledTemporaryFile(max_size=min(max_bytes, 1024 * 1024))
         size = 0
         disconnected = False
-        while True:
-            message = await receive()
-            if message.get("type") == "http.disconnect":
-                disconnected = True
-                break
-            if message.get("type") != "http.request":
-                continue
-            body = message.get("body", b"")
-            size += len(body)
-            if size > max_bytes:
-                return spool, True, disconnected
-            await asyncio.to_thread(spool.write, body)
-            if not message.get("more_body", False):
-                break
-        await asyncio.to_thread(spool.seek, 0)
-        return spool, False, disconnected
+        try:
+            while True:
+                message = await receive()
+                if message.get("type") == "http.disconnect":
+                    disconnected = True
+                    break
+                if message.get("type") != "http.request":
+                    continue
+                body = message.get("body", b"")
+                size += len(body)
+                if size > max_bytes:
+                    return spool, True, disconnected
+                await asyncio.to_thread(spool.write, body)
+                if not message.get("more_body", False):
+                    break
+            await asyncio.to_thread(spool.seek, 0)
+            return spool, False, disconnected
+        except BaseException:
+            try:
+                await asyncio.shield(asyncio.to_thread(spool.close))
+            except BaseException:
+                pass
+            raise
 
     @staticmethod
     def _replay_receive(spool, *, disconnected: bool):

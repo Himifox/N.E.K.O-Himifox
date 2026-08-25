@@ -241,7 +241,7 @@ class KnowledgeStore:
             ).fetchone()
             if row is not None:
                 raw = str(row["value"])
-                if not raw.isdecimal() or not raw or str(int(raw)) != raw or int(raw) <= 0:
+                if not raw.isdecimal() or str(int(raw)) != raw or int(raw) <= 0:
                     raise KnowledgeStoreError(
                         "knowledge database schema version is invalid"
                     )

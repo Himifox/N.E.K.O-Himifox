@@ -12,6 +12,8 @@ import json
 import tempfile
 import threading
 
+import pytest
+
 import utils.asgi_body_limit as body_limit_module
 
 from utils.asgi_body_limit import (
@@ -287,3 +289,64 @@ def test_streamed_spool_file_io_runs_off_the_event_loop(monkeypatch):
         for method_calls in calls.values()
         for thread_id in method_calls
     )
+
+
+def test_streamed_spool_closes_when_receive_is_cancelled(monkeypatch):
+    close_threads = []
+
+    class RecordingSpool:
+        def close(self):
+            close_threads.append(threading.get_ident())
+
+    spool = RecordingSpool()
+    monkeypatch.setattr(
+        body_limit_module.tempfile,
+        "SpooledTemporaryFile",
+        lambda **_kwargs: spool,
+    )
+
+    async def receive():
+        raise asyncio.CancelledError
+
+    event_thread = threading.get_ident()
+    with pytest.raises(asyncio.CancelledError):
+        _run(
+            InboundBodySizeLimitMiddleware._spool_bounded_body(
+                receive,
+                max_bytes=128,
+            )
+        )
+
+    assert close_threads and close_threads[0] != event_thread
+
+
+def test_streamed_spool_closes_and_preserves_write_error(monkeypatch):
+    close_threads = []
+
+    class FailingSpool:
+        def write(self, _body):
+            raise OSError("spool write failed")
+
+        def close(self):
+            close_threads.append(threading.get_ident())
+
+    spool = FailingSpool()
+    monkeypatch.setattr(
+        body_limit_module.tempfile,
+        "SpooledTemporaryFile",
+        lambda **_kwargs: spool,
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": b"body", "more_body": False}
+
+    event_thread = threading.get_ident()
+    with pytest.raises(OSError, match="spool write failed"):
+        _run(
+            InboundBodySizeLimitMiddleware._spool_bounded_body(
+                receive,
+                max_bytes=128,
+            )
+        )
+
+    assert close_threads and close_threads[0] != event_thread
