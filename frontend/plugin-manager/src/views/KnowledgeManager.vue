@@ -153,6 +153,34 @@
           <input ref="fileInput" type="file" accept="application/json,.json" hidden @change="importSelectedPack" />
           <el-button type="primary" @click="fileInput?.click()">{{ t('knowledge.importPack') }}</el-button>
         </div>
+        <section v-if="degradedPackJobs.length" class="degraded-job-panel" aria-live="polite">
+          <div class="degraded-job-panel__heading">
+            <div>
+              <div class="degraded-job-panel__title">
+                <strong>{{ t('knowledge.degradedJobs') }}</strong>
+                <el-tag type="warning" effect="plain">{{ degradedPackJobs.length }}</el-tag>
+              </div>
+              <p>{{ t('knowledge.degradedJobHint') }}</p>
+            </div>
+          </div>
+          <div class="degraded-job-list">
+            <div v-for="job in degradedPackJobs" :key="job.job_id" class="degraded-job-row">
+              <div class="degraded-job-row__identity">
+                <strong>{{ job.pack_id || job.job_id }}</strong>
+                <span>{{ job.reason || t('knowledge.degraded') }} · {{ job.job_id }}</span>
+              </div>
+              <el-button
+                type="danger"
+                plain
+                :loading="discardingJobId === job.job_id"
+                :disabled="Boolean(discardingJobId)"
+                @click="discardDegradedJob(job)"
+              >
+                {{ t('common.delete') }}
+              </el-button>
+            </div>
+          </div>
+        </section>
         <div class="table-shell">
           <el-table class="packs-table" :data="packs" v-loading="packsLoading">
             <el-table-column type="expand" width="40">
@@ -308,7 +336,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
+import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
@@ -331,6 +359,8 @@ let deferredIdleHandle: number | null = null
 let deferredLoadTimer: number | null = null
 let disposed = false
 const pendingImportJobs = new Map<string, number>()
+const packJobs = ref<KnowledgePackJob[]>([])
+const discardingJobId = ref('')
 
 const { t } = useI18n()
 const {
@@ -396,6 +426,10 @@ const sourceChartBackground = computed(() => {
   })
   return `conic-gradient(${stops.join(', ')})`
 })
+
+const degradedPackJobs = computed(() => (
+  packJobs.value.filter((job) => job.state === 'degraded')
+))
 
 const packRuntimeCards = computed(() => {
   const total = packs.value.length
@@ -497,9 +531,10 @@ async function refreshAll() {
   loading.value = true
   packsLoading.value = true
   try {
-    const [statusResult, packsResult] = await Promise.allSettled([
+    const [statusResult, packsResult, jobsResult] = await Promise.allSettled([
       knowledgeApi.status(),
       knowledgeApi.packs(),
+      knowledgeApi.packJobs(),
     ])
     if (statusResult.status === 'fulfilled') {
       status.value = statusResult.value.status || null
@@ -509,8 +544,11 @@ async function refreshAll() {
       packs.value = packsResult.value.packs || []
       cachedPacks = { value: packs.value, loadedAt: Date.now() }
     }
+    if (jobsResult.status === 'fulfilled') {
+      packJobs.value = jobsResult.value.jobs || []
+    }
     writeOverviewCache()
-    if (statusResult.status === 'rejected' || packsResult.status === 'rejected') {
+    if (statusResult.status === 'rejected' || packsResult.status === 'rejected' || jobsResult.status === 'rejected') {
       ElMessage.error(t('knowledge.loadFailed'))
     }
   } catch {
@@ -674,6 +712,38 @@ async function loadPacks(options: { force?: boolean; silent?: boolean } = {}) {
   }
 }
 
+async function loadPackJobs(options: { silent?: boolean } = {}) {
+  try {
+    const response = await knowledgeApi.packJobs()
+    if (!disposed) packJobs.value = response.jobs || []
+  } catch {
+    if (!disposed && !options.silent) ElMessage.error(t('knowledge.loadFailed'))
+  }
+}
+
+async function discardDegradedJob(job: KnowledgePackJob) {
+  const jobId = String(job.job_id || '').trim()
+  if (!jobId || discardingJobId.value) return
+  try {
+    await ElMessageBox.confirm(
+      t('knowledge.discardJobConfirm', { name: job.pack_id || jobId }),
+      t('common.warning'),
+      { type: 'warning' },
+    )
+    discardingJobId.value = jobId
+    await knowledgeApi.discardPackJob({ job_id: jobId })
+    packJobs.value = packJobs.value.filter((item) => item.job_id !== jobId)
+    ElMessage.success(t('knowledge.jobDiscarded'))
+    refreshOverviewInBackground()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(t('knowledge.operationFailed'))
+    }
+  } finally {
+    if (discardingJobId.value === jobId) discardingJobId.value = ''
+  }
+}
+
 async function importSelectedPack(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -727,6 +797,7 @@ async function pollImportJobs() {
   try {
     const response = await knowledgeApi.packJobs()
     if (disposed) return
+    packJobs.value = response.jobs || []
     const jobs = new Map(
       (response.jobs || []).map((job) => [String(job.job_id || ''), job]),
     )
@@ -892,7 +963,10 @@ function hasDiagnosticEntry(item: any): boolean {
 
 watch(activeTab, (tab) => {
   if (tab === 'catalog') loadEntries(true)
-  if (tab === 'packs') loadPacks()
+  if (tab === 'packs') {
+    loadPacks()
+    void loadPackJobs()
+  }
   if (tab === 'diagnostics') loadDiagnostics()
 })
 
@@ -902,6 +976,7 @@ function deferInitialSecondaryLoads(silent = false) {
     deferredLoadTimer = null
     if (disposed) return
     void loadPacks({ silent })
+    void loadPackJobs({ silent })
     void loadMarketAuthStatus()
   }
   const requestIdleCallback = window.requestIdleCallback
@@ -920,6 +995,7 @@ onMounted(() => {
   if (!cache.packsFresh) {
     deferInitialSecondaryLoads(Boolean(cachedPacks))
   } else {
+    void loadPackJobs({ silent: true })
     void loadMarketAuthStatus()
   }
 })
@@ -1498,6 +1574,73 @@ dd {
   max-width: 520px;
 }
 
+.degraded-job-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9);
+}
+
+.degraded-job-panel__heading,
+.degraded-job-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.degraded-job-panel__heading > div,
+.degraded-job-row__identity {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.degraded-job-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.degraded-job-panel__heading p {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.degraded-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.degraded-job-row {
+  padding: 10px 12px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 6px;
+  background: var(--knowledge-surface);
+}
+
+.degraded-job-row__identity strong,
+.degraded-job-row__identity span {
+  overflow-wrap: anywhere;
+}
+
+.degraded-job-row__identity span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.degraded-job-row .el-button {
+  min-width: 72px;
+  min-height: 44px;
+}
+
 .table-shell {
   min-width: 0;
   overflow: hidden;
@@ -1822,7 +1965,7 @@ pre {
   }
 
   .knowledge-manager {
-    padding: 16px 16px 72px;
+    padding: 16px 16px calc(128px + env(safe-area-inset-bottom));
   }
 
   .market-entry .el-alert,

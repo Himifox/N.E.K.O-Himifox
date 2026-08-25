@@ -288,6 +288,30 @@ def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> Non
     assert not (job_dir / "pack.json").exists()
 
 
+def test_discard_job_action_only_removes_quarantined_job(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    job_dir = tmp_path / ".staging" / "degraded-fixture"
+    job_dir.mkdir(parents=True)
+    (job_dir / "state.json").write_text("[]", encoding="utf-8")
+    args = MODULE._build_parser().parse_args(
+        [
+            "--discard-job",
+            "degraded-fixture",
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
+
+    result = asyncio.run(MODULE._run(args))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["ok"] is True
+    assert not job_dir.exists()
+
+
 def test_status_splits_failed_retry_boundaries(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     _write_v6_chunks(database)

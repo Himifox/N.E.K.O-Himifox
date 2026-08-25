@@ -66,6 +66,7 @@ export default {
     packageStatus: '知识包运行态', sourceDistribution: '来源分布', otherSources: '其他', inactivePacks: '关闭', needsAttention: '需关注', materialMix: '知识包类型', noPacks: '暂无知识包',
     indexPolicyHint: '可能占用本机 CPU 和内存；关闭后，可信索引不可用时将降级为 BM25。',
     loadFailed: '知识库数据加载失败', operationFailed: '知识库操作失败', importSuccess: '知识包导入成功', importQueued: '知识包正在后台静默处理，准备完成后会自动载入', importStillProcessing: '知识包仍在后台处理，请稍后刷新查看状态',
+    degradedJobs: '已隔离的导入任务', degradedJobHint: '损坏的任务无法继续。核对 ID 后丢弃对应任务，即可恢复新的导入。', discardJobConfirm: '确定丢弃隔离任务 {name} 吗？只会删除它的暂存文件。', jobDiscarded: '隔离任务已丢弃',
     invalidPack: '知识包格式无效', importTooLarge: '知识包超过 10 MiB 大小限制', removeConfirm: '确定移除知识包 {name} 吗？'
   },
   market: {

@@ -110,6 +110,7 @@ _KNOWLEDGE_BRIDGE_PATHS = frozenset({
     "entry/disabled",
     "packs",
     "packs/jobs",
+    "packs/jobs/discard",
     "packs/import",
     "packs/auto-context",
     "packs/index-policy",

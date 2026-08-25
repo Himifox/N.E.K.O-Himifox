@@ -65,6 +65,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="JOB_ID",
         help="cancel one staged import job and remove its staged payload",
     )
+    action.add_argument(
+        "--discard-job",
+        metavar="JOB_ID",
+        help="explicitly remove one quarantined staged import job",
+    )
     parser.add_argument(
         "--batch-size",
         type=_batch_size,
@@ -607,6 +612,8 @@ async def _run(args: argparse.Namespace) -> int:
         if args.preflight_pack
         else "cancel_job"
         if args.cancel_job
+        else "discard_job"
+        if args.discard_job
         else "full"
         if args.full
         else "rebuild"
@@ -684,6 +691,13 @@ async def _run(args: argparse.Namespace) -> int:
         payload.update({"ok": cancelled, "job_id": args.cancel_job})
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0 if cancelled else 2
+    if requested_action == "discard_job":
+        from knowledge.pack_jobs import discard_degraded_pack_job
+
+        discarded = discard_degraded_pack_job(root, args.discard_job)
+        payload.update({"ok": discarded, "job_id": args.discard_job})
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if discarded else 2
     if requested_action == "status":
         payload["index"] = inspect_database(target.database_path)
         payload["pack_jobs"] = inspect_pack_jobs(root)

@@ -156,6 +156,7 @@ export const knowledgeApi = {
   setEntryDisabled: (data: any) => request<any>('entry/disabled', { method: 'POST', data }),
   packs: () => request<{ ok: boolean; packs: KnowledgePackSummary[] }>('packs'),
   packJobs: () => request<{ ok: boolean; jobs: KnowledgePackJob[] }>('packs/jobs'),
+  discardPackJob: (data: { job_id: string }) => request<KnowledgeEnvelope>('packs/jobs/discard', { method: 'POST', data }),
   importPack: (pack: any) => request<any>('packs/import', { method: 'POST', data: { pack } }),
   setPackAutoContext: (data: any) => request<any>('packs/auto-context', { method: 'POST', data }),
   setPackMaterialType: (data: any) => request<any>('packs/material-type', { method: 'POST', data }),

@@ -53,6 +53,22 @@ def test_knowledge_bridge_forwards_only_allowlisted_local_api(monkeypatch):
     assert captured["headers"]["X-CSRF-Token"]
 
 
+def test_knowledge_bridge_forwards_degraded_job_discard(monkeypatch):
+    captured = {}
+    client = _client(monkeypatch, captured)
+
+    response = client.post(
+        "/market/knowledge/packs/jobs/discard",
+        params={"token": "fixture"},
+        json={"job_id": "degraded-fixture"},
+    )
+
+    assert response.json() == {"ok": True}
+    assert captured["target"] == (
+        "http://127.0.0.1:48911/api/public-knowledge/packs/jobs/discard"
+    )
+
+
 def test_knowledge_bridge_rejects_arbitrary_proxy_paths(monkeypatch):
     captured = {}
     client = _client(monkeypatch, captured)

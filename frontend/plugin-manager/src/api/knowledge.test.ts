@@ -61,6 +61,20 @@ describe('knowledge API response handling', () => {
     )
   })
 
+  it('discards a quarantined pack job through the knowledge bridge', async () => {
+    axiosMocks.request.mockResolvedValue({ data: { ok: true } })
+    const { knowledgeApi } = await loadKnowledgeApi()
+
+    await expect(
+      knowledgeApi.discardPackJob({ job_id: 'degraded-fixture' }),
+    ).resolves.toEqual({ ok: true })
+    expect(axiosMocks.request.mock.calls[0]![0]).toMatchObject({
+      url: '/market/knowledge/packs/jobs/discard',
+      method: 'POST',
+      data: { job_id: 'degraded-fixture' },
+    })
+  })
+
   it('preserves transport failures', async () => {
     const upstream = new Error('bad gateway')
     axiosMocks.request.mockRejectedValue(upstream)
