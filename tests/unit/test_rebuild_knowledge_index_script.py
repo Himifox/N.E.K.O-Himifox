@@ -143,6 +143,37 @@ def test_status_lists_staging_jobs_without_opening_their_database(
     assert not staging_database.exists()
 
 
+def test_status_sorts_jobs_safely_when_created_at_is_damaged(tmp_path: Path) -> None:
+    created_values = {
+        "valid-new": "10",
+        "valid-old": 5,
+        "invalid-bool": True,
+        "invalid-float": 2.5,
+        "invalid-list": [],
+        "invalid-negative": -1,
+        "invalid-unicode": "１２",
+    }
+    for job_id, created_at in created_values.items():
+        job_dir = tmp_path / ".staging" / job_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "state.json").write_text(
+            json.dumps({"job_id": job_id, "created_at": created_at}),
+            encoding="utf-8",
+        )
+
+    jobs = MODULE.inspect_pack_jobs(tmp_path)
+
+    assert [item["job_id"] for item in jobs] == [
+        "valid-new",
+        "valid-old",
+        "invalid-bool",
+        "invalid-float",
+        "invalid-list",
+        "invalid-negative",
+        "invalid-unicode",
+    ]
+
+
 def test_full_dry_run_counts_derived_chunks_without_writing(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     _write_v5_database(database)

@@ -357,10 +357,25 @@ def inspect_pack_jobs(root: Path) -> list[dict[str, Any]]:
     return sorted(
         items,
         key=lambda item: (
-            -int(item.get("created_at") or 0),
+            -_safe_nonnegative_int(item.get("created_at")),
             str(item.get("job_id") or ""),
         ),
     )
+
+
+def _safe_nonnegative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value >= 0 else 0
+    if (
+        isinstance(value, str)
+        and 0 < len(value) <= 20
+        and value.isascii()
+        and value.isdecimal()
+    ):
+        return int(value)
+    return 0
 
 
 def _count_derived_chunks(database_path: Path) -> tuple[int, int]:

@@ -27,6 +27,8 @@ PACK_REGISTRY_SCHEMA_VERSION = 4
 MATERIAL_TYPES = frozenset(("knowledge", "corpus"))
 MAX_PACK_ENTRIES = 5_000
 MAX_PACK_PROJECTED_CHUNKS = 5_000
+MAX_PACK_TERMS_PER_ROLE = 64
+MAX_PACK_TERM_BYTES_PER_ENTRY = 32 * 1024
 MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024
 _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
@@ -619,14 +621,25 @@ def _entry_from_payload(
     terms = payload.get("terms", {})
     if not isinstance(terms, dict) or set(terms) - _TERM_ROLES:
         raise ValueError(f"entries[{index}].terms contains unsupported roles")
-    normalized_terms: dict[str, tuple[str, ...]] = {}
-    for role in _TERM_ROLES:
+    term_bytes = 0
+    for role in sorted(_TERM_ROLES):
         values = terms.get(role, ())
         if not isinstance(values, list) or any(
             not isinstance(value, str) for value in values
         ):
             raise ValueError(f"entries[{index}].terms.{role} must be a string array")
-        normalized_terms[role] = tuple(values)
+        if len(values) > MAX_PACK_TERMS_PER_ROLE:
+            raise ValueError(f"entries[{index}].terms.{role} contains too many terms")
+        try:
+            term_bytes += sum(len(value.encode("utf-8")) for value in values)
+        except UnicodeEncodeError as exc:
+            raise ValueError(f"entries[{index}].terms must contain valid UTF-8") from exc
+    if term_bytes > MAX_PACK_TERM_BYTES_PER_ENTRY:
+        raise ValueError(f"entries[{index}].terms exceeds the metadata size limit")
+    normalized_terms = {
+        role: tuple(terms.get(role, ()))
+        for role in sorted(_TERM_ROLES)
+    }
     tags = payload.get("tags", [])
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
         raise ValueError(f"entries[{index}].tags must be a string array")

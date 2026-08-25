@@ -9,6 +9,8 @@ import pytest
 from knowledge.api import KnowledgeEntry, KnowledgeStore, open_knowledge
 from knowledge.source_registry import get_source
 from knowledge.packs import (
+    MAX_PACK_TERM_BYTES_PER_ENTRY,
+    MAX_PACK_TERMS_PER_ROLE,
     install_pack,
     installed_source_embedding_policies,
     pack_payload,
@@ -160,6 +162,37 @@ def test_pack_rejects_pre_release_schema_and_removed_collection_field():
     current_with_collection["collection_id"] = "meme"
     with pytest.raises(ValueError, match="unsupported fields"):
         validate_pack(current_with_collection)
+
+
+def test_pack_rejects_too_many_terms_before_normalization():
+    payload = _payload()
+    payload["entries"][0]["terms"]["alias"] = [
+        f"alias-{index}" for index in range(MAX_PACK_TERMS_PER_ROLE + 1)
+    ]
+
+    with pytest.raises(ValueError, match="contains too many terms"):
+        validate_pack(payload)
+
+
+def test_pack_rejects_oversized_term_metadata_by_utf8_bytes():
+    payload = _payload()
+    payload["entries"][0]["terms"]["alias"] = [
+        "猫" * (MAX_PACK_TERM_BYTES_PER_ENTRY // 3 + 1)
+    ]
+
+    with pytest.raises(ValueError, match="metadata size limit"):
+        validate_pack(payload)
+
+
+def test_pack_accepts_the_term_cardinality_boundary():
+    payload = _payload()
+    payload["entries"][0]["terms"]["alias"] = [
+        f"alias-{index}" for index in range(MAX_PACK_TERMS_PER_ROLE)
+    ]
+
+    pack = validate_pack(payload)
+
+    assert len(pack.entries[0].aliases) == MAX_PACK_TERMS_PER_ROLE
 
 
 def test_material_type_override_changes_routing_without_rewriting_entries(tmp_path):
