@@ -192,6 +192,11 @@ def test_indexer_work_limits_are_bounded() -> None:
     assert indexer.MAX_CHUNKS_PER_ROUND == 8
 
 
+def test_degraded_job_is_not_pending_for_unrelated_index_work() -> None:
+    assert indexer._has_pending_pack_jobs(({"state": "degraded"},)) is False
+    assert indexer._has_pending_pack_jobs(({"state": "queued"},)) is True
+
+
 @pytest.mark.asyncio
 async def test_indexer_initialization_failure_is_retrieved(
     monkeypatch: pytest.MonkeyPatch,

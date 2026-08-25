@@ -270,6 +270,23 @@ def test_corrupt_job_state_is_quarantined_and_still_counts_capacity(
         service.stage_pack(_pack(pack_id="second-pack"))
 
 
+@pytest.mark.parametrize("field", ("created_at", "updated_at"))
+@pytest.mark.parametrize("value", ("not-a-time", -1, 1.5, True))
+def test_invalid_job_timestamps_are_quarantined(tmp_path, field, value):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    state_path = tmp_path / ".staging" / str(job["job_id"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = value
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_timestamps"
+    assert service.get_status()["pack_job_registry_state"] == "invalid"
+
+
 @pytest.mark.asyncio
 async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
     service = KnowledgeService.from_root(tmp_path)

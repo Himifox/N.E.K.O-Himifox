@@ -65,6 +65,13 @@ def _backfill_store(
         )
 
 
+def _has_pending_pack_jobs(jobs: tuple[Mapping[str, object], ...]) -> bool:
+    from .pack_jobs import DEGRADED_STATE, TERMINAL_STATES
+
+    non_pending_states = TERMINAL_STATES | {DEGRADED_STATE}
+    return any(job.get("state") not in non_pending_states for job in jobs)
+
+
 async def _wait_for_wake(event: asyncio.Event, timeout: float) -> None:
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -158,10 +165,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
                     break
                 await asyncio.sleep(0)
 
-            pending_jobs = any(
-                job.get("state") not in {"active", "cancelled", "failed"}
-                for job in service.list_pack_jobs()
-            )
+            pending_jobs = _has_pending_pack_jobs(service.list_pack_jobs())
             backlog = backlog or (pending_jobs and not blocked)
 
             if (

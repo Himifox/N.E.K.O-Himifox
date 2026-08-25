@@ -154,6 +154,16 @@ def _degraded_job(
     }
 
 
+def _normalized_job_timestamp(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    return None
+
+
 def _read_job(job_dir: Path) -> dict[str, object]:
     if job_dir.name.startswith(".creating-"):
         return _degraded_job(
@@ -180,6 +190,30 @@ def _read_job(job_dir: Path) -> dict[str, object]:
                 reason="job_identity_mismatch",
                 identity=identity_result.payload,
             )
+        fallback_created_at = (
+            identity_result.payload.get("created_at")
+            if identity_result.state == "valid"
+            else None
+        )
+        created_at = _normalized_job_timestamp(
+            state.get("created_at", fallback_created_at)
+        )
+        updated_at = _normalized_job_timestamp(
+            state.get("updated_at", created_at)
+        )
+        if created_at is None or updated_at is None:
+            return _degraded_job(
+                job_dir,
+                reason="invalid_job_timestamps",
+                identity=(
+                    identity_result.payload
+                    if identity_result.state == "valid"
+                    else None
+                ),
+                orphan=identity_result.state != "valid",
+            )
+        state["created_at"] = created_at
+        state["updated_at"] = updated_at
         return state
     if identity_result.state == "valid":
         reason = {

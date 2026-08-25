@@ -80,6 +80,21 @@ def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_pat
     assert not service.database_path().exists()
 
 
+def test_empty_and_populated_status_share_chunk_fields(tmp_path):
+    empty_status = open_knowledge(tmp_path / "empty").get_status()
+    populated_service = open_knowledge(tmp_path / "populated")
+    populated_service._store().upsert(_entry("Status fixture", "source:fixture"))
+    populated_status = populated_service.get_status()
+    chunk_fields = {
+        key
+        for key in populated_status
+        if key.startswith("chunks_") or key.startswith("entries_")
+    }
+
+    assert chunk_fields <= empty_status.keys()
+    assert all(empty_status[key] == 0 for key in chunk_fields)
+
+
 def test_corrupt_database_status_is_structured_degraded(tmp_path):
     service = open_knowledge(tmp_path)
     service.database_path().write_bytes(b"not a sqlite database")
@@ -90,6 +105,7 @@ def test_corrupt_database_status_is_structured_degraded(tmp_path):
     assert status["schema_state"] == "invalid_or_unavailable"
     assert status["error_code"] == "knowledge_database_unavailable"
     assert status["entries"] == status["chunks_total"] == 0
+    assert status["chunks_local"] == status["chunks_prebuilt_only"] == 0
 
 
 def test_sample_entries_draws_from_complete_enabled_tag_population(
