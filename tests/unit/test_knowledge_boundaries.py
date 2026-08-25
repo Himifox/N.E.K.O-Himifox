@@ -249,6 +249,22 @@ def test_legacy_layout_migration_aborts_on_corrupt_existing_registry(tmp_path):
     assert registry_path.read_text(encoding="utf-8") == "not-json"
 
 
+def test_frontend_rejects_oversized_pack_before_reading_and_has_i18n():
+    root = Path(__file__).resolve().parents[2]
+    api_source = (
+        root / "frontend/plugin-manager/src/api/knowledge.ts"
+    ).read_text(encoding="utf-8")
+    view_source = (
+        root / "frontend/plugin-manager/src/views/KnowledgeManager.vue"
+    ).read_text(encoding="utf-8")
+    size_guard = "file.size > MAX_KNOWLEDGE_PACK_FILE_BYTES"
+
+    assert "MAX_KNOWLEDGE_PACK_FILE_BYTES = 10 * 1024 * 1024" in api_source
+    assert view_source.index(size_guard) < view_source.index("await file.text()")
+    for locale in (root / "frontend/plugin-manager/src/i18n/locales").glob("*.ts"):
+        assert "importTooLarge:" in locale.read_text(encoding="utf-8")
+
+
 def test_newer_pack_registry_is_not_overwritten(tmp_path):
     database_path = tmp_path / "knowledge.db"
     registry_path = tmp_path / "packs.json"

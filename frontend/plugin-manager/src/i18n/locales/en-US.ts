@@ -66,7 +66,7 @@ export default {
     packageStatus: 'Package runtime', sourceDistribution: 'Source distribution', otherSources: 'Other', inactivePacks: 'Off', needsAttention: 'Needs attention', materialMix: 'Pack type', noPacks: 'No knowledge packs',
     indexPolicyHint: 'May use local CPU and memory. If disabled, an unavailable trusted index falls back to BM25.',
     loadFailed: 'Failed to load knowledge data', operationFailed: 'Knowledge operation failed', importSuccess: 'Knowledge pack imported', importQueued: 'Knowledge pack is being prepared quietly and will appear when ready', importStillProcessing: 'The knowledge pack is still processing. Refresh later to check its status.',
-    invalidPack: 'Invalid knowledge pack', removeConfirm: 'Remove knowledge pack {name}?'
+    invalidPack: 'Invalid knowledge pack', importTooLarge: 'Knowledge pack exceeds the 10 MiB limit', removeConfirm: 'Remove knowledge pack {name}?'
   },
   market: {
     title: 'Get New Plugins',

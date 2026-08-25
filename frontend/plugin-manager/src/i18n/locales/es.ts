@@ -66,7 +66,7 @@ export default {
     packageStatus: 'Estado de paquetes', sourceDistribution: 'Distribución de fuentes', otherSources: 'Otros', inactivePacks: 'Desactivados', needsAttention: 'Requiere atención', materialMix: 'Tipo de paquete', noPacks: 'No hay paquetes',
     indexPolicyHint: 'Puede usar CPU y memoria locales. Si se desactiva, se usa BM25 cuando el índice de confianza no está disponible.',
     loadFailed: 'No se pudieron cargar los datos', operationFailed: 'La operación falló', importSuccess: 'Paquete importado', importQueued: 'El paquete se está preparando en segundo plano y aparecerá cuando esté listo', importStillProcessing: 'El paquete sigue procesándose. Actualiza más tarde para ver su estado.',
-    invalidPack: 'Paquete no válido', removeConfirm: '¿Eliminar el paquete {name}?'
+    invalidPack: 'Paquete no válido', importTooLarge: 'El paquete de conocimiento supera el límite de 10 MiB', removeConfirm: '¿Eliminar el paquete {name}?'
   },
   market: {
     title: 'Obtener nuevos plugins',

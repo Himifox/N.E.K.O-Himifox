@@ -237,6 +237,22 @@ def test_management_status_reports_future_schema_without_mutating_it(
     assert database_path.read_bytes() == before
 
 
+def test_remove_rejects_non_ascii_provider_package_identity(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/public-knowledge/packs/remove",
+        json={
+            "pack_id": "market-fixture",
+            "expected_provider": "plugin-market",
+            "expected_provider_package_id": "７",
+            "expected_remote_id": "knowledge/market-fixture",
+        },
+    )
+
+    assert response.json() == {"ok": False, "reason": "invalid_request"}
+
+
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(

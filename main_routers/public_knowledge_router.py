@@ -32,6 +32,7 @@ from knowledge.subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,
     canonical_pack_bytes,
     load_canonical_pack_artifact,
+    normalize_provider_package_id,
     validate_subscription,
 )
 from main_routers.shared_state import get_config_manager
@@ -564,13 +565,16 @@ async def remove_public_knowledge_pack(request: Request):
         payload.get("expected_provider_package_id") or ""
     ).strip()
     expected_remote_id = str(payload.get("expected_remote_id") or "").strip()
-    if expected_provider and (
-        expected_provider != "plugin-market"
-        or not expected_provider_package_id.isdecimal()
-        or expected_provider_package_id.startswith("0")
-        or not expected_remote_id
-    ):
-        return {"ok": False, "reason": "invalid_request"}
+    if expected_provider:
+        try:
+            normalized_package_id = normalize_provider_package_id(
+                expected_provider_package_id
+            )
+        except ValueError:
+            return {"ok": False, "reason": "invalid_request"}
+        if expected_provider != "plugin-market" or not expected_remote_id:
+            return {"ok": False, "reason": "invalid_request"}
+        expected_provider_package_id = normalized_package_id
     try:
         service = await _service_async()
         result = await asyncio.to_thread(

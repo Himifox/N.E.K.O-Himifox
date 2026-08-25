@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from knowledge.subscriptions import (
+    PROVIDER_PACKAGE_ID_MAX,
     SUBSCRIPTION_PROTOCOL_VERSION,
     load_canonical_pack_artifact,
 )
@@ -52,7 +53,7 @@ _ALLOWED_ARTIFACT_HOSTS = {
 class KnowledgeSubscribeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    package_id: int = Field(gt=0)
+    package_id: int = Field(gt=0, le=PROVIDER_PACKAGE_ID_MAX)
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$")
     channel: Literal["stable", "beta"] = "stable"
 
@@ -85,7 +86,7 @@ class KnowledgeVersionDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     protocol_version: Literal[1]
-    package_id: int = Field(gt=0)
+    package_id: int = Field(gt=0, le=PROVIDER_PACKAGE_ID_MAX)
     remote_id: str = Field(pattern=r"^knowledge/[a-z0-9][a-z0-9._-]{1,99}$")
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
     material_type: Literal["knowledge", "corpus"]
@@ -97,7 +98,7 @@ class KnowledgeVersionDescriptor(BaseModel):
 class KnowledgeUnsubscribeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    package_id: int = Field(gt=0)
+    package_id: int = Field(gt=0, le=PROVIDER_PACKAGE_ID_MAX)
     pack_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{1,63}$")
 
 

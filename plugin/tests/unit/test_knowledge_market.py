@@ -44,6 +44,18 @@ def _pack():
     }
 
 
+def test_market_package_id_is_bounded_to_the_persisted_ascii_contract():
+    assert module.KnowledgeSubscribeRequest(
+        package_id=module.PROVIDER_PACKAGE_ID_MAX,
+        version="1.0.0",
+    ).package_id == module.PROVIDER_PACKAGE_ID_MAX
+    with pytest.raises(ValueError):
+        module.KnowledgeSubscribeRequest(
+            package_id=module.PROVIDER_PACKAGE_ID_MAX + 1,
+            version="1.0.0",
+        )
+
+
 @pytest.mark.asyncio
 async def test_market_subscription_downloads_verifies_and_hands_off(monkeypatch):
     raw = canonical_pack_bytes(_pack())

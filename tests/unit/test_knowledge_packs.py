@@ -425,6 +425,11 @@ def test_subscription_requires_supported_material_type():
         validate_subscription({**payload, "material_type": "meme"})
     with pytest.raises(ValueError, match="provider_package_id"):
         validate_subscription({**payload, "provider_package_id": "07"})
+    for invalid_package_id in ("７", "٧", "1" * 20):
+        with pytest.raises(ValueError, match="provider_package_id"):
+            validate_subscription(
+                {**payload, "provider_package_id": invalid_package_id}
+            )
 
 
 def test_market_artifact_must_use_canonical_json_bytes():

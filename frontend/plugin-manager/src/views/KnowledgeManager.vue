@@ -308,7 +308,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { KnowledgeApiError, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
+import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
@@ -679,6 +679,10 @@ async function importSelectedPack(event: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
+  if (file.size > MAX_KNOWLEDGE_PACK_FILE_BYTES) {
+    ElMessage.error(t('knowledge.importTooLarge'))
+    return
+  }
   let pack: unknown
   try {
     pack = JSON.parse(await file.text())

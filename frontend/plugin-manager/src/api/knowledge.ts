@@ -1,5 +1,7 @@
 import axios from 'axios'
 
+export const MAX_KNOWLEDGE_PACK_FILE_BYTES = 10 * 1024 * 1024
+
 let bridgeToken = ''
 let bridgeTokenRequest: Promise<string> | null = null
 

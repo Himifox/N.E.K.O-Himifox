@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 
 SUBSCRIPTION_PROTOCOL_VERSION = 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PROVIDER_PACKAGE_ID_MAX = 9_999_999_999_999_999_999
+_PROVIDER_PACKAGE_ID_RE = re.compile(r"^[1-9][0-9]{0,18}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +129,12 @@ def _optional_digest(value: object, field: str) -> str:
 def _optional_provider_package_id(value: object) -> str:
     if value in (None, ""):
         return ""
+    return normalize_provider_package_id(value)
+
+
+def normalize_provider_package_id(value: object) -> str:
+    """Return the one ASCII representation accepted for provider identities."""
     text = str(value).strip()
-    if not text.isdecimal() or text.startswith("0") or int(text) <= 0:
+    if not _PROVIDER_PACKAGE_ID_RE.fullmatch(text):
         raise ValueError("subscription provider_package_id is invalid")
     return text

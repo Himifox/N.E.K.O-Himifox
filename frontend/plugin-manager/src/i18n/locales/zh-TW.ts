@@ -66,7 +66,7 @@ export default {
     packageStatus: '知識包運行態', sourceDistribution: '來源分布', otherSources: '其他', inactivePacks: '關閉', needsAttention: '需關注', materialMix: '知識包類型', noPacks: '暫無知識包',
     indexPolicyHint: '可能使用本機 CPU 與記憶體；停用後，可信索引不可用時將降級為 BM25。',
     loadFailed: '知識庫資料載入失敗', operationFailed: '知識庫操作失敗', importSuccess: '知識包匯入成功', importQueued: '知識包正在背景靜默處理，準備完成後會自動載入', importStillProcessing: '知識包仍在背景處理，請稍後重新整理查看狀態',
-    invalidPack: '知識包格式無效', removeConfirm: '確定移除知識包 {name} 嗎？'
+    invalidPack: '知識包格式無效', importTooLarge: '知識包超過 10 MiB 大小限制', removeConfirm: '確定移除知識包 {name} 嗎？'
   },
   market: {
     title: '取得新外掛',
