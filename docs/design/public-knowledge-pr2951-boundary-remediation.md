@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十二轮均已实施，第十三轮方案已归档并进入实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十三轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1632,3 +1632,14 @@ CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack
 6. 实现与最终证据文档推送后，5 条成立评论分别回复提交和精确测试；CR 回复不采纳理由。随后 resolve 全部 6 条并重新分页核对。
 
 关闭条件：CM 的全新安装成功且重解析负例不回退；CN 的最终 recount 与 install 位于同一 database lock；CO 的 remove 不可能先于已发出的 apply 完成；CP 的损坏 staging database 不产生 hybrid 安装；CQ 的重复 provider identity 在任何 mutation 前失败；CR 保持 CH 的严格身份边界。只有远端可见提交、通过证据和逐线程回复齐全后才能关闭。
+
+## 第十三轮实施证据
+
+| 提交 | 单元 | 实施结果 |
+| --- | --- | --- |
+| `9bc071d2f` | CM、CN、CP | 首次 stage 创建并复验受信 knowledge root；accepted staging database 使用 strict status/vector snapshot；live ready recount、净替换额度判断与 `install_pack()` 在同一 database mutation lock 内完成，旧轮次提示不再决定最终额度。 |
+| `8e877fd56` | CO、CQ | apply 请求由独立 installation mutation task 持有，installing 取消等待其完成后才 remove；registry 读取与候选写入共用 marketplace package identity 唯一性校验，歧义在任何 source mutation 前失败关闭。 |
+
+CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 canonical identity 校验拒绝。该决定复用 BE 已核验的发布边界——旧 registry 只存在于本 PR 的未发布开发历史，开发数据应删除并重新导入，不进入生产自动迁移合同。
+
+验证使用项目 `.venv` 的 Python 3.11.15 执行。CM/CN/CP 与 store 定向集合为 90 passed、1 skipped；CO/CQ 与 market/pack 定向集合为 81 passed；合并后的 pack job、pack registry、store、indexer、public service 与 market bridge 相邻集合为 208 passed、1 skipped。skip 仅因本机 Windows 无目录 symlink 权限，reparse marker 负例通过。相关 Ruff 与 `git diff --check` 均通过；没有新增测试文件、前端改动、用户文案或 i18n key。
