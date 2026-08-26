@@ -1279,11 +1279,14 @@ class KnowledgeService:
             job.get("state") not in non_pending_job_states
             for job in pack_jobs
         )
+        missing_installed_database = not database_exists and bool(installed_packs)
         return {
             "name": PUBLIC_KNOWLEDGE_DISPLAY_NAME,
             "entries": store.count() if store is not None else 0,
             "integrity_ok": (
-                store.integrity_ok() if store is not None else True
+                store.integrity_ok()
+                if store is not None
+                else not missing_installed_database
             )
             and override_state != "invalid"
             and registry_state != "invalid"
@@ -1306,6 +1309,14 @@ class KnowledgeService:
             "pack_jobs_pending": pending_pack_jobs,
             "vector_budget_chunks": MAX_READY_VECTOR_CHUNKS,
             **chunk_status,
+            **(
+                {
+                    "schema_state": "invalid_or_unavailable",
+                    "error_code": "knowledge_database_missing",
+                }
+                if missing_installed_database
+                else {}
+            ),
         }
 
     def install_pack(self, pack, *, subscription=None):

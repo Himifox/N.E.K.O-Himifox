@@ -201,6 +201,9 @@ class KnowledgeStore:
             "CREATE INDEX IF NOT EXISTS knowledge_chunks_policy_status_idx "
             "ON knowledge_chunks(embedding_policy, embedding_status)"
         )
+        chunker_version_row = connection.execute(
+            "SELECT value FROM metadata WHERE key='chunker_version'"
+        ).fetchone()
         metadata = {
             "schema_version": str(SCHEMA_VERSION),
             "chunker_version": str(CHUNKER_VERSION),
@@ -220,9 +223,13 @@ class KnowledgeStore:
         input_version_row = connection.execute(
             "SELECT value FROM metadata WHERE key='embedding_input_version'"
         ).fetchone()
-        if input_version_row is None or str(input_version_row["value"]) != str(
-            EMBEDDING_INPUT_VERSION
-        ):
+        chunker_changed = chunker_version_row is None or str(
+            chunker_version_row["value"]
+        ) != str(CHUNKER_VERSION)
+        input_changed = input_version_row is None or str(
+            input_version_row["value"]
+        ) != str(EMBEDDING_INPUT_VERSION)
+        if chunker_changed or input_changed:
             has_derived_chunks = bool(
                 connection.execute("SELECT 1 FROM knowledge_chunks LIMIT 1").fetchone()
             )
@@ -233,6 +240,11 @@ class KnowledgeStore:
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES "
                 "('embedding_input_version', ?)",
                 (str(EMBEDDING_INPUT_VERSION),),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES "
+                "('chunker_version', ?)",
+                (str(CHUNKER_VERSION),),
             )
         connection.execute(
             "DELETE FROM knowledge_chunks WHERE entry_rowid NOT IN (SELECT rowid FROM entries)"
@@ -661,9 +673,8 @@ class KnowledgeStore:
                 "SELECT entries.rowid, entries.* FROM entries "
                 "LEFT JOIN knowledge_chunks ON knowledge_chunks.entry_rowid=entries.rowid "
                 "WHERE knowledge_chunks.entry_rowid IS NULL "
-                "ORDER BY entries.rowid LIMIT ?",
-                (limit,),
-            ).fetchall()
+                "ORDER BY entries.rowid"
+            )
             for row in rows:
                 try:
                     entry = _entry_from_row(row)
@@ -683,6 +694,8 @@ class KnowledgeStore:
                     embedding_policy=embedding_policy,
                 )
                 processed += 1
+                if processed >= limit:
+                    break
         return processed
 
     def chunk_status(self, *, strict: bool = False) -> dict[str, object]:

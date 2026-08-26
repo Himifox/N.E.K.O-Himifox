@@ -46,6 +46,7 @@ IDENTITY_NAME = "identity.json"
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
 IDENTITY_SUBSCRIPTION_FIELDS = ("has_subscription", "subscription_sha256")
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}-[0-9a-f]{12}$")
+_JOB_SUFFIX_RE = re.compile(r"^[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,11 @@ def _validated_identity_payload(
             else subscription_sha256 == ""
         )
     )
+    job_suffix = (
+        job_id[len(pack_id) + 1 :]
+        if pack_id and job_id.startswith(f"{pack_id}-")
+        else ""
+    )
     if (
         any(value is None for value in identity_values.values())
         or not subscription_identity_valid
@@ -242,8 +248,10 @@ def _validated_identity_payload(
     if (
         job_id != job_dir.name
         or Path(job_id).name != job_id
+        or not _JOB_ID_RE.fullmatch(job_id)
         or not pack_id
         or Path(pack_id).name != pack_id
+        or not _JOB_SUFFIX_RE.fullmatch(job_suffix)
     ):
         return _JsonReadResult("invalid", {})
     return _JsonReadResult(
@@ -996,7 +1004,7 @@ def _activate_job_validated(
         if pack is None:
             return _capacity_mismatch_state(job_dir, current)
         embeddings = (
-            _strict_staged_vector_snapshot(job_dir, current)
+            _strict_staged_vector_snapshot(job_dir, current, subscription)
             if mode == "hybrid"
             else ()
         )
@@ -1078,23 +1086,65 @@ def _activate_job_validated(
 def _strict_staged_vector_snapshot(
     job_dir: Path,
     state: dict[str, Any],
+    subscription: dict[str, str] | None,
 ) -> tuple[dict[str, object], ...]:
+    from .prebuilt_index import validate_prebuilt_index
+
     database_path = job_dir / "knowledge.db"
     if not database_path.is_file():
         raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
+    expected_subscription = subscription or {}
+    try:
+        validated = validate_prebuilt_index(
+            (job_dir / PACK_ARTIFACT_NAME).read_bytes(),
+            (job_dir / INDEX_MANIFEST_NAME).read_bytes(),
+            (job_dir / VECTOR_ARTIFACT_NAME).read_bytes(),
+            expected_pack_sha256=str(
+                expected_subscription.get("artifact_sha256") or ""
+            ),
+            expected_manifest_sha256=str(
+                expected_subscription.get("index_manifest_sha256") or ""
+            ),
+            expected_vectors_sha256=str(
+                expected_subscription.get("vectors_sha256") or ""
+            ),
+        )
+    except (OSError, ValueError) as exc:
+        raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete") from exc
     store = KnowledgeStore(database_path)
     status = store.chunk_status(strict=True)
     expected_total = int(state.get("chunks_total") or 0)
     expected_ready = int(state.get("prebuilt_chunks_ready") or 0)
     embeddings = store.ready_embedding_records(strict=True)
+    expected = validated.prepared_embeddings()
+    expected_by_key = {
+        (str(record["chunk_id"]), str(record["content_hash"])): record
+        for record in expected
+    }
+    embeddings_by_key = {
+        (str(record["chunk_id"]), str(record["content_hash"])): record
+        for record in embeddings
+    }
     if (
         state.get("index_validation") != "accepted"
         or expected_ready != expected_total
         or int(status["chunks_total"]) != expected_total
         or int(status["chunks_ready"]) != expected_ready
         or len(embeddings) != expected_ready
+        or len(expected_by_key) != len(expected)
+        or len(embeddings_by_key) != len(embeddings)
+        or expected_by_key.keys() != embeddings_by_key.keys()
     ):
         raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
+    for key, expected_record in expected_by_key.items():
+        record = embeddings_by_key[key]
+        if (
+            record.get("embedding_policy") != "prebuilt_only"
+            or record.get("model_id") != expected_record.get("model_id")
+            or record.get("dimensions") != expected_record.get("dimensions")
+            or record.get("embedding") != expected_record.get("embedding")
+        ):
+            raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
     return embeddings
 
 

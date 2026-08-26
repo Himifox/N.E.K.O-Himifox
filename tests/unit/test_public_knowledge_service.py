@@ -115,6 +115,32 @@ def test_fresh_empty_knowledge_root_is_healthy_without_creating_database(tmp_pat
     assert not service.database_path().exists()
 
 
+def test_missing_installed_database_is_degraded_without_recreation(
+    tmp_path,
+    monkeypatch,
+):
+    service = open_knowledge(tmp_path)
+    monkeypatch.setattr(service, "refresh_routing_index", lambda **_kwargs: None)
+    service.install_pack(
+        _pack(
+            pack_id="missing-database",
+            material_type="knowledge",
+            title="Missing database fixture",
+        )
+    )
+    database_path = service.database_path()
+    database_path.unlink()
+
+    status = service.get_status()
+
+    assert status["integrity_ok"] is False
+    assert status["schema_state"] == "invalid_or_unavailable"
+    assert status["error_code"] == "knowledge_database_missing"
+    assert status["packs"] == 1
+    assert status["entries"] == status["chunks_total"] == 0
+    assert not database_path.exists()
+
+
 def test_lexical_exact_match_preserves_meaningful_punctuation(tmp_path):
     service = open_knowledge(tmp_path)
     store = KnowledgeStore(service.database_path())

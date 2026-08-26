@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from knowledge.chunking import (
+    CHUNKER_VERSION,
     EMBEDDING_INPUT_VERSION,
     MAX_CHUNKS_PER_ENTRY,
     MAX_EMBEDDING_CHARS,
@@ -16,9 +17,15 @@ from knowledge.models import KnowledgeEntry
 from knowledge.store import KnowledgeStore
 
 
-def _entry(*, content: str, tags=("source:test",), summary="summary"):
+def _entry(
+    *,
+    content: str,
+    tags=("source:test",),
+    summary="summary",
+    title="Hybrid retrieval",
+):
     return KnowledgeEntry(
-        title="Hybrid retrieval",
+        title=title,
         terms={"alias": ("hybrid",), "recognition": ("RAG",)},
         tags=tags,
         summary=summary,
@@ -147,6 +154,10 @@ def test_schema_v6_to_v7_preserves_fts_and_current_vectors(tmp_path):
             X'00000000', 'ready', 0, 0, ''
         );
     """)
+    connection.execute(
+        "INSERT INTO metadata VALUES ('chunker_version', ?)",
+        (str(CHUNKER_VERSION),),
+    )
     connection.commit()
     connection.close()
 
@@ -223,6 +234,70 @@ def test_current_embedding_input_version_keeps_derived_chunks_on_reopen(tmp_path
 
     assert after["chunks_total"] == before["chunks_total"] == 1
     assert after["chunks_revision"] == before["chunks_revision"]
+
+
+def test_changed_chunker_version_clears_derived_chunks_once(tmp_path):
+    path = tmp_path / "knowledge.db"
+    store = KnowledgeStore(path)
+    store.upsert(_entry(content="Chunker contract fixture."))
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "UPDATE knowledge_chunks SET embedding_status='ready', "
+            "embedding_model_id='fixture', embedding_dimensions=2, embedding=?",
+            (b"\x00\x00\x00\x00",),
+        )
+        connection.execute(
+            "UPDATE metadata SET value='0' WHERE key='chunker_version'"
+        )
+        old_revision = int(
+            connection.execute(
+                "SELECT value FROM metadata WHERE key='chunks_revision'"
+            ).fetchone()[0]
+        )
+
+    store_module._INITIALIZED_DATABASES.pop(str(path.resolve()), None)
+    reopened = KnowledgeStore(path)
+
+    with reopened._connection() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM knowledge_chunks"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT value FROM metadata WHERE key='chunker_version'"
+        ).fetchone()[0] == str(CHUNKER_VERSION)
+        assert int(
+            connection.execute(
+                "SELECT value FROM metadata WHERE key='chunks_revision'"
+            ).fetchone()[0]
+        ) == old_revision + 1
+    assert reopened.query_fts('"Chunker"', limit=1)
+
+
+def test_backfill_skips_malformed_entry_and_processes_next_valid_row(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert_many(
+        (
+            _entry(content="broken", title="Broken entry"),
+            _entry(content="valid", title="Valid entry"),
+        )
+    )
+    with store._connection(writable=True) as connection:
+        connection.execute(
+            "UPDATE entries SET terms='{' WHERE title='Broken entry'"
+        )
+        connection.execute("DELETE FROM knowledge_chunks")
+
+    assert store.backfill_missing_chunks(limit=1) == 1
+    with store._connection() as connection:
+        chunk_titles = {
+            str(row["title"])
+            for row in connection.execute(
+                "SELECT entries.title FROM knowledge_chunks JOIN entries "
+                "ON entries.rowid=knowledge_chunks.entry_rowid"
+            )
+        }
+    assert chunk_titles == {"Valid entry"}
+    assert store.chunk_status()["entries_missing_chunks"] == 1
 
 
 def test_tag_only_update_preserves_ready_embedding(tmp_path):

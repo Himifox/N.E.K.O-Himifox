@@ -813,13 +813,31 @@ async def _main_request(
                 json=json,
                 headers=headers,
             )
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.RequestError as exc:
         raise _KnowledgeTaskError(
             "main_server_unavailable", "Main Server 不可用"
         ) from exc
-    return payload if isinstance(payload, dict) else {}
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if response.status_code >= 500:
+            raise _KnowledgeTaskError(
+                "main_server_unavailable", "Main Server 不可用"
+            ) from exc
+        raise _KnowledgeTaskError(
+            "main_server_rejected", "Main Server 拒绝了请求"
+        ) from exc
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise _KnowledgeTaskError(
+            "main_server_invalid_response", "Main Server 返回了无效响应"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise _KnowledgeTaskError(
+            "main_server_invalid_response", "Main Server 返回了无效响应"
+        )
+    return payload
 
 
 async def _wait_for_pack_job(

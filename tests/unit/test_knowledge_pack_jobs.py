@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 
 import pytest
@@ -511,6 +512,28 @@ def test_invalid_identity_timestamp_cannot_supply_state_fallback(tmp_path, value
     assert service.get_status()["pack_job_registry_state"] == "invalid"
 
 
+def test_job_id_is_cryptographically_scoped_to_immutable_pack_id(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack(pack_id="original-pack"))
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    for name in ("identity.json", "state.json"):
+        path = job_dir / name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["pack_id"] = "different-pack"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_identity"
+    assert listed["orphan"] is True
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_invalid",
+    ):
+        service.stage_pack(_pack(pack_id="next-pack"))
+
+
 @pytest.mark.asyncio
 async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
@@ -813,13 +836,16 @@ def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
 
     jobs_root = tmp_path / ".staging"
     jobs_root.mkdir()
+    terminal_job_ids = []
     for index in range(3):
-        job_id = f"terminal-{index}"
+        pack_id = f"pack-{index}"
+        job_id = f"{pack_id}-{index:012x}"
+        terminal_job_ids.append(job_id)
         job_dir = jobs_root / job_id
         job_dir.mkdir()
         identity = {
             "job_id": job_id,
-            "pack_id": f"pack-{index}",
+            "pack_id": pack_id,
             "created_at": index + 1,
             "entries_total": 1,
             "chunks_total": 1,
@@ -840,13 +866,13 @@ def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
 
     listed = pack_jobs.list_pack_jobs(tmp_path)
 
-    assert not (jobs_root / "terminal-0").exists()
-    assert (jobs_root / "terminal-1").is_dir()
-    assert (jobs_root / "terminal-2").is_dir()
+    assert not (jobs_root / terminal_job_ids[0]).exists()
+    assert (jobs_root / terminal_job_ids[1]).is_dir()
+    assert (jobs_root / terminal_job_ids[2]).is_dir()
     assert degraded.is_dir()
     assert {item["job_id"] for item in listed} == {
-        "terminal-1",
-        "terminal-2",
+        terminal_job_ids[1],
+        terminal_job_ids[2],
         "degraded-job",
     }
 
@@ -1078,6 +1104,49 @@ async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
         return prepared
 
     monkeypatch.setattr(pack_jobs, "_prepare_job", prepare_then_remove_database)
+
+    result = await process_pack_jobs(
+        service,
+        batch_size=4,
+        ready_vector_chunks=0,
+    )
+
+    assert result["state"] == "failed"
+    assert service.list_packs() == ()
+    assert service.list_pack_jobs()[0]["retrieval_mode"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_tampered_staged_vector_bytes_cannot_activate_as_hybrid(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    original_prepare = pack_jobs._prepare_job
+
+    def prepare_then_replace_vector(selected_job_dir):
+        prepared = original_prepare(selected_job_dir)
+        assert prepared["index_validation"] == "accepted"
+        replacement = bytes.fromhex("0040") * PREBUILT_DIMENSIONS
+        with sqlite3.connect(selected_job_dir / "knowledge.db") as connection:
+            connection.execute(
+                "UPDATE knowledge_chunks SET embedding=?",
+                (replacement,),
+            )
+        return prepared
+
+    monkeypatch.setattr(pack_jobs, "_prepare_job", prepare_then_replace_vector)
 
     result = await process_pack_jobs(
         service,

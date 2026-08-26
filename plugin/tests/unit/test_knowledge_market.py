@@ -1121,6 +1121,72 @@ async def test_market_task_retries_transient_job_poll_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "content", "expected_code"),
+    (
+        (404, b'{"detail":"missing"}', "main_server_rejected"),
+        (200, b"{", "main_server_invalid_response"),
+    ),
+)
+async def test_main_request_classifies_permanent_poll_failures(
+    monkeypatch,
+    status_code,
+    content,
+    expected_code,
+):
+    real_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            content=content,
+            request=request,
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._main_request("GET", "packs/jobs")
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_code",
+    ("main_server_rejected", "main_server_invalid_response"),
+)
+async def test_market_task_does_not_retry_permanent_poll_failure(
+    monkeypatch,
+    error_code,
+):
+    calls = 0
+    task = {"stage": "installing", "progress": 0.75, "message": ""}
+
+    async def fake_main(_method, _path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise module._KnowledgeTaskError(error_code, "permanent failure")
+
+    async def unexpected_sleep(_seconds):
+        pytest.fail("permanent poll failures must not be retried")
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module.asyncio, "sleep", unexpected_sleep)
+
+    with pytest.raises(module._KnowledgeTaskError) as exc_info:
+        await module._wait_for_pack_job(task, job_id="fixture-job")
+
+    assert calls == 1
+    assert exc_info.value.code == error_code
+
+
+@pytest.mark.asyncio
 async def test_market_task_stops_polling_when_staged_job_is_degraded(monkeypatch):
     task = {"stage": "installing", "progress": 0.75, "message": ""}
 

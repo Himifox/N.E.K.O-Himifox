@@ -324,13 +324,13 @@ def list_installed_packs(
     *,
     busy_timeout_ms: int = 5_000,
 ) -> tuple[dict[str, Any], ...]:
+    database_path = Path(database_path)
     try:
         packs = _load_registry(get_pack_registry_path(database_path)).get("packs", {})
     except KnowledgePackRegistryError:
         return ()
     if not isinstance(packs, dict):
         return ()
-    store = KnowledgeStore(database_path, busy_timeout_ms=busy_timeout_ms)
     source_tags = tuple(
         dict.fromkeys(
             str(value.get("source_tag") or "")
@@ -339,7 +339,14 @@ def list_installed_packs(
             and str(value.get("source_tag") or "").startswith("source:")
         )
     )
-    statuses = store.source_chunk_statuses(source_tags)
+    statuses = (
+        KnowledgeStore(
+            database_path,
+            busy_timeout_ms=busy_timeout_ms,
+        ).source_chunk_statuses(source_tags)
+        if database_path.is_file()
+        else {}
+    )
     items: list[dict[str, Any]] = []
     for pack_id, value in sorted(packs.items()):
         if not isinstance(value, dict):
