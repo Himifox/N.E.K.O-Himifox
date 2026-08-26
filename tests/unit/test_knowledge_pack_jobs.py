@@ -141,6 +141,93 @@ def test_prebuilt_verification_resumes_from_persisted_state(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ("missing", "invalid", "replacement"))
+async def test_staged_subscription_must_match_immutable_job_identity(
+    tmp_path,
+    mutation,
+):
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    subscription_path = job_dir / "subscription.json"
+    if mutation == "missing":
+        subscription_path.unlink()
+    elif mutation == "invalid":
+        subscription_path.write_text("{", encoding="utf-8")
+    else:
+        replacement = json.loads(subscription_path.read_text(encoding="utf-8"))
+        replacement["version"] = "2.0.0"
+        subscription_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    listed = service.list_pack_jobs()[0]
+
+    assert result["state"] == "degraded"
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "job_subscription_identity_mismatch"
+    assert job_dir.is_dir()
+    assert service.list_packs() == ()
+
+
+@pytest.mark.asyncio
+async def test_local_staged_job_cannot_gain_subscription_metadata(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    _artifacts, subscription = _prebuilt(_pack())
+    (job_dir / "subscription.json").write_text(
+        json.dumps(subscription),
+        encoding="utf-8",
+    )
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    listed = service.list_pack_jobs()[0]
+
+    assert result["state"] == "degraded"
+    assert listed["reason"] == "job_subscription_identity_mismatch"
+    assert service.list_packs() == ()
+
+
+def test_activation_rechecks_staged_subscription_identity(tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    prepared = _prepare_job(job_dir)
+    assert prepared["index_validation"] == "accepted"
+    subscription_path = job_dir / "subscription.json"
+    replacement = json.loads(subscription_path.read_text(encoding="utf-8"))
+    replacement["provider_package_id"] = "8"
+    subscription_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+    activated = pack_jobs._activate_job(
+        service,
+        job_dir,
+        prepared,
+        mode="hybrid",
+    )
+
+    assert activated["state"] == "degraded"
+    assert activated["reason"] == "job_subscription_identity_mismatch"
+    assert service.list_packs() == ()
+
+
+@pytest.mark.asyncio
 async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     job = service.stage_pack(_pack())
@@ -737,6 +824,8 @@ def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
             "entries_total": 1,
             "chunks_total": 1,
             "content_bytes": 1,
+            "has_subscription": False,
+            "subscription_sha256": "",
         }
         (job_dir / "identity.json").write_text(json.dumps(identity), encoding="utf-8")
         (job_dir / "state.json").write_text(

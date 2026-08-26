@@ -28,7 +28,7 @@ from .packs import (
     preflight_pack,
     validate_pack,
 )
-from .subscriptions import canonical_pack_bytes
+from .subscriptions import canonical_pack_bytes, validate_subscription
 
 
 STAGING_DIRECTORY = ".staging"
@@ -44,7 +44,9 @@ INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
+IDENTITY_SUBSCRIPTION_FIELDS = ("has_subscription", "subscription_sha256")
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}-[0-9a-f]{12}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 logger = logging.getLogger(__name__)
 
 
@@ -221,7 +223,21 @@ def _validated_identity_payload(
             for key in IDENTITY_CAPACITY_FIELDS
         },
     }
-    if any(value is None for value in identity_values.values()):
+    has_subscription = payload.get("has_subscription")
+    subscription_sha256 = payload.get("subscription_sha256")
+    subscription_identity_valid = (
+        isinstance(has_subscription, bool)
+        and (
+            isinstance(subscription_sha256, str)
+            and bool(_SHA256_RE.fullmatch(subscription_sha256))
+            if has_subscription
+            else subscription_sha256 == ""
+        )
+    )
+    if (
+        any(value is None for value in identity_values.values())
+        or not subscription_identity_valid
+    ):
         return _JsonReadResult("invalid", {})
     if (
         job_id != job_dir.name
@@ -232,7 +248,13 @@ def _validated_identity_payload(
         return _JsonReadResult("invalid", {})
     return _JsonReadResult(
         "valid",
-        {"job_id": job_id, "pack_id": pack_id, **identity_values},
+        {
+            "job_id": job_id,
+            "pack_id": pack_id,
+            **identity_values,
+            "has_subscription": has_subscription,
+            "subscription_sha256": subscription_sha256,
+        },
     )
 
 
@@ -322,6 +344,13 @@ def _read_job(job_dir: Path) -> dict[str, object]:
                     reason="job_capacity_identity_mismatch",
                     identity=identity,
                 )
+        for key in IDENTITY_SUBSCRIPTION_FIELDS:
+            if key in state and state.get(key) != identity[key]:
+                return _degraded_job(
+                    job_dir,
+                    reason="job_subscription_identity_mismatch",
+                    identity=identity,
+                )
         if "created_at" not in state:
             created_at = int(identity["created_at"])
         else:
@@ -363,7 +392,7 @@ def _write_state(
     persisted = {
         key: value
         for key, value in updated.items()
-        if key not in IDENTITY_CAPACITY_FIELDS
+        if key not in IDENTITY_CAPACITY_FIELDS + IDENTITY_SUBSCRIPTION_FIELDS
     }
     atomic_write_json(_state_path(job_dir), persisted, ensure_ascii=False, indent=2)
     return updated
@@ -410,6 +439,7 @@ def stage_pack(
     """Persist validated source data without making it searchable yet."""
     root = Path(service.knowledge_root)
     preflight = preflight_pack(pack)
+    canonical_subscription = _canonical_staged_subscription(subscription)
     ensure_install_capacity(root, preflight)
     root = _create_trusted_knowledge_root(root)
     if root is None:
@@ -432,6 +462,11 @@ def stage_pack(
         creating_dir.mkdir()
         now = int(time.time())
         has_prebuilt = index_manifest is not None and vectors is not None
+        subscription_sha256 = (
+            hashlib.sha256(canonical_pack_bytes(canonical_subscription)).hexdigest()
+            if canonical_subscription is not None
+            else ""
+        )
         identity: dict[str, object] = {
             "job_id": job_id,
             "pack_id": pack.pack_id,
@@ -439,6 +474,8 @@ def stage_pack(
             "entries_total": preflight.entries,
             "chunks_total": preflight.projected_chunks,
             "content_bytes": preflight.content_bytes,
+            "has_subscription": canonical_subscription is not None,
+            "subscription_sha256": subscription_sha256,
         }
         state: dict[str, object] = {
             "job_id": job_id,
@@ -473,10 +510,10 @@ def stage_pack(
             if has_prebuilt:
                 atomic_write_bytes(creating_dir / INDEX_MANIFEST_NAME, index_manifest)
                 atomic_write_bytes(creating_dir / VECTOR_ARTIFACT_NAME, vectors)
-            if subscription is not None:
+            if canonical_subscription is not None:
                 atomic_write_json(
                     creating_dir / "subscription.json",
-                    subscription,
+                    canonical_subscription,
                     ensure_ascii=False,
                 )
             atomic_write_json(
@@ -708,11 +745,41 @@ def _load_capacity_validated_job_pack(
     return pack
 
 
-def _subscription(job_dir: Path) -> dict[str, str] | None:
-    payload = _read_json(job_dir / "subscription.json")
-    if not payload:
+def _canonical_staged_subscription(
+    payload: object,
+) -> dict[str, str] | None:
+    if payload is None:
         return None
-    return {str(key): str(value) for key, value in payload.items()}
+    subscription = validate_subscription(payload)
+    if subscription.provider == "plugin-market" and not subscription.provider_package_id:
+        raise ValueError("plugin-market subscription requires provider_package_id")
+    return subscription.to_dict()
+
+
+def _identity_validated_subscription(
+    job_dir: Path,
+    identity: dict[str, Any],
+) -> dict[str, str] | None:
+    result = _read_json_result(job_dir / "subscription.json")
+    has_subscription = identity.get("has_subscription") is True
+    if not has_subscription:
+        if result.state != "missing":
+            raise KnowledgeJobRegistryError("knowledge_job_subscription_invalid")
+        return None
+    if result.state != "valid":
+        raise KnowledgeJobRegistryError("knowledge_job_subscription_invalid")
+    try:
+        subscription = _canonical_staged_subscription(result.payload)
+    except ValueError as exc:
+        raise KnowledgeJobRegistryError(
+            "knowledge_job_subscription_invalid"
+        ) from exc
+    if subscription is None:
+        raise KnowledgeJobRegistryError("knowledge_job_subscription_invalid")
+    digest = hashlib.sha256(canonical_pack_bytes(subscription)).hexdigest()
+    if digest != identity.get("subscription_sha256"):
+        raise KnowledgeJobRegistryError("knowledge_job_subscription_invalid")
+    return subscription
 
 
 def _cleanup_payload(job_dir: Path) -> None:
@@ -757,6 +824,19 @@ def _capacity_mismatch_state(
     )
 
 
+def _subscription_mismatch_state(
+    job_dir: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    return _write_state(
+        job_dir,
+        state,
+        state=DEGRADED_STATE,
+        retrieval_mode="none",
+        reason="job_subscription_identity_mismatch",
+    )
+
+
 def _prepare_job(job_dir: Path) -> dict[str, Any]:
     """Validate staging again under its trusted-root lock before processing."""
     safe_job_dir = _revalidated_job_dir(job_dir)
@@ -778,6 +858,10 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
             return state
         if not state or state.get("state") in TERMINAL_STATES:
             return state
+        try:
+            subscription = _identity_validated_subscription(job_dir, state)
+        except KnowledgeJobRegistryError:
+            return _subscription_mismatch_state(job_dir, state)
         pack = _load_capacity_validated_job_pack(job_dir, state)
         if pack is None:
             return _capacity_mismatch_state(job_dir, state)
@@ -819,20 +903,20 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
             if has_manifest and has_vectors:
                 from .prebuilt_index import validate_prebuilt_index
 
-                subscription = _subscription(job_dir) or {}
+                expected_subscription = subscription or {}
                 try:
                     validated = validate_prebuilt_index(
                         (job_dir / PACK_ARTIFACT_NAME).read_bytes(),
                         manifest_path.read_bytes(),
                         vectors_path.read_bytes(),
                         expected_pack_sha256=str(
-                            subscription.get("artifact_sha256") or ""
+                            expected_subscription.get("artifact_sha256") or ""
                         ),
                         expected_manifest_sha256=str(
-                            subscription.get("index_manifest_sha256") or ""
+                            expected_subscription.get("index_manifest_sha256") or ""
                         ),
                         expected_vectors_sha256=str(
-                            subscription.get("vectors_sha256") or ""
+                            expected_subscription.get("vectors_sha256") or ""
                         ),
                     )
                     stored = staging_store.store_chunk_embeddings_strict(
@@ -904,6 +988,10 @@ def _activate_job_validated(
             if current.get("state") == "cancelled":
                 _cleanup_payload(job_dir)
             return current
+        try:
+            subscription = _identity_validated_subscription(job_dir, current)
+        except KnowledgeJobRegistryError:
+            return _subscription_mismatch_state(job_dir, current)
         pack = _load_capacity_validated_job_pack(job_dir, current)
         if pack is None:
             return _capacity_mismatch_state(job_dir, current)
@@ -938,7 +1026,7 @@ def _activate_job_validated(
             result = install_pack(
                 database_path,
                 pack,
-                subscription=_subscription(job_dir),
+                subscription=subscription,
                 prepared_embeddings=embeddings,
                 retrieval_mode=mode,
                 embedding_policy="prebuilt_only",
