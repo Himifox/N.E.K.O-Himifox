@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十六轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十六轮均已实施，第十七轮方案已冻结、等待实现证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1876,3 +1876,59 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 设计提交 `54f531673`、实现提交 `8612faa50` 已推送。DD 将 Main Server 网络/5xx、4xx 和无效响应分别映射为 unavailable、rejected 与 invalid response；DE 将 job ID 精确绑定 immutable pack ID；DF 在 activation 前重新验证三个 canonical artifacts，并逐 key 比较 staging database 的 model、dimensions 与 embedding bytes；DG 使 registry-only pack listing 不创建缺失 database，status 返回 `knowledge_database_missing`；DH 将 chunker 与 embedding input 合并为一次派生合同失效；DI 让 backfill limit 约束成功处理数并以惰性 rowid cursor 越过坏行。
 
 项目 `.venv` Python 3.11.15 的本轮精确反例为 9 passed；market、pack jobs、packs、service、chunks 相邻集合为 217 passed、1 skipped；store、hybrid retrieval、public router 与 agent hardening 扩展集合为 85 passed。合计 302 passed、1 skipped，skip 仍是本机 Windows 目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过；本轮无前端、i18n 或新测试文件变化。
+
+## 第十七轮：取消结果收敛、未发布迁移撤销与有界物化
+
+针对远端 head `290a532aba` 的复审新增 3 个未解决 conversation，并在 CodeRabbit review body 中新增 1 条 outside-diff 评论。逐条复核当前控制流后四条都成立，但策略迁移评论不按“继续完善迁移”处理：该迁移只兼容本 PR 的未发布中间注册表，沿用 BE 的发布事实结论，应删除兼容面而不是增加启动失败路径。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3859666690` | DJ | installing mutation 的业务拒绝结果被丢弃，退订可错误返回 `not_found`，成立 |
+| `discussion_r3859666694` | DK | registry 读取失败被折叠为迁移成功并污染 initialized cache，现象成立；解决方向改为删除未发布迁移 |
+| `discussion_r3859666698` | DL | `bool("false")` 把损坏的自动上下文标志规范化为启用，成立 |
+| `pullrequestreview-5026823337` | DM | 同一连接的活动 SELECT 游标与 chunk 写入交错，结果集稳定性未定义，成立 |
+
+### DJ：退订必须消费 installation mutation 的可证明结果
+
+- `_cancel_active_subscription()` 取消外层 worker 后必须取得 installation mutation 的终态，不能只等待后丢弃 result/exception。
+- Main Server 明确返回 `{ok:false}` 表示 apply 在原子 job 发布前被拒绝；此时记录 `preinstall_cancelled`，按既有幂等取消响应上报远端，不再调用必然 `not_found` 的 remove。
+- 连接、超时或无效响应不能证明未发布，继续按“不确定提交”处理：等待 mutation 终止后使用三重持久身份调用 `packs/remove`。此时 mutation 已不可能再迟到发布；若可信 remove 明确返回 `not_found`，也收敛为幂等取消成功并执行远端 unsubscribe report。
+- 其他 remove 业务拒绝仍保留原错误，不把身份冲突、registry 损坏或服务不可用伪装成成功。
+
+验收：apply 明确 `{ok:false}` 时不调用 remove、退订成功并上报；apply 抛连接异常时仍调用 remove；异常后 remove 成功或明确 not-found 均不留下订阅，身份不匹配仍失败关闭。
+
+### DK：删除最终格式之前的自动策略迁移
+
+- 删除 `migrate_legacy_pack_index_policies()`、`initialize_knowledge_runtime()`、进程级 migration task/cache，以及 Main Server 启动时调用和公共 API 导出。
+- 删除只验证缺少 `local_embedding_enabled` 等本 PR 中间 registry 字段的迁移测试；保留最终格式的 registry health、数据库 Schema guard、显式 pack mutation 和 indexer 当前策略读取。
+- 启动不再因旧 registry 自动改写数据库、chunks 或 `packs.json`。当前格式损坏仍由 status/管理入口报告 degraded；旧开发数据由开发者清理后重新导入。
+- `installed_source_embedding_policies()` 继续作为当前 registry 的只读策略映射供 backfill/indexer 使用，它不推断或持久化旧字段。
+
+验收：Main Server 启动不调用任何 pack policy migration；知识公共 API 不再暴露 runtime migration；当前空目录、合法最终数据库和损坏 registry 的健康语义不回归。
+
+### DL：自动上下文标志必须是严格布尔值
+
+- `_load_registry()` 对每个 pack 要求 `auto_context` 是 `bool`；字符串、数字、null、容器或缺失字段一律抛 `KnowledgePackRegistryError`，不能 truthiness-coerce 后继续报告 ready。
+- routing 快路径继续只接受 `is True`；material type 规范化不替代布尔字段校验，也不能因 corpus 旧 Schema 分支把类型损坏改成启用。
+- 写入入口继续持久化规范布尔值；本轮不为未发布的旧 registry Schema 新增自动补字段兼容。
+
+验收：`"false"`、`0`、null 与缺失值均使 registry invalid，自动会话不加载该来源；规范 true/false 的路由和管理切换不变。
+
+### DM：backfill 先有界物化候选、再修改 chunks
+
+- `backfill_missing_chunks()` 使用 `entries.rowid > last_rowid` 的有界分页；每页先 `fetchall()` 并结束该 SELECT 的 stepping，再调用 `_reconcile_chunks()`。
+- `last_rowid` 按本页最后一个候选推进，而不是按成功行推进；损坏 entry 被稳定越过但保持缺 chunks 状态，不会重复扫描或成为游标屏障。
+- `limit` 仍约束成功处理数。函数持续读页直到成功 `limit` 条或候选耗尽；单页大小固定有界，不恢复全表物化。
+- embedding policy 的显式映射、community 默认 `prebuilt_only` 与内置来源默认 `local` 保持不变。
+
+验收：早期坏行后合法行仍被处理；跨多页坏行不造成无限循环；每次 reconcile 时对应 SELECT 已物化完成；正常 limit 与策略选择不回归。
+
+## 第十七轮实施与关闭条件
+
+1. 先提交并推送本节设计，再实现 DJ–DM；设计提交不用于提前关闭评论。
+2. 删除迁移时同步清理调用、导出与专用测试，避免留下不可达兼容代码。
+3. 在既有 market、packs、service、chunks 测试文件中增加精确反例，不新增测试文件或用户文案/i18n key。
+4. 使用项目 Python 3.11 运行精确反例和相邻回归，运行 Ruff 与 `git diff --check`。
+5. 实现与测试证据推送后回复 3 个 conversation 并 resolve；outside-diff 只能在 review 正文下留实现证据，不能伪造 conversation resolution。最后重新分页收集全部未解决线程及最新 review body。
+
+关闭条件：明确失败的 apply 可幂等退订；不确定 apply 仍先等待再清理；启动不再迁移未发布 registry；损坏自动上下文字段失败关闭；backfill 不在活动候选游标上写依赖表。只有远端代码和精确测试齐全后才把本轮标为已实施。
