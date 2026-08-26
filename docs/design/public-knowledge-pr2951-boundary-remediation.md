@@ -2190,3 +2190,55 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 设计提交 `54d170567`、实现提交 `da42116f1` 已推送。tool handler 现在把显式 `knowledge`/`corpus` 传给服务，`auto`/`all` 保持双类型语义，并在渲染前再次核对实际来源类型。服务只从内置来源表和严格当前注册表发布的社区 source 中构建抽样 allowlist；store 在蓄水池计数前过滤 allowlist，因此异类或未知来源既不能被返回，也不能占用 `limit` 造成假空结果。全局检索的既有扩展来源回退语义未被改变。
 
 混合标签精确反例为 5 passed，context/service/store/packs 相邻回归为 166 passed，知识与市场相关宽回归为 459 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是既有 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有用户文案或 i18n 改动。pytest 完成后的遥测日志告警仍来自工作区沙盒，未影响测试判定。
+
+## 第二十三轮：状态输出与作业提交必须可证明
+
+第二十二轮推送后的远端 head `c5b79157e` 新增 5 条 conversation。沿当前读取、轮询、激活与降级链路复核后全部成立。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3861038602` | ED | 未解析社区来源在状态计数中被默认成 knowledge，成立 |
+| `discussion_r3861038607` | EE | mutable state 可伪造 active 且未与 live commit 对账，成立 |
+| `discussion_r3861038612` | EF | container state 在集合判断处触发 TypeError，成立 |
+| `discussion_r3861038621` | EG | source-aware 正例被旧 fixture schema 拒绝，成立 |
+| `discussion_r3861038626` | EH | override identity 的非字符串值被强制转换后接受，成立 |
+
+### ED：状态计数只统计已解析素材来源
+
+- `knowledge_entries` 与 `corpus_entries` 只累计严格来源映射中精确解析为对应类型的 source；不得为缺失映射提供 `knowledge` 默认值。
+- registry 损坏、缺失或不可读时，残留社区 rows 仍计入总 `entries` 和 source diagnostics，但不冒充任一可信素材类型；`integrity_ok` 与 registry state 继续明确降级。
+- 内置来源和合法当前社区注册表的计数不变，不从 source tag 名称或 SQLite 内容反推类型。
+
+### EE：active 是 live commit 的派生结论
+
+- stage 时为规范化 pack 计算稳定内容摘要，并将其写入强制 identity；安装时把同一摘要写入当前 packs registry。两端都严格校验 SHA-256，不兼容本 PR 未发布的无摘要中间格式。
+- `_read_job()` 只有在 immutable identity、严格 packs registry 与 live SQLite 同时对账后才接受 `active`：pack/source、内容摘要、订阅摘要、entries/chunks/content 容量以及 retrieval mode 必须一致。
+- 不能只验证 pack_id；同一 pack 的旧版本、相同条目数但不同内容、旧订阅版本都不得替代当前 job。注册表或数据库不可读、缺包、容量不一致时进入 `degraded`，不执行、不自动删除，只允许显式 discard。
+- `install_pack()` 仍是 durable commit point；状态写入失败后的既有幂等重试语义保留。正常 active journal 清理 payload 后仍可仅靠 identity、registry 与 live database 验证。
+
+### EF：作业状态字段先验证再参与控制流
+
+- state 必须是字符串且属于当前有限状态集合；数组、对象、布尔、数字、空值和未知字符串统一返回 `degraded/invalid_job_state`。
+- 校验发生在任何 terminal membership、prune、capacity、indexer 或 API 状态判断之前，损坏值不得抛出 TypeError 或被字符串化成新状态。
+- degraded 作业不自动清理，保持现有显式 discard 边界。
+
+### EG：评估 fixture schema 与来源身份一致
+
+- positive case 的精确字段集合加入 `expected_source_tag`；loader 在加载模型或向量前验证 id、query、expected title 与 expected source 都是非空字符串。
+- expected source 必须是非空 `source:*` identity，title 必须可规范化；negative case 同样严格验证 id/query 类型与非空值。
+- 默认正式 fixture 必须通过 loader；额外字段、缺字段、容器或非法来源失败关闭，不退回 title-only。
+
+### EH：catalog override identity 禁止类型强制转换
+
+- 持久 disabled row 的 `source` 与 `title` 必须原生为字符串，之后才允许 trim/标题规范化；数组、对象、数字、布尔和 null 都使整个 override invalid。
+- 写入口同步要求字符串，避免内部调用生成下一次读取即不可解释的身份。
+- override invalid 时检索与自动上下文继续失败关闭，文件不被静默改写；修复文件后可恢复。
+
+## 第二十三轮实施与关闭条件
+
+1. 先提交并推送本节设计，再实现 ED–EH；不提前关闭 conversation。
+2. 扩展既有 public service、pack jobs、real-model eval、catalog boundary 测试，不新增测试文件或用户文案/i18n key。
+3. 使用项目 Python 3.11 运行五组精确反例、受影响文件和知识/市场宽回归；运行 Ruff、compileall、fixture 解析与 `git diff --check`。
+4. 实现与证据推送后逐条回复并 resolve 5 个 conversation，最后完整分页检查新增未解决评论。
+
+关闭条件：未解析来源不再产生误导计数；伪造 active 无法代替真实安装提交；任意损坏 state 类型不会逃逸为系统异常；默认评估 fixture 可加载且来源身份严格；非字符串 override identity 失败关闭。只有远端实现和精确测试证据齐全后才标记第二十三轮已实施。
