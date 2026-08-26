@@ -1391,6 +1391,23 @@ class KnowledgeService:
         from .packs import remove_pack
 
         with pack_operation_lock(self.knowledge_root, pack_id):
+            installed = next(
+                (
+                    item
+                    for item in self.list_packs()
+                    if str(item.get("pack_id") or "") == pack_id
+                ),
+                None,
+            )
+            installed_subscription = (
+                installed.get("subscription")
+                if isinstance(installed, dict)
+                else None
+            )
+            if isinstance(installed_subscription, dict) and not expected_provider:
+                raise PermissionError(
+                    "knowledge subscription removal requires provider identity"
+                )
             cancelled_jobs = 0
             for job in list_pack_jobs(self.knowledge_root):
                 if (
@@ -1402,16 +1419,8 @@ class KnowledgeService:
                         str(job.get("job_id") or ""),
                     ))
             if expected_provider:
-                installed = next(
-                    (
-                        item
-                        for item in self.list_packs()
-                        if str(item.get("pack_id") or "") == pack_id
-                    ),
-                    None,
-                )
                 if installed is not None:
-                    subscription = installed.get("subscription")
+                    subscription = installed_subscription
                     provider_matches = (
                         isinstance(subscription, dict)
                         and str(subscription.get("provider") or "")

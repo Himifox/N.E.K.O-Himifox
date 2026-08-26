@@ -336,7 +336,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob } from '@/api/knowledge'
+import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, removeManagedPack, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
@@ -993,10 +993,10 @@ async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
   } catch { ElMessage.error(t('knowledge.operationFailed')) }
 }
 
-async function removePack(row: any) {
+async function removePack(row: KnowledgePackSummary) {
   try {
     await ElMessageBox.confirm(t('knowledge.removeConfirm', { name: row.pack_id }), t('common.warning'), { type: 'warning' })
-    await knowledgeApi.removePack({ pack_id: row.pack_id })
+    await removeManagedPack(row)
     packs.value = packs.value.filter((pack) => pack.pack_id !== row.pack_id)
     refreshOverviewInBackground()
   } catch (error: any) {

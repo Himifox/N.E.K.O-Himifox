@@ -297,6 +297,36 @@ def test_remove_rejects_non_ascii_provider_package_identity(monkeypatch, tmp_pat
     assert response.json() == {"ok": False, "reason": "invalid_request"}
 
 
+def test_generic_remove_cannot_delete_a_subscribed_pack(monkeypatch, tmp_path):
+    payload = _pack()
+    service = open_knowledge(tmp_path)
+    service.install_pack(
+        validate_pack(payload),
+        subscription={
+            "provider": "plugin-market",
+            "provider_package_id": "7",
+            "remote_id": "knowledge/market-fixture",
+            "version": "1.0.0",
+            "channel": "stable",
+            "artifact_sha256": hashlib.sha256(
+                canonical_pack_bytes(payload)
+            ).hexdigest(),
+        },
+    )
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/public-knowledge/packs/remove",
+        json={"pack_id": "market-fixture"},
+    )
+
+    assert response.json() == {
+        "ok": False,
+        "reason": "subscription_identity_mismatch",
+    }
+    assert service.list_packs()[0]["pack_id"] == "market-fixture"
+
+
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(

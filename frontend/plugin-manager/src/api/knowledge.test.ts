@@ -142,6 +142,55 @@ describe('knowledge API response handling', () => {
     expect(axiosMocks.request.mock.calls[0]![0].timeout).toBe(50000)
   })
 
+  it('routes local pack removal through the main knowledge API', async () => {
+    axiosMocks.request.mockResolvedValue({ data: { ok: true } })
+    const { removeManagedPack } = await loadKnowledgeApi()
+
+    await removeManagedPack({ pack_id: 'local-fixture' })
+
+    expect(axiosMocks.request.mock.calls[0]![0]).toMatchObject({
+      url: '/market/knowledge/packs/remove',
+      method: 'POST',
+      data: { pack_id: 'local-fixture' },
+    })
+  })
+
+  it('routes subscribed pack removal through provider unsubscribe', async () => {
+    axiosMocks.request.mockResolvedValue({ data: { ok: true } })
+    const { removeManagedPack } = await loadKnowledgeApi()
+
+    await removeManagedPack({
+      pack_id: 'market-fixture',
+      subscription: {
+        provider: 'plugin-market',
+        provider_package_id: '7',
+        remote_id: 'knowledge/market-fixture',
+        version: '1.0.0',
+      },
+    })
+
+    expect(axiosMocks.request.mock.calls[0]![0]).toMatchObject({
+      url: '/market/knowledge/unsubscribe',
+      method: 'POST',
+      data: { package_id: '7', pack_id: 'market-fixture' },
+    })
+  })
+
+  it('fails closed when subscribed pack ownership is incomplete', async () => {
+    const { removeManagedPack } = await loadKnowledgeApi()
+
+    await expect(removeManagedPack({
+      pack_id: 'market-fixture',
+      subscription: {
+        provider: 'plugin-market',
+        version: '1.0.0',
+      },
+    })).rejects.toMatchObject({
+      reason: 'subscription_identity_unverifiable',
+    })
+    expect(axiosMocks.request).not.toHaveBeenCalled()
+  })
+
   it('refreshes an invalid bridge token and retries once', async () => {
     axiosMocks.get
       .mockResolvedValueOnce({ data: { bridge_token: 'stale-token' } })

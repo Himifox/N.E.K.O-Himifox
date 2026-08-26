@@ -101,3 +101,80 @@ async def test_live_receiver_requires_exact_request_id_for_content_and_completio
 
     assert outcome["completed"] is True
     assert outcome["reply"] == "target"
+
+
+@pytest.mark.asyncio
+async def test_live_runner_uses_a_fresh_session_for_every_case(monkeypatch):
+    connections = []
+
+    class FakeWebSocket:
+        def __init__(self, index):
+            self.index = index
+            self.sent = []
+            self.received = iter(
+                (
+                    {"type": "session_started"},
+                    {
+                        "type": "gemini_response",
+                        "text": f"reply-{index}",
+                        "request_id": f"knowledge-quality-{index}",
+                    },
+                    {
+                        "type": "system",
+                        "data": "turn end",
+                        "request_id": f"knowledge-quality-{index}",
+                    },
+                )
+            )
+
+        async def send(self, payload):
+            self.sent.append(json.loads(payload))
+
+        async def recv(self):
+            return json.dumps(next(self.received))
+
+    class FakeConnection:
+        def __init__(self):
+            self.websocket = FakeWebSocket(len(connections) + 1)
+            connections.append(self.websocket)
+
+        async def __aenter__(self):
+            return self.websocket
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        evaluator.websockets,
+        "connect",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+
+    results = await evaluator._run_live(
+        [{"message": "first"}, {"message": "second"}],
+        websocket_url="ws://fixture",
+        language="zh",
+    )
+
+    assert [result["reply"] for result in results] == ["reply-1", "reply-2"]
+    assert len(connections) == 2
+    for index, websocket in enumerate(connections, start=1):
+        assert websocket.sent == [
+            {
+                "action": "start_session",
+                "input_type": "text",
+                "new_session": True,
+                "language": "zh",
+            },
+            {
+                "action": "stream_data",
+                "input_type": "text",
+                "data": "first" if index == 1 else "second",
+                "request_id": f"knowledge-quality-{index}",
+                "language": "zh",
+            },
+            {
+                "action": "end_session",
+                "reason": "knowledge_quality_case_complete",
+            },
+        ]

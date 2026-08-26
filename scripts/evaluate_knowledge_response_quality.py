@@ -151,18 +151,21 @@ async def _run_live(
     websocket_url: str,
     language: str,
 ) -> list[dict[str, Any]]:
-    async with websockets.connect(websocket_url, max_size=8 * 1024 * 1024) as websocket:
-        await websocket.send(json.dumps({
-            "action": "start_session",
-            "input_type": "text",
-            "new_session": False,
-            "language": language,
-        }, ensure_ascii=False))
-        startup = await _receive_until_complete(websocket, startup=True)
-        if not startup.get("ready"):
-            raise RuntimeError(f"text session failed: {startup}")
-        results: list[dict[str, Any]] = []
-        for index, case in enumerate(routed, start=1):
+    results: list[dict[str, Any]] = []
+    for index, case in enumerate(routed, start=1):
+        async with websockets.connect(
+            websocket_url,
+            max_size=8 * 1024 * 1024,
+        ) as websocket:
+            await websocket.send(json.dumps({
+                "action": "start_session",
+                "input_type": "text",
+                "new_session": True,
+                "language": language,
+            }, ensure_ascii=False))
+            startup = await _receive_until_complete(websocket, startup=True)
+            if not startup.get("ready"):
+                raise RuntimeError(f"text session failed for case {index}: {startup}")
             request_id = f"knowledge-quality-{index}"
             await websocket.send(json.dumps({
                 "action": "stream_data",
@@ -177,14 +180,14 @@ async def _run_live(
             )
             if not outcome.get("completed"):
                 raise RuntimeError(
-                    f"knowledge quality turn did not complete: {outcome}"
+                    f"knowledge quality turn {index} did not complete: {outcome}"
                 )
             results.append({**case, **outcome, "manual_result": "pending"})
-        await websocket.send(json.dumps({
-            "action": "end_session",
-            "reason": "knowledge_quality_complete",
-        }))
-        return results
+            await websocket.send(json.dumps({
+                "action": "end_session",
+                "reason": "knowledge_quality_case_complete",
+            }))
+    return results
 
 
 async def _run_direct(

@@ -157,7 +157,12 @@ export interface KnowledgePackSummary {
   effective_material_type?: 'knowledge' | 'corpus'
   entries?: number
   auto_context?: boolean
-  subscription?: { provider: string; version: string }
+  subscription?: {
+    provider: string
+    provider_package_id?: string
+    remote_id?: string
+    version: string
+  }
   index_origin?: string
   index_trust?: string
   index_validation?: string
@@ -195,5 +200,22 @@ export const knowledgeApi = {
   setPackMaterialType: (data: any) => request<any>('packs/material-type', { method: 'POST', data }),
   setPackIndexPolicy: (data: KnowledgePackIndexPolicy) => request<KnowledgeEnvelope>('packs/index-policy', { method: 'POST', data }),
   removePack: (data: any) => request<any>('packs/remove', { method: 'POST', data }),
+  unsubscribePack: (data: { package_id: string; pack_id: string }) => request<any>('unsubscribe', { method: 'POST', data }),
   diagnostics: () => request<any>('diagnostics/recent'),
+}
+
+export async function removeManagedPack(pack: KnowledgePackSummary): Promise<any> {
+  const subscription = pack.subscription
+  if (!subscription) return knowledgeApi.removePack({ pack_id: pack.pack_id })
+  const packageId = String(subscription.provider_package_id || '')
+  if (
+    subscription.provider !== 'plugin-market' ||
+    !/^[1-9][0-9]{0,18}$/.test(packageId)
+  ) {
+    throw new KnowledgeApiError('subscription_identity_unverifiable')
+  }
+  return knowledgeApi.unsubscribePack({
+    package_id: packageId,
+    pack_id: pack.pack_id,
+  })
 }
