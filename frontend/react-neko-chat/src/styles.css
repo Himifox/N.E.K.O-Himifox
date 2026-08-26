@@ -1378,8 +1378,8 @@ body.neko-electron-runtime .app-shell:not(.chat-surface-mode-compact)[data-focus
 .message-block-image img {
   display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
 }
 
 .message-block-image img[data-neko-image-load-failed-sticker="true"] {
