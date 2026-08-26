@@ -2212,9 +2212,9 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 ### EE：active 是 live commit 的派生结论
 
 - stage 时为规范化 pack 计算稳定内容摘要，并将其写入强制 identity；安装时把同一摘要写入当前 packs registry。两端都严格校验 SHA-256，不兼容本 PR 未发布的无摘要中间格式。
-- `_read_job()` 只有在 immutable identity、严格 packs registry 与 live SQLite 同时对账后才接受 `active`：pack/source、内容摘要、订阅摘要、entries/chunks/content 容量以及 retrieval mode 必须一致。
-- 不能只验证 pack_id；同一 pack 的旧版本、相同条目数但不同内容、旧订阅版本都不得替代当前 job。注册表或数据库不可读、缺包、容量不一致时进入 `degraded`，不执行、不自动删除，只允许显式 discard。
-- `install_pack()` 仍是 durable commit point；状态写入失败后的既有幂等重试语义保留。正常 active journal 清理 payload 后仍可仅靠 identity、registry 与 live database 验证。
+- `install_pack()` 仍是 durable commit point；只有它返回成功后，激活器才能原子发布独立 `activation.json` 收据，再把 mutable state 写为 active。收据绑定 job ID、pack ID、内容摘要、订阅摘要与实际 retrieval mode；写收据失败时不发布持久 active，后续按既有幂等路径重试。
+- `_read_job()` 只有在 immutable identity、activation receipt 与 active state 三者精确一致时才接受 `active`。不能只验证 pack_id；同一 pack 的旧版本、相同条目数但不同内容、旧订阅版本或另一 job 的旧收据都不得替代当前 job。缺失、损坏或不一致时进入 `degraded`，不执行、不自动删除，只允许显式 discard。
+- receipt 证明该 job 曾越过真实 durable commit，而不是声明包必须永远保持安装。正常退订后，7 天 TTL 内的历史 active job 仍保持成功记录；这避免把合法卸载误报为 staging registry 损坏。正常 payload 清理不删除 identity、state 或 receipt。
 
 ### EF：作业状态字段先验证再参与控制流
 
