@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十五轮均已实施，第十六轮方案已归档并等待实施证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十六轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1870,3 +1870,9 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 5. 实现推送后逐条回复提交和精确测试证据并 resolve 6 条线程，再完整分页复核。
 
 关闭条件：永久 Main Server 响应不进入 24 小时重试；job ID 不能冒充另一 pack；激活向量逐字节来自受信 artifact；installed registry 不会掩盖 database 丢失；chunker 升级不混用旧派生数据；坏 entry 不阻塞后续 backfill。只有远端实现和测试证据齐全后才把本轮标为已实施。
+
+## 第十六轮实施证据
+
+设计提交 `54f531673`、实现提交 `8612faa50` 已推送。DD 将 Main Server 网络/5xx、4xx 和无效响应分别映射为 unavailable、rejected 与 invalid response；DE 将 job ID 精确绑定 immutable pack ID；DF 在 activation 前重新验证三个 canonical artifacts，并逐 key 比较 staging database 的 model、dimensions 与 embedding bytes；DG 使 registry-only pack listing 不创建缺失 database，status 返回 `knowledge_database_missing`；DH 将 chunker 与 embedding input 合并为一次派生合同失效；DI 让 backfill limit 约束成功处理数并以惰性 rowid cursor 越过坏行。
+
+项目 `.venv` Python 3.11.15 的本轮精确反例为 9 passed；market、pack jobs、packs、service、chunks 相邻集合为 217 passed、1 skipped；store、hybrid retrieval、public router 与 agent hardening 扩展集合为 85 passed。合计 302 passed、1 skipped，skip 仍是本机 Windows 目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过；本轮无前端、i18n 或新测试文件变化。
