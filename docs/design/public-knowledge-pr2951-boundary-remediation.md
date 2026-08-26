@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十七轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十七轮均已实施，第十八轮方案已冻结、等待实现证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1938,3 +1938,65 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 设计提交 `545b2bf01`、实现提交 `ea79d433f` 已推送。DJ 记录 installation mutation 的 accepted/rejected/failed/cancelled 终态：明确业务拒绝直接收敛为幂等取消，不确定失败仍执行身份约束 remove，且只在 mutation 已终止并得到可信 `not_found` 时转为成功。DK 删除 pack policy migration、启动调用、进程 cache、公共导出及其专用测试。DL 拒绝非当前 registry Schema 与非布尔 `auto_context`，同时保留未来 Schema 的稳定错误。DM 使用最多 256 行的 `rowid` 页先完整物化，再逐行 reconcile，并按页尾 rowid 越过损坏候选。
 
 项目 `.venv` Python 3.11 的 Plugin Market 文件为 35 passed；packs/chunks 文件为 81 passed；完整知识相关宽回归为 378 passed、1 skipped、4 deselected。skip 是本机 Windows symlink 权限；4 个 deselected 均为远端 head 已存在且与本轮路径无关的夹具失配：3 个 staged job identity 夹具仍使用不合法 job ID/缺失强制 identity 字段，1 个 builder subscription 夹具缺失既有强制 `material_type`。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。
+
+## 第十八轮：自动检索失败关闭、市场再认证与根路径信任
+
+第十七轮实施后完整分页得到 4 条未解决 conversation：两条来自此前全 PR review，两条来自远端 head `e3dbba08f` 的最新复审；同一复审的 review body 另有 1 条直接涉及第十七轮代码的 outcome 分类重复 nitpick。本轮将四个实际边界与该低风险一致性整理一并收敛，不处理同一旧 review body 中与本轮无关的其他历史 nitpick。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3859734280` | DN | catalog override 损坏时 mention matcher 抛错，而 search 已失败关闭，成立 |
+| `discussion_r3859734285` | DO | pack canonical encoder 仍接受非标准 NaN/Infinity，成立 |
+| `discussion_r3859920312` | DP | 退订信任可解析但被改写的本地 provider package ID，可误删远端订阅，成立 |
+| `discussion_r3859920320` | DQ | staging 校验在 resolve 前未拒绝 knowledge root 自身的 link/reparse，成立 |
+| `pullrequestreview-5027046115` | DR | installation outcome 分类存在两份同构实现，成立但仅为一致性整理 |
+
+### DN：禁用目录不可证明时 mention 必须返回空匹配
+
+- `_get_cached_mention_matcher()` 对 `load_disabled_entries()` 的 `CatalogOverrideError` 使用与 `search()` 相同的 fail-closed 语义，返回当前 policy 下的空 matcher。
+- 错误期间不得回用旧 matcher，因为旧 disabled 集合可能遗漏刚被禁用的 entry；也不把空 matcher 写入正常 cache，以便文件修复后下一次调用按当前 revision 与 disabled 集合重建。
+- 顶层会话异常保护继续保留，但损坏 override 不再把本轮 route 记为内部 error；没有可信禁用状态时宁可不注入任何知识。
+
+验收：损坏 override 时 `find_mentions()` 与 `match_turn()` 都为空且不抛；修复文件后同进程可恢复匹配；正常 cache/revision 行为不变。
+
+### DO：知识包 canonical JSON 必须拒绝非有限数字
+
+- `canonical_pack_bytes()` 调用 `json.dumps(..., allow_nan=False)`，与 prebuilt manifest 的规范编码器保持同一 JSON 合同。
+- `load_canonical_pack_artifact()` 遇到包含 `NaN`、`Infinity` 或 `-Infinity` 的原始 JSON 时稳定返回 `ValueError`；不能在规范性比较前让 Python 扩展值进入 payload。
+- 有限数字仍由后续 pack Schema 类型校验决定是否接受；本轮只收紧 JSON 标准性，不改变五字段 pack Schema。
+
+验收：三个非有限常量在编码和加载入口均被拒绝；正常 canonical bytes、hash 和市场制品验证不变。
+
+### DP：持久 registry 身份只作候选，市场 descriptor 才能授权退订
+
+- 活跃内存任务继续使用其已经通过 `_fetch_version_descriptor()` 验证并绑定 package ID 的 resolved identity；pre-install 快捷取消不新增网络依赖。
+- 从 `packs.json` 解析出的 installed subscription 不直接授权删除。使用 caller package ID、持久 version/channel 与 claimed pack ID 重新读取市场 descriptor；要求 descriptor 的 package、pack、remote、version、channel 与持久记录全部一致后，才返回 remove 所需 identity。
+- 建议同时核对 material type 与 artifact SHA-256，防止同版本元数据被本地篡改后仍通过基础字段；缺失字段、Pydantic 校验失败、市场不可用或任一不一致统一失败关闭为 `subscription_ownership_unverifiable`。
+- 验证必须发生在 Main Server `packs/remove` 和远端 unsubscribe report 之前。不得因本地 registry 的 package ID 语法有效、全局唯一就视为市场所有权证据。
+
+验收：把 pack A 的 provider package ID 改成另一个合法未占用 ID 时，既不调用 remove 也不上报；匹配 descriptor 才可删除；active task 取消路径不额外 fetch；市场不可用保持本地数据。
+
+### DQ：配置根自身必须在任何解析和锁之前可信
+
+- `_validated_jobs_root()` 先对原始 `knowledge_root` 执行 `lstat`/reparse 检查；root 是 symlink、junction、Windows reparse、非目录、缺失或不可读时立即返回不可信。
+- 只有 root 自身通过后才 resolve root、检查 `.staging`、创建 registry lock、遍历 job 或执行 prune/cancel/discard。只证明 resolved child 位于 resolved root 下不再足够。
+- `stage_pack()` 继续由 `_create_trusted_knowledge_root()` 创建缺失目录；只读 list 对缺失 root 返回空，不创建任何路径。
+- 既有 staging root/job dir 二级 reparse 校验继续保留，root 校验是额外的第一道边界。
+
+验收：模拟 root reparse 时 list 为空、cancel/discard 为 false、prune 不运行，且 registry lock helper 未被调用；正常真实 root 和首次 stage 不回归。
+
+### DR：installation outcome 使用单一分类函数
+
+- 抽取只读 `_installation_outcome_of()`，统一 cancelled、failed、accepted、rejected 四态；callback 与 unsubscribe reconciliation 都调用该 helper。
+- 日志仍使用真实 exception 对象，helper 不吞异常、不改变 task 生命周期；本单元不改变第十七轮已经冻结的幂等取消语义。
+
+验收：四种 outcome 的 callback 与 unsubscribe 分类一致；现有取消顺序、业务拒绝和连接失败反例不变。
+
+## 第十八轮实施与关闭条件
+
+1. 先提交并推送本文，随后在既有 retrieval/subscription/market/pack-jobs 测试文件中增加反例，不新建测试文件。
+2. DN、DO 是纯读取/编码边界；DP、DQ 涉及删除授权与路径删除，必须同时覆盖成功与失败负例。
+3. 使用项目 Python 3.11 运行精确反例、四个受影响文件的相邻回归、知识相关宽回归、Ruff、compileall 与 `git diff --check`。
+4. 实现和证据推送后逐条回复并 resolve 4 条 conversation；DR 只能通过 PR comment 留证据。最后再次完整分页，新增评论不与本轮混入。
+
+关闭条件：损坏 override 不注入 mention；非标准 JSON 不进入 canonical artifact；持久 provider ID 未经市场再认证不能授权删除；linked knowledge root 不触发锁、遍历或删除；outcome 分类只有一份实现。只有远端代码与测试证据齐全后才标记第十八轮已实施。
