@@ -2033,3 +2033,48 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 设计提交 `d25ca94f1`、实现提交 `f11367626` 已推送。`_load_registry()` 现在只接受类型为字符串且精确属于 `knowledge`/`corpus` 的 `declared_material_type`；缺失、空值、错误字符串、布尔、数字和容器都会抛出 `KnowledgePackRegistryError`，有效 override 也不能掩盖无效声明。失败路径不会改写或删除 SQLite 词条。
 
 `test_knowledge_packs.py` 新增 8 种损坏声明乘以 2 种 override 状态的 16 个反例，并验证 registry state 为 invalid、installed/routing 读取为空、自动 match/context 不命中且原始 corpus 词条仍存在。packs 文件为 77 passed，相邻 public service 文件为 28 passed；完整知识相关宽回归为 399 passed、1 skipped、4 deselected。skip 与 4 个 deselected 原因同第十八轮；Ruff、compileall 和 `git diff --check` 均通过，本轮没有前端或 i18n 改动。
+
+## 第二十轮：检索来源、评估派生版本与外层上传边界
+
+合并上游后的远端 head `f178dd024` 新增 3 条 conversation。逐条沿实际调用链复核后均成立：第十九轮已经让当前注册表字段严格失败关闭，但检索来源映射仍使用宽松 source registry 回退；离线评估只核对 embedding input 而未核对 chunker；市场代理的外层 multipart 路径又未进入 Main Server 的有界流式读取。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3860419827` | DT | 注册表不可用时社区 source 被默认归类为 knowledge，成立 |
+| `discussion_r3860419842` | DU | 混合检索评估不校验 chunker version，成立 |
+| `discussion_r3860419853` | DV | 市场外层订阅上传在内层守门前无界物化，成立 |
+
+### DT：素材检索只接受可证明的来源类型
+
+- `_source_material_types()` 不再通过宽松 `get_source()` 推断 `source:community.*`。内置 source 可按内置 registry 解析；社区 source 只有在严格 `_load_registry()` 成功、且 installed pack 提供合法 effective material type 时才进入可信映射。
+- `_allowed_material_sources()` 对 knowledge-only、corpus-only 和同时允许两类的查询都返回显式 source allowlist；不得因两类均允许就返回 `None` 取消过滤。这样损坏、缺失或不可读 `packs.json` 时，SQLite 中残留的社区 rows 在所有素材组合下都失败关闭。
+- 不从 SQLite 内容、source tag 名称或本 PR 的旧格式反推 material type，也不改写、删除残留数据。合法内置 source 与合法当前注册表继续可检索；注册表修复后同一服务实例可重新读取并恢复社区结果。
+- 结果素材类型仍从同一可信映射派生。未进入 allowlist 的未知社区 row 不得先命中再用 `knowledge` 默认值补类型。
+
+验收：安装 corpus 后分别删除、损坏和使注册表不可读，knowledge-only、corpus-only 与 knowledge+corpus 查询均不返回该社区 source；内置 knowledge 仍可返回；恢复合法注册表后社区 corpus 恢复且标签不被误报为 knowledge。
+
+### DU：评估向量必须匹配完整派生合同
+
+- 评估脚本同时导入当前 `EMBEDDING_INPUT_VERSION` 与 `CHUNKER_VERSION`，只读加载 metadata 时一次读取两个版本。
+- 在读取 ready vectors 前要求 stored `chunker_version` 精确等于当前版本；缺失或不同统一返回稳定 `chunker_version_mismatch`，不能评估生产初始化会淘汰的旧 chunks。
+- 既有 embedding input mismatch 保持独立错误；成功状态同时报告两个版本，便于评估制品追溯。
+
+验收：只改变 stored chunker version、保持 embedding input version 正确时评估在向量读取前失败；两个版本都正确时既有 disabled、identity 和向量质量检查不回归。
+
+### DV：市场订阅上传在最外层代理前有界
+
+- Main Server 为知识订阅 multipart envelope 定义单一共享上限，并将 `/api/public-knowledge/subscriptions/apply` 与 `/market/knowledge/subscriptions/apply` 两个精确路径都注册到 `InboundBodySizeLimitMiddleware.streamed_path_limits`。
+- 两条入口共享相同的 pack、manifest、vector 与 envelope overhead 预算；不复制第二个数值，避免内外路径漂移。
+- 外层 middleware 继续同时拒绝过大的声明长度和实际 chunked body，并在线程中使用 bounded spool。`web_app.py` 只会物化已经通过上限的请求；本轮不另建一套代理流式协议。
+- 其他 multipart 路径保持原有 router 自管策略，不扩大全局限制范围。
+
+验收：两个精确路径的上限完全相同；外层市场路径在缺少 `Content-Length` 或声明不实但实际超限时均于代理前返回 413；合法 body 字节不变地重放；其他 multipart 路径不受影响。
+
+## 第二十轮实施与关闭条件
+
+1. 先提交并推送本节设计，再实现 DT–DV；设计提交不用于提前关闭线程。
+2. 只扩展既有 hybrid retrieval、real-model evaluation 与 ASGI body limit 测试，不新增测试文件或用户文案/i18n key。
+3. 使用项目 Python 3.11 运行三个精确反例、受影响测试文件和知识相关相邻回归；运行 Ruff、compileall 与 `git diff --check`。
+4. 实现与测试证据推送后逐条回复并 resolve 3 个 conversation，再完整分页复核新增未解决线程。
+
+关闭条件：无可信 registry 的社区 rows 在任何 material allowlist 组合下都不可检索；评估不使用 chunker 版本不匹配的向量；外层市场订阅上传在调用 `request.body()` 前已受实际体积上限保护。只有远端代码和精确测试证据齐全后才标记第二十轮已实施。
