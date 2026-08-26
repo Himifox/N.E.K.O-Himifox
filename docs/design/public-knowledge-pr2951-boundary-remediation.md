@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十四轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十四轮均已实施，第十五轮方案已归档并等待实施证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1733,3 +1733,61 @@ CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 cano
 验收：fixture teardown 能等待同时存在于两个 registry 的未完成任务并清空全部 ownership 状态；失败 installation mutation 的 callback 只记录一次 error 且移除 registry 引用；成功和 cancelled task 不记录错误。两项只修改现有 market route 与既有测试文件，不新增运行期状态、测试文件或用户文案。
 
 CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增失败、成功与取消 callback 反例，并在 async autouse teardown 统一等待任务。该文件 27 passed，相关 Ruff 与 `git diff --check` 通过。
+
+## 第十五轮：持久作业观察、校准过滤、维护失败与空分页
+
+第十四轮完成后，2026-08-26 针对 PR head `2c031186d4` 的 Codex 复审新增 3 个未解决 review conversation；同日 CodeRabbit review body 另有 1 条 outside-diff 评论。完整分页统计为 150 个 conversations，其中 147 个已解决、3 个未解决。沿生产调用链核对后 4 个问题均成立。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3859329958` | CZ | 已持久 stage 的市场作业在一次状态轮询失败后被误报为订阅失败，成立 |
+| `discussion_r3859329964` | DA | hybrid 校准语料包含 `catalog.override.json` 中已禁用词条，成立 |
+| `discussion_r3859329966` | DB | rebuild 把 `inspect_database()` 的错误回退计数解释成完成，成立 |
+| CodeRabbit review `5026316756` | DC | 空结果分页显示 `1–0` 或 `51–50`；建议 diff 只保护左边界，不能完整修复非零 offset，成立 |
+
+### 修复单元 CZ：持久作业的观察失败不等于安装失败
+
+- Main Server 返回 `job_id` 后，stage 已成为独立持久事实；Plugin Server 的轮询只观察该事实，单次网络、鉴权刷新或响应解析失败不能反向把作业改写成安装失败。
+- `_wait_for_pack_job()` 只对稳定的作业终态作业务判断：`active` 成功，`cancelled`、`failed`、`degraded` 失败。`main_server_unavailable` 属于可重试观察错误，在原 24 小时总 deadline 内按既有轮询间隔继续查询，不提前结束 marketplace task。
+- 可重试错误恢复后必须继续使用同一 `job_id`，不能重复 stage、重新下载制品或产生第二个订阅报告。最终观察到 `active` 后才写 completed 并 best-effort 上报市场。
+- `job_not_found` 仍是稳定失败：一次可信 job list 已证明该 ID 不存在。用户退订触发的 worker cancel 继续由既有 durable remove/ownership 路径收敛，不在轮询 helper 内隐式删除作业。
+- 24 小时 deadline 仍是等待上限；本轮不新增无限后台任务或进程重启后的 Plugin task 持久化。超时维持 `job_timeout`，但此前的瞬时观察失败不得缩短该边界。
+
+验收：首次 `packs/jobs` 返回 `main_server_unavailable`、下一次返回同一 job `active` 时订阅完成且只报告一次；稳定 failed/degraded/not-found 仍立即失败；持续 pending 仍受 deadline 控制；取消行为不变。
+
+### 修复单元 DA：校准语料与生产 disabled 策略一致
+
+- real-model evaluator 在加载向量前读取与 `knowledge.db` 同目录的 `catalog.override.json`，使用生产 `load_disabled_entries()` 和规范化 entry identity，不另造宽松解析器。
+- evaluator 的只读 SQL 同时取得 entry 的 tags；每个 entry 必须能唯一解析出 `source:*` identity，并与 title 构成 key。命中 disabled key 的全部 chunks 在组成矩阵前排除，避免高分禁用向量影响 positive rank 或 negative top score。
+- override 不存在等价于空集合；文件损坏、不可读或 entry identity 无法可信解析时返回稳定 `EvaluationUnavailable`，不忽略策略继续给出阈值。该失败只影响离线校准，不修改数据库或 override 文件。
+- `ready_vectors` 记录过滤后的可评估向量数，并增加 `disabled_vectors` 作为审计计数；过滤后为空仍返回 `ready_vectors_missing`，不生成无语料推荐。
+
+验收：禁用 entry 的所有 chunks 不进入 corpus；未禁用 entry 正常保留；损坏 override 与歧义 source identity 失败关闭；override 不存在保持当前行为；数据库继续以只读方式打开。
+
+### 修复单元 DB：维护命令不得用不可用状态证明完成
+
+- `inspect_database()` 保留结构化 `error_type`，用于 `--status` 展示；所有 rebuild 决策点通过共享 guard 要求 inspection 没有错误后，才读取 pending/ready/failed 计数。
+- rebuild 开始、每轮 eligible 计算、每轮写回后以及最终 completion 计算的任一 inspection 失败，都返回 `result_state=inspection_unavailable`、`complete=false`，命令最终非零退出。错误状态不得进入 `_eligible_chunk_count()`、容量预算或 `_completion_state()`。
+- 数据库明确不存在仍沿用 `database_missing` skipped；本单元只收紧“文件存在但无法可信读取”。失败后不把零计数当成无工作，也不继续下一批 embedding。
+- 已在 inspection 成功后完成的写回不回滚；结果必须保留已知动作计数并附带最新错误类型，方便安全重试。不得把暂时锁定升级为破坏性 reset 或自动删除。
+
+验收：初始、循环前、循环后和最终 inspection 分别注入 SQLite 错误时均不报告 complete；初始错误不启动 reset/backfill/embedding；中途错误停止后续批次；正常完成、容量限制和 database missing 语义不变。
+
+### 修复单元 DC：空页范围必须是自洽状态
+
+- 分页范围作为一个整体渲染：`entries.length === 0` 时固定显示 `0–0`；非空时显示 `offset + 1` 到 `offset + entries.length`。不能只保护左边界，否则非零 offset 会得到 `0–50`。
+- 保留上一页按钮在非零 offset 时可用，让用户能从因外部删除或筛选变化产生的空页返回；下一页继续由 `hasMore` 禁用。本轮不在缺少 total 的 API 上推断最后一页，也不加入可能循环回退的自动请求。
+- 仅改变已有数字表达式，不新增文案或 i18n key，不改变搜索 reset、请求 gate 或 page size。
+
+验收：首页空结果与 offset 50 空结果均显示 `0–0`；非空首页显示 `1–N`，非空第二页显示 `51–(50+N)`；previous/next 的既有行为不变。
+
+## 第十五轮实施顺序与关闭条件
+
+1. 首个提交只归档本节，不提前回复或 resolve 评论。
+2. 后端实现提交处理 CZ、DA、DB，各自扩展现有 `test_knowledge_market.py`、`test_knowledge_hybrid_real_model_eval.py` 与 `test_rebuild_knowledge_index_script.py`，不新建测试文件。
+3. 前端实现只调整 `KnowledgeManager.vue` 的范围表达式；使用现有前端类型检查和相关 Vitest 回归验证，不为单个模板插值引入新组件或 i18n。
+4. Python 使用项目 Python 3.11 的 `uv run pytest`；运行相关 Ruff、前端 Vitest、`vue-tsc --build` 与 `git diff --check`。
+5. 实现提交推送后，3 条 review conversations 分别回复提交和精确反例测试再 resolve；DC 是 review-body outside-diff，通过 PR 评论留下同等证据。
+6. 最终重新遍历全部 reviewThreads 分页并复查最新 review body；只有远端可见实现、验证证据和评论处理全部完成后，才把文档头部改为“第一至第十五轮均已实施”。
+
+关闭条件：瞬时轮询失败不制造本地已安装/市场失败分裂；校准矩阵不含禁用词条且策略损坏失败关闭；任何 inspection error 都不能导出 rebuild complete；所有空页只显示 `0–0`。150/147/3 是本轮开始快照，不代表实施后的最终状态。
