@@ -20,6 +20,7 @@ from .models import (
     normalize_knowledge_title,
 )
 from .store import KnowledgeStore
+from .subscriptions import validate_subscription
 
 
 PACK_SCHEMA_VERSION = 1
@@ -269,6 +270,11 @@ def install_pack(
         raise ValueError("unsupported knowledge pack retrieval mode")
     if embedding_policy not in {"local", "prebuilt_only"}:
         raise ValueError("unsupported knowledge pack embedding policy")
+    canonical_subscription = (
+        validate_subscription(subscription).to_dict()
+        if subscription is not None
+        else None
+    )
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
@@ -277,7 +283,7 @@ def install_pack(
         if isinstance(existing, dict):
             _validate_subscription_identity(
                 existing.get("subscription"),
-                subscription,
+                canonical_subscription,
             )
         store = KnowledgeStore(database_path)
         snapshot = _snapshot_source(store, pack.source_tag, existing)
@@ -289,7 +295,7 @@ def install_pack(
         new_registry = _registry_with_pack(
             old_registry,
             pack,
-            subscription=subscription,
+            subscription=canonical_subscription,
             retrieval_mode=retrieval_mode,
             index_metadata=index_metadata,
             local_embedding_enabled=local_embedding_enabled,
@@ -781,8 +787,27 @@ def _load_registry(
                 "declared_material_type"
             )
         override = metadata.get("material_type_override")
-        if override not in MATERIAL_TYPES:
-            override = None
+        if override is not None and (
+            not isinstance(override, str) or override not in MATERIAL_TYPES
+        ):
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid "
+                "material_type_override"
+            )
+        if "subscription" not in metadata:
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid "
+                "subscription"
+            )
+        subscription = metadata.get("subscription")
+        if subscription is not None:
+            try:
+                subscription = validate_subscription(subscription).to_dict()
+            except ValueError as exc:
+                raise KnowledgePackRegistryError(
+                    f"knowledge pack registry entry {pack_id!r} has an invalid "
+                    "subscription"
+                ) from exc
         effective = str(override or declared)
         auto_context = metadata.get("auto_context")
         if not isinstance(auto_context, bool):
@@ -795,6 +820,7 @@ def _load_registry(
             "material_type_override": override,
             "effective_material_type": effective,
             "auto_context": auto_context,
+            "subscription": subscription,
         }
         if normalized != metadata:
             payload["packs"][pack_id] = normalized

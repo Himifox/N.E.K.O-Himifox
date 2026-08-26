@@ -661,10 +661,24 @@ def _store_embedding_vectors(
                 )
                 failed += 1
                 continue
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                stored_array = array.astype("<f2")
+            stored_array_float32 = stored_array.astype(np.float32)
+            if (
+                not np.isfinite(stored_array_float32).all()
+                or float(np.linalg.norm(stored_array_float32)) <= 0
+            ):
+                store.mark_chunk_embedding_failed(
+                    chunk_id=str(chunk["chunk_id"]),
+                    content_hash=str(chunk["content_hash"]),
+                    error_code="invalid_embedding",
+                )
+                failed += 1
+                continue
             if remaining_capacity <= 0:
                 capacity_deferred += 1
                 continue
-            payload = array.astype("<f2").tobytes()
+            payload = stored_array.tobytes()
             did_store = store.store_chunk_embedding(
                 chunk_id=str(chunk["chunk_id"]),
                 content_hash=str(chunk["content_hash"]),

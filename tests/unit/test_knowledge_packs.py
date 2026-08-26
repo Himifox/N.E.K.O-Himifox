@@ -71,6 +71,21 @@ def _write_pack(path, payload):
     return path
 
 
+def _market_subscription(payload, *, pack_id, package_id="7"):
+    return {
+        "provider": "plugin-market",
+        "provider_package_id": package_id,
+        "remote_id": f"knowledge/{pack_id}",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": hashlib.sha256(canonical_pack_bytes(payload)).hexdigest(),
+        "material_type": payload["material_type"],
+        "index_manifest_sha256": "",
+        "vectors_sha256": "",
+        "trust": "trusted_market",
+    }
+
+
 def test_list_installed_packs_batches_all_source_statuses(tmp_path, monkeypatch):
     service = open_knowledge(tmp_path)
     for index in range(3):
@@ -231,6 +246,81 @@ def test_registry_rejects_invalid_declared_material_type(
     assert service.build_conversation_context("Community Tarot").hit_count == 0
     assert KnowledgeStore(database_path).count_by_source_tag(
         "source:community.community-tarot"
+    ) == 1
+
+
+@pytest.mark.parametrize("corrupt_value", ("", "meme", False, 0, [], {}))
+def test_registry_rejects_invalid_material_type_override(tmp_path, corrupt_value):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["packs"]["community-tarot"]["material_type_override"] = corrupt_value
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    registry_before = registry_path.read_bytes()
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_packs(service.database_path()) == ()
+    assert list_installed_pack_routing_metadata(service.database_path()) == ()
+    assert registry_path.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "valid_override",
+    ("__missing__", None, "knowledge", "corpus"),
+)
+def test_registry_accepts_current_material_type_override_values(
+    tmp_path,
+    valid_override,
+):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-tarot"]
+    if valid_override == "__missing__":
+        metadata.pop("material_type_override")
+    else:
+        metadata["material_type_override"] = valid_override
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    assert pack_registry_state(service.database_path()) == "ready"
+
+
+@pytest.mark.parametrize(
+    "corrupt_subscription",
+    ("__missing__", "plugin-market", [], {"provider": "plugin-market"}),
+)
+def test_registry_rejects_malformed_subscription_before_remove(
+    tmp_path,
+    corrupt_subscription,
+):
+    service = open_knowledge(tmp_path)
+    payload = _payload()
+    service.install_pack(
+        validate_pack(payload),
+        subscription=_market_subscription(
+            payload,
+            pack_id="community-fixture",
+        ),
+    )
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-fixture"]
+    if corrupt_subscription == "__missing__":
+        metadata.pop("subscription")
+    else:
+        metadata["subscription"] = corrupt_subscription
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    registry_before = registry_path.read_bytes()
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_packs(service.database_path()) == ()
+    with pytest.raises(KnowledgePackRegistryError, match="subscription"):
+        service.remove_pack("community-fixture")
+    assert registry_path.read_bytes() == registry_before
+    assert KnowledgeStore(service.database_path()).count_by_source_tag(
+        "source:community.community-fixture"
     ) == 1
 
 
@@ -688,15 +778,10 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
     service = open_knowledge(tmp_path)
     payload = _payload()
     pack = validate_pack(payload)
-    digest = hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
-    subscription = {
-        "provider": "plugin-market",
-        "provider_package_id": "7",
-        "remote_id": "knowledge/community-fixture",
-        "version": "1.0.0",
-        "channel": "stable",
-        "artifact_sha256": digest,
-    }
+    subscription = _market_subscription(
+        payload,
+        pack_id="community-fixture",
+    )
     service.install_pack(pack, subscription=subscription)
 
     with pytest.raises(ValueError, match="identity"):
@@ -716,16 +801,10 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
 def test_marketplace_package_identity_cannot_belong_to_two_packs(tmp_path):
     service = open_knowledge(tmp_path)
     first_payload = _payload(pack_id="first-pack", title="first phrase")
-    first_subscription = {
-        "provider": "plugin-market",
-        "provider_package_id": "7",
-        "remote_id": "knowledge/first-pack",
-        "version": "1.0.0",
-        "channel": "stable",
-        "artifact_sha256": hashlib.sha256(
-            canonical_pack_bytes(first_payload)
-        ).hexdigest(),
-    }
+    first_subscription = _market_subscription(
+        first_payload,
+        pack_id="first-pack",
+    )
     service.install_pack(
         validate_pack(first_payload),
         subscription=first_subscription,
@@ -763,16 +842,7 @@ def test_duplicate_marketplace_identity_makes_registry_invalid_without_rewrite(
     payload = _payload(pack_id="first-pack", title="first phrase")
     service.install_pack(
         validate_pack(payload),
-        subscription={
-            "provider": "plugin-market",
-            "provider_package_id": "7",
-            "remote_id": "knowledge/first-pack",
-            "version": "1.0.0",
-            "channel": "stable",
-            "artifact_sha256": hashlib.sha256(
-                canonical_pack_bytes(payload)
-            ).hexdigest(),
-        },
+        subscription=_market_subscription(payload, pack_id="first-pack"),
     )
     registry_path = service.database_path().with_name("packs.json")
     registry = json.loads(registry_path.read_text(encoding="utf-8"))

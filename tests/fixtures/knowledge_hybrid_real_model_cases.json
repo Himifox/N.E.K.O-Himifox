@@ -9,51 +9,61 @@
     {
       "id": "danger_arousal_attribution",
       "query": "在危险刺激环境中，把心跳加速错认为对身边人的好感，这叫什么？",
+      "expected_source_tag": "source:chime",
       "expected_title": "吊桥效应"
     },
     {
       "id": "weak_self_stronger_peers",
       "query": "本身表现一般，却因为其他竞争对手更差而显得优秀，用哪句梗形容？",
+      "expected_source_tag": "source:chime",
       "expected_title": "全靠同行衬托"
     },
     {
       "id": "premature_celebration_reversal",
       "query": "比赛取得巨大优势后过早放松，最后被对手逆转的梗是什么？",
+      "expected_source_tag": "source:chime",
       "expected_title": "半场开香槟"
     },
     {
       "id": "profit_from_tragedy",
       "query": "利用别人的不幸和悲剧来博取利益或关注，常被讽刺为什么？",
+      "expected_source_tag": "source:chime",
       "expected_title": "人血馒头"
     },
     {
       "id": "ma_baoguo_homophone",
       "query": "马保国因普通话不标准，把“好自为之”说成了哪个谐音梗？",
+      "expected_source_tag": "source:chime",
       "expected_title": "耗子尾汁"
     },
     {
       "id": "breakout_social_attention",
       "query": "一部作品突破原来的小圈子，引起全社会广泛关注，通常用什么词形容？",
+      "expected_source_tag": "source:chime",
       "expected_title": "现象级"
     },
     {
       "id": "animal_too_human",
       "query": "看到动物过于聪明，甚至表现得像人一样，网友常用哪句话调侃？",
+      "expected_source_tag": "source:chime",
       "expected_title": "建国后不许成精"
     },
     {
       "id": "sacrifice_one_for_many",
       "query": "牺牲少数人来拯救多数人，还是保持不作为，这是哪个伦理思想实验？",
+      "expected_source_tag": "source:chime",
       "expected_title": "电车难题"
     },
     {
       "id": "omniscient_hidden_expert",
       "query": "虚构的全知老练高人，总能一眼指出专业错误，这个梗叫什么？",
+      "expected_source_tag": "source:chime",
       "expected_title": "扫地老太太"
     },
     {
       "id": "shanni_rou_praises_uzi",
       "query": "哪句网络流行语源自山泥若在直播中夸赞Uzi？",
+      "expected_source_tag": "source:chime",
       "expected_title": "永远的神"
     }
   ],

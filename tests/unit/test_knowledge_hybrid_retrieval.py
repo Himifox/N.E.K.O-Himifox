@@ -474,6 +474,36 @@ async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding",
+    ([1.0e10, 1.0], [1.0e-10, -1.0e-10]),
+)
+async def test_embedding_batch_rejects_invalid_float16_rows(
+    tmp_path,
+    monkeypatch,
+    embedding,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Invalid float16 vector"))
+
+    class _EmbeddingService:
+        async def embed_batch(self, texts):
+            return [embedding for _text in texts]
+
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+
+    result = await vector_index.index_embedding_batch(store)
+    status = store.chunk_status()
+
+    assert result.state == "failed"
+    assert result.selected == result.failed == 1
+    assert result.stored == 0
+    assert status["chunks_ready"] == 0
+    assert status["chunks_failed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_embedding_writeback_rechecks_ready_cap_after_inference(
     tmp_path,
     monkeypatch,

@@ -155,6 +155,7 @@ def test_builder_output_is_validation_stable_and_staging_compatible(
             "version": "1.0.0",
             "channel": "stable",
             "artifact_sha256": built["pack_sha256"],
+            "material_type": "knowledge",
             "index_manifest_sha256": built["manifest_sha256"],
             "vectors_sha256": built["vectors_sha256"],
             "trust": "trusted_market",

@@ -676,6 +676,9 @@ _facts_sync_worker_task: asyncio.Task = None
 _client_registration_task: asyncio.Task = None
 _runtime_startup_init_lock = asyncio.Lock()
 _runtime_startup_init_completed = False
+_knowledge_indexer_start_retry_task: asyncio.Task | None = None
+_KNOWLEDGE_INDEXER_START_RETRY_SECONDS = 5.0
+_KNOWLEDGE_INDEXER_START_MAX_RETRY_SECONDS = 60.0
 
 
 from .preload import _background_preload, _sync_preload_modules  # noqa: F401
@@ -853,6 +856,61 @@ async def _rollback_partial_main_runtime_startup() -> None:
         _reset_sync_connector_shutdown_events()
 
 
+def _start_knowledge_indexer_once() -> None:
+    from knowledge.indexer import start_knowledge_indexer
+    from memory.local_embedding_provider import (
+        bind_process_local_embedding_provider,
+    )
+
+    bind_process_local_embedding_provider()
+    start_knowledge_indexer(_config_manager.knowledge_dir)
+
+
+async def _retry_knowledge_indexer_start() -> None:
+    retry_seconds = _KNOWLEDGE_INDEXER_START_RETRY_SECONDS
+    while True:
+        await asyncio.sleep(retry_seconds)
+        try:
+            _start_knowledge_indexer_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Knowledge background indexer retry failed (%s); retrying in %.1fs",
+                type(exc).__name__,
+                retry_seconds,
+            )
+            retry_seconds = min(
+                retry_seconds * 2,
+                _KNOWLEDGE_INDEXER_START_MAX_RETRY_SECONDS,
+            )
+        else:
+            return
+
+
+def _ensure_knowledge_indexer_start() -> None:
+    global _knowledge_indexer_start_retry_task
+
+    if (
+        _knowledge_indexer_start_retry_task is not None
+        and not _knowledge_indexer_start_retry_task.done()
+    ):
+        return
+    try:
+        _start_knowledge_indexer_once()
+    except Exception as exc:
+        logger.warning(
+            "Knowledge background indexer was not started (%s); scheduling retry",
+            type(exc).__name__,
+        )
+        _knowledge_indexer_start_retry_task = asyncio.create_task(
+            _retry_knowledge_indexer_start(),
+            name="knowledge-indexer-start-retry",
+        )
+    else:
+        _knowledge_indexer_start_retry_task = None
+
+
 async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
     global \
         steamworks, \
@@ -1026,19 +1084,7 @@ async def _ensure_main_server_runtime_initialized(*, reason: str) -> bool:
             _runtime_startup_init_completed = True
             _disable_main_storage_limited_mode()
 
-            try:
-                from knowledge.indexer import start_knowledge_indexer
-                from memory.local_embedding_provider import (
-                    bind_process_local_embedding_provider,
-                )
-
-                bind_process_local_embedding_provider()
-                start_knowledge_indexer(_config_manager.knowledge_dir)
-            except Exception as _knowledge_index_exc:
-                logger.warning(
-                    "Knowledge background indexer was not started: %s",
-                    type(_knowledge_index_exc).__name__,
-                )
+            _ensure_knowledge_indexer_start()
 
             # runtime init 完成后再起后台预热：把已改 lazy 的重模块（genai+mcp /
             # translatepy / 功能路由依赖）提前 import 好，用户首次用到时不等。放在
@@ -1232,8 +1278,15 @@ def _consume_shutdown_task_result(task: asyncio.Task[object]) -> None:
 @app.on_event("shutdown")
 async def on_shutdown():
     """Clean up resources at server shutdown"""
+    global \
+        _preload_task, \
+        _game_cleanup_task, \
+        agent_event_bridge, \
+        _knowledge_indexer_start_retry_task
+
     if _IS_MAIN_PROCESS:
         logger.info("正在清理资源...")
+        shutdown_cancellation: asyncio.CancelledError | None = None
         arm_shutdown_watchdog = get_start_config().get(
             "arm_standalone_shutdown_watchdog"
         )
@@ -1242,6 +1295,12 @@ async def on_shutdown():
         knowledge_stop_task = None
         finish_knowledge_indexer_stop = None
         knowledge_shutdown_timeout_seconds = 0.0
+        await _cancel_task_if_running(
+            _knowledge_indexer_start_retry_task,
+            name="knowledge indexer start retry",
+            timeout=1.0,
+        )
+        _knowledge_indexer_start_retry_task = None
         try:
             from knowledge.indexer import (
                 SHUTDOWN_TIMEOUT_SECONDS,
@@ -1257,6 +1316,11 @@ async def on_shutdown():
             from .voice_identity_runtime import close_voice_identity_runtime
 
             await close_voice_identity_runtime()
+        except asyncio.CancelledError as exc:
+            shutdown_cancellation = exc
+            logger.debug(
+                "voice identity cleanup was cancelled; finishing remaining shutdown"
+            )
         except Exception as e:
             logger.debug(f"voice identity cleanup failed: {e}")
         cleanup()
@@ -1267,7 +1331,6 @@ async def on_shutdown():
             logger.debug(f"同步连接器线程清理失败: {e}", exc_info=True)
 
         # 等待预加载任务完成（如果还在运行）
-        global _preload_task, _game_cleanup_task, agent_event_bridge
         if _preload_task:
             try:
                 await asyncio.wait_for(_preload_task, timeout=1.0)
@@ -1499,6 +1562,8 @@ async def on_shutdown():
                     f"Knowledge background indexer cleanup failed: {e}",
                     exc_info=True,
                 )
+        if shutdown_cancellation is not None:
+            raise shutdown_cancellation
 
 
 # 使用 FastAPI 的 app.state 来管理启动配置

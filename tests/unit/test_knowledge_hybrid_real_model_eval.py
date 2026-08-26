@@ -12,7 +12,10 @@ from knowledge.chunking import CHUNKER_VERSION
 from knowledge.vector_index import SEMANTIC_THRESHOLD
 from scripts.evaluate_knowledge_hybrid_retrieval import (
     EvaluationUnavailable,
+    VectorCorpus,
+    _expected_rank_and_score,
     _load_vector_corpus,
+    _rank_entries,
     select_threshold,
 )
 
@@ -90,6 +93,9 @@ def test_real_model_fixture_is_grounded_and_bounded():
         "电车难题",
         "扫地老太太",
         "永远的神",
+    }
+    assert {case["expected_source_tag"] for case in payload["positives"]} == {
+        "source:chime"
     }
     identifiers = [
         case["id"] for group in ("positives", "negatives") for case in payload[group]
@@ -180,3 +186,38 @@ def test_vector_corpus_rejects_mismatched_chunker_version(tmp_path):
 
     with pytest.raises(EvaluationUnavailable, match="chunker_version_mismatch"):
         _load_vector_corpus(tmp_path, model_id="fixture-model", dimensions=2)
+
+
+def test_calibration_positive_matches_source_and_normalized_title():
+    corpus = VectorCorpus(
+        matrix=np.asarray([[1.0, 0.0], [0.8, 0.6]], dtype=np.float32),
+        rows=(
+            {
+                "entry_rowid": 1,
+                "chunk_index": 0,
+                "source_tag": "source:other",
+                "title": "Duplicate Title",
+            },
+            {
+                "entry_rowid": 2,
+                "chunk_index": 0,
+                "source_tag": "source:chime",
+                "title": "Ｄｕｐｌｉｃａｔｅ　Ｔｉｔｌｅ",
+            },
+        ),
+        status={},
+    )
+    ranking = _rank_entries(corpus, [1.0, 0.0])
+
+    rank, score = _expected_rank_and_score(
+        ranking,
+        {
+            "expected_source_tag": "source:chime",
+            "expected_title": "Duplicate Title",
+        },
+    )
+
+    assert rank == 2
+    assert score == pytest.approx(0.8)
+    with pytest.raises(EvaluationUnavailable, match="positive_identity_unavailable"):
+        _expected_rank_and_score(ranking, {"expected_title": "Duplicate Title"})

@@ -311,6 +311,10 @@ def test_generic_remove_cannot_delete_a_subscribed_pack(monkeypatch, tmp_path):
             "artifact_sha256": hashlib.sha256(
                 canonical_pack_bytes(payload)
             ).hexdigest(),
+            "material_type": "knowledge",
+            "index_manifest_sha256": "",
+            "vectors_sha256": "",
+            "trust": "trusted_market",
         },
     )
     client = _client(monkeypatch, tmp_path)

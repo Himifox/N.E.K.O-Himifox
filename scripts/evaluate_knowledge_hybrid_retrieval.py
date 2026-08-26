@@ -206,6 +206,7 @@ def _load_vectors(
             {
                 "entry_rowid": int(row["entry_rowid"]),
                 "chunk_index": int(row["chunk_index"]),
+                "source_tag": source_tags[0],
                 "title": title,
             }
         )
@@ -263,6 +264,7 @@ def _rank_entries(
         previous = best.get(key)
         if previous is None or score > float(previous["score"]):
             best[key] = {
+                "source_tag": str(row["source_tag"]),
                 "title": str(row["title"]),
                 "score": round(score, 6),
                 "chunk_index": int(row["chunk_index"]),
@@ -271,8 +273,41 @@ def _rank_entries(
         best.values(),
         key=lambda row: (
             -float(row["score"]),
+            str(row["source_tag"]),
             str(row["title"]),
         ),
+    )
+
+
+def _expected_rank_and_score(
+    ranking: Sequence[Mapping[str, object]],
+    case: Mapping[str, object],
+) -> tuple[int | None, object | None]:
+    expected_source_tag = case.get("expected_source_tag")
+    expected_title = case.get("expected_title")
+    if (
+        not isinstance(expected_source_tag, str)
+        or not expected_source_tag.startswith("source:")
+        or not isinstance(expected_title, str)
+        or not normalize_knowledge_title(expected_title)
+    ):
+        raise EvaluationUnavailable("positive_identity_unavailable")
+    expected_title_key = normalize_knowledge_title(expected_title)
+    expected_rank = next(
+        (
+            index
+            for index, row in enumerate(ranking, start=1)
+            if row.get("source_tag") == expected_source_tag
+            and normalize_knowledge_title(str(row.get("title") or ""))
+            == expected_title_key
+        ),
+        None,
+    )
+    return (
+        expected_rank,
+        ranking[expected_rank - 1]["score"]
+        if expected_rank is not None
+        else None,
     )
 
 
@@ -389,20 +424,7 @@ async def evaluate(knowledge_root: Path, cases: Mapping[str, object]) -> dict[st
         ranking = _rank_entries(corpus, vector)
         top3 = ranking[:3]
         if "expected_title" in case:
-            expected_title = str(case["expected_title"])
-            expected_rank = next(
-                (
-                    index
-                    for index, row in enumerate(ranking, start=1)
-                    if row["title"] == expected_title
-                ),
-                None,
-            )
-            expected_score = (
-                ranking[expected_rank - 1]["score"]
-                if expected_rank is not None
-                else None
-            )
+            expected_rank, expected_score = _expected_rank_and_score(ranking, case)
             positive_results.append(
                 {
                     **case,
