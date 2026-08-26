@@ -35,6 +35,7 @@ router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
 _task_workers: dict[str, asyncio.Task[None]] = {}
+_installation_mutations: dict[str, asyncio.Task[dict[str, Any]]] = {}
 _active_package_tasks: dict[int, str] = {}
 _unsubscribing_package_ids: set[int] = set()
 _TASK_TTL_SECONDS = 60 * 60
@@ -200,6 +201,20 @@ def _subscription_done(
     _cleanup_tasks()
 
 
+def _installation_mutation_done(
+    task_id: str,
+    completed: asyncio.Task[dict[str, Any]],
+) -> None:
+    if _installation_mutations.get(task_id) is completed:
+        _installation_mutations.pop(task_id, None)
+    if completed.cancelled():
+        return
+    try:
+        completed.exception()
+    except Exception:
+        logger.exception("failed to consume knowledge installation mutation result")
+
+
 def _mark_subscription_cancelled(task: dict[str, Any]) -> None:
     task.update(
         status="cancelled",
@@ -340,9 +355,17 @@ async def _cancel_active_subscription(
     if preinstall and not trusted_pack_id:
         _raise_unsubscribe_error("subscription_ownership_unverifiable")
     worker = _task_workers.get(task_id) if task_id else None
+    installation_mutation = (
+        _installation_mutations.get(task_id) if task_id else None
+    )
     if worker is not None:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+    if installation_mutation is not None:
+        await asyncio.gather(
+            asyncio.shield(installation_mutation),
+            return_exceptions=True,
+        )
     if preinstall and task is not None:
         task["preinstall_cancelled"] = True
     return task
@@ -485,28 +508,39 @@ async def _execute_subscription(
                 vectors_raw = None
                 index_fallback_reason = exc.code
         _stage(task, "installing", 0.75, "正在写入本地知识库")
-        result = await _main_subscription_request(
-            subscription={
-                "provider": "plugin-market",
-                "provider_package_id": str(descriptor.package_id),
-                "remote_id": descriptor.remote_id,
-                "version": descriptor.version,
-                "channel": descriptor.channel,
-                "artifact_sha256": descriptor.artifacts.knowledge.sha256,
-                "material_type": descriptor.material_type,
-                "index_manifest_sha256": (
-                    manifest_descriptor.sha256 if manifest_raw is not None else ""
-                ),
-                "vectors_sha256": (
-                    vector_descriptor.sha256 if vectors_raw is not None else ""
-                ),
-                "trust": "trusted_market",
-            },
-            pack_raw=raw,
-            manifest_raw=manifest_raw,
-            vectors_raw=vectors_raw,
-            index_fallback_reason=index_fallback_reason,
+        installation_mutation = asyncio.create_task(
+            _main_subscription_request(
+                subscription={
+                    "provider": "plugin-market",
+                    "provider_package_id": str(descriptor.package_id),
+                    "remote_id": descriptor.remote_id,
+                    "version": descriptor.version,
+                    "channel": descriptor.channel,
+                    "artifact_sha256": descriptor.artifacts.knowledge.sha256,
+                    "material_type": descriptor.material_type,
+                    "index_manifest_sha256": (
+                        manifest_descriptor.sha256 if manifest_raw is not None else ""
+                    ),
+                    "vectors_sha256": (
+                        vector_descriptor.sha256 if vectors_raw is not None else ""
+                    ),
+                    "trust": "trusted_market",
+                },
+                pack_raw=raw,
+                manifest_raw=manifest_raw,
+                vectors_raw=vectors_raw,
+                index_fallback_reason=index_fallback_reason,
+            ),
+            name=f"market-knowledge-install-{task_id}",
         )
+        _installation_mutations[task_id] = installation_mutation
+        installation_mutation.add_done_callback(
+            lambda completed, *, task_id=task_id: _installation_mutation_done(
+                task_id,
+                completed,
+            )
+        )
+        result = await asyncio.shield(installation_mutation)
         if result.get("ok") is not True:
             raise _KnowledgeTaskError(
                 str(result.get("reason") or "install_failed"),

@@ -750,6 +750,26 @@ def _reject_unknown_keys(payload: dict, allowed: set[str], field: str) -> None:
         raise ValueError(f"{field} contains unsupported fields")
 
 
+def _validate_marketplace_package_identities(packs: dict[str, Any]) -> None:
+    owners: dict[str, str] = {}
+    for pack_id, metadata in packs.items():
+        if not isinstance(metadata, dict):
+            continue
+        subscription = metadata.get("subscription")
+        if not isinstance(subscription, dict):
+            continue
+        if str(subscription.get("provider") or "") != "plugin-market":
+            continue
+        package_id = str(subscription.get("provider_package_id") or "")
+        if not package_id:
+            continue
+        previous_owner = owners.setdefault(package_id, pack_id)
+        if previous_owner != pack_id:
+            raise KnowledgePackRegistryError(
+                "knowledge pack registry contains duplicate marketplace identities"
+            )
+
+
 def _load_registry(
     path: Path,
     *,
@@ -827,6 +847,7 @@ def _load_registry(
         }
         if normalized != metadata:
             payload["packs"][pack_id] = normalized
+    _validate_marketplace_package_identities(payload["packs"])
     if payload.get("schema_version") != PACK_REGISTRY_SCHEMA_VERSION:
         payload["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
     return payload
@@ -890,6 +911,7 @@ def _registry_with_pack(
             (index_metadata or {}).get("prebuilt_chunks_missing") or 0
         ),
     }
+    _validate_marketplace_package_identities(packs)
     return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": packs}
 
 

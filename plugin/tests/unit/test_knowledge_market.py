@@ -15,13 +15,17 @@ from plugin.server.routes import knowledge_market as module
 def _clear_task_registries():
     module._tasks.clear()
     module._task_workers.clear()
+    module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
     yield
     for worker in module._task_workers.values():
         worker.cancel()
+    for mutation in module._installation_mutations.values():
+        mutation.cancel()
     module._tasks.clear()
     module._task_workers.clear()
+    module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
 
@@ -567,6 +571,89 @@ async def test_unsubscribe_cancels_active_worker_and_records_terminal_state(monk
     assert task["completed_at"] is not None
     assert module._task_workers == {}
     assert module._active_package_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_waits_for_installation_mutation_before_remove(monkeypatch):
+    task_id = "installing-task"
+    apply_started = asyncio.Event()
+    allow_apply = asyncio.Event()
+    apply_finished = asyncio.Event()
+    order: list[str] = []
+
+    async def installation_mutation():
+        apply_started.set()
+        await allow_apply.wait()
+        order.append("apply")
+        apply_finished.set()
+        return {"ok": True, "job_id": "fixture-pack-0123456789ab"}
+
+    mutation = asyncio.create_task(installation_mutation())
+    module._installation_mutations[task_id] = mutation
+    mutation.add_done_callback(
+        lambda completed: module._installation_mutation_done(task_id, completed)
+    )
+
+    async def subscription_worker():
+        await asyncio.shield(mutation)
+
+    worker = asyncio.create_task(subscription_worker())
+    task = {
+        "task_id": task_id,
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "resolved_pack_id": "fixture-pack",
+        "resolved_remote_id": "knowledge/fixture-pack",
+        "status": "installing",
+        "stage": "installing",
+        "created_at": 1.0,
+        "completed_at": None,
+    }
+    module._tasks[task_id] = task
+    module._task_workers[task_id] = worker
+    module._active_package_tasks[7] = task_id
+    worker.add_done_callback(
+        lambda completed: module._subscription_done(task_id, 7, completed)
+    )
+
+    async def fake_main(method, path, **_kwargs):
+        assert apply_finished.is_set()
+        order.append("remove")
+        assert (method, path) == ("POST", "packs/remove")
+        return {
+            "ok": True,
+            "removed_pack": False,
+            "removed_entries": 0,
+            "cancelled_jobs": 1,
+        }
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module,
+        "_report_unsubscribe_best_effort",
+        lambda _package_id: asyncio.sleep(0),
+    )
+    await apply_started.wait()
+    unsubscribe = asyncio.create_task(
+        module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert not unsubscribe.done()
+    assert order == []
+    allow_apply.set()
+    result = await unsubscribe
+
+    assert result["cancelled_jobs"] == 1
+    assert order == ["apply", "remove"]
+    assert module._installation_mutations == {}
 
 
 @pytest.mark.asyncio

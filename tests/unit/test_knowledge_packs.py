@@ -655,6 +655,86 @@ def test_subscription_update_cannot_change_remote_identity(tmp_path):
         service.install_pack(pack)
 
 
+def test_marketplace_package_identity_cannot_belong_to_two_packs(tmp_path):
+    service = open_knowledge(tmp_path)
+    first_payload = _payload(pack_id="first-pack", title="first phrase")
+    first_subscription = {
+        "provider": "plugin-market",
+        "provider_package_id": "7",
+        "remote_id": "knowledge/first-pack",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifact_sha256": hashlib.sha256(
+            canonical_pack_bytes(first_payload)
+        ).hexdigest(),
+    }
+    service.install_pack(
+        validate_pack(first_payload),
+        subscription=first_subscription,
+    )
+    registry_path = service.database_path().with_name("packs.json")
+    registry_before = registry_path.read_bytes()
+
+    second_payload = _payload(pack_id="second-pack", title="second phrase")
+    with pytest.raises(
+        KnowledgePackRegistryError,
+        match="duplicate marketplace identities",
+    ):
+        service.install_pack(
+            validate_pack(second_payload),
+            subscription={
+                **first_subscription,
+                "remote_id": "knowledge/second-pack",
+                "artifact_sha256": hashlib.sha256(
+                    canonical_pack_bytes(second_payload)
+                ).hexdigest(),
+            },
+        )
+
+    assert registry_path.read_bytes() == registry_before
+    assert service.list_packs()[0]["pack_id"] == "first-pack"
+    assert KnowledgeStore(service.database_path()).count_by_source_tag(
+        "source:community.second-pack"
+    ) == 0
+
+
+def test_duplicate_marketplace_identity_makes_registry_invalid_without_rewrite(
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    payload = _payload(pack_id="first-pack", title="first phrase")
+    service.install_pack(
+        validate_pack(payload),
+        subscription={
+            "provider": "plugin-market",
+            "provider_package_id": "7",
+            "remote_id": "knowledge/first-pack",
+            "version": "1.0.0",
+            "channel": "stable",
+            "artifact_sha256": hashlib.sha256(
+                canonical_pack_bytes(payload)
+            ).hexdigest(),
+        },
+    )
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    duplicate = {
+        **registry["packs"]["first-pack"],
+        "source_tag": "source:community.second-pack",
+    }
+    duplicate["subscription"] = {
+        **duplicate["subscription"],
+        "remote_id": "knowledge/second-pack",
+    }
+    registry["packs"]["second-pack"] = duplicate
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    registry_before = registry_path.read_bytes()
+
+    assert service.list_packs() == ()
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert registry_path.read_bytes() == registry_before
+
+
 def test_removing_pack_does_not_remove_another_source(tmp_path):
     service = open_knowledge(tmp_path)
     database_path = service.database_path()
