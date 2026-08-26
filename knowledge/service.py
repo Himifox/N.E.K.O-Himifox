@@ -1229,14 +1229,12 @@ class KnowledgeService:
         knowledge_entries = sum(
             int(row.get("entries") or 0)
             for row in source_counts
-            if source_material_types.get(str(row.get("tag") or ""), "knowledge")
-            == "knowledge"
+            if source_material_types.get(str(row.get("tag") or "")) == "knowledge"
         )
         corpus_entries = sum(
             int(row.get("entries") or 0)
             for row in source_counts
-            if source_material_types.get(str(row.get("tag") or ""), "knowledge")
-            == "corpus"
+            if source_material_types.get(str(row.get("tag") or "")) == "corpus"
         )
         pending_pack_jobs = sum(
             job.get("state") not in non_pending_job_states

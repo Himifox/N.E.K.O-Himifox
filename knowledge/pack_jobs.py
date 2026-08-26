@@ -24,6 +24,7 @@ from .packs import (
     KnowledgePack,
     ensure_install_capacity,
     install_pack,
+    pack_identity_sha256,
     pack_payload,
     preflight_pack,
     validate_pack,
@@ -43,8 +44,23 @@ PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
+ACTIVATION_NAME = "activation.json"
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
 IDENTITY_SUBSCRIPTION_FIELDS = ("has_subscription", "subscription_sha256")
+IDENTITY_PACK_FIELDS = ("pack_sha256",)
+JOB_STATES = frozenset(
+    (
+        "queued",
+        "validating",
+        "building_fts",
+        "verifying_index",
+        "embedding",
+        "active",
+        "cancelled",
+        "failed",
+        DEGRADED_STATE,
+    )
+)
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}-[0-9a-f]{12}$")
 _JOB_SUFFIX_RE = re.compile(r"^[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -138,6 +154,10 @@ def _identity_path(job_dir: Path) -> Path:
     return job_dir / IDENTITY_NAME
 
 
+def _activation_path(job_dir: Path) -> Path:
+    return job_dir / ACTIVATION_NAME
+
+
 def _external_job_dir(
     knowledge_root: str | Path,
     job_id: str,
@@ -228,6 +248,7 @@ def _validated_identity_payload(
     }
     has_subscription = payload.get("has_subscription")
     subscription_sha256 = payload.get("subscription_sha256")
+    pack_sha256 = payload.get("pack_sha256")
     subscription_identity_valid = (
         isinstance(has_subscription, bool)
         and (
@@ -245,6 +266,8 @@ def _validated_identity_payload(
     if (
         any(value is None for value in identity_values.values())
         or not subscription_identity_valid
+        or not isinstance(pack_sha256, str)
+        or not _SHA256_RE.fullmatch(pack_sha256)
     ):
         return _JsonReadResult("invalid", {})
     if (
@@ -262,6 +285,7 @@ def _validated_identity_payload(
             "job_id": job_id,
             "pack_id": pack_id,
             **identity_values,
+            "pack_sha256": pack_sha256,
             "has_subscription": has_subscription,
             "subscription_sha256": subscription_sha256,
         },
@@ -273,6 +297,32 @@ def _validated_identity(job_dir: Path) -> _JsonReadResult:
     if result.state != "valid":
         return result
     return _validated_identity_payload(job_dir, result.payload)
+
+
+def _validated_activation(
+    job_dir: Path,
+    identity: dict[str, Any],
+) -> _JsonReadResult:
+    result = _read_json_result(_activation_path(job_dir))
+    if result.state != "valid":
+        return result
+    retrieval_mode = result.payload.get("retrieval_mode")
+    expected = {
+        "schema_version": 1,
+        "job_id": identity["job_id"],
+        "pack_id": identity["pack_id"],
+        "pack_sha256": identity["pack_sha256"],
+        "has_subscription": identity["has_subscription"],
+        "subscription_sha256": identity["subscription_sha256"],
+        "retrieval_mode": retrieval_mode,
+    }
+    if (
+        not isinstance(retrieval_mode, str)
+        or retrieval_mode not in {"bm25", "hybrid"}
+        or result.payload != expected
+    ):
+        return _JsonReadResult("invalid", {})
+    return _JsonReadResult("valid", expected)
 
 
 def _degraded_job(
@@ -335,6 +385,13 @@ def _read_job(job_dir: Path) -> dict[str, object]:
     identity = identity_result.payload
     if state_result.state == "valid":
         state = state_result.payload
+        job_state = state.get("state")
+        if not isinstance(job_state, str) or job_state not in JOB_STATES:
+            return _degraded_job(
+                job_dir,
+                reason="invalid_job_state",
+                identity=identity,
+            )
         if any(
             str(state.get(key) or "") != str(identity.get(key) or "")
             for key in ("job_id", "pack_id")
@@ -361,6 +418,13 @@ def _read_job(job_dir: Path) -> dict[str, object]:
                     reason="job_subscription_identity_mismatch",
                     identity=identity,
                 )
+        for key in IDENTITY_PACK_FIELDS:
+            if key in state and state.get(key) != identity[key]:
+                return _degraded_job(
+                    job_dir,
+                    reason="job_pack_identity_mismatch",
+                    identity=identity,
+                )
         if "created_at" not in state:
             created_at = int(identity["created_at"])
         else:
@@ -380,6 +444,18 @@ def _read_job(job_dir: Path) -> dict[str, object]:
                 reason="invalid_job_timestamps",
                 identity=identity,
             )
+        if job_state == "active":
+            activation = _validated_activation(job_dir, identity)
+            if (
+                activation.state != "valid"
+                or state.get("retrieval_mode")
+                != activation.payload["retrieval_mode"]
+            ):
+                return _degraded_job(
+                    job_dir,
+                    reason="active_job_commit_unverified",
+                    identity=identity,
+                )
         return {**state, **identity, "updated_at": updated_at}
     reason = {
         "missing": "missing_job_state",
@@ -402,7 +478,12 @@ def _write_state(
     persisted = {
         key: value
         for key, value in updated.items()
-        if key not in IDENTITY_CAPACITY_FIELDS + IDENTITY_SUBSCRIPTION_FIELDS
+        if key
+        not in (
+            IDENTITY_CAPACITY_FIELDS
+            + IDENTITY_SUBSCRIPTION_FIELDS
+            + IDENTITY_PACK_FIELDS
+        )
     }
     atomic_write_json(_state_path(job_dir), persisted, ensure_ascii=False, indent=2)
     return updated
@@ -484,6 +565,7 @@ def stage_pack(
             "entries_total": preflight.entries,
             "chunks_total": preflight.projected_chunks,
             "content_bytes": preflight.content_bytes,
+            "pack_sha256": pack_identity_sha256(pack),
             "has_subscription": canonical_subscription is not None,
             "subscription_sha256": subscription_sha256,
         }
@@ -746,6 +828,8 @@ def _load_capacity_validated_job_pack(
         "content_bytes": preflight.content_bytes,
     }
     if pack.pack_id != str(identity.get("pack_id") or ""):
+        return None
+    if pack_identity_sha256(pack) != identity.get("pack_sha256"):
         return None
     if any(
         actual_capacity[field] != identity.get(field)
@@ -1052,6 +1136,21 @@ def _activate_job_validated(
                 },
             )
         try:
+            activation = {
+                "schema_version": 1,
+                "job_id": current["job_id"],
+                "pack_id": current["pack_id"],
+                "pack_sha256": current["pack_sha256"],
+                "has_subscription": current["has_subscription"],
+                "subscription_sha256": current["subscription_sha256"],
+                "retrieval_mode": result.retrieval_mode,
+            }
+            atomic_write_json(
+                _activation_path(job_dir),
+                activation,
+                ensure_ascii=False,
+                indent=2,
+            )
             state = _write_state(
                 job_dir,
                 current,

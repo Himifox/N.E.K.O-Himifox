@@ -14,6 +14,7 @@ from scripts.evaluate_knowledge_hybrid_retrieval import (
     EvaluationUnavailable,
     VectorCorpus,
     _expected_rank_and_score,
+    _load_cases,
     _load_vector_corpus,
     _rank_entries,
     select_threshold,
@@ -72,7 +73,7 @@ def _write_vector_database(path: Path, *, ambiguous_source: bool = False) -> Non
 
 
 def test_real_model_fixture_is_grounded_and_bounded():
-    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload = _load_cases(FIXTURE)
 
     assert payload["schema_version"] == 1
     assert payload["embedding_input_version"] == 1
@@ -101,6 +102,26 @@ def test_real_model_fixture_is_grounded_and_bounded():
         case["id"] for group in ("positives", "negatives") for case in payload[group]
     ]
     assert len(identifiers) == len(set(identifiers))
+
+
+@pytest.mark.parametrize(
+    "invalid_source",
+    ("__missing__", "", "source:", "chime", False, 1, [], {}),
+)
+def test_real_model_fixture_rejects_invalid_positive_source_identity(
+    tmp_path,
+    invalid_source,
+):
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    if invalid_source == "__missing__":
+        payload["positives"][0].pop("expected_source_tag")
+    else:
+        payload["positives"][0]["expected_source_tag"] = invalid_source
+    fixture = tmp_path / "cases.json"
+    fixture.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="positive cases use an invalid schema|source"):
+        _load_cases(fixture)
 
 
 def test_threshold_selection_reproduces_lowest_057_boundary():

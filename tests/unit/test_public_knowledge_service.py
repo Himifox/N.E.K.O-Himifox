@@ -70,6 +70,64 @@ def test_non_utf8_catalog_override_is_reported_as_invalid(tmp_path):
     assert service.get_status()["catalog_override_state"] == "invalid"
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (
+        ("source", False),
+        ("source", 1),
+        ("source", []),
+        ("source", {}),
+        ("title", False),
+        ("title", 1),
+        ("title", []),
+        ("title", {}),
+    ),
+)
+def test_catalog_override_rejects_non_string_identity_without_rewriting(
+    tmp_path,
+    field,
+    invalid_value,
+):
+    service = open_knowledge(tmp_path)
+    override_path = get_catalog_override_path(service.database_path())
+    payload = {
+        "disabled": [
+            {"source": "source:fixture", "title": "Disabled fixture"}
+        ]
+    }
+    payload["disabled"][0][field] = invalid_value
+    override_path.write_text(json.dumps(payload), encoding="utf-8")
+    before = override_path.read_bytes()
+
+    with pytest.raises(CatalogOverrideError):
+        load_disabled_entries(override_path)
+    with pytest.raises(CatalogOverrideError):
+        service.set_entry_disabled(
+            source_tag="source:fixture",
+            title="Disabled fixture",
+            disabled=True,
+        )
+
+    assert service.get_status()["catalog_override_state"] == "invalid"
+    assert override_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("field", ("source", "title"))
+def test_catalog_override_setter_rejects_non_string_identity(tmp_path, field):
+    arguments = {
+        "path": tmp_path / "catalog-overrides.json",
+        "source_tag": "source:fixture",
+        "title": "Disabled fixture",
+        "disabled": True,
+    }
+    arguments["source_tag" if field == "source" else "title"] = 1
+
+    with pytest.raises(ValueError, match="source and title are required"):
+        set_entry_disabled(**arguments)
+
+    assert not arguments["path"].exists()
+
+
 def test_disabled_identity_survives_equivalent_pack_title_update(tmp_path):
     service = open_knowledge(tmp_path)
     pack_id = "normalized-override"

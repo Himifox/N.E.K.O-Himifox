@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -20,7 +21,7 @@ from .models import (
     normalize_knowledge_title,
 )
 from .store import KnowledgeStore
-from .subscriptions import validate_subscription
+from .subscriptions import canonical_pack_bytes, validate_subscription
 
 
 PACK_SCHEMA_VERSION = 1
@@ -34,6 +35,7 @@ MAX_PACK_TAGS_PER_ENTRY = 64
 MAX_PACK_TAG_BYTES_PER_ENTRY = 32 * 1024
 MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024
 _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
 
 
@@ -108,6 +110,19 @@ def pack_payload(pack: KnowledgePack) -> dict[str, object]:
         ],
     }
     return payload
+
+
+def pack_identity_sha256(pack: KnowledgePack) -> str:
+    """Hash normalized pack content independently of source entry order."""
+    payload = pack_payload(pack)
+    entries = payload["entries"]
+    if not isinstance(entries, list):  # pragma: no cover - pack_payload contract
+        raise ValueError("knowledge pack entries are invalid")
+    payload["entries"] = sorted(
+        entries,
+        key=lambda row: normalize_knowledge_title(str(row.get("title") or "")),
+    )
+    return hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
 
 
 def get_pack_registry_path(database_path: str | Path) -> Path:
@@ -786,6 +801,14 @@ def _load_registry(
                 f"knowledge pack registry entry {pack_id!r} has an invalid "
                 "declared_material_type"
             )
+        pack_sha256 = metadata.get("pack_sha256")
+        if not isinstance(pack_sha256, str) or not _SHA256_RE.fullmatch(
+            pack_sha256
+        ):
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid "
+                "pack_sha256"
+            )
         override = metadata.get("material_type_override")
         if override is not None and (
             not isinstance(override, str) or override not in MATERIAL_TYPES
@@ -816,6 +839,7 @@ def _load_registry(
             )
         normalized = {
             **metadata,
+            "pack_sha256": pack_sha256,
             "declared_material_type": declared,
             "material_type_override": override,
             "effective_material_type": effective,
@@ -856,6 +880,7 @@ def _registry_with_pack(
     effective_material_type = override or pack.material_type
     packs[pack.pack_id] = {
         "source_tag": pack.source_tag,
+        "pack_sha256": pack_identity_sha256(pack),
         "source": {
             "name": pack.source.name,
             "homepage": pack.source.homepage,

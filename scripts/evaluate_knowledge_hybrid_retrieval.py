@@ -86,21 +86,37 @@ def _load_cases(path: Path) -> dict[str, Any]:
         if not isinstance(case, dict) or set(case) != {
             "id",
             "query",
+            "expected_source_tag",
             "expected_title",
         }:
             raise ValueError("positive cases use an invalid schema")
-        case_id = str(case["id"])
-        if not case_id or case_id in identifiers:
+        case_id = _required_case_text(case, "id")
+        _required_case_text(case, "query")
+        expected_source_tag = _required_case_text(case, "expected_source_tag")
+        expected_title = _required_case_text(case, "expected_title")
+        if not expected_source_tag.startswith("source:") or not expected_source_tag[7:]:
+            raise ValueError("positive case source identity is invalid")
+        if not normalize_knowledge_title(expected_title):
+            raise ValueError("positive case title identity is invalid")
+        if case_id in identifiers:
             raise ValueError("case ids must be non-empty and unique")
         identifiers.add(case_id)
     for case in negatives:
         if not isinstance(case, dict) or set(case) != {"id", "query"}:
             raise ValueError("negative cases use an invalid schema")
-        case_id = str(case["id"])
-        if not case_id or case_id in identifiers:
+        case_id = _required_case_text(case, "id")
+        _required_case_text(case, "query")
+        if case_id in identifiers:
             raise ValueError("case ids must be non-empty and unique")
         identifiers.add(case_id)
     return payload
+
+
+def _required_case_text(case: Mapping[str, object], field: str) -> str:
+    value = case.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"evaluation case {field} must be non-empty text")
+    return value.strip()
 
 
 @contextmanager

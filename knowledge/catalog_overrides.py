@@ -35,10 +35,14 @@ def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
     rows = payload["disabled"]
     result: set[EntryKey] = set()
     for row in rows:
-        if not isinstance(row, dict):
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("source"), str)
+            or not isinstance(row.get("title"), str)
+        ):
             raise CatalogOverrideError("catalog override contains an invalid entry")
-        source = str(row.get("source") or "").strip()
-        title = normalize_knowledge_title(str(row.get("title") or ""))
+        source = row["source"].strip()
+        title = normalize_knowledge_title(row["title"])
         if not source.startswith("source:") or not title:
             raise CatalogOverrideError("catalog override contains an invalid entry")
         result.add((source, title))
@@ -53,8 +57,10 @@ def set_entry_disabled(
     disabled: bool,
 ) -> int:
     """Atomically update one source/title override and return the disabled count."""
-    source_tag = str(source_tag or "").strip()
-    title = normalize_knowledge_title(str(title or ""))
+    if not isinstance(source_tag, str) or not isinstance(title, str):
+        raise ValueError("source and title are required")
+    source_tag = source_tag.strip()
+    title = normalize_knowledge_title(title)
     if not source_tag.startswith("source:") or not title:
         raise ValueError("source and title are required")
     output_path = Path(path)

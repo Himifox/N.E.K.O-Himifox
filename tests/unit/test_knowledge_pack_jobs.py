@@ -250,6 +250,87 @@ async def test_staged_pack_is_hidden_until_bm25_activation(tmp_path):
     assert service.list_pack_jobs()[0]["state"] == "active"
 
 
+@pytest.mark.parametrize("invalid_state", ([], {}, False, 1, None, "unknown"))
+def test_malformed_job_state_is_quarantined_before_control_flow(
+    tmp_path,
+    invalid_state,
+):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    state_path = job_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["state"] = invalid_state
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+    status = service.get_status()
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "invalid_job_state"
+    assert status["pack_job_registry_state"] == "invalid"
+    assert job_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_active_state_requires_a_matching_commit_receipt(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    state_path = job_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update(state="active", retrieval_mode="bm25")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+    processed = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "active_job_commit_unverified"
+    assert processed["state"] == "no_work"
+    assert service.list_packs() == ()
+    assert job_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_active_receipt_survives_normal_pack_removal(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+    await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert service.list_pack_jobs()[0]["state"] == "active"
+    service.remove_pack("staged-fixture")
+
+    assert service.list_pack_jobs()[0]["state"] == "active"
+    assert service.list_packs() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (("pack_sha256", "0" * 64), ("retrieval_mode", [])),
+)
+async def test_active_receipt_rejects_identity_tampering(
+    tmp_path,
+    field,
+    invalid_value,
+):
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+    await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    job_dir = next((tmp_path / ".staging").iterdir())
+    activation_path = job_dir / "activation.json"
+    activation = json.loads(activation_path.read_text(encoding="utf-8"))
+    activation[field] = invalid_value
+    activation_path.write_text(json.dumps(activation), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "active_job_commit_unverified"
+    assert job_dir.is_dir()
+
+
 @pytest.mark.asyncio
 async def test_pack_update_keeps_old_source_until_new_job_activates(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
@@ -417,7 +498,7 @@ def test_staged_chunk_total_must_match_identity(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "mutation",
-    ("entries", "content_bytes", "chunks", "pack_id"),
+    ("entries", "content_bytes", "chunks", "pack_id", "same_capacity_content"),
 )
 def test_staged_artifact_must_match_immutable_capacity_identity(
     tmp_path,
@@ -437,8 +518,10 @@ def test_staged_artifact_must_match_immutable_capacity_identity(
     elif mutation == "chunks":
         # Preserve entries and UTF-8 byte count while crossing a chunk boundary.
         artifact["entries"][0]["content"] = "A" * 900 + "\n\n" + "B" * 98
-    else:
+    elif mutation == "pack_id":
         artifact["pack_id"] = "different-fixture"
+    else:
+        artifact["entries"][0]["content"] = "B staged entry body."
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
 
     state = _prepare_job(job_dir)
@@ -873,6 +956,7 @@ def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
             "entries_total": 1,
             "chunks_total": 1,
             "content_bytes": 1,
+            "pack_sha256": "0" * 64,
             "has_subscription": False,
             "subscription_sha256": "",
         }

@@ -241,7 +241,10 @@ def test_registry_rejects_invalid_declared_material_type(
     assert pack_registry_state(database_path) == "invalid"
     assert list_installed_packs(database_path) == ()
     assert list_installed_pack_routing_metadata(database_path) == ()
-    assert service.get_status()["pack_registry_state"] == "invalid"
+    status = service.get_status()
+    assert status["pack_registry_state"] == "invalid"
+    assert status["entries"] == 1
+    assert status["knowledge_entries"] == status["corpus_entries"] == 0
     assert service.match_turn("Community Tarot") == []
     assert service.build_conversation_context("Community Tarot").hit_count == 0
     assert KnowledgeStore(database_path).count_by_source_tag(
@@ -263,6 +266,26 @@ def test_registry_rejects_invalid_material_type_override(tmp_path, corrupt_value
     assert list_installed_packs(service.database_path()) == ()
     assert list_installed_pack_routing_metadata(service.database_path()) == ()
     assert registry_path.read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "corrupt_value",
+    ("__missing__", "", "not-a-digest", False, 0, [], {}),
+)
+def test_registry_rejects_invalid_pack_identity_digest(tmp_path, corrupt_value):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-tarot"]
+    if corrupt_value == "__missing__":
+        metadata.pop("pack_sha256")
+    else:
+        metadata["pack_sha256"] = corrupt_value
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_packs(service.database_path()) == ()
 
 
 @pytest.mark.parametrize(
