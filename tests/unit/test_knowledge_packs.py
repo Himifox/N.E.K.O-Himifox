@@ -200,6 +200,40 @@ def test_registry_rejects_non_boolean_auto_context(tmp_path, corrupt_value):
     assert list_installed_pack_routing_metadata(service.database_path()) == ()
 
 
+@pytest.mark.parametrize(
+    "corrupt_value",
+    ("__missing__", "", "meme", None, False, 1, [], {}),
+)
+@pytest.mark.parametrize("valid_override", (None, "knowledge"))
+def test_registry_rejects_invalid_declared_material_type(
+    tmp_path,
+    corrupt_value,
+    valid_override,
+):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-tarot"]
+    if corrupt_value == "__missing__":
+        metadata.pop("declared_material_type")
+    else:
+        metadata["declared_material_type"] = corrupt_value
+    metadata["material_type_override"] = valid_override
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    assert pack_registry_state(database_path) == "invalid"
+    assert list_installed_packs(database_path) == ()
+    assert list_installed_pack_routing_metadata(database_path) == ()
+    assert service.get_status()["pack_registry_state"] == "invalid"
+    assert service.match_turn("Community Tarot") == []
+    assert service.build_conversation_context("Community Tarot").hit_count == 0
+    assert KnowledgeStore(database_path).count_by_source_tag(
+        "source:community.community-tarot"
+    ) == 1
+
+
 def test_pack_requires_material_type():
     missing = _payload()
     missing.pop("material_type")

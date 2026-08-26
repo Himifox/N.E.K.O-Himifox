@@ -774,11 +774,12 @@ def _load_registry(
             raise KnowledgePackRegistryError(
                 f"knowledge pack registry entry {pack_id!r} has an invalid source_tag"
             )
-        declared = (
-            str(metadata.get("declared_material_type"))
-            if metadata.get("declared_material_type") in MATERIAL_TYPES
-            else "knowledge"
-        )
+        declared = metadata.get("declared_material_type")
+        if not isinstance(declared, str) or declared not in MATERIAL_TYPES:
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid "
+                "declared_material_type"
+            )
         override = metadata.get("material_type_override")
         if override not in MATERIAL_TYPES:
             override = None
