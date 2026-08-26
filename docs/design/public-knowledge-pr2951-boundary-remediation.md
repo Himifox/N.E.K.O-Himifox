@@ -2155,3 +2155,11 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 4. 实现证据推送后逐条回复并 resolve 4 个 inline conversation；为两个 outside-diff 问题发布一条对应 review ID 的 PR 证据评论。最后重新分页收集 threads 和最新 review body。
 
 关闭条件：当前 registry 的 override/subscription 损坏均失败关闭；评估正例不能被异源同名条目替代；ready 向量一定是有效 float16；索引器启动失败可独立恢复；voice cleanup 取消不会截断后续关闭。只有远端实现与精确测试齐全后才标记第二十一轮已实施。
+
+## 第二十一轮实施证据
+
+设计提交 `f2e1c406c`、实现提交 `11595cba1` 已推送。DW 令非法 `material_type_override` 直接使当前注册表失效且不改写原文件。DX 在安装写入与注册表读取两端统一执行完整 subscription 协议校验；缺字段、非对象或不完整对象都不能降级成无订阅本地包，合法对象统一规范化后再参与身份与唯一性判断。DY 为正式评估正例和排序结果补齐 source tag，并以来源和规范化标题的联合身份计算名次。DZ 在 float16 转换后再次检查有限性与非零范数，overflow 和整行 underflow 均记录为 `invalid_embedding`。
+
+EA 将知识索引器启动拆成独立的、单实例强引用退避重试任务；首次启动失败不阻断主服务，成功后自动结束，关闭入口会先取消并观察未完成重试。EB 暂存 voice identity 清理产生的取消，在连接器、后台任务、翻译、Token、音乐、Cloud Save、HTTP 连接池和索引器清理全部执行后恢复抛出，兼顾完整收尾与调用方取消语义。
+
+项目 `.venv` Python 3.11 的受影响回归为 320 passed、1 skipped；知识库与启动/关闭宽回归为 511 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是上一轮已确认、且本轮未触碰的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall、评估 fixture JSON 解析与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 完成后的遥测写入告警来自工作区沙盒拒绝访问用户配置目录，不影响测试结果或产品文件。
