@@ -830,7 +830,13 @@ async def _wait_for_pack_job(
     """Keep marketplace install pending until the staged pack is truly active."""
     deadline = time.monotonic() + _JOB_WAIT_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        payload = await _main_request("GET", "packs/jobs")
+        try:
+            payload = await _main_request("GET", "packs/jobs")
+        except _KnowledgeTaskError as exc:
+            if exc.code != "main_server_unavailable":
+                raise
+            await asyncio.sleep(_JOB_POLL_SECONDS)
+            continue
         job = next(
             (
                 item

@@ -25,6 +25,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from knowledge.chunking import EMBEDDING_INPUT_VERSION
+from knowledge.catalog_overrides import (
+    CatalogOverrideError,
+    get_catalog_override_path,
+    load_disabled_entries,
+)
+from knowledge.models import normalize_knowledge_title
 
 DEFAULT_CASES = (
     PROJECT_ROOT / "tests" / "fixtures" / "knowledge_hybrid_real_model_cases.json"
@@ -118,6 +124,10 @@ def _load_vectors(
     dimensions: int,
 ) -> tuple[list[np.ndarray], list[dict[str, object]], dict[str, object]]:
     try:
+        disabled = load_disabled_entries(get_catalog_override_path(database_path))
+    except CatalogOverrideError as exc:
+        raise EvaluationUnavailable("catalog_override_unavailable") from exc
+    try:
         with _open_read_only(database_path) as connection:
             tables = {
                 str(row[0])
@@ -142,7 +152,7 @@ def _load_vectors(
             rows = connection.execute(
                 "SELECT knowledge_chunks.entry_rowid, knowledge_chunks.chunk_index, "
                 "knowledge_chunks.embedding_dimensions, knowledge_chunks.embedding, "
-                "entries.title FROM knowledge_chunks JOIN entries "
+                "entries.title, entries.tags FROM knowledge_chunks JOIN entries "
                 "ON entries.rowid=knowledge_chunks.entry_rowid "
                 "WHERE knowledge_chunks.embedding_status='ready' "
                 "AND knowledge_chunks.embedding_model_id=? "
@@ -157,7 +167,24 @@ def _load_vectors(
     vectors: list[np.ndarray] = []
     result_rows: list[dict[str, object]] = []
     invalid_vectors = 0
+    disabled_vectors = 0
     for row in rows:
+        try:
+            tags = json.loads(str(row["tags"]))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise EvaluationUnavailable("entry_identity_unavailable") from exc
+        source_tags = (
+            [tag for tag in tags if isinstance(tag, str) and tag.startswith("source:")]
+            if isinstance(tags, list)
+            else []
+        )
+        title = str(row["title"])
+        title_key = normalize_knowledge_title(title)
+        if len(source_tags) != 1 or not title_key:
+            raise EvaluationUnavailable("entry_identity_unavailable")
+        if (source_tags[0], title_key) in disabled:
+            disabled_vectors += 1
+            continue
         raw = row["embedding"]
         if (
             int(row["embedding_dimensions"] or 0) != dimensions
@@ -176,7 +203,7 @@ def _load_vectors(
             {
                 "entry_rowid": int(row["entry_rowid"]),
                 "chunk_index": int(row["chunk_index"]),
-                "title": str(row["title"]),
+                "title": title,
             }
         )
     if not vectors:
@@ -190,6 +217,7 @@ def _load_vectors(
             "embedding_input_version": int(metadata["embedding_input_version"]),
             "ready_vectors": len(vectors),
             "invalid_vectors": invalid_vectors,
+            "disabled_vectors": disabled_vectors,
         },
     )
 

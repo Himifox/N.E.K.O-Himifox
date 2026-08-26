@@ -1091,6 +1091,36 @@ async def test_market_task_waits_for_staged_pack_activation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_market_task_retries_transient_job_poll_failure(monkeypatch):
+    calls = 0
+    task = {"stage": "installing", "progress": 0.75, "message": ""}
+
+    async def fake_main(_method, _path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module._KnowledgeTaskError(
+                "main_server_unavailable",
+                "Main Server unavailable",
+            )
+        return {
+            "ok": True,
+            "jobs": [{"job_id": "fixture-job", "state": "active"}],
+        }
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module.asyncio, "sleep", no_sleep)
+
+    result = await module._wait_for_pack_job(task, job_id="fixture-job")
+
+    assert calls == 2
+    assert result["state"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_market_task_stops_polling_when_staged_job_is_degraded(monkeypatch):
     task = {"stage": "installing", "progress": 0.75, "message": ""}
 

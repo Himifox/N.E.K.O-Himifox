@@ -143,7 +143,7 @@
         </div>
         <div class="pager">
           <el-button :disabled="offset === 0" @click="previousPage">{{ t('knowledge.previous') }}</el-button>
-          <span>{{ offset + 1 }}–{{ offset + entries.length }}</span>
+          <span>{{ entries.length ? offset + 1 : 0 }}–{{ entries.length ? offset + entries.length : 0 }}</span>
           <el-button :disabled="!hasMore" @click="nextPage">{{ t('knowledge.next') }}</el-button>
         </div>
       </el-tab-pane>

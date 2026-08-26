@@ -567,9 +567,33 @@ async def rebuild_target(
     from knowledge.store import KnowledgeStore
     from utils.local_embedding_runtime import get_local_embedding_status
 
+    action = "full" if full else "rebuild"
+    reset_chunks = 0
+    backfilled_entries = 0
+    embedded_chunks = 0
+    failed_chunks = 0
+    stale_writebacks = 0
+    last_batch_state = "no_work"
+
+    def inspection_unavailable(status: dict[str, Any]):
+        return {
+            **status,
+            "action": action,
+            "reset_chunks": reset_chunks,
+            "backfilled_entries": backfilled_entries,
+            "embedded_chunks": embedded_chunks,
+            "failed_chunks_this_run": failed_chunks,
+            "stale_writebacks": stale_writebacks,
+            "last_batch_state": last_batch_state,
+            "result_state": "inspection_unavailable",
+            "complete": False,
+        }, False
+
     before = inspect_database(target.database_path)
     if not target.database_path.is_file():
         return {**before, "action": "skipped", "reason": "database_missing"}, True
+    if before.get("error_type"):
+        return inspection_unavailable(before)
 
     store = KnowledgeStore(target.database_path)
     reset_chunks = store.reset_chunk_index(full=True) if full else 0
@@ -579,13 +603,11 @@ async def rebuild_target(
         batch_size=batch_size,
     )
 
-    embedded_chunks = 0
-    failed_chunks = 0
-    stale_writebacks = 0
-    last_batch_state = "no_work"
     capacity_limited = False
     while True:
         status_before = inspect_database(target.database_path)
+        if status_before.get("error_type"):
+            return inspection_unavailable(status_before)
         eligible_before = _eligible_chunk_count(status_before)
         if eligible_before == 0:
             break
@@ -611,7 +633,10 @@ async def rebuild_target(
         embedded_chunks += stored
         failed_chunks += failed
         stale_writebacks += stale
-        eligible_after = _eligible_chunk_count(inspect_database(target.database_path))
+        status_after = inspect_database(target.database_path)
+        if status_after.get("error_type"):
+            return inspection_unavailable(status_after)
+        eligible_after = _eligible_chunk_count(status_after)
         if selected == 0 or (
             stored == 0 and failed == 0 and eligible_after >= eligible_before
         ):
@@ -619,6 +644,8 @@ async def rebuild_target(
         await asyncio.sleep(0)
 
     after = inspect_database(target.database_path)
+    if after.get("error_type"):
+        return inspection_unavailable(after)
     embedding_status = get_local_embedding_status()
     eligible_remaining = _eligible_chunk_count(after)
     result_state = (
@@ -629,7 +656,7 @@ async def rebuild_target(
     complete = result_state == "complete"
     return {
         **after,
-        "action": "full" if full else "rebuild",
+        "action": action,
         "reset_chunks": reset_chunks,
         "backfilled_entries": backfilled_entries,
         "embedded_chunks": embedded_chunks,

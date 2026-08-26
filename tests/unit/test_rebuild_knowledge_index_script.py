@@ -618,3 +618,88 @@ async def test_rebuild_reports_capacity_limited_without_embedding(monkeypatch, t
     assert result["eligible_chunks_remaining"] == 1
     assert result["vector_budget_remaining"] == 0
     assert complete is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_stops_before_mutation_when_initial_inspection_fails(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.store as store_module
+
+    database = tmp_path / "knowledge.db"
+    database.write_bytes(b"fixture")
+
+    class UnexpectedStore:
+        def __init__(self, _path):
+            raise AssertionError("store must not open after an inspection failure")
+
+    monkeypatch.setattr(store_module, "KnowledgeStore", UnexpectedStore)
+    monkeypatch.setattr(
+        MODULE,
+        "inspect_database",
+        lambda _path: {
+            "database": str(database),
+            "database_exists": True,
+            "error_type": "OperationalError",
+        },
+    )
+
+    result, complete = await MODULE.rebuild_target(
+        MODULE.KnowledgeTarget(database),
+        full=False,
+        batch_size=4,
+    )
+
+    assert result["result_state"] == "inspection_unavailable"
+    assert result["error_type"] == "OperationalError"
+    assert complete is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_does_not_report_complete_when_final_inspection_fails(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.store as store_module
+
+    database = tmp_path / "knowledge.db"
+    database.write_bytes(b"fixture")
+    status = {
+        "chunks_ready": 1,
+        "chunks_pending": 0,
+        "chunks_stale": 0,
+        "chunks_failed": 0,
+        "chunks_failed_retryable_now": 0,
+        "chunks_failed_waiting": 0,
+        "chunks_failed_exhausted": 0,
+        "chunks_local_pending": 0,
+        "chunks_local_stale": 0,
+        "chunks_local_failed": 0,
+        "chunks_local_failed_retryable_now": 0,
+        "chunks_local_failed_waiting": 0,
+        "chunks_local_failed_exhausted": 0,
+    }
+    inspections = iter((dict(status), dict(status), {**status, "error_type": "DatabaseError"}))
+
+    class FakeStore:
+        def __init__(self, _path):
+            self.database_path = database
+
+        def reset_chunk_index(self, *, full):
+            assert full is False
+            return 0
+
+    monkeypatch.setattr(store_module, "KnowledgeStore", FakeStore)
+    monkeypatch.setattr(MODULE, "inspect_database", lambda _path: next(inspections))
+    monkeypatch.setattr(MODULE, "_backfill_all", lambda *_args, **_kwargs: 0)
+
+    result, complete = await MODULE.rebuild_target(
+        MODULE.KnowledgeTarget(database),
+        full=False,
+        batch_size=4,
+    )
+
+    assert result["result_state"] == "inspection_unavailable"
+    assert result["error_type"] == "DatabaseError"
+    assert complete is False
