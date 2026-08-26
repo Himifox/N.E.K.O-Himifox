@@ -201,34 +201,38 @@ def _subscription_done(
     _cleanup_tasks()
 
 
+def _installation_outcome_of(
+    completed: asyncio.Task[dict[str, Any]],
+) -> Literal["accepted", "rejected", "failed", "cancelled"]:
+    if completed.cancelled():
+        return "cancelled"
+    failure = completed.exception()
+    if failure is not None:
+        return "failed"
+    result = completed.result()
+    return (
+        "accepted"
+        if isinstance(result, dict) and result.get("ok") is True
+        else "rejected"
+    )
+
+
 def _installation_mutation_done(
     task_id: str,
     completed: asyncio.Task[dict[str, Any]],
 ) -> None:
     if _installation_mutations.get(task_id) is completed:
         _installation_mutations.pop(task_id, None)
-    if completed.cancelled():
-        task = _tasks.get(task_id)
-        if task is not None:
-            task["_installation_outcome"] = "cancelled"
-        return
-    failure = completed.exception()
-    if failure is not None:
-        task = _tasks.get(task_id)
-        if task is not None:
-            task["_installation_outcome"] = "failed"
+    outcome = _installation_outcome_of(completed)
+    task = _tasks.get(task_id)
+    if task is not None:
+        task["_installation_outcome"] = outcome
+    if outcome == "failed":
+        failure = completed.exception()
+        assert failure is not None
         logger.error(
             "knowledge installation mutation failed",
             exc_info=(type(failure), failure, failure.__traceback__),
-        )
-        return
-    result = completed.result()
-    task = _tasks.get(task_id)
-    if task is not None:
-        task["_installation_outcome"] = (
-            "accepted"
-            if isinstance(result, dict) and result.get("ok") is True
-            else "rejected"
         )
 
 
@@ -384,19 +388,7 @@ async def _cancel_active_subscription(
             asyncio.shield(installation_mutation),
             return_exceptions=True,
         )
-        if installation_mutation.cancelled():
-            installation_outcome = "cancelled"
-        else:
-            failure = installation_mutation.exception()
-            if failure is not None:
-                installation_outcome = "failed"
-            else:
-                result = installation_mutation.result()
-                installation_outcome = (
-                    "accepted"
-                    if isinstance(result, dict) and result.get("ok") is True
-                    else "rejected"
-                )
+        installation_outcome = _installation_outcome_of(installation_mutation)
         if task is not None:
             task["_installation_outcome"] = installation_outcome
     else:
@@ -459,10 +451,11 @@ async def _resolve_owned_subscription(
         resolved_pack_id = str(matches[0].get("pack_id") or "")
         if not resolved_pack_id or resolved_pack_id != claimed_pack_id:
             _raise_unsubscribe_error("subscription_identity_mismatch")
-        remote_id = str(matches[0]["subscription"].get("remote_id") or "")
-        if not remote_id:
-            _raise_unsubscribe_error("subscription_ownership_unverifiable")
-        return resolved_pack_id, remote_id
+        return await _revalidate_owned_market_subscription(
+            package_id=package_id,
+            claimed_pack_id=claimed_pack_id,
+            subscription=matches[0]["subscription"],
+        )
 
     legacy = next(
         (
@@ -477,23 +470,43 @@ async def _resolve_owned_subscription(
     )
     if legacy is None:
         _raise_unsubscribe_error("subscription_not_found", status_code=404)
-    subscription = legacy["subscription"]
+    return await _revalidate_owned_market_subscription(
+        package_id=package_id,
+        claimed_pack_id=claimed_pack_id,
+        subscription=legacy["subscription"],
+    )
+
+
+async def _revalidate_owned_market_subscription(
+    *,
+    package_id: int,
+    claimed_pack_id: str,
+    subscription: dict[str, Any],
+) -> tuple[str, str]:
+    version = str(subscription.get("version") or "")
+    channel = str(subscription.get("channel") or "")
+    remote_id = str(subscription.get("remote_id") or "")
+    material_type = str(subscription.get("material_type") or "")
+    artifact_sha256 = str(subscription.get("artifact_sha256") or "")
     try:
         descriptor = await _fetch_version_descriptor(
             KnowledgeSubscribeRequest(
                 package_id=package_id,
-                version=str(subscription.get("version") or ""),
-                channel=str(subscription.get("channel") or "stable"),
+                version=version,
+                channel=channel,
                 pack_id=claimed_pack_id,
             )
         )
     except (ValueError, _KnowledgeTaskError):
         _raise_unsubscribe_error("subscription_ownership_unverifiable")
     if (
-        descriptor.pack_id != claimed_pack_id
-        or descriptor.remote_id != str(subscription.get("remote_id") or "")
-        or descriptor.version != str(subscription.get("version") or "")
-        or descriptor.channel != str(subscription.get("channel") or "")
+        descriptor.package_id != package_id
+        or descriptor.pack_id != claimed_pack_id
+        or descriptor.remote_id != remote_id
+        or descriptor.version != version
+        or descriptor.channel != channel
+        or descriptor.material_type != material_type
+        or descriptor.artifacts.knowledge.sha256 != artifact_sha256
     ):
         _raise_unsubscribe_error("subscription_ownership_unverifiable")
     return descriptor.pack_id, descriptor.remote_id

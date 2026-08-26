@@ -286,7 +286,13 @@ def _get_cached_mention_matcher(
     """Refresh the per-database matcher only after a committed upsert batch."""
     cache_key = (str(store.database_path.resolve()), policy)
     revision = store.entries_revision()
-    disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    try:
+        disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
+    except CatalogOverrideError:
+        # Never reuse a matcher built from an override state that is no longer
+        # trustworthy. Do not cache this empty matcher so a repaired file takes
+        # effect on the next request.
+        return KnowledgeMentionMatcher((), policy=policy)
     cached = _MENTION_MATCHER_CACHE.get(cache_key)
     if cached is None or cached.revision != revision or cached.disabled != disabled:
         cached = _CachedMentionMatcher(

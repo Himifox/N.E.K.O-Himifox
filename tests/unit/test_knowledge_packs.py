@@ -638,6 +638,18 @@ def test_market_artifact_must_use_canonical_json_bytes():
         )
 
 
+@pytest.mark.parametrize(("constant", "value"), (
+    ("NaN", float("nan")),
+    ("Infinity", float("inf")),
+    ("-Infinity", float("-inf")),
+))
+def test_market_artifact_rejects_nonfinite_json_numbers(constant, value):
+    with pytest.raises(ValueError):
+        canonical_pack_bytes({"value": value})
+    with pytest.raises(ValueError):
+        load_canonical_pack_artifact(f'{{"value":{constant}}}'.encode("utf-8"))
+
+
 def test_subscription_update_cannot_change_remote_identity(tmp_path):
     service = open_knowledge(tmp_path)
     payload = _payload()

@@ -47,6 +47,7 @@ async def test_installation_mutation_callback_logs_task_failure(monkeypatch):
     completed = asyncio.get_running_loop().create_future()
     completed.set_exception(failure)
     module._installation_mutations["failed-task"] = completed
+    module._tasks["failed-task"] = {}
 
     module._installation_mutation_done("failed-task", completed)
 
@@ -54,13 +55,18 @@ async def test_installation_mutation_callback_logs_task_failure(monkeypatch):
     assert len(messages) == 1
     assert messages[0][0] == ("knowledge installation mutation failed",)
     assert messages[0][1]["exc_info"][1] is failure
+    assert module._tasks["failed-task"]["_installation_outcome"] == "failed"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ("success", "cancelled"))
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    (("success", "accepted"), ("rejected", "rejected"), ("cancelled", "cancelled")),
+)
 async def test_installation_mutation_callback_does_not_log_expected_outcome(
     monkeypatch,
     outcome,
+    expected,
 ):
     class _Logger:
         def error(self, *_args, **_kwargs):
@@ -70,10 +76,14 @@ async def test_installation_mutation_callback_does_not_log_expected_outcome(
     completed = asyncio.get_running_loop().create_future()
     if outcome == "success":
         completed.set_result({"ok": True})
+    elif outcome == "rejected":
+        completed.set_result({"ok": False, "reason": "fixture"})
     else:
         completed.cancel()
 
+    module._tasks["expected-task"] = {}
     module._installation_mutation_done("expected-task", completed)
+    assert module._tasks["expected-task"]["_installation_outcome"] == expected
 
 
 def _pack():
@@ -425,10 +435,39 @@ def _installed_subscription(*, package_id: str = "7", legacy: bool = False):
         "remote_id": "knowledge/fixture-pack",
         "version": "1.0.0",
         "channel": "stable",
+        "artifact_sha256": "a" * 64,
+        "material_type": "knowledge",
     }
     if not legacy:
         subscription["provider_package_id"] = package_id
     return {"pack_id": "fixture-pack", "subscription": subscription}
+
+
+async def _matching_fixture_descriptor(request):
+    assert request == module.KnowledgeSubscribeRequest(
+        package_id=7,
+        version="1.0.0",
+        channel="stable",
+        pack_id="fixture-pack",
+    )
+    return module.KnowledgeVersionDescriptor.model_validate(
+        {
+            "protocol_version": 1,
+            "package_id": 7,
+            "remote_id": "knowledge/fixture-pack",
+            "pack_id": "fixture-pack",
+            "material_type": "knowledge",
+            "version": "1.0.0",
+            "channel": "stable",
+            "artifacts": {
+                "knowledge": {
+                    "url": "https://github.com/example/repo/releases/download/v1/fixture.neko-knowledge.json",
+                    "sha256": "a" * 64,
+                    "bytes": 1,
+                }
+            },
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -448,6 +487,9 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
@@ -475,6 +517,62 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unsubscribe_rejects_tampered_persisted_package_identity(monkeypatch):
+    main_calls = []
+
+    async def fake_main(method, path, **kwargs):
+        main_calls.append((method, path, kwargs))
+        assert (method, path) == ("GET", "packs")
+        return {
+            "ok": True,
+            "packs": [_installed_subscription(package_id="8")],
+        }
+
+    async def descriptor_for_other_package(request):
+        assert request.package_id == 8
+        return module.KnowledgeVersionDescriptor.model_validate(
+            {
+                "protocol_version": 1,
+                "package_id": 8,
+                "remote_id": "knowledge/other-pack",
+                "pack_id": "other-pack",
+                "material_type": "knowledge",
+                "version": "1.0.0",
+                "channel": "stable",
+                "artifacts": {
+                    "knowledge": {
+                        "url": "https://github.com/example/repo/releases/download/v1/other.neko-knowledge.json",
+                        "sha256": "b" * 64,
+                        "bytes": 1,
+                    }
+                },
+            }
+        )
+
+    async def unexpected_report(_package_id):
+        pytest.fail("unverified ownership must not be reported remotely")
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", descriptor_for_other_package
+    )
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", unexpected_report)
+
+    with pytest.raises(HTTPException) as rejected:
+        await module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=8,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+
+    assert rejected.value.detail["code"] == "subscription_ownership_unverifiable"
+    assert [call[:2] for call in main_calls] == [("GET", "packs")]
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_preserves_not_found_without_settled_installation(
     monkeypatch,
 ):
@@ -488,6 +586,9 @@ async def test_unsubscribe_preserves_not_found_without_settled_installation(
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
     monkeypatch.setattr(module, "_report_unsubscribe_best_effort", unexpected_report)
 
     with pytest.raises(HTTPException) as rejected:
@@ -559,29 +660,11 @@ async def test_legacy_unsubscribe_uses_matching_trusted_descriptor(monkeypatch):
             return {"ok": True, "packs": [_installed_subscription(legacy=True)]}
         return {"ok": True, "removed_pack": True, "removed_entries": 1}
 
-    async def matching_descriptor(_request):
-        return module.KnowledgeVersionDescriptor.model_validate(
-            {
-                "protocol_version": 1,
-                "package_id": 7,
-                "remote_id": "knowledge/fixture-pack",
-                "pack_id": "fixture-pack",
-                "material_type": "knowledge",
-                "version": "1.0.0",
-                "channel": "stable",
-                "artifacts": {
-                    "knowledge": {
-                        "url": "https://github.com/example/repo/releases/download/v1/fixture.neko-knowledge.json",
-                        "sha256": "a" * 64,
-                        "bytes": 1,
-                    }
-                },
-            }
-        )
-
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
-    monkeypatch.setattr(module, "_fetch_version_descriptor", matching_descriptor)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
@@ -974,6 +1057,9 @@ async def test_unsubscribe_corrupt_latest_task_timestamp_uses_durable_registry(
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
     monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
+    monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
         lambda _package_id: asyncio.sleep(0),
@@ -1020,6 +1106,9 @@ async def test_unsubscribe_out_of_order_task_times_use_durable_registry(monkeypa
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
@@ -1091,6 +1180,9 @@ async def test_subscribe_conflicts_while_unsubscribe_is_reserved(monkeypatch):
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module, "_fetch_version_descriptor", _matching_fixture_descriptor
+    )
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",

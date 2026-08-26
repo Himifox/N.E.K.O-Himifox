@@ -83,6 +83,8 @@ def _validated_jobs_root(knowledge_root: str | Path) -> Path | None:
     created by ``stage_pack`` after it has acquired the trusted registry lock.
     """
     knowledge_root = Path(knowledge_root)
+    if _is_link_or_reparse(knowledge_root) or not knowledge_root.is_dir():
+        return None
     jobs_root = _jobs_root(knowledge_root)
     try:
         resolved_knowledge_root = knowledge_root.resolve(strict=True)

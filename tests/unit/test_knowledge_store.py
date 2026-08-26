@@ -121,6 +121,22 @@ def test_invalid_catalog_override_fails_automatic_search_closed(tmp_path):
     assert KnowledgeRetriever(store).search("急了", include_disabled=True)
 
 
+def test_invalid_catalog_override_fails_mentions_closed_and_recovers(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(0))
+    retriever = KnowledgeRetriever(store)
+    override_path = get_catalog_override_path(store.database_path)
+
+    assert retriever.find_mentions("他急了")
+    override_path.write_text("not-json", encoding="utf-8")
+
+    assert retriever.find_mentions("他急了") == []
+    assert retriever.match_turn("他急了") == ("none", [])
+
+    override_path.write_text('{"disabled":[]}', encoding="utf-8")
+    assert retriever.find_mentions("他急了")
+
+
 def test_damaged_metadata_row_does_not_block_other_results(tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     store.upsert(_entry(1))

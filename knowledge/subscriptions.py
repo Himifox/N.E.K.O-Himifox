@@ -93,6 +93,7 @@ def canonical_pack_bytes(payload: object) -> bytes:
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
+        allow_nan=False,
     ).encode("utf-8")
 
 

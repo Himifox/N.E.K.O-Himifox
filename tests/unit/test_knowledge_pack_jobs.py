@@ -620,6 +620,29 @@ def test_stage_rejects_reparse_knowledge_root_before_writing_locks(
     assert tuple(knowledge_root.iterdir()) == ()
 
 
+def test_read_mutations_reject_reparse_knowledge_root_before_lock(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    original_check = pack_jobs._is_link_or_reparse
+    monkeypatch.setattr(
+        pack_jobs,
+        "_is_link_or_reparse",
+        lambda path: path == tmp_path or original_check(path),
+    )
+
+    def unexpected_lock(_root):
+        pytest.fail("untrusted knowledge root must be rejected before locking")
+
+    monkeypatch.setattr(pack_jobs, "_jobs_registry_lock", unexpected_lock)
+
+    assert pack_jobs.list_pack_jobs(tmp_path) == ()
+    assert cancel_pack_job(tmp_path, "fixture-0123456789ab") is False
+    assert discard_degraded_pack_job(tmp_path, "fixture-0123456789ab") is False
+
+
 def test_staging_root_link_is_rejected_without_touching_external_files(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
