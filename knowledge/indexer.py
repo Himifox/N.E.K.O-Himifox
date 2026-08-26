@@ -22,7 +22,14 @@ MAX_CHUNKS_PER_ROUND = 8
 SHUTDOWN_TIMEOUT_SECONDS = 2.0
 INDEXER_CANCEL_GRACE_SECONDS = 0.25
 _BLOCKED_STATES = frozenset(
-    ("inference_busy", "embedding_unavailable", "not_ready", "disabled")
+    (
+        "inference_busy",
+        "embedding_unavailable",
+        "not_ready",
+        "disabled",
+        "capacity_reached",
+        "store_unavailable",
+    )
 )
 
 _STATE_LOCK = threading.Lock()

@@ -26,8 +26,9 @@ from .catalog_overrides import (
     get_catalog_override_path,
     load_disabled_entries,
 )
+from .limits import MAX_READY_VECTOR_CHUNKS
 from .models import KnowledgeHit
-from .store import KnowledgeStore
+from .store import KnowledgeStore, KnowledgeStoreError
 
 
 logger = logging.getLogger("N.E.K.O.Knowledge.VectorIndex")
@@ -350,7 +351,13 @@ def _score_snapshot(
         return []
     scores = snapshot.matrix @ (query / norm)
     disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
-    disabled_rowids = store.entry_rowids_for_keys(disabled)
+    try:
+        disabled_rowids = store.entry_rowids_for_keys(
+            disabled,
+            strict=bool(disabled),
+        )
+    except KnowledgeStoreError:
+        return []
     if allowed_source_tags is None:
         eligible_indices = np.arange(len(scores), dtype=np.int64)
     else:
@@ -415,6 +422,8 @@ def _score_snapshot(
         ):
             continue
         key = entry_key(entry)
+        if key in disabled:
+            continue
         candidate = KnowledgeHit(
             entry=entry,
             score=score,
@@ -619,11 +628,17 @@ def _store_embedding_vectors(
     *,
     model_id: str,
     dimensions: int,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     stored = 0
     failed = 0
     stale_writebacks = 0
+    capacity_deferred = 0
     with mutation_lock(store.database_path):
+        status = store.chunk_status(strict=True)
+        remaining_capacity = max(
+            MAX_READY_VECTOR_CHUNKS - int(status["chunks_ready"]),
+            0,
+        )
         for index, chunk in enumerate(chunks):
             vector = vectors[index] if index < len(vectors) else None
             if vector is None:
@@ -646,6 +661,9 @@ def _store_embedding_vectors(
                 )
                 failed += 1
                 continue
+            if remaining_capacity <= 0:
+                capacity_deferred += 1
+                continue
             payload = array.astype("<f2").tobytes()
             did_store = store.store_chunk_embedding(
                 chunk_id=str(chunk["chunk_id"]),
@@ -656,7 +674,8 @@ def _store_embedding_vectors(
             )
             stored += int(did_store)
             stale_writebacks += int(not did_store)
-    return stored, failed, stale_writebacks
+            remaining_capacity -= int(did_store)
+    return stored, failed, stale_writebacks, capacity_deferred
 
 
 async def index_embedding_batch(
@@ -750,16 +769,25 @@ async def index_embedding_batch(
             state="failed",
         )
 
-    stored, failed, stale_writebacks = await asyncio.to_thread(
-        _store_embedding_vectors,
-        store,
-        chunks,
-        vectors,
-        model_id=status.model_id,
-        dimensions=status.dimensions,
-    )
+    try:
+        stored, failed, stale_writebacks, capacity_deferred = await asyncio.to_thread(
+            _store_embedding_vectors,
+            store,
+            chunks,
+            vectors,
+            model_id=status.model_id,
+            dimensions=status.dimensions,
+        )
+    except KnowledgeStoreError:
+        return EmbeddingBatchResult(
+            selected=len(chunks),
+            elapsed_ms=elapsed_ms,
+            state="store_unavailable",
+        )
     state = "failed" if failed else "ready"
-    if not failed and elapsed_ms > round(SLOW_BATCH_SECONDS * 1000):
+    if not failed and capacity_deferred:
+        state = "capacity_reached"
+    if state == "ready" and elapsed_ms > round(SLOW_BATCH_SECONDS * 1000):
         state = "slow_batch"
         logger.warning(
             "Knowledge embedding microbatch was slow: selected=%d elapsed_ms=%d",

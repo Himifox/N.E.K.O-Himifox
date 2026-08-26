@@ -8,11 +8,12 @@ import pytest
 
 import knowledge.vector_index as vector_index
 import knowledge.service as service_module
+from knowledge.catalog_overrides import entry_key
 from knowledge.models import (
     KnowledgeEntry,
     KnowledgeHit,
 )
-from knowledge.store import KnowledgeStore
+from knowledge.store import KnowledgeStore, KnowledgeStoreError
 from knowledge.service import KnowledgeService, _rrf_knowledge_hits
 from knowledge.packs import validate_pack
 from knowledge.vector_index import (
@@ -202,6 +203,72 @@ def test_semantic_scan_filters_disabled_chunks_before_top_k(tmp_path, monkeypatc
 
     assert [hit.entry.title for hit in result] == ["Enabled result"]
     assert result[0].semantic_score == pytest.approx(0.8)
+
+
+def test_semantic_scan_fails_closed_when_disabled_identity_resolution_fails(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Disabled result"))
+    snapshot = VectorIndexSnapshot(
+        revision=store.chunks_revision(),
+        model_id="fixture",
+        matrix=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        entry_rowids=np.asarray([1], dtype=np.int64),
+        chunk_indices=np.asarray([0], dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: frozenset({("source:test", "Disabled result")}),
+    )
+
+    def fail_resolution(_keys, *, strict=False):
+        assert strict is True
+        raise KnowledgeStoreError("fixture failure")
+
+    monkeypatch.setattr(store, "entry_rowids_for_keys", fail_resolution)
+
+    assert _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=1,
+        allowed_source_tags=None,
+    ) == []
+
+
+def test_semantic_scan_rechecks_disabled_identity_after_materialization(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("Disabled result"))
+    snapshot = VectorIndexSnapshot(
+        revision=store.chunks_revision(),
+        model_id="fixture",
+        matrix=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        entry_rowids=np.asarray([1], dtype=np.int64),
+        chunk_indices=np.asarray([0], dtype=np.int32),
+    )
+    disabled = frozenset({entry_key(_entry("Disabled result"))})
+    monkeypatch.setattr(
+        "knowledge.vector_index.load_disabled_entries",
+        lambda _path: disabled,
+    )
+    monkeypatch.setattr(
+        store,
+        "entry_rowids_for_keys",
+        lambda _keys, *, strict=False: frozenset(),
+    )
+
+    assert _score_snapshot(
+        snapshot,
+        [1.0, 0.0],
+        store=store,
+        limit=1,
+        allowed_source_tags=None,
+    ) == []
 
 
 def test_semantic_scan_caps_unique_entries_after_collapsing_chunks(
@@ -404,6 +471,73 @@ async def test_embedding_batch_defaults_to_four_and_caps_at_eight(
     assert capped_result.selected == 8
     assert capped_result.stored == 8
     assert service.batch_sizes == [4, 8]
+
+
+@pytest.mark.asyncio
+async def test_embedding_writeback_rechecks_ready_cap_after_inference(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry("In flight"))
+    store.upsert(_entry("Concurrent activation"))
+    concurrent_chunk = store.pending_embedding_chunks(
+        model_id="fixture",
+        limit=2,
+    )[1]
+
+    class _EmbeddingService:
+        async def embed_batch(self, texts):
+            assert texts
+            assert store.store_chunk_embedding(
+                chunk_id=str(concurrent_chunk["chunk_id"]),
+                content_hash=str(concurrent_chunk["content_hash"]),
+                model_id="fixture",
+                dimensions=2,
+                embedding=np.asarray([1.0, 0.0], dtype="<f2").tobytes(),
+            )
+            return [[1.0, 0.0] for _text in texts]
+
+    monkeypatch.setattr(vector_index, "MAX_READY_VECTOR_CHUNKS", 1)
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+
+    result = await vector_index.index_embedding_batch(store, batch_size=1)
+    status = store.chunk_status()
+
+    assert result.state == "capacity_reached"
+    assert result.selected == 1
+    assert result.stored == result.failed == result.stale_writebacks == 0
+    assert status["chunks_ready"] == 1
+    assert status["chunks_pending"] == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_writeback_only_uses_remaining_locked_capacity(
+    tmp_path,
+    monkeypatch,
+):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    for title in ("First pending", "Second pending"):
+        store.upsert(_entry(title))
+
+    class _EmbeddingService:
+        async def embed_batch(self, texts):
+            return [[1.0, 0.0] for _text in texts]
+
+    monkeypatch.setattr(vector_index, "MAX_READY_VECTOR_CHUNKS", 1)
+    _fresh_coordinator(monkeypatch)
+    _set_ready_runtime(monkeypatch, _EmbeddingService())
+
+    result = await vector_index.index_embedding_batch(store, batch_size=2)
+    status = store.chunk_status()
+
+    assert result.state == "capacity_reached"
+    assert result.selected == 2
+    assert result.stored == 1
+    assert result.failed == result.stale_writebacks == 0
+    assert status["chunks_ready"] == 1
+    assert status["chunks_pending"] == 1
 
 
 @pytest.mark.asyncio

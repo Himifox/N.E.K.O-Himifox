@@ -1407,6 +1407,8 @@ class KnowledgeStore:
     def entry_rowids_for_keys(
         self,
         keys: Iterable[tuple[str, str]],
+        *,
+        strict: bool = False,
     ) -> frozenset[int]:
         """Resolve source/title override identities before vector top-K."""
         wanted = frozenset(
@@ -1438,7 +1440,13 @@ class KnowledgeStore:
             TypeError,
             ValueError,
             json.JSONDecodeError,
-        ):
+        ) as exc:
+            if strict:
+                if isinstance(exc, KnowledgeStoreError):
+                    raise
+                raise KnowledgeStoreError(
+                    "knowledge entry identities could not be resolved"
+                ) from exc
             return frozenset()
 
     def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:

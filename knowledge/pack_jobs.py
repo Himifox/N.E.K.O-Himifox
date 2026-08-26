@@ -18,6 +18,7 @@ from typing import Any, Literal
 from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
+from .limits import MAX_READY_VECTOR_CHUNKS
 from .store import KnowledgeStore, KnowledgeStoreError
 from .packs import (
     KnowledgePack,
@@ -31,7 +32,6 @@ from .subscriptions import canonical_pack_bytes
 
 
 STAGING_DIRECTORY = ".staging"
-MAX_READY_VECTOR_CHUNKS = 20_000
 MAX_COMMUNITY_ENTRIES = 20_000
 MAX_COMMUNITY_CHUNKS = 20_000
 MAX_COMMUNITY_CONTENT_BYTES = 64 * 1024 * 1024
