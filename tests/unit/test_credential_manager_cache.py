@@ -93,8 +93,8 @@ def test_missing_and_invalid_results_are_negative_cached(tmp_path):
     ):
         assert manager.load("missing") == manager.load("missing") == {}
         assert manager.load("invalid") == manager.load("invalid") == {}
-        assert manager.state("missing") == manager.MISSING
-        assert manager.state("invalid") == manager.INVALID
+        assert manager.snapshot("missing").state == manager.MISSING
+        assert manager.snapshot("invalid").state == manager.INVALID
 
     loader.assert_called_once_with("invalid")
 
@@ -200,7 +200,7 @@ def test_delete_retains_and_reuses_stable_key(tmp_path, monkeypatch):
         assert manager.delete("weibo") is True
         assert not cookie_file.exists()
         assert key_file.read_bytes() == original_key
-        assert manager.state("weibo") == manager.MISSING
+        assert manager.snapshot("weibo").state == manager.MISSING
 
         assert manager.save("weibo", {"SUB": "second"}) is True
         assert key_file.read_bytes() == original_key
@@ -237,7 +237,9 @@ def test_delete_unlinks_symlink_without_deleting_target(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     with _patched_weibo_paths(tmp_path, configured):
-        assert CredentialManager().delete("weibo") is True
+        manager = CredentialManager()
+        assert manager.snapshot("weibo").state == manager.INVALID
+        assert manager.delete("weibo") is True
 
     assert not configured.exists()
     assert target.exists()

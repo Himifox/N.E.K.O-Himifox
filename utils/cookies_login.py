@@ -370,7 +370,7 @@ def _load_credential_sources_uncached(
 
     configured_file = candidates[0]
     artifact_exists = _path_exists(configured_file)
-    if artifact_exists:
+    if artifact_exists and not configured_file.is_symlink():
         credentials = _load_cookies_from_file_uncached(platform)
         if credentials:
             return credentials, configured_file, True
@@ -379,6 +379,8 @@ def _load_credential_sources_uncached(
         if not _path_exists(legacy_file):
             continue
         artifact_exists = True
+        if legacy_file.is_symlink():
+            continue
         credentials = _load_plaintext_cookie_file(platform, legacy_file)
         if credentials:
             return credentials, legacy_file, True
@@ -542,9 +544,6 @@ class CredentialManager:
                 source_path,
             )
             return True
-
-    def state(self, platform: str) -> str:
-        return self.snapshot(platform).state
 
     def status(self, platform: str) -> dict[str, Any]:
         snapshot = self.snapshot(platform)
