@@ -1111,6 +1111,22 @@ def test_weibo_auth_failure_detection_is_conservative():
     assert not personal_dynamics._is_weibo_auth_failure({"ok": 1, "msg": "请先登录"})
 
 
+def test_twitter_auth_redirect_detection_requires_an_auth_path():
+    assert personal_dynamics._is_twitter_auth_redirect(
+        "https://x.com/i/flow/login?redirect_after_login=%2Fhome"
+    )
+    assert personal_dynamics._is_twitter_auth_redirect(
+        "https://mobile.twitter.com/logout"
+    )
+    assert not personal_dynamics._is_twitter_auth_redirect(
+        "https://twitter.com/home?next=login"
+    )
+    assert not personal_dynamics._is_twitter_auth_redirect(
+        "https://twitter.com/settings/login-history"
+    )
+    assert not personal_dynamics._is_twitter_auth_redirect("https://example.com/login")
+
+
 def test_bilibili_phase2_context_uses_published_at_label_without_link():
     context = bilibili_content.format_bilibili_phase2_context(
         {

@@ -62,6 +62,22 @@ def _is_weibo_auth_failure(payload: Any) -> bool:
     return bool(_WEIBO_AUTH_FAILURE_RE.search(message))
 
 
+def _is_twitter_auth_redirect(url: Any) -> bool:
+    try:
+        parsed = httpx.URL(str(url))
+    except (TypeError, ValueError, httpx.InvalidURL):
+        return False
+
+    host = (parsed.host or "").lower().rstrip(".")
+    if not (
+        host in {"twitter.com", "x.com"}
+        or host.endswith(".twitter.com")
+        or host.endswith(".x.com")
+    ):
+        return False
+    return parsed.path.rstrip("/") in {"/login", "/logout", "/i/flow/login"}
+
+
 async def _fetch_bilibili_personal_dynamic_uncached(limit: int = 10) -> Dict[str, Any]:
     """
     Fetch Bilibili push feed updates
@@ -683,7 +699,7 @@ async def _fetch_twitter_personal_web_scraping(limit: int = 10, cookies: Optiona
             res = await client.get(url, headers=headers, cookies=cookies, timeout=10.0)
 
         # 如果被重定向到了登录页，说明 Cookie 彻底失效了
-        if "login" in str(res.url) or "logout" in str(res.url):
+        if _is_twitter_auth_redirect(res.url):
             await asyncio.to_thread(
                 credential_manager.mark_auth_rejected,
                 "twitter",
