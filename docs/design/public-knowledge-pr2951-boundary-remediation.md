@@ -2084,3 +2084,74 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 设计提交 `91f19288b`、实现提交 `608e09ce1` 已推送。DT 将社区 source 从宽松 display registry 解析中移除，只由严格 installed registry 发布其素材类型；所有 material 组合都使用显式 allowlist，检索融合与直接 entry 分类也不再把未知社区来源默认成 knowledge。DU 让评估器在读取向量前同时核对 chunker 与 embedding input version，并在成功状态中报告完整派生版本。DV 把订阅 envelope 上限收敛到 `knowledge.limits` 的单一常量，并让 Main Server 的内层 API 与外层市场代理两个精确路径都进入同一 bounded spool 守门。
 
 三个受影响测试文件为 63 passed；知识、公共路由、市场桥与 ASGI 相邻宽回归为 458 passed、1 skipped、4 deselected。skip 仍是本机 Windows 目录 symlink 权限；4 个 deselected 是远端 head 已存在的 staged job identity 与 builder subscription 夹具失配，与本轮调用路径无关，未借本轮修改。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。
+
+## 第二十一轮：注册表对象、评估身份与运行期收敛
+
+第二十轮推送后的远端 head `942152329` 有 4 条新 inline conversation；最新 CodeRabbit review 正文（`PRR_kwDOPD8VW88AAAABK667fw`）另有 2 条 outside-diff 评论。沿当前调用链复核后六条都成立；outside-diff 没有可 resolve 的 review thread，只能随实现提交在 PR 留证据。
+
+| 线程或 review | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3860600486` | DW | 非法 material type override 被静默清空，成立 |
+| `discussion_r3860600496` | DX | 非对象或不完整 subscription 可绕过 ownership 校验，成立 |
+| `discussion_r3860600502` | DY | 评估正例只比较 title，未绑定 source identity，成立 |
+| `discussion_r3860600506` | DZ | float16 转换后未复验向量有效性，成立 |
+| `PRR_kwDOPD8VW88AAAABK667fw` outside 1 | EA | 索引器首次启动失败后没有实际重试路径，成立 |
+| `PRR_kwDOPD8VW88AAAABK667fw` outside 2 | EB | voice cleanup 取消会跳过剩余 shutdown，成立 |
+
+### DW：本地素材覆盖必须是显式三态
+
+- 当前 Schema 的 `material_type_override` 只接受 JSON `null`、`knowledge` 或 `corpus`。缺失字段继续等价于无覆盖；其他字符串、布尔、数字、数组和对象都使整个 registry invalid。
+- `_load_registry()` 不得把非法持久值规范化成 `None`，也不得借合法 declaration 猜测用户原有策略。合法 override 仍用于计算 effective type，`auto_context` 不因损坏策略被重新解释。
+- 失败关闭不改写磁盘；installed、routing、自动上下文与素材检索均看不到该社区包，修复文件后可恢复。
+
+验收：非法 override 的各 JSON 类型都令 registry invalid、routing 为空且原始 registry bytes 不变；null、knowledge、corpus 和缺失字段的当前语义不回归。
+
+### DX：subscription 必须是完整当前协议对象
+
+- pack registry 的 `subscription` 只接受 null 或通过 `validate_subscription()` 的完整对象；非对象、未知字段、缺失必填字段、非法 digest/package ID/material type/trust 都抛 `KnowledgePackRegistryError`。
+- `install_pack()` 在首次写 registry 前同样规范并校验 subscription，保证本进程不能写出下一次读取就 invalid 的数据。无订阅本地包继续保存 null。
+- ownership 与 marketplace package uniqueness 只在规范 subscription 上运行；不能把损坏 subscription 当成普通本地包，从 generic remove 绕过远端退订协调。
+- 本轮不兼容本 PR 早期的不完整 subscription 测试夹具；测试更新为当前协议字段，不为未发布格式增加推断。
+
+验收：scalar、array 与损坏 object 均使 registry invalid 且 remove 前失败；合法 subscribed/local pack 可读写；重复 marketplace identity 检查保持。
+
+### DY：校准正例绑定完整 entry identity
+
+- real-model fixture 的每个 positive 同时声明 `expected_source_tag` 与 `expected_title`；当前 CHIME 正例固定为 `source:chime`。
+- vector corpus rows 与 ranking 输出携带 source tag；expected rank/score 只在 source tag 和 title 同时匹配时命中。缺失或非法 expected source 使评估不可用，不能退回 title-only。
+- top3 输出保留 source identity，便于人工审计同名条目；negative 逻辑与 threshold 计算不变。
+
+验收：错误来源的同名条目排第一、目标来源排第二时 expected rank 必为 2；目标来源缺失时不得由同名条目代答；正式 fixture 的十个 positive 都有唯一 source identity。
+
+### DZ：持久化前复验 float16 向量
+
+- provider 输出先按既有规则验证 float32 dimensions 与 finiteness，再在受控 `np.errstate` 中转换为 little-endian float16。
+- 转换结果必须仍全部有限，且以 float32 计算的 norm 大于零；overflow 为 infinity、整体 underflow 为零或其他非法结果统一标记 `invalid_embedding`，不得写 ready BLOB 或消耗 ready capacity。
+- 合法的极小分量可下溢，只要整行仍有非零有限信息即可接受；本轮不改变规范化策略或模型维度合同。
+
+验收：float32 有限但 float16 overflow、整行 underflow 两类结果均 failed 且 ready 为零；正常向量仍写入，容量与 stale writeback 计数不回归。
+
+### EA：索引器启动拥有独立可取消重试
+
+- runtime 主初始化完成与 knowledge indexer 启动分开记账。bind 或 `start_knowledge_indexer()` 抛错时保持 BM25 和主服务可用，同时创建一个受强引用的 retry task，按有界退避重试同一幂等启动步骤。
+- 同一进程最多一个启动重试 task；成功（包括 indexer 已在运行）后结束重试。`_ensure_main_server_runtime_initialized()` 的 one-shot 不再是索引器恢复的唯一触发器。
+- shutdown 入口先取消并观察尚未完成的启动重试，再请求实际 indexer stop，避免退出期间迟到创建后台任务。
+
+验收：首次 bind/start 抛错、第二次成功时无需重跑主 runtime 即启动；并发调度不创建重复 retry；shutdown 取消 retry 后不再调用 start。
+
+### EB：关闭取消在清理完成后恢复
+
+- `close_voice_identity_runtime()` 抛出的 `asyncio.CancelledError` 单独暂存，不进入普通 Exception 日志，也不立即离开 `on_shutdown()`。
+- 连接器、预加载与游戏任务、agent bridge、翻译、token、音乐、Cloud Save、memory server、HTTP pools 和 knowledge indexer finish 按既有顺序继续执行。
+- 所有剩余关闭步骤完成后重新抛出原取消异常，保留调用方取消语义；普通 voice cleanup 错误继续只记录并放行。
+
+验收：voice close 取消时后续 cleanup、Cloud Save 与连接池均被调用，最后调用者仍收到 CancelledError；普通关闭与非取消异常不回归。
+
+## 第二十一轮实施与关闭条件
+
+1. 先提交并推送本节设计，再实施 DW–EB；不提前回复或 resolve。
+2. 扩展既有 packs、real-model eval、hybrid retrieval、cloudsave lifecycle 测试和正式评估 fixture，不新增测试文件或用户文案/i18n key。
+3. 使用项目 Python 3.11 运行六项精确反例、受影响文件和知识/启动/关闭相邻回归；运行 Ruff、compileall 与 `git diff --check`。
+4. 实现证据推送后逐条回复并 resolve 4 个 inline conversation；为两个 outside-diff 问题发布一条对应 review ID 的 PR 证据评论。最后重新分页收集 threads 和最新 review body。
+
+关闭条件：当前 registry 的 override/subscription 损坏均失败关闭；评估正例不能被异源同名条目替代；ready 向量一定是有效 float16；索引器启动失败可独立恢复；voice cleanup 取消不会截断后续关闭。只有远端实现与精确测试齐全后才标记第二十一轮已实施。
