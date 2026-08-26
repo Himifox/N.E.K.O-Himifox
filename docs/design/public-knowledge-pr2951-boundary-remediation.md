@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十三轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十四轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494` 与 `4cda7b874` 三个实现提交完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1712,3 +1712,13 @@ CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 cano
 6. 使用项目 Python 3.11 的 `uv run pytest` 运行定向及相邻回归；运行 Ruff、前端 Vitest、`vue-tsc --build` 与 `git diff --check`。实现推送后逐条回复提交和精确测试证据，再 resolve 5 条线程并完整分页核对 unresolved。
 
 关闭条件：最终 ready 向量数在所有 writer 竞态下不超过 20,000；disabled resolver 失败不泄漏；staged subscription 缺失或篡改不能改变归属；live case 没有跨用例历史；订阅包删除只能经过 provider unsubscribe。只有这些实现与回归在 PR 远端可见、线程内证据回复完成后，才允许关闭本轮评论。
+
+## 第十四轮实施证据
+
+| 提交 | 单元 | 实施结果 |
+| --- | --- | --- |
+| `359a2532e` | CS、CT | 本地 embedding writeback 在共享 database mutation lock 内 strict recount，超额向量保持 pending；disabled rowid resolver 使用 strict failure，并在 materialize 后按规范化 entry identity 二次过滤。 |
+| `6eb28d494` | CU | staged identity 明确记录 subscription presence 与 canonical SHA-256；stage、prepare、activate 共用严格 subscription validation，缺失、损坏、替换或本地作业后加订阅均进入 degraded 隔离。 |
+| `4cda7b874` | CV、CW | live evaluator 每 case 建立 `new_session=true` 的独立 websocket session；管理端本地包走 remove、Plugin Market 订阅包走 unsubscribe，Main Server 拒绝无 provider identity 的订阅包通用删除。 |
+
+合并回归使用项目 `.venv` 的 Python 3.11.15 执行，indexer、hybrid retrieval、pack jobs、pack registry、store、public service/router、quality evaluator 与 Plugin Market 集合为 269 passed、1 skipped；skip 仍仅因本机 Windows 无目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过。前端 Knowledge API Vitest 为 16 passed，`vue-tsc --build` 通过。没有新增测试文件或 i18n key。
