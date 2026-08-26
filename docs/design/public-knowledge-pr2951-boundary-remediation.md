@@ -1643,3 +1643,72 @@ CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack
 CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 canonical identity 校验拒绝。该决定复用 BE 已核验的发布边界——旧 registry 只存在于本 PR 的未发布开发历史，开发数据应删除并重新导入，不进入生产自动迁移合同。
 
 验证使用项目 `.venv` 的 Python 3.11.15 执行。CM/CN/CP 与 store 定向集合为 90 passed、1 skipped；CO/CQ 与 market/pack 定向集合为 81 passed；合并后的 pack job、pack registry、store、indexer、public service 与 market bridge 相邻集合为 208 passed、1 skipped。skip 仅因本机 Windows 无目录 symlink 权限，reparse marker 负例通过。相关 Ruff 与 `git diff --check` 均通过；没有新增测试文件、前端改动、用户文案或 i18n key。
+
+## 第十四轮：最终向量额度、暂存订阅身份与管理操作闭环
+
+第十三轮全部线程清零后，2026-08-26 的复审新增 5 个未解决线程。沿当前 PR head `7b3729acf` 的生产调用链核对后，5 个问题均成立；它们不是前一轮评论的重复项，而是已有边界在最终写回、失败语义和管理入口上的缺口。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3859036878` | CS | 本地推理与最终向量写回之间可被预构建激活占用额度，成立 |
+| `discussion_r3859036882` | CT | disabled identity 解析失败被折叠为空集合，语义候选可能泄漏，成立 |
+| `discussion_r3859036890` | CU | `subscription.json` 未绑定 immutable job identity，激活时可被删除或替换，成立 |
+| `discussion_r3859036896` | CV | live 质量用例共享同一历史会话，答案与 latency 可被前序用例污染，成立 |
+| `discussion_r3859036905` | CW | 管理页对订阅包调用普通删除，绕过 provider 退订与取消闭环，成立 |
+
+### 修复单元 CS：本地向量写回执行锁内最终额度准入
+
+- indexer 的轮次级 `ready_vectors` 只用于决定是否发起本地推理，不能授权最终写回；推理完成后的事实必须在数据库 mutation lock 内重新读取。
+- ready 上限常量由 pack 激活与本地写回共享，禁止分别维护两个 `20_000`。写回取得与 prebuilt activation 相同的 resolved database lock 后，以 strict `chunk_status()` 计算剩余额度。
+- 只写入 `min(有效返回向量数, 剩余额度)`。因最终额度不足而未提交的 chunk 保持 pending，不标为 failed，也不计为 stale writeback；下一轮在额度释放后仍可处理。
+- 向量格式错误仍按既有 failed 语义记录；content hash 在推理期间变化仍按 stale writeback 处理。容量截断不能掩盖无效向量或改变其错误统计。
+- strict recount 失败时不写任何向量并返回稳定 blocked/degraded 状态；不得使用推理前快照继续提交。
+
+验收：19,999 ready 的本地 batch 在推理期间被另一条 prebuilt 向量占满后写入 0 条，总量保持 20,000；只剩一个额度的两向量 batch 只写一条，另一条 pending；额度释放后 pending 可继续；recount 失败、invalid vector 与 stale writeback 分别保持原失败语义。
+
+### 修复单元 CT：disabled identity 解析错误必须失败关闭
+
+- `entry_rowids_for_keys()` 必须能区分“成功解析且没有匹配”和“数据库、tags JSON 或规范化失败”；语义检索不能把两者都解释为空集合。
+- 当 disabled 集合非空且 rowid 解析无法证明完整时，本次 semantic path 返回空结果，允许上层继续使用已经按 identity 过滤的 BM25，而不是泄漏禁用词条。
+- 即使 rowid 预过滤成功，在 materialize candidate 后仍以规范化 `entry_key(entry)` 对 disabled 集合二次过滤，防止 snapshot/rowid 漂移或未来 resolver 退化绕过策略。
+- allowed source tag resolver 的既有 fail-closed 方向保持不变；本单元不把检索错误升级成聊天请求异常。
+
+验收：存在 disabled 条目时注入 SQLite、malformed tags 与 resolver failure，semantic 返回空且不包含禁用词条；可信空匹配仍可检索其他条目；正常 disabled rowid 在 top-K 前排除，并在候选加载后再次排除。
+
+### 修复单元 CU：订阅元数据成为 staged job 的不可变身份组成
+
+- staging 时先通过 `validate_subscription()` 生成 canonical subscription。`identity.json` 明确记录作业是否有订阅，并保存 canonical subscription bytes 的 SHA-256；市场作业还必须具有 `provider == plugin-market`、ASCII 正整数 `provider_package_id` 和非空 `remote_id`。
+- 本地导入在 identity 中明确记录无订阅，不能通过后来添加 `subscription.json` 升格为市场作业；市场作业缺文件、不可读、格式损坏、摘要不一致或 immutable provider identity 改变均进入 degraded/orphan，不执行也不自动删除。
+- prepare 与 activate 都重新验证 subscription 文件及 identity digest；激活只能使用已经验证并与 identity 绑定的 canonical dict，不能再次宽松读取原文件。
+- `version`、`channel` 和 artifact/index digests 虽是可更新发布信息，但在单个 staged job 内同样不可变；更新必须创建新的 job，而不是修改已发布 job 目录。
+
+验收：删除、截断、替换 subscription，改变 provider/package/remote、version 或 digest 都在 install 前失败；给本地 job 后加 subscription 不能改变归属；正常本地与 marketplace job 均可激活且 registry 保存 canonical metadata。
+
+### 修复单元 CV：每个 live 质量用例使用独立新会话
+
+- 每条 case 都建立自己的 websocket session，发送 `start_session` 且 `new_session=true`，等待 ready 后只发送该 case 的 request，再发送 `end_session` 并关闭连接。
+- request ID 精确过滤继续复用 CJ；session 隔离解决对话历史污染，request ID 解决同一连接事件串扰，两者不能互相替代。
+- 单个 case 启动、请求或结束失败只产生带 case identity 的稳定 evaluator 错误；不能静默复用上一 case 的 session。
+- routing-only 与 direct-text-model 模式保持现状；本单元只改变 `--live` 的测量合同。
+
+验收：两条 live case 产生两次 `new_session=true` start 和两次 end；第二条连接看不到第一条消息；request IDs 仍精确匹配；startup failure 不发送 case 数据。
+
+### 修复单元 CW：订阅包删除必须经过 provider unsubscribe
+
+- Knowledge Manager 根据已持久化 subscription 判断操作：本地包继续调用 `/packs/remove`；`plugin-market` 订阅包调用 Plugin Server `/market/knowledge/unsubscribe`，请求只携带数值 `provider_package_id` 和作为非权威提示的 `pack_id`。
+- 前端 pack summary 类型补齐 `provider_package_id` 与 `remote_id`，但不自行用 `pack_id` 推断 provider package identity。缺失或非法 identity 时拒绝普通删除并展示已有稳定操作失败，不降级成不安全的本地删除。
+- Main Server defense-in-depth：已安装 pack 含 subscription 时，未提供 expected provider identity 的普通 `/packs/remove` 必须拒绝；Plugin Server 的 unsubscribe 路径继续负责取消 installing worker、解析 durable ownership、携带三重身份删除并 best-effort 上报远端。
+- 只有确认 Plugin Server unsubscribe 成功后前端才移除表格行；409/503/timeout 保留行并允许刷新事实状态，不自动重试可能已经提交的 mutation。
+
+验收：本地包仍走普通 remove；订阅包只走 unsubscribe；缺失 provider package identity 不触发任一删除；直接调用通用 remove 删除订阅包被后端拒绝；installing、active、重复退订和 ownership mismatch 的既有市场回归继续通过。
+
+## 第十四轮实施顺序与关闭条件
+
+1. 首个提交只归档本节，不提前回复或 resolve 新线程。
+2. 第一实现提交处理 CS、CT：共享容量常量、锁内 strict recount、容量截断 pending 语义和 disabled 双层 fail-closed 各有独立反例。
+3. 第二实现提交处理 CU：不可变 job identity 绑定 canonical subscription，prepare 与 activate 共用一次严格解析结果。
+4. 第三实现提交处理 CV、CW：live evaluator 每 case 新会话；前端按订阅类型路由，Main Server 增加防御性拒绝。两项分别测试，不共享业务 helper。
+5. 只扩展现有 hybrid retrieval、pack job、quality evaluator、public router、Knowledge API/Manager 和 knowledge market 测试；不为本轮创建孤立测试文件。用户界面不新增文案 key，复用已有操作失败提示，因此无需 i18n 变更。
+6. 使用项目 Python 3.11 的 `uv run pytest` 运行定向及相邻回归；运行 Ruff、前端 Vitest、`vue-tsc --build` 与 `git diff --check`。实现推送后逐条回复提交和精确测试证据，再 resolve 5 条线程并完整分页核对 unresolved。
+
+关闭条件：最终 ready 向量数在所有 writer 竞态下不超过 20,000；disabled resolver 失败不泄漏；staged subscription 缺失或篡改不能改变归属；live case 没有跨用例历史；订阅包删除只能经过 provider unsubscribe。只有这些实现与回归在 PR 远端可见、线程内证据回复完成后，才允许关闭本轮评论。
