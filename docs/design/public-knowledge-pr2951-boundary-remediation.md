@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十八轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十八轮均已实施，第十九轮方案已冻结、等待实现证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -2006,3 +2006,24 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 设计提交 `d0663773a`、实现提交 `03f7c5167` 已推送。DN 在 catalog override 不可信时创建但不缓存空 matcher，阻断旧缓存注入并允许修复后自动恢复。DO 为 pack canonical encoder 启用 `allow_nan=False`。DP 将持久 registry 身份降为候选，删除前使用 package/version/channel/pack 重新获取市场 descriptor，并同时核对 remote、material type 与知识制品 SHA-256；任何缺失、离线或不一致均在 remove/report 前失败关闭。DQ 在 resolve 与 registry lock 前拒绝 knowledge root 自身的 symlink/reparse。DR 以 `_installation_outcome_of()` 统一 callback 与 unsubscribe 的四态分类。
 
 项目 `.venv` Python 3.11 的受影响核心文件为 160 passed、1 skipped，Plugin Market 文件为 37 passed；完整知识相关宽回归为 383 passed、1 skipped、4 deselected。skip 是本机 Windows 目录 symlink 权限；4 个 deselected 与第十七轮相同，均为远端 head 已存在且与本轮路径无关的夹具失配。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。宽回归退出阶段的遥测目录写入被工作区沙盒拒绝，发生在 pytest 已报告全部通过后，不影响测试判定或产品文件。
+
+## 第十九轮：当前注册表的素材声明必须失败关闭
+
+远端 head `624f57ab3` 的新复审留下 1 条 conversation（`discussion_r3860237961`）：Schema v4 `packs.json` 的 `declared_material_type` 缺失或损坏时，`_load_registry()` 会静默改写为 `knowledge`，使注册表保持 `ready`。评论成立；这不是旧 Schema 迁移需求，而是当前正式 Schema 的信任根字段被错误容错。
+
+### DS：声明类型与本地用途覆盖必须分层
+
+- `declared_material_type` 是安装制品写入的持久身份，当前 Schema 每个 pack 都必须显式保存 `knowledge` 或 `corpus`。字段缺失、类型错误或值不在集合中时，`_load_registry()` 必须抛出 `KnowledgePackRegistryError`，不能默认成 `knowledge`。
+- `material_type_override` 只是用户可撤销的本地用途策略，不能替代或修复损坏的声明。即使 override 本身有效，声明无效时仍将整个注册表标记为 `invalid`。
+- `effective_material_type` 继续由可信 declaration 与合法 override 计算；不从损坏声明推断，不尝试回读 SQLite 内容猜测原始包类型，也不自动改写磁盘。
+- 失败关闭后，`pack_registry_state()` 返回 `invalid`，依赖 `_load_registry()` 的 installed/routing 读取返回空，因此社区包不能进入自动 mention 或 conversation context。管理端仍可通过状态诊断损坏，用户修复或重新导入后恢复。
+
+验收：对已安装 corpus 包分别删除 declaration，或写入空值、错误字符串、布尔值、数字和容器，注册表状态均为 `invalid`，routing metadata 与 enabled community source tags 均为空，自动 turn/conversation context 不命中；合法 knowledge/corpus 及合法 override 行为不变。
+
+## 第十九轮实施与关闭条件
+
+1. 只修改当前 Schema 注册表校验和既有 packs 测试，不引入旧格式兼容或数据库反推。
+2. 使用项目 Python 3.11 运行精确反例、packs 与 public service 相邻回归、知识相关宽回归、Ruff、compileall 和 `git diff --check`。
+3. 实现与证据推送后回复并 resolve `PRRT_kwDOPD8VW86cW46-`，再完整分页检查新增 conversation。
+
+关闭条件：任何无可信 declaration 的 Schema v4 pack registry 都不得显示 `ready`，不得向知识自动路由发布社区 source；合法当前注册表无回归。只有远端实现与测试证据齐全后才标记第十九轮已实施。
