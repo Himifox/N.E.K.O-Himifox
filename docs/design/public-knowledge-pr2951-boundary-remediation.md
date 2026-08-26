@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十六轮均已实施，第十七轮方案已冻结、等待实现证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十七轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1932,3 +1932,9 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 5. 实现与测试证据推送后回复 3 个 conversation 并 resolve；outside-diff 只能在 review 正文下留实现证据，不能伪造 conversation resolution。最后重新分页收集全部未解决线程及最新 review body。
 
 关闭条件：明确失败的 apply 可幂等退订；不确定 apply 仍先等待再清理；启动不再迁移未发布 registry；损坏自动上下文字段失败关闭；backfill 不在活动候选游标上写依赖表。只有远端代码和精确测试齐全后才把本轮标为已实施。
+
+## 第十七轮实施证据
+
+设计提交 `545b2bf01`、实现提交 `ea79d433f` 已推送。DJ 记录 installation mutation 的 accepted/rejected/failed/cancelled 终态：明确业务拒绝直接收敛为幂等取消，不确定失败仍执行身份约束 remove，且只在 mutation 已终止并得到可信 `not_found` 时转为成功。DK 删除 pack policy migration、启动调用、进程 cache、公共导出及其专用测试。DL 拒绝非当前 registry Schema 与非布尔 `auto_context`，同时保留未来 Schema 的稳定错误。DM 使用最多 256 行的 `rowid` 页先完整物化，再逐行 reconcile，并按页尾 rowid 越过损坏候选。
+
+项目 `.venv` Python 3.11 的 Plugin Market 文件为 35 passed；packs/chunks 文件为 81 passed；完整知识相关宽回归为 378 passed、1 skipped、4 deselected。skip 是本机 Windows symlink 权限；4 个 deselected 均为远端 head 已存在且与本轮路径无关的夹具失配：3 个 staged job identity 夹具仍使用不合法 job ID/缺失强制 identity 字段，1 个 builder subscription 夹具缺失既有强制 `material_type`。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。
