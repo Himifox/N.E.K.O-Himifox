@@ -668,34 +668,42 @@ class KnowledgeStore:
         limit = min(max(int(limit), 1), 256)
         policies = embedding_policy_by_source or {}
         processed = 0
+        last_rowid = 0
+        page_size = min(max(limit, 64), 256)
         with self._connection(writable=True) as connection:
-            rows = connection.execute(
-                "SELECT entries.rowid, entries.* FROM entries "
-                "LEFT JOIN knowledge_chunks ON knowledge_chunks.entry_rowid=entries.rowid "
-                "WHERE knowledge_chunks.entry_rowid IS NULL "
-                "ORDER BY entries.rowid"
-            )
-            for row in rows:
-                try:
-                    entry = _entry_from_row(row)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    continue
-                embedding_policy = policies.get(entry.source_tag)
-                if embedding_policy is None:
-                    embedding_policy = (
-                        "prebuilt_only"
-                        if entry.source_tag.startswith("source:community.")
-                        else "local"
-                    )
-                self._reconcile_chunks(
-                    connection,
-                    int(row["rowid"]),
-                    entry,
-                    embedding_policy=embedding_policy,
-                )
-                processed += 1
-                if processed >= limit:
+            while processed < limit:
+                rows = connection.execute(
+                    "SELECT entries.rowid, entries.* FROM entries "
+                    "WHERE entries.rowid>? AND NOT EXISTS ("
+                    "SELECT 1 FROM knowledge_chunks "
+                    "WHERE knowledge_chunks.entry_rowid=entries.rowid) "
+                    "ORDER BY entries.rowid LIMIT ?",
+                    (last_rowid, page_size),
+                ).fetchall()
+                if not rows:
                     break
+                last_rowid = int(rows[-1]["rowid"])
+                for row in rows:
+                    try:
+                        entry = _entry_from_row(row)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    embedding_policy = policies.get(entry.source_tag)
+                    if embedding_policy is None:
+                        embedding_policy = (
+                            "prebuilt_only"
+                            if entry.source_tag.startswith("source:community.")
+                            else "local"
+                        )
+                    self._reconcile_chunks(
+                        connection,
+                        int(row["rowid"]),
+                        entry,
+                        embedding_policy=embedding_policy,
+                    )
+                    processed += 1
+                    if processed >= limit:
+                        break
         return processed
 
     def chunk_status(self, *, strict: bool = False) -> dict[str, object]:

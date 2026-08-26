@@ -475,6 +475,35 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unsubscribe_preserves_not_found_without_settled_installation(
+    monkeypatch,
+):
+    async def fake_main(method, _path, **_kwargs):
+        if method == "GET":
+            return {"ok": True, "packs": [_installed_subscription()]}
+        return {"ok": False, "reason": "not_found"}
+
+    async def unexpected_report(_package_id):
+        pytest.fail("failed unsubscribe must not be reported remotely")
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", unexpected_report)
+
+    with pytest.raises(HTTPException) as rejected:
+        await module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+
+    assert rejected.value.status_code == 409
+    assert rejected.value.detail["code"] == "not_found"
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_never_uses_claimed_pack_id_as_authority(monkeypatch):
     async def fake_main(method, _path, **_kwargs):
         assert method == "GET"
@@ -700,6 +729,95 @@ async def test_unsubscribe_waits_for_installation_mutation_before_remove(monkeyp
     assert result["cancelled_jobs"] == 1
     assert order == ["apply", "remove"]
     assert module._installation_mutations == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation_outcome", ("rejected", "failed"))
+async def test_unsubscribe_reconciles_installation_without_durable_state(
+    monkeypatch,
+    mutation_outcome,
+):
+    task_id = f"installing-{mutation_outcome}"
+    apply_started = asyncio.Event()
+    allow_apply = asyncio.Event()
+
+    async def installation_mutation():
+        apply_started.set()
+        await allow_apply.wait()
+        if mutation_outcome == "failed":
+            raise RuntimeError("fixture connection failure")
+        return {"ok": False, "reason": "invalid_pack"}
+
+    mutation = asyncio.create_task(installation_mutation())
+    module._installation_mutations[task_id] = mutation
+    mutation.add_done_callback(
+        lambda completed: module._installation_mutation_done(task_id, completed)
+    )
+
+    async def subscription_worker():
+        await asyncio.shield(mutation)
+
+    worker = asyncio.create_task(subscription_worker())
+    task = {
+        "task_id": task_id,
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "resolved_pack_id": "fixture-pack",
+        "resolved_remote_id": "knowledge/fixture-pack",
+        "status": "installing",
+        "stage": "installing",
+        "created_at": 1.0,
+        "completed_at": None,
+    }
+    module._tasks[task_id] = task
+    module._task_workers[task_id] = worker
+    module._active_package_tasks[7] = task_id
+    worker.add_done_callback(
+        lambda completed: module._subscription_done(task_id, 7, completed)
+    )
+    main_calls = []
+
+    async def fake_main(method, path, **_kwargs):
+        main_calls.append((method, path))
+        assert mutation_outcome == "failed"
+        return {"ok": False, "reason": "not_found"}
+
+    reports = []
+
+    async def report(package_id):
+        reports.append(package_id)
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", report)
+    await apply_started.wait()
+    unsubscribe = asyncio.create_task(
+        module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+    )
+    await asyncio.sleep(0)
+    allow_apply.set()
+
+    result = await unsubscribe
+
+    assert result == {
+        "ok": True,
+        "cancelled": True,
+        "removed": False,
+        "removed_pack": False,
+        "removed_entries": 0,
+        "cancelled_jobs": 0,
+    }
+    assert main_calls == (
+        [] if mutation_outcome == "rejected" else [("POST", "packs/remove")]
+    )
+    assert reports == [7]
+    assert task["preinstall_cancelled"] is True
 
 
 @pytest.mark.asyncio

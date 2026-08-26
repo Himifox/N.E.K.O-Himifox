@@ -429,62 +429,6 @@ def installed_source_embedding_policies(
     return policies
 
 
-def migrate_legacy_pack_index_policies(database_path: str | Path) -> int:
-    """Adopt installed community packs without scheduling new local inference."""
-    database_path = Path(database_path)
-    registry_path = get_pack_registry_path(database_path)
-    with mutation_lock(registry_path):
-        try:
-            registry = _load_registry(registry_path)
-        except KnowledgePackRegistryError:
-            return 0
-        packs = registry.get("packs")
-        if not isinstance(packs, dict):
-            return 0
-        store = KnowledgeStore(database_path)
-        changed = 0
-        snapshots: list[tuple[str, _SourceSnapshot]] = []
-        try:
-            for pack_id, metadata in tuple(packs.items()):
-                if (
-                    not isinstance(metadata, dict)
-                    or "local_embedding_enabled" in metadata
-                ):
-                    continue
-                source_tag = str(metadata.get("source_tag") or "")
-                if not source_tag.startswith("source:community."):
-                    continue
-                status = store.source_chunk_status(source_tag)
-                snapshots.append(
-                    (source_tag, _snapshot_source(store, source_tag, metadata))
-                )
-                store.set_source_embedding_policy(source_tag, "prebuilt_only")
-                has_ready = int(status["chunks_ready"]) > 0
-                packs[pack_id] = {
-                    **metadata,
-                    "index_origin": "legacy" if has_ready else "none",
-                    "index_trust": "local_generated" if has_ready else "none",
-                    "index_validation": "accepted" if has_ready else "absent",
-                    "index_fallback_reason": "",
-                    "local_embedding_enabled": False,
-                    "prebuilt_chunks_ready": int(status["chunks_ready"]),
-                    "prebuilt_chunks_missing": max(
-                        int(status["chunks_total"]) - int(status["chunks_ready"]),
-                        0,
-                    ),
-                }
-                changed += 1
-            if changed:
-                atomic_write_json(
-                    registry_path, registry, ensure_ascii=False, indent=2
-                )
-        except Exception:
-            for source_tag, snapshot in reversed(snapshots):
-                _restore_source(store, source_tag, snapshot)
-            raise
-    return changed
-
-
 def set_pack_auto_context(
     database_path: str | Path,
     pack_id: str,
@@ -812,10 +756,10 @@ def _load_registry(
         raise KnowledgePackRegistryError(
             "knowledge pack registry uses a newer schema version"
         )
-    migrate_corpus_auto_context = (
-        not isinstance(previous_schema_version, int)
-        or previous_schema_version < PACK_REGISTRY_SCHEMA_VERSION
-    )
+    if previous_schema_version != PACK_REGISTRY_SCHEMA_VERSION:
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry uses an unsupported schema version"
+        )
     for pack_id, metadata in tuple(payload["packs"].items()):
         if not isinstance(pack_id, str) or not _PACK_ID_RE.fullmatch(pack_id):
             raise KnowledgePackRegistryError(
@@ -839,12 +783,11 @@ def _load_registry(
         if override not in MATERIAL_TYPES:
             override = None
         effective = str(override or declared)
-        auto_context = bool(metadata.get("auto_context"))
-        if (
-            effective == "corpus"
-            and migrate_corpus_auto_context
-        ):
-            auto_context = True
+        auto_context = metadata.get("auto_context")
+        if not isinstance(auto_context, bool):
+            raise KnowledgePackRegistryError(
+                f"knowledge pack registry entry {pack_id!r} has an invalid auto_context"
+            )
         normalized = {
             **metadata,
             "declared_material_type": declared,
@@ -855,8 +798,6 @@ def _load_registry(
         if normalized != metadata:
             payload["packs"][pack_id] = normalized
     _validate_marketplace_package_identities(payload["packs"])
-    if payload.get("schema_version") != PACK_REGISTRY_SCHEMA_VERSION:
-        payload["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
     return payload
 
 

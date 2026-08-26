@@ -10,7 +10,6 @@ _PUBLIC_NAMES = frozenset(
         "KnowledgeService",
         "KnowledgeStore",
         "KnowledgeTurnContext",
-        "initialize_knowledge_runtime",
         "open_knowledge",
     }
 )
@@ -21,7 +20,6 @@ __all__ = [
     "KnowledgeService",
     "KnowledgeStore",
     "KnowledgeTurnContext",
-    "initialize_knowledge_runtime",
     "open_knowledge",
 ]
 

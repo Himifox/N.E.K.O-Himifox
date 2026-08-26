@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
-import time
 
 import pytest
 
 from knowledge.api import (
     KnowledgeEntry,
     KnowledgeStore,
-    initialize_knowledge_runtime,
     open_knowledge,
 )
 from knowledge.source_registry import get_source
@@ -25,6 +22,7 @@ from knowledge.packs import (
     install_pack,
     installed_source_embedding_policies,
     list_installed_packs,
+    list_installed_pack_routing_metadata,
     pack_registry_state,
     pack_payload,
     validate_pack,
@@ -173,19 +171,33 @@ def test_corpus_pack_automatic_context_can_be_disabled_and_enabled(tmp_path):
     assert context.hit_count == 0
 
 
-def test_v3_registry_enables_existing_corpus_for_conversation(tmp_path):
+def test_pre_release_registry_schema_is_rejected(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_material_payload()))
     registry_path = service.database_path().with_name("packs.json")
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["schema_version"] = 3
-    registry["packs"]["community-tarot"]["auto_context"] = False
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
-    installed = service.list_packs()
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_pack_routing_metadata(service.database_path()) == ()
 
-    assert installed[0]["effective_material_type"] == "corpus"
-    assert installed[0]["auto_context"] is True
+
+@pytest.mark.parametrize("corrupt_value", ("false", 0, None, [], "__missing__"))
+def test_registry_rejects_non_boolean_auto_context(tmp_path, corrupt_value):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_material_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    metadata = registry["packs"]["community-tarot"]
+    if corrupt_value == "__missing__":
+        metadata.pop("auto_context")
+    else:
+        metadata["auto_context"] = corrupt_value
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_pack_routing_metadata(service.database_path()) == ()
 
 
 def test_pack_requires_material_type():
@@ -916,39 +928,6 @@ def test_index_policy_registry_failure_restores_previous_policy(monkeypatch, tmp
     assert service.list_packs()[0]["local_embedding_enabled"] is False
 
 
-def test_legacy_policy_migration_rolls_back_when_registry_write_fails(
-    monkeypatch, tmp_path
-):
-    import knowledge.packs as packs
-
-    service = open_knowledge(tmp_path)
-    service.install_pack(validate_pack(_payload()))
-    database_path = service.database_path()
-    registry_path = database_path.with_name("packs.json")
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    metadata = registry["packs"]["community-fixture"]
-    metadata.pop("local_embedding_enabled")
-    registry_path.write_text(json.dumps(registry), encoding="utf-8")
-    source_tag = "source:community.community-fixture"
-    store = KnowledgeStore(database_path)
-    store.set_source_embedding_policy(source_tag, "local")
-    monkeypatch.setattr(
-        packs,
-        "atomic_write_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
-    )
-
-    with pytest.raises(OSError, match="fixture failure"):
-        packs.migrate_legacy_pack_index_policies(database_path)
-
-    assert store.embedding_policy_counts(source_tag=source_tag) == {
-        "local": 1,
-        "prebuilt_only": 0,
-    }
-    persisted = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert "local_embedding_enabled" not in persisted["packs"]["community-fixture"]
-
-
 def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
@@ -973,41 +952,6 @@ def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
     }
 
 
-@pytest.mark.asyncio
-async def test_legacy_community_vectors_are_preserved_at_runtime_initialization(
-    tmp_path,
-):
-    service = open_knowledge(tmp_path)
-    service.install_pack(validate_pack(_payload()))
-    database_path = service.database_path()
-    registry_path = database_path.with_name("packs.json")
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    metadata = registry["packs"]["community-fixture"]
-    for field in (
-        "index_origin",
-        "index_trust",
-        "index_validation",
-        "index_fallback_reason",
-        "local_embedding_enabled",
-        "prebuilt_chunks_ready",
-        "prebuilt_chunks_missing",
-    ):
-        metadata.pop(field, None)
-    registry_path.write_text(json.dumps(registry), encoding="utf-8")
-
-    await initialize_knowledge_runtime(tmp_path)
-    migrated = open_knowledge(tmp_path).list_packs()[0]
-
-    assert migrated["local_embedding_enabled"] is False
-    assert migrated["index_origin"] == "none"
-    assert (
-        KnowledgeStore(database_path).embedding_policy_counts(
-            source_tag=migrated["source_tag"]
-        )["prebuilt_only"]
-        == 1
-    )
-
-
 def test_knowledge_service_constructor_performs_no_path_io(monkeypatch, tmp_path):
     from knowledge.service import KnowledgeService
 
@@ -1019,49 +963,3 @@ def test_knowledge_service_constructor_performs_no_path_io(monkeypatch, tmp_path
     service = KnowledgeService(tmp_path)
 
     assert service.knowledge_root == tmp_path
-
-
-@pytest.mark.asyncio
-async def test_runtime_initialization_is_shared_and_one_shot(monkeypatch, tmp_path):
-    import knowledge.service as service_module
-
-    calls = 0
-
-    def _migrate(_database_path):
-        nonlocal calls
-        calls += 1
-        time.sleep(0.02)
-        return 4
-
-    monkeypatch.setattr(service_module, "_migrate_runtime_database", _migrate)
-
-    first, second = await asyncio.gather(
-        initialize_knowledge_runtime(tmp_path),
-        initialize_knowledge_runtime(tmp_path),
-    )
-
-    assert (first, second) == (4, 4)
-    assert await initialize_knowledge_runtime(tmp_path) == 0
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_failed_runtime_initialization_can_be_retried(monkeypatch, tmp_path):
-    import knowledge.service as service_module
-
-    calls = 0
-
-    def _migrate(_database_path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("fixture failure")
-        return 2
-
-    monkeypatch.setattr(service_module, "_migrate_runtime_database", _migrate)
-
-    with pytest.raises(OSError, match="fixture failure"):
-        await initialize_knowledge_runtime(tmp_path)
-
-    assert await initialize_knowledge_runtime(tmp_path) == 2
-    assert calls == 2

@@ -208,12 +208,27 @@ def _installation_mutation_done(
     if _installation_mutations.get(task_id) is completed:
         _installation_mutations.pop(task_id, None)
     if completed.cancelled():
+        task = _tasks.get(task_id)
+        if task is not None:
+            task["_installation_outcome"] = "cancelled"
         return
     failure = completed.exception()
     if failure is not None:
+        task = _tasks.get(task_id)
+        if task is not None:
+            task["_installation_outcome"] = "failed"
         logger.error(
             "knowledge installation mutation failed",
             exc_info=(type(failure), failure, failure.__traceback__),
+        )
+        return
+    result = completed.result()
+    task = _tasks.get(task_id)
+    if task is not None:
+        task["_installation_outcome"] = (
+            "accepted"
+            if isinstance(result, dict) and result.get("ok") is True
+            else "rejected"
         )
 
 
@@ -269,14 +284,7 @@ async def unsubscribe_knowledge_package(
         )
         if active_task is not None and active_task.get("preinstall_cancelled") is True:
             await _report_unsubscribe_best_effort(payload.package_id)
-            return {
-                "ok": True,
-                "cancelled": True,
-                "removed": False,
-                "removed_pack": False,
-                "removed_entries": 0,
-                "cancelled_jobs": 0,
-            }
+            return _preinstall_cancellation_result()
         pack_id, remote_id = await _resolve_owned_subscription(
             package_id=payload.package_id,
             claimed_pack_id=payload.pack_id,
@@ -300,6 +308,14 @@ async def unsubscribe_knowledge_package(
             ) from exc
         if result.get("ok") is not True:
             code = str(result.get("reason") or "subscription_not_found")
+            if (
+                code == "not_found"
+                and active_task is not None
+                and active_task.get("_installation_settled_for_unsubscribe") is True
+            ):
+                active_task["preinstall_cancelled"] = True
+                await _report_unsubscribe_best_effort(payload.package_id)
+                return _preinstall_cancellation_result()
             raise HTTPException(status_code=409, detail={"code": code})
         await _report_unsubscribe_best_effort(payload.package_id)
         return result
@@ -368,9 +384,41 @@ async def _cancel_active_subscription(
             asyncio.shield(installation_mutation),
             return_exceptions=True,
         )
+        if installation_mutation.cancelled():
+            installation_outcome = "cancelled"
+        else:
+            failure = installation_mutation.exception()
+            if failure is not None:
+                installation_outcome = "failed"
+            else:
+                result = installation_mutation.result()
+                installation_outcome = (
+                    "accepted"
+                    if isinstance(result, dict) and result.get("ok") is True
+                    else "rejected"
+                )
+        if task is not None:
+            task["_installation_outcome"] = installation_outcome
+    else:
+        installation_outcome = str((task or {}).get("_installation_outcome") or "")
+    if task is not None and stage == "installing" and installation_outcome:
+        task["_installation_settled_for_unsubscribe"] = True
+        if installation_outcome == "rejected":
+            task["preinstall_cancelled"] = True
     if preinstall and task is not None:
         task["preinstall_cancelled"] = True
     return task
+
+
+def _preinstall_cancellation_result() -> dict[str, object]:
+    return {
+        "ok": True,
+        "cancelled": True,
+        "removed": False,
+        "removed_pack": False,
+        "removed_entries": 0,
+        "cancelled_jobs": 0,
+    }
 
 
 async def _resolve_owned_subscription(

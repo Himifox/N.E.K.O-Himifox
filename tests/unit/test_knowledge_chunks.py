@@ -300,6 +300,30 @@ def test_backfill_skips_malformed_entry_and_processes_next_valid_row(tmp_path):
     assert store.chunk_status()["entries_missing_chunks"] == 1
 
 
+def test_backfill_pages_past_more_than_one_page_of_malformed_entries(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    broken = tuple(
+        _entry(content=f"broken {index}", title=f"Broken entry {index:03d}")
+        for index in range(65)
+    )
+    store.upsert_many((*broken, _entry(content="valid", title="Valid entry")))
+    with store._connection(writable=True) as connection:
+        connection.execute("UPDATE entries SET terms='{' WHERE title LIKE 'Broken entry %'")
+        connection.execute("DELETE FROM knowledge_chunks")
+
+    assert store.backfill_missing_chunks(limit=1) == 1
+    with store._connection() as connection:
+        chunk_titles = {
+            str(row["title"])
+            for row in connection.execute(
+                "SELECT entries.title FROM knowledge_chunks JOIN entries "
+                "ON entries.rowid=knowledge_chunks.entry_rowid"
+            )
+        }
+    assert chunk_titles == {"Valid entry"}
+    assert store.chunk_status()["entries_missing_chunks"] == len(broken)
+
+
 def test_tag_only_update_preserves_ready_embedding(tmp_path):
     store = KnowledgeStore(tmp_path / "knowledge.db")
     original = _entry(content="same content")
