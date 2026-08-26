@@ -1722,3 +1722,12 @@ CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 cano
 | `4cda7b874` | CV、CW | live evaluator 每 case 建立 `new_session=true` 的独立 websocket session；管理端本地包走 remove、Plugin Market 订阅包走 unsubscribe，Main Server 拒绝无 provider identity 的订阅包通用删除。 |
 
 合并回归使用项目 `.venv` 的 Python 3.11.15 执行，indexer、hybrid retrieval、pack jobs、pack registry、store、public service/router、quality evaluator 与 Plugin Market 集合为 269 passed、1 skipped；skip 仍仅因本机 Windows 无目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过。前端 Knowledge API Vitest 为 16 passed，`vue-tsc --build` 通过。没有新增测试文件或 i18n key。
+
+### 第十四轮 outside-diff 补充：异步任务收尾与异常可观测性
+
+完整检查 CodeRabbit review body 时另发现 2 条不会生成 review conversation 的 Nitpick。它们不影响前述 5 条线程的解决状态，但沿取消路径核对后均成立，因此作为 CX、CY 补充归档：
+
+- CX：Plugin Market 测试的 autouse fixture 只调用 `Task.cancel()` 就清空 registry，未等待 worker 与 installation mutation 真正结束。fixture 改为 async，在 teardown 收集两个 registry 的任务、统一 cancel、`await asyncio.gather(..., return_exceptions=True)` 后再清空，确保测试退出没有 pending task。
+- CY：`_installation_mutation_done()` 调用 `completed.exception()` 只消费返回值；该方法对任务内部异常不会抛出，取消 worker 后异常可能无人记录。callback 保留 cancelled early return，检查返回异常并以 traceback 记录 error；正常成功不产生日志，也不重复抛出。
+
+验收：fixture teardown 能等待同时存在于两个 registry 的未完成任务并清空全部 ownership 状态；失败 installation mutation 的 callback 只记录一次 error 且移除 registry 引用；成功和 cancelled task 不记录错误。两项只修改现有 market route 与既有测试文件，不新增运行期状态、测试文件或用户文案。
