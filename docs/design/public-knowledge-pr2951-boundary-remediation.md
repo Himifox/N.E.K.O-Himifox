@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十二轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十二轮均已实施，第十三轮方案已归档并进入实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1555,3 +1555,80 @@ CG、CH/CI、CJ 分为三个原子实现提交；只扩展既有 pack job、pack
 最终相关回归使用项目 Python 3.11 执行 `uv run pytest`，结果为 278 passed、1 skipped；skip 仅因本机 Windows 无目录 symlink 权限，另有不依赖权限的 junction/reparse 模拟反例通过。前端 Knowledge API 13 项通过，`vue-tsc --build` 与相关 Python Ruff 均通过，`git diff --check` 通过。未新增测试文件，只扩展已有回归文件。
 
 实现提交推送并逐条回复证据后，GraphQL 重新遍历 PR #2951 全部 reviewThreads 分页，最终 unresolved 为 0；第十二轮代码完成核对时远端 head 为 `0e033249f37c85f5d64604a477edb5e4b8c74d51`。该计数仍是 2026-08-25 的完成快照；任何后续复审新增线程必须重新分页处理。
+
+## 第十三轮：首次导入、激活容量与市场订阅身份
+
+第十二轮完成后，GraphQL 对 142 个 review conversations 完整分页得到 6 个未解决线程。核对远端 head `7ea7254bbb` 后，5 个问题成立；要求为缺少 `source_tag` 的旧注册表自动补值的评论与既有 CH、BE 发布边界冲突，不采纳其修复方向。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3853883535` | CM | 全新安装的 knowledge root 尚不存在时，首次 stage 在创建目录前失败，成立 |
+| `discussion_r3853883550` | CN | ready-vector 快照与向量写回未共享同一提交锁，容量可竞态超限，成立 |
+| `discussion_r3853883555` | CO | installing 阶段取消只中断 HTTP await，服务端 mutation 可迟到发布，成立 |
+| `discussion_r3853883567` | CP | 暂存数据库宽松读取可把损坏快照当作零向量 hybrid，成立 |
+| `discussion_r3853883571` | CQ | registry 允许重复 marketplace package identity，成立 |
+| `discussion_r3853890854` | CR | 自动推断缺失 `source_tag` 会恢复未发布格式兼容并削弱 CH，不成立 |
+
+### 修复单元 CM：首次写入创建并复验受信 knowledge root
+
+- 只读路径继续把不存在的 knowledge root / staging root 视为空，不因 status 或 list 创建目录。
+- `stage_pack()` 是首次允许创建目录的写入口：磁盘容量预检后，在任何 staging 锁文件或作业文件落盘前创建 knowledge root，并立即拒绝 symlink、junction、reparse、非目录或无法严格解析的路径。
+- 创建后仍沿用 BW 的 staging 根复验：取得 registry/pack lock 前后都要求 `.staging` 是 knowledge root 的真实直接子目录；任何复验失败均不发布 job。
+- runtime initialization 不为普通只读启动强制创建空知识目录；首次写入边界由 `stage_pack()` 单独拥有。
+
+验收：全新空 app data 首次本地导入与 marketplace stage 成功；只读 list/status 不创建目录；knowledge root 或 staging root 是重解析路径时不向外部目标写入；并发首次 stage 只发布完整原子作业。
+
+### 修复单元 CN：ready-vector 容量决策与写回共享数据库锁
+
+- `ready_vector_chunks` 调用参数仅作为轮次调度提示，不再作为激活提交的最终事实；最终额度必须在 live knowledge database 的跨进程 mutation lock 内重新统计。
+- hybrid 激活在同一 database lock 临界区中完成：严格读取 live ready 总量、减去被替换 source 的 ready 数、加入暂存完整向量数、选择 hybrid/BM25，并执行 `install_pack()`。容量判断与 prepared vector 写入之间不得释放该锁。
+- 本地 embedding writeback、模型 stale/reset、维护脚本与激活统一使用同一 resolved database lock key。若 live 统计不可证明，激活失败关闭，不以旧轮次快照继续提交。
+- 替换同 pack 仍只计算净增量；达到 20,000 可以提交，超过才降级 BM25。锁只覆盖 SQLite/registry commit，不覆盖模型推理或制品验证。
+
+验收：19,999 ready 与并发一条本地 writeback 后，一向量 pack 不会提交为第 20,001 条；等量替换保持 hybrid；统计失败不提交；普通 BM25 激活和本地 batch 上限不变。
+
+### 修复单元 CO：安装期取消等待 mutation 可观测完成
+
+- Plugin Server 将 apply 请求作为独立、受强引用的 installation mutation task；取消外层订阅 worker 只停止用户任务，不取消或遗失该 mutation 的完成信号。
+- `_cancel_active_subscription()` 在 `stage=installing` 时先取消 worker，再等待对应 apply 请求得到响应或稳定错误，随后才解析 durable ownership 并调用 `packs/remove`。
+- 等待完成后不把订阅任务改回 completed，也不发送 subscribe report；remove 继续携带 provider/package/remote 三重身份，并依赖 Main Server pack-operation lock 取消刚发布的 staged job 或删除已激活 pack。
+- pre-install 快捷取消保持现状；请求超时仍按“不确定是否提交”处理，但必须继续走 durable remove/reconcile，不能返回未安装成功假象。
+
+验收：取消发生在请求已发送但 `stage_pack()` 尚未进入时，remove 必须在 apply 可观测完成后执行并清掉迟到 job；apply 成功、业务失败、连接失败与取消重复调用均无游离 task；错误 claimed identity 仍失败关闭。
+
+### 修复单元 CP：暂存向量快照必须严格且完整
+
+- accepted prebuilt job 激活前严格打开 staging `knowledge.db`；缺失、损坏、锁定、Schema 错误或读取失败不得折叠为零状态。
+- 严格比较 `chunks_total`、`chunks_ready` 与 immutable identity / accepted index metadata；hybrid 要求三者一致且 ready vector records 数量完全相等。
+- prepared records 必须继续由 strict importer 校验 content address、model、dimensions 和 bytes；任一缺口进入稳定 failed/degraded，不安装 hybrid，也不显示 100%。
+- 明确的无预构建或已因额度拒绝路径仍可 BM25 激活；不得把“读取失败”解释成“确实没有向量”。
+
+验收：删除、截断、锁定 staging database，以及伪造 accepted 后零行均不安装；完整快照仍 hybrid；明确 BM25 job 不要求读取向量。
+
+### 修复单元 CQ：marketplace package identity 在 registry 内唯一
+
+- `_load_registry()` 在逐 pack 完成结构、canonical source tag 与 subscription 字段校验时，收集非空 `(provider, provider_package_id)`；`plugin-market` 的同一 package ID 只能归属一个 pack ID。
+- 重复身份使整个 registry fail closed，list、install/update、remove 与 policy mutation 都不得基于歧义数据继续。失败读取不改写原文件。
+- 新订阅写入前也对候选 registry 做同一唯一性验证，防止不同 `pack_id` 的 marketplace 重订阅制造第二条歧义记录；同 pack 的版本更新不受影响。
+- provider package ID 继续使用 ASCII 正整数规范；不同 provider 的相同字符串不冲突。
+
+验收：两个 pack 使用同一 marketplace ID 时 list 返回既有降级结果、mutation 在数据库写入前失败且 registry 字节不变；同 pack 更新成功；不同 marketplace ID 和不同 provider 不误报。
+
+### 修复单元 CR：拒绝未发布 registry source-tag 推断
+
+- 维持 CH：registry key 是合法 pack ID，`source_tag` 必须严格等于 `source:community.<pack_id>`。缺失与错误值均是无法证明身份的损坏数据。
+- 不从 key 自动补写 `source_tag`，不在只读 `_load_registry()` 中恢复本 PR 中间格式，也不新增迁移测试。开发期间旧数据通过删除并重新导入收敛。
+- 现有同版本 metadata normalization 不能改变 source identity；若未来出现真实外部分发证据，沿用 BE 另立显式、离线、先备份迁移工具。
+
+验收：缺失 `source_tag` 继续 fail closed，读取不改写文件；合法最终 registry 正常；远端评论回复引用 CH/BE 的发布证据并说明不采纳自动迁移。
+
+## 第十三轮实施顺序与关闭条件
+
+1. 先提交本节设计与索引，不用计划文本提前关闭线程。
+2. 第一实现提交处理 CM、CN、CP：三者共同收紧 staged activation 的可信路径、严格快照和最终数据库提交锁，但分别保留精确反例测试。
+3. 第二实现提交处理 CO、CQ：installation mutation 生命周期与 durable registry ownership 同时验证；不借取消修复放宽身份匹配。
+4. 仅扩展现有 `test_knowledge_pack_jobs.py`、`test_knowledge_packs.py` 与 `plugin/tests/unit/test_knowledge_market.py`，不新建测试文件。
+5. 使用项目 Python 3.11 的 `uv run pytest` 执行定向及相邻 knowledge 回归；运行相关 Ruff 与 `git diff --check`。本轮没有前端或用户文案变化，不需要 i18n 修改。
+6. 实现与最终证据文档推送后，5 条成立评论分别回复提交和精确测试；CR 回复不采纳理由。随后 resolve 全部 6 条并重新分页核对。
+
+关闭条件：CM 的全新安装成功且重解析负例不回退；CN 的最终 recount 与 install 位于同一 database lock；CO 的 remove 不可能先于已发出的 apply 完成；CP 的损坏 staging database 不产生 hybrid 安装；CQ 的重复 provider identity 在任何 mutation 前失败；CR 保持 CH 的严格身份边界。只有远端可见提交、通过证据和逐线程回复齐全后才能关闭。
