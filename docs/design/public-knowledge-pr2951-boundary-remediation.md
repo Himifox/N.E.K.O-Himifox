@@ -2242,3 +2242,9 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 4. 实现与证据推送后逐条回复并 resolve 5 个 conversation，最后完整分页检查新增未解决评论。
 
 关闭条件：未解析来源不再产生误导计数；伪造 active 无法代替真实安装提交；任意损坏 state 类型不会逃逸为系统异常；默认评估 fixture 可加载且来源身份严格；非字符串 override identity 失败关闭。只有远端实现和精确测试证据齐全后才标记第二十三轮已实施。
+
+## 第二十三轮实施证据
+
+设计提交 `78a748c0d`、边界细化提交 `130380a79`、实现提交 `66da99d7e` 已推送。ED 取消状态计数对未知来源的 knowledge 默认值。EE 为规范化 pack、staged identity、installed registry 和激活收据建立同一内容摘要链；只有真实安装提交后发布的收据与 active state 精确一致时才接受完成状态，同时保留正常卸载后的历史成功记录。相同容量但不同内容的 staged artifact 也会在执行前失败关闭。EF 在所有控制流前验证 state 的原生字符串类型和有限状态集合，激活收据中的容器型模式同样安全降级。EG 统一正式 fixture 与 loader 的来源感知 schema，并严格验证正负例文本身份。EH 禁止持久化和写入口把非字符串 source/title 强制转换成可接受身份。
+
+项目 `.venv` Python 3.11 的最终受影响文件回归为 243 passed、1 skipped；知识库、公共路由和市场相邻宽回归为 493 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具，不为本 PR 未发布格式恢复兼容。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试判定或产品文件。
