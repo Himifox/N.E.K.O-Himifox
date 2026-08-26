@@ -2163,3 +2163,24 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 EA 将知识索引器启动拆成独立的、单实例强引用退避重试任务；首次启动失败不阻断主服务，成功后自动结束，关闭入口会先取消并观察未完成重试。EB 暂存 voice identity 清理产生的取消，在连接器、后台任务、翻译、Token、音乐、Cloud Save、HTTP 连接池和索引器清理全部执行后恢复抛出，兼顾完整收尾与调用方取消语义。
 
 项目 `.venv` Python 3.11 的受影响回归为 320 passed、1 skipped；知识库与启动/关闭宽回归为 511 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是上一轮已确认、且本轮未触碰的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall、评估 fixture JSON 解析与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 完成后的遥测写入告警来自工作区沙盒拒绝访问用户配置目录，不影响测试结果或产品文件。
+
+## 第二十二轮：抽样的素材类型必须约束候选总体
+
+第二十一轮推送后的远端 head `52d8d9c08` 新增 1 条 conversation（`discussion_r3860797003`）：`sample` 模式解析了 `material_type`，但 `sample_entries()` 仍从标签下所有来源抽样，随后只排除无法识别类型的结果。混合标签可能因此把 knowledge 请求返回成 corpus，反之亦然。问题成立；但仅在抽样后过滤仍会让错误类型占用有限名额，造成目标类型实际存在却返回空，因此必须在随机抽样前收窄候选总体。
+
+### EC：按可信来源类型进行抽样
+
+- `KnowledgeService.sample_entries()` 接受可选的精确素材类型，只允许 `knowledge`、`corpus` 或不指定；调用者不能传入其他持久或推断值。
+- 服务先通过当前严格来源映射得到允许的 source tag。指定类型时只保留该类型来源；`auto`/`all` 则保留全部可证明来源。未知来源及损坏社区注册表不进入抽样总体。
+- `KnowledgeStore.sample_entries_by_tag()` 在蓄水池计数和随机替换前检查允许来源，因此 `limit` 只由合格候选消耗；不能先混合抽样再丢弃错误类型。
+- tool handler 将显式 `knowledge`/`corpus` 传入服务，并在渲染前再次核对解析类型；`auto`/`all` 保持接受两类的既有语义。
+
+验收：同一允许标签同时包含 knowledge 与 corpus 时，两种显式请求都只返回对应类型，且 `limit=1` 时目标候选不会因另一类型先被抽中而产生假空结果；auto/all 仍可从两类抽样；未知来源失败关闭。
+
+## 第二十二轮实施与关闭条件
+
+1. 先提交并推送本节设计，再扩展既有 service/context/store 调用链及测试，不新增测试文件或用户文案/i18n key。
+2. 使用项目 Python 3.11 运行混合标签精确反例、受影响文件与知识相关宽回归，并运行 Ruff、compileall 和 `git diff --check`。
+3. 实现和证据推送后回复并 resolve `PRRT_kwDOPD8VW86cYT4U`，再完整分页确认是否有新增未解决评论。
+
+关闭条件：显式素材类型在随机抽样的候选计数前生效，且渲染结果再次满足请求类型；目标类型存在时不会因异类候选占位而假空。只有远端实现和测试证据齐全后才标记第二十二轮已实施。
