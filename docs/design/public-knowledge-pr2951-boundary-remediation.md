@@ -2078,3 +2078,9 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 4. 实现与测试证据推送后逐条回复并 resolve 3 个 conversation，再完整分页复核新增未解决线程。
 
 关闭条件：无可信 registry 的社区 rows 在任何 material allowlist 组合下都不可检索；评估不使用 chunker 版本不匹配的向量；外层市场订阅上传在调用 `request.body()` 前已受实际体积上限保护。只有远端代码和精确测试证据齐全后才标记第二十轮已实施。
+
+## 第二十轮实施证据
+
+设计提交 `91f19288b`、实现提交 `608e09ce1` 已推送。DT 将社区 source 从宽松 display registry 解析中移除，只由严格 installed registry 发布其素材类型；所有 material 组合都使用显式 allowlist，检索融合与直接 entry 分类也不再把未知社区来源默认成 knowledge。DU 让评估器在读取向量前同时核对 chunker 与 embedding input version，并在成功状态中报告完整派生版本。DV 把订阅 envelope 上限收敛到 `knowledge.limits` 的单一常量，并让 Main Server 的内层 API 与外层市场代理两个精确路径都进入同一 bounded spool 守门。
+
+三个受影响测试文件为 63 passed；知识、公共路由、市场桥与 ASGI 相邻宽回归为 458 passed、1 skipped、4 deselected。skip 仍是本机 Windows 目录 symlink 权限；4 个 deselected 是远端 head 已存在的 staged job identity 与 builder subscription 夹具失配，与本轮调用路径无关，未借本轮修改。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。
