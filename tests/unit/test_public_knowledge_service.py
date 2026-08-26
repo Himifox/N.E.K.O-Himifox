@@ -277,6 +277,26 @@ def test_sample_entries_excludes_normalized_disabled_title(tmp_path, monkeypatch
     )
 
 
+def test_sample_entries_filters_material_type_before_random_selection(tmp_path):
+    service = open_knowledge(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    tag = "dataset:tarot-interpretations"
+    store.upsert(_entry("Knowledge card", "source:chime", tag))
+    store.upsert(_entry("Corpus card", "source:corpora", tag))
+    store.upsert(_entry("Unknown card", "source:unknown", tag))
+
+    knowledge = service.sample_entries(tag, limit=1, material_type="knowledge")
+    corpus = service.sample_entries(tag, limit=1, material_type="corpus")
+    all_trusted = service.sample_entries(tag, limit=3)
+
+    assert [entry.title for entry in knowledge] == ["Knowledge card"]
+    assert [entry.title for entry in corpus] == ["Corpus card"]
+    assert {entry.title for entry in all_trusted} == {
+        "Knowledge card",
+        "Corpus card",
+    }
+
+
 def _pack(*, pack_id: str, material_type: str, title: str, tags=()):
     return validate_pack(
         {

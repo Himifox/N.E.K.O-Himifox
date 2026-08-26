@@ -981,18 +981,26 @@ class KnowledgeService:
         sample_tag: str,
         *,
         limit: int = 1,
+        material_type: str | None = None,
     ) -> tuple[KnowledgeEntry, ...]:
         """Return a small random selection from an approved material tag."""
-        return self._sample_entries(sample_tag, limit=limit)
+        return self._sample_entries(
+            sample_tag,
+            limit=limit,
+            material_type=material_type,
+        )
 
     def _sample_entries(
         self,
         sample_tag: str,
         *,
         limit: int,
+        material_type: str | None,
     ) -> tuple[KnowledgeEntry, ...]:
         if sample_tag not in CORPORA_SAMPLE_TAGS:
             raise ValueError("sample tag is not enabled for public knowledge")
+        if material_type not in {None, "knowledge", "corpus"}:
+            raise ValueError("sample material type is not available")
         limit = min(max(int(limit), 1), 3)
         database_path = self.database_path()
         try:
@@ -1001,9 +1009,21 @@ class KnowledgeService:
             )
         except CatalogOverrideError:
             return ()
-        return self._store().sample_entries_by_tag(
+        store = self._store()
+        source_types = self._source_material_types(store)
+        allowed_source_tags = tuple(
+            source_tag
+            for source_tag, source_type in source_types.items()
+            if (
+                source_tag in SOURCES
+                or source_tag.startswith("source:community.")
+            )
+            and (material_type is None or source_type == material_type)
+        )
+        return store.sample_entries_by_tag(
             sample_tag,
             limit=limit,
+            allowed_source_tags=allowed_source_tags,
             excluded=disabled,
             randrange=random.randrange,
         )

@@ -1561,11 +1561,19 @@ class KnowledgeStore:
         tag: str,
         *,
         limit: int,
+        allowed_source_tags: tuple[str, ...] | None = None,
         excluded: frozenset[tuple[str, str]] = frozenset(),
         randrange: Callable[[int], int],
     ) -> tuple[KnowledgeEntry, ...]:
         """Reservoir-sample entries from the complete enabled exact-tag set."""
         if not tag or limit <= 0:
+            return ()
+        allowed_sources = (
+            frozenset(allowed_source_tags)
+            if allowed_source_tags is not None
+            else None
+        )
+        if allowed_sources is not None and not allowed_sources:
             return ()
         sample: list[KnowledgeEntry] = []
         eligible_count = 0
@@ -1579,6 +1587,11 @@ class KnowledgeStore:
                 )
                 for row in rows:
                     entry = _entry_from_row(row)
+                    if (
+                        allowed_sources is not None
+                        and entry.source_tag not in allowed_sources
+                    ):
+                        continue
                     if entry_key(entry) in excluded:
                         continue
                     eligible_count += 1

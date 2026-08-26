@@ -76,6 +76,84 @@ def test_embedded_knowledge_words_do_not_claim_the_route(text):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_type", "forwarded_type", "expected_titles"),
+    [
+        ("knowledge", "knowledge", "Knowledge sample"),
+        ("corpus", "corpus", "Corpus sample"),
+        ("auto", None, "Knowledge sample,Corpus sample"),
+        ("all", None, "Knowledge sample,Corpus sample"),
+    ],
+)
+async def test_sample_mode_respects_requested_material_type(
+    tmp_path,
+    monkeypatch,
+    requested_type,
+    forwarded_type,
+    expected_titles,
+):
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.api import KnowledgeEntry
+
+    entries = (
+        KnowledgeEntry(
+            title="Knowledge sample",
+            terms={},
+            tags=("source:chime",),
+            summary="knowledge",
+            content="knowledge",
+        ),
+        KnowledgeEntry(
+            title="Corpus sample",
+            terms={},
+            tags=("source:corpora",),
+            summary="corpus",
+            content="corpus",
+        ),
+    )
+    captured = {}
+
+    class _MixedSampleService:
+        def sample_entries(self, _tag, *, limit, material_type):
+            captured.update(limit=limit, material_type=material_type)
+            return entries
+
+        def material_type_for_entry(self, entry):
+            return (
+                "corpus" if entry.source_tag == "source:corpora" else "knowledge"
+            )
+
+    monkeypatch.setattr(
+        knowledge_tool,
+        "get_config_manager",
+        lambda: SimpleNamespace(knowledge_dir=tmp_path),
+    )
+    monkeypatch.setattr(
+        knowledge_tool,
+        "open_knowledge",
+        lambda _root: _MixedSampleService(),
+    )
+    monkeypatch.setattr(
+        knowledge_tool,
+        "_render_entries",
+        lambda _service, selected: ",".join(entry.title for _, entry in selected),
+    )
+
+    rendered = await knowledge_tool.handle_public_knowledge_call(
+        {
+            "query": "dataset:tarot-interpretations",
+            "mode": "sample",
+            "material_type": requested_type,
+            "limit": 2,
+        },
+        language="zh",
+    )
+
+    assert captured == {"limit": 2, "material_type": forwarded_type}
+    assert rendered == expected_titles
+
+
+@pytest.mark.asyncio
 async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(
     monkeypatch,
 ):

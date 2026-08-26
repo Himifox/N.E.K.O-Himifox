@@ -168,12 +168,18 @@ async def handle_public_knowledge_call(
     attempt_count = 1
 
     if mode == "sample":
+        sample_material_type = (
+            requested_material_type
+            if requested_material_type in {"knowledge", "corpus"}
+            else None
+        )
         try:
             sample_task = asyncio.create_task(
                 asyncio.to_thread(
                     service.sample_entries,
                     query,
                     limit=limit,
+                    material_type=sample_material_type,
                 )
             )
             completed, sampled = await _wait_task_until(
@@ -191,6 +197,10 @@ async def handle_public_knowledge_call(
                     for entry in sampled
                     if (material_type := service.material_type_for_entry(entry))
                     is not None
+                    and (
+                        sample_material_type is None
+                        or material_type == sample_material_type
+                    )
                 ]
             )
         )
