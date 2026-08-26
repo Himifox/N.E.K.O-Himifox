@@ -471,6 +471,45 @@ def test_discard_only_removes_degraded_jobs(tmp_path):
     assert not job_dir.exists()
 
 
+def test_first_stage_creates_missing_trusted_knowledge_root(tmp_path):
+    knowledge_root = tmp_path / "new-knowledge-root"
+    service = KnowledgeService.from_root(knowledge_root)
+
+    assert not knowledge_root.exists()
+    assert service.list_pack_jobs() == ()
+    assert not knowledge_root.exists()
+
+    job = service.stage_pack(_pack())
+
+    assert knowledge_root.is_dir()
+    assert (knowledge_root / ".staging" / str(job["job_id"])).is_dir()
+
+
+def test_stage_rejects_reparse_knowledge_root_before_writing_locks(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    knowledge_root = tmp_path / "knowledge-root"
+    knowledge_root.mkdir()
+    service = KnowledgeService.from_root(knowledge_root)
+    original_check = pack_jobs._is_link_or_reparse
+    monkeypatch.setattr(
+        pack_jobs,
+        "_is_link_or_reparse",
+        lambda path: path == knowledge_root or original_check(path),
+    )
+
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_path_invalid",
+    ):
+        service.stage_pack(_pack())
+
+    assert tuple(knowledge_root.iterdir()) == ()
+
+
 def test_staging_root_link_is_rejected_without_touching_external_files(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
@@ -638,14 +677,14 @@ async def test_failed_state_race_observes_concurrent_cancel(tmp_path, monkeypatc
     job_id = str(job["job_id"])
     original_update = pack_jobs._write_state_async
 
-    def fail_capacity(*_args, **_kwargs):
-        raise OSError("capacity unavailable")
+    def fail_activation(*_args, **_kwargs):
+        raise OSError("activation unavailable")
 
     async def cancel_before_failed_update(job_dir, **changes):
         assert cancel_pack_job(tmp_path, job_id) is True
         return await original_update(job_dir, **changes)
 
-    monkeypatch.setattr(pack_jobs, "_activation_capacity_snapshot", fail_capacity)
+    monkeypatch.setattr(pack_jobs, "_activate_job", fail_activation)
     monkeypatch.setattr(pack_jobs, "_write_state_async", cancel_before_failed_update)
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
@@ -873,6 +912,10 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
         index_manifest=artifacts.manifest,
         vectors=artifacts.vectors,
     )
+    monkeypatch.setattr(
+        "knowledge.pack_jobs.MAX_READY_VECTOR_CHUNKS",
+        0,
+    )
 
     result = await process_pack_jobs(
         service,
@@ -885,6 +928,77 @@ async def test_vector_budget_activates_pack_as_bm25_without_loading_model(
     assert job["state"] == "active"
     assert job["retrieval_mode"] == "bm25"
     assert job["index_fallback_reason"] == "vector_budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_vector_budget_recounts_live_vectors_at_activation(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    monkeypatch.setattr(pack_jobs, "MAX_READY_VECTOR_CHUNKS", 1)
+    monkeypatch.setattr(
+        pack_jobs,
+        "_live_ready_capacity_snapshot",
+        lambda _service, _pack_id: (1, 0),
+    )
+
+    result = await process_pack_jobs(
+        service,
+        batch_size=4,
+        ready_vector_chunks=0,
+    )
+
+    assert result["state"] == "ready_bm25"
+    assert service.list_packs()[0]["retrieval_mode"] == "bm25"
+
+
+@pytest.mark.asyncio
+async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    original_prepare = pack_jobs._prepare_job
+
+    def prepare_then_remove_database(selected_job_dir):
+        prepared = original_prepare(selected_job_dir)
+        assert prepared["index_validation"] == "accepted"
+        (selected_job_dir / "knowledge.db").unlink()
+        return prepared
+
+    monkeypatch.setattr(pack_jobs, "_prepare_job", prepare_then_remove_database)
+
+    result = await process_pack_jobs(
+        service,
+        batch_size=4,
+        ready_vector_chunks=0,
+    )
+
+    assert result["state"] == "failed"
+    assert service.list_packs() == ()
+    assert service.list_pack_jobs()[0]["retrieval_mode"] == "none"
 
 
 @pytest.mark.asyncio

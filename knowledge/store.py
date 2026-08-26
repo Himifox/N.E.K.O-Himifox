@@ -685,7 +685,7 @@ class KnowledgeStore:
                 processed += 1
         return processed
 
-    def chunk_status(self) -> dict[str, object]:
+    def chunk_status(self, *, strict: bool = False) -> dict[str, object]:
         try:
             with self._connection() as connection:
                 counts = {
@@ -804,6 +804,8 @@ class KnowledgeStore:
                     else 0,
                 }
         except KnowledgeStoreError:
+            if strict:
+                raise
             return {
                 "entries_total": 0,
                 "entries_missing_chunks": 0,
@@ -861,13 +863,20 @@ class KnowledgeStore:
                 raise
             return {policy: 0 for policy in EMBEDDING_POLICIES}
 
-    def source_chunk_status(self, source_tag: str) -> dict[str, int]:
+    def source_chunk_status(
+        self,
+        source_tag: str,
+        *,
+        strict: bool = False,
+    ) -> dict[str, int]:
         """Return compact activation counts for one source namespace."""
-        return self.source_chunk_statuses((source_tag,))[source_tag]
+        return self.source_chunk_statuses((source_tag,), strict=strict)[source_tag]
 
     def source_chunk_statuses(
         self,
         source_tags: Sequence[str],
+        *,
+        strict: bool = False,
     ) -> dict[str, dict[str, int]]:
         """Return chunk activation counts for all requested sources in one query."""
         normalized = tuple(dict.fromkeys(str(tag) for tag in source_tags))
@@ -912,6 +921,8 @@ class KnowledgeStore:
                     for row in rows
                 }
         except KnowledgeStoreError:
+            if strict:
+                raise
             return empty
 
     def set_source_embedding_policy(self, source_tag: str, policy: str) -> int:

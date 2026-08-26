@@ -104,6 +104,22 @@ def _validated_jobs_root(knowledge_root: str | Path) -> Path | None:
     return jobs_root
 
 
+def _create_trusted_knowledge_root(knowledge_root: str | Path) -> Path | None:
+    """Create the configured write root without accepting a redirected path."""
+    root = Path(knowledge_root)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    if _is_link_or_reparse(root) or not root.is_dir():
+        return None
+    try:
+        root.resolve(strict=True)
+    except OSError:
+        return None
+    return root
+
+
 def _jobs_registry_lock(knowledge_root: str | Path):
     """Lock staging mutations without placing a lock below untrusted staging."""
     return mutation_lock(Path(knowledge_root) / "knowledge-job-registry")
@@ -395,6 +411,9 @@ def stage_pack(
     root = Path(service.knowledge_root)
     preflight = preflight_pack(pack)
     ensure_install_capacity(root, preflight)
+    root = _create_trusted_knowledge_root(root)
+    if root is None:
+        raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
     jobs_root = _validated_jobs_root(root)
     if jobs_root is None:
         raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
@@ -888,24 +907,52 @@ def _activate_job_validated(
         pack = _load_capacity_validated_job_pack(job_dir, current)
         if pack is None:
             return _capacity_mismatch_state(job_dir, current)
-        staging_store = KnowledgeStore(job_dir / "knowledge.db")
-        embeddings = staging_store.ready_embedding_records() if mode != "bm25" else ()
-        result = install_pack(
-            service.database_path(),
-            pack,
-            subscription=_subscription(job_dir),
-            prepared_embeddings=embeddings,
-            retrieval_mode=mode,
-            embedding_policy="prebuilt_only",
-            index_metadata={
-                "index_origin": current.get("index_origin", "none"),
-                "index_trust": current.get("index_trust", "none"),
-                "index_validation": current.get("index_validation", "absent"),
-                "index_fallback_reason": current.get("index_fallback_reason", ""),
-                "prebuilt_chunks_ready": current.get("prebuilt_chunks_ready", 0),
-                "prebuilt_chunks_missing": current.get("prebuilt_chunks_missing", 0),
-            },
+        embeddings = (
+            _strict_staged_vector_snapshot(job_dir, current)
+            if mode == "hybrid"
+            else ()
         )
+        database_path = service.database_path()
+        with mutation_lock(database_path):
+            if mode == "hybrid":
+                live_ready, replaced_ready = _live_ready_capacity_snapshot(
+                    service,
+                    pack.pack_id,
+                )
+                projected_ready = max(live_ready - replaced_ready, 0) + len(
+                    embeddings
+                )
+                if projected_ready > MAX_READY_VECTOR_CHUNKS:
+                    mode = "bm25"
+                    embeddings = ()
+                    current = _write_state(
+                        job_dir,
+                        current,
+                        index_origin="none",
+                        index_trust="none",
+                        index_validation="rejected",
+                        index_fallback_reason="vector_budget_exceeded",
+                        prebuilt_chunks_ready=0,
+                        prebuilt_chunks_missing=int(current.get("chunks_total") or 0),
+                    )
+            result = install_pack(
+                database_path,
+                pack,
+                subscription=_subscription(job_dir),
+                prepared_embeddings=embeddings,
+                retrieval_mode=mode,
+                embedding_policy="prebuilt_only",
+                index_metadata={
+                    "index_origin": current.get("index_origin", "none"),
+                    "index_trust": current.get("index_trust", "none"),
+                    "index_validation": current.get("index_validation", "absent"),
+                    "index_fallback_reason": current.get("index_fallback_reason", ""),
+                    "prebuilt_chunks_ready": current.get("prebuilt_chunks_ready", 0),
+                    "prebuilt_chunks_missing": current.get(
+                        "prebuilt_chunks_missing", 0
+                    ),
+                },
+            )
         try:
             state = _write_state(
                 job_dir,
@@ -940,10 +987,42 @@ def _activate_job_validated(
     return state
 
 
-def _ready_chunks_replaced_by_job(service, pack_id: str) -> int:
-    source_tag = f"source:community.{pack_id}"
-    status = KnowledgeStore(service.database_path()).source_chunk_status(source_tag)
-    return int(status["chunks_ready"])
+def _strict_staged_vector_snapshot(
+    job_dir: Path,
+    state: dict[str, Any],
+) -> tuple[dict[str, object], ...]:
+    database_path = job_dir / "knowledge.db"
+    if not database_path.is_file():
+        raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
+    store = KnowledgeStore(database_path)
+    status = store.chunk_status(strict=True)
+    expected_total = int(state.get("chunks_total") or 0)
+    expected_ready = int(state.get("prebuilt_chunks_ready") or 0)
+    embeddings = store.ready_embedding_records(strict=True)
+    if (
+        state.get("index_validation") != "accepted"
+        or expected_ready != expected_total
+        or int(status["chunks_total"]) != expected_total
+        or int(status["chunks_ready"]) != expected_ready
+        or len(embeddings) != expected_ready
+    ):
+        raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
+    return embeddings
+
+
+def _live_ready_capacity_snapshot(service, pack_id: str) -> tuple[int, int]:
+    database_path = service.database_path()
+    if not database_path.is_file():
+        return 0, 0
+    store = KnowledgeStore(database_path)
+    total = int(store.chunk_status(strict=True)["chunks_ready"])
+    replaced = int(
+        store.source_chunk_status(
+            f"source:community.{pack_id}",
+            strict=True,
+        )["chunks_ready"]
+    )
+    return total, replaced
 
 
 def _list_jobs_for_processing(knowledge_root: Path) -> tuple[dict[str, object], ...]:
@@ -999,45 +1078,8 @@ async def process_pack_jobs(
         if not state or state.get("state") in TERMINAL_STATES:
             return {"state": "no_work", "selected": 0, "stored": 0}
 
-        total, ready, replaced_ready = await asyncio.to_thread(
-            _activation_capacity_snapshot,
-            service,
-            job_dir,
-            str(state.get("pack_id") or ""),
-        )
-        has_prebuilt = state.get("index_validation") == "accepted" and ready == total
-        projected_ready = max(ready_vector_chunks - replaced_ready, 0) + total
-        if has_prebuilt and projected_ready > MAX_READY_VECTOR_CHUNKS:
-            state = await _write_state_async(
-                job_dir,
-                index_origin="none",
-                index_trust="none",
-                index_validation="rejected",
-                index_fallback_reason="vector_budget_exceeded",
-                prebuilt_chunks_ready=0,
-                prebuilt_chunks_missing=total,
-            )
-            activated = await asyncio.to_thread(
-                _activate_job,
-                service,
-                job_dir,
-                state,
-                mode="bm25",
-            )
-            if activated.get("state") == DEGRADED_STATE:
-                return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
-            if activated.get("state") == "cancelled":
-                return {"state": "cancelled", "selected": 0, "stored": 0}
-            if activated.get("state") == "failed":
-                return {"state": "failed", "selected": 0, "stored": 0}
-            return {"state": "ready_bm25", "selected": 0, "stored": 0}
-
+        has_prebuilt = state.get("index_validation") == "accepted"
         if has_prebuilt:
-            state = await _write_state_async(
-                job_dir,
-                chunks_ready=ready,
-                indexed_percent=100.0,
-            )
             activated = await asyncio.to_thread(
                 _activate_job,
                 service,
@@ -1049,6 +1091,11 @@ async def process_pack_jobs(
                 return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
             if activated.get("state") == "failed":
                 return {"state": "failed", "selected": 0, "stored": 0}
+            if activated.get("state") == "cancelled":
+                return {"state": "cancelled", "selected": 0, "stored": 0}
+            if activated.get("retrieval_mode") != "hybrid":
+                return {"state": "ready_bm25", "selected": 0, "stored": 0}
+            ready = int(activated.get("chunks_ready") or 0)
             activation_state = (
                 "cancelled" if activated.get("state") == "cancelled" else "ready_hybrid"
             )
@@ -1101,22 +1148,3 @@ async def process_pack_jobs(
             "selected": 0,
             "stored": 0,
         }
-
-
-def _activation_capacity_snapshot(
-    service, job_dir: Path, pack_id: str
-) -> tuple[int, int, int]:
-    """Read activation capacity inputs off the event-loop thread."""
-    safe_job_dir = _revalidated_job_dir(job_dir)
-    if safe_job_dir is None:
-        raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
-    with _jobs_registry_lock(service.knowledge_root):
-        safe_job_dir = _revalidated_job_dir(safe_job_dir)
-        if safe_job_dir is None:
-            raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
-        status = KnowledgeStore(safe_job_dir / "knowledge.db").chunk_status()
-        return (
-            int(status["chunks_total"]),
-            int(status["chunks_ready"]),
-            _ready_chunks_replaced_by_job(service, pack_id),
-        )
