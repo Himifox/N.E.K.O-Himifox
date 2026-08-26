@@ -1721,7 +1721,7 @@ CR 没有代码迁移提交：缺失或错误 `source_tag` 继续由 CH 的 cano
 | `6eb28d494` | CU | staged identity 明确记录 subscription presence 与 canonical SHA-256；stage、prepare、activate 共用严格 subscription validation，缺失、损坏、替换或本地作业后加订阅均进入 degraded 隔离。 |
 | `4cda7b874` | CV、CW | live evaluator 每 case 建立 `new_session=true` 的独立 websocket session；管理端本地包走 remove、Plugin Market 订阅包走 unsubscribe，Main Server 拒绝无 provider identity 的订阅包通用删除。 |
 
-合并回归使用项目 `.venv` 的 Python 3.11.15 执行，indexer、hybrid retrieval、pack jobs、pack registry、store、public service/router、quality evaluator 与 Plugin Market 集合为 269 passed、1 skipped；skip 仍仅因本机 Windows 无目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过。前端 Knowledge API Vitest 为 16 passed，`vue-tsc --build` 通过。没有新增测试文件或 i18n key。
+最终合并回归使用项目 `.venv` 的 Python 3.11.15 执行，indexer、hybrid retrieval、pack jobs、pack registry、store、public service/router、quality evaluator 与 Plugin Market 集合为 272 passed、1 skipped；skip 仍仅因本机 Windows 无目录 symlink 权限。相关 Ruff 与 `git diff --check` 通过。前端 Knowledge API Vitest 为 16 passed，`vue-tsc --build` 通过。没有新增测试文件或 i18n key。
 
 ### 第十四轮 outside-diff 补充：异步任务收尾与异常可观测性
 
