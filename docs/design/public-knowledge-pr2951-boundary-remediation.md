@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十五轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十五轮均已实施，第十六轮方案已归档并等待实施证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -1799,3 +1799,74 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 项目 `.venv` 的 Python 3.11.15 精确反例 6 passed；本轮三个相关文件除既有失配用例外的相邻集合为 62 passed、3 deselected。3 个 deselected 是当前 PR head 原已存在的 staged-job identity 测试夹具未包含第十四轮 CU 强制字段，与本轮代码路径无关，单独执行同样失败，未借本轮扩大修复范围。相关 Ruff 与 `git diff --check` 通过。前端 Knowledge API Vitest 为 16 passed，`vue-tsc --build` 与 8 个 locale 的 i18n 完整性检查通过；没有新增 i18n key。
 
 本轮设计提交为 `98b192b7b`。设计与实现均已本地提交；首次远端 push 因受限环境无法取得 Git 凭据而失败，依仓库规则未在同轮重试。因此评论回复、resolve 和远端 unresolved 清零必须等待后续明确的推送步骤，不能用本地提交冒充远端关闭证据。
+
+## 第十六轮：错误分类、暂存真实性与持久状态恢复
+
+第十五轮提交推送并清零线程后，针对远端 head `ac84a9692` 的复审新增 6 个未解决 conversation。逐条追踪当前实现后全部成立；其中 DD 是对 CZ“只重试瞬时观察失败”的必要分类补充，DE–DI 是此前身份、容量、状态和迁移边界仍可构造的独立反例。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3859520407` | DD | `_main_request()` 把永久 4xx 和无效 JSON 都映射为可重试 unavailable，成立 |
+| `discussion_r3859562970` | DE | job ID 没有与 immutable pack ID 精确绑定，可伪造 replacement 容量扣减，成立 |
+| `discussion_r3859562976` | DF | accepted staging database 的向量字节可在 prepare 后被等长替换，成立 |
+| `discussion_r3859562983` | DG | registry 仍有安装包但 database 缺失时 status 可重建空库并报告健康，成立 |
+| `discussion_r3859562986` | DH | `CHUNKER_VERSION` 改变不会淘汰旧 chunks，成立 |
+| `discussion_r3859562991` | DI | LIMIT 前缀中的损坏 entry 会永久阻塞后续合法 entry backfill，成立 |
+
+### DD：轮询只重试网络与 Main Server 5xx
+
+- `_main_request()` 将连接、读写、超时等 `RequestError` 与 HTTP 5xx 映射为 `main_server_unavailable`；CZ 只重试该稳定 code。
+- HTTP 4xx 映射为 `main_server_rejected`，JSON 解码失败或非对象响应映射为 `main_server_invalid_response`，两者直接结束轮询，不等待 24 小时。
+- 不在轮询层自行猜测 404 的 job 语义；路由不存在属于协议不匹配，不等价于可信 `packs/jobs` 列表中的 `job_not_found`。
+
+验收：网络错误和 500 可恢复后继续同一 job；404、其他 4xx、无效 JSON 与非对象 JSON 均不调用 sleep/retry；既有 degraded/failed/active 处理不变。
+
+### DE：job directory identity 必须由 pack identity 派生
+
+- `_validated_identity_payload()` 除目录名和 `identity.job_id` 相等外，要求 job ID 严格等于 `<validated pack_id>-<12 lowercase hex>`；不能只分别验证两个字段。
+- identity 与 state 同时被改成另一 pack ID 时，读取即进入 `degraded/invalid_job_identity`，不得进入 pending capacity 的 replacement keys。
+- 正常 UUID 前 12 位生成方式不变；本轮不兼容本 PR 未发布的无绑定 staged job。
+
+验收：同步篡改 identity/state pack ID 仍被隔离；合法含 `-` 的 pack ID 正常；隔离作业使新的 capacity mutation 失败关闭且不能借已安装大包额度。
+
+### DF：激活安装的向量字节必须重新绑定发布制品
+
+- hybrid activation 在读取 staging database 后，重新用 immutable subscription digests 验证仍在 job directory 的 canonical pack、manifest 和 vector artifacts。
+- 将验证所得 expected records 与 `ready_embedding_records(strict=True)` 按 `(chunk_id, content_hash)` 比较 model、dimensions 和 embedding bytes；staging database 中任意等长、有限但不同的向量均拒绝。
+- 安装只使用已经与可信 artifact 完全相等的内存 records；制品缺失、摘要变化、重复 key 或记录集合差异均进入稳定 failed，不降级成 trusted hybrid。
+
+验收：prepare 后替换一个 BLOB 不安装；删除/替换 artifact 不安装；完整 accepted job 仍 hybrid；容量降级 BM25 仍先完成真实性验证，不把篡改数据写入 live database。
+
+### DG：安装 registry 与 database 存在性必须一致
+
+- `list_installed_packs()` 在 database 不存在时只读取 registry 并返回零 chunk status，不构造 `KnowledgeStore`，保证管理只读路径不创建空库。
+- `get_status()` 使用启动时取得的 `database_exists` 事实；当 registry 含至少一个 installed pack 而 database 缺失时返回 `integrity_ok=false`、`schema_state=invalid_or_unavailable` 和稳定 `knowledge_database_missing`。
+- 全新空 root、空 registry 和仅有尚未激活 staged job 继续健康且不创建 database；registry 损坏仍按 registry invalid 单独失败关闭。
+
+验收：安装后删除 database，status 保留 pack 计数、entries/chunks 为零并明确 degraded，且调用后 database 仍不存在；全新空目录维持健康。
+
+### DH：chunker 合同变化淘汰全部旧派生数据
+
+- 初始化 Schema 时在写入默认 metadata 前读取 stored `chunker_version`；其缺失或不同与 `embedding_input_version` 不同使用同一个 invalidation 分支。
+- 任一派生合同变化都删除全部 `knowledge_chunks`、只递增一次 `chunks_revision`，并原子写入当前两个版本。entries 与 FTS 保持不变，由后续 backfill 按当前 chunker 重建。
+- prebuilt-only 旧 chunks 同样不能保留；它们在重新导入匹配当前 manifest 前只提供 BM25，不允许混用旧边界向量。
+
+验收：只改变 stored chunker version、保持 embedding input version 不变时 chunks 清空、revision +1、metadata 更新；当前版本重开不变；两个版本同时变化也只递增一次。
+
+### DI：损坏 entry 不得成为 backfill 游标屏障
+
+- `backfill_missing_chunks(limit=N)` 的 limit 约束“成功处理数”，而不是 SQL 候选前缀。使用按 rowid 排序的惰性 cursor 扫描缺 chunks rows，跳过无法构造 `KnowledgeEntry` 的行，直到成功 N 条或候选耗尽。
+- 不修改、删除或伪造损坏 entry/chunk；损坏行继续由 status 的 `entries_missing_chunks` 暴露。函数返回 0 只表示本轮没有任何可合法派生的 entry。
+- 单次调用不把全部 rows `fetchall()` 到内存；生产 `limit=1` 可越过任意早期坏行处理下一条合法数据。
+
+验收：rowid 最小的 entry JSON 损坏、第二条合法时，`limit=1` 为第二条生成 chunks 并返回 1；只剩损坏行时返回 0；正常 limit 和 embedding policy 行为不变。
+
+## 第十六轮实施与关闭条件
+
+1. 先提交并推送本节设计，不提前关闭线程。
+2. DD 单独修改 market bridge error mapping 和既有 market 测试；DE、DF 共用 staged trust boundary 但保留两个独立反例。
+3. DG、DH、DI 分别扩展既有 packs/service/chunks 测试，不新建测试文件，不引入用户文案或 i18n key。
+4. 使用项目 Python 3.11 运行精确反例和相邻 market、pack jobs、packs、service、chunks 回归；运行 Ruff 与 `git diff --check`。本轮无前端改动。
+5. 实现推送后逐条回复提交和精确测试证据并 resolve 6 条线程，再完整分页复核。
+
+关闭条件：永久 Main Server 响应不进入 24 小时重试；job ID 不能冒充另一 pack；激活向量逐字节来自受信 artifact；installed registry 不会掩盖 database 丢失；chunker 升级不混用旧派生数据；坏 entry 不阻塞后续 backfill。只有远端实现和测试证据齐全后才把本轮标为已实施。
