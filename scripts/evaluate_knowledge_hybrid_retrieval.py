@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from knowledge.chunking import EMBEDDING_INPUT_VERSION
+from knowledge.chunking import CHUNKER_VERSION, EMBEDDING_INPUT_VERSION
 from knowledge.catalog_overrides import (
     CatalogOverrideError,
     get_catalog_override_path,
@@ -37,6 +37,7 @@ DEFAULT_CASES = (
 )
 KNOWLEDGE_DATABASE = Path("knowledge.db")
 REQUIRED_INPUT_VERSION = str(EMBEDDING_INPUT_VERSION)
+REQUIRED_CHUNKER_VERSION = str(CHUNKER_VERSION)
 QUERY_BATCH_SIZE = 4
 
 
@@ -142,9 +143,11 @@ def _load_vectors(
                 str(row["key"]): str(row["value"])
                 for row in connection.execute(
                     "SELECT key, value FROM metadata WHERE key IN "
-                    "('schema_version', 'embedding_input_version')"
+                    "('schema_version', 'embedding_input_version', 'chunker_version')"
                 ).fetchall()
             }
+            if metadata.get("chunker_version") != REQUIRED_CHUNKER_VERSION:
+                raise EvaluationUnavailable("chunker_version_mismatch")
             if metadata.get("embedding_input_version") != REQUIRED_INPUT_VERSION:
                 raise EvaluationUnavailable(
                     "embedding_input_version_mismatch"
@@ -214,6 +217,7 @@ def _load_vectors(
         {
             "database": str(database_path),
             "schema_version": int(metadata.get("schema_version", "0")),
+            "chunker_version": int(metadata["chunker_version"]),
             "embedding_input_version": int(metadata["embedding_input_version"]),
             "ready_vectors": len(vectors),
             "invalid_vectors": invalid_vectors,

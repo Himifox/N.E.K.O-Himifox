@@ -800,16 +800,14 @@ class KnowledgeService:
             [
                 MaterialKnowledgeHit(
                     hit=hit,
-                    material_type=source_types.get(
-                        hit.entry.source_tag,
-                        "knowledge",
-                    ),
+                    material_type=source_types[hit.entry.source_tag],
                 )
                 for hit in _rrf_knowledge_hits(
                     list(lexical),
                     list(semantic),
                     limit=max(len(lexical) + len(semantic), limit),
                 )
+                if hit.entry.source_tag in source_types
             ]
             for lexical, semantic in zip(
                 lexical_pools,
@@ -1491,10 +1489,8 @@ class KnowledgeService:
     def material_type_for_entry(
         self,
         entry: KnowledgeEntry,
-    ) -> str:
-        return self._source_material_types(self._store()).get(
-            entry.source_tag, "knowledge"
-        )
+    ) -> str | None:
+        return self._source_material_types(self._store()).get(entry.source_tag)
 
     def _source_material_types(
         self,
@@ -1503,12 +1499,10 @@ class KnowledgeService:
         from .packs import list_installed_packs
 
         source_types = {
-            str(row.get("tag") or ""): get_source(
-                str(row.get("tag") or ""),
-                database_path=self.database_path(),
-            ).material_type
+            tag: get_source(tag).material_type
             for row in store.count_by_source_tags()
-            if str(row.get("tag") or "").startswith("source:")
+            if (tag := str(row.get("tag") or "")).startswith("source:")
+            and not tag.startswith("source:community.")
         }
         for pack in list_installed_packs(
             self.database_path(),
@@ -1526,9 +1520,7 @@ class KnowledgeService:
     def _allowed_material_sources(
         source_types: Mapping[str, str],
         allowed_types: tuple[str, ...],
-    ) -> tuple[str, ...] | None:
-        if frozenset(allowed_types) == frozenset(("knowledge", "corpus")):
-            return None
+    ) -> tuple[str, ...]:
         return tuple(
             sorted(
                 source_tag

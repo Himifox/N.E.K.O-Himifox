@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from knowledge.catalog_overrides import get_catalog_override_path
+from knowledge.chunking import CHUNKER_VERSION
 from knowledge.vector_index import SEMANTIC_THRESHOLD
 from scripts.evaluate_knowledge_hybrid_retrieval import (
     EvaluationUnavailable,
@@ -29,6 +30,7 @@ def _write_vector_database(path: Path, *, ambiguous_source: bool = False) -> Non
             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT INTO metadata VALUES ('schema_version', '6');
             INSERT INTO metadata VALUES ('embedding_input_version', '1');
+            INSERT INTO metadata VALUES ('chunker_version', '1');
             CREATE TABLE entries (
                 title TEXT NOT NULL,
                 terms TEXT NOT NULL,
@@ -145,6 +147,7 @@ def test_vector_corpus_excludes_disabled_entries(tmp_path):
     )
 
     assert [row["title"] for row in corpus.rows] == ["Enabled entry"]
+    assert corpus.status["chunker_version"] == CHUNKER_VERSION
     assert corpus.status["ready_vectors"] == 1
     assert corpus.status["disabled_vectors"] == 1
 
@@ -163,4 +166,17 @@ def test_vector_corpus_rejects_ambiguous_entry_identity(tmp_path):
     _write_vector_database(database, ambiguous_source=True)
 
     with pytest.raises(EvaluationUnavailable, match="entry_identity_unavailable"):
+        _load_vector_corpus(tmp_path, model_id="fixture-model", dimensions=2)
+
+
+def test_vector_corpus_rejects_mismatched_chunker_version(tmp_path):
+    database = tmp_path / "knowledge.db"
+    _write_vector_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE metadata SET value=? WHERE key='chunker_version'",
+            (str(CHUNKER_VERSION + 1),),
+        )
+
+    with pytest.raises(EvaluationUnavailable, match="chunker_version_mismatch"):
         _load_vector_corpus(tmp_path, model_id="fixture-model", dimensions=2)

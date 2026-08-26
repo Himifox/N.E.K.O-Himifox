@@ -126,11 +126,7 @@ from utils.logger_config import setup_logging  # noqa: E402
 from utils.ssl_env_diagnostics import probe_ssl_environment, write_ssl_diagnostic  # noqa: E402
 from utils.asyncio_executor import configure_default_executor  # noqa: E402
 from utils.asgi_body_limit import InboundBodySizeLimitMiddleware  # noqa: E402
-from knowledge.packs import MAX_PACK_BYTES  # noqa: E402
-from knowledge.prebuilt_index import (  # noqa: E402
-    MAX_PREBUILT_MANIFEST_BYTES,
-    MAX_PREBUILT_VECTOR_BYTES,
-)
+from knowledge.limits import MAX_SUBSCRIPTION_ENVELOPE_BYTES  # noqa: E402
 from utils.host_origin_guard import HostOriginGuardMiddleware  # noqa: E402
 
 _main_log_level = getattr(
@@ -617,12 +613,8 @@ async def main_storage_limited_mode_guard(request: Request, call_next):
 app.add_middleware(
     InboundBodySizeLimitMiddleware,
     streamed_path_limits={
-        "/api/public-knowledge/subscriptions/apply": (
-            MAX_PACK_BYTES
-            + MAX_PREBUILT_MANIFEST_BYTES
-            + MAX_PREBUILT_VECTOR_BYTES
-            + 256 * 1024
-        ),
+        "/api/public-knowledge/subscriptions/apply": MAX_SUBSCRIPTION_ENVELOPE_BYTES,
+        "/market/knowledge/subscriptions/apply": MAX_SUBSCRIPTION_ENVELOPE_BYTES,
     },
 )
 # Registered after the body guard so it is the outermost ASGI middleware and

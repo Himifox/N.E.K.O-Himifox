@@ -22,6 +22,12 @@ from utils.asgi_body_limit import (
 )
 
 
+KNOWLEDGE_SUBSCRIPTION_PATHS = (
+    "/api/public-knowledge/subscriptions/apply",
+    "/market/knowledge/subscriptions/apply",
+)
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -191,8 +197,24 @@ def test_default_cap_is_16_mib():
     assert DEFAULT_MAX_INBOUND_BODY_BYTES == 16 * 1024 * 1024
 
 
-def test_exact_streamed_path_rejects_declared_oversized_multipart():
-    path = "/api/public-knowledge/subscriptions/apply"
+def test_main_server_guards_both_knowledge_subscription_paths():
+    from app.main_server import app
+    from knowledge.limits import MAX_SUBSCRIPTION_ENVELOPE_BYTES
+
+    body_guard = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is InboundBodySizeLimitMiddleware
+    )
+
+    assert body_guard.kwargs["streamed_path_limits"] == {
+        path: MAX_SUBSCRIPTION_ENVELOPE_BYTES
+        for path in KNOWLEDGE_SUBSCRIPTION_PATHS
+    }
+
+
+@pytest.mark.parametrize("path", KNOWLEDGE_SUBSCRIPTION_PATHS)
+def test_exact_streamed_path_rejects_declared_oversized_multipart(path):
     mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
     scope = _http_scope(
         [(b"content-length", b"65"), (b"content-type", b"multipart/form-data")]
@@ -212,8 +234,8 @@ def test_exact_streamed_path_rejects_declared_oversized_multipart():
     }
 
 
-def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart():
-    path = "/api/public-knowledge/subscriptions/apply"
+@pytest.mark.parametrize("path", KNOWLEDGE_SUBSCRIPTION_PATHS)
+def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart(path):
     mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
     scope = _http_scope([(b"content-type", b"multipart/form-data")])
     scope["path"] = path
@@ -225,8 +247,8 @@ def test_exact_streamed_path_rejects_actual_oversized_chunked_multipart():
     assert json.loads(sent[1]["body"])["error"] == "请求体超过允许的体积上限。"
 
 
-def test_exact_streamed_path_replays_valid_body_without_changing_bytes():
-    path = "/api/public-knowledge/subscriptions/apply"
+@pytest.mark.parametrize("path", KNOWLEDGE_SUBSCRIPTION_PATHS)
+def test_exact_streamed_path_replays_valid_body_without_changing_bytes(path):
     mw = InboundBodySizeLimitMiddleware(None, streamed_path_limits={path: 64})
     scope = _http_scope([(b"content-type", b"multipart/form-data")])
     scope["path"] = path

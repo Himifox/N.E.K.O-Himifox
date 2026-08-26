@@ -15,7 +15,7 @@ from knowledge.models import (
 )
 from knowledge.store import KnowledgeStore, KnowledgeStoreError
 from knowledge.service import KnowledgeService, _rrf_knowledge_hits
-from knowledge.packs import validate_pack
+from knowledge.packs import get_pack_registry_path, validate_pack
 from knowledge.vector_index import (
     SemanticQueryEmbedding,
     VectorIndexSnapshot,
@@ -1117,6 +1117,79 @@ async def test_target_material_has_an_independent_lexical_candidate_budget(tmp_p
 
     assert [item.material_type for item in result] == ["corpus"]
     assert result[0].hit.entry.title == "shared phrase corpus"
+
+
+@pytest.mark.asyncio
+async def test_corrupt_pack_registry_excludes_untrusted_community_sources(tmp_path):
+    service = KnowledgeService(tmp_path)
+    store = KnowledgeStore(service.database_path())
+    store.upsert(_entry("trusted built-in phrase", source="source:chime"))
+    service.install_pack(
+        validate_pack(
+            {
+                "schema_version": 1,
+                "pack_id": "untrusted-corpus",
+                "material_type": "corpus",
+                "source": {"name": "Untrusted", "homepage": "", "license": "CC0"},
+                "entries": [
+                    {
+                        "title": "untrusted community phrase",
+                        "terms": {"alias": [], "recognition": []},
+                        "tags": [],
+                        "summary": "untrusted community phrase",
+                        "content": "untrusted community phrase",
+                    }
+                ],
+            }
+        )
+    )
+    registry_path = get_pack_registry_path(service.database_path())
+    registry_bytes = registry_path.read_bytes()
+    registry_path.write_text("{", encoding="utf-8")
+
+    assert service.material_type_for_entry(
+        _entry(
+            "untrusted community phrase",
+            source="source:community.untrusted-corpus",
+        )
+    ) is None
+
+    knowledge = await service.asearch(
+        "phrase",
+        allowed_material_types=("knowledge",),
+        limit=10,
+        load_model=False,
+    )
+    corpus = await service.asearch(
+        "phrase",
+        allowed_material_types=("corpus",),
+        limit=10,
+        load_model=False,
+    )
+    combined = await service.asearch(
+        "phrase",
+        allowed_material_types=("knowledge", "corpus"),
+        limit=10,
+        load_model=False,
+    )
+
+    assert [item.hit.entry.title for item in knowledge] == ["trusted built-in phrase"]
+    assert corpus == []
+    assert [item.hit.entry.title for item in combined] == ["trusted built-in phrase"]
+
+    registry_path.write_bytes(registry_bytes)
+    restored = await service.asearch(
+        "untrusted community phrase",
+        allowed_material_types=("corpus",),
+        limit=10,
+        load_model=False,
+    )
+
+    assert [item.hit.entry.title for item in restored] == [
+        "untrusted community phrase"
+    ]
+    assert [item.material_type for item in restored] == ["corpus"]
+    assert service.material_type_for_entry(restored[0].hit.entry) == "corpus"
 
 
 @pytest.mark.asyncio

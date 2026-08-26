@@ -187,8 +187,10 @@ async def handle_public_knowledge_call(
         material_task = asyncio.create_task(
             asyncio.to_thread(
                 lambda: [
-                    (service.material_type_for_entry(entry), entry)
+                    (material_type, entry)
                     for entry in sampled
+                    if (material_type := service.material_type_for_entry(entry))
+                    is not None
                 ]
             )
         )
