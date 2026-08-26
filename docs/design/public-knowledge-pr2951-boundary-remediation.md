@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十七轮均已实施，第十八轮方案已冻结、等待实现证据。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第十八轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -2000,3 +2000,9 @@ CX、CY 由提交 `89b8a30d3` 完成；现有 Plugin Market 测试文件新增�
 4. 实现和证据推送后逐条回复并 resolve 4 条 conversation；DR 只能通过 PR comment 留证据。最后再次完整分页，新增评论不与本轮混入。
 
 关闭条件：损坏 override 不注入 mention；非标准 JSON 不进入 canonical artifact；持久 provider ID 未经市场再认证不能授权删除；linked knowledge root 不触发锁、遍历或删除；outcome 分类只有一份实现。只有远端代码与测试证据齐全后才标记第十八轮已实施。
+
+## 第十八轮实施证据
+
+设计提交 `d0663773a`、实现提交 `03f7c5167` 已推送。DN 在 catalog override 不可信时创建但不缓存空 matcher，阻断旧缓存注入并允许修复后自动恢复。DO 为 pack canonical encoder 启用 `allow_nan=False`。DP 将持久 registry 身份降为候选，删除前使用 package/version/channel/pack 重新获取市场 descriptor，并同时核对 remote、material type 与知识制品 SHA-256；任何缺失、离线或不一致均在 remove/report 前失败关闭。DQ 在 resolve 与 registry lock 前拒绝 knowledge root 自身的 symlink/reparse。DR 以 `_installation_outcome_of()` 统一 callback 与 unsubscribe 的四态分类。
+
+项目 `.venv` Python 3.11 的受影响核心文件为 160 passed、1 skipped，Plugin Market 文件为 37 passed；完整知识相关宽回归为 383 passed、1 skipped、4 deselected。skip 是本机 Windows 目录 symlink 权限；4 个 deselected 与第十七轮相同，均为远端 head 已存在且与本轮路径无关的夹具失配。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。宽回归退出阶段的遥测目录写入被工作区沙盒拒绝，发生在 pytest 已报告全部通过后，不影响测试判定或产品文件。
