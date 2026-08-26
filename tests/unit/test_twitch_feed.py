@@ -159,6 +159,39 @@ async def test_twitch_device_exchange_sends_scopes_and_saves_only_after_validati
 
 
 @pytest.mark.asyncio
+async def test_twitch_refresh_saves_only_against_the_used_snapshot(monkeypatch):
+    original = {
+        "client_id": "clientid123",
+        "access_token": "expired-token",
+        "refresh_token": "refresh-token",
+    }
+    refreshed = {**original, "access_token": "fresh-token"}
+    saved = []
+
+    async def _request(_method, _url, *, headers=None, data=None):
+        return 200, {"access_token": "fresh-token"}
+
+    async def _validated(_client_id, _data):
+        return refreshed
+
+    async def _save(credential, *, expected_credentials=None):
+        saved.append((credential, expected_credentials))
+        return True
+
+    monkeypatch.setattr(twitch_auth, "_request", _request)
+    monkeypatch.setattr(twitch_auth, "_validated_credential", _validated)
+    monkeypatch.setattr(twitch_auth, "_save", _save)
+
+    result = await twitch_auth.TwitchAuthService()._credential_for_access(
+        original,
+        force_refresh=True,
+    )
+
+    assert result == refreshed
+    assert saved == [(refreshed, original)]
+
+
+@pytest.mark.asyncio
 async def test_twitch_status_reports_saved_follow_credential(monkeypatch):
     snapshot_calls = 0
 

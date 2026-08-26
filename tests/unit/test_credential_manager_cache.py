@@ -147,7 +147,12 @@ def test_save_updates_cache_without_reading_file(tmp_path):
         patch("utils.cookies_login._load_credential_sources_uncached") as loader,
     ):
         assert manager.save("weibo", {"SUB": "saved"}) is True
-        assert manager.load("weibo") == {"SUB": "saved"}
+        assert manager.save(
+            "weibo",
+            {"SUB": "refreshed"},
+            expected_credentials={"SUB": "saved"},
+        ) is True
+        assert manager.load("weibo") == {"SUB": "refreshed"}
 
     loader.assert_not_called()
 
@@ -181,6 +186,12 @@ def test_stale_auth_rejection_does_not_override_new_credentials(tmp_path):
     ):
         assert manager.save("weibo", {"SUB": "old"}) is True
         assert manager.save("weibo", {"SUB": "new"}) is True
+        assert manager.save(
+            "weibo",
+            {"SUB": "refreshed-old"},
+            expected_credentials={"SUB": "old"},
+        ) is False
+        assert manager.load("weibo") == {"SUB": "new"}
         assert manager.mark_auth_rejected("weibo", {"SUB": "old"}) is False
         assert manager.mark_auth_rejected("weibo", {"SUB": "new"}) is True
         assert manager.load("weibo") == {}
@@ -207,13 +218,32 @@ def test_delete_retains_and_reuses_stable_key(tmp_path, monkeypatch):
         assert CredentialManager().load("weibo") == {"SUB": "second"}
 
 
+def test_save_rotates_only_a_malformed_retained_key(tmp_path, monkeypatch):
+    cookie_file = tmp_path / "config" / "weibo_cookies.json"
+    cookie_file.parent.mkdir()
+    cookie_file.write_text("broken", encoding="utf-8")
+    key_file = cookie_file.parent / "weibo_key.key"
+    key_file.write_bytes(b"broken")
+    monkeypatch.chdir(tmp_path)
+
+    with _patched_weibo_paths(tmp_path, cookie_file):
+        manager = CredentialManager()
+        assert manager.snapshot("weibo").state == manager.INVALID
+        assert manager.delete("weibo") is True
+        assert manager.save("weibo", {"SUB": "recovered"}) is True
+        assert key_file.read_bytes() != b"broken"
+        assert CredentialManager().load("weibo") == {"SUB": "recovered"}
+
+
 def test_delete_removes_legacy_payloads(tmp_path, monkeypatch):
     configured = tmp_path / "config" / "weibo_cookies.json"
     legacy = tmp_path / "home" / "weibo_cookies.json"
+    unrelated = tmp_path / "weibo_cookies.json"
     configured.parent.mkdir()
     legacy.parent.mkdir()
     configured.write_text('{"SUB":"configured"}', encoding="utf-8")
     legacy.write_text('{"SUB":"legacy"}', encoding="utf-8")
+    unrelated.write_text('{"notes":"keep"}', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     with _patched_weibo_paths(tmp_path, configured):
@@ -223,6 +253,7 @@ def test_delete_removes_legacy_payloads(tmp_path, monkeypatch):
 
     assert not configured.exists()
     assert not legacy.exists()
+    assert unrelated.read_text(encoding="utf-8") == '{"notes":"keep"}'
 
 
 def test_delete_unlinks_symlink_without_deleting_target(tmp_path, monkeypatch):

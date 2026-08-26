@@ -184,7 +184,10 @@ class TwitchAuthService:
                 )
             return {}
         refreshed = await _validated_credential(client_id, data)
-        if refreshed is None or not await _save(refreshed):
+        if refreshed is None or not await _save(
+            refreshed,
+            expected_credentials=credential,
+        ):
             return {}
         return refreshed
 
@@ -227,8 +230,20 @@ async def _snapshot() -> CredentialSnapshot:
     return await asyncio.to_thread(credential_manager.snapshot, "twitch")
 
 
-async def _save(credential: dict[str, str]) -> bool:
-    return await asyncio.to_thread(save_cookies_to_file, "twitch", credential, True)
+async def _save(
+    credential: dict[str, str],
+    *,
+    expected_credentials: dict[str, str] | None = None,
+) -> bool:
+    if expected_credentials is None:
+        return await asyncio.to_thread(save_cookies_to_file, "twitch", credential, True)
+    return await asyncio.to_thread(
+        credential_manager.save,
+        "twitch",
+        credential,
+        True,
+        expected_credentials=expected_credentials,
+    )
 
 
 def _public_status(credential: dict[str, str], *, refreshed: bool) -> dict[str, Any]:

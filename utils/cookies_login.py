@@ -164,12 +164,19 @@ def _save_cookies_to_file_uncached(platform: str, cookies: Dict[str, Any], encry
             key_file = get_cookie_key_file(platform)
             if key_file.exists():
                 key = _read_encryption_key(platform, key_file)
+                try:
+                    fernet = Fernet(key)
+                except (TypeError, ValueError):
+                    logger.warning("%s 加密密钥损坏，将在保存时重新生成", platform)
+                    key = Fernet.generate_key()
+                    _write_encryption_key(platform, key_file, key)
+                    fernet = Fernet(key)
             else:
                 key = Fernet.generate_key()
                 _write_encryption_key(platform, key_file, key)
+                fernet = Fernet(key)
             
             # 加密Cookie数据
-            fernet = Fernet(key)
             cookie_json = json.dumps(cookies, ensure_ascii=False)
             encrypted_data = fernet.encrypt(cookie_json.encode('utf-8'))
             
@@ -334,7 +341,12 @@ def _path_exists(path: Path) -> bool:
     return True
 
 
-def _load_plaintext_cookie_file(platform: str, cookie_file: Path) -> Dict[str, str]:
+def _load_plaintext_cookie_file(
+    platform: str,
+    cookie_file: Path,
+    *,
+    log_success: bool = True,
+) -> Dict[str, str]:
     """Load one legacy plaintext credential file."""
     try:
         cookie_data = json.loads(cookie_file.read_text(encoding="utf-8"))
@@ -356,7 +368,8 @@ def _load_plaintext_cookie_file(platform: str, cookie_file: Path) -> Dict[str, s
     normalized = _normalize_cookies(cookies, platform)
     if not normalized or not validate_cookies(platform, normalized):
         return {}
-    logger.info("✅ 已从兼容路径加载 %s 凭证", platform)
+    if log_success:
+        logger.info("✅ 已从兼容路径加载 %s 凭证", platform)
     return normalized
 
 
@@ -378,7 +391,6 @@ def _load_credential_sources_uncached(
     for legacy_file in candidates[1:]:
         if not _path_exists(legacy_file):
             continue
-        artifact_exists = True
         if legacy_file.is_symlink():
             continue
         credentials = _load_plaintext_cookie_file(platform, legacy_file)
@@ -474,12 +486,32 @@ class CredentialManager:
         entry = self._load_entry(platform)
         return CredentialSnapshot(entry.state, self._copy(entry))
 
-    def save(self, platform: str, cookies: Dict[str, Any], encrypt: bool = True) -> bool:
+    def save(
+        self,
+        platform: str,
+        cookies: Dict[str, Any],
+        encrypt: bool = True,
+        *,
+        expected_credentials: Dict[str, Any] | None = None,
+    ) -> bool:
         normalized = _normalize_cookies(cookies, platform)
         if not normalized:
             return False
+        expected = None
+        if expected_credentials is not None:
+            expected = _normalize_cookies(expected_credentials, platform)
+            if not expected:
+                return False
 
         with self._platform_lock(platform):
+            if expected is not None:
+                entry = self._cached(platform)
+                if (
+                    entry is None
+                    or entry.state != self.READY
+                    or entry.credentials != expected
+                ):
+                    return False
             if not _save_cookies_to_file_uncached(
                 platform,
                 normalized,
@@ -498,7 +530,9 @@ class CredentialManager:
         """Delete credential payloads while retaining stable encryption material."""
         with self._platform_lock(platform):
             artifact_existed = False
-            for stored_file in _credential_file_candidates(platform):
+            entry = self._cached(platform)
+            source_path = entry.source_path if entry is not None else None
+            for index, stored_file in enumerate(_credential_file_candidates(platform)):
                 try:
                     stored_file.lstat()
                 except FileNotFoundError:
@@ -507,6 +541,17 @@ class CredentialManager:
                     with self._cache_lock:
                         self._cache.pop(platform, None)
                     raise
+
+                if index > 0:
+                    if stored_file.is_symlink():
+                        continue
+                    known_source = source_path == str(stored_file)
+                    if not known_source and not _load_plaintext_cookie_file(
+                        platform,
+                        stored_file,
+                        log_success=False,
+                    ):
+                        continue
 
                 try:
                     stored_file.unlink()
