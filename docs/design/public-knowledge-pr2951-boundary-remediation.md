@@ -2184,3 +2184,9 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 3. 实现和证据推送后回复并 resolve `PRRT_kwDOPD8VW86cYT4U`，再完整分页确认是否有新增未解决评论。
 
 关闭条件：显式素材类型在随机抽样的候选计数前生效，且渲染结果再次满足请求类型；目标类型存在时不会因异类候选占位而假空。只有远端实现和测试证据齐全后才标记第二十二轮已实施。
+
+## 第二十二轮实施证据
+
+设计提交 `54d170567`、实现提交 `da42116f1` 已推送。tool handler 现在把显式 `knowledge`/`corpus` 传给服务，`auto`/`all` 保持双类型语义，并在渲染前再次核对实际来源类型。服务只从内置来源表和严格当前注册表发布的社区 source 中构建抽样 allowlist；store 在蓄水池计数前过滤 allowlist，因此异类或未知来源既不能被返回，也不能占用 `limit` 造成假空结果。全局检索的既有扩展来源回退语义未被改变。
+
+混合标签精确反例为 5 passed，context/service/store/packs 相邻回归为 166 passed，知识与市场相关宽回归为 459 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是既有 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有用户文案或 i18n 改动。pytest 完成后的遥测日志告警仍来自工作区沙盒，未影响测试判定。
