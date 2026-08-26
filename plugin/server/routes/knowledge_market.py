@@ -209,10 +209,12 @@ def _installation_mutation_done(
         _installation_mutations.pop(task_id, None)
     if completed.cancelled():
         return
-    try:
-        completed.exception()
-    except Exception:
-        logger.exception("failed to consume knowledge installation mutation result")
+    failure = completed.exception()
+    if failure is not None:
+        logger.error(
+            "knowledge installation mutation failed",
+            exc_info=(type(failure), failure, failure.__traceback__),
+        )
 
 
 def _mark_subscription_cancelled(task: dict[str, Any]) -> None:

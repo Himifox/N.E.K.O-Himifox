@@ -12,22 +12,68 @@ from plugin.server.routes import knowledge_market as module
 
 
 @pytest.fixture(autouse=True)
-def _clear_task_registries():
+async def _clear_task_registries():
     module._tasks.clear()
     module._task_workers.clear()
     module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
     yield
-    for worker in module._task_workers.values():
-        worker.cancel()
-    for mutation in module._installation_mutations.values():
-        mutation.cancel()
+    pending = tuple({
+        *module._task_workers.values(),
+        *module._installation_mutations.values(),
+    })
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
     module._tasks.clear()
     module._task_workers.clear()
     module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
+
+
+@pytest.mark.asyncio
+async def test_installation_mutation_callback_logs_task_failure(monkeypatch):
+    messages = []
+
+    class _Logger:
+        def error(self, *args, **kwargs):
+            messages.append((args, kwargs))
+
+    monkeypatch.setattr(module, "logger", _Logger())
+    failure = RuntimeError("fixture failure")
+    completed = asyncio.get_running_loop().create_future()
+    completed.set_exception(failure)
+    module._installation_mutations["failed-task"] = completed
+
+    module._installation_mutation_done("failed-task", completed)
+
+    assert module._installation_mutations == {}
+    assert len(messages) == 1
+    assert messages[0][0] == ("knowledge installation mutation failed",)
+    assert messages[0][1]["exc_info"][1] is failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ("success", "cancelled"))
+async def test_installation_mutation_callback_does_not_log_expected_outcome(
+    monkeypatch,
+    outcome,
+):
+    class _Logger:
+        def error(self, *_args, **_kwargs):
+            pytest.fail("expected outcome must not log")
+
+    monkeypatch.setattr(module, "logger", _Logger())
+    completed = asyncio.get_running_loop().create_future()
+    if outcome == "success":
+        completed.set_result({"ok": True})
+    else:
+        completed.cancel()
+
+    module._installation_mutation_done("expected-task", completed)
 
 
 def _pack():
