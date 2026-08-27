@@ -15,6 +15,8 @@ from knowledge.catalog_overrides import (
 from knowledge.packs import validate_pack
 from knowledge.service import (
     MaterialKnowledgeHit,
+    _AUTOMATIC_CONTEXT_CLOSING_FENCE,
+    _AUTOMATIC_CONTEXT_MAX_CHARS,
     _is_direct_material_match,
     _is_short_query_embedded_in_term,
 )
@@ -592,6 +594,65 @@ async def test_short_natural_corpus_phrase_does_not_require_an_intent_command(
 
     assert context.corpus_hits == 1
     assert "Conversation trigger:" in context.text
+
+
+@pytest.mark.asyncio
+async def test_automatic_context_keeps_its_closing_fence_when_material_overflows(
+    monkeypatch,
+    tmp_path,
+):
+    """The closing fence marks where untrusted material ends; truncation must keep it.
+
+    One knowledge hit plus one corpus hit with realistic-length fields already
+    exceeds the character budget, so appending the fence before truncating would
+    silently cut it off and hand the LLM an unterminated block of pack content.
+    """
+    service = open_knowledge(tmp_path)
+
+    def _long_entry(title: str, source: str) -> KnowledgeEntry:
+        return KnowledgeEntry(
+            title=title * 12,
+            terms={"alias": (), "recognition": ()},
+            tags=(source,),
+            summary="释义" * 300,
+            content="正文" * 600,
+        )
+
+    async def _asearch(*_args, **_kwargs):
+        return [
+            MaterialKnowledgeHit(
+                hit=KnowledgeHit(
+                    entry=_long_entry("超长知识词条", "source:corpora"),
+                    score=0.9,
+                    retrieval_modes=("lexical", "semantic"),
+                    lexical_score=3.0,
+                    semantic_score=0.9,
+                ),
+                material_type="knowledge",
+            ),
+            MaterialKnowledgeHit(
+                hit=KnowledgeHit(
+                    entry=_long_entry("超长语料词条", "source:corpora"),
+                    score=0.9,
+                    retrieval_modes=("lexical", "semantic"),
+                    lexical_score=3.0,
+                    semantic_score=0.9,
+                ),
+                material_type="corpus",
+            ),
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context("超长素材问题")
+
+    assert context.knowledge_hits == 1
+    assert context.corpus_hits == 1
+    # The budget really was hit — otherwise this test would pass even with the
+    # fence appended after truncation.
+    assert len(context.text) > _AUTOMATIC_CONTEXT_MAX_CHARS - 50
+    assert len(context.text) <= _AUTOMATIC_CONTEXT_MAX_CHARS
+    assert context.text.startswith("======[EPHEMERAL CONVERSATION REFERENCE]======")
+    assert context.text.endswith(_AUTOMATIC_CONTEXT_CLOSING_FENCE)
 
 
 @pytest.mark.asyncio

@@ -372,14 +372,31 @@ class TtsRuntimeMixin:
                     except Exception:
                         break
         async with self.tts_cache_lock:
-            if clear_all_pending:
+            # 判据是白名单「只留当前轮」，不是黑名单「只删 expected」：
+            # ``current_speech_id`` 可以在不经过本函数的路径上 rotate
+            # （prepare_proactive_delivery / handle_avatar_interaction 直接赋
+            # uuid4），worker 未就绪时 pending 里因此可能同时躺着第三个已作废的
+            # sid。只删 expected 会把它永久漏下，等 __ready__ 触发
+            # ``_flush_tts_pending_chunks`` 时被重新入队念出来——正是打断要防的。
+            # 没被抢占（current == expected）时全清，与引入本参数之前同行为。
+            if clear_all_pending or self.current_speech_id == expected_speech_id:
                 self.tts_pending_chunks.clear()
             else:
                 self.tts_pending_chunks[:] = [
                     (speech_id, text)
                     for speech_id, text in self.tts_pending_chunks
-                    if speech_id != expected_speech_id
+                    if speech_id == self.current_speech_id
                 ]
+            # ``_tts_done_pending_until_ready`` 的对偶是 ``tts_pending_chunks``
+            # （见函数顶部注释），所以它跟摘除同步清零，不受下面的陈旧
+            # early-return 管辖——但只在 pending 真的空了之后才清：
+            #  - pending 空：没有文本等着刷了，留 True 会让 __ready__ 后的
+            #    ``_flush_tts_pending_chunks`` 给已作废的那轮补发 done sentinel，
+            #    落到还在流式输出的新一轮上提前收尾。
+            #  - pending 非空：留着的是新一轮的文本，它们刷出后仍需补 done，
+            #    这里清成 False 会让那一轮的 sentinel 永远发不出、合成器不 flush。
+            if not self.tts_pending_chunks:
+                self._tts_done_pending_until_ready = False
             if (
                 not clear_all_pending
                 and self.current_speech_id != expected_speech_id

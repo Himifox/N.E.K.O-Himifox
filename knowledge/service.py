@@ -38,6 +38,10 @@ from .vector_index import (
 _KNOWLEDGE_RRF_K = 60
 _MANAGEMENT_SEARCH_RESULT_LIMIT = 10_101
 _T = TypeVar("_T")
+_AUTOMATIC_CONTEXT_CLOSING_FENCE = (
+    "=========================================================="
+)
+_AUTOMATIC_CONTEXT_MAX_CHARS = 2_000
 
 
 def _empty_chunk_status() -> dict[str, int | float]:
@@ -1643,8 +1647,14 @@ class KnowledgeService:
                     f"Conversation trigger: {entry.title}\n"
                     f"Reference material: {material}\n"
                 )
-        lines.append("==========================================================")
-        return "".join(lines)[:2_000]
+        # 收尾栅栏必须先于正文预留位置再拼：它是「不可信素材到此为止」的唯一
+        # 标记，与开头的 ``======[EPHEMERAL CONVERSATION REFERENCE]======``
+        # 成对。先 append 再整体截断会在素材够长时把它切掉，模型看到的就是一段
+        # 没有封口的外部内容。
+        body = "".join(lines)[
+            : _AUTOMATIC_CONTEXT_MAX_CHARS - len(_AUTOMATIC_CONTEXT_CLOSING_FENCE) - 1
+        ].rstrip()
+        return f"{body}\n{_AUTOMATIC_CONTEXT_CLOSING_FENCE}"
 
     def _render_turn_context(
         self,
