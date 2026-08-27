@@ -2369,3 +2369,7 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - 反例固定同一秒写满 100 个字典序更大的历史 job，再写入字典序最小的当前 job；断言当前记录存在、总数为 100、被淘汰的是历史集合中最旧排序项。
 
 关闭条件：无论同秒 job ID 排序如何，刚完成 durable install 的当前 activation 都存在于原子写回后的外部提交日志，并能通过后续 active 核验。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86crDYk`。
+
+## 第二十七轮实施证据
+
+设计提交 `26b732213`、实现提交 `cd5f1b09c` 已推送。提交日志裁剪现在先排除当前 job，从其它记录中按既有顺序保留最多 99 条，再无条件加入当前 activation 并确定性排序写回；总数仍为 100，不改变 schema。固定同一秒、当前 job ID 字典序最小的反例证明当前记录保留，淘汰的是历史集合中的最小排序项。完整 pack-jobs 回归为 97 passed、3 skipped；3 个 skip 仍是本机 Windows symlink 权限。Ruff、compileall 与 `git diff --check` 均通过。
