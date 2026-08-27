@@ -64,9 +64,13 @@ export default {
     indexStatus: '向量索引', indexOrigin: '索引来源', indexTrust: '信任状态', indexValidation: '校验状态', indexFallback: '降级方式',
     localEmbeddingState: '本机维护状态', allowLocalEmbedding: '允许本机维护向量', enabled: '已启用', disabledState: '已禁用',
     packageStatus: '知识包运行态', sourceDistribution: '来源分布', otherSources: '其他', inactivePacks: '关闭', needsAttention: '需关注', materialMix: '知识包类型', noPacks: '暂无知识包',
+    vectorReadyPercent: '已就绪 {percent}%', noVectorChunks: '暂无向量分块', vectorBuilding: '构建中', vectorComplete: '全部就绪', vectorWaiting: '等待构建',
     indexPolicyHint: '可能占用本机 CPU 和内存；关闭后，可信索引不可用时将降级为 BM25。',
     loadFailed: '知识库数据加载失败', operationFailed: '知识库操作失败', importSuccess: '知识包导入成功', importQueued: '知识包正在后台静默处理，准备完成后会自动载入', importStillProcessing: '知识包仍在后台处理，请稍后刷新查看状态',
     degradedJobs: '已隔离的导入任务', degradedJobHint: '损坏的任务无法继续。核对 ID 后丢弃对应任务，即可恢复新的导入。', discardJobConfirm: '确定丢弃隔离任务 {name} 吗？只会删除它的暂存文件。', jobDiscarded: '隔离任务已丢弃',
+    importingPacks: '正在导入知识包', importingPackHint: '正在校验并准备本地知识库，可离开此页面，稍后回来查看。',
+    importStateQueued: '等待处理', importStateValidating: '正在校验', importStateBuildingFts: '正在建立词法索引', importStateVerifyingIndex: '正在检查向量索引', importStateEmbedding: '正在准备向量',
+    importProgressMeta: '已完成 {percent}% · {entries} 词条 · {chunks} 分块', importPreparingMeta: '{entries} 词条 · {chunks} 分块',
     invalidPack: '知识包格式无效', importTooLarge: '知识包超过 10 MiB 大小限制', removeConfirm: '确定移除知识包 {name} 吗？'
   },
   market: {

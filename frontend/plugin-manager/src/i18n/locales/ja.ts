@@ -64,9 +64,13 @@ export default {
     indexStatus: 'ベクトル索引', indexOrigin: '索引元', indexTrust: '信頼状態', indexValidation: '検証状態', indexFallback: 'フォールバック',
     localEmbeddingState: 'ローカル保守状態', allowLocalEmbedding: 'ローカルでのベクトル保守を許可', enabled: '有効', disabledState: '無効',
     packageStatus: 'パック稼働状態', sourceDistribution: '出典分布', otherSources: 'その他', inactivePacks: 'オフ', needsAttention: '要確認', materialMix: 'パック種別', noPacks: 'ナレッジパックはありません',
+    vectorReadyPercent: '{percent}% 準備完了', noVectorChunks: 'ベクトルチャンクなし', vectorBuilding: '構築中', vectorComplete: 'すべて準備完了', vectorWaiting: '構築待ち',
     indexPolicyHint: 'ローカルの CPU とメモリを使用する場合があります。無効時は信頼済み索引が利用できなければ BM25 にフォールバックします。',
     loadFailed: 'ナレッジデータを読み込めません', operationFailed: 'ナレッジ操作に失敗しました', importSuccess: 'ナレッジパックを導入しました', importQueued: 'ナレッジパックをバックグラウンドで準備中です。完了後に自動で利用可能になります', importStillProcessing: 'ナレッジパックは処理中です。後でもう一度更新して状態を確認してください。',
     degradedJobs: '隔離されたインポート', degradedJobHint: '破損したジョブは続行できません。ID を確認して破棄すると、新しいインポートを再開できます。', discardJobConfirm: '隔離ジョブ {name} を破棄しますか？ステージングファイルのみ削除されます。', jobDiscarded: '隔離ジョブを破棄しました',
+    importingPacks: 'ナレッジパックをインポート中', importingPackHint: 'ローカルナレッジベースを検証して準備しています。このページを離れて後で戻ることができます。',
+    importStateQueued: '待機中', importStateValidating: '検証中', importStateBuildingFts: '字句インデックスを作成中', importStateVerifyingIndex: 'ベクトルインデックスを確認中', importStateEmbedding: 'ベクトルを準備中',
+    importProgressMeta: '{percent}% 完了 · {entries} 件 · {chunks} チャンク', importPreparingMeta: '{entries} 件 · {chunks} チャンク',
     invalidPack: 'ナレッジパックが無効です', importTooLarge: 'ナレッジパックが 10 MiB の上限を超えています', removeConfirm: 'ナレッジパック {name} を削除しますか？'
   },
   market: {

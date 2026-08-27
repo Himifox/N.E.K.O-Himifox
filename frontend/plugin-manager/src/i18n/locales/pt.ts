@@ -64,9 +64,13 @@ export default {
     indexStatus: 'Índice vetorial', indexOrigin: 'Origem', indexTrust: 'Confiança', indexValidation: 'Validação', indexFallback: 'Modo alternativo',
     localEmbeddingState: 'Manutenção local', allowLocalEmbedding: 'Permitir manutenção local de vetores', enabled: 'Ativado', disabledState: 'Desativado',
     packageStatus: 'Estado dos pacotes', sourceDistribution: 'Distribuição de fontes', otherSources: 'Outros', inactivePacks: 'Desativados', needsAttention: 'Precisa de atenção', materialMix: 'Tipo de pacote', noPacks: 'Nenhum pacote',
+    vectorReadyPercent: '{percent}% pronto', noVectorChunks: 'Sem fragmentos vetoriais', vectorBuilding: 'Criando', vectorComplete: 'Tudo pronto', vectorWaiting: 'Aguardando criação',
     indexPolicyHint: 'Pode usar CPU e memória locais. Se desativado, usa BM25 quando o índice confiável não está disponível.',
     loadFailed: 'Falha ao carregar os dados', operationFailed: 'A operação falhou', importSuccess: 'Pacote importado', importQueued: 'O pacote está sendo preparado em segundo plano e aparecerá quando estiver pronto', importStillProcessing: 'O pacote ainda está sendo processado. Atualize mais tarde para verificar o estado.',
     degradedJobs: 'Importações em quarentena', degradedJobHint: 'Tarefas danificadas não podem continuar. Confira o ID e descarte a tarefa para liberar novas importações.', discardJobConfirm: 'Descartar a tarefa em quarentena {name}? Apenas os arquivos temporários serão removidos.', jobDiscarded: 'Tarefa em quarentena descartada',
+    importingPacks: 'Importando pacotes de conhecimento', importingPackHint: 'A base de conhecimento local está sendo verificada e preparada. Você pode sair desta página e voltar depois.',
+    importStateQueued: 'Aguardando', importStateValidating: 'Validando', importStateBuildingFts: 'Criando índice lexical', importStateVerifyingIndex: 'Verificando índice vetorial', importStateEmbedding: 'Preparando vetores',
+    importProgressMeta: '{percent}% concluído · {entries} entradas · {chunks} fragmentos', importPreparingMeta: '{entries} entradas · {chunks} fragmentos',
     invalidPack: 'Pacote inválido', importTooLarge: 'O pacote de conhecimento excede o limite de 10 MiB', removeConfirm: 'Remover o pacote {name}?'
   },
   market: {

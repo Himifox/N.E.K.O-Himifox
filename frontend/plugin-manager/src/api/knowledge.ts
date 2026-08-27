@@ -114,6 +114,12 @@ export interface KnowledgeStatus {
   corpus_packs?: number
   knowledge_entries?: number
   corpus_entries?: number
+  chunks_total?: number
+  chunks_ready?: number
+  chunks_pending?: number
+  chunks_stale?: number
+  chunks_failed?: number
+  indexed_percent?: number
   sources?: Array<{ tag: string; entries: number }>
   error_type?: string
   error_code?: string
@@ -168,6 +174,8 @@ export interface KnowledgePackSummary {
   index_validation?: string
   index_fallback_reason?: string
   local_embedding_enabled?: boolean
+  prebuilt_chunks_ready?: number
+  prebuilt_chunks_missing?: number
 }
 
 export interface KnowledgePackIndexPolicy {
@@ -181,6 +189,8 @@ export interface KnowledgePackJob {
   state: string
   reason?: string
   indexed_percent?: number
+  entries_total?: number
+  chunks_total?: number
 }
 
 export const knowledgeApi = {

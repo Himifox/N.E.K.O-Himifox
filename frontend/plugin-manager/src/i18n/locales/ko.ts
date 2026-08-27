@@ -64,9 +64,13 @@ export default {
     indexStatus: '벡터 인덱스', indexOrigin: '인덱스 출처', indexTrust: '신뢰 상태', indexValidation: '검증 상태', indexFallback: '대체 방식',
     localEmbeddingState: '로컬 유지 상태', allowLocalEmbedding: '로컬 벡터 유지 허용', enabled: '활성화', disabledState: '비활성화',
     packageStatus: '지식 팩 실행 상태', sourceDistribution: '출처 분포', otherSources: '기타', inactivePacks: '꺼짐', needsAttention: '확인 필요', materialMix: '팩 유형', noPacks: '지식 팩 없음',
+    vectorReadyPercent: '{percent}% 준비됨', noVectorChunks: '벡터 청크 없음', vectorBuilding: '구축 중', vectorComplete: '모두 준비됨', vectorWaiting: '구축 대기 중',
     indexPolicyHint: '로컬 CPU와 메모리를 사용할 수 있습니다. 끄면 신뢰할 수 있는 인덱스를 사용할 수 없을 때 BM25로 대체됩니다.',
     loadFailed: '지식 데이터를 불러오지 못했습니다', operationFailed: '지식 작업에 실패했습니다', importSuccess: '지식 팩을 가져왔습니다', importQueued: '지식 팩을 백그라운드에서 준비 중이며 완료되면 자동으로 사용할 수 있습니다', importStillProcessing: '지식 팩이 아직 처리 중입니다. 나중에 새로고침하여 상태를 확인하세요.',
     degradedJobs: '격리된 가져오기 작업', degradedJobHint: '손상된 작업은 계속할 수 없습니다. ID를 확인한 뒤 폐기하면 새 가져오기를 다시 시작할 수 있습니다.', discardJobConfirm: '격리 작업 {name}을(를) 폐기할까요? 스테이징 파일만 삭제됩니다.', jobDiscarded: '격리 작업을 폐기했습니다',
+    importingPacks: '지식 팩 가져오는 중', importingPackHint: '로컬 지식 베이스를 확인하고 준비하는 중입니다. 이 페이지를 나갔다가 나중에 돌아올 수 있습니다.',
+    importStateQueued: '대기 중', importStateValidating: '확인 중', importStateBuildingFts: '어휘 색인 생성 중', importStateVerifyingIndex: '벡터 색인 확인 중', importStateEmbedding: '벡터 준비 중',
+    importProgressMeta: '{percent}% 완료 · 항목 {entries}개 · 청크 {chunks}개', importPreparingMeta: '항목 {entries}개 · 청크 {chunks}개',
     invalidPack: '잘못된 지식 팩입니다', importTooLarge: '지식 팩이 10 MiB 크기 제한을 초과했습니다', removeConfirm: '지식 팩 {name}을(를) 제거할까요?'
   },
   market: {

@@ -629,10 +629,9 @@ def _store_embedding_vectors(
     model_id: str,
     dimensions: int,
 ) -> tuple[int, int, int, int]:
-    stored = 0
     failed = 0
-    stale_writebacks = 0
     capacity_deferred = 0
+    prepared: list[dict[str, object]] = []
     with mutation_lock(store.database_path):
         status = store.chunk_status(strict=True)
         remaining_capacity = max(
@@ -678,17 +677,18 @@ def _store_embedding_vectors(
             if remaining_capacity <= 0:
                 capacity_deferred += 1
                 continue
-            payload = stored_array.tobytes()
-            did_store = store.store_chunk_embedding(
-                chunk_id=str(chunk["chunk_id"]),
-                content_hash=str(chunk["content_hash"]),
-                model_id=model_id,
-                dimensions=dimensions,
-                embedding=payload,
+            prepared.append(
+                {
+                    "chunk_id": str(chunk["chunk_id"]),
+                    "content_hash": str(chunk["content_hash"]),
+                    "model_id": model_id,
+                    "dimensions": dimensions,
+                    "embedding": stored_array.tobytes(),
+                }
             )
-            stored += int(did_store)
-            stale_writebacks += int(not did_store)
-            remaining_capacity -= int(did_store)
+            remaining_capacity -= 1
+        stored = store.store_chunk_embedding_batch(prepared)
+        stale_writebacks = len(prepared) - stored
     return stored, failed, stale_writebacks, capacity_deferred
 
 

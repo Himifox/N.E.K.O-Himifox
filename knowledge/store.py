@@ -1129,6 +1129,59 @@ class KnowledgeStore:
                 self._increment_chunks_revision(connection)
             return changed
 
+    def store_chunk_embedding_batch(
+        self,
+        records: Sequence[dict[str, object]],
+        *,
+        embedding_policy: str = "local",
+    ) -> int:
+        """Publish matching background vectors in one visible transaction."""
+        embedding_policy = _validate_embedding_policy(embedding_policy)
+        validated: list[tuple[str, str, str, int, bytes]] = []
+        seen: set[str] = set()
+        for record in records:
+            chunk_id = str(record.get("chunk_id") or "")
+            content_hash = str(record.get("content_hash") or "")
+            model_id = str(record.get("model_id") or "")
+            dimensions = int(record.get("dimensions") or 0)
+            embedding = record.get("embedding")
+            if (
+                not chunk_id
+                or chunk_id in seen
+                or not content_hash
+                or not model_id
+                or dimensions <= 0
+                or not isinstance(embedding, bytes)
+                or len(embedding) != dimensions * 2
+            ):
+                raise ValueError("invalid or duplicate chunk embedding record")
+            seen.add(chunk_id)
+            validated.append((chunk_id, content_hash, model_id, dimensions, embedding))
+        if not validated:
+            return 0
+
+        stored = 0
+        with self._connection(writable=True) as connection:
+            for chunk_id, content_hash, model_id, dimensions, embedding in validated:
+                cursor = connection.execute(
+                    "UPDATE knowledge_chunks SET embedding_model_id=?, "
+                    "embedding_dimensions=?, embedding=?, embedding_status='ready', "
+                    "embedding_attempts=0, next_retry_at=0, last_error_code='' "
+                    "WHERE embedding_policy=? AND chunk_id=? AND content_hash=?",
+                    (
+                        model_id,
+                        dimensions,
+                        embedding,
+                        embedding_policy,
+                        chunk_id,
+                        content_hash,
+                    ),
+                )
+                stored += int(cursor.rowcount) == 1
+            if stored:
+                self._increment_chunks_revision(connection)
+        return stored
+
     def store_chunk_embeddings(
         self,
         records: Sequence[dict[str, object]],

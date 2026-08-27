@@ -594,3 +594,29 @@ def test_strict_embedding_batch_rolls_back_when_one_chunk_is_stale(tmp_path):
             "SELECT embedding_status FROM knowledge_chunks ORDER BY chunk_index"
         ).fetchall()
     assert all(row["embedding_status"] == "pending" for row in statuses)
+
+
+def test_background_embedding_batch_publishes_matching_vectors_once(tmp_path):
+    store = KnowledgeStore(tmp_path / "knowledge.db")
+    store.upsert(_entry(content="# A\n\n" + "a" * 1_000 + "\n\n# B\n\n" + "b" * 1_000))
+    pending = store.pending_embedding_chunks(model_id="fixture", limit=2)
+    assert len(pending) == 2
+    records = [
+        {
+            "chunk_id": str(chunk["chunk_id"]),
+            "content_hash": str(chunk["content_hash"]),
+            "model_id": "fixture",
+            "dimensions": 2,
+            "embedding": b"\x00\x00\x00\x00",
+        }
+        for chunk in pending
+    ]
+    records[1]["content_hash"] = "stale-hash"
+    before_revision = store.chunks_revision()
+
+    assert store.store_chunk_embedding_batch(records) == 1
+
+    status = store.chunk_status()
+    assert status["chunks_ready"] == 1
+    assert status["chunks_pending"] >= 1
+    assert store.chunks_revision() == before_revision + 1

@@ -64,9 +64,13 @@ export default {
     indexStatus: 'Índice vectorial', indexOrigin: 'Origen', indexTrust: 'Confianza', indexValidation: 'Validación', indexFallback: 'Modo alternativo',
     localEmbeddingState: 'Mantenimiento local', allowLocalEmbedding: 'Permitir mantenimiento local de vectores', enabled: 'Activado', disabledState: 'Desactivado',
     packageStatus: 'Estado de paquetes', sourceDistribution: 'Distribución de fuentes', otherSources: 'Otros', inactivePacks: 'Desactivados', needsAttention: 'Requiere atención', materialMix: 'Tipo de paquete', noPacks: 'No hay paquetes',
+    vectorReadyPercent: '{percent}% listo', noVectorChunks: 'Sin fragmentos vectoriales', vectorBuilding: 'Creando', vectorComplete: 'Todo listo', vectorWaiting: 'En espera',
     indexPolicyHint: 'Puede usar CPU y memoria locales. Si se desactiva, se usa BM25 cuando el índice de confianza no está disponible.',
     loadFailed: 'No se pudieron cargar los datos', operationFailed: 'La operación falló', importSuccess: 'Paquete importado', importQueued: 'El paquete se está preparando en segundo plano y aparecerá cuando esté listo', importStillProcessing: 'El paquete sigue procesándose. Actualiza más tarde para ver su estado.',
     degradedJobs: 'Importaciones en cuarentena', degradedJobHint: 'Las tareas dañadas no pueden continuar. Revisa el ID y descarta la tarea para desbloquear nuevas importaciones.', discardJobConfirm: '¿Descartar la tarea en cuarentena {name}? Solo se eliminarán sus archivos temporales.', jobDiscarded: 'Tarea en cuarentena descartada',
+    importingPacks: 'Importando paquetes de conocimiento', importingPackHint: 'La base de conocimiento local se está verificando y preparando. Puedes salir de esta página y volver más tarde.',
+    importStateQueued: 'En espera', importStateValidating: 'Validando', importStateBuildingFts: 'Creando índice léxico', importStateVerifyingIndex: 'Comprobando índice vectorial', importStateEmbedding: 'Preparando vectores',
+    importProgressMeta: '{percent}% completado · {entries} entradas · {chunks} fragmentos', importPreparingMeta: '{entries} entradas · {chunks} fragmentos',
     invalidPack: 'Paquete no válido', importTooLarge: 'El paquete de conocimiento supera el límite de 10 MiB', removeConfirm: '¿Eliminar el paquete {name}?'
   },
   market: {

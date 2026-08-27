@@ -64,9 +64,13 @@ export default {
     indexStatus: 'Векторный индекс', indexOrigin: 'Источник', indexTrust: 'Доверие', indexValidation: 'Проверка', indexFallback: 'Резервный режим',
     localEmbeddingState: 'Локальное обслуживание', allowLocalEmbedding: 'Разрешить локальное обслуживание векторов', enabled: 'Включено', disabledState: 'Отключено',
     packageStatus: 'Состояние пакетов', sourceDistribution: 'Распределение источников', otherSources: 'Другие', inactivePacks: 'Отключено', needsAttention: 'Требует внимания', materialMix: 'Тип пакета', noPacks: 'Нет пакетов знаний',
+    vectorReadyPercent: 'Готово {percent}%', noVectorChunks: 'Нет векторных фрагментов', vectorBuilding: 'Создаётся', vectorComplete: 'Полностью готово', vectorWaiting: 'Ожидает создания',
     indexPolicyHint: 'Может использовать локальные CPU и память. Если отключено, при недоступном доверенном индексе используется BM25.',
     loadFailed: 'Не удалось загрузить данные', operationFailed: 'Операция не выполнена', importSuccess: 'Пакет импортирован', importQueued: 'Пакет готовится в фоновом режиме и появится после завершения', importStillProcessing: 'Пакет всё ещё обрабатывается. Обновите страницу позже, чтобы проверить состояние.',
     degradedJobs: 'Импорты в карантине', degradedJobHint: 'Повреждённые задания не могут продолжиться. Проверьте ID и удалите задание, чтобы разблокировать новый импорт.', discardJobConfirm: 'Удалить задание в карантине {name}? Будут удалены только его временные файлы.', jobDiscarded: 'Задание в карантине удалено',
+    importingPacks: 'Импорт пакетов знаний', importingPackHint: 'Локальная база знаний проверяется и подготавливается. Можно покинуть страницу и вернуться позже.',
+    importStateQueued: 'В очереди', importStateValidating: 'Проверка', importStateBuildingFts: 'Создание лексического индекса', importStateVerifyingIndex: 'Проверка векторного индекса', importStateEmbedding: 'Подготовка векторов',
+    importProgressMeta: 'Готово {percent}% · записей: {entries} · фрагментов: {chunks}', importPreparingMeta: 'Записей: {entries} · фрагментов: {chunks}',
     invalidPack: 'Недопустимый пакет', importTooLarge: 'Пакет знаний превышает ограничение 10 МиБ', removeConfirm: 'Удалить пакет {name}?'
   },
   market: {

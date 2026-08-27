@@ -92,9 +92,11 @@
                       <span>{{ t('knowledge.allowLocalEmbedding') }}</span>
                       <strong>{{ pack.local_embedding_enabled === true ? t('knowledge.enabled') : t('knowledge.disabledState') }}</strong>
                     </div>
-                    <div class="overview-state-cell" :class="packIndexStateClass(pack)">
-                      <span>{{ t('knowledge.indexValidation') }}</span>
-                      <strong>{{ displayIndexValue(pack.index_validation) }}</strong>
+                    <div class="overview-state-cell" :class="packVectorStateClass(pack)">
+                      <span :title="`${t('knowledge.indexStatus')} · ${packVectorStateLabel(pack)}`">
+                        {{ t('knowledge.indexStatus') }} · {{ packVectorStateLabel(pack) }}
+                      </span>
+                      <strong>{{ formatPackVectorProgress(pack) }}</strong>
                     </div>
                   </div>
                 </div>
@@ -153,6 +155,33 @@
           <input ref="fileInput" type="file" accept="application/json,.json" hidden @change="importSelectedPack" />
           <el-button type="primary" @click="fileInput?.click()">{{ t('knowledge.importPack') }}</el-button>
         </div>
+        <section v-if="activeImportJobs.length" class="import-job-panel" aria-live="polite">
+          <div class="import-job-panel__heading">
+            <div>
+              <div class="import-job-panel__title">
+                <strong>{{ t('knowledge.importingPacks') }}</strong>
+                <el-tag type="primary" effect="plain">{{ activeImportJobs.length }}</el-tag>
+              </div>
+              <p>{{ t('knowledge.importingPackHint') }}</p>
+            </div>
+          </div>
+          <div class="import-job-list">
+            <div v-for="job in activeImportJobs" :key="job.job_id" class="import-job-row">
+              <div class="import-job-row__heading">
+                <strong>{{ job.pack_id || job.job_id }}</strong>
+                <el-tag type="primary" effect="plain">{{ displayImportJobState(job.state) }}</el-tag>
+              </div>
+              <el-progress
+                :percentage="jobProgressPercentage(job)"
+                :indeterminate="!hasMeasuredJobProgress(job)"
+                :show-text="false"
+                :stroke-width="6"
+                :duration="2"
+              />
+              <span>{{ formatImportJobMeta(job) }}</span>
+            </div>
+          </div>
+        </section>
         <section v-if="degradedPackJobs.length" class="degraded-job-panel" aria-live="polite">
           <div class="degraded-job-panel__heading">
             <div>
@@ -193,6 +222,10 @@
                   <div>
                     <dt>{{ t('knowledge.localEmbeddingState') }}</dt>
                     <dd>{{ scope.row.local_embedding_enabled ? t('knowledge.enabled') : t('knowledge.disabledState') }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t('knowledge.indexStatus') }}</dt>
+                    <dd>{{ formatPackVectorProgress(scope.row) }} · {{ packVectorStateLabel(scope.row) }}</dd>
                   </div>
                 </dl>
               </template>
@@ -353,11 +386,13 @@ type KnowledgeStatusView = KnowledgeStatus & { status: 'ready' | 'degraded' }
 const KNOWLEDGE_OVERVIEW_CACHE_TTL_MS = 30_000
 const KNOWLEDGE_OVERVIEW_CACHE_KEY = 'neko.pluginManager.knowledgeOverview'
 const PACK_JOB_POLL_LIMIT_MS = 10 * 60_000
+const VECTOR_PROGRESS_POLL_MS = 10_000
 let cachedStatus: { value: KnowledgeStatusView; loadedAt: number } | null = null
 let cachedPacks: { value: KnowledgePackSummary[]; loadedAt: number } | null = null
 let overviewRefreshTimer: number | null = null
 let overviewRefreshInFlight: Promise<void> | null = null
 let packJobPollTimer: number | null = null
+let vectorProgressPollTimer: number | null = null
 let packJobPollAttempts = 0
 let packJobPollInFlight = false
 let deferredIdleHandle: number | null = null
@@ -438,13 +473,36 @@ const degradedPackJobs = computed(() => (
   packJobs.value.filter((job) => job.state === 'degraded')
 ))
 
+const activeImportJobs = computed(() => (
+  packJobs.value.filter((job) => !['active', 'cancelled', 'failed', 'degraded'].includes(String(job.state || '')))
+))
+
 const packRuntimeCards = computed(() => {
   const total = packs.value.length
   const autoEnabled = packs.value.filter((pack) => pack.auto_context === true).length
-  const localVectorEnabled = packs.value.filter((pack) => pack.local_embedding_enabled === true).length
   const acceptedIndex = packs.value.filter((pack) => String(pack.index_validation || '') === 'accepted').length
   const corpusPacks = packs.value.filter((pack) => pack.effective_material_type === 'corpus').length
   const knowledgePacks = total - corpusPacks
+  const packVectorSnapshot = packs.value.reduce(
+    (summary, pack) => {
+      const counts = packVectorCounts(pack)
+      summary.ready += counts.ready
+      summary.total += counts.total
+      return summary
+    },
+    { ready: 0, total: 0 },
+  )
+  const vectorTotal = packVectorSnapshot.total > 0
+    ? packVectorSnapshot.total
+    : Math.max(0, Number(status.value?.chunks_total) || 0)
+  const vectorReady = packVectorSnapshot.total > 0
+    ? packVectorSnapshot.ready
+    : Math.min(vectorTotal, Math.max(0, Number(status.value?.chunks_ready) || 0))
+  const vectorPercent = vectorTotal > 0 ? Math.round(vectorReady * 1000 / vectorTotal) / 10 : 0
+  const vectorBuilding = packs.value.some((pack) => {
+    const counts = packVectorCounts(pack)
+    return pack.local_embedding_enabled === true && counts.total > counts.ready
+  })
   return [
     {
       key: 'auto-context',
@@ -455,10 +513,14 @@ const packRuntimeCards = computed(() => {
     },
     {
       key: 'local-vector',
-      label: t('knowledge.allowLocalEmbedding'),
-      value: localVectorEnabled,
-      meta: `${t('knowledge.enabled')} ${localVectorEnabled} / ${t('knowledge.disabledState')} ${total - localVectorEnabled}`,
-      tone: localVectorEnabled > 0 ? 'success' : 'muted',
+      label: t('knowledge.indexStatus'),
+      value: `${vectorReady} / ${vectorTotal}`,
+      meta: vectorTotal > 0
+        ? `${vectorReady === vectorTotal ? t('knowledge.vectorComplete') : t('knowledge.vectorBuilding')} · ${t('knowledge.vectorReadyPercent', { percent: vectorPercent })}`
+        : t('knowledge.noVectorChunks'),
+      tone: vectorTotal > 0 && vectorReady === vectorTotal
+        ? 'success'
+        : (vectorBuilding ? 'info' : (vectorReady > 0 ? 'warning' : 'muted')),
     },
     {
       key: 'index-health',
@@ -476,6 +538,88 @@ const packRuntimeCards = computed(() => {
     },
   ] as const
 })
+
+function packVectorCounts(pack: KnowledgePackSummary): { ready: number; total: number } {
+  const ready = Math.max(0, Number(pack.prebuilt_chunks_ready) || 0)
+  const missing = Math.max(0, Number(pack.prebuilt_chunks_missing) || 0)
+  return { ready, total: ready + missing }
+}
+
+function formatPackVectorProgress(pack: KnowledgePackSummary): string {
+  const { ready, total } = packVectorCounts(pack)
+  if (total <= 0) return t('knowledge.noVectorChunks')
+  return `${ready} / ${total}`
+}
+
+function packVectorStateClass(pack: KnowledgePackSummary): string {
+  const { ready, total } = packVectorCounts(pack)
+  if (total > 0 && ready === total) return 'is-enabled'
+  if (total > ready && pack.local_embedding_enabled === true) return 'is-progress'
+  if (ready > 0) return 'is-warning'
+  return 'is-disabled'
+}
+
+function packVectorStateLabel(pack: KnowledgePackSummary): string {
+  const { ready, total } = packVectorCounts(pack)
+  if (total > 0 && ready === total) return t('knowledge.vectorComplete')
+  if (total > 0 && ready === 0) return t('knowledge.vectorWaiting')
+  if (total > ready && pack.local_embedding_enabled === true) return t('knowledge.vectorBuilding')
+  return t('knowledge.vectorWaiting')
+}
+
+function displayImportJobState(state: string): string {
+  const keyByState: Record<string, string> = {
+    queued: 'knowledge.importStateQueued',
+    validating: 'knowledge.importStateValidating',
+    building_fts: 'knowledge.importStateBuildingFts',
+    verifying_index: 'knowledge.importStateVerifyingIndex',
+    embedding: 'knowledge.importStateEmbedding',
+  }
+  const key = keyByState[String(state || '')]
+  return key ? t(key) : String(state || t('knowledge.importStateQueued'))
+}
+
+function hasMeasuredJobProgress(job: KnowledgePackJob): boolean {
+  return Number(job.indexed_percent) > 0
+}
+
+function jobProgressPercentage(job: KnowledgePackJob): number {
+  if (!hasMeasuredJobProgress(job)) return 35
+  return Math.min(100, Math.max(0, Number(job.indexed_percent) || 0))
+}
+
+function formatImportJobMeta(job: KnowledgePackJob): string {
+  const entries = Math.max(0, Number(job.entries_total) || 0)
+  const chunks = Math.max(0, Number(job.chunks_total) || 0)
+  if (hasMeasuredJobProgress(job)) {
+    return t('knowledge.importProgressMeta', {
+      percent: jobProgressPercentage(job).toFixed(1),
+      entries,
+      chunks,
+    })
+  }
+  return t('knowledge.importPreparingMeta', { entries, chunks })
+}
+
+function scheduleVectorProgressRefresh() {
+  if (vectorProgressPollTimer !== null) {
+    window.clearTimeout(vectorProgressPollTimer)
+    vectorProgressPollTimer = null
+  }
+  if (
+    disposed
+    || !['overview', 'packs'].includes(activeTab.value)
+    || !packs.value.some((pack) => {
+      const { ready, total } = packVectorCounts(pack)
+      return pack.local_embedding_enabled === true && total > ready
+    })
+  ) return
+  vectorProgressPollTimer = window.setTimeout(async () => {
+    vectorProgressPollTimer = null
+    await loadPacks({ force: true, silent: true })
+    scheduleVectorProgressRefresh()
+  }, VECTOR_PROGRESS_POLL_MS)
+}
 
 const selectedEntryTermGroups = computed(() => {
   const entry = selectedEntry.value
@@ -563,6 +707,7 @@ async function refreshAll() {
       && packJobsRequestGate.isLatest(packJobsRequestId)
     ) {
       packJobs.value = jobsResult.value.jobs || []
+      for (const job of activeImportJobs.value) watchImportJob(job.job_id)
     }
     const currentJobsFailed = jobsResult.status === 'rejected'
       && !disposed
@@ -768,6 +913,7 @@ async function loadPackJobs(options: { silent?: boolean } = {}) {
     const response = await knowledgeApi.packJobs()
     if (!disposed && packJobsRequestGate.isLatest(requestId)) {
       packJobs.value = response.jobs || []
+      for (const job of activeImportJobs.value) watchImportJob(job.job_id)
     }
   } catch {
     if (!disposed && packJobsRequestGate.isLatest(requestId) && !options.silent) {
@@ -966,22 +1112,6 @@ function diagnosticMatchTagType(value: unknown): 'success' | 'info' | 'warning' 
   return 'warning'
 }
 
-function packIndexTagType(pack: KnowledgePackSummary): 'success' | 'info' | 'warning' | 'danger' {
-  const validation = String(pack.index_validation || '')
-  if (validation === 'accepted') return 'success'
-  if (validation === 'pending') return 'warning'
-  if (validation === 'rejected') return 'danger'
-  return 'info'
-}
-
-function packIndexStateClass(pack: KnowledgePackSummary): string {
-  const type = packIndexTagType(pack)
-  if (type === 'success') return 'is-enabled'
-  if (type === 'warning') return 'is-warning'
-  if (type === 'danger') return 'is-danger'
-  return 'is-info'
-}
-
 async function setPackIndexPolicy(row: KnowledgePackSummary, enabled: boolean) {
   try {
     await knowledgeApi.setPackIndexPolicy({
@@ -1028,6 +1158,8 @@ watch(activeTab, (tab) => {
   if (tab === 'diagnostics') loadDiagnostics()
 })
 
+watch([activeTab, packs], scheduleVectorProgressRefresh)
+
 function deferInitialSecondaryLoads(silent = false) {
   const run = () => {
     deferredIdleHandle = null
@@ -1066,12 +1198,14 @@ onUnmounted(() => {
   pendingImportJobs.clear()
   if (overviewRefreshTimer !== null) window.clearTimeout(overviewRefreshTimer)
   if (packJobPollTimer !== null) window.clearTimeout(packJobPollTimer)
+  if (vectorProgressPollTimer !== null) window.clearTimeout(vectorProgressPollTimer)
   if (deferredLoadTimer !== null) window.clearTimeout(deferredLoadTimer)
   if (deferredIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
     window.cancelIdleCallback(deferredIdleHandle)
   }
   overviewRefreshTimer = null
   packJobPollTimer = null
+  vectorProgressPollTimer = null
   deferredLoadTimer = null
   deferredIdleHandle = null
 })
@@ -1606,6 +1740,11 @@ dd {
   background: var(--el-color-warning-light-9);
 }
 
+.overview-state-cell.is-progress {
+  border-left-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
 .overview-state-cell.is-danger {
   border-left-color: var(--el-color-danger);
   background: var(--el-color-danger-light-9);
@@ -1643,6 +1782,67 @@ dd {
   border: 1px solid var(--el-color-warning-light-5);
   border-radius: 8px;
   background: var(--el-color-warning-light-9);
+}
+
+.import-job-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 8px;
+  background: var(--el-color-primary-light-9);
+}
+
+.import-job-panel__heading,
+.import-job-panel__title,
+.import-job-row__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.import-job-panel__heading p {
+  margin: 6px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.import-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.import-job-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 7px;
+  background: var(--knowledge-surface);
+}
+
+.import-job-row__heading strong,
+.import-job-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-job-row__heading strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.import-job-row > span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .degraded-job-panel__heading,
@@ -2002,6 +2202,20 @@ pre {
   background: var(--knowledge-surface);
 }
 
+@media (max-width: 1100px) {
+  .pack-runtime-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-pack-row {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-pack-row__states {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   :global(.knowledge-entry-drawer) {
     width: min(100vw, 620px) !important;
@@ -2065,12 +2279,8 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .overview-pack-row {
+  .pack-runtime-grid {
     grid-template-columns: 1fr;
-  }
-
-  .overview-pack-row__states {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .toolbar .el-input,

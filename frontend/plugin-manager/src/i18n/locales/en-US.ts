@@ -64,9 +64,13 @@ export default {
     indexStatus: 'Vector index', indexOrigin: 'Origin', indexTrust: 'Trust', indexValidation: 'Validation', indexFallback: 'Fallback',
     localEmbeddingState: 'Local maintenance', allowLocalEmbedding: 'Allow local vector maintenance', enabled: 'Enabled', disabledState: 'Disabled',
     packageStatus: 'Package runtime', sourceDistribution: 'Source distribution', otherSources: 'Other', inactivePacks: 'Off', needsAttention: 'Needs attention', materialMix: 'Pack type', noPacks: 'No knowledge packs',
+    vectorReadyPercent: '{percent}% ready', noVectorChunks: 'No vector chunks', vectorBuilding: 'Building', vectorComplete: 'Fully ready', vectorWaiting: 'Waiting to build',
     indexPolicyHint: 'May use local CPU and memory. If disabled, an unavailable trusted index falls back to BM25.',
     loadFailed: 'Failed to load knowledge data', operationFailed: 'Knowledge operation failed', importSuccess: 'Knowledge pack imported', importQueued: 'Knowledge pack is being prepared quietly and will appear when ready', importStillProcessing: 'The knowledge pack is still processing. Refresh later to check its status.',
     degradedJobs: 'Quarantined imports', degradedJobHint: 'Damaged jobs cannot continue. Review the ID, then discard one to unblock new imports.', discardJobConfirm: 'Discard quarantined job {name}? Only its staged files will be removed.', jobDiscarded: 'Quarantined job discarded',
+    importingPacks: 'Importing knowledge packs', importingPackHint: 'The local knowledge base is being verified and prepared. You can leave this page and return later.',
+    importStateQueued: 'Waiting', importStateValidating: 'Validating', importStateBuildingFts: 'Building lexical index', importStateVerifyingIndex: 'Checking vector index', importStateEmbedding: 'Preparing vectors',
+    importProgressMeta: '{percent}% complete · {entries} entries · {chunks} chunks', importPreparingMeta: '{entries} entries · {chunks} chunks',
     invalidPack: 'Invalid knowledge pack', importTooLarge: 'Knowledge pack exceeds the 10 MiB limit', removeConfirm: 'Remove knowledge pack {name}?'
   },
   market: {
