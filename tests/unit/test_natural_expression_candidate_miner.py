@@ -1219,8 +1219,8 @@ def test_an_equal_depth_marker_closes_the_fence_it_opened():
         assert "we always say the same thing" in unprotected, text
 
 
-def _lines(*rows: str) -> str:
-    return "\n".join(rows) + "\n"
+def _lines(*rows: str, eol: str = "\n") -> str:
+    return eol.join(rows) + eol
 
 
 def _unprotected(text: str) -> str:
@@ -1268,13 +1268,16 @@ _FENCE_MATRIX = [
 ]
 
 
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize(
     "label, rows, must_remain_visible",
     _FENCE_MATRIX,
     ids=[row[0] for row in _FENCE_MATRIX],
 )
-def test_fence_blockquote_depth_matrix(label, rows, must_remain_visible):
-    text = _lines(*rows)
+def test_fence_blockquote_depth_matrix(label, rows, must_remain_visible, eol):
+    """Line endings are a matrix dimension: persisted replies carry whatever the
+    model emitted, and an LF-only assumption silently changes the verdict."""
+    text = _lines(*rows, eol=eol)
 
     unprotected = _unprotected(text)
 
@@ -1309,14 +1312,19 @@ _INLINE_CODE_MATRIX = [
 ]
 
 
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize(
     "label, text, secret_visible",
     _INLINE_CODE_MATRIX,
     ids=[row[0] for row in _INLINE_CODE_MATRIX],
 )
-def test_inline_code_span_matrix(label, text, secret_visible):
+def test_inline_code_span_matrix(label, text, secret_visible, eol):
+    """CRLF included: an LF-only blank-line pattern skips a CRLF blank line, so
+    the paragraph runs to end of text and a later backtick is mistaken for the
+    closer -- swallowing prose that should have produced candidates."""
     from memory.anti_repeat_effects import build_repeat_signature
 
+    text = text.replace("\n", eol)
     unprotected = _unprotected(text)
 
     assert ("SECRET" in unprotected) is secret_visible, label

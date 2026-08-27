@@ -325,7 +325,11 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
+# CRLF too: persisted replies are whatever the model emitted, and an LF-only
+# pattern silently skips a CRLF blank line — the paragraph then runs to the end
+# of the text and a later backtick gets mistaken for this run's closer, which
+# swallows real prose and drops the candidates it should have produced.
+_BLANK_LINE_RE = re.compile(r"\r?\n[ \t]*\r?\n")
 
 
 def _paragraph_end(text: str, start: int) -> int:
