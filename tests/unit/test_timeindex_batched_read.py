@@ -1150,3 +1150,109 @@ def test_damaged_visible_length_drops_only_its_own_row():
     assert _assistant_record_from_stored_message(
         _row("٥")
     ) == ("hello", None)
+
+
+def test_engine_initialization_is_serialized_per_character(timeindex_module):
+    """Re-landed from c64d7ab31, which was reverted without a recorded reason.
+
+    `_ensure_engine_exists_unlocked` is "read the cached engine -> dispose it ->
+    rebuild", and this PR added a concurrent reader
+    (`retrieve_latest_assistant_texts`, readonly, under `asyncio.to_thread`)
+    racing the writer `/cache` drives. Without the per-character lock the
+    writable branch can dispose the very engine the reader is querying.
+    """
+    manager = timeindex_module.TimeIndexedMemory(recent_history_manager=None)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_attempted = threading.Event()
+    second_entered = threading.Event()
+    call_lock = threading.Lock()
+    call_count = 0
+    errors: list[BaseException] = []
+
+    def fake_ensure(_name, db_path=None, readonly=False):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 1:
+            first_entered.set()
+            if not release_first.wait(2):
+                raise TimeoutError("test did not release first initialization")
+        else:
+            second_entered.set()
+        return True
+
+    manager._ensure_engine_exists_unlocked = fake_ensure
+
+    def run_first():
+        try:
+            manager._ensure_engine_exists("cat", readonly=True)
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+            errors.append(exc)
+
+    def run_second():
+        second_attempted.set()
+        try:
+            manager._ensure_engine_exists("cat", readonly=False)
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+            errors.append(exc)
+
+    first = threading.Thread(target=run_first)
+    second = threading.Thread(target=run_second)
+    first.start()
+    assert first_entered.wait(1)
+    second.start()
+    assert second_attempted.wait(1)
+    # The second caller must still be blocked on the lock, not inside the body.
+    assert not second_entered.wait(0.1)
+    release_first.set()
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert call_count == 2
+
+
+def test_engine_disposal_shares_the_initialization_lock(timeindex_module):
+    """Disposal is the other half of the race, and the lock is re-entrant."""
+    manager = timeindex_module.TimeIndexedMemory(recent_history_manager=None)
+
+    lock = manager._get_engine_lock("cat")
+    assert manager._get_engine_lock("cat") is lock
+    assert manager._get_engine_lock("other") is not lock
+
+    # Re-entrant: the in-place repair branches dispose while already holding it.
+    with lock:
+        manager.dispose_engine("cat")
+
+    entered = threading.Event()
+    release = threading.Event()
+    disposed = threading.Event()
+
+    def hold_initialization(_name, db_path=None, readonly=False):
+        entered.set()
+        release.wait(2)
+        return True
+
+    manager._ensure_engine_exists_unlocked = hold_initialization
+
+    initializer = threading.Thread(
+        target=lambda: manager._ensure_engine_exists("cat", readonly=True)
+    )
+    disposer = threading.Thread(
+        target=lambda: (manager.dispose_engine("cat"), disposed.set())
+    )
+    initializer.start()
+    assert entered.wait(1)
+    disposer.start()
+    assert not disposed.wait(0.1), "disposal ran while initialization held the lock"
+    release.set()
+    initializer.join(2)
+    disposer.join(2)
+
+    assert disposed.is_set()
+    assert not initializer.is_alive()
+    assert not disposer.is_alive()

@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 import unicodedata
 
 logger = get_module_logger(__name__, "Memory")
@@ -382,6 +383,9 @@ class TimeIndexedMemory:
         self.db_paths = {} # 存储 {lanlan_name: db_path}
         self._engine_readonly_flags = {}  # 存储 {lanlan_name: bool}
         self._writable_bootstrapped = set()  # 存储已完成可写初始化的角色
+        # 每角色一把可重入锁，串行化引擎的初始化与释放。见 _get_engine_lock。
+        self._engine_locks: dict[str, threading.RLock] = {}
+        self._engine_locks_guard = threading.Lock()
         # {lanlan_name: {connection_string}}：dispose 失败、仍扣着文件句柄的 pool。
         # 按连接串记账而不是靠 db_path 现推——路径漂移重建会覆盖 db_path，
         # 那之后就再也推不出失败 pool 的键了。
@@ -440,7 +444,40 @@ class TimeIndexedMemory:
         except Exception:
             return left == right
 
+    def _get_engine_lock(self, lanlan_name: str) -> threading.RLock:
+        """Per-character re-entrant lock guarding engine init and disposal.
+
+        Re-entrant because the in-place repair branches of
+        ``_ensure_engine_exists_unlocked`` (db_path drift, readonly → writable
+        switch) call ``dispose_engine`` while already holding it.
+        """
+        with self._engine_locks_guard:
+            return self._engine_locks.setdefault(lanlan_name, threading.RLock())
+
     def _ensure_engine_exists(
+        self,
+        lanlan_name: str,
+        db_path: str | None = None,
+        readonly: bool = False,
+    ) -> bool:
+        """Serialize engine initialization per character.
+
+        ``_ensure_engine_exists_unlocked`` is "read the cached engine → dispose
+        it → rebuild", which is not atomic. This PR added a concurrent READER
+        (``retrieve_latest_assistant_texts`` runs under ``asyncio.to_thread``
+        with ``readonly=True``) alongside the existing writer that ``/cache``
+        drives through another thread. Interleaved, the writable branch sees a
+        read-only cached engine, disposes it and rebuilds — while the reader is
+        still querying the engine that just got disposed.
+        """
+        with self._get_engine_lock(lanlan_name):
+            return self._ensure_engine_exists_unlocked(
+                lanlan_name,
+                db_path=db_path,
+                readonly=readonly,
+            )
+
+    def _ensure_engine_exists_unlocked(
         self,
         lanlan_name: str,
         db_path: str | None = None,
@@ -589,6 +626,21 @@ class TimeIndexedMemory:
         return await asyncio.to_thread(self._ensure_engine_exists, lanlan_name, db_path)
 
     def dispose_engine(
+        self, lanlan_name: str, *, retain_on_failure: bool = False,
+    ) -> bool:
+        """Serialize disposal against initialization for the same character.
+
+        Same lock as ``_ensure_engine_exists``: tearing an engine down while
+        another thread is halfway through rebuilding it is the other half of the
+        race. Re-entrant, so the in-place repair branches can keep calling this
+        while already holding it.
+        """
+        with self._get_engine_lock(lanlan_name):
+            return self._dispose_engine_unlocked(
+                lanlan_name, retain_on_failure=retain_on_failure
+            )
+
+    def _dispose_engine_unlocked(
         self, lanlan_name: str, *, retain_on_failure: bool = False,
     ) -> bool:
         """Dispose one character's cached engines and report whether any were known.
