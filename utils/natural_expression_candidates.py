@@ -95,6 +95,15 @@ class CandidateMinerError(ValueError):
     """A safe, content-free error suitable for CLI output."""
 
 
+class CandidateBudgetExceededError(CandidateMinerError):
+    """The input busts a local analysis budget; retrying with fewer messages helps.
+
+    Distinct from the other miner errors precisely so the user-facing report can
+    narrow its window and try again instead of failing the whole request. The CLI
+    still surfaces it as an ordinary ``CandidateMinerError``.
+    """
+
+
 @dataclass(frozen=True)
 class MiningConfig:
     """Deterministic mining parameters recorded in the output artifact."""
@@ -707,7 +716,7 @@ def build_report(
                 max_occurrences is not None
                 and retained_occurrence_count > max_occurrences
             ):
-                raise CandidateMinerError(
+                raise CandidateBudgetExceededError(
                     "assistant history exceeds local analysis limit"
                 )
             key = (message.language, occurrence.normalized)
@@ -796,24 +805,46 @@ def build_user_review_report(
     The maintainer CLI historically filters by total occurrences.  The user
     workflow is deliberately stricter: a phrase must also occur in at least
     ``message_count_threshold`` distinct assistant messages.
+
+    Budget handling narrows the window instead of failing the request.  The two
+    budgets are wildly out of proportion: n-gram expansion scales with the length
+    of each punctuation-bounded *segment*, not with the total character count, so
+    100 replies of ~280 unbroken Han characters bust
+    ``USER_REVIEW_MAX_OCCURRENCES`` at only ~21% of
+    ``USER_REVIEW_MAX_INPUT_CHARACTERS``.  Raising there turned an ordinary
+    request into a 422 the UI could only render as "please try again", which never
+    succeeds.  The oldest messages are dropped until the window fits, and the
+    summary reports what was actually analyzed.
     """
     if message_count_threshold < 1:
         raise CandidateMinerError("message_count_threshold must be at least 1")
-    if (
-        sum(len(message.content) for message in messages)
+
+    analyzed = list(messages)
+    while (
+        len(analyzed) > 1
+        and sum(len(message.content) for message in analyzed)
         > USER_REVIEW_MAX_INPUT_CHARACTERS
     ):
-        raise CandidateMinerError("assistant history exceeds local analysis limit")
+        analyzed = analyzed[1:]
 
     config = MiningConfig(threshold=DEFAULT_THRESHOLD)
-    maintainer_report = build_report(
-        messages,
-        input_record_count=len(messages),
-        config=config,
-        rules_by_language=rules_by_language,
-        message_count_threshold=message_count_threshold,
-        max_occurrences=USER_REVIEW_MAX_OCCURRENCES,
-    )
+    while True:
+        try:
+            maintainer_report = build_report(
+                analyzed,
+                input_record_count=len(analyzed),
+                config=config,
+                rules_by_language=rules_by_language,
+                message_count_threshold=message_count_threshold,
+                max_occurrences=USER_REVIEW_MAX_OCCURRENCES,
+            )
+            break
+        except CandidateBudgetExceededError:
+            # Halve toward the newest messages. A single reply that busts the
+            # budget on its own is genuinely exceptional and still propagates.
+            if len(analyzed) <= 1:
+                raise
+            analyzed = analyzed[-(len(analyzed) // 2):]
     all_candidates = maintainer_report["candidates"]
     candidates = all_candidates[:USER_REVIEW_MAX_CANDIDATES]
     parameters = dict(maintainer_report["parameters"])
@@ -829,6 +860,8 @@ def build_user_review_report(
         "schema_version": SCHEMA_VERSION,
         "summary": {
             "assistant_message_count": len(messages),
+            "analyzed_message_count": len(analyzed),
+            "messages_truncated": len(analyzed) < len(messages),
             "candidate_count": len(all_candidates),
             "returned_candidate_count": len(candidates),
             "candidates_truncated": len(candidates) < len(all_candidates),

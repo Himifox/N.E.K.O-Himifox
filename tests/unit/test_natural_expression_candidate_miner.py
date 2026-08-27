@@ -742,6 +742,8 @@ def test_user_review_requires_three_distinct_assistant_messages():
     assert report["parameters"]["message_count_threshold"] == 3
     assert report["summary"] == {
         "assistant_message_count": 3,
+        "analyzed_message_count": 3,
+        "messages_truncated": False,
         "candidate_count": 1,
         "returned_candidate_count": 1,
         "candidates_truncated": False,
@@ -795,14 +797,53 @@ def test_report_can_bound_retained_occurrences():
         )
 
 
-def test_user_review_rejects_oversized_history_before_mining(monkeypatch):
-    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_INPUT_CHARACTERS", 8)
-    messages = [candidate_core.SourceMessage("en", "quiet lantern", 1)]
+def test_user_review_narrows_window_when_character_budget_is_exceeded(monkeypatch):
+    """An oversized history narrows the window instead of failing the request."""
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_INPUT_CHARACTERS", 30)
+    messages = [
+        candidate_core.SourceMessage("en", "quiet lantern", source_line)
+        for source_line in range(1, 5)
+    ]
 
-    with pytest.raises(
-        candidate_core.CandidateMinerError,
-        match="assistant history exceeds local analysis limit",
-    ):
+    report = candidate_core.build_user_review_report(messages, rules_by_language={})
+
+    summary = report["summary"]
+    assert summary["assistant_message_count"] == 4
+    assert summary["analyzed_message_count"] == 2
+    assert summary["messages_truncated"] is True
+
+
+def test_user_review_narrows_window_when_occurrence_budget_is_exceeded(monkeypatch):
+    """The n-gram budget bites long before the character budget does.
+
+    100 replies of ~280 unbroken Han characters blow through
+    ``USER_REVIEW_MAX_OCCURRENCES`` at roughly 21% of
+    ``USER_REVIEW_MAX_INPUT_CHARACTERS``.  Raising there produced a 422 the
+    browser could only render as "please try again", which never succeeded.
+    """
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 400)
+    unbroken = "今天天气真好我们一起去散步你觉得怎么样我觉得非常开心因为可以和你聊天"
+    messages = [
+        candidate_core.SourceMessage("zh-CN", unbroken, source_line)
+        for source_line in range(1, 17)
+    ]
+
+    report = candidate_core.build_user_review_report(messages, rules_by_language={})
+
+    summary = report["summary"]
+    assert summary["assistant_message_count"] == 16
+    assert summary["messages_truncated"] is True
+    assert 0 < summary["analyzed_message_count"] < 16
+
+
+def test_user_review_still_reports_a_single_unanalyzable_message(monkeypatch):
+    """The narrowing loop floors at one message rather than looping forever."""
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 1)
+    messages = [
+        candidate_core.SourceMessage("en", "quiet lantern glows", 1),
+    ]
+
+    with pytest.raises(candidate_core.CandidateBudgetExceededError):
         candidate_core.build_user_review_report(messages, rules_by_language={})
 
 
@@ -829,6 +870,8 @@ def test_user_review_caps_candidates_before_returning_them_to_the_browser(monkey
     assert report["candidates"] == candidates[:2]
     assert report["summary"] == {
         "assistant_message_count": 0,
+        "analyzed_message_count": 0,
+        "messages_truncated": False,
         "candidate_count": 3,
         "returned_candidate_count": 2,
         "candidates_truncated": True,
