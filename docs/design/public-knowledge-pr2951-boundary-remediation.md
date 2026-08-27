@@ -2389,3 +2389,40 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 ## 第二十八轮实施证据
 
 设计提交 `e1201ee37`、实现提交 `a626d4b37` 已推送。loader 现在在读取 `id` 或 `expected_mode` 前验证基础 required 字段子集，之后仍执行既有精确字段集合和 strong identity 校验；缺 `id`、缺 `expected_mode` 两项反例均返回 documented-fields `ValueError`。完整 quality evaluator 回归为 9 passed；Ruff、compileall 与 `git diff --check` 均通过。
+
+## 第二十九轮：直接入口、开发来源与崩溃暂存恢复必须闭环
+
+测试夹具修正提交 `142ca9821` 触发的新一轮 Codex Review 给出 4 条 conversation。逐条沿独立脚本入口、Vite 代理和 staged job 恢复调用链复核后全部成立；其中 `.creating-*` 必须同时满足早期“orphan 只能显式清理”和 BL“普通 job ID 不得接受点目录”两项边界，不能通过放宽通用解析器修复。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3868647212` | ET | Geng Guide 导入脚本依赖环境已安装项目才能解析 `knowledge`，成立 |
+| `discussion_r3868647216` | ET | response-quality 评估器在项目导入后才计算仓库根且未加入搜索路径，成立 |
+| `discussion_r3868647220` | EU | Vite 5173 代理保留浏览器 Origin，但路由守门未允许该开发源，成立 |
+| `discussion_r3868647224` | EV | 崩溃 `.creating-<uuid>` 被 orphan 准入守门阻塞，却无法通过显式 discard 恢复，成立 |
+
+### ET：独立知识脚本在项目导入前建立仓库根
+
+- `import_geng_guide.py` 与 `evaluate_knowledge_response_quality.py` 都从自身 `__file__` 推导仓库根，并在任何 `knowledge.*` 导入前将其加入 `sys.path`；不得依赖启动 cwd、editable install 或 pytest 的导入环境。
+- 已存在同一路径时不重复插入；默认案例路径继续从同一个仓库根计算，不增加第二套路径来源。
+- 入口测试固定“路径引导早于项目导入”的源码顺序，并以两个脚本真实 `--help` 调用证明直接入口可启动。
+
+### EU：只向明确的本地 Vite 开发源签发配对码
+
+- 本地 Bridge 原有双重边界保持不变：TCP client 与 Host 都必须是 loopback；Origin 必须是纯 `http` loopback origin，不能含凭据、路径、查询或 fragment。
+- 允许端口集合在实际 Plugin Server 端口和动态 Main Server 端口之外，只增加仓库 Vite 配置的 5173。由此前端开发代理保留的 `http://localhost:5173` 和 `http://127.0.0.1:5173` 可以取得 pair code。
+- 不采用“任意 localhost 端口”或 Market CORS allowlist 作为 token 权限；相邻端口、HTTPS、本地带路径来源和远程域名继续返回 403。
+
+### EV：崩溃创建目录使用独立的显式 discard 解析边界
+
+- 普通 get、cancel、processor 与 job state mutation 继续只接受 `<pack_id>-<12 位小写十六进制>`，不允许 `.creating-*` 进入正式作业身份。
+- discard 单独接受生成器真实格式 `\.creating-<32 位小写十六进制>`。解析后仍必须证明目标是可信 `.staging` 的真实直接子目录，且目标本身不是 symlink、junction 或 reparse point。
+- discard 与 `stage_pack()` 共用 jobs-root 跨进程 mutation lock。仍在创建的目录会先完成并原子改名，随后旧临时名不再存在；只有创建进程已经退出并释放锁的崩溃残留能够被删除。
+- 删除前 `_read_job()` 必须仍将目标识别为 degraded；后台、启动和容量检查绝不自动删除。非法后缀、大小写十六进制、路径片段和普通健康作业继续拒绝。
+- 管理 API、Bridge、前端与维护 CLI 继续复用同一个 `discard_degraded_pack_job()`，不复制目录删除逻辑。成功清理后新的 staging 应立即恢复，而普通 cancel 对同一临时 ID 必须失败。
+
+关闭条件：两个脚本不依赖 editable install 的路径副作用；Vite 5173 开发源可取得 pair code 且任意其它来源仍被拒绝；真实格式的崩溃临时目录可以经显式 discard 清理并恢复导入；普通 cancel、非法临时名称、路径穿越和重解析目标均不能扩大删除范围。实现、精确反例和远端检查齐全后回复并 resolve 4 条线程。
+
+## 第二十九轮实施证据
+
+实现提交 `7a57a0f10` 已完成：两个脚本在项目导入前建立仓库根；Bridge 只增加明确的本地 Vite 5173 来源；discard 通过专用临时目录解析器恢复崩溃残留，普通 job ID 与 cancel 边界不变。精确反例为 15 passed；作业生命周期、公共知识路由、Bridge、维护 CLI 和质量评估五个完整测试文件为 170 passed、3 skipped，skip 均为既有 Windows symlink 权限条件。两个脚本的真实 `--help` 入口、相关 Ruff、compileall 与 `git diff --check` 均通过。本轮没有新增用户文案或 i18n 键。
