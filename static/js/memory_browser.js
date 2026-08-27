@@ -1129,18 +1129,31 @@
         if (!repetitionInsightsReport) return;
         const effects = repetitionInsightsReport.effectiveness || {};
         const parameters = repetitionInsightsReport.parameters || {};
-        const scopeLimit = Number(
-            effects.assistant_message_limit
-            || parameters.assistant_message_limit
-            || 0
-        );
+        // Two scopes reach this panel. Message-scoped aggregates exist only when
+        // the persisted replies carried runtime response IDs; otherwise the
+        // backend answers with the day-scoped aggregate, which must not be
+        // labelled "the latest N replies".
+        const messageScoped = effects.scope_type === 'assistant_messages';
         const title = document.createElement('h4');
         title.className = 'memory-insights-section-title';
-        title.textContent = translate(
-            'memory.repetitionInsightsEffectivenessTitle',
-            'Anti-repeat handling in the latest {{count}} replies',
-            { count: scopeLimit }
-        );
+        if (messageScoped) {
+            const scopeLimit = Number(
+                effects.assistant_message_limit
+                || parameters.assistant_message_limit
+                || 0
+            );
+            title.textContent = translate(
+                'memory.repetitionInsightsEffectivenessTitle',
+                'Anti-repeat handling in the latest {{count}} replies',
+                { count: scopeLimit }
+            );
+        } else {
+            title.textContent = translate(
+                'memory.repetitionInsightsEffectivenessTitleDays',
+                'Anti-repeat handling over the last {{count}} days',
+                { count: Number(effects.period_days || 0) }
+            );
+        }
         container.appendChild(title);
         if (effects.query_failed === true) {
             appendRepetitionInsightsEmptyState(
@@ -1153,8 +1166,12 @@
         if (effects.source_available === false) {
             appendRepetitionInsightsEmptyState(
                 container,
-                'memory.repetitionInsightsNoEffects',
-                'No linked anti-repeat records are available for these replies.'
+                messageScoped
+                    ? 'memory.repetitionInsightsNoEffects'
+                    : 'memory.repetitionInsightsNoEffectsDays',
+                messageScoped
+                    ? 'No linked anti-repeat records are available for these replies.'
+                    : 'No anti-repeat records have been kept for this period yet.'
             );
             return;
         }
@@ -1232,6 +1249,22 @@
                 'At least three persisted assistant messages are required.'
             );
             return;
+        }
+
+        if (summary.messages_truncated === true) {
+            // The local budget narrowed the window instead of failing; say so,
+            // otherwise the counts silently describe fewer replies than asked for.
+            const trimmed = document.createElement('p');
+            trimmed.className = 'memory-insights-scope-note';
+            trimmed.textContent = translate(
+                'memory.repetitionInsightsScopeTrimmed',
+                'These replies were long, so only the latest {{analyzed}} of {{total}} fit the local analysis budget.',
+                {
+                    analyzed: Number(summary.analyzed_message_count || 0),
+                    total: Number(summary.assistant_message_count || 0)
+                }
+            );
+            results.appendChild(trimmed);
         }
 
         const visibleCandidates = visibleRepetitionInsightCandidates();
@@ -1494,18 +1527,29 @@
                 throw new Error('effect reset unavailable');
             }
             if (repetitionInsightsReport) {
-                repetitionInsightsReport.effectiveness = {
+                // Keep whatever scope the report already had; fabricating a
+                // message-scoped shell over a day-scoped report would relabel the
+                // panel "the latest N replies" after a reset.
+                const previousEffects = repetitionInsightsReport.effectiveness || {};
+                const clearedEffects = {
                     source_available: false,
-                    scope_type: 'assistant_messages',
-                    assistant_message_limit: Number(
-                        document.getElementById('memory-insights-limit')?.value || 100
-                    ),
-                    linked_message_count: 0,
                     totals: {},
                     reason_counts: {},
                     bm25: {},
                     patterns: []
                 };
+                if (previousEffects.scope_type === 'assistant_messages') {
+                    clearedEffects.scope_type = 'assistant_messages';
+                    clearedEffects.assistant_message_limit = Number(
+                        previousEffects.assistant_message_limit
+                        || document.getElementById('memory-insights-limit')?.value
+                        || 100
+                    );
+                    clearedEffects.linked_message_count = 0;
+                } else {
+                    clearedEffects.period_days = Number(previousEffects.period_days || 30);
+                }
+                repetitionInsightsReport.effectiveness = clearedEffects;
                 repetitionInsightsReport.associations = [];
             }
             renderRepetitionInsightsResults();

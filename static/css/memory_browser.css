@@ -2763,7 +2763,8 @@ html.neko-window-maximized .chat-item + .chat-item::before {
 }
 
 .memory-insights-description,
-.memory-insights-note {
+.memory-insights-note,
+.memory-insights-scope-note {
     margin: 0;
     color: var(--memory-text-secondary);
     font-size: var(--memory-font-control);

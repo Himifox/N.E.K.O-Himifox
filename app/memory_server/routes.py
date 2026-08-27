@@ -135,16 +135,20 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
     parameters["assistant_message_limit"] = req.assistant_message_limit
     summary = dict(report["summary"])
     summary["source_available"] = history.source_available
+    response_ids = list(getattr(history, "response_ids", []))
     logger.info(
-        "[RepetitionInsights] character=%s language=%s limit=%s messages=%s candidates=%s skipped=%s",
+        "[RepetitionInsights] character=%s language=%s limit=%s messages=%s "
+        "analyzed=%s candidates=%s skipped=%s linked_ids=%s",
         lanlan_name,
         language,
         req.assistant_message_limit,
         summary["assistant_message_count"],
+        summary.get("analyzed_message_count", summary["assistant_message_count"]),
         summary["candidate_count"],
         history.skipped_row_count,
+        len(response_ids),
     )
-    return {
+    payload: dict[str, object] = {
         "success": True,
         "schema_version": report["schema_version"],
         "artifact_type": report["artifact_type"],
@@ -153,10 +157,21 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
         "parameters": parameters,
         "summary": summary,
         "candidates": report["candidates"],
+    }
+    if response_ids:
         # Internal-only join keys. The public router removes these before the
         # browser response, so runtime IDs never become UI/export data.
-        "_anti_repeat_response_ids": list(getattr(history, "response_ids", [])),
-    }
+        #
+        # Emitted ONLY when the persisted history actually carries them. Sending
+        # an empty list still selects the message-scoped branch in
+        # ``main_routers.memory_router``, which then reports "no linked records"
+        # forever instead of falling back to the day-scoped aggregate that does
+        # work. Assistant rows only carry the key when the writer preserved
+        # ``additional_kwargs`` end to end; the streamed cross_server path that
+        # feeds ``time_indexed_original`` today does not, so the fallback is the
+        # normal case rather than an edge case.
+        payload["_anti_repeat_response_ids"] = response_ids
+    return payload
 
 
 def _activate_request_language(language: str | None) -> str:

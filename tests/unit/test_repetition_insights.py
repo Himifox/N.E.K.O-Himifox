@@ -95,6 +95,8 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
     assert result["artifact_type"] == "user_review_candidates"
     assert result["summary"] == {
         "assistant_message_count": 3,
+        "analyzed_message_count": 3,
+        "messages_truncated": False,
         "candidate_count": 1,
         "returned_candidate_count": 1,
         "candidates_truncated": False,
@@ -104,10 +106,43 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
     assert result["parameters"]["message_count_threshold"] == 3
     assert result["candidates"][0]["phrase"] == "quiet lantern"
     assert "context" not in result["candidates"][0]
+    # No persisted response IDs -> the key must be OMITTED, not sent as an empty
+    # list. An empty list still selects the message-scoped branch in
+    # main_routers.memory_router, which then reports "no linked records" forever
+    # instead of falling back to the day-scoped aggregate that does work.
+    assert "_anti_repeat_response_ids" not in result
     time_manager.aretrieve_latest_assistant_texts.assert_awaited_once_with(
         "test_char",
         25,
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_internal_repetition_insights_forwards_present_response_ids():
+    """The join key still travels when the persisted history actually carries it."""
+    from app.memory_server import routes
+
+    history = SimpleNamespace(
+        messages=["quiet lantern", "quiet lantern", "quiet lantern"],
+        source_available=True,
+        skipped_row_count=0,
+        response_ids=["turn-a", "turn-b"],
+    )
+    time_manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
+    )
+
+    with patch.object(routes.runtime, "time_manager", time_manager):
+        result = await routes.repetition_insights(
+            "test_char",
+            routes.RepetitionInsightsRequest(
+                language="en",
+                assistant_message_limit=25,
+            ),
+        )
+
+    assert result["_anti_repeat_response_ids"] == ["turn-a", "turn-b"]
 
 
 @pytest.mark.unit
