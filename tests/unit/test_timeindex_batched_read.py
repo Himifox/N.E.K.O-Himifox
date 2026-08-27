@@ -1112,9 +1112,15 @@ def test_damaged_visible_length_drops_only_its_own_row():
     """One damaged metadata field must not fail the whole insights request.
 
     A digit string longer than CPython's int-conversion limit passes isdigit()
-    and then raises ValueError, which escaped the per-row parser. A
-    present-but-unusable value drops just that row: falling back to the legacy
+    and then raises ValueError, which escaped the per-row parser. So does a
+    superscript: "²".isdigit() is True while int("²") raises. A
+    present-but-unusable value drops just that row -- falling back to the legacy
     stripper could read past the visible text and expose the hidden tail.
+
+    This pins the CONTRACT (damaged field drops its own row, never escapes), not
+    each individual guard. The `isdecimal()` predicate, the length bound and the
+    `try/except` are deliberately redundant, so removing any ONE of them leaves
+    this test green; removing the predicate and the catch together reddens it.
     """
     from memory.timeindex import _assistant_record_from_stored_message
 
@@ -1132,4 +1138,11 @@ def test_damaged_visible_length_drops_only_its_own_row():
     assert _assistant_record_from_stored_message(_row("9" * 5000)) is None
     assert _assistant_record_from_stored_message(_row("abc")) is None
     assert _assistant_record_from_stored_message(_row(12)) is None
+    # isdigit() is not an int() predicate: superscripts satisfy it and raise.
+    assert _assistant_record_from_stored_message(_row("²")) is None
+    assert _assistant_record_from_stored_message(_row("³²")) is None
     assert _assistant_record_from_stored_message(_row("5")) == ("hello", None)
+    # Non-ASCII DECIMAL digits are accepted by int() and stay supported.
+    assert _assistant_record_from_stored_message(
+        _row("٥")
+    ) == ("hello", None)

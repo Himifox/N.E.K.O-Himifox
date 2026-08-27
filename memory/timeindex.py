@@ -62,7 +62,8 @@ class LatestAssistantTexts:
 _ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
 _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY = "anti_repeat_visible_text_length"
 # A visible-text length is one reply's character count; 12 digits is already
-# absurdly generous and stays far under CPython's int-conversion digit limit.
+# absurdly generous and stays far under CPython's int-conversion digit limit
+# (4300 by default), which int() raises ValueError past.
 _MAX_VISIBLE_LENGTH_DIGITS = 12
 
 _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
@@ -164,11 +165,20 @@ def _assistant_record_from_stored_message(
             # past the visible text and exposing the hidden tail.
             if (
                 not isinstance(raw_visible_length, str)
-                or not raw_visible_length.isdigit()
+                # isdigit() is NOT an int() predicate: "²" and other
+                # superscripts satisfy it and then raise. isdecimal() is the
+                # one that matches what int() accepts.
+                or not raw_visible_length.isdecimal()
                 or len(raw_visible_length) > _MAX_VISIBLE_LENGTH_DIGITS
             ):
                 return None
-            visible_text_length = int(raw_visible_length)
+            try:
+                visible_text_length = int(raw_visible_length)
+            except ValueError:
+                # Belt and braces. The predicate above should already cover it,
+                # and it has been wrong twice; nothing about a damaged metadata
+                # field is worth failing the whole request over.
+                return None
 
     content = data.get("content")
     if isinstance(content, str):
