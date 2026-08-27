@@ -2248,3 +2248,17 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 设计提交 `78a748c0d`、边界细化提交 `130380a79`、实现提交 `66da99d7e` 已推送。ED 取消状态计数对未知来源的 knowledge 默认值。EE 为规范化 pack、staged identity、installed registry 和激活收据建立同一内容摘要链；只有真实安装提交后发布的收据与 active state 精确一致时才接受完成状态，同时保留正常卸载后的历史成功记录。相同容量但不同内容的 staged artifact 也会在执行前失败关闭。EF 在所有控制流前验证 state 的原生字符串类型和有限状态集合，激活收据中的容器型模式同样安全降级。EG 统一正式 fixture 与 loader 的来源感知 schema，并严格验证正负例文本身份。EH 禁止持久化和写入口把非字符串 source/title 强制转换成可接受身份。
 
 项目 `.venv` Python 3.11 的最终受影响文件回归为 243 passed、1 skipped；知识库、公共路由和市场相邻宽回归为 493 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具，不为本 PR 未发布格式恢复兼容。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试判定或产品文件。
+
+## 第二十四轮：订阅声明必须绑定实际知识包
+
+第二十三轮回复期间新增 1 条 conversation（`discussion_r3861220735`）：预构建索引端到端测试把 `corpus` 包与声明为 `knowledge` 的 subscription 一起直接传给 `stage_pack()`，却仍能安装成功。评论要求修正夹具；沿调用链继续审计后确认，单改测试会掩盖内部持久化入口缺少交叉对象校验的问题。外层市场和 Main Server 路由虽已验证类型，但 `KnowledgeService.stage_pack()` 和直接 `install_pack()` 仍可被维护代码、测试或后续调用者绕过路由使用。
+
+### EI：pack 与 subscription 的素材类型在每个持久化入口一致
+
+- 建立单一 binding helper：先按当前 subscription schema 完整规范化，再要求 `subscription.material_type` 精确等于 `KnowledgePack.material_type`。
+- staged job 在创建知识目录、容量检查或写 identity/state/artifact 之前完成 binding 校验；不一致请求不留下 `.creating-*`、job 目录或数据库副作用。
+- 直接安装入口在获取 registry/SQLite 写锁和创建数据库前使用同一 helper，避免内部调用写出“subscription 自身合法、但不属于该 pack”的当前注册表。
+- artifact、manifest 与 vector 摘要仍按既有路由和预构建 sidecar 信任链验证；本轮不借 Minor 评论扩张摘要协议，也不把错误 subscription 降级为本地无订阅包。
+- 将 builder 端到端正例的 subscription 类型修正为 `corpus`。另增类型不一致反例，分别覆盖 staging 与 direct install，证明守门不只存在于 HTTP 路由。
+
+关闭条件：任何持久化入口都不能接受与实际 pack 素材类型不一致的 subscription；合法 corpus 预构建交接继续安装为 hybrid；失败请求不产生 staged job、registry 或知识数据库。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86cZZBs`，再完整分页复核。
