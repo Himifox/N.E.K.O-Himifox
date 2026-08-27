@@ -1373,3 +1373,117 @@ def test_a_failed_restore_surfaces_instead_of_being_swallowed(tmp_path, monkeypa
     assert len(writes) == anti_repeat_effects._CLEAR_ATTEMPTS + 1, (
         "the restore never reached the write layer"
     )
+
+
+def test_a_transient_read_failure_is_not_cached_as_empty(tmp_path, monkeypatch):
+    """An unreadable-but-present sidecar must not become "no aggregates".
+
+    A bare ``except Exception`` turned a sharing violation into an empty
+    payload, which ``_load_unlocked`` then CACHED -- it only assigns on a
+    return -- so later reads served zeros and the next decision flushed that
+    emptiness over real history. Asserted through ``query_effects``, the call
+    site, not the helper: a test that only drives ``_read_payload_from_disk``
+    stays green if the caching above it is what regresses.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    for _ in range(5):
+        store.record_decision("Neko", _decision(), now=now)
+    persisted_path = tmp_path / "Neko" / "anti_repeat_effects.json"
+    before = persisted_path.read_text(encoding="utf-8")
+
+    # A second store: cold cache, so the read actually happens.
+    reader = _store(tmp_path)
+    real_open = anti_repeat_effects.open if hasattr(
+        anti_repeat_effects, "open"
+    ) else open
+
+    def _sharing_violation(*args, **kwargs):
+        raise PermissionError(32, "The process cannot access the file")
+
+    monkeypatch.setattr("builtins.open", _sharing_violation)
+    try:
+        with pytest.raises(OSError):
+            reader.query_effects("Neko", 30)
+    finally:
+        monkeypatch.setattr("builtins.open", real_open)
+
+    assert "Neko" not in reader._cache, (
+        "an unreadable sidecar was cached as empty"
+    )
+    # And the real history is still intact once the file is readable again.
+    reader.record_decision("Neko", _decision(), now=now + 1)
+    persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+    day = anti_repeat_effects._utc_day(now)
+    assert persisted["daily_buckets"][day]["counters"]["detected"] == 6, (
+        "the poisoned cache was flushed over real history; before=%s" % before[:80]
+    )
+    assert persisted["started_at"] == now
+
+
+def test_reviving_a_retired_name_drops_the_deleted_identity_cache(tmp_path):
+    """A decision recorded between retire and rmtree repopulates the cache.
+
+    Lifting retirement while that entry is live would flush the DELETED
+    character's aggregates -- and its ``started_at`` -- under the reused name.
+    A live name still must NOT be evicted: that fences away a snapshot staged
+    and not yet flushed, which is why revive is cache-preserving in general.
+    """
+    import shutil
+
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    for _ in range(5):
+        store.record_decision("Neko", _decision(), now=now)
+
+    store.retire_character("Neko")
+    # The in-flight turn that lands between the retire and the rmtree.
+    store.record_decision("Neko", _decision(), now=now + 1)
+    assert "Neko" in store._cache
+    shutil.rmtree(tmp_path / "Neko")
+
+    # The name is reused: a cloud download or snapshot import of the same name.
+    store.revive_character("Neko")
+
+    assert "Neko" not in store._cache, (
+        "the deleted identity's aggregates survived into the reused name"
+    )
+    (tmp_path / "Neko").mkdir()
+    store.record_decision("Neko", _decision(), now=now + 2)
+    persisted = json.loads(
+        (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    totals = [
+        bucket["counters"]["detected"]
+        for bucket in persisted["daily_buckets"].values()
+    ]
+    assert sum(totals) == 1, (
+        "the reused name inherited the deleted character's history: %s" % persisted
+    )
+
+
+def test_reviving_a_live_name_keeps_its_cache_and_fence(tmp_path):
+    """The cache-preserving half must survive the retired-name fix.
+
+    A cloud import of a name that was never retired must not evict: the apply
+    does not rewrite this sidecar, and fencing would discard a staged write.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+    staged = store.stage_decision("Neko", _decision(), now=now + 1)
+
+    store.revive_character("Neko")
+
+    assert "Neko" in store._cache, "revive evicted a live identity"
+    store._flush_snapshot(*staged)
+    persisted = json.loads(
+        (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    day = anti_repeat_effects._utc_day(now)
+    assert persisted["daily_buckets"][day]["counters"]["detected"] == 2, (
+        "revive fenced away the staged write"
+    )

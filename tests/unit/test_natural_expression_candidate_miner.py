@@ -1563,3 +1563,47 @@ _NESTED_CONTAINER_SPEECH = [
 )
 def test_container_markers_alone_do_not_protect_speech(label, rows):
     assert "我们一起去吃饭吧" in _unprotected(_lines(*rows)), label
+
+
+# A code-span closer must be a run of EXACTLY the opening length; a longer run is
+# content. `find` accepted the opening-length prefix of a longer run, so a span
+# ended mid-run and, once a second shorter run paired with the leftovers, the
+# body after it was mined as prose. Harmless while the search was bounded to one
+# line -- the leftovers re-opened and the coverage merged -- but this file now
+# searches to the end of the paragraph, which turns it into a real leak that
+# also reaches the persisted signature.
+_LONGER_RUN_CASES = [
+    ("two runs", "run this `echo ```a`` export SECRET_TOKEN` ok"),
+    ("two runs, fullwidth", "reply ｀code ｀｀｀x｀｀ SECRET_TOKEN｀ done"),
+    ("single longer run", "reply `code ``inner`` SECRET_TOKEN` done"),
+    ("opened with two", "reply ``code ```x``` SECRET_TOKEN`` done"),
+    ("across lines", "你好 `代码 x\n继续 ```y`` SECRET_TOKEN\n` 完毕"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _LONGER_RUN_CASES,
+    ids=[row[0] for row in _LONGER_RUN_CASES],
+)
+def test_a_longer_run_inside_a_code_span_is_content(label, text):
+    assert "SECRET_TOKEN" not in _unprotected(text), label
+
+
+_CLOSER_SPEECH_CASES = [
+    ("stray single", "好呀我们一起去吧 ` 真开心", "我们一起去吧"),
+    ("paired", "好呀`一起去吧`真开心", "真开心"),
+    # `我们` is a legitimate span here and is protected, before and after --
+    # what must survive is the prose outside it.
+    ("two strays", "好呀`我们`一起去吧", "一起去吧"),
+    ("english apostrophe-ish", "it's a `great day out there friend", "it's a "),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _CLOSER_SPEECH_CASES,
+    ids=[row[0] for row in _CLOSER_SPEECH_CASES],
+)
+def test_the_exact_run_rule_does_not_swallow_speech(label, text, must_remain_visible):
+    assert must_remain_visible in _unprotected(text), label

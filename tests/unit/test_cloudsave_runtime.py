@@ -3268,22 +3268,21 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
         corpus._cache["小满"] = [{"stale": True}]
         greeting._cache["小满"] = ["stale"]
 
+        # The name was deleted earlier, so it is retired and whatever sits in
+        # the caches belongs to that removed identity.
         store._retired.add("小满")
 
         import_local_cloudsave_snapshot(cm)
 
-        # NOT evicted. The apply writes only MANAGED_MEMORY_FILENAMES, and none
-        # of the three sidecars are in it, so these caches still match disk --
-        # dropping them would only raise each sequence fence and discard a
-        # snapshot staged but not yet flushed.
-        assert store._cache["小满"] == {"version": 1, "daily_buckets": {"stale": {}}}
-        assert corpus._cache["小满"] == [{"stale": True}]
-        assert greeting._cache["小满"] == ["stale"]
-        # An imported profile is a LIVE identity. Left retired it would be
-        # denied the lazy directory creation every sibling memory writer gets,
-        # so a profile that ships no managed memory files would never persist
-        # its aggregates while the character is in active use.
+        # Retirement lifted: an imported profile is a LIVE identity, and left
+        # retired it would be denied the lazy directory creation every sibling
+        # memory writer gets.
         assert "小满" not in store._retired
+        # ...and the deleted identity's cache goes with it, so the reused name
+        # cannot inherit its aggregates. (The live-identity case, where the
+        # cache must SURVIVE, is covered by the single-character download test
+        # and by the staged-write test below.)
+        assert "小满" not in store._cache
 
 
 @pytest.mark.unit
@@ -3334,9 +3333,6 @@ def test_single_character_download_revives_without_evicting(tmp_path):
         store._cache["云端角色"] = {"version": 1, "daily_buckets": {"stale": {}}}
         corpus._cache["云端角色"] = [{"stale": True}]
         greeting._cache["云端角色"] = ["stale"]
-        # A name reused after an earlier delete is still retired; the download
-        # makes it live again, so the eviction has to lift that too.
-        store._retired.add("云端角色")
 
         import_cloudsave_character_unit(target_cm, "云端角色")
 

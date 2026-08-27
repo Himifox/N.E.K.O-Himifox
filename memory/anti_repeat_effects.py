@@ -673,14 +673,28 @@ class AntiRepeatEffectStore:
             return _default_payload(now)
         try:
             with open(path, encoding="utf-8") as handle:
-                return self._normalize_payload(json.load(handle), now)
+                raw = json.load(handle)
+        except OSError:
+            # Transient (sharing violation, EACCES, EIO): the file is still
+            # there and still authoritative. Returning an empty stand-in gets
+            # it CACHED -- `_load_unlocked` only assigns on a return -- and the
+            # next decision flushes that emptiness over real history. Measured
+            # against a genuine Win32 sharing violation: 5 recorded decisions
+            # on disk became 1, and `started_at` moved. Raising skips both the
+            # cache install and the staging that follows it in the same
+            # critical section; every caller already swallows.
+            raise
         except Exception as exc:
+            # A CORRUPT file is different: it will not become readable, so an
+            # empty payload is the right stand-in. Same split the sibling
+            # startup-greeting store already makes.
             logger.warning(
                 "[AntiRepeatEffects] load failed for %s: %s",
                 name,
                 type(exc).__name__,
             )
             return _default_payload(now)
+        return self._normalize_payload(raw, now)
 
     def _load_unlocked(self, name: str, now: float) -> dict[str, Any]:
         if name not in self._cache:
@@ -1156,6 +1170,19 @@ class AntiRepeatEffectStore:
         name = _resolve_name(name)
         with self._get_lock(name):
             with self._get_write_lock(name):
+                if name not in self._retired:
+                    # Live identity: the cloud apply never rewrites this
+                    # sidecar, so the cache matches the file and the sequence
+                    # fence must not move -- moving it discards a snapshot
+                    # staged and not yet flushed.
+                    return
+                # Retired: everything cached or staged under this name belongs
+                # to the identity that was deleted -- a decision recorded
+                # between the retire and the rmtree repopulates the cache from
+                # the still-present file. Dropping and fencing it loses nothing
+                # the reused name is entitled to, and keeping it would flush a
+                # deleted character's aggregates under the new one.
+                self._evict_unlocked(name)
                 self._retired.discard(name)
 
     def retire_character(self, name: str) -> None:

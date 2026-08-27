@@ -1603,8 +1603,23 @@
             });
             const report = await response.json();
             if (requestId !== repetitionInsightsRequestId
-                || repetitionInsightsTarget() !== targetCharacter
-                || languageSelect.value !== requestedLanguage) return;
+                || repetitionInsightsTarget() !== targetCharacter) return;
+            if (languageSelect.value !== requestedLanguage) {
+                // The app locale re-selected the analysis language while this was
+                // in flight, so this response describes a language the panel no
+                // longer claims. Returning bare left the loading status latched
+                // forever -- the finally only clears the busy flag -- and it was
+                // re-translated into every locale the user visited afterwards.
+                //
+                // Clear the STATUS only. A full reset is too broad here: it also
+                // clears the pending range retry, which would leave the range
+                // selector inert, and wipes the query and filters the user typed.
+                // Nothing else needs clearing -- the locale sync that triggers
+                // this only fires when there is no report to begin with.
+                repetitionInsightsStatus = null;
+                refreshRepetitionInsightsStatus();
+                return;
+            }
             if (!response.ok || !report || !Array.isArray(report.candidates)) {
                 throw new Error('local analysis unavailable');
             }

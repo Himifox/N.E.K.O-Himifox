@@ -610,6 +610,19 @@ class StartupGreetingHistory:
         resolved = _resolve_name(name)
         with self._get_lock(resolved):
             with self._get_write_lock(resolved):
+                if resolved not in self._retired:
+                    # Live identity: the cloud apply never rewrites this
+                    # sidecar, so the cache matches the file and the sequence
+                    # fence must not move -- moving it discards a snapshot
+                    # staged and not yet flushed.
+                    return
+                # Retired: everything cached or staged under this name belongs
+                # to the identity that was deleted -- a decision recorded
+                # between the retire and the rmtree repopulates the cache from
+                # the still-present file. Dropping and fencing it loses nothing
+                # the reused name is entitled to, and keeping it would flush a
+                # deleted character's aggregates under the new one.
+                self._evict_unlocked(resolved)
                 self._retired.discard(resolved)
 
     def retire_character(self, name: str) -> None:

@@ -439,7 +439,28 @@ def _inline_code_spans(
         delimiter = text[index:run_end]
         newline = text.find("\n", run_end)
         line_end = len(text) if newline < 0 else newline
-        closing = text.find(delimiter, run_end, _paragraph_end(text, run_end))
+        # The closer must be a run of EXACTLY the opening length; a longer run
+        # is content. `find` accepted the opening-length PREFIX of a longer
+        # run, so a span ended mid-run and, once a second shorter run paired
+        # up with the leftovers, the body after it was mined as prose. Harmless
+        # while the search was bounded to one line -- the leftovers re-opened
+        # and the coverage merged -- but this file now searches to the end of
+        # the paragraph, which turned it into a real leak that also reaches the
+        # persisted signature.
+        limit = _paragraph_end(text, run_end)
+        closing = -1
+        cursor = run_end
+        while cursor < limit:
+            if text[cursor] != delimiter_char:
+                cursor += 1
+                continue
+            candidate_end = cursor
+            while candidate_end < limit and text[candidate_end] == delimiter_char:
+                candidate_end += 1
+            if candidate_end - cursor == len(delimiter):
+                closing = cursor
+                break
+            cursor = candidate_end
         end = line_end if closing < 0 else closing + len(delimiter)
         spans.append((index, end))
         index = max(end, run_end)
