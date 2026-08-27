@@ -1081,3 +1081,49 @@ def test_runtime_cache_entry_points_split_live_from_removed(tmp_path):
         assert "Neko" not in store._retired
     finally:
         anti_repeat_effects._GLOBAL_STORE = previous
+
+
+_WRAPPED_TEMPLATE_DRAFTS = [
+    ("jinja", "sure thing {{" + chr(10) + "secret helper phrase" + chr(10) + "}} enjoy"),
+    ("shell", "sure thing ${" + chr(10) + "secret helper phrase" + chr(10) + "} enjoy"),
+    ("erb", "sure thing <%" + chr(10) + "secret helper phrase" + chr(10) + "%> enjoy"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, draft",
+    _WRAPPED_TEMPLATE_DRAFTS,
+    ids=[row[0] for row in _WRAPPED_TEMPLATE_DRAFTS],
+)
+def test_a_wrapped_template_body_never_reaches_the_sidecar(label, draft):
+    """The single-line form of the same content already returned None.
+
+    `_PROTECTED_RE` rejected newlines inside every template alternative, so a
+    body that merely wrapped stayed searchable and detector evidence taken from
+    inside it could be persisted -- the leak was triggered purely by a newline
+    between the delimiters.
+    """
+    assert build_repeat_signature(
+        draft, ["secret", "helper"], language="en"
+    ) is None, label
+
+
+def test_speech_around_stray_delimiters_still_yields_a_signature():
+    """The template guard must not swallow ordinary character speech.
+
+    The bounded form is what keeps this true: an unbounded newline-crossing
+    match would treat the stray opener and the far-away closer as one container
+    and protect everything between them, so no signature could ever be built
+    for the catchphrase sitting in the middle.
+    """
+    draft = (
+        "那个 ${" + chr(10)
+        + "不过我也记不清楚了呢" + chr(10)
+        + "我们一起去吃饭吧" + chr(10)
+        + "最后那个括号 }"
+    )
+
+    signature = build_repeat_signature(draft, ["我们一起去吃饭吧"], language="zh-CN")
+
+    assert signature is not None
+    assert signature.phrase == "我们一起去吃饭吧"

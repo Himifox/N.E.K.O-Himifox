@@ -1461,3 +1461,45 @@ _LIST_MARKER_AS_CONTENT_CASES = [
 )
 def test_a_list_marker_inside_a_fence_is_content_not_a_closer(label, text):
     assert "DB_PASSWORD" not in _unprotected(text), label
+
+
+# A template body that merely wrapped was left unprotected while its single-line
+# twin was masked. The two-line budget is what keeps that from becoming an
+# over-protection bug: an unbounded newline-crossing match turns one stray
+# delimiter in prose into a span that swallows the rest of the reply, and
+# `<...>` is excluded outright because emoticons pair up across lines.
+_MULTILINE_TEMPLATE_CASES = [
+    ("jinja", "{{\nsecret helper phrase\n}}"),
+    ("shell interpolation", "${\nsecret helper phrase\n}"),
+    ("erb scriptlet", "<%\nsecret helper phrase\n%>"),
+    ("jinja with a filter", "{{ secret helper phrase\n | default('x') }}"),
+    ("crlf jinja", "{{\r\nsecret helper phrase\r\n}}"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _MULTILINE_TEMPLATE_CASES,
+    ids=[row[0] for row in _MULTILINE_TEMPLATE_CASES],
+)
+def test_wrapped_template_bodies_are_protected(label, text):
+    assert "secret helper phrase" not in _unprotected(text), label
+
+
+_TEMPLATE_OVER_PROTECTION_CASES = [
+    ("paired emoticons", "嘿嘿 >_<\n我们一起去吃饭吧\n晚安晚安 >_<", "我们一起去吃饭吧"),
+    ("heart then arrow", "そうだね <3\nまた一緒に散歩しようね\n気分 ->", "また一緒に散歩しようね"),
+    ("stray brace far apart", "那个 ${\n不过我也记不清楚了呢\n我们一起去吃饭吧\n最后那个括号 }", "我们一起去吃饭吧"),
+    ("comparison operators", "记住哦 3 < 5\n我们一起去吃饭吧\n然后 10 > 7", "我们一起去吃饭吧"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _TEMPLATE_OVER_PROTECTION_CASES,
+    ids=[row[0] for row in _TEMPLATE_OVER_PROTECTION_CASES],
+)
+def test_stray_delimiters_in_speech_do_not_swallow_catchphrases(
+    label, text, must_remain_visible
+):
+    assert must_remain_visible in _unprotected(text), label

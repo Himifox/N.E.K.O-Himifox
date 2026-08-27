@@ -62,8 +62,16 @@ _VALID_OUTCOMES = _BLOCKED_OUTCOMES | {
     "abandoned_user_interaction",
 }
 _PROTECTED_RE = re.compile(
-    r"```[\s\S]*?```|`[^`\r\n]+`|\{\{[^{}\r\n]*\}\}|"
-    r"\$\{[^{}\r\n]*\}|<%[^%\r\n]*%>|<[^<>\r\n]{1,80}>|"
+    r"```[\s\S]*?```|`[^`\r\n]+`|"
+    # Same bounded multiline containers as the miner's `_TEMPLATE_RE`, and for
+    # the same reason: a template body that merely wrapped was left searchable
+    # here, so evidence taken from inside it could reach the sidecar even though
+    # its single-line twin was rejected. `<...>` stays line-bounded -- see the
+    # miner for the speech it swallows otherwise.
+    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}\}|"
+    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}|"
+    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,2}%>|"
+    r"<[^<>\r\n]{1,80}>|"
     r"\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
 _EDGE_PUNCTUATION = " \t\r\n,，。.!！?？;；:：、()（）[]【】{}<>《》\"'“”‘’"

@@ -86,7 +86,20 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 _TEMPLATE_RE = re.compile(
-    r"\{\{[^{}\r\n]*\}\}|\$\{[^{}\r\n]*\}|<%[^%\r\n]*%>|"
+    # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
+    # interpolation and ERB scriptlets are ordinary shapes, and a body that
+    # merely spanned a newline was left unprotected while its single-line twin
+    # was masked. The line budget is the point -- an unbounded newline-crossing
+    # match turns one stray delimiter in prose into a span that swallows the
+    # rest of the reply.
+    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}\}|"
+    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}|"
+    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,2}%>|"
+    # `<...>` stays strictly line-bounded. It carries by far the highest
+    # false-positive density in this project's character speech -- `>_<`, `<3`,
+    # `->`, `3 < 5` -- so letting it cross newlines paired the tail of one
+    # emoticon with the head of another and erased the catchphrase between them.
+    # Real HTML code containers are covered by `_html_raw_text_spans` anyway.
     r"<[^<>\r\n]{1,80}>|\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
 
