@@ -567,27 +567,27 @@ class AntiRepeatEffectStore:
         ``ensure_character_dir`` lazily creates ``memory/<name>/`` on first write,
         because nothing creates it eagerly at character-creation time.
 
-        The exception is a name ``evict_character`` retired. ``evict_character``
-        alone only fences snapshots staged *before* the eviction, so a decision
+        The exception is a name ``retire_character`` retired. Fencing alone only
+        covers snapshots staged *before* the eviction, so a decision
         recorded while delete/rename was still in flight would call
         ``ensure_character_dir`` and ``makedirs`` the directory back into
         existence right after ``shutil.rmtree`` removed it — leaving an orphan
         that makes ``character_memory_exists`` report the removed character
         again.
 
-        Retirement is PERMANENT for the process, and a retired name may only
-        write into a directory that already exists: it never creates one.
-        Inferring "the identity is live again" from directory existence would be
-        wrong, because ``delete_character_memory_storage`` evicts *before* it
-        removes the tree (utils/character_memory.py:570 then :577). A flush
-        landing in that window still sees the doomed directory, and lifting
-        retirement there would disarm the guard for every later flush — exactly
-        the resurrection this exists to prevent. Never lifting also means no
-        character-creation or rename-completion hook is needed: a rename target
-        keeps its moved directory and a re-created character gets one from
-        whichever sibling writer touches it first, and writes resume on their
-        own. Worst case these aggregates skip a write, which is the right way
-        for best-effort telemetry to fail.
+        A retired name may only write into a directory that already exists: it
+        never creates one. Inferring "the identity is live again" from directory
+        existence would be wrong, because ``delete_character_memory_storage``
+        retires *before* it removes the tree. A flush landing in that window
+        still sees the doomed directory, and lifting retirement there would
+        disarm the guard for every later flush -- exactly the resurrection this
+        exists to prevent. Only ``evict_character`` lifts it, and only callers
+        that KNOW an identity is live reach for it: a rename target and a
+        cloud-save import. Retiring those would be wrong in the other
+        direction -- an imported profile that ships no managed memory files has
+        no directory yet, and a retired name never creates one, so its
+        aggregates would keep failing to persist while the character is in
+        active use.
         """
         from memory import ensure_character_dir
 
@@ -1040,6 +1040,7 @@ class AntiRepeatEffectStore:
             cleared = _default_payload(timestamp)
             self._cache[name] = cleared
             staged = self._stage_unlocked(name)
+            cleared_seq = staged[2]
         try:
             self._flush_snapshot(*staged, raise_on_error=True)
         except Exception:
@@ -1047,25 +1048,57 @@ class AntiRepeatEffectStore:
                 # Only roll back what this call installed: a decision recorded
                 # while the flush was in flight is newer than `previous` and
                 # must not be thrown away by a failed clear.
-                if self._cache.get(name) is cleared:
+                #
+                # Object identity cannot detect that decision.
+                # ``_apply_decision`` loads the cached payload and mutates it IN
+                # PLACE before storing it back, so `cleared` stays the very same
+                # object and an identity test would roll the concurrent decision
+                # away. The staged sequence does detect it: every mutation
+                # stages a fresh snapshot and bumps the sequence past ours.
+                if self._staged_seq.get(name, 0) == cleared_seq:
                     self._cache[name] = previous
             raise
 
+    def _evict_unlocked(self, name: str) -> None:
+        fence = max(
+            self._staged_seq.get(name, 0),
+            self._written_seq.get(name, 0),
+        )
+        self._cache.pop(name, None)
+        self._staged_seq[name] = fence
+        self._written_seq[name] = fence
+
     def evict_character(self, name: str) -> None:
-        """Forget one identity and fence snapshots staged before its removal."""
+        """Forget a LIVE identity whose file changed underneath us.
+
+        Same contract as the sibling stores: a cloud-save import replaces
+        ``memory/<name>/`` wholesale, and the cache would otherwise shadow the
+        new contents and get flushed back over them. The sequence fence stops a
+        snapshot staged before the replacement from doing that.
+
+        This is also the explicit "the identity is live" event that lifts
+        retirement -- an imported or renamed-to name is a real character, and
+        leaving it retired would deny it the lazy directory creation every
+        sibling memory writer gets. Directory existence never lifts retirement;
+        only this call does.
+        """
         name = _resolve_name(name)
         with self._get_lock(name):
             with self._get_write_lock(name):
-                fence = max(
-                    self._staged_seq.get(name, 0),
-                    self._written_seq.get(name, 0),
-                )
-                self._cache.pop(name, None)
-                self._staged_seq[name] = fence
-                self._written_seq[name] = fence
-                # The sequence fence only covers snapshots staged BEFORE this
-                # call. Retirement is what stops a decision recorded while the
-                # delete/rename is still in flight from recreating the directory.
+                self._evict_unlocked(name)
+                self._retired.discard(name)
+
+    def retire_character(self, name: str) -> None:
+        """Forget one identity whose directory is being REMOVED, and fence it.
+
+        The sequence fence only covers snapshots staged BEFORE this call.
+        Retirement is what stops a decision recorded while the delete or
+        rename-away is still in flight from recreating the directory.
+        """
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            with self._get_write_lock(name):
+                self._evict_unlocked(name)
                 self._retired.add(name)
 
 
@@ -1089,6 +1122,15 @@ def evict_cached_anti_repeat_effects(*character_names: str) -> None:
         return
     for character_name in dict.fromkeys(character_names):
         store.evict_character(character_name)
+
+
+def retire_cached_anti_repeat_effects(*character_names: str) -> None:
+    """Retire identities whose directories are being removed."""
+    store = _GLOBAL_STORE
+    if store is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        store.retire_character(character_name)
 
 
 def record_anti_repeat_decision(

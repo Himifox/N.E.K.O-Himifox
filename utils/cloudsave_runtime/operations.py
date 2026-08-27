@@ -31,6 +31,7 @@ from typing import Any
 from utils.file_utils import atomic_write_json
 from utils.character_memory import (
     evict_character_runtime_caches,
+    retire_character_runtime_caches,
     list_character_recent_paths,
 )
 from utils.recent_file import (
@@ -1517,10 +1518,14 @@ def import_local_cloudsave_snapshot(
                     for target_path in delete_dir_targets
                     if target_path.parent == memory_root
                 ]
-                evict_character_runtime_caches(
-                    *imported_character_names,
-                    *removed_character_names,
-                )
+                # Imported names are LIVE identities: invalidate only. An
+                # imported profile that ships no managed memory files has no
+                # directory yet, and a retired name never creates one, so
+                # retiring it would silently stop its aggregates from ever
+                # persisting while the character is in active use. Removed
+                # names are the opposite case and do retire.
+                evict_character_runtime_caches(*imported_character_names)
+                retire_character_runtime_caches(*removed_character_names)
                 return {
                     "manifest_fingerprint": computed_fingerprint,
                     "applied_character_count": len(imported_character_names),

@@ -1331,3 +1331,42 @@ def test_disposal_waits_for_an_in_flight_latest_assistant_read(
     assert failures == []
     assert disposal_returned.is_set()
     assert results and results[0].messages == ["reply 1", "reply 2", "reply 3"]
+
+
+def test_latest_assistant_texts_stop_at_the_scan_budget(timeindex_module, tmp_path):
+    """Rows EXAMINED bound the read, not only assistant messages found.
+
+    A history whose tail is all human rows used to page through the entire
+    table looking for a full window, holding the per-character engine lock the
+    whole time. The router's HTTP timeout does not stop the worker thread, so
+    that scan kept blocking the character's memory reads and writes long after
+    the request had given up.
+    """
+    timestamp = "2026-01-01 00:00:00.000000"
+    budget = timeindex_module._LATEST_ASSISTANT_MIN_SCAN_BUDGET
+    rows = [
+        {
+            "session_id": "0",
+            "message": _stored_message("ai", "buried answer"),
+            "timestamp": timestamp,
+        }
+    ]
+    rows += [
+        {
+            "session_id": str(index + 1),
+            "message": _stored_message("human", "user turn"),
+            "timestamp": timestamp,
+        }
+        for index in range(budget + 500)
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 1, batch_size=256)
+    finally:
+        engine.dispose()
+
+    assert result.source_available is True
+    assert result.messages == [], (
+        "the scan ran past its budget to reach the buried assistant row"
+    )
+    assert result.skipped_row_count <= budget + 256

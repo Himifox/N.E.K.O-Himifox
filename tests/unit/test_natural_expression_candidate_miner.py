@@ -1268,10 +1268,22 @@ _FENCE_MATRIX = [
     # A list item is a container too: a fence written straight after its marker
     # was invisible to the parser, and stayed unprotected wherever the inline
     # scanner did not happen to cover it.
-    ("bullet list fence", ["- ```", "- SECRET=1", "- ```", "tail"], ["tail"]),
-    ("numbered list fence", ["1. ```", "1. SECRET=1", "1. ```", "tail"], ["tail"]),
-    ("list fence, unclosed", ["- ```", "- SECRET=1"], []),
-    ("list fence, blank line inside", ["- ```", "- a=1", "", "- SECRET=1", "- ```"], []),
+    # Continuation lines are INDENTED under the marker, which is the only
+    # legal form. Re-marking every line ("- SECRET=1") is not a list fence at
+    # all, and treating a re-marked line as a closer is the bug the
+    # list-marker-as-content cases below pin down.
+    ("bullet list fence", ["- ```", "  SECRET=1", "  ```", "tail"], ["tail"]),
+    (
+        "numbered list fence",
+        ["1. ```", "   SECRET=1", "   ```", "tail"],
+        ["tail"],
+    ),
+    ("list fence, unclosed", ["- ```", "  SECRET=1"], []),
+    (
+        "list fence, blank line inside",
+        ["- ```", "  a=1", "", "  SECRET=1", "  ```"],
+        [],
+    ),
     ("bullet prose is not a fence", ["- SAFE=1 here", "- SAFE=1 here"], ["SAFE=1"]),
 ]
 
@@ -1428,3 +1440,24 @@ _FULLWIDTH_CODE_CASES = [
 )
 def test_fullwidth_code_delimiters_still_protect(label, text):
     assert "SECRET" not in _unprotected(text), label
+
+
+# A list marker may only introduce an OPENING fence. Stripping it on every line
+# let a CONTENT line that happens to read "- ```" be rewritten into a bare
+# delimiter run, close the active fence early, and expose the rest of the block.
+_LIST_MARKER_AS_CONTENT_CASES = [
+    ("ascii backtick", "```\n- ```\nDB_PASSWORD = hunter2\n```\ntail"),
+    ("ascii tilde", "~~~\n- ~~~\nDB_PASSWORD = hunter2\n~~~\ntail"),
+    ("ordered marker", "~~~\n1. ~~~\nDB_PASSWORD = hunter2\n~~~\ntail"),
+    ("quoted marker", "~~~\n> - ~~~\nDB_PASSWORD = hunter2\n~~~\ntail"),
+    ("fullwidth tick", "｀｀｀\n- ｀｀｀\nDB_PASSWORD = hunter2\n｀｀｀\ntail"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _LIST_MARKER_AS_CONTENT_CASES,
+    ids=[row[0] for row in _LIST_MARKER_AS_CONTENT_CASES],
+)
+def test_a_list_marker_inside_a_fence_is_content_not_a_closer(label, text):
+    assert "DB_PASSWORD" not in _unprotected(text), label

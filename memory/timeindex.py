@@ -70,6 +70,16 @@ _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY = "anti_repeat_visible_text_length"
 # absurdly generous and stays far under CPython's int-conversion digit limit
 # (4300 by default), which int() raises ValueError past.
 _MAX_VISIBLE_LENGTH_DIGITS = 12
+# A scan budget bounds the latest-assistant read by ROWS EXAMINED, not only by
+# assistant messages found. Without it, a character whose history is mostly
+# human/system/malformed rows and holds fewer than `limit` usable assistant
+# rows pages through the entire table while holding the per-character engine
+# lock. The router's HTTP timeout does not stop the `asyncio.to_thread`
+# worker, so a timed-out analysis would keep scanning and keep blocking that
+# character's memory reads and writes. Running out of budget degrades into
+# "fewer replies analyzed", which the panel already reports.
+_LATEST_ASSISTANT_SCAN_BUDGET_FACTOR = 20
+_LATEST_ASSISTANT_MIN_SCAN_BUDGET = 2_000
 
 _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
     re.compile(pattern)
@@ -940,8 +950,9 @@ class TimeIndexedMemory:
         lock, so releasing it after acquisition would let a concurrent disposal
         pull the engine out from under a read already in flight — surfacing as
         ``RuntimeError("latest assistant history read failed")``. The work is
-        bounded (at most ``limit`` messages, ``batch_size`` rows per page), so
-        holding it cannot stall a writer indefinitely.
+        bounded on BOTH axes: at most ``limit`` messages AND a scan budget of
+        rows examined, so holding it cannot stall a writer indefinitely even
+        for a history whose tail carries almost no assistant rows.
         """
         if limit < 1:
             raise ValueError("limit must be greater than zero")
@@ -984,8 +995,13 @@ class TimeIndexedMemory:
         cursor: tuple[object, int] | None = None
         records: list[tuple[str, str | None]] = []
         skipped_row_count = 0
+        scanned_row_count = 0
+        scan_budget = max(
+            _LATEST_ASSISTANT_MIN_SCAN_BUDGET,
+            limit * _LATEST_ASSISTANT_SCAN_BUDGET_FACTOR,
+        )
 
-        while len(records) < limit:
+        while len(records) < limit and scanned_row_count < scan_budget:
             timestamp_expression = "timestamp" if has_timestamp else "NULL"
             sql = (
                 f"SELECT {timestamp_expression}, rowid, message FROM {table_name} "
@@ -1028,6 +1044,7 @@ class TimeIndexedMemory:
 
             if not rows:
                 break
+            scanned_row_count += len(rows)
             for row in rows:
                 assistant_record = _assistant_record_from_stored_message(row[2])
                 if assistant_record is None:
@@ -1039,6 +1056,14 @@ class TimeIndexedMemory:
             cursor = (rows[-1][0], int(rows[-1][1]))
             if len(rows) < batch_size:
                 break
+            if scanned_row_count >= scan_budget and len(records) < limit:
+                logger.warning(
+                    "[TimeIndexedMemory] latest assistant scan budget reached "
+                    "for %s after %d rows with %d messages",
+                    lanlan_name,
+                    scanned_row_count,
+                    len(records),
+                )
 
         records.reverse()
         return LatestAssistantTexts(

@@ -3243,6 +3243,11 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
         assert "小满" not in store._cache
         assert "小满" not in corpus._cache
         assert "小满" not in greeting._cache
+        # An imported profile is a LIVE identity. Retiring it would deny it
+        # the lazy directory creation every sibling memory writer gets, so a
+        # profile that ships no managed memory files would never persist its
+        # anti-repeat aggregates while the character is in active use.
+        assert "小满" not in store._retired
     finally:
         (
             effects_module._GLOBAL_STORE,

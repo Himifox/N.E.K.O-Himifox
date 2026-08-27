@@ -16,7 +16,9 @@ from memory.anti_repeat_effects import (
 )
 from utils.character_memory import (
     delete_character_memory_storage,
+    evict_character_runtime_caches,
     rename_character_memory_storage,
+    retire_character_runtime_caches,
 )
 
 
@@ -603,7 +605,7 @@ def test_evict_fences_old_snapshot_before_reusing_character_name(tmp_path):
         now=1_700_000_000.0,
     )
 
-    store.evict_character("Neko")
+    store.retire_character("Neko")
     store._flush_snapshot(*old_snapshot)
     assert not (tmp_path / "Neko").exists()
 
@@ -767,7 +769,7 @@ def test_staged_snapshot_shares_no_mutable_state_with_the_live_cache(tmp_path):
 
 
 def test_decision_after_eviction_does_not_recreate_a_removed_character_dir(tmp_path):
-    """``evict_character`` fences snapshots staged before it, not after it.
+    """``retire_character`` fences snapshots staged before it, not after it.
 
     Without the retirement guard, a decision recorded while delete/rename was
     still in flight went through ``ensure_character_dir`` and made the directory
@@ -781,7 +783,7 @@ def test_decision_after_eviction_does_not_recreate_a_removed_character_dir(tmp_p
 
     import shutil
 
-    store.evict_character("Neko")
+    store.retire_character("Neko")
     shutil.rmtree(tmp_path / "Neko")
 
     store.record_decision("Neko", _decision(), now=now + 1)
@@ -790,15 +792,16 @@ def test_decision_after_eviction_does_not_recreate_a_removed_character_dir(tmp_p
 
 
 def test_a_retired_name_writes_again_only_once_a_directory_exists(tmp_path):
-    """Retirement is permanent, but it never blocks a live directory.
+    """Retirement outlives the directory, but it never blocks a live one.
 
-    Exercises the real delete-then-recreate order: evict, remove the tree, then
+    Exercises the real delete-then-recreate order: retire, remove the tree, then
     let another writer create the directory again. The store must refuse while
     the directory is gone and resume once it exists — without ever creating it
     itself, and without un-retiring the name. Directory existence cannot be
     treated as proof the identity is live, because
-    ``delete_character_memory_storage`` evicts BEFORE it removes the tree, so a
+    ``delete_character_memory_storage`` retires BEFORE it removes the tree, so a
     flush landing in that window would otherwise disarm the guard permanently.
+    Only ``evict_character`` -- the explicit live-identity event -- lifts it.
     """
     import shutil
 
@@ -806,7 +809,7 @@ def test_a_retired_name_writes_again_only_once_a_directory_exists(tmp_path):
     (tmp_path / "Neko").mkdir()
     now = 1_700_000_000.0
 
-    store.evict_character("Neko")
+    store.retire_character("Neko")
 
     # Still inside the delete window: the doomed directory is present. Writing
     # here is harmless (rmtree wins), but retirement must NOT be lifted.
@@ -948,3 +951,133 @@ def test_clear_effects_does_not_hold_the_character_lock_across_the_fence(tmp_pat
     assert done.is_set()
     assert errors == []
     assert observed == [True], "the character lock was still held during the flush"
+
+
+def test_evicting_a_live_identity_does_not_retire_it(tmp_path):
+    """A cloud-save import replaces the files of a LIVE character.
+
+    Retiring it would deny it the lazy directory creation every sibling memory
+    writer gets, so an imported profile that ships no managed memory files
+    would never persist its aggregates while the character is in active use.
+    """
+    store = _store(tmp_path)
+    now = 1_700_000_000.0
+
+    store.evict_character("Neko")
+
+    assert "Neko" not in store._retired
+    store.record_decision("Neko", _decision(), now=now)
+    assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
+
+
+def test_evicting_a_retired_name_brings_it_back(tmp_path):
+    """Re-creating an identity is the explicit event that lifts retirement.
+
+    A rename target and a cloud-save import both name a live character. Nothing
+    else lifts it -- directory existence in particular does not, because the
+    delete path retires while the doomed tree is still on disk.
+    """
+    import shutil
+
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+
+    store.retire_character("Neko")
+    shutil.rmtree(tmp_path / "Neko")
+    store.record_decision("Neko", _decision(), now=now)
+    assert not (tmp_path / "Neko").exists()
+
+    store.evict_character("Neko")
+
+    assert "Neko" not in store._retired
+    store.record_decision("Neko", _decision(), now=now + 1)
+    assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
+
+
+def test_a_failed_reset_keeps_a_decision_recorded_during_its_flush(tmp_path):
+    """The rollback must not throw away a concurrent decision.
+
+    ``_apply_decision`` mutates the cached payload IN PLACE, so the cleared
+    payload stays the very same object and an identity test cannot tell the two
+    apart. The staged sequence can.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    # Distinct reasons: the pre-reset state and the concurrent decision land
+    # on the SAME day bucket with the same counters, so only the reason tells
+    # a preserved decision from a restored `previous`.
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=now,
+    )
+
+    original_flush = store._flush_snapshot
+
+    def _flush_then_fail(*args, **kwargs):
+        # Runs after clear_effects released the character lock, exactly where a
+        # proactive decision can land. Restore the real flush first so the
+        # concurrent decision persists normally instead of recursing.
+        store._flush_snapshot = original_flush
+        store.record_decision(
+            "Neko",
+            AntiRepeatDecision(
+                source="proactive",
+                reasons=("literal_similarity",),
+                action="block",
+                outcome="blocked_initial",
+            ),
+            now=now + 1,
+        )
+        raise OSError("disk full")
+
+    store._flush_snapshot = _flush_then_fail
+    try:
+        with pytest.raises(OSError):
+            store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    day = anti_repeat_effects._utc_day(now + 1)
+    reasons = store._cache["Neko"]["daily_buckets"][day]["reason_counts"]
+    assert reasons.get("literal_similarity") == 1, (
+        "the concurrent decision was rolled away with the failed reset"
+    )
+    # `reason_counts` is pre-seeded with every reason at zero, so absence is
+    # not the discriminator -- the count is.
+    assert reasons.get("bm25") == 0, (
+        "the reset was undone: the pre-reset aggregates came back"
+    )
+
+
+def test_runtime_cache_entry_points_split_live_from_removed(tmp_path):
+    """The two entry points differ only in retirement, and must keep differing.
+
+    A delete or a rename SOURCE is going away and retires. A cloud-save import
+    or a rename TARGET is live and only invalidates. Collapsing them in either
+    direction breaks one of the two: retiring a live name stops it persisting,
+    and not retiring a removed one lets an in-flight decision recreate the
+    directory that was just deleted.
+    """
+    previous = anti_repeat_effects._GLOBAL_STORE
+    store = _store(tmp_path)
+    anti_repeat_effects._GLOBAL_STORE = store
+    try:
+        store._cache["Neko"] = anti_repeat_effects._default_payload(1_700_000_000.0)
+        retire_character_runtime_caches("Neko")
+        assert "Neko" not in store._cache
+        assert "Neko" in store._retired
+
+        store._cache["Neko"] = anti_repeat_effects._default_payload(1_700_000_000.0)
+        evict_character_runtime_caches("Neko")
+        assert "Neko" not in store._cache
+        assert "Neko" not in store._retired
+    finally:
+        anti_repeat_effects._GLOBAL_STORE = previous

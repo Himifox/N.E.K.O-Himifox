@@ -55,25 +55,35 @@ logger = get_module_logger(__name__, "Memory")
 # Looked up through ``sys.modules`` rather than imported: eviction must not be
 # what drags the memory package into a process that never touched it, and a
 # module nobody loaded has no cache to evict.
+# (module, evictor, retiring evictor). Only the effects store distinguishes
+# the two: it is the one that retires a name so a decision recorded while the
+# delete is still in flight cannot recreate the directory. The other two are
+# pure cache invalidation and have no retiring form.
 _CHARACTER_RUNTIME_CACHE_EVICTORS = (
-    ("memory.anti_repeat_effects", "evict_cached_anti_repeat_effects"),
-    ("memory.anti_repeat", "evict_cached_anti_repeat_corpus"),
-    ("memory.startup_greeting_history", "evict_cached_startup_greeting_history"),
+    (
+        "memory.anti_repeat_effects",
+        "evict_cached_anti_repeat_effects",
+        "retire_cached_anti_repeat_effects",
+    ),
+    ("memory.anti_repeat", "evict_cached_anti_repeat_corpus", None),
+    (
+        "memory.startup_greeting_history",
+        "evict_cached_startup_greeting_history",
+        None,
+    ),
 )
 
 
-def evict_character_runtime_caches(*character_names: str) -> None:
-    """Drop in-memory per-character caches for names whose files just changed.
-
-    Best-effort by construction: one module failing must not abort a delete,
+def _run_character_cache_evictors(names: tuple[str, ...], *, retire: bool) -> None:
+    """Best-effort by construction: one module failing must not abort a delete,
     rename or cloud-save import that has already touched the filesystem.
     """
-    names = tuple(dict.fromkeys(name for name in character_names if name))
-    if not names:
-        return
-    for module_name, evictor_name in _CHARACTER_RUNTIME_CACHE_EVICTORS:
+    for module_name, evictor_name, retiring_name in (
+        _CHARACTER_RUNTIME_CACHE_EVICTORS
+    ):
         module = sys.modules.get(module_name)
-        evict = getattr(module, evictor_name, None)
+        wanted = retiring_name if (retire and retiring_name) else evictor_name
+        evict = getattr(module, wanted, None)
         if not callable(evict):
             continue
         try:
@@ -86,9 +96,34 @@ def evict_character_runtime_caches(*character_names: str) -> None:
             )
 
 
-def _evict_cached_anti_repeat_effects(*character_names: str) -> None:
-    """Backwards-compatible alias for the single-cache call sites."""
-    evict_character_runtime_caches(*character_names)
+def evict_character_runtime_caches(*character_names: str) -> None:
+    """Drop caches for LIVE identities whose files just changed.
+
+    For a cloud-save import or a rename TARGET: the files on disk were
+    replaced, the cache would shadow them, but the identity is still real and
+    must keep persisting. Use ``retire_character_runtime_caches`` instead when
+    the directory is going away.
+    """
+    names = tuple(dict.fromkeys(name for name in character_names if name))
+    if not names:
+        return
+    _run_character_cache_evictors(names, retire=False)
+
+
+def retire_character_runtime_caches(*character_names: str) -> None:
+    """Drop caches for identities whose directories are being REMOVED.
+
+    For a delete or the source name of a rename. On top of the invalidation,
+    this retires the name in the anti-repeat effects store so a decision
+    recorded while the removal is still in flight cannot ``makedirs`` the
+    directory back into existence after the tree is gone.
+    """
+    names = tuple(dict.fromkeys(name for name in character_names if name))
+    if not names:
+        return
+    _run_character_cache_evictors(names, retire=True)
+
+
 
 
 LEGACY_CHARACTER_MEMORY_FILE_MAP = {
@@ -388,7 +423,12 @@ def rename_character_memory_storage(
     generation_snapshot: dict[str, tuple[int, int]] = {}
     pending_snapshot: dict[Path, list[Any]] = {}
     try:
-        _evict_cached_anti_repeat_effects(old_name, new_name)
+        # The SOURCE name loses its directory to the move, so it retires. The
+        # TARGET is a live identity that keeps writing, so it only invalidates:
+        # retiring it would deny it the lazy directory creation every sibling
+        # memory writer gets.
+        retire_character_runtime_caches(old_name)
+        evict_character_runtime_caches(new_name)
         # 目标角色名可能曾被改走；复用该名字前必须切断旧跳转，否则新角色会写进旧目标。
         (
             _,
@@ -608,7 +648,7 @@ def delete_character_memory_storage(
     )
     pending_snapshot: dict[Path, list[Any]] = {}
     try:
-        _evict_cached_anti_repeat_effects(character_name)
+        retire_character_runtime_caches(character_name)
         pending_snapshot = {
             path: deepcopy(get_recent_pending_unlocked(path))
             for path in recent_candidates

@@ -287,9 +287,14 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     offset = 0
     for line in text.splitlines(keepends=True):
         body, depth = _split_blockquote_prefix(line)
-        list_marker = _LIST_MARKER_PREFIX_RE.match(body)
-        if list_marker is not None:
-            body = body[list_marker.end() :]
+        if fence_start is None:
+            # Only an OPENING fence may sit behind a list marker. Stripping
+            # the marker on every line let a content line that happens to
+            # read "- ```" be rewritten into a bare run and close the active
+            # fence, exposing the rest of the block.
+            list_marker = _LIST_MARKER_PREFIX_RE.match(body)
+            if list_marker is not None:
+                body = body[list_marker.end() :]
         stripped = body.lstrip(" \t")
         indent = len(body) - len(stripped)
         if indent <= 3:
