@@ -2312,3 +2312,42 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 设计提交 `615304adc`、实现提交 `89c4bdde4` 已推送。EJ 在知识根目录建立严格、原子且最多保留 100 条记录的 `activation-commits.json`；active 作业现在必须同时匹配 staging 内 identity/receipt/state 与 staging 外提交记录，伪造局部文件不能产生成功状态，正常卸载则保留历史提交证明。EK 令任务清理 helper 只吸收子任务自身取消，并让 shutdown 在 retry 或 voice 清理处收到调用者取消时暂存、完成剩余收尾后重新抛出。EL 在新普通 transcript 或图片到达时按 request ID 立即失效旧 analyze owner，仅同一 turn 分片可保留，mirror 路径不变。EM 以独立强引用 settlement task 持有退订 package guard，调用者取消不会中断安装收敛和 remove，也不会提前允许同包重新订阅。
 
 项目 `.venv` Python 3.11 的四组精确反例及相邻回归为 135 passed、1 skipped；知识库、公共会话、启动关闭和市场宽回归为 553 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试退出码、判定或产品文件。
+
+## 第二十六轮：文件身份、评估身份与来源身份必须复用生产边界
+
+第二十五轮关闭期间完整分页又发现 4 条 conversation。沿暂存 SQLite、两条评估脚本和管理状态调用链复核后全部成立；其中注册表问题需要覆盖“注册表存在但漏记某个社区来源”的同类边界，不能只特判文件缺失。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3868058344` | EN | staging database 子文件可被链接到作业目录外，成立 |
+| `discussion_r3868058348` | EO | response-quality 正例只验证任意 strong 命中，成立 |
+| `discussion_r3868058353` | EP | hybrid evaluator 未复用生产 schema marker 契约，成立 |
+| `discussion_r3868058358` | EQ | 社区 rows 缺少可信 registry 归属时健康状态仍可能 ready，成立 |
+
+### EN：每次打开暂存 SQLite 前验证数据库文件族
+
+- 建立单一 staging database path validator；数据库主文件及 SQLite 可能使用的 `-wal`、`-shm`、`-journal` 均必须是作业目录的直接子项，已有项必须是普通文件且不得为 symlink/reparse point。
+- 首次构建允许这些文件尚不存在，但在创建 `KnowledgeStore` 前验证；`verifying_index` 恢复、严格向量快照和任何后续重新打开同样复用该守门，不因 durable state 跳过。
+- 校验失败使作业进入稳定 degraded 状态，不打开链接目标、不清理链接目标，也不继续激活。作业目录本身仍需先通过现有 trusted-root 重验证。
+- 清理只能 unlink 经目录边界确认的固定子项；本轮不承诺抵御拥有同等本机文件权限的进程在一次校验与 SQLite 系统调用之间持续竞争，但所有受支持入口均不得主动跟随已存在的链接。
+
+### EO：response-quality strong 正例绑定预期条目
+
+- strong fixture 必须额外声明非空 `expected_source_tag` 与 `expected_title`；none 用例不得携带这两个字段，保持“不得路由”的单一预期。
+- preflight 使用生产 context 返回的 `source_tag` 和 `entry_title`，要求来源精确一致、标题按生产规范化规则一致；任一不符即 `route_pass=false`，即使 `actual_mode=strong`。
+- `matched_term` 继续仅用于报告，不作为可信身份替代；fixture loader 对字段集合、来源格式和可规范化标题失败关闭。
+- 现有 7 个 strong 用例绑定 `source:chime` 中的实际目标卡片，另增异源/异标题命中反例。
+
+### EP：只读评估复用生产 schema marker 契约
+
+- 将 `PRAGMA user_version` 与 metadata `schema_version` 的兼容判断提取为可复用、只读 helper；`KnowledgeStore` 与 evaluator 调用同一实现，避免复制后漂移。
+- evaluator 在读取向量前执行该 helper；future version、两个 marker 不一致、非规范 metadata 版本以及有 user_version 却缺 metadata 均转换为稳定 `EvaluationUnavailable/index_schema_unavailable`。
+- 评估仍以 SQLite read-only URI 打开，不构造或初始化 `KnowledgeStore`，因此不会迁移、建表或改写被测数据库；旧但生产可读的 schema 继续由 chunk/input 版本决定能否参与当前评估。
+
+### EQ：健康状态要求每个社区来源都有可信注册身份
+
+- 从持久 source counts 提取所有 `source:community.*`，并与严格当前 registry 解析出的 source/material 映射核对；任何无法解析的社区来源都令 `integrity_ok=false`。
+- 这自然覆盖 packs.json 缺失、损坏以及合法 registry 漏记数据库残留来源；总 entries 和 source diagnostics 保留，但未知社区 rows 不计入 knowledge/corpus 分类。
+- 全新空目录、仅内置来源、合法当前社区包仍保持健康；不得从 source tag 名称或 SQLite 内容反推包身份，也不得自动重建注册表。
+
+关闭条件：所有 staging SQLite 打开点拒绝已存在的链接文件族；strong 评估只在预期来源与标题命中时通过；只读 hybrid 评估与生产使用同一 schema marker 判定；任一未注册社区来源都会使管理健康状态降级。实现与远端证据齐全后逐条回复并 resolve 4 个线程，再完整分页复核。
