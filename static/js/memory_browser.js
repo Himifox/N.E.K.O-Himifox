@@ -994,10 +994,42 @@
     // has no button, so the identity list has to supply it.
     let repetitionInsightExtraCharacters = [];
     let repetitionInsightCharactersRequested = false;
+    // Retry a failed identity load, but rate-limit it: the loader runs on every
+    // panel sync, so a dead endpoint would be re-hit on each character switch
+    // and each analyze start/stop. A time window rather than an attempt count --
+    // an attempt count is spent by the three syncs that fire during bootstrap,
+    // ~126ms apart, so a momentary blip at page load would give up permanently.
+    let repetitionInsightCharacterRetryAt = 0;
+    const REPETITION_INSIGHT_CHARACTER_RETRY_DELAY_MS = 5000;
+
+    // The panel analyses a CHARACTER; the editor opens a FILE. Those are the
+    // same identity for anyone with a recent.json, and the panel piggybacked on
+    // `currentCatName` on that assumption. The identity list breaks it: a
+    // configured or imported character with time-indexed history and no
+    // recent.json is analysable but has no file to open, so picking it used to
+    // leave `currentCatName` untouched and silently analyse whatever the editor
+    // still had open. The panel keeps its own target for exactly that case.
+    let repetitionInsightsCharacterOverride = '';
+    // Storage not settled (selection required, migration pending, recovery).
+    // The insights panel used to be disarmed by accident: the limited state
+    // blanks `currentCatName`, and every insights control gated on it. A
+    // panel-owned target re-arms them, so the lockdown has to be explicit --
+    // "clear anti-repeat statistics" writes to disk, and must not run while a
+    // migration is still in flight.
+    // Starts LOCKED: the flag is lowered only once the storage bootstrap has
+    // reported a settled root. Starting unlocked left the whole await window --
+    // during which the panel is already interactive -- outside the lockdown.
+    let memoryStorageLimited = true;
+
+    function repetitionInsightsTarget() {
+        return repetitionInsightsCharacterOverride || currentCatName || '';
+    }
 
     async function loadRepetitionInsightCharacters() {
         if (repetitionInsightCharactersRequested) return;
+        if (Date.now() < repetitionInsightCharacterRetryAt) return;
         repetitionInsightCharactersRequested = true;
+        let loaded = false;
         try {
             const response = await fetch('/api/memory/insight_characters');
             if (!response.ok) return;
@@ -1006,10 +1038,23 @@
             repetitionInsightExtraCharacters = data.characters
                 .map(function (name) { return String(name || '').trim(); })
                 .filter(Boolean);
+            loaded = true;
             syncRepetitionInsightsCharacterSelect();
         } catch (error) {
             // Best effort: the button-derived list still works without it.
             console.error('Failed to load analyzable characters:', error);
+        } finally {
+            // Latch a SUCCESSFUL load. The flag stays set across the await, so
+            // overlapping syncs still collapse into one request, but a transient
+            // failure must not silence the selector for the rest of the window's
+            // life -- the identities it carries have no file-list button to fall
+            // back on. The retry window keeps a persistently dead endpoint down to
+            // one request every few seconds instead of one per sync.
+            if (!loaded) {
+                repetitionInsightCharacterRetryAt = Date.now()
+                    + REPETITION_INSIGHT_CHARACTER_RETRY_DELAY_MS;
+                repetitionInsightCharactersRequested = false;
+            }
         }
     }
 
@@ -1038,8 +1083,9 @@
         const select = document.getElementById('memory-insights-character-select');
         if (!select) return;
         const entries = repetitionInsightCharacterEntries();
-        if (currentCatName && !entries.some(function (entry) { return entry.name === currentCatName; })) {
-            entries.unshift({ name: currentCatName, filename: '' });
+        const target = repetitionInsightsTarget();
+        if (target && !entries.some(function (entry) { return entry.name === target; })) {
+            entries.unshift({ name: target, filename: '' });
         }
         const noCharacterLabel = translate(
             'memory.repetitionInsightsNoCharacter',
@@ -1048,7 +1094,7 @@
         const signature = JSON.stringify({ entries: entries, noCharacterLabel: noCharacterLabel });
         if (select.dataset.entries !== signature) {
             select.textContent = '';
-            if (!currentCatName) {
+            if (!target) {
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
                 placeholder.textContent = noCharacterLabel;
@@ -1064,18 +1110,20 @@
             });
             select.dataset.entries = signature;
         }
-        select.value = currentCatName || '';
-        select.disabled = repetitionInsightsBusy || !!window._memoryImportInProgress || !entries.length;
+        select.value = target;
+        select.disabled = repetitionInsightsBusy || memoryStorageLimited
+            || !!window._memoryImportInProgress || !entries.length;
     }
 
     function syncRepetitionInsightsControls() {
         const character = document.getElementById('memory-insights-character');
         if (character) {
-            character.textContent = currentCatName || translate(
+            const target = repetitionInsightsTarget();
+            character.textContent = target || translate(
                 'memory.repetitionInsightsNoCharacter',
                 'No character selected'
             );
-            character.title = currentCatName || '';
+            character.title = target;
         }
         syncRepetitionInsightsCharacterSelect();
         loadRepetitionInsightCharacters();
@@ -1092,11 +1140,16 @@
             'memory-insights-language',
             'memory-insights-limit'
         ];
-        if (analyze) analyze.disabled = repetitionInsightsBusy || !currentCatName;
+        // Same three locks the character dropdown carries. Analyze reads from the
+        // store and "clear anti-repeat statistics" WRITES to it, so neither may
+        // run while an import is replacing the very files they touch.
+        const ready = !memoryStorageLimited && !window._memoryImportInProgress
+            && !!repetitionInsightsTarget();
+        if (analyze) analyze.disabled = repetitionInsightsBusy || !ready;
         if (clear) clear.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
         if (exportButton) exportButton.disabled = repetitionInsightsBusy || !repetitionInsightsReport;
         if (resetEffects) {
-            resetEffects.disabled = repetitionInsightsBusy || !currentCatName;
+            resetEffects.disabled = repetitionInsightsBusy || !ready;
         }
         filterIds.forEach(function (id) {
             const control = document.getElementById(id);
@@ -1104,7 +1157,10 @@
         });
         scopeIds.forEach(function (id) {
             const control = document.getElementById(id);
-            if (control) control.disabled = repetitionInsightsBusy;
+            // Changing the scope re-runs the analysis, so it belongs behind the
+            // same lock as the Analyze button rather than staying live while
+            // everything around it is disabled.
+            if (control) control.disabled = repetitionInsightsBusy || !ready;
         });
     }
 
@@ -1503,12 +1559,13 @@
     }
 
     async function analyzeRepetitionInsights() {
-        if (!currentCatName || repetitionInsightsBusy) return;
+        if (memoryStorageLimited) return;
+        if (!repetitionInsightsTarget() || repetitionInsightsBusy) return;
         const languageSelect = document.getElementById('memory-insights-language');
         const limitSelect = document.getElementById('memory-insights-limit');
         if (!languageSelect || !limitSelect) return;
 
-        const targetCharacter = currentCatName;
+        const targetCharacter = repetitionInsightsTarget();
         const requestId = ++repetitionInsightsRequestId;
         setRepetitionInsightsBusy(true);
         setRepetitionInsightsStatus(
@@ -1527,7 +1584,8 @@
                 })
             });
             const report = await response.json();
-            if (requestId !== repetitionInsightsRequestId || currentCatName !== targetCharacter) return;
+            if (requestId !== repetitionInsightsRequestId
+                || repetitionInsightsTarget() !== targetCharacter) return;
             if (!response.ok || !report || !Array.isArray(report.candidates)) {
                 throw new Error('local analysis unavailable');
             }
@@ -1574,12 +1632,15 @@
     }
 
     async function resetRepetitionEffectRecords() {
-        if (!currentCatName || repetitionInsightsBusy) return;
+        // Writes to disk. Never on an unsettled storage root -- a migration may
+        // still be moving the very directory this would clear.
+        if (memoryStorageLimited) return;
+        if (!repetitionInsightsTarget() || repetitionInsightsBusy) return;
         if (!window.confirm(translate(
             'memory.repetitionInsightsResetConfirm',
             'Clear this character\'s local anti-repeat effect statistics? Saved chat history and repetition candidates will not be deleted.'
         ))) return;
-        const targetCharacter = currentCatName;
+        const targetCharacter = repetitionInsightsTarget();
         const requestId = ++repetitionInsightsRequestId;
         setRepetitionInsightsBusy(true);
         try {
@@ -1589,7 +1650,8 @@
                 body: JSON.stringify({ character_name: targetCharacter })
             });
             const result = await response.json();
-            if (requestId !== repetitionInsightsRequestId || currentCatName !== targetCharacter) return;
+            if (requestId !== repetitionInsightsRequestId
+                || repetitionInsightsTarget() !== targetCharacter) return;
             if (!response.ok || !result || result.success !== true) {
                 throw new Error('effect reset unavailable');
             }
@@ -1675,7 +1737,7 @@
         const serialized = JSON.stringify(sortRepetitionInsightsJson(artifact), null, 2) + '\n';
         const blob = new Blob([serialized], { type: 'application/json;charset=utf-8' });
         const url = URL.createObjectURL(blob);
-        const safeCharacter = String(currentCatName || 'character')
+        const safeCharacter = String(repetitionInsightsTarget() || 'character')
             .normalize('NFKC')
             .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
             .replace(/\s+/g, '-')
@@ -1711,15 +1773,38 @@
             || !exportButton || !resetEffects || !query || !coverage || !effectFilter) return;
         character.addEventListener('change', function () {
             const option = character.options[character.selectedIndex];
+            const name = String(character.value || '');
             const filename = option ? String(option.dataset.filename || '') : '';
             const button = filename ? findMemoryRoleButton(filename) : null;
             const listItem = button ? button.closest('li') : null;
-            if (!button || !listItem || character.value === currentCatName) {
+            if (name === repetitionInsightsTarget()) {
                 syncRepetitionInsightsControls();
                 return;
             }
-            requestMemoryFileSelection(filename, listItem, character.value);
-            syncRepetitionInsightsControls();
+            if (name === currentCatName) {
+                // The editor is ALREADY on this character; only the panel needs
+                // re-coupling. Routing this through requestMemoryFileSelection
+                // opened the unsaved-switch dialog for the file already in the
+                // editor, and "discard" then reloaded it from disk -- destroying
+                // the user's unsaved edits for something that was never a switch.
+                repetitionInsightsCharacterOverride = '';
+                resetRepetitionInsightsState();
+                return;
+            }
+            if (button && listItem) {
+                // A different character that has an editor file: switch to it,
+                // which resets the panel and clears any override on the way
+                // through selectMemoryFile.
+                requestMemoryFileSelection(filename, listItem, name);
+                syncRepetitionInsightsControls();
+                return;
+            }
+            // No editor file for this identity. Dropping the selection here left
+            // the previous character as the analysis target while the dropdown
+            // snapped back -- so Analyze silently reported on the wrong
+            // character. Take the selection as the panel's own target instead.
+            repetitionInsightsCharacterOverride = name;
+            resetRepetitionInsightsState();
         });
         language.value = repetitionInsightLanguageFromLocale();
         language.addEventListener('change', function () {
@@ -2674,9 +2759,11 @@
     }
 
     function renderMemoryBrowserLimitedState(state) {
+        memoryStorageLimited = true;
         currentMemoryFile = null;
         currentMemoryIdentityToken = null;
         currentCatName = '';
+        repetitionInsightsCharacterOverride = '';
         chatData = [];
         memoryFileRequestId++;
         resetRepetitionInsightsState();
@@ -3152,7 +3239,13 @@
                             if (currentMemoryFile) {
                                 return;
                             }
-                            requestMemoryFileSelection(f, li, catName);
+                            // 编辑器照常打开当前角色的文件（否则这里会留一个空白
+                            // 编辑区），但不夺走洞察面板里用户显式选中的无文件角色：
+                            // 那不设置 currentMemoryFile，此前会被这个定时器连同
+                            // 已经跑完的分析结果一起清掉，且不需要任何用户操作。
+                            requestMemoryFileSelection(f, li, catName, {
+                                keepInsightsTarget: true,
+                            });
                         }, 100);
                     }
                 });
@@ -3354,6 +3447,11 @@
         // 都据此拦截，防用户在预览 / 确认期间切角色或换文件重新启用按钮、起第二次
         // 导入（Codex P2）。finally 统一清除。
         window._memoryImportInProgress = true;
+        // Nothing else syncs the insights panel at either edge of an import, so
+        // its controls kept whatever state the last sync left them in: the lock
+        // below never engaged during the import, and a sync that happened to run
+        // while the flag was up left them disabled after it finished.
+        syncRepetitionInsightsControls();
         // 冻结文件 / 格式选择：payload 在预览前已快照，期间若改选，commit 仍发旧
         // payload，会导入与界面所示不同的 workspace（Codex P2）。finally 复原。
         const fileInput = document.getElementById('external-memory-files');
@@ -3530,6 +3628,7 @@
                 if (fileInput) fileInput.disabled = false;
                 if (formatSelect) formatSelect.disabled = false;
                 updateExternalImportButton();
+                syncRepetitionInsightsControls();
             }
         }
     }
@@ -4020,13 +4119,17 @@
         return true;
     }
 
-    function requestMemoryFileSelection(filename, li, catName) {
+    function requestMemoryFileSelection(filename, li, catName, options) {
         if (window._memoryImportInProgress || memoryUnsavedSwitchBusy) return;
         if (memoryHasUnsavedChanges && currentMemoryFile) {
+            // The dialog path drops `options`, which is sound for the only option
+            // there is: `keepInsightsTarget` comes from the startup auto-select,
+            // and that runs only while `currentMemoryFile` is unset, so this
+            // branch cannot be reached from it.
             openMemoryUnsavedSwitchDialog(filename, li, catName);
             return;
         }
-        selectMemoryFile(filename, li, catName);
+        selectMemoryFile(filename, li, catName, options);
     }
 
     function initMemoryUnsavedSwitchDialog() {
@@ -4127,9 +4230,15 @@
         currentMemoryFile = filename;
         currentMemoryFingerprint = null;
         currentMemoryIdentityToken = null;
-        const previousCatName = currentCatName;
+        const previousTarget = repetitionInsightsTarget();
         currentCatName = catName || (li ? li.getAttribute('data-catname') : '');
-        if (previousCatName !== currentCatName) {
+        // Opening a file re-couples the panel to the editor: an override set by
+        // picking a file-less identity must not survive a deliberate switch. The
+        // startup auto-select is not deliberate, so it opts out.
+        if (!(options && options.keepInsightsTarget)) {
+            repetitionInsightsCharacterOverride = '';
+        }
+        if (previousTarget !== repetitionInsightsTarget()) {
             resetRepetitionInsightsState();
         } else {
             syncRepetitionInsightsControls();
@@ -4565,6 +4674,7 @@
         if (storagePanelState && storagePanelState.limited) {
             renderMemoryBrowserLimitedState(storagePanelState);
         } else {
+            memoryStorageLimited = false;
             setReviewControlsEnabled(true);
             setPowerfulMemoryControlsEnabled(true);
             await loadMemoryFileList();
