@@ -669,14 +669,22 @@ class AntiRepeatEffectStore:
 
     def _read_payload_from_disk(self, name: str, now: float) -> dict[str, Any]:
         path = self._existing_file_path(name)
-        if not os.path.exists(path):
-            return _default_payload(now)
         try:
             with open(path, encoding="utf-8") as handle:
                 raw = json.load(handle)
+        except FileNotFoundError:
+            # Genuinely absent: a first run, or a character whose directory no
+            # sibling writer has created yet. An empty payload is correct here.
+            return _default_payload(now)
         except OSError:
-            # Transient (sharing violation, EACCES, EIO): the file is still
-            # there and still authoritative. Returning an empty stand-in gets
+            # Anything else -- sharing violation, EACCES, EIO -- means the file
+            # may well be there and authoritative. An `os.path.exists` probe
+            # used to sit above this, but it answers False on a permission
+            # denied stat, so it conflated "absent" with "unreadable" and sent
+            # the unreadable case down the empty-payload path anyway. Letting
+            # `open` make the distinction is both simpler and correct.
+            #
+            # Returning an empty stand-in gets
             # it CACHED -- `_load_unlocked` only assigns on a return -- and the
             # next decision flushes that emptiness over real history. Measured
             # against a genuine Win32 sharing violation: 5 recorded decisions

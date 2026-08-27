@@ -1487,3 +1487,56 @@ def test_reviving_a_live_name_keeps_its_cache_and_fence(tmp_path):
     assert persisted["daily_buckets"][day]["counters"]["detected"] == 2, (
         "revive fenced away the staged write"
     )
+
+
+def test_a_stat_denied_path_is_not_mistaken_for_an_absent_file(
+    tmp_path, monkeypatch
+):
+    """`os.path.exists` answers False on a permission-denied stat.
+
+    That probe used to sit above the open, so a path whose STAT is denied took
+    the absent-file branch even though the file was readable -- its empty
+    payload was cached and then flushed over real history, the very loss the
+    OSError split was added to prevent, reached by a different door.
+
+    The discriminator has to be a denied STAT with a working OPEN. Making
+    `open` raise instead proves nothing: with the probe restored the file still
+    exists, so the probe passes and the error propagates either way.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    for _ in range(5):
+        store.record_decision("Neko", _decision(), now=now)
+
+    reader = _store(tmp_path)
+    monkeypatch.setattr(
+        anti_repeat_effects.os.path, "exists", lambda _path: False
+    )
+
+    reader.query_effects("Neko", 30)
+
+    # `started_at` is the discriminator. `source_available` is windowed by day
+    # and the daily buckets are pruned by retention, so both read the same
+    # either way for backdated decisions -- but a default payload stamps
+    # `started_at` with the current time, and the real file carries the
+    # original. It is also the field the on-disk repro showed being clobbered.
+    assert reader._cache["Neko"]["started_at"] == now, (
+        "a stat-denied but readable sidecar was loaded as a fresh empty payload"
+    )
+    # The flush-over-history half is covered by
+    # test_a_transient_read_failure_is_not_cached_as_empty. Asserting it here
+    # too would be wrong: query_effects prunes by real time, so these backdated
+    # buckets are legitimately dropped from the cache first.
+
+
+def test_a_missing_sidecar_still_reads_as_empty(tmp_path):
+    """The absent case must keep working without the exists() probe.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+
+    effects = store.query_effects("Neko", 30)
+
+    assert effects["source_available"] is False
+    assert "Neko" in store._cache

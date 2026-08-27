@@ -1656,6 +1656,15 @@
             }
         } catch (error) {
             if (requestId !== repetitionInsightsRequestId) return;
+            if (languageSelect.value !== requestedLanguage) {
+                // Same stale-language discard as the success path. A network
+                // failure or a non-JSON body throws before that check runs, and
+                // reporting the error would attach it to a language the panel no
+                // longer claims -- and leave the loading status latched behind it.
+                repetitionInsightsStatus = null;
+                refreshRepetitionInsightsStatus();
+                return;
+            }
             if (options && options.dropReportOnError) {
                 repetitionInsightsReport = null;
                 repetitionInsightsIgnored.clear();
