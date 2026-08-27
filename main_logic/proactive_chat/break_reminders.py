@@ -17,6 +17,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 from config import (
     ANTI_REPEAT_INJECT_TOP_K,
@@ -35,6 +36,7 @@ from main_logic.proactive_chat.state import (
 )
 from memory.anti_repeat import get_anti_repeat_corpus
 from memory.anti_repeat_effects import (
+    KEEP_INITIAL_SIGNATURE,
     AntiRepeatDecision,
     build_repeat_signature,
     record_anti_repeat_decision,
@@ -442,7 +444,15 @@ async def _deliver_break_reminder_via_llm(
             language=lang,
         )
 
-        def record_break_repeat_effect(outcome: str) -> None:
+        def record_break_repeat_effect(
+            outcome: str,
+            *,
+            signature: Any = KEEP_INITIAL_SIGNATURE,
+        ) -> None:
+            # ``repeat_signature`` describes the INITIAL draft. An outcome the
+            # detector produced against the REGENERATED draft has to carry that
+            # draft's phrase instead, or the per-candidate handling record points
+            # at a fragment that had nothing to do with the block.
             record_anti_repeat_decision(
                 lanlan_name,
                 AntiRepeatDecision(
@@ -450,7 +460,11 @@ async def _deliver_break_reminder_via_llm(
                     reasons=("unanswered_repeat",),
                     action="regenerate",
                     outcome=outcome,
-                    signature=repeat_signature,
+                    signature=(
+                        repeat_signature
+                        if signature is KEEP_INITIAL_SIGNATURE
+                        else signature
+                    ),
                     response_id=str(proactive_sid),
                 ),
             )
@@ -529,7 +543,14 @@ async def _deliver_break_reminder_via_llm(
             mgr=mgr,
         )
         if regen_signal is not None and regen_signal.triggered:
-            record_break_repeat_effect("break_reminder_suppressed")
+            record_break_repeat_effect(
+                "break_reminder_suppressed",
+                signature=build_repeat_signature(
+                    cleaned,
+                    regen_signal.repeated_terms,
+                    language=lang,
+                ),
+            )
             logger.info(
                 "[%s] break reminder regen still repeats unanswered content; drop",
                 lanlan_name,

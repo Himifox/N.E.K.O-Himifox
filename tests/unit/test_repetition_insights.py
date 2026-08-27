@@ -673,3 +673,73 @@ async def test_response_ids_are_sliced_to_the_analyzed_window(monkeypatch):
     assert 0 < analyzed < 4
     # Exactly the newest `analyzed` ids, never the dropped older ones.
     assert result["_anti_repeat_response_ids"] == ["oldest", "older", "newer", "newest"][-analyzed:]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_effect_scope_uses_the_analyzed_count_not_the_request(monkeypatch):
+    """A narrowed window must relabel the effect scope.
+
+    Otherwise the panel says "the latest 100 replies" over an aggregate that
+    covers however few the budget actually allowed.
+    """
+    from main_routers import memory_router
+
+    captured = {}
+
+    class _Store:
+        def query_effects_for_responses(self, name, ids, limit, **_kwargs):
+            captured["limit"] = limit
+            return {
+                "schema_version": "anti-repeat-effects/v1",
+                "source_available": True,
+                "started_at": 0.0,
+                "scope_type": "assistant_messages",
+                "assistant_message_limit": limit,
+                "linked_message_count": len(list(ids)),
+                "totals": {},
+                "reason_counts": {},
+                "bm25": {},
+                "patterns": [],
+            }
+
+    monkeypatch.setattr(
+        "memory.anti_repeat_effects.get_anti_repeat_effect_store", lambda: _Store()
+    )
+
+    inner = {
+        "success": True,
+        "summary": {"assistant_message_count": 100, "analyzed_message_count": 10},
+        "candidates": [],
+        "parameters": {},
+        "_anti_repeat_response_ids": ["a", "b"],
+    }
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return dict(inner)
+
+    monkeypatch.setattr(
+        memory_router,
+        "character_memory_exists",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "utils.internal_http_client.get_internal_http_client",
+        lambda: SimpleNamespace(post=AsyncMock(return_value=_Response())),
+    )
+    monkeypatch.setattr(
+        "utils.config_manager.get_config_manager",
+        lambda: SimpleNamespace(aload_characters=AsyncMock(return_value={"猫娘": {}})),
+    )
+
+    result = await memory_router.repetition_insights(
+        memory_router.RepetitionInsightsRequest(
+            character_name="测试猫娘", language="en", assistant_message_limit=100
+        )
+    )
+
+    assert captured["limit"] == 10
+    assert result["effectiveness"]["assistant_message_limit"] == 10

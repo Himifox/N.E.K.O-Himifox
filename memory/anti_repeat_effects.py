@@ -118,6 +118,13 @@ class RepeatSignature:
     language: str
 
 
+# Sentinel for recorder closures that capture the INITIAL draft's signature:
+# it distinguishes "keep what the closure captured" from an explicit ``None``
+# (a deliberately unattributed record). Shared so every recorder in
+# ``main_logic.proactive_chat`` spells the override the same way.
+KEEP_INITIAL_SIGNATURE = object()
+
+
 @dataclass(frozen=True, slots=True)
 class AntiRepeatDecision:
     source: str

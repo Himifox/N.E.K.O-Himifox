@@ -1432,3 +1432,97 @@ async def test_regen_unanswered_block_records_its_own_reason_and_fragment(monkey
     assert "bm25" in decision.reasons
     assert decision.signature is not None
     assert decision.signature.normalized_phrase == "改写后的老梗"
+
+
+@pytest.mark.asyncio
+async def test_break_reminder_regen_block_records_the_rewrite_phrase(monkeypatch):
+    """The rewrite tripped the detector on ITS OWN phrase, not the initial one.
+
+    `record_break_repeat_effect` closes over the initial draft's signature, so
+    the suppression was attributed to the phrase that triggered the rewrite
+    rather than the one that blocked it.
+    """
+    from main_logic.proactive_chat import break_reminders
+
+    captured = []
+    monkeypatch.setattr(
+        break_reminders,
+        "record_anti_repeat_decision",
+        lambda name, decision: captured.append(decision),
+    )
+
+    corpus = MagicMock()
+    corpus.apreload = AsyncMock()
+    corpus.score_unanswered_proactive_draft.side_effect = [
+        anti_repeat_module.UnansweredProactiveRepeatSignal(
+            triggered=True,
+            match_count=2,
+            considered_count=2,
+            best_similarity=0.92,
+            repeated_terms=("记得起来喝水",),
+        ),
+        anti_repeat_module.UnansweredProactiveRepeatSignal(
+            triggered=True,
+            match_count=2,
+            considered_count=2,
+            best_similarity=0.91,
+            repeated_terms=("让眼睛放松",),
+        ),
+    ]
+    monkeypatch.setattr(break_reminders, "get_anti_repeat_corpus", lambda: corpus)
+    monkeypatch.setattr(break_reminders, "_record_proactive_chat", MagicMock())
+    monkeypatch.setattr(
+        break_reminders,
+        "create_chat_llm_async",
+        AsyncMock(
+            side_effect=[
+                _FakeStreamingLlm("记得起来喝水休息一下。"),
+                _FakeRegenLlm("先望望远处，让眼睛放松一会儿吧。"),
+            ]
+        ),
+    )
+
+    mgr = SimpleNamespace(
+        prepare_proactive_delivery=AsyncMock(return_value=True),
+        current_speech_id="break-sid",
+        state=SimpleNamespace(
+            fire=AsyncMock(), is_proactive_preempted=MagicMock(return_value=False)
+        ),
+        feed_tts_chunk=AsyncMock(return_value=True),
+        finish_proactive_delivery=AsyncMock(return_value=True),
+        handle_new_message=AsyncMock(),
+        proactive_engagement_observation_started_at=100.0,
+        last_user_message_time=None,
+        last_user_engagement_time=None,
+    )
+
+    result = await break_reminders._deliver_break_reminder_via_llm(
+        lanlan_name="Neko",
+        mgr=mgr,
+        config_manager=SimpleNamespace(
+            aget_model_api_config=AsyncMock(
+                return_value={
+                    "model": "fake-model",
+                    "base_url": "http://127.0.0.1:9/v1",
+                    "api_key": "fake-key",
+                    "provider_type": "openai_compatible",
+                }
+            )
+        ),
+        system_prompt="Generate one concise water-break reminder.",
+        channel="work_break",
+        lang="zh",
+    )
+
+    assert result.repeat_suppressed is True
+    suppressed = [
+        decision
+        for decision in captured
+        if decision.outcome == "break_reminder_suppressed"
+    ]
+    assert len(suppressed) == 1
+    decision = suppressed[0]
+    decision.validate()
+    assert decision.signature is not None
+    # The REWRITE's phrase, not the initial draft's.
+    assert decision.signature.normalized_phrase == "让眼睛放松"

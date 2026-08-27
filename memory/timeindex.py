@@ -152,10 +152,13 @@ def _assistant_record_from_stored_message(
             normalized_response_id = raw_response_id.strip()
             if 0 < len(normalized_response_id) <= 128:
                 response_id = normalized_response_id
-        raw_visible_length = additional_kwargs.get(
-            _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY
-        )
-        if raw_visible_length is not None:
+        # Presence, not truthiness: ``.get()`` cannot tell a MISSING key from one
+        # explicitly set to null, and the latter is unusable metadata that must
+        # drop the row rather than fall through to the legacy stripper.
+        if _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY in additional_kwargs:
+            raw_visible_length = additional_kwargs[
+                _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY
+            ]
             # A digit string longer than CPython's int-conversion limit (4300 by
             # default) passes isdigit() and then raises ValueError, which escaped
             # this per-row parser and failed the WHOLE request — one damaged

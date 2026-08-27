@@ -1142,6 +1142,10 @@ def test_damaged_visible_length_drops_only_its_own_row():
     assert _assistant_record_from_stored_message(_row("²")) is None
     assert _assistant_record_from_stored_message(_row("³²")) is None
     assert _assistant_record_from_stored_message(_row("5")) == ("hello", None)
+    # An EXPLICIT null is unusable metadata, not a missing key: `.get()` cannot
+    # tell them apart, and falling back to the legacy stripper on a corrupt
+    # field risks reading past the visible text.
+    assert _assistant_record_from_stored_message(_row(None)) is None
     # Non-ASCII DECIMAL digits are accepted by int() and stay supported.
     assert _assistant_record_from_stored_message(
         _row("٥")

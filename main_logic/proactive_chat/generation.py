@@ -46,6 +46,7 @@ from config.prompts.prompts_proactive import (
 )
 from config.prompts.prompts_sys import _loc
 from memory.anti_repeat_effects import (
+    KEEP_INITIAL_SIGNATURE,
     AntiRepeatDecision,
     build_repeat_signature,
     record_anti_repeat_decision,
@@ -106,11 +107,6 @@ def _merge_regen_avoid_terms(*term_groups: Any) -> list[str]:
         term for row in zip_longest(*term_groups) for term in row if term is not None
     )
     return list(dict.fromkeys(interleaved))[:ANTI_REPEAT_INJECT_TOP_K]
-
-
-# Sentinel so ``record_regen_effect`` can tell "keep the initial signature"
-# apart from an explicit ``None`` (a deliberately unattributed record).
-_KEEP_INITIAL_SIGNATURE = object()
 
 
 def _score_regenerated_draft(
@@ -1289,7 +1285,7 @@ async def _guard_phase2_output(
             *,
             score_after: float | None = None,
             extra_reasons: tuple[str, ...] = (),
-            signature: Any = _KEEP_INITIAL_SIGNATURE,
+            signature: Any = KEEP_INITIAL_SIGNATURE,
         ) -> None:
             # ``repeat_reasons`` / ``repeat_signature`` describe the INITIAL
             # draft. An outcome produced by a different detector on the
@@ -1305,7 +1301,7 @@ async def _guard_phase2_output(
                     outcome=outcome,
                     signature=(
                         repeat_signature
-                        if signature is _KEEP_INITIAL_SIGNATURE
+                        if signature is KEEP_INITIAL_SIGNATURE
                         else signature
                     ),
                     score_before=bm25_total if bm25_total > 0 else None,

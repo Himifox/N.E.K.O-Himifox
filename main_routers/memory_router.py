@@ -570,10 +570,18 @@ async def repetition_insights(request: RepetitionInsightsRequest):
             raise ValueError("invalid local memory analysis response")
         response_ids = payload.pop("_anti_repeat_response_ids", None)
         message_scoped = isinstance(response_ids, list)
+        # The local budget can narrow the window, so the requested limit is what
+        # the user asked for while `analyzed_message_count` is what was actually
+        # mined. The effect scope must be labelled with the latter, or the panel
+        # says "the latest 100 replies" over an aggregate covering ten.
+        payload_summary = payload.get("summary")
+        analyzed_limit = request.assistant_message_limit
+        if isinstance(payload_summary, dict):
+            analyzed = payload_summary.get("analyzed_message_count")
+            if isinstance(analyzed, int) and analyzed > 0:
+                analyzed_limit = analyzed
         effects = (
-            _empty_message_scoped_repetition_effects(
-                request.assistant_message_limit
-            )
+            _empty_message_scoped_repetition_effects(analyzed_limit)
             if message_scoped
             else _empty_repetition_effects(request.effect_days)
         )
@@ -586,7 +594,7 @@ async def repetition_insights(request: RepetitionInsightsRequest):
                     effect_store.query_effects_for_responses,
                     character_name,
                     response_ids,
-                    request.assistant_message_limit,
+                    analyzed_limit,
                 )
             else:
                 queried_effects = await asyncio.to_thread(
