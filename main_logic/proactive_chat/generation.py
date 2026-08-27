@@ -108,6 +108,11 @@ def _merge_regen_avoid_terms(*term_groups: Any) -> list[str]:
     return list(dict.fromkeys(interleaved))[:ANTI_REPEAT_INJECT_TOP_K]
 
 
+# Sentinel so ``record_regen_effect`` can tell "keep the initial signature"
+# apart from an explicit ``None`` (a deliberately unattributed record).
+_KEEP_INITIAL_SIGNATURE = object()
+
+
 def _score_regenerated_draft(
     anti_repeat_corpus: Any,
     lanlan_name: str,
@@ -1283,15 +1288,26 @@ async def _guard_phase2_output(
             outcome: str,
             *,
             score_after: float | None = None,
+            extra_reasons: tuple[str, ...] = (),
+            signature: Any = _KEEP_INITIAL_SIGNATURE,
         ) -> None:
+            # ``repeat_reasons`` / ``repeat_signature`` describe the INITIAL
+            # draft. An outcome produced by a different detector on the
+            # regenerated draft has to say so, otherwise reason totals and the
+            # per-candidate handling record attribute it to the wrong detector
+            # and the wrong fragment.
             record_anti_repeat_decision(
                 lanlan_name,
                 AntiRepeatDecision(
                     source="proactive",
-                    reasons=repeat_reasons,
+                    reasons=tuple(dict.fromkeys(repeat_reasons + extra_reasons)),
                     action="regenerate",
                     outcome=outcome,
-                    signature=repeat_signature,
+                    signature=(
+                        repeat_signature
+                        if signature is _KEEP_INITIAL_SIGNATURE
+                        else signature
+                    ),
                     score_before=bm25_total if bm25_total > 0 else None,
                     score_after=score_after,
                     response_id=str(proactive_sid),
@@ -1541,6 +1557,15 @@ async def _guard_phase2_output(
             record_regen_effect(
                 "blocked_after_regen_literal",
                 score_after=regen_total,
+                extra_reasons=("literal_similarity",),
+                # Derive the fragment from the regenerated match. Passing None
+                # when nothing safe can be derived is correct: an unattributed
+                # record beats one pointing at the initial draft's fragment.
+                signature=build_repeat_signature(
+                    cleaned,
+                    language=proactive_lang,
+                    fallback_fragment=regen_match.common_fragment,
+                ),
             )
             active_logger.info(
                 "[%s] proactive BM25 regen still literal-dup (similarity=%.3f)",

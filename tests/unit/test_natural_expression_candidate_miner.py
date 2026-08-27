@@ -885,3 +885,30 @@ def test_user_review_rejects_invalid_distinct_message_threshold():
         match="message_count_threshold must be at least 1",
     ):
         candidate_core.build_user_review_report([], message_count_threshold=0)
+
+
+def test_narrowed_window_can_fall_below_the_distinct_message_threshold(monkeypatch):
+    """A narrowed window can make the 3-message threshold unsatisfiable.
+
+    The browser bases its minimum-sample check on `analyzed_message_count` for
+    exactly this case: with fewer analyzed replies than the threshold no
+    candidate can qualify, so "no candidates found" would misreport an
+    impossible evaluation as a genuine absence.
+    """
+    # One such reply mines to 145 occurrences, so a 200 budget admits
+    # exactly one message and the window narrows all the way down.
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 200)
+    unbroken = "今天天气真好我们一起去散步你觉得怎么样我觉得非常开心因为可以和你聊天"
+    messages = [
+        candidate_core.SourceMessage("zh-CN", unbroken, source_line)
+        for source_line in range(1, 33)
+    ]
+
+    summary = candidate_core.build_user_review_report(
+        messages, rules_by_language={}
+    )["summary"]
+
+    assert summary["assistant_message_count"] == 32
+    assert summary["messages_truncated"] is True
+    assert summary["analyzed_message_count"] < 3
+    assert summary["candidate_count"] == 0

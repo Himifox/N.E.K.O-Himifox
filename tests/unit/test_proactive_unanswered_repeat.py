@@ -1234,3 +1234,110 @@ async def test_rejected_mini_game_button_response_records_user_engagement(
         apply_choice.assert_called_once()
     else:
         apply_choice.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_regen_literal_block_records_its_own_reason_and_fragment(monkeypatch):
+    """A literal-similarity rejection of the REGENERATED draft must say so.
+
+    The recorder closure carries the initial draft's reasons and signature.
+    Reusing them for this outcome attributed a literal block to
+    BM25/unanswered-repeat and pointed the per-candidate handling record at the
+    initial draft's fragment.
+    """
+    captured = []
+    monkeypatch.setattr(
+        generation_module,
+        "record_anti_repeat_decision",
+        lambda name, decision: captured.append(decision),
+    )
+
+    corpus = MagicMock()
+    corpus.apreload = AsyncMock()
+    corpus.score_unanswered_proactive_draft.return_value = (
+        anti_repeat_module.UnansweredProactiveRepeatSignal(triggered=False)
+    )
+    # Over ANTI_REPEAT_REGEN_THRESHOLD on the initial draft -> take the regen
+    # path with reasons == ("bm25",); comfortably under the drop threshold
+    # afterwards so the literal guard is what rejects the rewrite.
+    corpus.score_draft.side_effect = [(12.0, {"旧话题": 12.0}), (0.0, {})]
+    monkeypatch.setattr(
+        anti_repeat_module, "get_anti_repeat_corpus", lambda: corpus
+    )
+
+    initial = "还是来聊聊这个一直重复的旧话题吧。"
+    regenerated = "[CHAT] 换个说法，但其实还是同一个旧梗。"
+
+    def _match(_name, message):
+        if message.strip().startswith("还是来聊聊"):
+            return generation_module.ProactiveSimilarityMatch()
+        return generation_module.ProactiveSimilarityMatch(
+            is_duplicate=True,
+            best_score=0.97,
+            matched_text="以前说过的那句话",
+            common_fragment="还是同一个旧梗",
+        )
+
+    monkeypatch.setattr(
+        "main_logic.proactive_chat.generation._find_similar_recent_proactive_chat",
+        _match,
+    )
+
+    regen_llm = MagicMock()
+    regen_llm.ainvoke = AsyncMock(
+        return_value=SimpleNamespace(content=regenerated)
+    )
+    regen_llm.__aenter__ = AsyncMock(return_value=regen_llm)
+    regen_llm.__aexit__ = AsyncMock(return_value=False)
+    make_llm = AsyncMock(return_value=regen_llm)
+
+    mgr = SimpleNamespace(
+        state=_NeverPreemptedState(),
+        current_speech_id="sid",
+        last_user_message_time=None,
+        last_user_engagement_time=None,
+        proactive_engagement_observation_started_at=100.0,
+        handle_new_message=AsyncMock(),
+    )
+
+    await _guard_phase2_output(
+        mgr=mgr,
+        proactive_sid="sid",
+        lanlan_name="regen-literal-attribution-test",
+        response_text=initial,
+        full_text=initial,
+        source_tag="CHAT",
+        active_channels=["chat"],
+        selected_music_link=None,
+        selected_meme_link=None,
+        music_content=None,
+        meme_content=None,
+        is_playing_music=False,
+        music_cooldown=False,
+        expects_source_tag=True,
+        make_llm=make_llm,
+        messages=[
+            SystemMessage(content="system"),
+            HumanMessage(content="begin"),
+        ],
+        human_text="begin",
+        screenshot_b64=None,
+        phase2_use_vision=False,
+        phase2_disable_thinking=True,
+        proactive_lang="zh",
+        master_name="博士",
+    )
+
+    literal = [
+        decision
+        for decision in captured
+        if decision.outcome == "blocked_after_regen_literal"
+    ]
+    assert len(literal) == 1
+    decision = literal[0]
+    decision.validate()
+    assert "literal_similarity" in decision.reasons
+    assert "bm25" in decision.reasons
+    # The fragment must come from the REGENERATED draft, not the initial one.
+    assert decision.signature is not None
+    assert decision.signature.normalized_phrase == "还是同一个旧梗"

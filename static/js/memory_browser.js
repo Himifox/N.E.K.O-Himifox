@@ -937,6 +937,20 @@
         return ['en', 'es', 'pt', 'ru', 'ja', 'ko'].includes(base) ? base : 'en';
     }
 
+    function repetitionInsightUsableMessageCount(summary) {
+        // The local analysis budget can narrow the selected range, so
+        // `assistant_message_count` is what the user asked for while
+        // `analyzed_message_count` is what was actually mined. Minimum-sample
+        // checks must use the latter: narrowed to one or two replies the
+        // three-message threshold is impossible to satisfy, and reporting
+        // "no candidates found" would read as an absence rather than as a
+        // sample too small to evaluate.
+        const source = summary || {};
+        const analyzed = source.analyzed_message_count;
+        if (analyzed !== undefined && analyzed !== null) return Number(analyzed) || 0;
+        return Number(source.assistant_message_count || 0) || 0;
+    }
+
     function repetitionInsightCandidateKey(candidate) {
         return String(candidate.language || '') + '\u0000' + String(candidate.normalized_phrase || '');
     }
@@ -1242,15 +1256,6 @@
             );
             return;
         }
-        if (Number(summary.assistant_message_count || 0) < 3) {
-            appendRepetitionInsightsEmptyState(
-                results,
-                'memory.repetitionInsightsInsufficient',
-                'At least three persisted assistant messages are required.'
-            );
-            return;
-        }
-
         if (summary.messages_truncated === true) {
             // The local budget narrowed the window instead of failing; say so,
             // otherwise the counts silently describe fewer replies than asked for.
@@ -1265,6 +1270,17 @@
                 }
             );
             results.appendChild(trimmed);
+        }
+
+        // After the truncation note, so a narrowed window explains itself
+        // instead of showing a bare "not enough history".
+        if (repetitionInsightUsableMessageCount(summary) < 3) {
+            appendRepetitionInsightsEmptyState(
+                results,
+                'memory.repetitionInsightsInsufficient',
+                'At least three persisted assistant messages are required.'
+            );
+            return;
         }
 
         const visibleCandidates = visibleRepetitionInsightCandidates();
@@ -1473,7 +1489,7 @@
                     'memory.repetitionInsightsNoSource',
                     'No persisted assistant history is available for this character.'
                 );
-            } else if (Number(summary.assistant_message_count || 0) < 3) {
+            } else if (repetitionInsightUsableMessageCount(summary) < 3) {
                 setRepetitionInsightsStatus(
                     'memory.repetitionInsightsInsufficient',
                     'At least three persisted assistant messages are required.'
