@@ -1265,6 +1265,14 @@ _FENCE_MATRIX = [
     ("longer closer closes", ["```", "SECRET=1", "`````", "tail"], ["tail"]),
     ("shorter closer is content", ["`````", "SECRET=1", "```", "SECRET=2"], []),
     ("no fence at all", ["SAFE=1", "SAFE=2"], ["SAFE=1", "SAFE=2"]),
+    # A list item is a container too: a fence written straight after its marker
+    # was invisible to the parser, and stayed unprotected wherever the inline
+    # scanner did not happen to cover it.
+    ("bullet list fence", ["- ```", "- SECRET=1", "- ```", "tail"], ["tail"]),
+    ("numbered list fence", ["1. ```", "1. SECRET=1", "1. ```", "tail"], ["tail"]),
+    ("list fence, unclosed", ["- ```", "- SECRET=1"], []),
+    ("list fence, blank line inside", ["- ```", "- a=1", "", "- SECRET=1", "- ```"], []),
+    ("bullet prose is not a fence", ["- SAFE=1 here", "- SAFE=1 here"], ["SAFE=1"]),
 ]
 
 
@@ -1342,3 +1350,81 @@ def test_inline_code_protection_still_leaves_prose_minable():
     text = "we always say the exact same thing"
 
     assert "always" in _unprotected(text)
+
+
+# Raw-text HTML containers. Nesting is the dimension the single non-greedy
+# pattern could not express: it stopped at the FIRST closing tag and leaked the
+# rest of the outer element.
+_HTML_CONTAINER_MATRIX = [
+    ("plain code element", "<code>SECRET=1</code> tail", ["tail"]),
+    ("nested same tag", "<code>a <code>b</code> SECRET=1</code> tail", ["tail"]),
+    ("nested pre", "<pre>a <pre>b</pre> SECRET=1</pre> tail", ["tail"]),
+    (
+        "triple nesting",
+        "<code>1<code>2<code>3</code>4</code> SECRET=1</code> tail",
+        ["tail"],
+    ),
+    (
+        "two sibling containers",
+        "<code>SECRET=1</code> mid <code>SECRET=2</code> tail",
+        ["mid", "tail"],
+    ),
+    ("unterminated container", "she said <code>SECRET=1", []),
+    ("script body", "<script>SECRET=1</script> tail", ["tail"]),
+    ("style body", "<style>.SECRET=1{}</style> tail", ["tail"]),
+    ("prose with a comparison", "we always say a < b and b > c", ["always"]),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _HTML_CONTAINER_MATRIX,
+    ids=[row[0] for row in _HTML_CONTAINER_MATRIX],
+)
+def test_html_raw_text_container_matrix(label, text, must_remain_visible):
+    unprotected = _unprotected(text)
+
+    assert "SECRET" not in unprotected, label
+    for fragment in must_remain_visible:
+        assert fragment in unprotected, label
+
+
+# Fullwidth tilde is the commonest elongation mark in this project's character
+# speech. Treating it as an inline code delimiter protected the text between two
+# of them and silently dropped real catchphrases -- the exact thing this feature
+# exists to surface. Inline delimiters are backticks only; fences keep the tilde
+# forms, which need a run of three at the start of a line.
+_SPEECH_ELONGATION_CASES = [
+    ("japanese", "そうですね～また明日ね～", "また明日ね"),
+    ("chinese", "好呀～我们一起去吧～", "我们一起去吧"),
+    ("repeated tildes", "はい～～ありがとう～～", "ありがとう"),
+    ("ascii tilde prose", "we always say ~the exact same thing~ here", "always"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _SPEECH_ELONGATION_CASES,
+    ids=[row[0] for row in _SPEECH_ELONGATION_CASES],
+)
+def test_tilde_elongation_is_speech_not_code(label, text, must_remain_visible):
+    assert must_remain_visible in _unprotected(text), label
+
+
+_FULLWIDTH_CODE_CASES = [
+    ("ascii inline", "a `SECRET=1` b"),
+    ("fullwidth tick inline", "a ｀SECRET=1｀ b"),
+    ("ascii fence", "```\nSECRET=1\n```\ntail"),
+    ("tilde fence", "~~~\nSECRET=1\n~~~\ntail"),
+    ("fullwidth tick fence", "｀｀｀\nSECRET=1\n｀｀｀\ntail"),
+    ("fullwidth tilde fence", "～～～\nSECRET=1\n～～～\ntail"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _FULLWIDTH_CODE_CASES,
+    ids=[row[0] for row in _FULLWIDTH_CODE_CASES],
+)
+def test_fullwidth_code_delimiters_still_protect(label, text):
+    assert "SECRET" not in _unprotected(text), label

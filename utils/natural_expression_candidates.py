@@ -245,6 +245,13 @@ def read_jsonl(
 # match, only the delimiter lines end up protected by the inline-code pass,
 # and the code body between them leaks into candidates and the export.
 _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
+# A list item is also a container: a fence written directly after its marker
+# ("- ```") never matched, so the block stayed unprotected whenever the inline
+# scanner did not happen to cover it — measured leaking for an unclosed list
+# fence, and for one whose closer sat in another paragraph. Stripped for fence
+# detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
+# the container that decides whether a closer belongs to this fence.
+_LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
 
 
 def _strip_blockquote_prefix(line: str) -> str:
@@ -280,6 +287,9 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     offset = 0
     for line in text.splitlines(keepends=True):
         body, depth = _split_blockquote_prefix(line)
+        list_marker = _LIST_MARKER_PREFIX_RE.match(body)
+        if list_marker is not None:
+            body = body[list_marker.end() :]
         stripped = body.lstrip(" \t")
         indent = len(body) - len(stripped)
         if indent <= 3:
@@ -336,7 +346,15 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
 # whose code fence was typed in Chinese input mode still contains code.
 # Mixed delimiters cannot pair: the fence tracks the exact opening character
 # and the inline scanner matches the exact opening run.
-_CODE_DELIMITERS = "`~" + "｀～"
+# INLINE code delimiters are backticks ONLY. Markdown has no tilde inline
+# code (``~~~`` is a FENCE delimiter), and a fullwidth tilde is the
+# commonest elongation mark in this project's character speech --
+# treating it as a delimiter protected the text between two of them and
+# silently dropped real catchphrases: "そうですね～また明日ね～" lost
+# "また明日ね", "好呀～我们一起去吧～" lost "我们一起去吧". Fences keep the
+# tilde forms: they need a run of three at the start of a line, which
+# elongation never produces.
+_CODE_DELIMITERS = "`" + "｀"
 _FENCE_OPEN_RE = re.compile(
     r"(`{3,}|~{3,}|｀{3,}|～{3,})"
 )
@@ -437,10 +455,50 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # form and for an unclosed fence. The pattern requires the literal ``<code`` /
 # ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
 # containing comparisons or words like "decode" is unaffected.
-_HTML_RAW_TEXT_RE = re.compile(
-    r"<(pre|code|script|style)\b[^>]*>[\s\S]*?(?:</\1\s*>|\Z)",
+_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style")
+_HTML_RAW_TEXT_OPEN_RE = re.compile(
+    r"<(pre|code|script|style)\b[^>]*>",
     re.IGNORECASE,
 )
+
+
+def _html_raw_text_spans(text: str) -> list[tuple[int, int]]:
+    """Return raw-text element spans, counting NESTED same-tag opens.
+
+    A non-greedy regex stopped at the FIRST closing tag, so
+    ``<code>a <code>b</code> SECRET</code>`` ended its span early and leaked the
+    rest of the outer element. Depth counting is why this is a scanner rather
+    than one pattern.
+    """
+    spans: list[tuple[int, int]] = []
+    position = 0
+    while True:
+        opening = _HTML_RAW_TEXT_OPEN_RE.search(text, position)
+        if opening is None:
+            return spans
+        tag = opening.group(1).lower()
+        open_re = re.compile(rf"<{tag}\b[^>]*>", re.IGNORECASE)
+        close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
+        depth = 1
+        cursor = opening.end()
+        end = len(text)
+        while depth:
+            next_close = close_re.search(text, cursor)
+            if next_close is None:
+                # Unterminated: protect through the end of the text, the same
+                # way an unclosed fence behaves.
+                end = len(text)
+                break
+            next_open = open_re.search(text, cursor)
+            if next_open is not None and next_open.start() < next_close.start():
+                depth += 1
+                cursor = next_open.end()
+                continue
+            depth -= 1
+            cursor = next_close.end()
+            end = cursor
+        spans.append((opening.start(), end))
+        position = max(end, opening.end())
 
 
 def _protected_spans(text: str) -> list[tuple[int, int]]:
@@ -456,7 +514,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     block_code = _merge_spans(fenced + _indented_code_spans(text))
     spans = block_code + _inline_code_spans(text, block_code)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
-    spans.extend(match.span() for match in _HTML_RAW_TEXT_RE.finditer(text))
+    spans.extend(_html_raw_text_spans(text))
     return _merge_spans(spans)
 
 
