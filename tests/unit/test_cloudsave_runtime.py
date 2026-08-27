@@ -6,7 +6,9 @@ import sqlite3
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +16,42 @@ import pytest
 from utils.file_utils import atomic_write_json
 
 
+@contextmanager
+def _isolated_sidecar_stores(memory_dir):
+    """Swap the three sidecar singletons for FRESH instances.
+
+    Saving the module globals and restoring them is not enough. These tests
+    mutate ``_cache`` and ``_retired`` on the EXISTING objects, and putting the
+    same reference back leaves those mutations in place -- so an entry another
+    test also uses is silently dropped and the suite becomes order-dependent.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+
+    config_manager = SimpleNamespace(memory_dir=str(memory_dir))
+    store = effects_module.AntiRepeatEffectStore()
+    store._config_manager = config_manager
+    corpus = anti_repeat_module.AntiRepeatCorpus()
+    corpus._config_manager = config_manager
+    greeting = greeting_module.StartupGreetingHistory(config_manager)
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    effects_module._GLOBAL_STORE = store
+    anti_repeat_module._GLOBAL_CORPUS = corpus
+    greeting_module._GLOBAL_HISTORY = greeting
+    try:
+        yield (store, corpus, greeting)
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
 def _make_config_manager(
     tmp_path,
     platform: str | None = None,
@@ -3213,9 +3251,6 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
     restore. Drives the real `import_local_cloudsave_snapshot`, so it fails if
     the eviction call site is removed rather than just the helper.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from utils.cloudsave_runtime import (
         export_local_cloudsave_snapshot,
         import_local_cloudsave_snapshot,
@@ -3225,15 +3260,7 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
     _write_runtime_state(cm)
     export_local_cloudsave_snapshot(cm)
 
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        store = effects_module.get_anti_repeat_effect_store()
-        corpus = anti_repeat_module.get_anti_repeat_corpus()
-        greeting = greeting_module.get_startup_greeting_history()
+    with _isolated_sidecar_stores(tmp_path) as (store, corpus, greeting):
         store._cache["小满"] = {"version": 1, "daily_buckets": {"stale": {}}}
         corpus._cache["小满"] = [{"stale": True}]
         greeting._cache["小满"] = ["stale"]
@@ -3248,12 +3275,6 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
         # profile that ships no managed memory files would never persist its
         # anti-repeat aggregates while the character is in active use.
         assert "小满" not in store._retired
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -3284,9 +3305,6 @@ def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
     entry loaded before the download kept shadowing it, and the next flush
     would write the pre-download state back over what was just imported.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from utils.cloudsave_runtime import (
         export_cloudsave_character_unit,
         import_cloudsave_character_unit,
@@ -3301,15 +3319,7 @@ def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
         source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
     )
 
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        store = effects_module.get_anti_repeat_effect_store()
-        corpus = anti_repeat_module.get_anti_repeat_corpus()
-        greeting = greeting_module.get_startup_greeting_history()
+    with _isolated_sidecar_stores(tmp_path) as (store, corpus, greeting):
         store._cache["云端角色"] = {"version": 1, "daily_buckets": {"stale": {}}}
         corpus._cache["云端角色"] = [{"stale": True}]
         greeting._cache["云端角色"] = ["stale"]
@@ -3325,9 +3335,3 @@ def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
         assert "云端角色" not in store._retired, (
             "a downloaded character stayed retired and cannot create sidecars"
         )
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous

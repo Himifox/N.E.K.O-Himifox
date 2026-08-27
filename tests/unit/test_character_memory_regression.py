@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -15,6 +16,43 @@ from PIL import Image
 
 from main_routers.shared_state import init_shared_state
 
+
+@contextmanager
+def _isolated_sidecar_stores(memory_dir):
+    """Swap the three sidecar singletons for FRESH instances.
+
+    Saving the module globals and restoring them is not enough. These tests
+    mutate ``_cache`` and ``_retired`` on the EXISTING objects, and putting the
+    same reference back leaves those mutations in place -- so an entry another
+    test also uses is silently dropped and the suite becomes order-dependent.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+
+    config_manager = SimpleNamespace(memory_dir=str(memory_dir))
+    store = effects_module.AntiRepeatEffectStore()
+    store._config_manager = config_manager
+    corpus = anti_repeat_module.AntiRepeatCorpus()
+    corpus._config_manager = config_manager
+    greeting = greeting_module.StartupGreetingHistory(config_manager)
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    effects_module._GLOBAL_STORE = store
+    anti_repeat_module._GLOBAL_CORPUS = corpus
+    greeting_module._GLOBAL_HISTORY = greeting
+    try:
+        yield (store, corpus, greeting)
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
 
 def _make_role_state_for_test(session_managers: dict) -> dict:
     """Seed role_state with pre-existing session_managers (post-#855 + cross_server async).
@@ -4865,9 +4903,6 @@ async def test_publishing_an_identity_lifts_sidecar_retirement(tmp_path):
     creating the directory, and they would stay dropped until some unrelated
     memory writer happened to make the directory.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from utils.character_memory import (
         asave_characters_with_recent_activation,
         retire_character_runtime_caches,
@@ -4881,17 +4916,7 @@ async def test_publishing_an_identity_lifts_sidecar_retirement(tmp_path):
             return None
 
     config = _Config()
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        stores = (
-            effects_module.get_anti_repeat_effect_store(),
-            anti_repeat_module.get_anti_repeat_corpus(),
-            greeting_module.get_startup_greeting_history(),
-        )
+    with _isolated_sidecar_stores(tmp_path) as stores:
         retire_character_runtime_caches("Reborn")
         assert all("Reborn" in store._retired for store in stores)
 
@@ -4902,12 +4927,6 @@ async def test_publishing_an_identity_lifts_sidecar_retirement(tmp_path):
         assert all("Reborn" not in store._retired for store in stores), (
             "publishing an identity must reactivate its sidecar storage"
         )
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -4924,9 +4943,6 @@ async def test_a_rolled_back_delete_reactivates_the_sidecar_stores(tmp_path):
     retired name is refused the lazy directory creation every sibling writer
     gets.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from main_routers.characters_router import crud
     from utils.character_memory import retire_character_runtime_caches
 
@@ -4940,17 +4956,7 @@ async def test_a_rolled_back_delete_reactivates_the_sidecar_stores(tmp_path):
         def save_character_tombstones_state(self, _state):
             return None
 
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        stores = (
-            effects_module.get_anti_repeat_effect_store(),
-            anti_repeat_module.get_anti_repeat_corpus(),
-            greeting_module.get_startup_greeting_history(),
-        )
+    with _isolated_sidecar_stores(tmp_path) as stores:
         retire_character_runtime_caches("Restored")
         assert all("Restored" in store._retired for store in stores)
 
@@ -4972,12 +4978,6 @@ async def test_a_rolled_back_delete_reactivates_the_sidecar_stores(tmp_path):
         assert all("Restored" not in store._retired for store in stores), (
             "a rolled-back delete left the live character retired"
         )
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -4990,9 +4990,6 @@ async def test_a_failed_restore_leaves_the_character_retired(tmp_path):
     directory that was just removed, which is the orphan the retirement exists
     to prevent.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from main_routers.characters_router import crud
     from utils.character_memory import retire_character_runtime_caches
 
@@ -5006,17 +5003,7 @@ async def test_a_failed_restore_leaves_the_character_retired(tmp_path):
         def save_character_tombstones_state(self, _state):
             return None
 
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        stores = (
-            effects_module.get_anti_repeat_effect_store(),
-            anti_repeat_module.get_anti_repeat_corpus(),
-            greeting_module.get_startup_greeting_history(),
-        )
+    with _isolated_sidecar_stores(tmp_path) as stores:
         retire_character_runtime_caches("Doomed")
 
         with (
@@ -5037,12 +5024,6 @@ async def test_a_failed_restore_leaves_the_character_retired(tmp_path):
         assert all("Doomed" in store._retired for store in stores), (
             "retirement was lifted for a character that was never restored"
         )
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -5230,9 +5211,6 @@ async def test_the_rollback_actually_re_retires_the_absent_name(tmp_path):
     pins that they take effect, so the two together fail if either half is
     removed.
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     from main_routers.characters_router import crud
 
     class _Config:
@@ -5245,17 +5223,7 @@ async def test_the_rollback_actually_re_retires_the_absent_name(tmp_path):
         def save_character_tombstones_state(self, _state):
             return None
 
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        stores = (
-            effects_module.get_anti_repeat_effect_store(),
-            anti_repeat_module.get_anti_repeat_corpus(),
-            greeting_module.get_startup_greeting_history(),
-        )
+    with _isolated_sidecar_stores(tmp_path) as stores:
         assert all("Gone" not in store._retired for store in stores)
 
         with (
@@ -5277,12 +5245,6 @@ async def test_the_rollback_actually_re_retires_the_absent_name(tmp_path):
             "the undone rename target was left live in a sidecar store"
         )
         assert all("Back" not in store._retired for store in stores)
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -5296,23 +5258,10 @@ def test_a_failed_rename_restores_the_cache_lifecycle(tmp_path):
     retired name never creates its directory) and the absent target stays
     reactivated (a late write can recreate an identity never committed).
     """
-    import memory.anti_repeat as anti_repeat_module
-    import memory.anti_repeat_effects as effects_module
-    import memory.startup_greeting_history as greeting_module
     import utils.character_memory as character_memory
 
     cm = _make_config_manager(tmp_path)
-    previous = (
-        effects_module._GLOBAL_STORE,
-        anti_repeat_module._GLOBAL_CORPUS,
-        greeting_module._GLOBAL_HISTORY,
-    )
-    try:
-        stores = (
-            effects_module.get_anti_repeat_effect_store(),
-            anti_repeat_module.get_anti_repeat_corpus(),
-            greeting_module.get_startup_greeting_history(),
-        )
+    with _isolated_sidecar_stores(tmp_path) as stores:
         # The target name was deleted earlier, so it is retired.
         character_memory.retire_character_runtime_caches("Target")
 
@@ -5331,12 +5280,6 @@ def test_a_failed_rename_restores_the_cache_lifecycle(tmp_path):
         assert all("Target" in store._retired for store in stores), (
             "the uncommitted target was left reactivated after a failed rename"
         )
-    finally:
-        (
-            effects_module._GLOBAL_STORE,
-            anti_repeat_module._GLOBAL_CORPUS,
-            greeting_module._GLOBAL_HISTORY,
-        ) = previous
 
 
 @pytest.mark.unit
@@ -5389,3 +5332,40 @@ async def test_a_raising_delete_still_tells_the_rollback_it_retired(tmp_path):
     assert rollback.await_args.kwargs["restored_live_character_names"] == ("Boom",), (
         "a delete that raised after retiring told the rollback nothing was retired"
     )
+
+
+@pytest.mark.unit
+def test_sidecar_isolation_does_not_touch_the_process_singletons(tmp_path):
+    """The helper must swap instances, not mutate the shared ones.
+
+    Saving the module globals and restoring the same references leaves any
+    ``_cache`` / ``_retired`` mutation in place, so a name another test also
+    uses gets silently dropped and the suite turns order-dependent. This pins
+    the property directly: what the helper yields is NOT the process singleton,
+    and writing through it leaves the singleton untouched.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+
+    outer = (
+        effects_module.get_anti_repeat_effect_store(),
+        anti_repeat_module.get_anti_repeat_corpus(),
+        greeting_module.get_startup_greeting_history(),
+    )
+    outer_retired = [set(store._retired) for store in outer]
+    outer_cached = [set(store._cache) for store in outer]
+
+    with _isolated_sidecar_stores(tmp_path) as stores:
+        assert all(
+            inner is not shared for inner, shared in zip(stores, outer)
+        ), "the helper handed back the process singletons"
+        for store in stores:
+            store._retired.add("PollutionCanary")
+            store._cache["PollutionCanary"] = {}
+
+    assert [set(store._retired) for store in outer] == outer_retired
+    assert [set(store._cache) for store in outer] == outer_cached
+    assert effects_module._GLOBAL_STORE is outer[0]
+    assert anti_repeat_module._GLOBAL_CORPUS is outer[1]
+    assert greeting_module._GLOBAL_HISTORY is outer[2]
