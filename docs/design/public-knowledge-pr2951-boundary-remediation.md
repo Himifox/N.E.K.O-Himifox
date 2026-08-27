@@ -2357,3 +2357,15 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 设计提交 `de287704d`、实现提交 `cec305978` 已推送。EN 在首次构建、`verifying_index` 恢复和 hybrid 激活快照前统一验证 `knowledge.db`、`-wal`、`-shm` 与 `-journal`，已有项必须是作业目录内普通非 reparse 文件；失败作业进入 `degraded/knowledge_staging_database_invalid`，实际链接目标保持不变。EO 为 7 个 strong fixture 绑定 `source:chime` 与规范化目标标题，任意异源或异标题 strong 命中不再通过。EP 将生产 schema-marker 判断提取为只读 helper，评估器在读取向量前复用，future、marker 分歧、非规范版本和 user_version 缺 metadata 都稳定拒绝且不改写数据库。EQ 逐一核对持久社区来源与严格 registry 映射，注册表缺失或漏记来源都会使 `integrity_ok=false`，同时保留总数诊断且不反推身份。
 
 项目 `.venv` Python 3.11 的受影响回归为 165 passed、3 skipped；知识库、公共会话、启动关闭和市场宽回归为 567 passed、3 skipped、3 deselected。3 个 skip 是本机 Windows 文件/目录 symlink 权限，四个 SQLite 文件名另由 reparse marker 反例完整覆盖；3 个 deselected 是已归档的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall、fixture JSON 与 `git diff --check` 均通过；本轮没有用户文案或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试退出码、判定或产品文件。
+
+## 第二十七轮：有界提交日志不能裁掉正在发布的提交
+
+第二十六轮关闭后 CodeRabbit 新增 1 条 conversation（`discussion_r3868155882`）：提交日志达到 100 条时按 `(committed_at, job_id)` 保留末尾记录；若同一秒内当前 job ID 的字典序较小，刚写入的当前记录会被裁掉，随后本地 active receipt 无法通过外部日志核验。问题成立。
+
+### ER：裁剪必须无条件保留当前 activation
+
+- `_record_activation_commit()` 先从候选中排除当前 job，再按既有 `(committed_at, job_id)` 顺序保留最多 99 条历史记录，最后把当前记录加入并确定性排序写回。
+- 总数仍不得超过 `MAX_TERMINAL_JOB_DIRECTORIES`，旧记录的保留顺序不变；不引入新的 schema、序号或未发布格式兼容。
+- 反例固定同一秒写满 100 个字典序更大的历史 job，再写入字典序最小的当前 job；断言当前记录存在、总数为 100、被淘汰的是历史集合中最旧排序项。
+
+关闭条件：无论同秒 job ID 排序如何，刚完成 durable install 的当前 activation 都存在于原子写回后的外部提交日志，并能通过后续 active 核验。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86crDYk`。
