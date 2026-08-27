@@ -487,10 +487,19 @@ def _record_activation_commit(
             **activation,
             "committed_at": committed_at,
         }
-        ordered = sorted(
-            commits.items(),
+        current_job_id = str(activation["job_id"])
+        retained_history = sorted(
+            (
+                item
+                for item in commits.items()
+                if item[0] != current_job_id
+            ),
             key=lambda item: (int(item[1]["committed_at"]), item[0]),
-        )[-MAX_TERMINAL_JOB_DIRECTORIES:]
+        )[-(MAX_TERMINAL_JOB_DIRECTORIES - 1):]
+        ordered = sorted(
+            (*retained_history, (current_job_id, commits[current_job_id])),
+            key=lambda item: (int(item[1]["committed_at"]), item[0]),
+        )
         atomic_write_json(
             path,
             {"schema_version": 1, "commits": dict(ordered)},

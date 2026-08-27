@@ -383,10 +383,15 @@ async def test_active_job_rejects_tampered_external_commit_record(tmp_path):
     assert listed["reason"] == "active_job_commit_unverified"
 
 
-def test_activation_commit_history_is_bounded(tmp_path):
+def test_activation_commit_history_is_bounded_and_keeps_current_job(
+    tmp_path,
+    monkeypatch,
+):
     import knowledge.pack_jobs as pack_jobs
+    from tests.fake_clock import patch_module_clock
 
-    for index in range(pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES + 1):
+    patch_module_clock(monkeypatch, pack_jobs, time=lambda: 1)
+    for index in range(1, pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES + 1):
         pack_jobs._record_activation_commit(
             tmp_path,
             {
@@ -399,13 +404,27 @@ def test_activation_commit_history_is_bounded(tmp_path):
                 "retrieval_mode": "bm25",
             },
         )
+    current_job_id = "fixture-000000000000"
+    pack_jobs._record_activation_commit(
+        tmp_path,
+        {
+            "schema_version": 1,
+            "job_id": current_job_id,
+            "pack_id": "fixture",
+            "pack_sha256": "0" * 64,
+            "has_subscription": False,
+            "subscription_sha256": "",
+            "retrieval_mode": "bm25",
+        },
+    )
 
     payload = json.loads(
         (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
     )
 
     assert len(payload["commits"]) == pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES
-    assert "fixture-000000000000" not in payload["commits"]
+    assert current_job_id in payload["commits"]
+    assert "fixture-000000000001" not in payload["commits"]
 
 
 @pytest.mark.asyncio
