@@ -1230,3 +1230,54 @@ def _unprotected(text: str) -> str:
         for index, char in enumerate(text)
         if not any(start <= index < end for start, end in spans)
     )
+
+
+# Fence x blockquote-depth matrix. Written as a table because every regression in
+# this helper so far came from testing SOME shapes and assuming the rest: a quote
+# marker inside an unquoted fence, an unquoted marker after a quoted one, and a
+# depth-matched marker arriving after that. `mined` lists the fragments that MUST
+# still be analyzable, so the table pins over-protection as well as leaks.
+_FENCE_MATRIX = [
+    ("open0 closed at 0", ["```", "SECRET=1", "```", "tail"], ["tail"]),
+    ("open1 closed at 1", ["> ```", "> SECRET=1", "> ```", "> tail"], ["tail"]),
+    ("open2 closed at 2", [">> ```", ">> SECRET=1", ">> ```", ">> tail"], ["tail"]),
+    ("open0, deeper marker is content", ["```", "SECRET=1", "> ```", "SECRET=2"], []),
+    ("open1, shallower marker reopens", ["> ```", "> SECRET=1", "```", "SECRET=2"], []),
+    (
+        "open1, shallower then depth-matched marker",
+        ["> ```", "> SECRET=1", "```", "SECRET=2", "> ```", "SECRET=3"],
+        [],
+    ),
+    (
+        "open1, shallower then closed at 0",
+        ["> ```", "> SECRET=1", "```", "SECRET=2", "```", "tail"],
+        ["tail"],
+    ),
+    (
+        "open2, shallower then closed at 1",
+        [">> ```", ">> SECRET=1", "> ```", "> SECRET=2", "> ```", "tail"],
+        ["tail"],
+    ),
+    ("open0 unclosed", ["```", "SECRET=1"], []),
+    ("open1 unclosed", ["> ```", "> SECRET=1"], []),
+    ("open1, deeper marker is content", ["> ```", "> SECRET=1", ">> ```", "> SECRET=2"], []),
+    ("tilde fence", ["~~~", "SECRET=1", "~~~", "tail"], ["tail"]),
+    ("longer closer closes", ["```", "SECRET=1", "`````", "tail"], ["tail"]),
+    ("shorter closer is content", ["`````", "SECRET=1", "```", "SECRET=2"], []),
+    ("no fence at all", ["SAFE=1", "SAFE=2"], ["SAFE=1", "SAFE=2"]),
+]
+
+
+@pytest.mark.parametrize(
+    "label, rows, must_remain_visible",
+    _FENCE_MATRIX,
+    ids=[row[0] for row in _FENCE_MATRIX],
+)
+def test_fence_blockquote_depth_matrix(label, rows, must_remain_visible):
+    text = _lines(*rows)
+
+    unprotected = _unprotected(text)
+
+    assert "SECRET" not in unprotected, label
+    for fragment in must_remain_visible:
+        assert fragment in unprotected, label

@@ -260,7 +260,18 @@ def _split_blockquote_prefix(line: str) -> tuple[str, int]:
 
 
 def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
-    """Return Markdown fenced-code spans, including an unclosed final fence."""
+    """Return Markdown fenced-code spans, including an unclosed final fence.
+
+    Blockquote depth participates. A closer must sit at exactly the depth the
+    fence opened at: a DEEPER marker is code content, while a SHALLOWER one means
+    the blockquote ended -- which implicitly ends the inner fence -- and opens a
+    new outer fence, so the region stays contiguously protected.
+
+    Deliberate simplification: a shallower NON-marker line does not end the
+    fence, so such a block over-protects rather than under-protects. That is the
+    right direction to fail for a guard whose job is keeping code out of the
+    report, the export and the persisted signature.
+    """
     spans: list[tuple[int, int]] = []
     fence_start: int | None = None
     fence_char = ""
@@ -285,23 +296,29 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
                     stripped,
                 )
-                # A closer must sit at EXACTLY the fence's blockquote depth.
-                #
-                # Deeper: a quoted marker cannot close a fence opened outside
-                # any quote -- that line is code content per CommonMark.
-                # Shallower: an unquoted marker after a quoted fence does not
-                # close it either. Leaving the blockquote implicitly ends the
-                # inner fence and the unquoted marker opens a NEW outer fence,
-                # so what follows is still code. Accepting it as a closer left
-                # the next line mineable, which is how a quoted fence followed
-                # by an unquoted one leaked a secret into reports, exports and
-                # a persisted RepeatSignature.
+                reopening = re.match(r"(`{3,}|~{3,})", stripped)
                 if closing and depth == fence_depth:
+                    # Depth-matched closer: an ordinary close.
                     spans.append((fence_start, offset + len(line)))
                     fence_start = None
                     fence_char = ""
                     fence_len = 0
                     fence_depth = 0
+                elif reopening and depth < fence_depth:
+                    # Leaving the blockquote implicitly ends the inner fence, and
+                    # this shallower marker opens a NEW outer fence. Ending the
+                    # old span here and starting a new one at the same offset
+                    # keeps the region contiguously protected. Merely IGNORING
+                    # the line left the inner fence open, so a later
+                    # depth-matched marker closed it and exposed everything from
+                    # that point on.
+                    spans.append((fence_start, offset))
+                    marker = reopening.group(1)
+                    fence_start = offset
+                    fence_char = marker[0]
+                    fence_len = len(marker)
+                    fence_depth = depth
+                # depth > fence_depth: the marker is code content; ignore it.
         offset += len(line)
     if fence_start is not None:
         spans.append((fence_start, len(text)))
