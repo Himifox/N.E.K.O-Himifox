@@ -564,7 +564,7 @@ async def test_pair_code_allows_local_manager_and_is_single_use(
 
 
 @pytest.mark.asyncio
-async def test_pair_code_rejects_mismatched_local_origin(
+async def test_pair_code_allows_local_vite_origin(
     bridge_e2e_env: dict[str, Any],
 ) -> None:
     res = await bridge_e2e_env["client"].post(
@@ -572,6 +572,22 @@ async def test_pair_code_rejects_mismatched_local_origin(
         headers={
             "Host": "127.0.0.1:48916",
             "Origin": "http://127.0.0.1:5173",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.json()["port"] == 48916
+
+
+@pytest.mark.asyncio
+async def test_pair_code_rejects_mismatched_local_origin(
+    bridge_e2e_env: dict[str, Any],
+) -> None:
+    res = await bridge_e2e_env["client"].post(
+        "/market/pair-code",
+        headers={
+            "Host": "127.0.0.1:48916",
+            "Origin": "http://127.0.0.1:5174",
         },
     )
 

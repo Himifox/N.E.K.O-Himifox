@@ -2425,4 +2425,4 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 
 ## 第二十九轮实施证据
 
-实现提交 `7a57a0f10` 已完成：两个脚本在项目导入前建立仓库根；Bridge 只增加明确的本地 Vite 5173 来源；discard 通过专用临时目录解析器恢复崩溃残留，普通 job ID 与 cancel 边界不变。精确反例为 15 passed；作业生命周期、公共知识路由、Bridge、维护 CLI 和质量评估五个完整测试文件为 170 passed、3 skipped，skip 均为既有 Windows symlink 权限条件。两个脚本的真实 `--help` 入口、相关 Ruff、compileall 与 `git diff --check` 均通过。本轮没有新增用户文案或 i18n 键。
+实现提交 `7a57a0f10` 已完成：两个脚本在项目导入前建立仓库根；Bridge 只增加明确的本地 Vite 5173 来源；discard 通过专用临时目录解析器恢复崩溃残留，普通 job ID 与 cancel 边界不变。精确反例为 15 passed；作业生命周期、公共知识路由、Bridge、维护 CLI 和质量评估五个完整测试文件为 170 passed、3 skipped，skip 均为既有 Windows symlink 权限条件。远端 Plugin pytest 随后暴露一条仍把 5173 当作拒绝场景的旧集成断言；同步为 5173 成功、5174 拒绝后，完整 Market Bridge 集成文件为 98 passed。两个脚本的真实 `--help` 入口、相关 Ruff、compileall 与 `git diff --check` 均通过。本轮没有新增用户文案或 i18n 键。
