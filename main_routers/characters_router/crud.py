@@ -1641,14 +1641,26 @@ async def _delete_catgirl_by_name_serialized(name: str):
             if not is_cloudsave_disabled():
                 tombstone_snapshot = copy.deepcopy(_config_manager.load_character_tombstones_state())
 
-            delete_result, delete_cancelled = await _await_thread_call_to_completion(
-                delete_character_memory_storage,
-                _config_manager,
-                name,
-                capture_pending=True,
-                keep_recent_locks=True,
-                recent_transaction=recent_transaction,
-            )
+            try:
+                delete_result, delete_cancelled = await _await_thread_call_to_completion(
+                    delete_character_memory_storage,
+                    _config_manager,
+                    name,
+                    capture_pending=True,
+                    keep_recent_locks=True,
+                    recent_transaction=recent_transaction,
+                )
+            except BaseException:
+                # It retires the name as its first act, so a raise partway
+                # through still leaves it retired. The rollback below restores
+                # the files and the config entry, which makes the name live
+                # again -- and a live name that is still retired drops every
+                # later sidecar write. Unlike rename this cannot live in the
+                # helper: the unsubscribe caller removes the config entry
+                # BEFORE calling it and never rolls back, so for that one the
+                # name really is gone and must stay retired.
+                retired_names = (name,)
+                raise
             removed_memory_paths, recent_delete_result = delete_result
             retired_names = (name,)
             if delete_cancelled:

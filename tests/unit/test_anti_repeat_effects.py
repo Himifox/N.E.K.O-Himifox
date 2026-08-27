@@ -995,12 +995,17 @@ def test_evicting_a_retired_name_brings_it_back(tmp_path):
     assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
 
 
-def test_a_failed_reset_keeps_a_decision_recorded_during_its_flush(tmp_path):
-    """The rollback must not throw away a concurrent decision.
+def test_a_failed_reset_loses_nothing(tmp_path):
+    """A reset that reports failure must lose NEITHER generation.
 
-    ``_apply_decision`` mutates the cached payload IN PLACE, so the cleared
-    payload stays the very same object and an identity test cannot tell the two
-    apart. The staged sequence can.
+    Publishing the empty payload before the flush made a concurrent decision
+    load it, mutate it in place and stage a newer snapshot built on the cut --
+    so the racer made the reset durable even though the reset failed, taking
+    the pre-reset aggregates and ``started_at`` with it while the endpoint
+    reported failure. No rollback can undo that, because by then the racer has
+    already written the cleared payload out. Keeping the pre-reset payload in
+    the cache until the cut is durable inverts it: the concurrent decision
+    builds on the OLD data, so both survive.
     """
     store = _store(tmp_path)
     (tmp_path / "Neko").mkdir()
@@ -1048,13 +1053,21 @@ def test_a_failed_reset_keeps_a_decision_recorded_during_its_flush(tmp_path):
     day = anti_repeat_effects._utc_day(now + 1)
     reasons = store._cache["Neko"]["daily_buckets"][day]["reason_counts"]
     assert reasons.get("literal_similarity") == 1, (
-        "the concurrent decision was rolled away with the failed reset"
+        "the concurrent decision was lost with the failed reset"
     )
-    # `reason_counts` is pre-seeded with every reason at zero, so absence is
-    # not the discriminator -- the count is.
-    assert reasons.get("bm25") == 0, (
-        "the reset was undone: the pre-reset aggregates came back"
+    assert reasons.get("bm25") == 1, (
+        "the failed reset destroyed the pre-reset aggregates anyway"
     )
+    assert store._cache["Neko"]["started_at"] == now, (
+        "the failed reset still moved the statistics-since date"
+    )
+
+    # The file is the authority, and it must not carry the cut either.
+    persisted = json.loads(
+        (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    assert persisted["daily_buckets"][day]["reason_counts"]["bm25"] == 1
+    assert persisted["started_at"] == now
 
 
 def test_runtime_cache_entry_points_split_live_from_removed(tmp_path):
@@ -1134,3 +1147,79 @@ def test_speech_around_stray_delimiters_still_yields_a_signature():
 
     assert signature is not None
     assert signature.phrase == "我们一起去吃饭吧"
+
+
+def test_a_failed_reset_does_not_resurrect_an_evicted_cache(tmp_path):
+    """A cloud import evicting mid-reset must stay evicted.
+
+    ``_evict_unlocked`` fences the sequence at ``max(staged, written)``, which
+    equals the sequence the reset staged -- so a rollback guarded on "did the
+    sequence advance" read "nothing newer" and wrote the pre-reset payload back
+    into the cache the import had just dropped. The next decision then flushed
+    that resurrected payload over the freshly imported file.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+
+    original_flush = store._flush_snapshot
+
+    def _evict_then_fail(*_args, **_kwargs):
+        store._flush_snapshot = original_flush
+        # What import_local_cloudsave_snapshot does under the cloud-apply
+        # fence, right before it replaces memory/Neko/.
+        store.evict_character("Neko")
+        raise OSError("disk full")
+
+    store._flush_snapshot = _evict_then_fail
+    try:
+        with pytest.raises(OSError):
+            store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    assert "Neko" not in store._cache, (
+        "the failed reset resurrected a cache entry the import had evicted"
+    )
+
+
+def test_a_reset_outrun_by_a_writer_cuts_again(tmp_path):
+    """Publishing a cut the racer already overwrote would report a false success.
+
+    A decision that stages AFTER the reset flushed writes the pre-reset payload
+    plus its own delta at a higher sequence, so it lands after ours and the cut
+    is not durable. Publishing regardless would leave the cache empty while the
+    file still held the data -- the reset reporting success having cleared
+    nothing.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+
+    original_flush = store._flush_snapshot
+    races = []
+
+    def _flush_then_race(*args, **kwargs):
+        original_flush(*args, **kwargs)
+        if not races:
+            races.append(True)
+            # Stages seq+1 from the PRE-RESET payload and writes it out, so
+            # the cut we just flushed is already gone from disk.
+            store.record_decision("Neko", _decision(), now=now + 1)
+
+    store._flush_snapshot = _flush_then_race
+    try:
+        store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    assert races, "the race never happened; the test proves nothing"
+    assert store._cache["Neko"]["daily_buckets"] == {}
+    persisted = json.loads(
+        (tmp_path / "Neko" / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    assert persisted["daily_buckets"] == {}, (
+        "the reset reported success while the file still held the old data"
+    )

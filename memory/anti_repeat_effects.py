@@ -74,6 +74,11 @@ _PROTECTED_RE = re.compile(
     r"<[^<>\r\n]{1,80}>|"
     r"\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
+# How many times a reset re-cuts when a concurrent write lands after its
+# flush. Each retry needs a racing writer to win again, so a small bound is
+# enough; exhausting it reports failure rather than claiming a cut that the
+# racer already overwrote.
+_CLEAR_ATTEMPTS = 3
 _EDGE_PUNCTUATION = " \t\r\n,，。.!！?？;；:：、()（）[]【】{}<>《》\"'“”‘’"
 
 
@@ -1031,8 +1036,7 @@ class AntiRepeatEffectStore:
         return result
 
     def clear_effects(self, name: str) -> None:
-        """Clear one identity's aggregates, staging under the lock and flushing
-        outside it.
+        """Clear one identity's aggregates, publishing the cut only once durable.
 
         The flush must NOT run while this holds the character lock. It enters
         ``cloudsave_writable_transaction``, and a cloud import takes those two
@@ -1040,32 +1044,41 @@ class AntiRepeatEffectStore:
         duration and reaches for the character lock inside it, to evict caches.
         Holding character-lock-then-fence here is the other leg of an ABBA
         deadlock that would hang both the reset and the import.
+
+        So the flush races concurrent writers, and the ordering rule is: the
+        cache and the file must always agree on which side of the cut they are
+        on, and a reset that reports failure must lose nothing.
+
+        That is why the empty payload is NOT published before the flush.
+        Publishing it early made ``_apply_decision`` load the empty payload,
+        mutate it in place and stage a newer snapshot built on the cut — so a
+        racing writer made the reset durable even when the reset itself failed,
+        destroying the pre-reset aggregates and ``started_at`` while the
+        endpoint reported failure. No rollback in an ``except`` block can undo
+        that: by then the racer has already written the cleared payload out.
+
+        Keeping the pre-reset payload in the cache inverts it. A concurrent
+        decision builds on the OLD data, so a failed flush leaves cache and
+        file exactly as they were and there is nothing to roll back. If such a
+        decision staged after us, its write lands after ours and the cut is not
+        durable, so cut again. On success the racing decision is dropped: the
+        user asked for this data to be cleared milliseconds earlier, and
+        recording one is best-effort by contract.
         """
-        timestamp = time.time()
         name = _resolve_name(name)
-        with self._get_lock(name):
-            previous = self._load_unlocked(name, timestamp)
-            cleared = _default_payload(timestamp)
-            self._cache[name] = cleared
-            staged = self._stage_unlocked(name)
-            cleared_seq = staged[2]
-        try:
-            self._flush_snapshot(*staged, raise_on_error=True)
-        except Exception:
+        for _ in range(_CLEAR_ATTEMPTS):
+            timestamp = time.time()
             with self._get_lock(name):
-                # Only roll back what this call installed: a decision recorded
-                # while the flush was in flight is newer than `previous` and
-                # must not be thrown away by a failed clear.
-                #
-                # Object identity cannot detect that decision.
-                # ``_apply_decision`` loads the cached payload and mutates it IN
-                # PLACE before storing it back, so `cleared` stays the very same
-                # object and an identity test would roll the concurrent decision
-                # away. The staged sequence does detect it: every mutation
-                # stages a fresh snapshot and bumps the sequence past ours.
-                if self._staged_seq.get(name, 0) == cleared_seq:
-                    self._cache[name] = previous
-            raise
+                cleared = _default_payload(timestamp)
+                seq = self._staged_seq.get(name, 0) + 1
+                self._staged_seq[name] = seq
+                staged = (name, _copy_payload(cleared), seq)
+            self._flush_snapshot(*staged, raise_on_error=True)
+            with self._get_lock(name):
+                if self._staged_seq.get(name, 0) == seq:
+                    self._cache[name] = cleared
+                    return
+        raise RuntimeError("anti-repeat reset lost the race to concurrent writes")
 
     def _evict_unlocked(self, name: str) -> None:
         fence = max(

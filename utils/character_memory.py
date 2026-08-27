@@ -495,6 +495,17 @@ def rename_character_memory_storage(
             release_character_recent_transaction(transaction)
         return result
     except BaseException:
+        # Undo the cache lifecycle too, by rule rather than by snapshot. At the
+        # moment this can raise, the config mutation and the "target must be
+        # free" check both still sit with the caller, so the SOURCE is
+        # unconditionally live and the TARGET unconditionally absent. Leaving
+        # them as-is stranded a live source retired -- every later sidecar write
+        # dropped, because a retired name never creates its directory -- and
+        # left the absent target reactivated, so a late write could recreate an
+        # identity that was never committed. The caller cannot fix it either:
+        # it fills its rollback name tuples from this function returning.
+        evict_character_runtime_caches(old_name)
+        retire_character_runtime_caches(new_name)
         restore_recent_registry_state(
             list(set(recent_paths) | activation_scope),
             redirect_snapshot,

@@ -5283,3 +5283,109 @@ async def test_the_rollback_actually_re_retires_the_absent_name(tmp_path):
             anti_repeat_module._GLOBAL_CORPUS,
             greeting_module._GLOBAL_HISTORY,
         ) = previous
+
+
+@pytest.mark.unit
+def test_a_failed_rename_restores_the_cache_lifecycle(tmp_path):
+    """A raise partway through must not strand either name.
+
+    The helper retires the source and evicts the target as its first act. If a
+    file move then raises, the caller never fills its rollback tuples -- it
+    fills them from this function RETURNING -- so without an inverse here the
+    live source stays retired (every later sidecar write dropped, since a
+    retired name never creates its directory) and the absent target stays
+    reactivated (a late write can recreate an identity never committed).
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    import utils.character_memory as character_memory
+
+    cm = _make_config_manager(tmp_path)
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        stores = (
+            effects_module.get_anti_repeat_effect_store(),
+            anti_repeat_module.get_anti_repeat_corpus(),
+            greeting_module.get_startup_greeting_history(),
+        )
+        # The target name was deleted earlier, so it is retired.
+        character_memory.retire_character_runtime_caches("Target")
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("cross-device move")
+
+        with patch.object(character_memory, "activate_recent_paths", _boom):
+            with pytest.raises(OSError):
+                character_memory.rename_character_memory_storage(
+                    cm, "Source", "Target",
+                )
+
+        assert all("Source" not in store._retired for store in stores), (
+            "the live source was left retired after a failed rename"
+        )
+        assert all("Target" in store._retired for store in stores), (
+            "the uncommitted target was left reactivated after a failed rename"
+        )
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_raising_delete_still_tells_the_rollback_it_retired(tmp_path):
+    """The storage helper retires as its first act, so a raise still retired.
+
+    The rollback restores the files and the config entry, making the name live
+    again -- and a live name left retired drops every later sidecar write. The
+    route therefore has to record the retirement on the raise, not only on the
+    return.
+    """
+    cm = _make_config_manager(tmp_path)
+    bootstrap_local_cloudsave_environment(cm)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    with patch("utils.config_manager._config_manager", cm):
+        init_shared_state(
+            role_state={},
+            steamworks=None,
+            templates=None,
+            config_manager=cm,
+            logger=None,
+            initialize_character_data=_noop,
+            switch_current_catgirl_fast=_noop,
+            init_one_catgirl=_noop,
+            remove_one_catgirl=_noop,
+        )
+        crud = reload_module("main_routers.characters_router.crud")
+        characters = cm.load_characters()
+        characters.setdefault("猫娘", {})["Boom"] = {"昵称": "Boom"}
+        cm.save_characters(characters, bypass_write_fence=True)
+        rollback = AsyncMock(return_value="")
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("file in use")
+
+        with patch.object(
+            crud, "release_memory_server_character", AsyncMock(return_value=True),
+        ), patch.object(
+            crud, "delete_character_memory_storage", _boom,
+        ), patch.object(crud, "_rollback_character_operation", rollback):
+            response = await crud.delete_catgirl("Boom")
+
+    assert rollback.await_args is not None, (
+        "the route never reached the rollback: %s" % getattr(response, "body", response)
+    )
+    assert rollback.await_args.kwargs["restored_live_character_names"] == ("Boom",), (
+        "a delete that raised after retiring told the rollback nothing was retired"
+    )
