@@ -1087,6 +1087,9 @@ _WRAPPED_TEMPLATE_DRAFTS = [
     ("jinja", "sure thing {{" + chr(10) + "secret helper phrase" + chr(10) + "}} enjoy"),
     ("shell", "sure thing ${" + chr(10) + "secret helper phrase" + chr(10) + "} enjoy"),
     ("erb", "sure thing <%" + chr(10) + "secret helper phrase" + chr(10) + "%> enjoy"),
+    # Opener and closer on their own lines with a two-line body.
+    ("jinja block", "ok {{" + chr(10) + "alpha" + chr(10) + "secret helper phrase" + chr(10) + "}} done"),
+    ("shell block", "ok ${" + chr(10) + "alpha" + chr(10) + "secret helper phrase" + chr(10) + "} done"),
 ]
 
 
@@ -1116,10 +1119,14 @@ def test_speech_around_stray_delimiters_still_yields_a_signature():
     and protect everything between them, so no signature could ever be built
     for the catchphrase sitting in the middle.
     """
+    # Four newlines apart: past the budget. At three the stray pair is
+    # indistinguishable from a real template block and is deliberately
+    # protected; what this pins is that the blast radius STOPS growing.
     draft = (
         "那个 ${" + chr(10)
-        + "不过我也记不清楚了呢" + chr(10)
+        + "A呢" + chr(10)
         + "我们一起去吃饭吧" + chr(10)
+        + "B呢" + chr(10)
         + "最后那个括号 }"
     )
 

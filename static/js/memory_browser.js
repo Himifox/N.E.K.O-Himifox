@@ -1010,6 +1010,11 @@
     // leave `currentCatName` untouched and silently analyse whatever the editor
     // still had open. The panel keeps its own target for exactly that case.
     let repetitionInsightsCharacterOverride = '';
+    // A range change that FAILED still counts as "the user asked for a report".
+    // Dropping the stale report on error is right, but it also made the next
+    // range change take the no-report path -- which issues no request and
+    // silently wipes the red error, so the selector stopped being a retry.
+    let repetitionInsightsRangeRetryPending = false;
     // Storage not settled (selection required, migration pending, recovery).
     // The insights panel used to be disarmed by accident: the limited state
     // blanks `currentCatName`, and every insights control gated on it. A
@@ -1536,6 +1541,7 @@
     function resetRepetitionInsightsState() {
         repetitionInsightsRequestId++;
         repetitionInsightsReport = null;
+        repetitionInsightsRangeRetryPending = false;
         repetitionInsightsIgnored.clear();
         repetitionInsightsStatus = null;
         const query = document.getElementById('memory-insights-query');
@@ -1551,14 +1557,19 @@
     }
 
     function refreshRepetitionInsightsAfterRangeChange() {
-        if (repetitionInsightsReport) {
-            analyzeRepetitionInsights();
+        if (repetitionInsightsReport || repetitionInsightsRangeRetryPending) {
+            // Keep the existing cards up WHILE the replacement loads, but a
+            // FAILED replacement must not leave them standing under a range they
+            // were never mined from: the selector already shows the new limit, so
+            // the pane and an enabled Export would describe a scope the data does
+            // not have, and only a red status line would contradict them.
+            analyzeRepetitionInsights({ dropReportOnError: true });
             return;
         }
         resetRepetitionInsightsState();
     }
 
-    async function analyzeRepetitionInsights() {
+    async function analyzeRepetitionInsights(options) {
         if (memoryStorageLimited) return;
         if (!repetitionInsightsTarget() || repetitionInsightsBusy) return;
         const languageSelect = document.getElementById('memory-insights-language');
@@ -1591,6 +1602,7 @@
             }
             repetitionInsightsReport = report;
             repetitionInsightsIgnored.clear();
+            repetitionInsightsRangeRetryPending = false;
             renderRepetitionInsightsResults();
             const summary = report.summary || {};
             if (summary.source_available === false) {
@@ -1621,6 +1633,12 @@
             }
         } catch (error) {
             if (requestId !== repetitionInsightsRequestId) return;
+            if (options && options.dropReportOnError) {
+                repetitionInsightsReport = null;
+                repetitionInsightsIgnored.clear();
+                repetitionInsightsRangeRetryPending = true;
+                renderRepetitionInsightsResults();
+            }
             setRepetitionInsightsStatus(
                 'memory.repetitionInsightsError',
                 'Local analysis is unavailable. Please try again.',
@@ -1812,7 +1830,11 @@
             resetRepetitionInsightsState();
         });
         limit.addEventListener('change', refreshRepetitionInsightsAfterRangeChange);
-        analyze.addEventListener('click', analyzeRepetitionInsights);
+        // Wrapped, not passed directly: the handler now takes an options object,
+        // and a click listener would hand it the Event instead.
+        analyze.addEventListener('click', function () {
+            analyzeRepetitionInsights();
+        });
         clear.addEventListener('click', resetRepetitionInsightsState);
         exportButton.addEventListener('click', exportRepetitionInsights);
         resetEffects.addEventListener('click', resetRepetitionEffectRecords);

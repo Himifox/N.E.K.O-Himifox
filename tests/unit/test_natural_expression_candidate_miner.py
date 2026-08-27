@@ -1473,6 +1473,11 @@ _MULTILINE_TEMPLATE_CASES = [
     ("shell interpolation", "${\nsecret helper phrase\n}"),
     ("erb scriptlet", "<%\nsecret helper phrase\n%>"),
     ("jinja with a filter", "{{ secret helper phrase\n | default('x') }}"),
+    # Opener and closer on their own lines with a two-line body: the shape a
+    # hand-written template actually has, and the one a two-newline budget missed.
+    ("jinja block", "{{\nalpha\nsecret helper phrase\n}}"),
+    ("shell block", "${\nalpha\nsecret helper phrase\n}"),
+    ("erb block", "<%\nalpha\nsecret helper phrase\n%>"),
     ("crlf jinja", "{{\r\nsecret helper phrase\r\n}}"),
 ]
 
@@ -1489,7 +1494,12 @@ def test_wrapped_template_bodies_are_protected(label, text):
 _TEMPLATE_OVER_PROTECTION_CASES = [
     ("paired emoticons", "嘿嘿 >_<\n我们一起去吃饭吧\n晚安晚安 >_<", "我们一起去吃饭吧"),
     ("heart then arrow", "そうだね <3\nまた一緒に散歩しようね\n気分 ->", "また一緒に散歩しようね"),
-    ("stray brace far apart", "那个 ${\n不过我也记不清楚了呢\n我们一起去吃饭吧\n最后那个括号 }", "我们一起去吃饭吧"),
+    # Where the line is drawn, stated explicitly: a stray opener and a stray
+    # closer THREE newlines apart are indistinguishable from a real template
+    # block, so the budget protects both. Past the budget the blast radius stops
+    # growing, which is the property this row exists to pin -- an unbounded
+    # pattern swallowed 99.7% of a 200-line reply.
+    ("stray brace past the budget", "那个 ${\nA呢\n我们一起去吃饭吧\nB呢\n最后那个括号 }", "我们一起去吃饭吧"),
     ("comparison operators", "记住哦 3 < 5\n我们一起去吃饭吧\n然后 10 > 7", "我们一起去吃饭吧"),
 ]
 

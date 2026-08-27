@@ -92,9 +92,9 @@ _TEMPLATE_RE = re.compile(
     # was masked. The line budget is the point -- an unbounded newline-crossing
     # match turns one stray delimiter in prose into a span that swallows the
     # rest of the reply.
-    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}\}|"
-    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}|"
-    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,2}%>|"
+    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
+    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     # `<...>` stays strictly line-bounded. It carries by far the highest
     # false-positive density in this project's character speech -- `>_<`, `<3`,
     # `->`, `3 < 5` -- so letting it cross newlines paired the tail of one

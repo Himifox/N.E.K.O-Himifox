@@ -68,9 +68,9 @@ _PROTECTED_RE = re.compile(
     # here, so evidence taken from inside it could reach the sidecar even though
     # its single-line twin was rejected. `<...>` stays line-bounded -- see the
     # miner for the speech it swallows otherwise.
-    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}\}|"
-    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,2}\}|"
-    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,2}%>|"
+    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
+    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     r"<[^<>\r\n]{1,80}>|"
     r"\[[A-Z][A-Z0-9_-]{1,63}\]"
 )

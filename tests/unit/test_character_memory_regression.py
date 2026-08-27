@@ -4908,3 +4908,378 @@ async def test_publishing_an_identity_lifts_sidecar_retirement(tmp_path):
             anti_repeat_module._GLOBAL_CORPUS,
             greeting_module._GLOBAL_HISTORY,
         ) = previous
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_rolled_back_delete_reactivates_the_sidecar_stores(tmp_path):
+    """A restored character is live again, so its retirement must be lifted.
+
+    The delete path retires the name in every sidecar store BEFORE removing
+    anything. If the operation then rolls back -- a failed memory-server reload,
+    a cancellation, maintenance mode -- the files and characters.json come back
+    through save_characters, which never reaches the activation helper that
+    lifts retirement. A character that had no memory directory yet would then
+    keep dropping its startup greeting and anti-repeat decisions, because a
+    retired name is refused the lazy directory creation every sibling writer
+    gets.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from main_routers.characters_router import crud
+    from utils.character_memory import retire_character_runtime_caches
+
+    class _Config:
+        memory_dir = tmp_path
+        project_memory_dir = tmp_path
+
+        def save_characters(self, _characters, **_kwargs):
+            return None
+
+        def save_character_tombstones_state(self, _state):
+            return None
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        stores = (
+            effects_module.get_anti_repeat_effect_store(),
+            anti_repeat_module.get_anti_repeat_corpus(),
+            greeting_module.get_startup_greeting_history(),
+        )
+        retire_character_runtime_caches("Restored")
+        assert all("Restored" in store._retired for store in stores)
+
+        with (
+            patch.object(crud, "get_initialize_character_data",
+                         return_value=AsyncMock()),
+            patch.object(crud, "notify_memory_server_reload",
+                         AsyncMock(return_value=True)),
+        ):
+            errors = await crud._rollback_character_operation(
+                _Config(),
+                characters_snapshot={"猫娘": {"Restored": {}}},
+                memory_snapshot_records=[],
+                restored_live_character_names=("Restored",),
+                reason="test rollback",
+            )
+
+        assert errors == "", errors
+        assert all("Restored" not in store._retired for store in stores), (
+            "a rolled-back delete left the live character retired"
+        )
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_failed_restore_leaves_the_character_retired(tmp_path):
+    """The lift is scoped to a restore that actually succeeded.
+
+    If characters.json could not be put back, the name is NOT live again --
+    lifting retirement there would let a decision staged mid-delete recreate the
+    directory that was just removed, which is the orphan the retirement exists
+    to prevent.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from main_routers.characters_router import crud
+    from utils.character_memory import retire_character_runtime_caches
+
+    class _Config:
+        memory_dir = tmp_path
+        project_memory_dir = tmp_path
+
+        def save_characters(self, _characters, **_kwargs):
+            raise OSError("disk full")
+
+        def save_character_tombstones_state(self, _state):
+            return None
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        stores = (
+            effects_module.get_anti_repeat_effect_store(),
+            anti_repeat_module.get_anti_repeat_corpus(),
+            greeting_module.get_startup_greeting_history(),
+        )
+        retire_character_runtime_caches("Doomed")
+
+        with (
+            patch.object(crud, "get_initialize_character_data",
+                         return_value=AsyncMock()),
+            patch.object(crud, "notify_memory_server_reload",
+                         AsyncMock(return_value=True)),
+        ):
+            errors = await crud._rollback_character_operation(
+                _Config(),
+                characters_snapshot={"猫娘": {"Doomed": {}}},
+                memory_snapshot_records=[],
+                restored_live_character_names=("Doomed",),
+                reason="test rollback",
+            )
+
+        assert "characters restore failed" in errors
+        assert all("Doomed" in store._retired for store in stores), (
+            "retirement was lifted for a character that was never restored"
+        )
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_rollback_before_retirement_does_not_evict(tmp_path):
+    """Eviction is not a harmless no-op on a name that was never retired.
+
+    The rollback block is shared with failures that happen before the storage
+    op ran. Evicting there pops the cache AND advances the sequence fence, so a
+    decision recorded while the operation was in flight is destroyed rather
+    than merely delayed -- it never reaches disk and it is gone from memory.
+    The route passes an EMPTY tuple until the retiring op has returned.
+    """
+    import memory.anti_repeat_effects as effects_module
+    from main_routers.characters_router import crud
+
+    class _Config:
+        memory_dir = tmp_path
+        project_memory_dir = tmp_path
+
+        def save_characters(self, _characters, **_kwargs):
+            return None
+
+        def save_character_tombstones_state(self, _state):
+            return None
+
+    previous = effects_module._GLOBAL_STORE
+    try:
+        store = effects_module.AntiRepeatEffectStore()
+        store._config_manager = _Config()
+        effects_module._GLOBAL_STORE = store
+        (tmp_path / "Busy").mkdir()
+        store.record_decision(
+            "Busy",
+            effects_module.AntiRepeatDecision(
+                source="proactive",
+                reasons=("bm25",),
+                action="block",
+                outcome="blocked_initial",
+            ),
+            now=1_700_000_000.0,
+        )
+        assert "Busy" in store._cache
+
+        with (
+            patch.object(crud, "get_initialize_character_data",
+                         return_value=AsyncMock()),
+            patch.object(crud, "notify_memory_server_reload",
+                         AsyncMock(return_value=True)),
+        ):
+            await crud._rollback_character_operation(
+                _Config(),
+                characters_snapshot={"猫娘": {"Busy": {}}},
+                memory_snapshot_records=[],
+                restored_live_character_names=(),
+                reason="rollback before the storage op ran",
+            )
+
+        assert "Busy" in store._cache, (
+            "a rollback that retired nothing still evicted the live cache"
+        )
+    finally:
+        effects_module._GLOBAL_STORE = previous
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_early_delete_failure_tells_the_rollback_nothing_was_retired(tmp_path):
+    """The CALL SITE must pass an empty tuple, not just the helper honour one.
+
+    Cancelling during the release happens before delete_character_memory_storage
+    has retired anything, so the rollback must not evict: eviction pops the
+    cache and advances the sequence fence, destroying a decision recorded while
+    the operation was in flight.
+    """
+    cm = _make_config_manager(tmp_path)
+    bootstrap_local_cloudsave_environment(cm)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    with patch("utils.config_manager._config_manager", cm):
+        init_shared_state(
+            role_state={},
+            steamworks=None,
+            templates=None,
+            config_manager=cm,
+            logger=None,
+            initialize_character_data=_noop,
+            switch_current_catgirl_fast=_noop,
+            init_one_catgirl=_noop,
+            remove_one_catgirl=_noop,
+        )
+        crud = reload_module("main_routers.characters_router.crud")
+        characters = cm.load_characters()
+        characters.setdefault("猫娘", {})["DeleteMe"] = {"昵称": "DeleteMe"}
+        cm.save_characters(characters, bypass_write_fence=True)
+        release_started = asyncio.Event()
+        finish_release = asyncio.Event()
+        rollback = AsyncMock(return_value="")
+
+        async def _release(*_args, **_kwargs):
+            release_started.set()
+            await finish_release.wait()
+            return True
+
+        with patch.object(
+            crud, "release_memory_server_character", side_effect=_release,
+        ), patch.object(crud, "_rollback_character_operation", rollback):
+            operation = asyncio.create_task(crud.delete_catgirl("DeleteMe"))
+            await asyncio.wait_for(release_started.wait(), timeout=3)
+            operation.cancel()
+            await asyncio.sleep(0.05)
+            finish_release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+
+    assert rollback.await_args.kwargs["restored_live_character_names"] == (), (
+        "a rollback from before the storage op claimed a name had been retired"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rename_rollback_restores_both_sides_of_the_retirement(tmp_path):
+    """A rolled-back rename restores the source AND un-does the target.
+
+    The storage op retires the source name and EVICTS the target, lifting any
+    retirement an earlier delete of that same name had installed. Undoing the
+    rename makes the target not-live again, so it has to go back to retired --
+    otherwise a late sidecar flush recreates its directory for an identity that
+    does not exist.
+    """
+    cm = _make_config_manager(tmp_path)
+    bootstrap_local_cloudsave_environment(cm)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    with patch("utils.config_manager._config_manager", cm):
+        init_shared_state(
+            role_state={},
+            steamworks=None,
+            templates=None,
+            config_manager=cm,
+            logger=None,
+            initialize_character_data=_noop,
+            switch_current_catgirl_fast=_noop,
+            init_one_catgirl=_noop,
+            remove_one_catgirl=_noop,
+        )
+        crud = reload_module("main_routers.characters_router.crud")
+        characters = cm.load_characters()
+        characters.setdefault("猫娘", {})["OldName"] = {"昵称": "OldName"}
+        cm.save_characters(characters, bypass_write_fence=True)
+        rollback = AsyncMock(return_value="")
+
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"new_name": "NewName"}),
+        )
+        with patch.object(
+            crud, "notify_memory_server_reload", AsyncMock(return_value=False),
+        ), patch.object(
+            crud, "release_memory_server_character", AsyncMock(return_value=True),
+        ), patch.object(crud, "_rollback_character_operation", rollback):
+            response = await crud.rename_catgirl("OldName", request)
+
+    assert rollback.await_args is not None, (
+        "the route never reached the rollback: %s" % getattr(response, "body", response)
+    )
+
+    kwargs = rollback.await_args.kwargs
+    assert kwargs["restored_live_character_names"] == ("OldName",)
+    assert kwargs["reretired_absent_character_names"] == ("NewName",), (
+        "the rename target stayed live after the rename was undone"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_rollback_actually_re_retires_the_absent_name(tmp_path):
+    """The helper must DO the re-retirement, not merely accept the list.
+
+    Paired with the call-site test that pins which names are passed: this one
+    pins that they take effect, so the two together fail if either half is
+    removed.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from main_routers.characters_router import crud
+
+    class _Config:
+        memory_dir = tmp_path
+        project_memory_dir = tmp_path
+
+        def save_characters(self, _characters, **_kwargs):
+            return None
+
+        def save_character_tombstones_state(self, _state):
+            return None
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        stores = (
+            effects_module.get_anti_repeat_effect_store(),
+            anti_repeat_module.get_anti_repeat_corpus(),
+            greeting_module.get_startup_greeting_history(),
+        )
+        assert all("Gone" not in store._retired for store in stores)
+
+        with (
+            patch.object(crud, "get_initialize_character_data",
+                         return_value=AsyncMock()),
+            patch.object(crud, "notify_memory_server_reload",
+                         AsyncMock(return_value=True)),
+        ):
+            await crud._rollback_character_operation(
+                _Config(),
+                characters_snapshot={"猫娘": {"Back": {}}},
+                memory_snapshot_records=[],
+                restored_live_character_names=("Back",),
+                reretired_absent_character_names=("Gone",),
+                reason="rename rollback",
+            )
+
+        assert all("Gone" in store._retired for store in stores), (
+            "the undone rename target was left live in a sidecar store"
+        )
+        assert all("Back" not in store._retired for store in stores)
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
