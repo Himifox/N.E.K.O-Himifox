@@ -744,3 +744,51 @@ async def test_effect_scope_uses_the_analyzed_count_not_the_request(monkeypatch)
 
     assert captured["limit"] == 10
     assert result["effectiveness"]["assistant_message_limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
+    """The selector must offer every identity the analysis route accepts.
+
+    Built from the recent-memory file list, it omitted a character that has
+    time-indexed history but no ``recent.json`` -- the shape a cloud-save import
+    produces when the profile ships no recent file -- even though the analysis
+    route explicitly supports it.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "OnlyHistory").mkdir(parents=True)
+    (memory_dir / "OnlyHistory" / "time_indexed.db").write_bytes(b"")
+    (memory_dir / "HasRecent").mkdir()
+    (memory_dir / "HasRecent" / "recent.json").write_text("[]", encoding="utf-8")
+    (memory_dir / "Empty").mkdir()
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {"Configured": {}}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        result = await memory_router.get_insight_characters()
+
+    assert "OnlyHistory" in result["characters"], (
+        "a character with time-indexed history but no recent.json was omitted"
+    )
+    assert "HasRecent" in result["characters"]
+    assert "Configured" in result["characters"]
+    assert "Absent" not in result["characters"]
+
+    # Anti-drift: membership must be exactly the analysis route's admission
+    # rule, so the panel can never offer a name the route rejects nor hide one
+    # it accepts. A bare directory qualifies under that rule -- the route serves
+    # it and reports an empty analysis -- so it belongs in the list too.
+    from utils.character_memory import character_memory_exists
+
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        for name in ("OnlyHistory", "HasRecent", "Empty", "Absent"):
+            admitted = name == "Configured" or character_memory_exists(
+                config, name
+            )
+            assert (name in result["characters"]) is admitted, name

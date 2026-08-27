@@ -55,21 +55,26 @@ logger = get_module_logger(__name__, "Memory")
 # Looked up through ``sys.modules`` rather than imported: eviction must not be
 # what drags the memory package into a process that never touched it, and a
 # module nobody loaded has no cache to evict.
-# (module, evictor, retiring evictor). Only the effects store distinguishes
-# the two: it is the one that retires a name so a decision recorded while the
-# delete is still in flight cannot recreate the directory. The other two are
-# pure cache invalidation and have no retiring form.
+# (module, evictor, retiring evictor). Every sidecar writer needs both forms:
+# each one lazily creates ``memory/<name>/`` on write, so a snapshot staged
+# while a delete was in flight would recreate the directory the caller had just
+# removed. Retiring is for identities that are going away; the plain evictor is
+# for live ones whose files changed underneath us, and it LIFTS retirement.
 _CHARACTER_RUNTIME_CACHE_EVICTORS = (
     (
         "memory.anti_repeat_effects",
         "evict_cached_anti_repeat_effects",
         "retire_cached_anti_repeat_effects",
     ),
-    ("memory.anti_repeat", "evict_cached_anti_repeat_corpus", None),
+    (
+        "memory.anti_repeat",
+        "evict_cached_anti_repeat_corpus",
+        "retire_cached_anti_repeat_corpus",
+    ),
     (
         "memory.startup_greeting_history",
         "evict_cached_startup_greeting_history",
-        None,
+        "retire_cached_startup_greeting_history",
     ),
 )
 
@@ -114,9 +119,9 @@ def retire_character_runtime_caches(*character_names: str) -> None:
     """Drop caches for identities whose directories are being REMOVED.
 
     For a delete or the source name of a rename. On top of the invalidation,
-    this retires the name in the anti-repeat effects store so a decision
-    recorded while the removal is still in flight cannot ``makedirs`` the
-    directory back into existence after the tree is gone.
+    this retires the name in EVERY sidecar store, so a write staged while the
+    removal was still in flight cannot ``makedirs`` the directory back into
+    existence after the tree is gone.
     """
     names = tuple(dict.fromkeys(name for name in character_names if name))
     if not names:
@@ -619,6 +624,7 @@ async def asave_characters_with_recent_activation(
             )))
         else:
             release_character_recent_transaction(transaction)
+            evict_character_runtime_caches(*character_names)
             return True
         raise
     except BaseException:
@@ -628,6 +634,13 @@ async def asave_characters_with_recent_activation(
         raise
     else:
         release_character_recent_transaction(transaction)
+        # Publishing an identity is the explicit "this character is live" event.
+        # A name deleted earlier in the process is still retired, and a freshly
+        # created profile has no memory/<name>/ yet, so without this lift the
+        # sidecar writers would drop its startup greeting and early proactive
+        # decisions instead of creating the directory. Rollback paths must NOT
+        # lift: nothing was published there.
+        evict_character_runtime_caches(*character_names)
         return False
 
 

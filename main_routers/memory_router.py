@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 from utils.character_name import validate_character_name
 from utils.character_memory import (
     character_memory_exists,
+    iter_character_memory_roots,
 )
 from utils.cloudsave_runtime import MaintenanceModeError, assert_cloudsave_writable
 from utils.language_utils import is_supported_language_code, normalize_language_code
@@ -785,6 +786,50 @@ def _recent_browser_conflict_response(
         },
         status_code=409,
     )
+
+
+@router.get('/insight_characters')
+async def get_insight_characters():
+    """List the identities the repetition-insights route will accept.
+
+    The panel selector used to be built from the recent-memory file list,
+    which only knows characters that have a ``recent.json``. A configured
+    character, or one restored from a cloud snapshot carrying time-indexed
+    history without the optional recent file, was therefore missing from the
+    panel even though the analysis route supports it.
+
+    Reuses that route's own admission rule -- configured OR has character
+    memory on disk -- so the two cannot drift into offering a name the route
+    rejects, or hiding one it accepts.
+    """
+    from utils.config_manager import get_config_manager
+
+    config_manager = get_config_manager()
+    characters = await config_manager.aload_characters()
+    configured = (
+        characters.get("猫娘", {}) if isinstance(characters, dict) else {}
+    )
+    names = {name for name in configured if isinstance(name, str) and name}
+
+    # Enumerate through the same roots the predicate reads, so a root added
+    # there cannot silently become invisible here.
+    candidates: set[str] = set()
+    for base_dir in iter_character_memory_roots(config_manager):
+        if not base_dir.exists():
+            continue
+        for child in base_dir.iterdir():
+            if child.is_dir():
+                candidates.add(child.name)
+        for logical_name in iter_recent_memory_files(base_dir):
+            candidate = extract_catgirl_name_from_recent_filename(logical_name)
+            if candidate:
+                candidates.add(candidate)
+
+    for candidate in candidates - names:
+        if character_memory_exists(config_manager, candidate):
+            names.add(candidate)
+
+    return {"characters": sorted(names)}
 
 
 @router.get('/recent_files')

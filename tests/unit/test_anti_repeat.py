@@ -1009,3 +1009,51 @@ def test_stale_flush_is_refused_while_the_cloud_import_fence_is_closed(monkeypat
     assert not (tmp_path / "Neko" / "anti_repeat.json").exists()
     # The sequence must NOT advance: the write never happened.
     assert corpus._written_seq.get("Neko", 0) == 0
+
+
+def test_a_retired_corpus_write_does_not_recreate_a_removed_directory(tmp_path):
+    """The corpus lazily creates memory/<name>/ on every write.
+
+    Fencing alone only covers snapshots staged BEFORE the eviction, so an
+    output committed while a delete or rename-away was still in flight ran once
+    the lifecycle operation released its fence and made the directory the
+    caller had just removed reappear -- with a sidecar in it, so the deleted
+    identity looked like it still had memory.
+    """
+    import shutil
+
+    corpus = _build_store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    corpus.record_output("Neko", LONG_TIGER, now=1_700_000_000.0)
+    assert (tmp_path / "Neko" / "anti_repeat_corpus.json").exists()
+
+    corpus.retire_character("Neko")
+    shutil.rmtree(tmp_path / "Neko")
+
+    corpus.record_output("Neko", LONG_TIGER, now=1_700_000_001.0)
+
+    assert not (tmp_path / "Neko").exists()
+
+
+def test_evicting_a_live_corpus_identity_does_not_retire_it(tmp_path):
+    """A cloud-save import replaces the files of a LIVE character.
+
+    Retiring it would deny it the lazy directory creation every sibling memory
+    writer gets, so a profile that ships no managed memory files would never
+    persist while the character is in active use. Eviction is also what lifts
+    an earlier retirement -- directory existence never does.
+    """
+    import shutil
+
+    corpus = _build_store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    corpus.retire_character("Neko")
+    shutil.rmtree(tmp_path / "Neko")
+    corpus.record_output("Neko", LONG_TIGER, now=1_700_000_000.0)
+    assert not (tmp_path / "Neko").exists()
+
+    corpus.evict_character("Neko")
+
+    assert "Neko" not in corpus._retired
+    corpus.record_output("Neko", LONG_TIGER, now=1_700_000_001.0)
+    assert (tmp_path / "Neko" / "anti_repeat_corpus.json").exists()

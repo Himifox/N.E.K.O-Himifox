@@ -4852,3 +4852,59 @@ def test_timeindexed_short_circuits_when_memory_dir_unchanged(monkeypatch, tmp_p
     assert ensure_calls == ["测试角色"]
     assert migrate_calls == ["测试角色"]
     assert engine.dispose_calls == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_publishing_an_identity_lifts_sidecar_retirement(tmp_path):
+    """Creating a character is the explicit "this identity is live" event.
+
+    A name deleted earlier in the process stays retired, and a freshly created
+    profile has no memory/<name>/ yet -- so without this lift the sidecar writers
+    would drop its startup greeting and early proactive decisions instead of
+    creating the directory, and they would stay dropped until some unrelated
+    memory writer happened to make the directory.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from utils.character_memory import (
+        asave_characters_with_recent_activation,
+        retire_character_runtime_caches,
+    )
+
+    class _Config:
+        memory_dir = tmp_path
+        project_memory_dir = tmp_path
+
+        async def asave_characters(self, _characters):
+            return None
+
+    config = _Config()
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        stores = (
+            effects_module.get_anti_repeat_effect_store(),
+            anti_repeat_module.get_anti_repeat_corpus(),
+            greeting_module.get_startup_greeting_history(),
+        )
+        retire_character_runtime_caches("Reborn")
+        assert all("Reborn" in store._retired for store in stores)
+
+        await asave_characters_with_recent_activation(
+            config, {"猫娘": {"Reborn": {}}}, "Reborn",
+        )
+
+        assert all("Reborn" not in store._retired for store in stores), (
+            "publishing an identity must reactivate its sidecar storage"
+        )
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous

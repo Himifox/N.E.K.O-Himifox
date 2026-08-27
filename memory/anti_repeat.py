@@ -300,13 +300,50 @@ class AntiRepeatCorpus:
         # 已摘下的落盘 task。只被局部变量引用的 task 会被 GC 回收，事件循环不保证
         # 跑完它 —— 必须由这里持强引用到完成为止。见 flush_staged_detached。
         self._detached_flushes: set = set()
+        # Names retired by ``retire_character``; see ``_write_file_path``.
+        self._retired: set[str] = set()
 
     # ── path / lock ────────────────────────────────────────
 
     def _file_path(self, name: str) -> str:
-        from memory import ensure_character_dir
+        """Return the path for READING; it never creates the directory.
+
+        Creation belongs to ``_write_file_path`` alone. Creating it here made a
+        cache MISS resurrect a directory that a delete had just removed: the
+        eviction dropped the cache, so the very next record re-read from disk
+        and ``makedirs`` the tree back before any write was attempted.
+        """
         return os.path.join(
-            ensure_character_dir(self._config_manager.memory_dir, name),
+            str(self._config_manager.memory_dir),
+            name,
+            "anti_repeat_corpus.json",
+        )
+
+    def _write_file_path(self, name: str) -> str | None:
+        """Return the save target, or None for a retired, removed identity.
+
+        The normal path is the lazy ``ensure_character_dir`` every sibling
+        memory writer uses. The exception is a name ``retire_character``
+        retired: fencing alone only covers snapshots staged BEFORE the
+        eviction, so a write staged while a delete or rename-away was still in
+        flight would run once the lifecycle operation released its fence and
+        ``makedirs`` the directory back into existence -- making a deleted
+        identity look like it still has memory.
+
+        A retired name may only write into a directory that already exists; it
+        never creates one. Only ``evict_character`` lifts retirement, and only
+        callers that KNOW the identity is live reach for it.
+        """
+        from memory import ensure_character_dir
+
+        memory_dir = self._config_manager.memory_dir
+        if name in self._retired:
+            character_dir = os.path.join(str(memory_dir), name)
+            if not os.path.isdir(character_dir):
+                return None
+            return os.path.join(character_dir, "anti_repeat_corpus.json")
+        return os.path.join(
+            ensure_character_dir(memory_dir, name),
             "anti_repeat_corpus.json",
         )
 
@@ -370,8 +407,19 @@ class AntiRepeatCorpus:
                 with self._get_write_lock(name):
                     if seq <= self._written_seq.get(name, 0):
                         return
+                    target = self._write_file_path(name)
+                    if target is None:
+                        # Directory is gone (deleted or renamed away while this
+                        # turn was in flight). Fence the sequence and drop this
+                        # snapshot rather than recreating the directory.
+                        self._written_seq[name] = seq
+                        logger.debug(
+                            "[AntiRepeat] skip save for removed character %s",
+                            name,
+                        )
+                        return
                     atomic_write_json(
-                        self._file_path(name), payload, indent=2, ensure_ascii=False,
+                        target, payload, indent=2, ensure_ascii=False,
                     )
                     self._written_seq[name] = seq
         except Exception as exc:
@@ -835,26 +883,49 @@ class AntiRepeatCorpus:
         # 会卡在这次 fsync 上。清空也走 seq，免得它被一次在飞的旧快照写盖回去。
         self._flush_snapshot(name, payload, seq)
 
-    def evict_character(self, name: str) -> None:
-        """Forget one identity's cached window without touching the file.
+    def _evict_unlocked(self, name: str) -> None:
+        fence = max(
+            self._staged_seq.get(name, 0),
+            self._written_seq.get(name, 0),
+        )
+        self._cache.pop(name, None)
+        self._staged_seq[name] = fence
+        self._written_seq[name] = fence
 
-        Distinct from ``clear``, which WIPES the corpus and persists an empty
-        payload. Eviction is for when the file on disk changed underneath us —
-        a cloud-save import replaces ``memory/<name>/`` wholesale — and the
+    def evict_character(self, name: str) -> None:
+        """Forget a LIVE identity whose file changed underneath us.
+
+        Distinct from ``clear``, which WIPES the data and persists an empty
+        payload. Eviction is for when the file on disk changed underneath us --
+        a cloud-save import replaces ``memory/<name>/`` wholesale -- and the
         cache would otherwise shadow the new contents and get flushed back over
         them. The sequence fence stops a snapshot staged before the replacement
         from doing exactly that.
+
+        This is also the explicit "the identity is live" event that lifts
+        retirement: a created, imported or renamed-to name is a real character,
+        and leaving it retired would deny it the lazy directory creation every
+        sibling memory writer gets. Directory existence never lifts retirement;
+        only this call does.
         """
         name = _resolve_name(name)
         with self._get_lock(name):
             with self._get_write_lock(name):
-                fence = max(
-                    self._staged_seq.get(name, 0),
-                    self._written_seq.get(name, 0),
-                )
-                self._cache.pop(name, None)
-                self._staged_seq[name] = fence
-                self._written_seq[name] = fence
+                self._evict_unlocked(name)
+                self._retired.discard(name)
+
+    def retire_character(self, name: str) -> None:
+        """Forget one identity whose directory is being REMOVED, and fence it.
+
+        The sequence fence only covers snapshots staged BEFORE this call.
+        Retirement is what stops a write staged while the delete or
+        rename-away is still in flight from recreating the directory.
+        """
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            with self._get_write_lock(name):
+                self._evict_unlocked(name)
+                self._retired.add(name)
 
 
 # ── 进程级单例 ─────────────────────────────────────────────
@@ -869,6 +940,15 @@ def evict_cached_anti_repeat_corpus(*character_names: str) -> None:
         return
     for character_name in dict.fromkeys(character_names):
         corpus.evict_character(character_name)
+
+
+def retire_cached_anti_repeat_corpus(*character_names: str) -> None:
+    """Retire removed identities without creating the global corpus."""
+    corpus = _GLOBAL_CORPUS
+    if corpus is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        corpus.retire_character(character_name)
 
 
 def get_anti_repeat_corpus() -> AntiRepeatCorpus:

@@ -988,8 +988,33 @@
                 : '');
     }
 
+    // The recent-memory buttons only cover characters that have a recent.json.
+    // A configured character, or one restored from a cloud snapshot carrying
+    // time-indexed history without the optional recent file, is analyzable but
+    // has no button, so the identity list has to supply it.
+    let repetitionInsightExtraCharacters = [];
+    let repetitionInsightCharactersRequested = false;
+
+    async function loadRepetitionInsightCharacters() {
+        if (repetitionInsightCharactersRequested) return;
+        repetitionInsightCharactersRequested = true;
+        try {
+            const response = await fetch('/api/memory/insight_characters');
+            if (!response.ok) return;
+            const data = await response.json();
+            if (!data || !Array.isArray(data.characters)) return;
+            repetitionInsightExtraCharacters = data.characters
+                .map(function (name) { return String(name || '').trim(); })
+                .filter(Boolean);
+            syncRepetitionInsightsCharacterSelect();
+        } catch (error) {
+            // Best effort: the button-derived list still works without it.
+            console.error('Failed to load analyzable characters:', error);
+        }
+    }
+
     function repetitionInsightCharacterEntries() {
-        return Array.from(document.querySelectorAll('#memory-file-list .cat-btn[data-filename]'))
+        const entries = Array.from(document.querySelectorAll('#memory-file-list .cat-btn[data-filename]'))
             .map(function (button) {
                 return {
                     name: String(button.dataset.catname || '').trim(),
@@ -997,6 +1022,16 @@
                 };
             })
             .filter(function (entry) { return entry.name && entry.filename; });
+        const seen = new Set(entries.map(function (entry) { return entry.name; }));
+        repetitionInsightExtraCharacters.forEach(function (name) {
+            if (!name || seen.has(name)) return;
+            seen.add(name);
+            // No filename: the selector already handles that shape -- it is how
+            // the current character is added -- and only switching the editor
+            // needs a file.
+            entries.push({ name: name, filename: '' });
+        });
+        return entries;
     }
 
     function syncRepetitionInsightsCharacterSelect() {
@@ -1043,6 +1078,7 @@
             character.title = currentCatName || '';
         }
         syncRepetitionInsightsCharacterSelect();
+        loadRepetitionInsightCharacters();
         const analyze = document.getElementById('memory-insights-analyze');
         const clear = document.getElementById('memory-insights-clear');
         const exportButton = document.getElementById('memory-insights-export');

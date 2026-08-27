@@ -140,12 +140,48 @@ class StartupGreetingHistory:
         self._written_seq: dict[str, int] = {}
         self._detached_flushes: set[asyncio.Task] = set()
         self._reservations: dict[str, tuple[str, float]] = {}
+        # Names retired by ``retire_character``; see ``_write_file_path``.
+        self._retired: set[str] = set()
 
     def _file_path(self, name: str) -> str:
+        """Return the path for READING; it never creates the directory.
+
+        Creation belongs to ``_write_file_path`` alone. Creating it here made a
+        cache MISS resurrect a directory that a delete had just removed: the
+        eviction dropped the cache, so the very next record re-read from disk
+        and ``makedirs`` the tree back before any write was attempted.
+        """
+        return os.path.join(
+            str(self._config_manager.memory_dir),
+            name,
+            "startup_greetings.json",
+        )
+
+    def _write_file_path(self, name: str) -> str | None:
+        """Return the save target, or None for a retired, removed identity.
+
+        The normal path is the lazy ``ensure_character_dir`` every sibling
+        memory writer uses. The exception is a name ``retire_character``
+        retired: fencing alone only covers snapshots staged BEFORE the
+        eviction, so a write staged while a delete or rename-away was still in
+        flight would run once the lifecycle operation released its fence and
+        ``makedirs`` the directory back into existence -- making a deleted
+        identity look like it still has memory.
+
+        A retired name may only write into a directory that already exists; it
+        never creates one. Only ``evict_character`` lifts retirement, and only
+        callers that KNOW the identity is live reach for it.
+        """
         from memory import ensure_character_dir
 
+        memory_dir = self._config_manager.memory_dir
+        if name in self._retired:
+            character_dir = os.path.join(str(memory_dir), name)
+            if not os.path.isdir(character_dir):
+                return None
+            return os.path.join(character_dir, "startup_greetings.json")
         return os.path.join(
-            ensure_character_dir(self._config_manager.memory_dir, name),
+            ensure_character_dir(memory_dir, name),
             "startup_greetings.json",
         )
 
@@ -276,8 +312,20 @@ class StartupGreetingHistory:
                 with self._get_write_lock(name):
                     if seq <= self._written_seq.get(name, 0):
                         return
+                    target = self._write_file_path(name)
+                    if target is None:
+                        # Directory is gone (deleted or renamed away while this
+                        # turn was in flight). Fence the sequence and drop this
+                        # snapshot rather than recreating the directory.
+                        self._written_seq[name] = seq
+                        logger.debug(
+                            "[StartupGreetingHistory] skip save for removed "
+                            "character %s",
+                            name,
+                        )
+                        return
                     atomic_write_json(
-                        self._file_path(name), payload, indent=2, ensure_ascii=False
+                        target, payload, indent=2, ensure_ascii=False
                     )
                     self._written_seq[name] = seq
         except Exception as exc:
@@ -517,25 +565,50 @@ class StartupGreetingHistory:
 
         task.add_done_callback(_done)
 
-    def evict_character(self, name: str) -> None:
-        """Forget one identity's cached records without touching the file.
+    def _evict_unlocked(self, resolved: str) -> None:
+        fence = max(
+            self._staged_seq.get(resolved, 0),
+            self._written_seq.get(resolved, 0),
+        )
+        self._cache.pop(resolved, None)
+        self._reservations.pop(resolved, None)
+        self._staged_seq[resolved] = fence
+        self._written_seq[resolved] = fence
 
-        For when the file changed underneath us — a cloud-save import replaces
-        ``memory/<name>/`` wholesale — where the cache would otherwise shadow
-        the new contents and get flushed back over them. The sequence fence
-        stops a snapshot staged before the replacement from doing that.
+    def evict_character(self, name: str) -> None:
+        """Forget a LIVE identity whose file changed underneath us.
+
+        Distinct from ``clear``, which WIPES the data and persists an empty
+        payload. Eviction is for when the file on disk changed underneath us --
+        a cloud-save import replaces ``memory/<name>/`` wholesale -- and the
+        cache would otherwise shadow the new contents and get flushed back over
+        them. The sequence fence stops a snapshot staged before the replacement
+        from doing exactly that.
+
+        This is also the explicit "the identity is live" event that lifts
+        retirement: a created, imported or renamed-to name is a real character,
+        and leaving it retired would deny it the lazy directory creation every
+        sibling memory writer gets. Directory existence never lifts retirement;
+        only this call does.
         """
         resolved = _resolve_name(name)
         with self._get_lock(resolved):
             with self._get_write_lock(resolved):
-                fence = max(
-                    self._staged_seq.get(resolved, 0),
-                    self._written_seq.get(resolved, 0),
-                )
-                self._cache.pop(resolved, None)
-                self._reservations.pop(resolved, None)
-                self._staged_seq[resolved] = fence
-                self._written_seq[resolved] = fence
+                self._evict_unlocked(resolved)
+                self._retired.discard(resolved)
+
+    def retire_character(self, name: str) -> None:
+        """Forget one identity whose directory is being REMOVED, and fence it.
+
+        The sequence fence only covers snapshots staged BEFORE this call.
+        Retirement is what stops a write staged while the delete or
+        rename-away is still in flight from recreating the directory.
+        """
+        resolved = _resolve_name(name)
+        with self._get_lock(resolved):
+            with self._get_write_lock(resolved):
+                self._evict_unlocked(resolved)
+                self._retired.add(resolved)
 
 
 _GLOBAL_HISTORY: StartupGreetingHistory | None = None
@@ -549,6 +622,15 @@ def evict_cached_startup_greeting_history(*character_names: str) -> None:
         return
     for character_name in dict.fromkeys(character_names):
         history.evict_character(character_name)
+
+
+def retire_cached_startup_greeting_history(*character_names: str) -> None:
+    """Retire removed identities without creating the global history."""
+    history = _GLOBAL_HISTORY
+    if history is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        history.retire_character(character_name)
 
 
 def get_startup_greeting_history() -> StartupGreetingHistory:
