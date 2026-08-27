@@ -1096,6 +1096,15 @@ class AntiRepeatEffectStore:
                 if self._staged_seq.get(name, 0) == seq:
                     self._cache[name] = cleared
                     return
+        # Every attempt already wrote the cut out before losing the race. The
+        # racer that outran us normally restores the file, but if its own
+        # flush then fails or is cancelled the cut stays on disk while this
+        # reports failure -- the data would come back erased after a restart.
+        # Push the live cache out so the file matches memory before failing.
+        with self._get_lock(name):
+            restore = self._stage_unlocked(name) if name in self._cache else None
+        if restore is not None:
+            self._flush_snapshot(*restore)
         raise RuntimeError("anti-repeat reset lost the race to concurrent writes")
 
     def _evict_unlocked(self, name: str) -> None:

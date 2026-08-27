@@ -3273,3 +3273,61 @@ def test_corpus_eviction_forgets_the_cache_without_writing_the_file(tmp_path):
     assert "小满" not in corpus._cache
     # `clear` bumps the written sequence by flushing; eviction must not.
     assert corpus._written_seq.get("小满", 0) == 0
+
+
+@pytest.mark.unit
+def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
+    """The single-character path replaces the same managed sidecars.
+
+    The eviction was added to the full-snapshot import only, but
+    ``import_cloudsave_character_unit`` rewrites the same files -- so a cache
+    entry loaded before the download kept shadowing it, and the next flush
+    would write the pre-download state back over what was just imported.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="云端角色")
+    export_cloudsave_character_unit(source_cm, "云端角色")
+    _write_runtime_state(target_cm, character_name="本地角色")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        store = effects_module.get_anti_repeat_effect_store()
+        corpus = anti_repeat_module.get_anti_repeat_corpus()
+        greeting = greeting_module.get_startup_greeting_history()
+        store._cache["云端角色"] = {"version": 1, "daily_buckets": {"stale": {}}}
+        corpus._cache["云端角色"] = [{"stale": True}]
+        greeting._cache["云端角色"] = ["stale"]
+        # A name reused after an earlier delete is still retired; the download
+        # makes it live again, so the eviction has to lift that too.
+        store._retired.add("云端角色")
+
+        import_cloudsave_character_unit(target_cm, "云端角色")
+
+        assert "云端角色" not in store._cache
+        assert "云端角色" not in corpus._cache
+        assert "云端角色" not in greeting._cache
+        assert "云端角色" not in store._retired, (
+            "a downloaded character stayed retired and cannot create sidecars"
+        )
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous

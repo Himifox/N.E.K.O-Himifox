@@ -1282,3 +1282,46 @@ def test_a_reset_abandons_when_the_identity_is_replaced(tmp_path):
     assert imported["daily_buckets"][day]["reason_counts"]["bm25"] == 42, (
         "the imported file was clobbered by the abandoned reset"
     )
+
+
+def test_a_reset_that_gives_up_leaves_the_file_matching_memory(tmp_path):
+    """Every attempt wrote the cut out before losing the race.
+
+    The writer that outran us normally restores the file, but if its own flush
+    fails or is cancelled the cut stays on disk while this reports failure --
+    and the data comes back erased after a restart, contradicting the promise
+    that a failed reset loses nothing.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    day = anti_repeat_effects._utc_day(now)
+    store.record_decision("Neko", _decision(), now=now)
+    persisted_path = tmp_path / "Neko" / "anti_repeat_effects.json"
+
+    original_flush = store._flush_snapshot
+    attempts = []
+
+    def _outrun(*args, **kwargs):
+        original_flush(*args, **kwargs)
+        attempts.append(True)
+        if len(attempts) <= anti_repeat_effects._CLEAR_ATTEMPTS:
+            # A writer stages a newer snapshot but its own flush never lands.
+            with store._get_lock("Neko"):
+                store._staged_seq["Neko"] = store._staged_seq.get("Neko", 0) + 1
+
+    store._flush_snapshot = _outrun
+    try:
+        with pytest.raises(RuntimeError):
+            store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    # Three cuts plus the restore flush that puts the live payload back --
+    # counting it is what proves the restore actually reached the file layer.
+    assert len(attempts) == anti_repeat_effects._CLEAR_ATTEMPTS + 1
+    persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+    assert persisted["daily_buckets"][day]["reason_counts"]["bm25"] == 1, (
+        "the abandoned reset left its cut on disk"
+    )
+    assert persisted["started_at"] == now

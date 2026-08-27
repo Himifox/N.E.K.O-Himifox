@@ -541,6 +541,16 @@ def import_cloudsave_character_unit(
                 release_recent_file_locks(held_locks)
                 recent_transaction["held_locks"] = []
 
+            # Same reason as the full-snapshot import: this replaced the same
+            # managed sidecar files, and those caches only re-read on a MISS,
+            # so a stale entry would shadow what was just downloaded and be
+            # flushed back over it. Evict rather than retire -- the character
+            # is live, and a name reused after an earlier delete is still
+            # retired until an explicit live-identity event lifts it. Inside
+            # the cloud-apply fence, so nothing can repopulate from the old
+            # state first.
+            evict_character_runtime_caches(character_name)
+
             result = {
                 "character_name": character_name,
                 "applied_at_utc": apply_time,
