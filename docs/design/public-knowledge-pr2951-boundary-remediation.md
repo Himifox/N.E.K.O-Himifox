@@ -2262,3 +2262,9 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - 将 builder 端到端正例的 subscription 类型修正为 `corpus`。另增类型不一致反例，分别覆盖 staging 与 direct install，证明守门不只存在于 HTTP 路由。
 
 关闭条件：任何持久化入口都不能接受与实际 pack 素材类型不一致的 subscription；合法 corpus 预构建交接继续安装为 hybrid；失败请求不产生 staged job、registry 或知识数据库。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86cZZBs`，再完整分页复核。
+
+## 第二十四轮实施证据
+
+设计提交 `3f3e57f62`、实现提交 `19bb013d9` 已推送。`validate_pack_subscription()` 现在统一执行当前 subscription schema 校验和 pack 素材类型绑定；staging 在容量检查及创建目录前调用，direct install 在获取 registry/SQLite 写锁前调用。类型不一致会直接失败，不创建 staged job、知识数据库或注册表，也不会被降级为无订阅本地包。builder 端到端正例已改为与实际 pack 一致的 `corpus`，并继续完成 hybrid 预构建索引安装。本轮没有扩张 artifact、manifest 或 vector 摘要协议。
+
+项目 `.venv` Python 3.11 的受影响回归为 193 passed、1 skipped；知识库、公共路由和市场相邻宽回归为 497 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试判定或产品文件。
