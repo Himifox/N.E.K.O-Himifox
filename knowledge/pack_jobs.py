@@ -46,6 +46,7 @@ INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
 ACTIVATION_NAME = "activation.json"
+ACTIVATION_COMMITS_NAME = "activation-commits.json"
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
 IDENTITY_SUBSCRIPTION_FIELDS = ("has_subscription", "subscription_sha256")
 IDENTITY_PACK_FIELDS = ("pack_sha256",)
@@ -157,6 +158,26 @@ def _identity_path(job_dir: Path) -> Path:
 
 def _activation_path(job_dir: Path) -> Path:
     return job_dir / ACTIVATION_NAME
+
+
+def _activation_commits_path(knowledge_root: str | Path) -> Path | None:
+    root = Path(knowledge_root)
+    path = root / ACTIVATION_COMMITS_NAME
+    try:
+        if root.resolve() != path.parent.resolve():
+            return None
+    except OSError:
+        return None
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    else:
+        if _is_link_or_reparse(path):
+            return None
+    return path
 
 
 def _external_job_dir(
@@ -323,7 +344,114 @@ def _validated_activation(
         or result.payload != expected
     ):
         return _JsonReadResult("invalid", {})
+    commits_result = _validated_activation_commits(job_dir.parent.parent)
+    if commits_result.state != "valid":
+        return _JsonReadResult("invalid", {})
+    commit = commits_result.payload["commits"].get(identity["job_id"])
+    if not isinstance(commit, dict):
+        return _JsonReadResult("invalid", {})
+    committed_at = _normalized_job_timestamp(commit.get("committed_at"))
+    if committed_at is None or commit != {**expected, "committed_at": committed_at}:
+        return _JsonReadResult("invalid", {})
     return _JsonReadResult("valid", expected)
+
+
+def _validated_activation_commits(
+    knowledge_root: str | Path,
+) -> _JsonReadResult:
+    path = _activation_commits_path(knowledge_root)
+    if path is None:
+        return _JsonReadResult("invalid", {})
+    result = _read_json_result(path)
+    if result.state == "missing":
+        return _JsonReadResult(
+            "valid",
+            {"schema_version": 1, "commits": {}},
+        )
+    if result.state != "valid":
+        return result
+    if set(result.payload) != {"schema_version", "commits"}:
+        return _JsonReadResult("invalid", {})
+    commits = result.payload.get("commits")
+    if (
+        type(result.payload.get("schema_version")) is not int
+        or result.payload.get("schema_version") != 1
+        or not isinstance(commits, dict)
+    ):
+        return _JsonReadResult("invalid", {})
+    normalized: dict[str, dict[str, object]] = {}
+    expected_fields = {
+        "schema_version",
+        "job_id",
+        "pack_id",
+        "pack_sha256",
+        "has_subscription",
+        "subscription_sha256",
+        "retrieval_mode",
+        "committed_at",
+    }
+    for job_id, commit in commits.items():
+        if (
+            not isinstance(job_id, str)
+            or not _JOB_ID_RE.fullmatch(job_id)
+            or not isinstance(commit, dict)
+            or set(commit) != expected_fields
+            or type(commit.get("schema_version")) is not int
+            or commit.get("schema_version") != 1
+            or commit.get("job_id") != job_id
+            or not isinstance(commit.get("pack_id"), str)
+            or not isinstance(commit.get("pack_sha256"), str)
+            or not _SHA256_RE.fullmatch(commit["pack_sha256"])
+            or not isinstance(commit.get("has_subscription"), bool)
+            or not isinstance(commit.get("subscription_sha256"), str)
+            or not isinstance(commit.get("retrieval_mode"), str)
+            or commit.get("retrieval_mode") not in {"bm25", "hybrid"}
+        ):
+            return _JsonReadResult("invalid", {})
+        has_subscription = commit["has_subscription"]
+        subscription_sha256 = commit["subscription_sha256"]
+        if has_subscription:
+            if not _SHA256_RE.fullmatch(subscription_sha256):
+                return _JsonReadResult("invalid", {})
+        elif subscription_sha256 != "":
+            return _JsonReadResult("invalid", {})
+        committed_at = _normalized_job_timestamp(commit.get("committed_at"))
+        if committed_at is None:
+            return _JsonReadResult("invalid", {})
+        normalized[job_id] = {**commit, "committed_at": committed_at}
+    return _JsonReadResult(
+        "valid",
+        {"schema_version": 1, "commits": normalized},
+    )
+
+
+def _record_activation_commit(
+    knowledge_root: str | Path,
+    activation: dict[str, object],
+) -> None:
+    path = _activation_commits_path(knowledge_root)
+    if path is None:
+        raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+    with mutation_lock(path):
+        result = _validated_activation_commits(knowledge_root)
+        if result.state != "valid":
+            raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+        commits = dict(result.payload["commits"])
+        committed_at = int(time.time())
+        commits[str(activation["job_id"])] = {
+            **activation,
+            "committed_at": committed_at,
+        }
+        ordered = sorted(
+            commits.items(),
+            key=lambda item: (int(item[1]["committed_at"]), item[0]),
+        )[-MAX_TERMINAL_JOB_DIRECTORIES:]
+        atomic_write_json(
+            path,
+            {"schema_version": 1, "commits": dict(ordered)},
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 def _degraded_job(
@@ -1158,6 +1286,7 @@ def _activate_job_validated(
                 "subscription_sha256": current["subscription_sha256"],
                 "retrieval_mode": result.retrieval_mode,
             }
+            _record_activation_commit(service.knowledge_root, activation)
             atomic_write_json(
                 _activation_path(job_dir),
                 activation,

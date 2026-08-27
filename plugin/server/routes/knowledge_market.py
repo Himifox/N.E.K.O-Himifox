@@ -38,6 +38,7 @@ _task_workers: dict[str, asyncio.Task[None]] = {}
 _installation_mutations: dict[str, asyncio.Task[dict[str, Any]]] = {}
 _active_package_tasks: dict[int, str] = {}
 _unsubscribing_package_ids: set[int] = set()
+_unsubscribe_settlements: dict[int, asyncio.Task[dict[str, Any]]] = {}
 _TASK_TTL_SECONDS = 60 * 60
 _TASK_MAX_ENTRIES = 200
 _MAX_ACTIVE_SUBSCRIPTIONS = 4
@@ -282,49 +283,76 @@ async def unsubscribe_knowledge_package(
         )
     _unsubscribing_package_ids.add(payload.package_id)
     try:
-        active_task = await _cancel_active_subscription(
-            payload.package_id,
-            claimed_pack_id=payload.pack_id,
+        settlement = asyncio.create_task(
+            _settle_knowledge_unsubscribe(payload),
+            name=f"market-knowledge-unsubscribe-{payload.package_id}",
         )
-        if active_task is not None and active_task.get("preinstall_cancelled") is True:
+    except Exception:
+        _unsubscribing_package_ids.discard(payload.package_id)
+        raise
+    _unsubscribe_settlements[payload.package_id] = settlement
+    settlement.add_done_callback(
+        lambda completed, *, package_id=payload.package_id:
+        _unsubscribe_settlement_done(package_id, completed)
+    )
+    return await asyncio.shield(settlement)
+
+
+def _unsubscribe_settlement_done(
+    package_id: int,
+    completed: asyncio.Task[dict[str, Any]],
+) -> None:
+    if _unsubscribe_settlements.get(package_id) is completed:
+        _unsubscribe_settlements.pop(package_id, None)
+    _unsubscribing_package_ids.discard(package_id)
+    if not completed.cancelled():
+        completed.exception()
+
+
+async def _settle_knowledge_unsubscribe(
+    payload: KnowledgeUnsubscribeRequest,
+) -> dict[str, Any]:
+    active_task = await _cancel_active_subscription(
+        payload.package_id,
+        claimed_pack_id=payload.pack_id,
+    )
+    if active_task is not None and active_task.get("preinstall_cancelled") is True:
+        await _report_unsubscribe_best_effort(payload.package_id)
+        return _preinstall_cancellation_result()
+    pack_id, remote_id = await _resolve_owned_subscription(
+        package_id=payload.package_id,
+        claimed_pack_id=payload.pack_id,
+        active_task=active_task,
+    )
+    try:
+        result = await _main_request(
+            "POST",
+            "packs/remove",
+            json={
+                "pack_id": pack_id,
+                "expected_provider": "plugin-market",
+                "expected_provider_package_id": str(payload.package_id),
+                "expected_remote_id": remote_id,
+            },
+        )
+    except _KnowledgeTaskError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code},
+        ) from exc
+    if result.get("ok") is not True:
+        code = str(result.get("reason") or "subscription_not_found")
+        if (
+            code == "not_found"
+            and active_task is not None
+            and active_task.get("_installation_settled_for_unsubscribe") is True
+        ):
+            active_task["preinstall_cancelled"] = True
             await _report_unsubscribe_best_effort(payload.package_id)
             return _preinstall_cancellation_result()
-        pack_id, remote_id = await _resolve_owned_subscription(
-            package_id=payload.package_id,
-            claimed_pack_id=payload.pack_id,
-            active_task=active_task,
-        )
-        try:
-            result = await _main_request(
-                "POST",
-                "packs/remove",
-                json={
-                    "pack_id": pack_id,
-                    "expected_provider": "plugin-market",
-                    "expected_provider_package_id": str(payload.package_id),
-                    "expected_remote_id": remote_id,
-                },
-            )
-        except _KnowledgeTaskError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": exc.code},
-            ) from exc
-        if result.get("ok") is not True:
-            code = str(result.get("reason") or "subscription_not_found")
-            if (
-                code == "not_found"
-                and active_task is not None
-                and active_task.get("_installation_settled_for_unsubscribe") is True
-            ):
-                active_task["preinstall_cancelled"] = True
-                await _report_unsubscribe_best_effort(payload.package_id)
-                return _preinstall_cancellation_result()
-            raise HTTPException(status_code=409, detail={"code": code})
-        await _report_unsubscribe_best_effort(payload.package_id)
-        return result
-    finally:
-        _unsubscribing_package_ids.discard(payload.package_id)
+        raise HTTPException(status_code=409, detail={"code": code})
+    await _report_unsubscribe_best_effort(payload.package_id)
+    return result
 
 
 async def _cancel_active_subscription(

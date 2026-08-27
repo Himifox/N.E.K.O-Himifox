@@ -18,10 +18,12 @@ async def _clear_task_registries():
     module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
+    module._unsubscribe_settlements.clear()
     yield
     pending = tuple({
         *module._task_workers.values(),
         *module._installation_mutations.values(),
+        *module._unsubscribe_settlements.values(),
     })
     for task in pending:
         task.cancel()
@@ -32,6 +34,7 @@ async def _clear_task_registries():
     module._installation_mutations.clear()
     module._active_package_tasks.clear()
     module._unsubscribing_package_ids.clear()
+    module._unsubscribe_settlements.clear()
 
 
 @pytest.mark.asyncio
@@ -812,6 +815,108 @@ async def test_unsubscribe_waits_for_installation_mutation_before_remove(monkeyp
     assert result["cancelled_jobs"] == 1
     assert order == ["apply", "remove"]
     assert module._installation_mutations == {}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_unsubscribe_retains_guard_until_installation_settles(
+    monkeypatch,
+):
+    task_id = "cancelled-unsubscribe"
+    apply_started = asyncio.Event()
+    allow_apply = asyncio.Event()
+    worker_cancelled = asyncio.Event()
+    order: list[str] = []
+
+    async def installation_mutation():
+        apply_started.set()
+        await allow_apply.wait()
+        order.append("apply")
+        return {"ok": True, "job_id": "fixture-pack-0123456789ab"}
+
+    mutation = asyncio.create_task(installation_mutation())
+    module._installation_mutations[task_id] = mutation
+    mutation.add_done_callback(
+        lambda completed: module._installation_mutation_done(task_id, completed)
+    )
+
+    async def subscription_worker():
+        try:
+            await asyncio.shield(mutation)
+        except asyncio.CancelledError:
+            worker_cancelled.set()
+            raise
+
+    worker = asyncio.create_task(subscription_worker())
+    module._tasks[task_id] = {
+        "task_id": task_id,
+        "package_id": 7,
+        "requested_pack_id": "fixture-pack",
+        "resolved_pack_id": "fixture-pack",
+        "resolved_remote_id": "knowledge/fixture-pack",
+        "status": "installing",
+        "stage": "installing",
+        "created_at": 1.0,
+        "completed_at": None,
+    }
+    module._task_workers[task_id] = worker
+    module._active_package_tasks[7] = task_id
+    worker.add_done_callback(
+        lambda completed: module._subscription_done(task_id, 7, completed)
+    )
+
+    async def fake_main(method, path, **_kwargs):
+        order.append("remove")
+        assert (method, path) == ("POST", "packs/remove")
+        return {
+            "ok": True,
+            "removed_pack": True,
+            "removed_entries": 1,
+            "cancelled_jobs": 0,
+        }
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(
+        module,
+        "_report_unsubscribe_best_effort",
+        lambda _package_id: asyncio.sleep(0),
+    )
+    await apply_started.wait()
+    request = module.KnowledgeUnsubscribeRequest(
+        package_id=7,
+        pack_id="fixture-pack",
+    )
+    unsubscribe = asyncio.create_task(
+        module.unsubscribe_knowledge_package(request, token="fixture")
+    )
+    await worker_cancelled.wait()
+    settlement = module._unsubscribe_settlements[7]
+
+    unsubscribe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await unsubscribe
+
+    assert module._unsubscribing_package_ids == {7}
+    assert module._unsubscribe_settlements == {7: settlement}
+    with pytest.raises(HTTPException) as conflict:
+        await module.subscribe_knowledge_package(
+            module.KnowledgeSubscribeRequest(
+                package_id=7,
+                version="2.0.0",
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+    assert conflict.value.status_code == 409
+
+    allow_apply.set()
+    result = await settlement
+    await asyncio.sleep(0)
+
+    assert result["removed_pack"] is True
+    assert order == ["apply", "remove"]
+    assert module._unsubscribing_package_ids == set()
+    assert module._unsubscribe_settlements == {}
 
 
 @pytest.mark.asyncio

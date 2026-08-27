@@ -491,7 +491,44 @@ async def test_main_server_shutdown_does_not_reexport_runtime_into_cloudsave_sna
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_main_server_shutdown_defers_voice_cleanup_cancellation():
+async def test_cancel_task_if_running_propagates_caller_cancellation():
+    from app import main_server
+
+    child_cancelled = asyncio.Event()
+    child = asyncio.create_task(asyncio.Event().wait())
+
+    async def observe_child():
+        try:
+            await child
+        except asyncio.CancelledError:
+            child_cancelled.set()
+            await asyncio.Event().wait()
+
+    observer = asyncio.create_task(observe_child())
+    cleanup = asyncio.create_task(
+        main_server._cancel_task_if_running(
+            observer,
+            name="fixture",
+            timeout=10.0,
+        )
+    )
+    await child_cancelled.wait()
+    cleanup.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+
+    child.cancel()
+    observer.cancel()
+    await asyncio.gather(child, observer, return_exceptions=True)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation_source", ("voice", "indexer_retry"))
+async def test_main_server_shutdown_defers_cleanup_cancellation(
+    cancellation_source,
+):
     from app import main_server
 
     cleanup_order: list[str] = []
@@ -508,7 +545,11 @@ async def test_main_server_shutdown_defers_voice_cleanup_cancellation():
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(main_server, "_IS_MAIN_PROCESS", True))
         stack.enter_context(
-            patch.object(main_server, "_knowledge_indexer_start_retry_task", None)
+            patch.object(
+                main_server,
+                "_knowledge_indexer_start_retry_task",
+                object() if cancellation_source == "indexer_retry" else None,
+            )
         )
         stack.enter_context(patch.object(main_server, "_preload_task", None))
         stack.enter_context(patch.object(main_server, "_game_cleanup_task", None))
@@ -550,9 +591,27 @@ async def test_main_server_shutdown_defers_voice_cleanup_cancellation():
         stack.enter_context(
             patch(
                 "app.main_server.voice_identity_runtime.close_voice_identity_runtime",
-                AsyncMock(side_effect=asyncio.CancelledError),
+                AsyncMock(
+                    side_effect=(
+                        asyncio.CancelledError
+                        if cancellation_source == "voice"
+                        else None
+                    )
+                ),
             )
         )
+        if cancellation_source == "indexer_retry":
+            async def _cancel_retry(_task, *, name, timeout):
+                if name == "knowledge indexer start retry":
+                    raise asyncio.CancelledError
+
+            stack.enter_context(
+                patch.object(
+                    main_server,
+                    "_cancel_task_if_running",
+                    side_effect=_cancel_retry,
+                )
+            )
         stack.enter_context(
             patch("knowledge.indexer.request_knowledge_indexer_stop", return_value=None)
         )

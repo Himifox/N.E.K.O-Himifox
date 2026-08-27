@@ -461,6 +461,17 @@ def _session_end_analyze_owner(
     return normalize_analyze_route_owner(pending.get("owner"))
 
 
+def _pending_owner_after_user_input(
+    pending: dict[str, str] | None,
+    request_id: object,
+) -> dict[str, str] | None:
+    """Retain an owner only for another fragment of the same user turn."""
+    if not pending:
+        return None
+    turn_id = str(request_id or "").strip()
+    return pending if turn_id and turn_id == pending.get("turn_id") else None
+
+
 def _build_recent_analyze_messages(
     chat_history: list,
     pending_user_images: list,
@@ -996,6 +1007,13 @@ async def run_sync_connector(
                         data = message["data"].get("data")
                         input_type = message["data"].get("input_type")
                         if input_type == "transcript": # 暂时只处理语音，后续还需要记录图片
+                            if data:
+                                pending_analyze_route_owner = (
+                                    _pending_owner_after_user_input(
+                                        pending_analyze_route_owner,
+                                        message["data"].get("request_id"),
+                                    )
+                                )
                             for source_value in _iter_source_values(message["data"].get("source")):
                                 user_input_sources.add(source_value)
                             transcript_metadata = message["data"].get("metadata")
@@ -1030,6 +1048,13 @@ async def run_sync_connector(
                                 input_type,
                                 source=message["data"].get("source"),
                             )
+                            if appended_image or message["data"].get("has_image"):
+                                pending_analyze_route_owner = (
+                                    _pending_owner_after_user_input(
+                                        pending_analyze_route_owner,
+                                        message["data"].get("request_id"),
+                                    )
+                                )
                             if not appended_image and message["data"].get("has_image"):
                                 await _try_send_json(sync_slot, {'type': 'user_activity'})
 

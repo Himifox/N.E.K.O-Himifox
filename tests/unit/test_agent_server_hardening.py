@@ -106,6 +106,7 @@ async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
 def test_analyzer_route_owner_is_bound_to_one_user_turn():
     from main_logic.cross_server import (
         _pending_analyze_owner,
+        _pending_owner_after_user_input,
         _session_end_analyze_owner,
     )
 
@@ -118,6 +119,9 @@ def test_analyzer_route_owner_is_bound_to_one_user_turn():
     ) == "public_knowledge"
     assert _pending_analyze_owner("", "public_knowledge") is None
     assert _pending_analyze_owner("req-next", None) is None
+    assert _pending_owner_after_user_input(pending, "req-user") == pending
+    assert _pending_owner_after_user_input(pending, "req-next") is None
+    assert _pending_owner_after_user_input(pending, "") is None
 
 
 def test_proactive_or_userless_session_end_cannot_inherit_route_owner():

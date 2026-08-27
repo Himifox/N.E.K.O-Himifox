@@ -297,6 +297,20 @@ async def test_active_state_requires_a_matching_commit_receipt(tmp_path):
     job = service.stage_pack(_pack())
     job_dir = tmp_path / ".staging" / str(job["job_id"])
     state_path = job_dir / "state.json"
+    identity = json.loads((job_dir / "identity.json").read_text(encoding="utf-8"))
+    activation = {
+        "schema_version": 1,
+        "job_id": identity["job_id"],
+        "pack_id": identity["pack_id"],
+        "pack_sha256": identity["pack_sha256"],
+        "has_subscription": identity["has_subscription"],
+        "subscription_sha256": identity["subscription_sha256"],
+        "retrieval_mode": "bm25",
+    }
+    (job_dir / "activation.json").write_text(
+        json.dumps(activation),
+        encoding="utf-8",
+    )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state.update(state="active", retrieval_mode="bm25")
     state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -309,6 +323,7 @@ async def test_active_state_requires_a_matching_commit_receipt(tmp_path):
     assert processed["state"] == "no_work"
     assert service.list_packs() == ()
     assert job_dir.is_dir()
+    assert not (tmp_path / "activation-commits.json").exists()
 
 
 @pytest.mark.asyncio
@@ -318,6 +333,7 @@ async def test_active_receipt_survives_normal_pack_removal(tmp_path):
     await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
     assert service.list_pack_jobs()[0]["state"] == "active"
+    assert (tmp_path / "activation-commits.json").is_file()
     service.remove_pack("staged-fixture")
 
     assert service.list_pack_jobs()[0]["state"] == "active"
@@ -348,6 +364,48 @@ async def test_active_receipt_rejects_identity_tampering(
     assert listed["state"] == "degraded"
     assert listed["reason"] == "active_job_commit_unverified"
     assert job_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_active_job_rejects_tampered_external_commit_record(tmp_path):
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+    await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    commits_path = tmp_path / "activation-commits.json"
+    payload = json.loads(commits_path.read_text(encoding="utf-8"))
+    commit = next(iter(payload["commits"].values()))
+    commit["retrieval_mode"] = []
+    commits_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    listed = service.list_pack_jobs()[0]
+
+    assert listed["state"] == "degraded"
+    assert listed["reason"] == "active_job_commit_unverified"
+
+
+def test_activation_commit_history_is_bounded(tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+
+    for index in range(pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES + 1):
+        pack_jobs._record_activation_commit(
+            tmp_path,
+            {
+                "schema_version": 1,
+                "job_id": f"fixture-{index:012x}",
+                "pack_id": "fixture",
+                "pack_sha256": "0" * 64,
+                "has_subscription": False,
+                "subscription_sha256": "",
+                "retrieval_mode": "bm25",
+            },
+        )
+
+    payload = json.loads(
+        (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
+    )
+
+    assert len(payload["commits"]) == pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES
+    assert "fixture-000000000000" not in payload["commits"]
 
 
 @pytest.mark.asyncio

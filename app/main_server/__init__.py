@@ -773,6 +773,9 @@ async def _cancel_task_if_running(
     try:
         await asyncio.wait_for(task, timeout=timeout)
     except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
         logger.debug("%s task cancelled during startup rollback", name)
     except asyncio.TimeoutError:
         logger.warning(
@@ -1295,11 +1298,22 @@ async def on_shutdown():
         knowledge_stop_task = None
         finish_knowledge_indexer_stop = None
         knowledge_shutdown_timeout_seconds = 0.0
-        await _cancel_task_if_running(
-            _knowledge_indexer_start_retry_task,
-            name="knowledge indexer start retry",
-            timeout=1.0,
-        )
+        try:
+            await _cancel_task_if_running(
+                _knowledge_indexer_start_retry_task,
+                name="knowledge indexer start retry",
+                timeout=1.0,
+            )
+        except asyncio.CancelledError as exc:
+            shutdown_cancellation = exc
+            current = asyncio.current_task()
+            if current is not None:
+                while current.cancelling():
+                    current.uncancel()
+            logger.debug(
+                "knowledge indexer retry cleanup was cancelled; "
+                "finishing remaining shutdown"
+            )
         _knowledge_indexer_start_retry_task = None
         try:
             from knowledge.indexer import (
@@ -1317,7 +1331,12 @@ async def on_shutdown():
 
             await close_voice_identity_runtime()
         except asyncio.CancelledError as exc:
-            shutdown_cancellation = exc
+            if shutdown_cancellation is None:
+                shutdown_cancellation = exc
+            current = asyncio.current_task()
+            if current is not None:
+                while current.cancelling():
+                    current.uncancel()
             logger.debug(
                 "voice identity cleanup was cancelled; finishing remaining shutdown"
             )
