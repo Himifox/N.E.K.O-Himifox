@@ -239,6 +239,19 @@ def read_jsonl(
     return messages, record_count
 
 
+# Markdown blockquote containers: ``>`` optionally followed by one space, and
+# nestable. Stripped before fence detection so a fence quoted inside a reply
+# still opens and closes. Without this the ``>`` prefix defeats the fence
+# match, only the delimiter lines end up protected by the inline-code pass,
+# and the code body between them leaks into candidates and the export.
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
+
+
+def _strip_blockquote_prefix(line: str) -> str:
+    match = _BLOCKQUOTE_PREFIX_RE.match(line)
+    return line[match.end() :] if match else line
+
+
 def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     """Return Markdown fenced-code spans, including an unclosed final fence."""
     spans: list[tuple[int, int]] = []
@@ -247,8 +260,9 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     fence_len = 0
     offset = 0
     for line in text.splitlines(keepends=True):
-        stripped = line.lstrip(" \t")
-        indent = len(line) - len(stripped)
+        body = _strip_blockquote_prefix(line)
+        stripped = body.lstrip(" \t")
+        indent = len(body) - len(stripped)
         if indent <= 3:
             if fence_start is None:
                 opening = re.match(r"(`{3,}|~{3,})", stripped)

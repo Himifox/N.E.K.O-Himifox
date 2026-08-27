@@ -912,3 +912,111 @@ def test_narrowed_window_can_fall_below_the_distinct_message_threshold(monkeypat
     assert summary["messages_truncated"] is True
     assert summary["analyzed_message_count"] < 3
     assert summary["candidate_count"] == 0
+
+
+def _blockquoted(*lines: str) -> str:
+    return "\n".join("> " + line for line in lines)
+
+
+def test_blockquoted_fenced_code_stays_protected():
+    """A fence quoted inside a reply must protect its body, not just its rails.
+
+    Stripping only whitespace left the `>` prefix in place, so the opening fence
+    never matched. The inline-code pass then protected just the two delimiter
+    lines and every identifier in between became an exportable candidate.
+    """
+    text = _blockquoted(
+        "```python",
+        "secret_token_helper = compute_secret_token_helper()",
+        "secret_token_helper = compute_secret_token_helper()",
+        "```",
+    )
+    messages = [
+        candidate_core.SourceMessage("en", text, source_line)
+        for source_line in range(1, 4)
+    ]
+
+    assert candidate_core._fenced_code_spans(text) == [(0, len(text))]
+    report = candidate_core.build_report(
+        messages,
+        input_record_count=3,
+        config=candidate_core.MiningConfig(),
+        rules_by_language={},
+    )
+    assert report["candidates"] == []
+
+
+def test_nested_and_unclosed_blockquoted_fences_stay_protected():
+    nested = "\n".join(
+        [
+            ">> ```python",
+            ">> secret_token_helper = compute_secret_token_helper()",
+            ">> ```",
+        ]
+    )
+    unclosed = _blockquoted(
+        "```python",
+        "secret_token_helper = compute_secret_token_helper()",
+    )
+
+    for text in (nested, unclosed):
+        messages = [
+            candidate_core.SourceMessage("en", text, source_line)
+            for source_line in range(1, 4)
+        ]
+        report = candidate_core.build_report(
+            messages,
+            input_record_count=3,
+            config=candidate_core.MiningConfig(),
+            rules_by_language={},
+        )
+        assert report["candidates"] == [], text
+
+
+def test_ordinary_quoted_prose_is_still_mined():
+    """Blockquote handling must not over-protect: quoted prose is normal text."""
+    text = _blockquoted(
+        "I really think we should go outside today",
+        "I really think we should go outside today",
+    )
+    messages = [
+        candidate_core.SourceMessage("en", text, source_line)
+        for source_line in range(1, 4)
+    ]
+
+    report = candidate_core.build_report(
+        messages,
+        input_record_count=3,
+        config=candidate_core.MiningConfig(),
+        rules_by_language={},
+    )
+    assert any(
+        candidate["phrase"] == "go outside today" for candidate in report["candidates"]
+    )
+
+
+def test_only_blockquote_markers_count_as_a_quote_prefix():
+    """The prefix must be `>` and nothing else.
+
+    Widening it to any leading run of characters would make a mid-line fence
+    look like an opening fence, swallowing the surrounding prose into a
+    protected span and silently dropping real candidates.
+    """
+    text = "we always say the exact same thing and then ```code``` follows"
+    messages = [
+        candidate_core.SourceMessage("en", text, source_line)
+        for source_line in range(1, 4)
+    ]
+
+    assert candidate_core._strip_blockquote_prefix(text) == text
+    assert candidate_core._fenced_code_spans(text) == []
+    report = candidate_core.build_report(
+        messages,
+        input_record_count=3,
+        config=candidate_core.MiningConfig(),
+        rules_by_language={},
+    )
+    assert any(
+        candidate["phrase"] == "exact same thing"
+        for candidate in report["candidates"]
+    )
