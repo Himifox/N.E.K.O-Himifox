@@ -284,7 +284,7 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
         indent = len(body) - len(stripped)
         if indent <= 3:
             if fence_start is None:
-                opening = re.match(r"(`{3,}|~{3,})", stripped)
+                opening = _FENCE_OPEN_RE.match(stripped)
                 if opening:
                     marker = opening.group(1)
                     fence_start = offset
@@ -296,7 +296,7 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
                     stripped,
                 )
-                reopening = re.match(r"(`{3,}|~{3,})", stripped)
+                reopening = _FENCE_OPEN_RE.match(stripped)
                 if closing and depth == fence_depth:
                     # Depth-matched closer: an ordinary close.
                     spans.append((fence_start, offset + len(line)))
@@ -329,6 +329,19 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
 # pattern silently skips a CRLF blank line — the paragraph then runs to the end
 # of the text and a later backtick gets mistaken for this run's closer, which
 # swallows real prose and drops the candidates it should have produced.
+# Fence and inline-code delimiters, including the FULLWIDTH forms a CJK IME
+# produces (U+FF40 GRAVE ACCENT, U+FF5E TILDE). Markdown proper only knows the
+# ASCII ones, so by spec this text is prose -- but the guard's job is keeping
+# code out of the report, the export and the persisted signature, and a reply
+# whose code fence was typed in Chinese input mode still contains code.
+# Mixed delimiters cannot pair: the fence tracks the exact opening character
+# and the inline scanner matches the exact opening run.
+_CODE_DELIMITERS = "`~" + "｀～"
+_FENCE_OPEN_RE = re.compile(
+    r"(`{3,}|~{3,}|｀{3,}|～{3,})"
+)
+
+
 _BLANK_LINE_RE = re.compile(r"\r?\n[ \t]*\r?\n")
 
 
@@ -367,12 +380,13 @@ def _inline_code_spans(
         ):
             index = block_spans[block_index][1]
             continue
-        if text[index] != "`":
+        delimiter_char = text[index]
+        if delimiter_char not in _CODE_DELIMITERS:
             index += 1
             continue
 
         run_end = index + 1
-        while run_end < len(text) and text[run_end] == "`":
+        while run_end < len(text) and text[run_end] == delimiter_char:
             run_end += 1
         delimiter = text[index:run_end]
         newline = text.find("\n", run_end)

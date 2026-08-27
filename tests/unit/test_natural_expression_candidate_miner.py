@@ -1312,19 +1312,25 @@ _INLINE_CODE_MATRIX = [
 ]
 
 
+@pytest.mark.parametrize("tick", ["`", "｀"], ids=["ascii", "fullwidth"])
 @pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize(
     "label, text, secret_visible",
     _INLINE_CODE_MATRIX,
     ids=[row[0] for row in _INLINE_CODE_MATRIX],
 )
-def test_inline_code_span_matrix(label, text, secret_visible, eol):
-    """CRLF included: an LF-only blank-line pattern skips a CRLF blank line, so
-    the paragraph runs to end of text and a later backtick is mistaken for the
-    closer -- swallowing prose that should have produced candidates."""
+def test_inline_code_span_matrix(label, text, secret_visible, eol, tick):
+    """Line endings AND delimiter style are matrix dimensions.
+
+    An LF-only blank-line pattern skips a CRLF blank line, so the paragraph runs
+    to end of text and a later delimiter is mistaken for the closer, swallowing
+    prose that should have produced candidates. A CJK input method produces the
+    fullwidth grave accent, which Markdown does not treat as code but which
+    still wraps real code.
+    """
     from memory.anti_repeat_effects import build_repeat_signature
 
-    text = text.replace("\n", eol)
+    text = text.replace("\n", eol).replace("`", tick)
     unprotected = _unprotected(text)
 
     assert ("SECRET" in unprotected) is secret_visible, label

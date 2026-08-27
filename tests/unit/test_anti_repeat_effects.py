@@ -897,3 +897,54 @@ def test_availability_reflects_in_period_buckets_not_file_existence(tmp_path):
     store.record_decision("Neko", _decision(), now=now)
     much_later = now + 60 * 24 * 60 * 60
     assert store.query_effects("Neko", 7, now=much_later)["source_available"] is False
+
+
+def test_clear_effects_does_not_hold_the_character_lock_across_the_fence(tmp_path):
+    """Lock ORDER, not just correctness: fence first, character lock second.
+
+    A cloud import holds the cloud-apply fence for its whole duration and takes
+    the character lock inside it (to evict caches). If a reset takes the
+    character lock and then reaches for the fence, the two deadlock. This pins
+    the order by proving the character lock is free while the flush is inside
+    the transaction.
+    """
+    import threading
+
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    store.record_decision("Neko", _decision(), now=1_700_000_000.0)
+
+    observed: list[bool] = []
+    original = anti_repeat_effects.AntiRepeatEffectStore._flush_snapshot
+
+    def _flush_and_probe(self, *args, **kwargs):
+        # Stands in for the point where the real flush enters the cloud-save
+        # transaction: another thread must be able to take the character lock.
+        lock = self._get_lock("Neko")
+        acquired = lock.acquire(timeout=1.0)
+        observed.append(acquired)
+        if acquired:
+            lock.release()
+        return original(self, *args, **kwargs)
+
+    anti_repeat_effects.AntiRepeatEffectStore._flush_snapshot = _flush_and_probe
+    try:
+        done = threading.Event()
+        errors: list[BaseException] = []
+
+        def run_clear():
+            try:
+                store.clear_effects("Neko")
+            except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`
+                errors.append(exc)
+            done.set()
+
+        worker = threading.Thread(target=run_clear)
+        worker.start()
+        worker.join(5)
+    finally:
+        anti_repeat_effects.AntiRepeatEffectStore._flush_snapshot = original
+
+    assert done.is_set()
+    assert errors == []
+    assert observed == [True], "the character lock was still held during the flush"

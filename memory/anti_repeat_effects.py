@@ -1023,17 +1023,33 @@ class AntiRepeatEffectStore:
         return result
 
     def clear_effects(self, name: str) -> None:
+        """Clear one identity's aggregates, staging under the lock and flushing
+        outside it.
+
+        The flush must NOT run while this holds the character lock. It enters
+        ``cloudsave_writable_transaction``, and a cloud import takes those two
+        in the opposite order — it holds the cloud-apply fence for its whole
+        duration and reaches for the character lock inside it, to evict caches.
+        Holding character-lock-then-fence here is the other leg of an ABBA
+        deadlock that would hang both the reset and the import.
+        """
         timestamp = time.time()
         name = _resolve_name(name)
         with self._get_lock(name):
             previous = self._load_unlocked(name, timestamp)
-            self._cache[name] = _default_payload(timestamp)
+            cleared = _default_payload(timestamp)
+            self._cache[name] = cleared
             staged = self._stage_unlocked(name)
-            try:
-                self._flush_snapshot(*staged, raise_on_error=True)
-            except Exception:
-                self._cache[name] = previous
-                raise
+        try:
+            self._flush_snapshot(*staged, raise_on_error=True)
+        except Exception:
+            with self._get_lock(name):
+                # Only roll back what this call installed: a decision recorded
+                # while the flush was in flight is newer than `previous` and
+                # must not be thrown away by a failed clear.
+                if self._cache.get(name) is cleared:
+                    self._cache[name] = previous
+            raise
 
     def evict_character(self, name: str) -> None:
         """Forget one identity and fence snapshots staged before its removal."""
