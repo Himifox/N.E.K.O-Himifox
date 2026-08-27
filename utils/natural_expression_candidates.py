@@ -348,10 +348,18 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # ``<pre>`` / ``<code>`` mark code just as explicitly as a Markdown fence does.
 # The generic ``<...>`` template pattern only covers the TAGS, which protected
 # the delimiters while leaving the code between them mineable — worse than not
-# handling it, because it looks handled. Non-greedy and anchored on a real
-# closing tag, so an unmatched tag falls back to the previous behaviour.
+# handling it, because it looks handled.
+#
+# An UNMATCHED opening container protects through the end of the text, exactly
+# as ``_fenced_code_spans`` treats an unclosed final fence. A reply truncated
+# mid-code-block otherwise leaks its body all the way into a persisted
+# ``RepeatSignature`` — measured: ``build_repeat_signature`` returned the code
+# identifier verbatim for an unclosed ``<code>`` and ``None`` for the closed
+# form and for an unclosed fence. The pattern requires the literal ``<code`` /
+# ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
+# containing comparisons or words like "decode" is unaffected.
 _HTML_CODE_RE = re.compile(
-    r"<pre\b[^>]*>[\s\S]*?</pre\s*>|<code\b[^>]*>[\s\S]*?</code\s*>",
+    r"<pre\b[^>]*>[\s\S]*?(?:</pre\s*>|\Z)|<code\b[^>]*>[\s\S]*?(?:</code\s*>|\Z)",
     re.IGNORECASE,
 )
 

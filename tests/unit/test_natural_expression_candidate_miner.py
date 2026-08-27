@@ -1077,17 +1077,31 @@ def test_html_code_elements_protect_their_contents():
         ], text
 
 
-def test_html_code_protection_needs_a_closing_tag():
-    """Documented blind spot: an unmatched `<code>` protects only the tag.
+def test_unclosed_html_code_container_protects_to_end_of_text():
+    """A reply truncated mid-code-block must not leak its body.
 
-    Extending an unclosed tag to the end of the text — the way an unclosed fence
-    behaves — would let one stray `<code>` swallow the rest of a reply and
-    silently drop real candidates. A stray `<` is far more likely in prose than
-    a stray fence, so the simple rule is kept deliberately.
+    Requiring a closing tag left the body of an unmatched container exposed all
+    the way into persistence: `build_repeat_signature` returned the code
+    identifier verbatim, which `anti_repeat_effects.json` would then store —
+    against that module's stated no-code boundary. Unclosed fences already
+    protect to end-of-text; the HTML containers now match that.
     """
-    text = "she said <code>secret token helper again and again"
+    from memory.anti_repeat_effects import build_repeat_signature
 
-    assert any("secret" in phrase for phrase in _mined(text))
+    for text in (
+        "she said <code>secret_token_helper = compute()",
+        "she said <pre>secret_token_helper = compute()",
+        "<code>aaa</code> middle text <code>secret_token_helper",
+    ):
+        assert not [
+            phrase for phrase in _mined(text) if "secret" in phrase or "helper" in phrase
+        ], text
+        assert (
+            build_repeat_signature(
+                text, ["secret_token_helper"], language="en"
+            )
+            is None
+        ), text
 
 
 def test_html_code_protection_does_not_swallow_prose():
