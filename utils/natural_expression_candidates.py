@@ -285,14 +285,18 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
                     stripped,
                 )
-                # A closer may not sit DEEPER than the fence it would close.
-                # Stripping the prefix unconditionally let "> ```" close a fence
-                # opened outside any quote -- which is code content per
-                # CommonMark -- exposing the rest of the block and making
-                # protection strictly worse than before blockquote handling
-                # existed. A shallower closer still closes, so the lazy
-                # "> ``` ... ```" case keeps working.
-                if closing and depth <= fence_depth:
+                # A closer must sit at EXACTLY the fence's blockquote depth.
+                #
+                # Deeper: a quoted marker cannot close a fence opened outside
+                # any quote -- that line is code content per CommonMark.
+                # Shallower: an unquoted marker after a quoted fence does not
+                # close it either. Leaving the blockquote implicitly ends the
+                # inner fence and the unquoted marker opens a NEW outer fence,
+                # so what follows is still code. Accepting it as a closer left
+                # the next line mineable, which is how a quoted fence followed
+                # by an unquoted one leaked a secret into reports, exports and
+                # a persisted RepeatSignature.
+                if closing and depth == fence_depth:
                     spans.append((fence_start, offset + len(line)))
                     fence_start = None
                     fence_char = ""

@@ -915,7 +915,12 @@ class TimeIndexedMemory:
                     params["cursor_timestamp"] = cursor_timestamp
                 params["cursor_rowid"] = cursor_rowid
             if has_timestamp:
-                sql += " ORDER BY timestamp DESC NULLS LAST, rowid DESC LIMIT :page_size"
+                # No NULLS LAST: SQLite sorts NULL smallest, so a DESC order
+                # already places NULL timestamps last, and the keyword only
+                # exists from 3.30.0 (2019). Spelling it cost compatibility with
+                # older builds for a clause that changes nothing -- verified
+                # identical output for a mixed NULL/non-NULL window.
+                sql += " ORDER BY timestamp DESC, rowid DESC LIMIT :page_size"
             else:
                 sql += " ORDER BY rowid DESC LIMIT :page_size"
 

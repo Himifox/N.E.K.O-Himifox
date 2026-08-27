@@ -1187,16 +1187,46 @@ def test_a_quote_marker_inside_an_unquoted_fence_does_not_close_it():
     ]
 
 
-def test_a_shallower_closer_still_closes_a_quoted_fence():
-    """The lazy "> ``` ... ```" case must keep working after the depth check."""
-    text = "> ```\n> DB_PASSWORD = 'zqxjleak2'\n```\nwe always say the same thing\n"
+def test_an_unquoted_marker_does_not_close_a_quoted_fence():
+    """A shallower marker is not a closer either, and this test used to say it was.
 
+    It originally asserted that the trailing unquoted marker closes the quoted
+    fence and that the prose after it is mineable -- pinning a leak as correct.
+    Per CommonMark, leaving the blockquote implicitly ends the inner fence and
+    the unquoted marker opens a NEW outer fence, so everything after it is still
+    code.
+    """
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    text = _lines("> ```", "> API_TOKEN = 'zqxjleak'", "```", "DB_PASSWORD = 'zqxjleak2'")
+
+    unprotected = _unprotected(text)
+
+    assert "API_TOKEN" not in unprotected
+    assert "DB_PASSWORD" not in unprotected
+    assert build_repeat_signature(text, ["DB_PASSWORD"], language="en") is None
+
+
+def test_an_equal_depth_marker_closes_the_fence_it_opened():
+    """Depth-matched closers still work, at depth 0 and nested."""
+    for text in (
+        _lines("```", "API_TOKEN = 'zqxjleak'", "```", "we always say the same thing"),
+        _lines("> ```", "> API_TOKEN = 'zqxjleak'", "> ```", "> we always say the same thing"),
+        _lines(">> ```", ">> API_TOKEN = 'zqxjleak'", ">> ```", ">> we always say the same thing"),
+    ):
+        unprotected = _unprotected(text)
+        assert "API_TOKEN" not in unprotected, text
+        assert "we always say the same thing" in unprotected, text
+
+
+def _lines(*rows: str) -> str:
+    return "\n".join(rows) + "\n"
+
+
+def _unprotected(text: str) -> str:
     spans = candidate_core._protected_spans(text)
-    unprotected = "".join(
+    return "".join(
         char
         for index, char in enumerate(text)
         if not any(start <= index < end for start, end in spans)
     )
-
-    assert "DB_PASSWORD" not in unprotected
-    assert "we always say the same thing" in unprotected
