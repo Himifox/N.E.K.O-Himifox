@@ -2385,3 +2385,7 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - 反例分别删除 `id` 与 `expected_mode`，证明二者都稳定返回 `ValueError` 而非 `KeyError`。
 
 关闭条件：任意缺少基础必填字段的质量案例都由 loader 的 schema `ValueError` 拒绝，且合法 strong/none 案例行为不变。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86crI0V`。
+
+## 第二十八轮实施证据
+
+设计提交 `e1201ee37`、实现提交 `a626d4b37` 已推送。loader 现在在读取 `id` 或 `expected_mode` 前验证基础 required 字段子集，之后仍执行既有精确字段集合和 strong identity 校验；缺 `id`、缺 `expected_mode` 两项反例均返回 documented-fields `ValueError`。完整 quality evaluator 回归为 9 passed；Ruff、compileall 与 `git diff --check` 均通过。
