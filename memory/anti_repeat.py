@@ -822,10 +822,40 @@ class AntiRepeatCorpus:
         # 会卡在这次 fsync 上。清空也走 seq，免得它被一次在飞的旧快照写盖回去。
         self._flush_snapshot(name, payload, seq)
 
+    def evict_character(self, name: str) -> None:
+        """Forget one identity's cached window without touching the file.
+
+        Distinct from ``clear``, which WIPES the corpus and persists an empty
+        payload. Eviction is for when the file on disk changed underneath us —
+        a cloud-save import replaces ``memory/<name>/`` wholesale — and the
+        cache would otherwise shadow the new contents and get flushed back over
+        them. The sequence fence stops a snapshot staged before the replacement
+        from doing exactly that.
+        """
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            with self._get_write_lock(name):
+                fence = max(
+                    self._staged_seq.get(name, 0),
+                    self._written_seq.get(name, 0),
+                )
+                self._cache.pop(name, None)
+                self._staged_seq[name] = fence
+                self._written_seq[name] = fence
+
 
 # ── 进程级单例 ─────────────────────────────────────────────
 _GLOBAL_CORPUS: Optional[AntiRepeatCorpus] = None
 _GLOBAL_LOCK = threading.Lock()
+
+
+def evict_cached_anti_repeat_corpus(*character_names: str) -> None:
+    """Evict loaded identities without creating the global corpus."""
+    corpus = _GLOBAL_CORPUS
+    if corpus is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        corpus.evict_character(character_name)
 
 
 def get_anti_repeat_corpus() -> AntiRepeatCorpus:

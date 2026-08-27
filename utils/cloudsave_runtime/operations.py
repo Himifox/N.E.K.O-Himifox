@@ -29,7 +29,10 @@ from pathlib import Path
 from typing import Any
 
 from utils.file_utils import atomic_write_json
-from utils.character_memory import list_character_recent_paths
+from utils.character_memory import (
+    evict_character_runtime_caches,
+    list_character_recent_paths,
+)
 from utils.recent_file import (
     acquire_recent_file_locks,
     activate_recent_paths,
@@ -1499,6 +1502,25 @@ def import_local_cloudsave_snapshot(
 
                 for recent_path in recent_state_paths:
                     set_recent_pending_unlocked(recent_path, [])
+                # The apply above replaced and removed character directories on
+                # disk. Per-character sidecar caches (anti-repeat effects, the
+                # anti-repeat corpus, startup-greeting history) only re-read on a
+                # cache MISS, so a stale entry would shadow the file just
+                # imported and then be flushed back over it — silently undoing
+                # part of the import. Evict here, while the fence is still
+                # closed, so nothing can repopulate from the old state first.
+                # Replacement matters as much as removal: both leave the cache
+                # describing a file that no longer exists.
+                memory_root = Path(config_manager.memory_dir)
+                removed_character_names = [
+                    target_path.name
+                    for target_path in delete_dir_targets
+                    if target_path.parent == memory_root
+                ]
+                evict_character_runtime_caches(
+                    *imported_character_names,
+                    *removed_character_names,
+                )
                 return {
                     "manifest_fingerprint": computed_fingerprint,
                     "applied_character_count": len(imported_character_names),

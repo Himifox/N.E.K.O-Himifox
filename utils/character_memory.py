@@ -22,6 +22,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from utils.logger_config import get_module_logger
 from utils.recent_file import (
     acquire_recent_file_locks,
     activate_recent_paths,
@@ -42,12 +43,52 @@ from utils.recent_file import (
 )
 
 
+logger = get_module_logger(__name__, "Memory")
+
+
+# Per-character sidecar caches that shadow their own file: each keeps
+# ``{name: data}`` in memory and only re-reads from disk on a cache MISS, so
+# whenever a character directory is removed or replaced underneath them the
+# stale entry stays authoritative for both reads and the next flush — which
+# then writes it back over the new contents.
+#
+# Looked up through ``sys.modules`` rather than imported: eviction must not be
+# what drags the memory package into a process that never touched it, and a
+# module nobody loaded has no cache to evict.
+_CHARACTER_RUNTIME_CACHE_EVICTORS = (
+    ("memory.anti_repeat_effects", "evict_cached_anti_repeat_effects"),
+    ("memory.anti_repeat", "evict_cached_anti_repeat_corpus"),
+    ("memory.startup_greeting_history", "evict_cached_startup_greeting_history"),
+)
+
+
+def evict_character_runtime_caches(*character_names: str) -> None:
+    """Drop in-memory per-character caches for names whose files just changed.
+
+    Best-effort by construction: one module failing must not abort a delete,
+    rename or cloud-save import that has already touched the filesystem.
+    """
+    names = tuple(dict.fromkeys(name for name in character_names if name))
+    if not names:
+        return
+    for module_name, evictor_name in _CHARACTER_RUNTIME_CACHE_EVICTORS:
+        module = sys.modules.get(module_name)
+        evict = getattr(module, evictor_name, None)
+        if not callable(evict):
+            continue
+        try:
+            evict(*names)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "[CharacterMemory] cache eviction skipped for %s: %s",
+                module_name,
+                type(exc).__name__,
+            )
+
+
 def _evict_cached_anti_repeat_effects(*character_names: str) -> None:
-    """Notify the optional runtime store without importing the memory package."""
-    effects_module = sys.modules.get("memory.anti_repeat_effects")
-    evict = getattr(effects_module, "evict_cached_anti_repeat_effects", None)
-    if callable(evict):
-        evict(*character_names)
+    """Backwards-compatible alias for the single-cache call sites."""
+    evict_character_runtime_caches(*character_names)
 
 
 LEGACY_CHARACTER_MEMORY_FILE_MAP = {

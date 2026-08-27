@@ -502,9 +502,38 @@ class StartupGreetingHistory:
 
         task.add_done_callback(_done)
 
+    def evict_character(self, name: str) -> None:
+        """Forget one identity's cached records without touching the file.
+
+        For when the file changed underneath us — a cloud-save import replaces
+        ``memory/<name>/`` wholesale — where the cache would otherwise shadow
+        the new contents and get flushed back over them. The sequence fence
+        stops a snapshot staged before the replacement from doing that.
+        """
+        resolved = _resolve_name(name)
+        with self._get_lock(resolved):
+            with self._get_write_lock(resolved):
+                fence = max(
+                    self._staged_seq.get(resolved, 0),
+                    self._written_seq.get(resolved, 0),
+                )
+                self._cache.pop(resolved, None)
+                self._reservations.pop(resolved, None)
+                self._staged_seq[resolved] = fence
+                self._written_seq[resolved] = fence
+
 
 _GLOBAL_HISTORY: StartupGreetingHistory | None = None
 _GLOBAL_HISTORY_LOCK = threading.Lock()
+
+
+def evict_cached_startup_greeting_history(*character_names: str) -> None:
+    """Evict loaded identities without creating the global history."""
+    history = _GLOBAL_HISTORY
+    if history is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        history.evict_character(character_name)
 
 
 def get_startup_greeting_history() -> StartupGreetingHistory:

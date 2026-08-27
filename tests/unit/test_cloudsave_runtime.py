@@ -3201,3 +3201,70 @@ def test_standard_data_candidates_on_unix_platforms(tmp_path):
         candidates = cm._get_standard_data_directory_candidates()
         assert candidates[0] == fake_home / ".xdg-data"
         assert fake_home / ".local" / "share" in candidates
+
+
+@pytest.mark.unit
+def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
+    """An import replaces character files; the in-memory caches must not survive.
+
+    Each sidecar cache keeps ``{name: data}`` and only re-reads on a MISS, so a
+    stale entry shadows the file that was just imported and the next flush
+    writes it back over the imported contents — silently undoing part of the
+    restore. Drives the real `import_local_cloudsave_snapshot`, so it fails if
+    the eviction call site is removed rather than just the helper.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    import memory.anti_repeat_effects as effects_module
+    import memory.startup_greeting_history as greeting_module
+    from utils.cloudsave_runtime import (
+        export_local_cloudsave_snapshot,
+        import_local_cloudsave_snapshot,
+    )
+
+    cm = _make_config_manager(tmp_path)
+    _write_runtime_state(cm)
+    export_local_cloudsave_snapshot(cm)
+
+    previous = (
+        effects_module._GLOBAL_STORE,
+        anti_repeat_module._GLOBAL_CORPUS,
+        greeting_module._GLOBAL_HISTORY,
+    )
+    try:
+        store = effects_module.get_anti_repeat_effect_store()
+        corpus = anti_repeat_module.get_anti_repeat_corpus()
+        greeting = greeting_module.get_startup_greeting_history()
+        store._cache["小满"] = {"version": 1, "daily_buckets": {"stale": {}}}
+        corpus._cache["小满"] = [{"stale": True}]
+        greeting._cache["小满"] = ["stale"]
+
+        import_local_cloudsave_snapshot(cm)
+
+        assert "小满" not in store._cache
+        assert "小满" not in corpus._cache
+        assert "小满" not in greeting._cache
+    finally:
+        (
+            effects_module._GLOBAL_STORE,
+            anti_repeat_module._GLOBAL_CORPUS,
+            greeting_module._GLOBAL_HISTORY,
+        ) = previous
+
+
+@pytest.mark.unit
+def test_corpus_eviction_forgets_the_cache_without_writing_the_file(tmp_path):
+    """`evict_character` is not `clear`: it must not persist an empty payload.
+
+    Using `clear` for import eviction would delete the corpus that was just
+    imported, which is the opposite of the intent.
+    """
+    import memory.anti_repeat as anti_repeat_module
+
+    corpus = anti_repeat_module.AntiRepeatCorpus()
+    corpus._cache["小满"] = [{"stale": True}]
+
+    corpus.evict_character("小满")
+
+    assert "小满" not in corpus._cache
+    # `clear` bumps the written sequence by flushing; eviction must not.
+    assert corpus._written_seq.get("小满", 0) == 0
