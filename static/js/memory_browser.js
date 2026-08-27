@@ -1193,10 +1193,16 @@
         const reportSummary = repetitionInsightsReport.summary || {};
         const bm25 = effects.bm25 || {};
         const comparableRewrites = Number(bm25.pair_count || 0);
-        const reductionPercent = comparableRewrites > 0
-            ? Math.round(Number(bm25.reduction_ratio || 0) * 100)
+        // Classify on the RAW ratio and round only for display. Math.round of a
+        // ratio in (-0.005, 0) yields -0, and `-0 < 0` is false, so a genuine
+        // repetition increase used to be labelled a reduction.
+        const reductionRatio = comparableRewrites > 0
+            ? Number(bm25.reduction_ratio || 0)
             : null;
-        const repetitionIncreased = reductionPercent !== null && reductionPercent < 0;
+        const reductionPercent = reductionRatio === null
+            ? null
+            : Math.round(reductionRatio * 100);
+        const repetitionIncreased = reductionRatio !== null && reductionRatio < 0;
         const summary = document.createElement('div');
         summary.className = 'memory-insights-effect-summary';
         appendRepetitionEffectMetric(
