@@ -325,11 +325,32 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
+
+
+def _paragraph_end(text: str, start: int) -> int:
+    """Offset of the blank line that ends the paragraph containing ``start``."""
+    match = _BLANK_LINE_RE.search(text, start)
+    return match.start() if match else len(text)
+
+
 def _inline_code_spans(
     text: str,
     block_spans: Sequence[tuple[int, int]],
 ) -> list[tuple[int, int]]:
-    """Return same-line backtick spans outside block code."""
+    """Return backtick code spans outside block code.
+
+    A code span may cross newlines but not a blank line — CommonMark keeps it
+    inside one paragraph — so the closing delimiter is searched to the end of
+    the paragraph. Stopping at the end of the LINE protected only the first line
+    of a multi-line span and left the rest mineable, right through to a
+    persisted signature.
+
+    An unmatched run still falls back to protecting the rest of its own line
+    rather than the paragraph: without a closer the backtick is literal text per
+    CommonMark, so the following lines really are prose and swallowing them
+    would drop real candidates.
+    """
     spans: list[tuple[int, int]] = []
     index = 0
     block_index = 0
@@ -352,7 +373,7 @@ def _inline_code_spans(
         delimiter = text[index:run_end]
         newline = text.find("\n", run_end)
         line_end = len(text) if newline < 0 else newline
-        closing = text.find(delimiter, run_end, line_end)
+        closing = text.find(delimiter, run_end, _paragraph_end(text, run_end))
         end = line_end if closing < 0 else closing + len(delimiter)
         spans.append((index, end))
         index = max(end, run_end)

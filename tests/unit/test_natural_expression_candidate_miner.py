@@ -1281,3 +1281,50 @@ def test_fence_blockquote_depth_matrix(label, rows, must_remain_visible):
     assert "SECRET" not in unprotected, label
     for fragment in must_remain_visible:
         assert fragment in unprotected, label
+
+
+# Inline code span matrix. `secret_visible` is the EXPECTED outcome, so the
+# table pins both directions: a real code span must be protected, and text that
+# is genuinely prose per CommonMark must stay mineable.
+_INLINE_CODE_MATRIX = [
+    ("single-line span", "she said `SECRET=1` again", False),
+    ("multi-line span", "she said `a =\nSECRET=1` again", False),
+    ("multi-line double backtick", "she said ``a =\nSECRET=1`` again", False),
+    ("unterminated on one line", "she said `SECRET=1", False),
+    # No closing delimiter: the backtick is literal text, so the following
+    # lines really are prose and must not be swallowed.
+    ("unterminated across lines", "she said `a =\nSECRET=1\nmore prose", True),
+    # A code span cannot cross a blank line, so this is prose too.
+    ("run interrupted by a blank line", "she said `a =\n\nSECRET=1 is prose", True),
+    # A delimiter AFTER a blank line is a different paragraph and must not
+    # be treated as this run's closer -- otherwise the search swallows the
+    # prose in between. Pins the over-reach direction.
+    (
+        "closer only after a blank line",
+        "she said `a =\n\nSECRET=1 is prose and `x` here",
+        True,
+    ),
+    ("two spans on one line", "`a` prose here `SECRET=1`", False),
+    ("backticks inside a fence", "```\n`SECRET=1`\n```\ntail", False),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, secret_visible",
+    _INLINE_CODE_MATRIX,
+    ids=[row[0] for row in _INLINE_CODE_MATRIX],
+)
+def test_inline_code_span_matrix(label, text, secret_visible):
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    unprotected = _unprotected(text)
+
+    assert ("SECRET" in unprotected) is secret_visible, label
+    signature = build_repeat_signature(text, ["SECRET"], language="en")
+    assert (signature is not None) is secret_visible, label
+
+
+def test_inline_code_protection_still_leaves_prose_minable():
+    text = "we always say the exact same thing"
+
+    assert "always" in _unprotected(text)
