@@ -789,14 +789,37 @@ def test_decision_after_eviction_does_not_recreate_a_removed_character_dir(tmp_p
     assert not (tmp_path / "Neko").exists()
 
 
-def test_a_recreated_character_starts_persisting_again(tmp_path):
-    """Retirement is lifted once the identity is live on disk again."""
+def test_a_retired_name_writes_again_only_once_a_directory_exists(tmp_path):
+    """Retirement is permanent, but it never blocks a live directory.
+
+    Exercises the real delete-then-recreate order: evict, remove the tree, then
+    let another writer create the directory again. The store must refuse while
+    the directory is gone and resume once it exists — without ever creating it
+    itself, and without un-retiring the name. Directory existence cannot be
+    treated as proof the identity is live, because
+    ``delete_character_memory_storage`` evicts BEFORE it removes the tree, so a
+    flush landing in that window would otherwise disarm the guard permanently.
+    """
+    import shutil
+
     store = _store(tmp_path)
     (tmp_path / "Neko").mkdir()
     now = 1_700_000_000.0
+
     store.evict_character("Neko")
 
+    # Still inside the delete window: the doomed directory is present. Writing
+    # here is harmless (rmtree wins), but retirement must NOT be lifted.
     store.record_decision("Neko", _decision(), now=now)
+    assert "Neko" in store._retired
+
+    shutil.rmtree(tmp_path / "Neko")
+    store.record_decision("Neko", _decision(), now=now + 1)
+    assert not (tmp_path / "Neko").exists()
+
+    # A sibling writer (or an explicit re-creation) brings the directory back.
+    (tmp_path / "Neko").mkdir()
+    store.record_decision("Neko", _decision(), now=now + 2)
 
     assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
-    assert "Neko" not in store._retired
+    assert "Neko" in store._retired

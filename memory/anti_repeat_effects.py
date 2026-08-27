@@ -566,18 +566,30 @@ class AntiRepeatEffectStore:
         ``ensure_character_dir`` and ``makedirs`` the directory back into
         existence right after ``shutil.rmtree`` removed it — leaving an orphan
         that makes ``character_memory_exists`` report the removed character
-        again. For a retired name whose directory is genuinely gone the write is
-        dropped instead. If the directory exists again the identity is live (the
-        rename target, or a re-created character), so retirement is lifted and
-        the write proceeds.
+        again.
+
+        Retirement is PERMANENT for the process, and a retired name may only
+        write into a directory that already exists: it never creates one.
+        Inferring "the identity is live again" from directory existence would be
+        wrong, because ``delete_character_memory_storage`` evicts *before* it
+        removes the tree (utils/character_memory.py:570 then :577). A flush
+        landing in that window still sees the doomed directory, and lifting
+        retirement there would disarm the guard for every later flush — exactly
+        the resurrection this exists to prevent. Never lifting also means no
+        character-creation or rename-completion hook is needed: a rename target
+        keeps its moved directory and a re-created character gets one from
+        whichever sibling writer touches it first, and writes resume on their
+        own. Worst case these aggregates skip a write, which is the right way
+        for best-effort telemetry to fail.
         """
         from memory import ensure_character_dir
 
         memory_dir = self._config_manager.memory_dir
         if name in self._retired:
-            if not os.path.isdir(os.path.join(str(memory_dir), name)):
+            character_dir = os.path.join(str(memory_dir), name)
+            if not os.path.isdir(character_dir):
                 return None
-            self._retired.discard(name)
+            return os.path.join(character_dir, "anti_repeat_effects.json")
         return os.path.join(
             ensure_character_dir(memory_dir, name),
             "anti_repeat_effects.json",
