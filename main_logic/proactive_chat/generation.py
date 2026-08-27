@@ -115,16 +115,21 @@ def _score_regenerated_draft(
     text: str,
     *,
     exempt: bool,
-) -> float | None:
-    """Return a measured BM25 score, never a synthetic zero for skipped work."""
+) -> tuple[float | None, dict]:
+    """Return a measured BM25 score and its terms, never a synthetic zero.
+
+    The terms come back because an outcome produced by scoring the REGENERATED
+    draft has to be attributed to that draft's phrases, not to the initial
+    draft's.
+    """
     if exempt or anti_repeat_corpus is None:
-        return None
+        return None, {}
     try:
-        total, _ = anti_repeat_corpus.score_draft(lanlan_name, text)
-        return float(total)
+        total, terms = anti_repeat_corpus.score_draft(lanlan_name, text)
+        return float(total), dict(terms or {})
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("[AntiRepeat] proactive regen score skipped: %s", exc)
-        return None
+        return None, {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1465,7 +1470,7 @@ async def _guard_phase2_output(
             )
         )
 
-        regen_total = _score_regenerated_draft(
+        regen_total, regen_bm25_terms = _score_regenerated_draft(
             anti_repeat_corpus,
             lanlan_name,
             cleaned,
@@ -1478,6 +1483,16 @@ async def _guard_phase2_output(
             record_regen_effect(
                 "blocked_after_regen_bm25",
                 score_after=regen_total,
+                # Scored against the REGENERATED draft, so it carries that
+                # draft's reason and phrases. Without this the block was filed
+                # under whatever detector triggered the rewrite and pointed at
+                # a fragment from a draft that had already been discarded.
+                extra_reasons=("bm25",),
+                signature=build_repeat_signature(
+                    cleaned,
+                    list(regen_bm25_terms)[:ANTI_REPEAT_INJECT_TOP_K],
+                    language=proactive_lang,
+                ),
             )
             active_logger.info(
                 "[%s] proactive BM25 regen still over drop (score=%.2f)",

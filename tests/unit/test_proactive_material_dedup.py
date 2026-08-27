@@ -30,15 +30,14 @@ def _clear(name="测试角色"):
 def test_exempt_regen_has_no_synthetic_bm25_after_score():
     corpus = MagicMock()
 
-    assert (
-        _score_regenerated_draft(
-            corpus,
-            "测试角色",
-            "换成了新的音乐素材",
-            exempt=True,
-        )
-        is None
-    )
+    # Returns (score, terms): the terms are what lets a block produced by
+    # scoring the REGENERATED draft name that draft's own phrases.
+    assert _score_regenerated_draft(
+        corpus,
+        "测试角色",
+        "换成了新的音乐素材",
+        exempt=True,
+    ) == (None, {})
     corpus.score_draft.assert_not_called()
 
 

@@ -1856,6 +1856,7 @@
         "repetitionInsightsIncrease": "Aumento médio de repetições ({{count}} reescritas comparáveis)",
         "repetitionInsightsVisibleCount": "Mostrando {{visible}} de {{total}} resíduos finais",
         "repetitionInsightsScopeTrimmed": "Estas respostas eram longas, então apenas as {{analyzed}} mais recentes de {{total}} couberam no limite de análise local.",
+        "repetitionInsightsReplyClipped": "Uma resposta era longa demais; apenas o início foi verificado.",
         "repetitionInsightsNoFilterMatches": "Nenhum resíduo final corresponde aos filtros atuais.",
         "repetitionInsightsResidualEffect": "Histórico: detectado {{detected}} · reescritas aprovadas {{passed}}",
         "repetitionInsightsResetConfirm": "Limpar as estatísticas antirrepetição locais deste personagem? O histórico e os candidatos não serão excluídos.",

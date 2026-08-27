@@ -744,6 +744,7 @@ def test_user_review_requires_three_distinct_assistant_messages():
         "assistant_message_count": 3,
         "analyzed_message_count": 3,
         "messages_truncated": False,
+        "content_truncated": False,
         "candidate_count": 1,
         "returned_candidate_count": 1,
         "candidates_truncated": False,
@@ -872,6 +873,7 @@ def test_user_review_caps_candidates_before_returning_them_to_the_browser(monkey
         "assistant_message_count": 0,
         "analyzed_message_count": 0,
         "messages_truncated": False,
+        "content_truncated": False,
         "candidate_count": 3,
         "returned_candidate_count": 2,
         "candidates_truncated": True,
@@ -1149,4 +1151,52 @@ def test_a_single_oversized_reply_is_truncated_to_the_character_budget():
     )["summary"]
 
     assert summary["analyzed_message_count"] == 1
-    assert summary["messages_truncated"] is True
+    # Dropping messages did NOT happen; the single body was clipped.
+    assert summary["messages_truncated"] is False
+    assert summary["content_truncated"] is True
+
+
+def test_a_quote_marker_inside_an_unquoted_fence_does_not_close_it():
+    """CommonMark: a fence opened at depth 0 is not closed by a deeper line.
+
+    Stripping the blockquote prefix unconditionally made "> ```" close a fence
+    opened outside any quote, exposing the rest of the block — strictly worse
+    than before blockquote handling existed. This is the regression that shipped
+    because the blockquote tests only covered fully-quoted fences.
+    """
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    text = (
+        "hello there\n```\nAPI_TOKEN = 'zqxjleak'\n> ```\n"
+        "DB_PASSWORD = 'zqxjleak2'\n"
+    )
+
+    spans = candidate_core._protected_spans(text)
+    unprotected = "".join(
+        char
+        for index, char in enumerate(text)
+        if not any(start <= index < end for start, end in spans)
+    )
+
+    assert "DB_PASSWORD" not in unprotected
+    assert "API_TOKEN" not in unprotected
+    assert unprotected.strip() == "hello there"
+    assert build_repeat_signature(text, ["DB_PASSWORD"], language="en") is None
+    assert not [
+        phrase for phrase in _mined(text) if "PASSWORD" in phrase or "TOKEN" in phrase
+    ]
+
+
+def test_a_shallower_closer_still_closes_a_quoted_fence():
+    """The lazy "> ``` ... ```" case must keep working after the depth check."""
+    text = "> ```\n> DB_PASSWORD = 'zqxjleak2'\n```\nwe always say the same thing\n"
+
+    spans = candidate_core._protected_spans(text)
+    unprotected = "".join(
+        char
+        for index, char in enumerate(text)
+        if not any(start <= index < end for start, end in spans)
+    )
+
+    assert "DB_PASSWORD" not in unprotected
+    assert "we always say the same thing" in unprotected

@@ -1262,6 +1262,15 @@
             );
             return;
         }
+        if (summary.content_truncated === true) {
+            const clipped = document.createElement('p');
+            clipped.className = 'memory-insights-scope-note';
+            clipped.textContent = translate(
+                'memory.repetitionInsightsReplyClipped',
+                'One reply was too long to analyze in full; only its beginning was checked.'
+            );
+            results.appendChild(clipped);
+        }
         if (summary.messages_truncated === true) {
             // The local budget narrowed the window instead of failing; say so,
             // otherwise the counts silently describe fewer replies than asked for.

@@ -248,8 +248,15 @@ _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
 
 
 def _strip_blockquote_prefix(line: str) -> str:
+    return _split_blockquote_prefix(line)[0]
+
+
+def _split_blockquote_prefix(line: str) -> tuple[str, int]:
+    """Return the line without its blockquote markers, plus the depth stripped."""
     match = _BLOCKQUOTE_PREFIX_RE.match(line)
-    return line[match.end() :] if match else line
+    if not match:
+        return line, 0
+    return line[match.end() :], match.group(0).count(">")
 
 
 def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
@@ -258,9 +265,10 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     fence_start: int | None = None
     fence_char = ""
     fence_len = 0
+    fence_depth = 0
     offset = 0
     for line in text.splitlines(keepends=True):
-        body = _strip_blockquote_prefix(line)
+        body, depth = _split_blockquote_prefix(line)
         stripped = body.lstrip(" \t")
         indent = len(body) - len(stripped)
         if indent <= 3:
@@ -271,16 +279,25 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     fence_start = offset
                     fence_char = marker[0]
                     fence_len = len(marker)
+                    fence_depth = depth
             else:
                 closing = re.match(
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
                     stripped,
                 )
-                if closing:
+                # A closer may not sit DEEPER than the fence it would close.
+                # Stripping the prefix unconditionally let "> ```" close a fence
+                # opened outside any quote -- which is code content per
+                # CommonMark -- exposing the rest of the block and making
+                # protection strictly worse than before blockquote handling
+                # existed. A shallower closer still closes, so the lazy
+                # "> ``` ... ```" case keeps working.
+                if closing and depth <= fence_depth:
                     spans.append((fence_start, offset + len(line)))
                     fence_start = None
                     fence_char = ""
                     fence_len = 0
+                    fence_depth = 0
         offset += len(line)
     if fence_start is not None:
         spans.append((fence_start, len(text)))
@@ -918,9 +935,12 @@ def build_user_review_report(
         "summary": {
             "assistant_message_count": len(messages),
             "analyzed_message_count": len(analyzed),
-            "messages_truncated": (
-                len(analyzed) < len(messages) or content_truncated
-            ),
+            # Two distinct mechanisms, reported separately: whole messages
+            # dropped off the front (derivable from the two counts) versus one
+            # oversized reply's BODY cut short (not derivable at all). Collapsing
+            # them made the panel say "only the latest 1 of 1 fit".
+            "messages_truncated": len(analyzed) < len(messages),
+            "content_truncated": content_truncated,
             "candidate_count": len(all_candidates),
             "returned_candidate_count": len(candidates),
             "candidates_truncated": len(candidates) < len(all_candidates),

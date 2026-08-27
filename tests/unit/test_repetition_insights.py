@@ -97,6 +97,7 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
         "assistant_message_count": 3,
         "analyzed_message_count": 3,
         "messages_truncated": False,
+        "content_truncated": False,
         "candidate_count": 1,
         "returned_candidate_count": 1,
         "candidates_truncated": False,

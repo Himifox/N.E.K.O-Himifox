@@ -1856,6 +1856,7 @@
         "repetitionInsightsIncrease": "Average repetition increase ({{count}} comparable rewrites)",
         "repetitionInsightsVisibleCount": "Showing {{visible}} of {{total}} final residual fragments",
         "repetitionInsightsScopeTrimmed": "These replies were long, so only the latest {{analyzed}} of {{total}} fit the local analysis budget.",
+        "repetitionInsightsReplyClipped": "One reply was too long to analyze in full; only its beginning was checked.",
         "repetitionInsightsNoFilterMatches": "No final residual fragments match the current filters.",
         "repetitionInsightsResidualEffect": "Past handling: detected {{detected}} · rewrites passed {{passed}}",
         "repetitionInsightsResetConfirm": "Clear this character's local anti-repeat effect statistics? Saved chat history and repetition candidates will not be deleted.",
