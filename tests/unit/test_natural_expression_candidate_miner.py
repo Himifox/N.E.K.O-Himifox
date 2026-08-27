@@ -1020,3 +1020,80 @@ def test_only_blockquote_markers_count_as_a_quote_prefix():
         candidate["phrase"] == "exact same thing"
         for candidate in report["candidates"]
     )
+
+
+def _mined(text: str) -> list[str]:
+    messages = [
+        candidate_core.SourceMessage("en", text, source_line)
+        for source_line in range(1, 4)
+    ]
+    report = candidate_core.build_report(
+        messages,
+        input_record_count=3,
+        config=candidate_core.MiningConfig(),
+        rules_by_language={},
+    )
+    return [candidate["phrase"] for candidate in report["candidates"]]
+
+
+def test_blockquoted_indented_code_stays_protected():
+    """The blockquote container is not part of a code block's indentation.
+
+    `>     code` measured zero indent columns, so a quoted indented block was
+    mined as prose while the unquoted form was protected.
+    """
+    quoted = "\n".join(
+        [
+            "> text before",
+            ">",
+            ">     secret_token_helper = compute()",
+            ">",
+            "> text after",
+        ]
+    )
+    nested = "\n".join([">> a b c d", ">>", ">>     secret_token_helper = compute()"])
+
+    for text in (quoted, nested):
+        assert not [
+            phrase for phrase in _mined(text) if "secret" in phrase or "helper" in phrase
+        ], text
+    # Prose around the block is still mined; the fix must not swallow the quote.
+    assert "text before" in _mined(quoted)
+
+
+def test_html_code_elements_protect_their_contents():
+    """`<pre>` / `<code>` mark code as explicitly as a Markdown fence does.
+
+    The generic `<...>` template pattern protected only the TAGS, leaving the
+    code between them mineable and exportable.
+    """
+    for text in (
+        "she said <code>secret token helper</code> again and again",
+        "<pre><code>secret_token_helper = compute()</code></pre>",
+        "she said <CODE>secret token helper</CODE> again and again",
+    ):
+        assert not [
+            phrase for phrase in _mined(text) if "secret" in phrase or "helper" in phrase
+        ], text
+
+
+def test_html_code_protection_needs_a_closing_tag():
+    """Documented blind spot: an unmatched `<code>` protects only the tag.
+
+    Extending an unclosed tag to the end of the text — the way an unclosed fence
+    behaves — would let one stray `<code>` swallow the rest of a reply and
+    silently drop real candidates. A stray `<` is far more likely in prose than
+    a stray fence, so the simple rule is kept deliberately.
+    """
+    text = "she said <code>secret token helper again and again"
+
+    assert any("secret" in phrase for phrase in _mined(text))
+
+
+def test_html_code_protection_does_not_swallow_prose():
+    for text in (
+        "we always say the exact same thing",
+        "if a < b and b > c we always say the exact same thing",
+        "we always decode the exact same thing and encode it",
+    ):
+        assert any("always" in phrase for phrase in _mined(text)), text

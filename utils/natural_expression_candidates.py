@@ -327,18 +327,33 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
     offset = 0
     for line in text.splitlines(keepends=True):
         line_end = offset + len(line)
+        # Same reason as in _fenced_code_spans: the blockquote container is not
+        # part of the code block's indentation, so a quoted indented block
+        # (">     code") measured 0 columns and was mined as prose.
+        body = _strip_blockquote_prefix(line)
         indent_columns = 0
-        for character in line:
+        for character in body:
             if character == " ":
                 indent_columns += 1
             elif character == "\t":
                 indent_columns += 4 - (indent_columns % 4)
             else:
                 break
-        if indent_columns >= 4 and line.strip():
+        if indent_columns >= 4 and body.strip():
             spans.append((offset, line_end))
         offset = line_end
     return spans
+
+
+# ``<pre>`` / ``<code>`` mark code just as explicitly as a Markdown fence does.
+# The generic ``<...>`` template pattern only covers the TAGS, which protected
+# the delimiters while leaving the code between them mineable — worse than not
+# handling it, because it looks handled. Non-greedy and anchored on a real
+# closing tag, so an unmatched tag falls back to the previous behaviour.
+_HTML_CODE_RE = re.compile(
+    r"<pre\b[^>]*>[\s\S]*?</pre\s*>|<code\b[^>]*>[\s\S]*?</code\s*>",
+    re.IGNORECASE,
+)
 
 
 def _protected_spans(text: str) -> list[tuple[int, int]]:
@@ -354,6 +369,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     block_code = _merge_spans(fenced + _indented_code_spans(text))
     spans = block_code + _inline_code_spans(text, block_code)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
+    spans.extend(match.span() for match in _HTML_CODE_RE.finditer(text))
     return _merge_spans(spans)
 
 
