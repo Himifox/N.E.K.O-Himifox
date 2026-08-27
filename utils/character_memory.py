@@ -55,7 +55,8 @@ logger = get_module_logger(__name__, "Memory")
 # Looked up through ``sys.modules`` rather than imported: eviction must not be
 # what drags the memory package into a process that never touched it, and a
 # module nobody loaded has no cache to evict.
-# (module, evictor, retiring evictor). Every sidecar writer needs both forms:
+# (module, evictor, retiring evictor, reviving evictor). Every sidecar writer
+# needs all three:
 # each one lazily creates ``memory/<name>/`` on write, so a snapshot staged
 # while a delete was in flight would recreate the directory the caller had just
 # removed. Retiring is for identities that are going away; the plain evictor is
@@ -65,29 +66,36 @@ _CHARACTER_RUNTIME_CACHE_EVICTORS = (
         "memory.anti_repeat_effects",
         "evict_cached_anti_repeat_effects",
         "retire_cached_anti_repeat_effects",
+        "revive_cached_anti_repeat_effects",
     ),
     (
         "memory.anti_repeat",
         "evict_cached_anti_repeat_corpus",
         "retire_cached_anti_repeat_corpus",
+        "revive_cached_anti_repeat_corpus",
     ),
     (
         "memory.startup_greeting_history",
         "evict_cached_startup_greeting_history",
         "retire_cached_startup_greeting_history",
+        "revive_cached_startup_greeting_history",
     ),
 )
 
 
-def _run_character_cache_evictors(names: tuple[str, ...], *, retire: bool) -> None:
+def _run_character_cache_evictors(names: tuple[str, ...], *, mode: str) -> None:
     """Best-effort by construction: one module failing must not abort a delete,
     rename or cloud-save import that has already touched the filesystem.
     """
-    for module_name, evictor_name, retiring_name in (
+    for module_name, evictor_name, retiring_name, reviving_name in (
         _CHARACTER_RUNTIME_CACHE_EVICTORS
     ):
         module = sys.modules.get(module_name)
-        wanted = retiring_name if (retire and retiring_name) else evictor_name
+        wanted = evictor_name
+        if mode == "retire" and retiring_name:
+            wanted = retiring_name
+        elif mode == "revive" and reviving_name:
+            wanted = reviving_name
         evict = getattr(module, wanted, None)
         if not callable(evict):
             continue
@@ -112,7 +120,23 @@ def evict_character_runtime_caches(*character_names: str) -> None:
     names = tuple(dict.fromkeys(name for name in character_names if name))
     if not names:
         return
-    _run_character_cache_evictors(names, retire=False)
+    _run_character_cache_evictors(names, mode="evict")
+
+
+def revive_character_runtime_caches(*character_names: str) -> None:
+    """Lift retirement for names an operation made live, and nothing else.
+
+    For a cloud import: it rewrites only the managed memory files, none of
+    which are these sidecars, so their caches still match what is on disk.
+    Evicting anyway would raise each store's sequence fence and discard a
+    snapshot staged but not yet flushed -- the just-delivered reply, statistic
+    or greeting. Only the retirement needs lifting, so a name reused after an
+    earlier delete can create its directory again.
+    """
+    names = tuple(dict.fromkeys(name for name in character_names if name))
+    if not names:
+        return
+    _run_character_cache_evictors(names, mode="revive")
 
 
 def retire_character_runtime_caches(*character_names: str) -> None:
@@ -126,7 +150,7 @@ def retire_character_runtime_caches(*character_names: str) -> None:
     names = tuple(dict.fromkeys(name for name in character_names if name))
     if not names:
         return
-    _run_character_cache_evictors(names, retire=True)
+    _run_character_cache_evictors(names, mode="retire")
 
 
 

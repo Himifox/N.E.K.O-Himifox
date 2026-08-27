@@ -17,7 +17,7 @@ from utils.file_utils import atomic_write_json
 
 
 @contextmanager
-def _isolated_sidecar_stores(memory_dir):
+def _isolated_sidecar_stores(memory_dir, config_manager=None):
     """Swap the three sidecar singletons for FRESH instances.
 
     Saving the module globals and restoring them is not enough. These tests
@@ -29,7 +29,10 @@ def _isolated_sidecar_stores(memory_dir):
     import memory.anti_repeat_effects as effects_module
     import memory.startup_greeting_history as greeting_module
 
-    config_manager = SimpleNamespace(memory_dir=str(memory_dir))
+    # A real config manager when the test drives a real flush: the write path
+    # enters cloudsave_writable_transaction, which needs more than memory_dir.
+    if config_manager is None:
+        config_manager = SimpleNamespace(memory_dir=str(memory_dir))
     store = effects_module.AntiRepeatEffectStore()
     store._config_manager = config_manager
     corpus = anti_repeat_module.AntiRepeatCorpus()
@@ -3265,15 +3268,21 @@ def test_cloud_import_evicts_stale_per_character_caches(tmp_path):
         corpus._cache["小满"] = [{"stale": True}]
         greeting._cache["小满"] = ["stale"]
 
+        store._retired.add("小满")
+
         import_local_cloudsave_snapshot(cm)
 
-        assert "小满" not in store._cache
-        assert "小满" not in corpus._cache
-        assert "小满" not in greeting._cache
-        # An imported profile is a LIVE identity. Retiring it would deny it
-        # the lazy directory creation every sibling memory writer gets, so a
-        # profile that ships no managed memory files would never persist its
-        # anti-repeat aggregates while the character is in active use.
+        # NOT evicted. The apply writes only MANAGED_MEMORY_FILENAMES, and none
+        # of the three sidecars are in it, so these caches still match disk --
+        # dropping them would only raise each sequence fence and discard a
+        # snapshot staged but not yet flushed.
+        assert store._cache["小满"] == {"version": 1, "daily_buckets": {"stale": {}}}
+        assert corpus._cache["小满"] == [{"stale": True}]
+        assert greeting._cache["小满"] == ["stale"]
+        # An imported profile is a LIVE identity. Left retired it would be
+        # denied the lazy directory creation every sibling memory writer gets,
+        # so a profile that ships no managed memory files would never persist
+        # its aggregates while the character is in active use.
         assert "小满" not in store._retired
 
 
@@ -3297,13 +3306,15 @@ def test_corpus_eviction_forgets_the_cache_without_writing_the_file(tmp_path):
 
 
 @pytest.mark.unit
-def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
-    """The single-character path replaces the same managed sidecars.
+def test_single_character_download_revives_without_evicting(tmp_path):
+    """A download lifts retirement and leaves the untouched caches alone.
 
-    The eviction was added to the full-snapshot import only, but
-    ``import_cloudsave_character_unit`` rewrites the same files -- so a cache
-    entry loaded before the download kept shadowing it, and the next flush
-    would write the pre-download state back over what was just imported.
+    The apply rewrites only MANAGED_MEMORY_FILENAMES, which contains none of
+    the three sidecars, so evicting them would drop nothing stale and would
+    raise each store's sequence fence -- silently discarding a snapshot staged
+    but not yet flushed, i.e. the reply just delivered. What the download does
+    need is the retirement lifted, so a name reused after an earlier delete can
+    create its directory again.
     """
     from utils.cloudsave_runtime import (
         export_cloudsave_character_unit,
@@ -3329,9 +3340,122 @@ def test_single_character_download_evicts_stale_per_character_caches(tmp_path):
 
         import_cloudsave_character_unit(target_cm, "云端角色")
 
-        assert "云端角色" not in store._cache
-        assert "云端角色" not in corpus._cache
-        assert "云端角色" not in greeting._cache
+        # See the full-snapshot test: the apply never touches these files, so
+        # their caches stay.
+        assert store._cache["云端角色"] == {"version": 1, "daily_buckets": {"stale": {}}}
+        assert corpus._cache["云端角色"] == [{"stale": True}]
+        assert greeting._cache["云端角色"] == ["stale"]
         assert "云端角色" not in store._retired, (
             "a downloaded character stayed retired and cannot create sidecars"
         )
+
+
+@pytest.mark.unit
+def test_a_download_does_not_discard_a_staged_sidecar_write(tmp_path):
+    """Evicting fences the sequence, which drops a staged-but-unflushed write.
+
+    ``record_anti_repeat_decision`` stages a snapshot and flushes it detached,
+    so there is an ordinary window where ``_staged_seq > _written_seq``. An
+    eviction in that window sets both to the staged value, and the pending
+    flush then early-returns on ``seq <= _written_seq`` and is lost -- the
+    reply just delivered never reaches the file. The apply never touches this
+    sidecar, so there is nothing to evict for in the first place.
+    """
+    import memory.anti_repeat_effects as effects_module
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="云端角色")
+    export_cloudsave_character_unit(source_cm, "云端角色")
+    _write_runtime_state(target_cm, character_name="云端角色")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+
+    with _isolated_sidecar_stores(
+        Path(target_cm.memory_dir), config_manager=target_cm
+    ) as (store, _c, _g):
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+        store.record_decision("云端角色", decision, now=1_700_000_000.0)
+        # Staged, deliberately not flushed -- the detached-flush window.
+        staged = store.stage_decision(
+            "云端角色", decision, now=1_700_000_001.0
+        )
+
+        import_cloudsave_character_unit(
+            target_cm, "云端角色", overwrite=True
+        )
+
+        store._flush_snapshot(*staged)
+
+    persisted = json.loads(
+        (Path(target_cm.memory_dir) / "云端角色" / "anti_repeat_effects.json")
+        .read_text(encoding="utf-8")
+    )
+    detected = [
+        bucket["counters"]["detected"]
+        for bucket in persisted["daily_buckets"].values()
+    ]
+    assert detected == [2], (
+        "the import fenced away a staged sidecar write: %s" % persisted
+    )
+
+
+@pytest.mark.unit
+def test_restoring_a_backup_drops_the_caches_it_replaces(tmp_path):
+    """The RESTORE does replace the sidecars, unlike the apply.
+
+    ``_restore_backup_records`` rmtree+copytree's whole ``memory/<name>/``
+    directories, so it puts the three sidecars back to their pre-operation
+    contents underneath any loaded cache. That used to be covered only by
+    accident, because the success path evicted before the rollback ran; now
+    that the success path merely lifts retirement, the restore has to evict for
+    itself. The eviction lives in the restore helper rather than at its four
+    call sites, so every caller is covered.
+    """
+    from utils.cloudsave_runtime import operations
+
+    cm = _make_config_manager(tmp_path)
+    memory_root = Path(cm.memory_dir)
+    character_dir = memory_root / "小满"
+    character_dir.mkdir(parents=True, exist_ok=True)
+    (character_dir / "anti_repeat_effects.json").write_text(
+        json.dumps({"version": 1, "daily_buckets": {"after": {}}}),
+        encoding="utf-8",
+    )
+    backup_dir = tmp_path / "backup" / "小满"
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "anti_repeat_effects.json").write_text(
+        json.dumps({"version": 1, "daily_buckets": {"before": {}}}),
+        encoding="utf-8",
+    )
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        store._cache["小满"] = {"version": 1, "daily_buckets": {"stale": {}}}
+        corpus._cache["小满"] = [{"stale": True}]
+        greeting._cache["小满"] = ["stale"]
+
+        operations._restore_backup_records(
+            cm,
+            [{"target": character_dir, "backup": backup_dir, "is_dir": True}],
+        )
+
+        assert "小满" not in store._cache, (
+            "the restore replaced the file but left the cache shadowing it"
+        )
+        assert "小满" not in corpus._cache
+        assert "小满" not in greeting._cache
+
+    restored = json.loads(
+        (character_dir / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    assert restored["daily_buckets"] == {"before": {}}

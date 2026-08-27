@@ -597,6 +597,21 @@ class StartupGreetingHistory:
                 self._evict_unlocked(resolved)
                 self._retired.discard(resolved)
 
+    def revive_character(self, name: str) -> None:
+        """Mark a name live again WITHOUT dropping its cache or fencing it.
+
+        The cloud APPLY never rewrites this sidecar -- it is not in
+        ``MANAGED_MEMORY_FILENAMES`` -- so the cache still matches the file and
+        evicting would only raise the sequence fence, silently discarding a
+        snapshot that was staged and not yet flushed. What such an import DOES
+        need is the retirement lifted: a name reused after an earlier delete
+        cannot create its directory until something says it is live again.
+        """
+        resolved = _resolve_name(name)
+        with self._get_lock(resolved):
+            with self._get_write_lock(resolved):
+                self._retired.discard(resolved)
+
     def retire_character(self, name: str) -> None:
         """Forget one identity whose directory is being REMOVED, and fence it.
 
@@ -622,6 +637,14 @@ def evict_cached_startup_greeting_history(*character_names: str) -> None:
         return
     for character_name in dict.fromkeys(character_names):
         history.evict_character(character_name)
+
+def revive_cached_startup_greeting_history(*character_names: str) -> None:
+    """Lift retirement for live identities without touching their caches."""
+    history = _GLOBAL_HISTORY
+    if history is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        history.revive_character(character_name)
 
 
 def retire_cached_startup_greeting_history(*character_names: str) -> None:

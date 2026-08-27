@@ -1577,6 +1577,13 @@
         if (!languageSelect || !limitSelect) return;
 
         const targetCharacter = repetitionInsightsTarget();
+        // Captured, not watched. The analysis language is written by more than
+        // one listener -- i18next dispatches `localechange` synchronously from
+        // inside its FIRST `languageChanged` subscriber, so a bump added to the
+        // later listener never runs: the value is already updated by then.
+        // Comparing at the single point of consumption cannot be defeated by
+        // listener order, or by a writer added later.
+        const requestedLanguage = languageSelect.value;
         const requestId = ++repetitionInsightsRequestId;
         setRepetitionInsightsBusy(true);
         setRepetitionInsightsStatus(
@@ -1596,7 +1603,8 @@
             });
             const report = await response.json();
             if (requestId !== repetitionInsightsRequestId
-                || repetitionInsightsTarget() !== targetCharacter) return;
+                || repetitionInsightsTarget() !== targetCharacter
+                || languageSelect.value !== requestedLanguage) return;
             if (!response.ok || !report || !Array.isArray(report.candidates)) {
                 throw new Error('local analysis unavailable');
             }
@@ -4750,17 +4758,7 @@
                 syncMemoryRoleTriggerLabel();
                 if (!repetitionInsightsLanguageTouched && !repetitionInsightsReport) {
                     const insightsLanguage = document.getElementById('memory-insights-language');
-                    const localeLanguage = repetitionInsightLanguageFromLocale();
-                    if (insightsLanguage && insightsLanguage.value !== localeLanguage) {
-                        insightsLanguage.value = localeLanguage;
-                        // A request already in flight was submitted under the
-                        // OLD language. Its candidates are tokenized that way,
-                        // so rendering them under the label the selector now
-                        // shows would misstate what was analysed. The manual
-                        // language handler resets the panel, which bumps this
-                        // id; the automatic one has to do it too.
-                        repetitionInsightsRequestId++;
-                    }
+                    if (insightsLanguage) insightsLanguage.value = repetitionInsightLanguageFromLocale();
                 }
                 refreshRepetitionInsightsStatus();
                 renderRepetitionInsightsResults();

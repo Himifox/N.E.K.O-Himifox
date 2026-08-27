@@ -32,6 +32,7 @@ from utils.file_utils import atomic_write_json
 from utils.character_memory import (
     evict_character_runtime_caches,
     retire_character_runtime_caches,
+    revive_character_runtime_caches,
     list_character_recent_paths,
 )
 from utils.recent_file import (
@@ -354,7 +355,7 @@ def export_cloudsave_character_unit(config_manager, character_name: str, *, over
             cloud_state["last_successful_export_at"] = exported_at
             config_manager.save_cloudsave_local_state(cloud_state)
         except Exception:
-            _restore_backup_records(backup_records)
+            _restore_backup_records(config_manager, backup_records)
             raise
 
         detail = build_cloudsave_character_detail(config_manager, character_name)
@@ -519,7 +520,7 @@ def import_cloudsave_character_unit(
                 detail = build_cloudsave_character_detail(config_manager, character_name)
             except BaseException:
                 try:
-                    _restore_backup_records(backup_records)
+                    _restore_backup_records(config_manager, backup_records)
                 finally:
                     for recent_path, messages in pending_snapshot.items():
                         set_recent_pending_unlocked(recent_path, messages)
@@ -541,15 +542,17 @@ def import_cloudsave_character_unit(
                 release_recent_file_locks(held_locks)
                 recent_transaction["held_locks"] = []
 
-            # Same reason as the full-snapshot import: this replaced the same
-            # managed sidecar files, and those caches only re-read on a MISS,
-            # so a stale entry would shadow what was just downloaded and be
-            # flushed back over it. Evict rather than retire -- the character
-            # is live, and a name reused after an earlier delete is still
-            # retired until an explicit live-identity event lifts it. Inside
-            # the cloud-apply fence, so nothing can repopulate from the old
-            # state first.
-            evict_character_runtime_caches(character_name)
+            # The APPLY above rewrote only MANAGED_MEMORY_FILENAMES, and none of
+            # the three sidecars (anti-repeat effects, anti-repeat corpus,
+            # startup-greeting history) are in it -- verified by planting
+            # sentinels and reading them back byte-identical. So their caches
+            # still match disk and must NOT be evicted: eviction raises each
+            # store's sequence fence, which silently discards a snapshot that
+            # was staged and not yet flushed -- the reply just delivered.
+            #
+            # What a download does need is the retirement lifted, so a name
+            # reused after an earlier delete can create its directory again.
+            revive_character_runtime_caches(character_name)
 
             result = {
                 "character_name": character_name,
@@ -704,7 +707,39 @@ def _snapshot_existing_targets(config_manager, backup_root: Path, targets: set[P
     return backup_records
 
 
-def _restore_backup_records(backup_records: list[dict[str, Any]]) -> None:
+def _memory_character_names_from_backup_records(config_manager, backup_records):
+    """Character names whose memory directory a restore is about to replace.
+
+    Unlike the apply, ``_restore_backup_records`` rmtree+copytree's whole
+    ``memory/<name>/`` directories, so it DOES put the three sidecars back to
+    their pre-operation contents underneath any loaded cache. That was
+    incidentally covered while the success path evicted; now that the success
+    path only lifts retirement, the restore has to evict for itself.
+    """
+    memory_root = Path(config_manager.memory_dir)
+    names: list[str] = []
+    for record in backup_records:
+        target = Path(record.get("target") or "")
+        if not record.get("is_dir") or target.parent != memory_root:
+            continue
+        if target.name:
+            names.append(target.name)
+    return tuple(dict.fromkeys(names))
+
+
+def _restore_backup_records(
+    config_manager, backup_records: list[dict[str, Any]]
+) -> None:
+    """Put backed-up targets back, and drop the caches they shadow.
+
+    Unlike the apply -- which writes only MANAGED_MEMORY_FILENAMES and leaves
+    the anti-repeat and startup-greeting sidecars untouched -- this
+    rmtree+copytree's whole ``memory/<name>/`` directories, so it DOES put
+    those sidecars back to their pre-operation contents underneath any loaded
+    cache. The eviction lives here rather than at the call sites because this
+    is the one function that does the replacing; four callers already restore
+    through it.
+    """
     for record in sorted(backup_records, key=lambda item: len(item["target"].parts), reverse=True):
         target_path = record["target"]
         if target_path.exists():
@@ -719,6 +754,9 @@ def _restore_backup_records(backup_records: list[dict[str, Any]]) -> None:
             shutil.copytree(backup_path, target_path, dirs_exist_ok=True)
         else:
             _facade._apply_runtime_file(backup_path, target_path)
+    evict_character_runtime_caches(
+        *_memory_character_names_from_backup_records(config_manager, backup_records)
+    )
 
 
 def _write_operation_backup_metadata(
@@ -837,7 +875,7 @@ def restore_cloudsave_operation_backup(
             }
             current_deleted = snapshot_recent_deletions(list(backup_recent_paths))
             try:
-                _restore_backup_records(backup_records)
+                _restore_backup_records(config_manager, backup_records)
                 for path in backup_recent_paths:
                     set_recent_pending_unlocked(path, [])
                 if recent_locks_held:
@@ -904,7 +942,7 @@ def restore_cloudsave_operation_backup(
         }
         current_deleted = snapshot_recent_deletions(list(recent_paths))
         try:
-            _restore_backup_records(backup_records)
+            _restore_backup_records(config_manager, backup_records)
             for path in recent_paths:
                 set_recent_pending_unlocked(path, pending_snapshot.get(path, []))
             if recent_locks_held:
@@ -1513,28 +1551,24 @@ def import_local_cloudsave_snapshot(
 
                 for recent_path in recent_state_paths:
                     set_recent_pending_unlocked(recent_path, [])
-                # The apply above replaced and removed character directories on
-                # disk. Per-character sidecar caches (anti-repeat effects, the
-                # anti-repeat corpus, startup-greeting history) only re-read on a
-                # cache MISS, so a stale entry would shadow the file just
-                # imported and then be flushed back over it — silently undoing
-                # part of the import. Evict here, while the fence is still
-                # closed, so nothing can repopulate from the old state first.
-                # Replacement matters as much as removal: both leave the cache
-                # describing a file that no longer exists.
+                # The apply above wrote managed files and removed the directories
+                # of characters absent from the snapshot. Per-character sidecar
+                # caches only re-read on a MISS, so for a REMOVED name a stale
+                # entry describes a file that is gone and would be flushed back,
+                # recreating the directory. Handle both here, while the fence is
+                # still closed, so nothing can repopulate from the old state.
                 memory_root = Path(config_manager.memory_dir)
                 removed_character_names = [
                     target_path.name
                     for target_path in delete_dir_targets
                     if target_path.parent == memory_root
                 ]
-                # Imported names are LIVE identities: invalidate only. An
-                # imported profile that ships no managed memory files has no
-                # directory yet, and a retired name never creates one, so
-                # retiring it would silently stop its aggregates from ever
-                # persisting while the character is in active use. Removed
-                # names are the opposite case and do retire.
-                evict_character_runtime_caches(*imported_character_names)
+                # Imported names are LIVE identities, and the apply never touched
+                # their sidecars, so they only need the retirement lifted --
+                # evicting would fence away a staged-but-unflushed snapshot.
+                # Removed names are the opposite case: their directories really
+                # are gone, so they retire.
+                revive_character_runtime_caches(*imported_character_names)
                 retire_character_runtime_caches(*removed_character_names)
                 return {
                     "manifest_fingerprint": computed_fingerprint,

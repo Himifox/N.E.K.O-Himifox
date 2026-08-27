@@ -1143,6 +1143,21 @@ class AntiRepeatEffectStore:
                 self._evict_unlocked(name)
                 self._retired.discard(name)
 
+    def revive_character(self, name: str) -> None:
+        """Mark a name live again WITHOUT dropping its cache or fencing it.
+
+        The cloud APPLY never rewrites this sidecar -- it is not in
+        ``MANAGED_MEMORY_FILENAMES`` -- so the cache still matches the file and
+        evicting would only raise the sequence fence, silently discarding a
+        snapshot that was staged and not yet flushed. What such an import DOES
+        need is the retirement lifted: a name reused after an earlier delete
+        cannot create its directory until something says it is live again.
+        """
+        name = _resolve_name(name)
+        with self._get_lock(name):
+            with self._get_write_lock(name):
+                self._retired.discard(name)
+
     def retire_character(self, name: str) -> None:
         """Forget one identity whose directory is being REMOVED, and fence it.
 
@@ -1177,6 +1192,14 @@ def evict_cached_anti_repeat_effects(*character_names: str) -> None:
         return
     for character_name in dict.fromkeys(character_names):
         store.evict_character(character_name)
+
+def revive_cached_anti_repeat_effects(*character_names: str) -> None:
+    """Lift retirement for live identities without touching their caches."""
+    store = _GLOBAL_STORE
+    if store is None:
+        return
+    for character_name in dict.fromkeys(character_names):
+        store.revive_character(character_name)
 
 
 def retire_cached_anti_repeat_effects(*character_names: str) -> None:
