@@ -2268,3 +2268,41 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 设计提交 `3f3e57f62`、实现提交 `19bb013d9` 已推送。`validate_pack_subscription()` 现在统一执行当前 subscription schema 校验和 pack 素材类型绑定；staging 在容量检查及创建目录前调用，direct install 在获取 registry/SQLite 写锁前调用。类型不一致会直接失败，不创建 staged job、知识数据库或注册表，也不会被降级为无订阅本地包。builder 端到端正例已改为与实际 pack 一致的 `corpus`，并继续完成 hybrid 预构建索引安装。本轮没有扩张 artifact、manifest 或 vector 摘要协议。
 
 项目 `.venv` Python 3.11 的受影响回归为 193 passed、1 skipped；知识库、公共路由和市场相邻宽回归为 497 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试判定或产品文件。
+
+## 第二十五轮：提交证据与取消所有权不能停留在局部状态
+
+第二十四轮关闭后完整分页发现 4 条 Codex conversation。逐条沿当前持久化、关闭、会话和市场任务调用链复核后全部成立。
+
+| 线程 | 单元 | 结论 |
+| --- | --- | --- |
+| `discussion_r3861346530` | EJ | activation receipt 与 state 同在可变 staging 目录，可一起伪造，成立 |
+| `discussion_r3861346534` | EK | retry worker 清理会吞掉 shutdown 调用者取消，成立 |
+| `discussion_r3861346541` | EL | 新用户输入在 turn-end 前不会清除旧 analyze owner，成立 |
+| `discussion_r3861346548` | EM | 退订调用者取消会在安装 mutation 收敛前释放 package guard，成立 |
+
+### EJ：active 必须引用 staging 目录外的提交日志
+
+- 在知识根目录增加独立 `activation-commits.json`，不放入任何 job 目录。真实 `install_pack()` 返回成功后，激活器才原子记录绑定 job ID、pack ID、pack 摘要、订阅摘要、实际 retrieval mode 与提交时间的记录。
+- 日志采用严格当前 schema 和精确记录结构；缺失、损坏或与 identity/receipt/state 不一致时，active job 进入 `degraded/active_job_commit_unverified`。仅在 staging 目录内复制 identity 并伪造 receipt/state 不能产生成功。
+- 提交记录按时间和 job ID 确定性保留最近 100 条，与终态 job 数量上限一致，避免新增长期无界状态。日志损坏失败关闭，不静默覆盖。
+- 正常卸载不删除提交记录，因此 7 天 TTL 内的历史 active 仍有效；这不要求当前 pack 永远安装。真正的终态目录仍按原 TTL/数量规则清理。
+
+### EK：区分子任务取消与 shutdown 调用者取消
+
+- `_cancel_task_if_running()` 捕获 `CancelledError` 时检查当前调用任务是否处于 cancelling；仅吞掉被清理子任务自身的取消，调用者取消必须向上传播。
+- `on_shutdown()` 包住最前面的知识索引器 retry 清理；若调用者在此处取消，暂存异常并继续现有全部关闭步骤，最后与 voice cleanup 取消一样重新抛出。
+- shutdown 已暂存取消后仍清理连接器、后台任务、Cloud Save、HTTP pools 与 indexer finish；不把调用者取消误记成普通子任务取消。
+
+### EL：新普通用户输入立即失效旧 analyze owner
+
+- 收到新的普通 transcript 或成功接收的用户图片时，立即按 request ID 核对 pending owner；只有明确属于同一 turn 的分片可保留，缺失 ID 或不同 ID 均清除旧 owner。
+- mirror 输入不进入普通对话，不能干扰 ordinary owner；主动 assistant 消息也不继承 owner。
+- session-end 只能复用仍与当前用户 turn 相同的 owner；新用户输入即使尚未收到 turn-end，也不能继承前一失败请求的 `public_knowledge` 路由。
+
+### EM：退订 settlement 独立持有 package guard
+
+- 退订入口先原子占用 package guard，再创建受强引用的 settlement task 执行取消 worker、等待 shielded installation mutation、解析持久归属并 remove。
+- 调用者取消时立即保留取消语义，但 settlement task 继续持有 guard；完成或失败的回调消费结果、释放 guard 并移除强引用。期间同包 subscribe/unsubscribe 均返回稳定 conflict。
+- guard 不能由已取消 worker 的 callback 代替；只有 installation mutation 与 removal 路径均结束后才能释放。正常退订结果、预安装幂等取消和其它 package 并发不变。
+
+关闭条件：伪造 staging receipt/state 无外部提交记录时不能显示 active；shutdown 在 retry 清理处取消仍完成收尾并重新抛出；新普通输入在 session-end 前清除旧 owner；退订调用者取消后同包新订阅必须等待真实 settlement。实现和远端证据齐全后逐条回复并 resolve 4 个线程，再完整分页复核。
