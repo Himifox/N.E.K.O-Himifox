@@ -823,3 +823,52 @@ def test_a_retired_name_writes_again_only_once_a_directory_exists(tmp_path):
 
     assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
     assert "Neko" in store._retired
+
+
+def test_queries_do_not_hand_live_cache_buckets_to_the_summarizer(tmp_path):
+    """Summarizing happens after the per-name lock is released.
+
+    Handing out the live bucket dicts lets a concurrent decision add pattern
+    keys while `_summarize_effect_buckets` iterates them — a "dictionary changed
+    size during iteration" away, and torn counters short of that. The staging
+    path already refuses to share sub-dicts for exactly this reason.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    signature = RepeatSignature("quiet lantern", "quiet lantern", "en")
+    store.record_decision(
+        "Neko", _decision(signature=signature, response_id="turn"), now=now
+    )
+    store._flush_snapshot(*store.stage_response_delivered("Neko", "turn", now=now))
+
+    live_day = store._cache["Neko"]["daily_buckets"]
+    live_responses = store._cache["Neko"]["response_buckets"]
+    handed_out = []
+    original = anti_repeat_effects._summarize_effect_buckets
+
+    def _spy(buckets):
+        buckets = list(buckets)
+        handed_out.extend(buckets)
+        return original(buckets)
+
+    anti_repeat_effects._summarize_effect_buckets = _spy
+    try:
+        day_result = store.query_effects("Neko", 30, now=now)
+        response_result = store.query_effects_for_responses(
+            "Neko", ["turn"], 100, now=now
+        )
+    finally:
+        anti_repeat_effects._summarize_effect_buckets = original
+
+    assert handed_out, "the summarizer should have received buckets"
+    live_objects = list(live_day.values()) + [
+        entry["bucket"] for entry in live_responses.values()
+    ]
+    for bucket in handed_out:
+        assert not any(bucket is live for live in live_objects)
+
+    # A later decision must not retroactively change an already-returned result.
+    store.record_decision("Neko", _decision(response_id="turn"), now=now)
+    assert day_result["totals"]["detected"] == 1
+    assert response_result["totals"]["detected"] == 1

@@ -937,11 +937,17 @@ class AntiRepeatEffectStore:
                 datetime.fromtimestamp(timestamp, timezone.utc).date()
                 - timedelta(days=days - 1)
             ).isoformat()
+            # Copy under the lock. Summarizing happens after the lock is
+            # released, and a concurrent decision mutates these very dicts —
+            # adding pattern keys while _summarize_effect_buckets iterates
+            # ``.values()`` is a "dictionary changed size during iteration"
+            # away. Same reason ``_copy_payload`` refuses to share sub-dicts.
             buckets = [
-                bucket
+                _copy_bucket(bucket)
                 for day, bucket in payload.get("daily_buckets", {}).items()
                 if cutoff <= day <= _utc_day(timestamp) and isinstance(bucket, dict)
             ]
+            started_at = float(payload.get("started_at", timestamp))
 
         if staged is not None:
             self._flush_snapshot(*staged)
@@ -949,7 +955,7 @@ class AntiRepeatEffectStore:
         result = {
             "schema_version": SCHEMA_VERSION,
             "source_available": source_available,
-            "started_at": float(payload.get("started_at", timestamp)),
+            "started_at": started_at,
             "period_days": days,
         }
         result.update(_summarize_effect_buckets(buckets))
@@ -984,8 +990,9 @@ class AntiRepeatEffectStore:
                 and _as_float(response_buckets[key].get("delivered_at")) > 0
             ]
             source_available = bool(linked)
+            # Copied under the lock for the same reason as ``query_effects``.
             buckets = [
-                response["bucket"]
+                _copy_bucket(response["bucket"])
                 for response in linked
                 if isinstance(response.get("bucket"), dict)
             ]
