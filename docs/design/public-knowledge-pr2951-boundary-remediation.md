@@ -2373,3 +2373,15 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 ## 第二十七轮实施证据
 
 设计提交 `26b732213`、实现提交 `cd5f1b09c` 已推送。提交日志裁剪现在先排除当前 job，从其它记录中按既有顺序保留最多 99 条，再无条件加入当前 activation 并确定性排序写回；总数仍为 100，不改变 schema。固定同一秒、当前 job ID 字典序最小的反例证明当前记录保留，淘汰的是历史集合中的最小排序项。完整 pack-jobs 回归为 97 passed、3 skipped；3 个 skip 仍是本机 Windows symlink 权限。Ruff、compileall 与 `git diff --check` 均通过。
+
+## 第二十八轮：质量案例缺字段也必须走统一失败契约
+
+第 27 轮最终分页发现 1 条更早插入的 CodeRabbit conversation（`discussion_r3868189551`）：response-quality loader 在确认必填字段存在前读取 `case["id"]` 和 `case["expected_mode"]`，缺字段会泄漏 `KeyError`，而不是该加载器对 schema 错误约定的 `ValueError`。问题成立。
+
+### ES：先验证必填字段子集，再读取案例值
+
+- 每个 case 确认为对象后，先要求基础 `required` 字段全部存在；缺失任一字段立即抛当前 documented-fields `ValueError`。
+- 之后保留现有 ID 唯一性、expected mode、strong identity 与精确字段集合判断；不放宽额外字段，也不改变合法 fixture。
+- 反例分别删除 `id` 与 `expected_mode`，证明二者都稳定返回 `ValueError` 而非 `KeyError`。
+
+关闭条件：任意缺少基础必填字段的质量案例都由 loader 的 schema `ValueError` 拒绝，且合法 strong/none 案例行为不变。实现、测试和远端证据齐全后回复并 resolve `PRRT_kwDOPD8VW86crI0V`。
