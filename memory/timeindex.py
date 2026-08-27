@@ -52,7 +52,11 @@ class LatestAssistantTexts:
     messages: list[str]
     source_available: bool
     skipped_row_count: int = 0
-    response_ids: list[str] = field(default_factory=list)
+    # POSITIONALLY ALIGNED with ``messages``: one entry per message, ``None``
+    # where that row carries no anti-repeat join key. A compacted list would
+    # lose the alignment callers need to tell which analyzed replies are
+    # linkable, and a partial set silently misrepresents the scope.
+    response_ids: list[str | None] = field(default_factory=list)
 
 
 _ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
@@ -834,7 +838,7 @@ class TimeIndexedMemory:
             [message for message, _response_id in records],
             True,
             skipped_row_count,
-            [response_id for _message, response_id in records if response_id],
+            [response_id for _message, response_id in records],
         )
 
     async def aretrieve_latest_assistant_texts(

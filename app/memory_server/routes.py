@@ -135,7 +135,24 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
     parameters["assistant_message_limit"] = req.assistant_message_limit
     summary = dict(report["summary"])
     summary["source_available"] = history.source_available
-    response_ids = list(getattr(history, "response_ids", []))
+    # ``response_ids`` is positionally aligned with ``history.messages``. The
+    # report may have analyzed only a SUFFIX of them (the budget narrows the
+    # window newest-first), so slice to that suffix before deciding anything.
+    aligned_ids = list(getattr(history, "response_ids", []))
+    analyzed_count = int(
+        summary.get("analyzed_message_count", summary["assistant_message_count"])
+    )
+    window_ids = aligned_ids[-analyzed_count:] if analyzed_count > 0 else []
+    # Message scope is only honest when EVERY analyzed reply is linkable. A
+    # partial set (legacy rows without the key mixed with newer ones, or ids
+    # belonging to messages the budget dropped) would let the panel label an
+    # out-of-window aggregate as "handling for the latest N replies". Anything
+    # short of full coverage falls back to the day-scoped aggregate.
+    scoped_ids = (
+        [str(response_id) for response_id in window_ids]
+        if window_ids and all(window_ids)
+        else []
+    )
     logger.info(
         "[RepetitionInsights] character=%s language=%s limit=%s messages=%s "
         "analyzed=%s candidates=%s skipped=%s linked_ids=%s",
@@ -146,7 +163,7 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
         summary.get("analyzed_message_count", summary["assistant_message_count"]),
         summary["candidate_count"],
         history.skipped_row_count,
-        len(response_ids),
+        len(scoped_ids),
     )
     payload: dict[str, object] = {
         "success": True,
@@ -158,19 +175,19 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
         "summary": summary,
         "candidates": report["candidates"],
     }
-    if response_ids:
+    if scoped_ids:
         # Internal-only join keys. The public router removes these before the
         # browser response, so runtime IDs never become UI/export data.
         #
-        # Emitted ONLY when the persisted history actually carries them. Sending
-        # an empty list still selects the message-scoped branch in
+        # Emitted ONLY when every analyzed reply carries one. Sending an empty
+        # list still selects the message-scoped branch in
         # ``main_routers.memory_router``, which then reports "no linked records"
         # forever instead of falling back to the day-scoped aggregate that does
         # work. Assistant rows only carry the key when the writer preserved
         # ``additional_kwargs`` end to end; the streamed cross_server path that
         # feeds ``time_indexed_original`` today does not, so the fallback is the
         # normal case rather than an edge case.
-        payload["_anti_repeat_response_ids"] = response_ids
+        payload["_anti_repeat_response_ids"] = scoped_ids
     return payload
 
 

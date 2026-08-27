@@ -127,7 +127,8 @@ async def test_internal_repetition_insights_forwards_present_response_ids():
         messages=["quiet lantern", "quiet lantern", "quiet lantern"],
         source_available=True,
         skipped_row_count=0,
-        response_ids=["turn-a", "turn-b"],
+        # Positionally aligned with `messages`: one entry per reply.
+        response_ids=["turn-a", "turn-b", "turn-c"],
     )
     time_manager = SimpleNamespace(
         aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
@@ -142,7 +143,7 @@ async def test_internal_repetition_insights_forwards_present_response_ids():
             ),
         )
 
-    assert result["_anti_repeat_response_ids"] == ["turn-a", "turn-b"]
+    assert result["_anti_repeat_response_ids"] == ["turn-a", "turn-b", "turn-c"]
 
 
 @pytest.mark.unit
@@ -595,3 +596,80 @@ async def test_public_repetition_insights_returns_sanitized_unavailable_error():
         "error": "local memory analysis unavailable",
     }
     assert "private upstream detail" not in response.body.decode("utf-8")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_ids, expected",
+    [
+        # Every analyzed reply linkable -> message scope is honest.
+        (["turn-a", "turn-b", "turn-c"], ["turn-a", "turn-b", "turn-c"]),
+        # A legacy row without the key mixed in -> the aggregate would cover
+        # only part of the window, so fall back to day scope.
+        (["turn-a", None, "turn-c"], None),
+        (["turn-a", None, None], None),
+        ([None, None, None], None),
+    ],
+)
+async def test_partial_response_id_coverage_falls_back_to_day_scope(
+    response_ids, expected
+):
+    from app.memory_server import routes
+
+    history = SimpleNamespace(
+        messages=["quiet lantern", "quiet lantern", "quiet lantern"],
+        source_available=True,
+        skipped_row_count=0,
+        response_ids=response_ids,
+    )
+    time_manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
+    )
+
+    with patch.object(routes.runtime, "time_manager", time_manager):
+        result = await routes.repetition_insights(
+            "test_char",
+            routes.RepetitionInsightsRequest(language="en", assistant_message_limit=25),
+        )
+
+    assert result.get("_anti_repeat_response_ids") == expected
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_response_ids_are_sliced_to_the_analyzed_window(monkeypatch):
+    """The budget narrows the window newest-first; the IDs must follow it.
+
+    Emitting IDs for replies the report never analyzed would let the panel label
+    an out-of-window aggregate as handling for the latest requested replies.
+    """
+    from app.memory_server import routes
+    from utils import natural_expression_candidates as candidate_core
+
+    # One such reply mines to 145 occurrences, so a 200 budget keeps exactly one.
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 200)
+    unbroken = "今天天气真好我们一起去散步你觉得怎么样我觉得非常开心因为可以和你聊天"
+    history = SimpleNamespace(
+        messages=[unbroken] * 4,
+        source_available=True,
+        skipped_row_count=0,
+        response_ids=["oldest", "older", "newer", "newest"],
+    )
+    time_manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
+    )
+
+    with patch.object(routes.runtime, "time_manager", time_manager):
+        result = await routes.repetition_insights(
+            "test_char",
+            routes.RepetitionInsightsRequest(
+                language="zh-CN", assistant_message_limit=25
+            ),
+        )
+
+    analyzed = result["summary"]["analyzed_message_count"]
+    assert result["summary"]["messages_truncated"] is True
+    assert 0 < analyzed < 4
+    # Exactly the newest `analyzed` ids, never the dropped older ones.
+    assert result["_anti_repeat_response_ids"] == ["oldest", "older", "newer", "newest"][-analyzed:]

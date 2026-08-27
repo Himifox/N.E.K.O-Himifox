@@ -1068,3 +1068,41 @@ def test_block_list_assistant_rows_reject_an_impossible_visible_length():
     )
 
     assert _assistant_record_from_stored_message(stored) is None
+
+
+def test_latest_assistant_texts_keep_response_ids_positionally_aligned(
+    timeindex_module,
+    tmp_path,
+):
+    """`response_ids` must be one entry per message, `None` where absent.
+
+    A compacted list loses the alignment the caller needs to tell WHICH analyzed
+    replies are linkable. With a mix of legacy rows and newer ones, a compacted
+    list looks like full coverage of a shorter window, and the panel would label
+    a partial aggregate as handling for the whole requested range.
+    """
+
+    def _row(session_id, text, response_id, stamp):
+        data = {"content": text}
+        if response_id is not None:
+            data["additional_kwargs"] = {"anti_repeat_response_id": response_id}
+        return {
+            "session_id": session_id,
+            "message": json.dumps({"type": "ai", "data": data}, ensure_ascii=False),
+            "timestamp": stamp,
+        }
+
+    rows = [
+        _row("1", "oldest reply", None, "2026-01-01 00:00:00.000000"),
+        _row("2", "middle reply", "turn-b", "2026-01-02 00:00:00.000000"),
+        _row("3", "newest reply", None, "2026-01-03 00:00:00.000000"),
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 10)
+    finally:
+        engine.dispose()
+
+    assert result.messages == ["oldest reply", "middle reply", "newest reply"]
+    assert len(result.response_ids) == len(result.messages)
+    assert result.response_ids == [None, "turn-b", None]
