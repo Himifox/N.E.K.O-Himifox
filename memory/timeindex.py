@@ -99,6 +99,22 @@ def _strip_legacy_proactive_action_note(content: str) -> str:
     return content
 
 
+def _visible_assistant_text(content: str, visible_text_length: int | None) -> str | None:
+    """Apply the history-only visible-text boundary to one assistant body.
+
+    Shared by both content shapes so the rule cannot hold for one and not the
+    other. A recorded visible length that does not fit rejects the row rather
+    than guessing, because over-reading is what would leak the hidden tail.
+    """
+    if visible_text_length is not None:
+        if visible_text_length > len(content):
+            return None
+        content = content[:visible_text_length]
+    else:
+        content = _strip_legacy_proactive_action_note(content)
+    return content.strip() or None
+
+
 def _assistant_record_from_stored_message(
     message_raw: object,
 ) -> tuple[str, str | None] | None:
@@ -136,13 +152,7 @@ def _assistant_record_from_stored_message(
 
     content = data.get("content")
     if isinstance(content, str):
-        if visible_text_length is not None:
-            if visible_text_length > len(content):
-                return None
-            content = content[:visible_text_length]
-        else:
-            content = _strip_legacy_proactive_action_note(content)
-        text_content = content.strip()
+        text_content = _visible_assistant_text(content, visible_text_length)
         return (text_content, response_id) if text_content else None
     if not isinstance(content, list):
         return None
@@ -155,7 +165,15 @@ def _assistant_record_from_stored_message(
         if isinstance(text_value, str) and text_value.strip():
             text_parts.append(text_value.strip())
     joined = "\n".join(text_parts).strip()
-    return (joined, response_id) if joined else None
+    if not joined:
+        return None
+    # The same visible-text boundary has to apply here. Block-list content is
+    # not an edge case: cross_server persists every assistant turn as
+    # ``[{"type": "text", ...}]``, so this is the shape almost all stored rows
+    # actually have, and leaving it unguarded meant the hidden-text rule the
+    # string branch enforces was effectively never enforced at all.
+    text_content = _visible_assistant_text(joined, visible_text_length)
+    return (text_content, response_id) if text_content else None
 
 
 def _assistant_text_from_stored_message(message_raw: object) -> str | None:

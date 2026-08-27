@@ -999,3 +999,72 @@ def test_batched_read_reduces_python_peak_memory(
         if tracemalloc.is_tracing():
             tracemalloc.stop()
         engine.dispose()
+
+
+def test_block_list_assistant_rows_honor_the_visible_text_boundary():
+    """Block-list content is the shape cross_server actually persists.
+
+    ``main_logic/cross_server.py`` rebuilds every assistant turn as
+    ``[{"type": "text", ...}]``, so a guard that only ran on the string branch
+    was effectively never enforced on real rows.
+    """
+    from memory.timeindex import _assistant_record_from_stored_message
+
+    note = '[给博士放了《晴天》— 周杰伦]'
+    stored = json.dumps(
+        {
+            "type": "ai",
+            "data": {
+                "content": [
+                    {"type": "text", "text": "今天也要好好休息哦\n" + note},
+                ]
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    record = _assistant_record_from_stored_message(stored)
+
+    assert record is not None
+    assert record[0] == "今天也要好好休息哦"
+    assert note not in record[0]
+
+
+def test_block_list_assistant_rows_truncate_to_the_recorded_visible_length():
+    from memory.timeindex import _assistant_record_from_stored_message
+
+    visible = "今天也要好好休息哦"
+    stored = json.dumps(
+        {
+            "type": "ai",
+            "data": {
+                "content": [{"type": "text", "text": visible + "\n[hidden note]"}],
+                "additional_kwargs": {
+                    "anti_repeat_response_id": "turn-1",
+                    "anti_repeat_visible_text_length": str(len(visible)),
+                },
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    record = _assistant_record_from_stored_message(stored)
+
+    assert record == (visible, "turn-1")
+
+
+def test_block_list_assistant_rows_reject_an_impossible_visible_length():
+    from memory.timeindex import _assistant_record_from_stored_message
+
+    stored = json.dumps(
+        {
+            "type": "ai",
+            "data": {
+                "content": [{"type": "text", "text": "short"}],
+                "additional_kwargs": {"anti_repeat_visible_text_length": "9999"},
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    assert _assistant_record_from_stored_message(stored) is None
