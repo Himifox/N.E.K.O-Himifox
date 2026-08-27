@@ -2306,3 +2306,9 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - guard 不能由已取消 worker 的 callback 代替；只有 installation mutation 与 removal 路径均结束后才能释放。正常退订结果、预安装幂等取消和其它 package 并发不变。
 
 关闭条件：伪造 staging receipt/state 无外部提交记录时不能显示 active；shutdown 在 retry 清理处取消仍完成收尾并重新抛出；新普通输入在 session-end 前清除旧 owner；退订调用者取消后同包新订阅必须等待真实 settlement。实现和远端证据齐全后逐条回复并 resolve 4 个线程，再完整分页复核。
+
+## 第二十五轮实施证据
+
+设计提交 `615304adc`、实现提交 `89c4bdde4` 已推送。EJ 在知识根目录建立严格、原子且最多保留 100 条记录的 `activation-commits.json`；active 作业现在必须同时匹配 staging 内 identity/receipt/state 与 staging 外提交记录，伪造局部文件不能产生成功状态，正常卸载则保留历史提交证明。EK 令任务清理 helper 只吸收子任务自身取消，并让 shutdown 在 retry 或 voice 清理处收到调用者取消时暂存、完成剩余收尾后重新抛出。EL 在新普通 transcript 或图片到达时按 request ID 立即失效旧 analyze owner，仅同一 turn 分片可保留，mirror 路径不变。EM 以独立强引用 settlement task 持有退订 package guard，调用者取消不会中断安装收敛和 remove，也不会提前允许同包重新订阅。
+
+项目 `.venv` Python 3.11 的四组精确反例及相邻回归为 135 passed、1 skipped；知识库、公共会话、启动关闭和市场宽回归为 553 passed、1 skipped、3 deselected。skip 是本机 Windows 目录 symlink 权限；3 个 deselected 是已归档的 staged-job identity 旧夹具。相关 Python 文件 Ruff、compileall 与 `git diff --check` 均通过；本轮没有前端或 i18n 改动。pytest 退出后的遥测日志告警来自沙盒拒绝写入用户配置目录，不影响测试退出码、判定或产品文件。
