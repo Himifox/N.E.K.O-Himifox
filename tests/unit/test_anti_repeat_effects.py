@@ -1223,3 +1223,62 @@ def test_a_reset_outrun_by_a_writer_cuts_again(tmp_path):
     assert persisted["daily_buckets"] == {}, (
         "the reset reported success while the file still held the old data"
     )
+
+
+def test_a_reset_abandons_when_the_identity_is_replaced(tmp_path):
+    """An import landing mid-flush must not have its file cleared afterwards.
+
+    Eviction fences the write sequence at exactly the value the reset staged,
+    so the flush is silently skipped AND "did the sequence advance" reads no.
+    Publishing on that basis put an empty payload into the cache the import had
+    just dropped, and the next decision flushed it over the imported file --
+    while the endpoint reported the reset had succeeded. Re-cutting would be
+    worse still: it would clear data the reset never asked about.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    day = anti_repeat_effects._utc_day(now)
+    store.record_decision("Neko", _decision(), now=now)
+    persisted_path = tmp_path / "Neko" / "anti_repeat_effects.json"
+
+    original_flush = store._flush_snapshot
+
+    def _import_then_flush(*args, **kwargs):
+        store._flush_snapshot = original_flush
+        # What import_local_cloudsave_snapshot does under the cloud-apply
+        # fence: drop the cache, then replace memory/Neko/ wholesale.
+        store.evict_character("Neko")
+        imported = json.loads(persisted_path.read_text(encoding="utf-8"))
+        imported["daily_buckets"][day]["reason_counts"]["bm25"] = 42
+        persisted_path.write_text(
+            json.dumps(imported, ensure_ascii=False), encoding="utf-8"
+        )
+        return original_flush(*args, **kwargs)
+
+    store._flush_snapshot = _import_then_flush
+    try:
+        with pytest.raises(RuntimeError):
+            store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    assert "Neko" not in store._cache, (
+        "the reset republished a cut into the cache the import had evicted"
+    )
+    # A different reason, so the imported count stays exactly 42 and the
+    # assertion cannot be satisfied by an increment that merely looks intact.
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("literal_similarity",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=now + 1,
+    )
+    imported = json.loads(persisted_path.read_text(encoding="utf-8"))
+    assert imported["daily_buckets"][day]["reason_counts"]["bm25"] == 42, (
+        "the imported file was clobbered by the abandoned reset"
+    )

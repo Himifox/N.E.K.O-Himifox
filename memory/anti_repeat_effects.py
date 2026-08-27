@@ -563,6 +563,11 @@ class AntiRepeatEffectStore:
         self._written_seq: dict[str, int] = {}
         # Names retired by ``evict_character``; see ``_write_file_path``.
         self._retired: set[str] = set()
+        # Bumped whenever an identity is dropped from the cache. A sequence
+        # fence cannot stand in for this: eviction fences to exactly the
+        # sequence already staged, so "did the sequence advance" reads NO for
+        # an eviction and a reset cannot tell it from a quiet window.
+        self._evict_generation: dict[str, int] = {}
         self._detached_flushes: set[asyncio.Task] = set()
 
     def _existing_file_path(self, name: str) -> str:
@@ -1072,15 +1077,29 @@ class AntiRepeatEffectStore:
                 cleared = _default_payload(timestamp)
                 seq = self._staged_seq.get(name, 0) + 1
                 self._staged_seq[name] = seq
+                generation = self._evict_generation.get(name, 0)
                 staged = (name, _copy_payload(cleared), seq)
             self._flush_snapshot(*staged, raise_on_error=True)
             with self._get_lock(name):
+                if self._evict_generation.get(name, 0) != generation:
+                    # A cloud import (or a delete) replaced this identity while
+                    # the flush was in flight. Eviction fences the write
+                    # sequence, so the flush above was silently skipped and the
+                    # file on disk is the imported one. Publishing the cut here
+                    # would put an empty payload into the cache the import just
+                    # dropped, and the next decision would flush it over the
+                    # imported file. Re-cutting would be worse: it would clear
+                    # data the reset never asked about.
+                    raise RuntimeError(
+                        "anti-repeat reset abandoned: the identity was replaced"
+                    )
                 if self._staged_seq.get(name, 0) == seq:
                     self._cache[name] = cleared
                     return
         raise RuntimeError("anti-repeat reset lost the race to concurrent writes")
 
     def _evict_unlocked(self, name: str) -> None:
+        self._evict_generation[name] = self._evict_generation.get(name, 0) + 1
         fence = max(
             self._staged_seq.get(name, 0),
             self._written_seq.get(name, 0),
