@@ -1521,6 +1521,15 @@ async def _guard_phase2_output(
             record_regen_effect(
                 "blocked_after_regen_unanswered",
                 score_after=regen_total,
+                # The REGENERATED draft is what tripped the unanswered-repeat
+                # detector; the closure's reasons/signature describe the initial
+                # one. Same correction as the literal branch below.
+                extra_reasons=("unanswered_repeat",),
+                signature=build_repeat_signature(
+                    cleaned,
+                    regen_unanswered_repeat_signal.repeated_terms,
+                    language=proactive_lang,
+                ),
             )
             active_logger.info(
                 "[%s] proactive regen still repeats unanswered content "

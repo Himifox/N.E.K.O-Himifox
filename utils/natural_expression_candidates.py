@@ -345,7 +345,9 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-# ``<pre>`` / ``<code>`` mark code just as explicitly as a Markdown fence does.
+# ``<pre>`` / ``<code>`` mark code as explicitly as a Markdown fence does, and
+# ``<script>`` / ``<style>`` are raw-text elements whose bodies are code by
+# definition. The close tag is a backreference so containers cannot cross-match.
 # The generic ``<...>`` template pattern only covers the TAGS, which protected
 # the delimiters while leaving the code between them mineable — worse than not
 # handling it, because it looks handled.
@@ -358,8 +360,8 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # form and for an unclosed fence. The pattern requires the literal ``<code`` /
 # ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
 # containing comparisons or words like "decode" is unaffected.
-_HTML_CODE_RE = re.compile(
-    r"<pre\b[^>]*>[\s\S]*?(?:</pre\s*>|\Z)|<code\b[^>]*>[\s\S]*?(?:</code\s*>|\Z)",
+_HTML_RAW_TEXT_RE = re.compile(
+    r"<(pre|code|script|style)\b[^>]*>[\s\S]*?(?:</\1\s*>|\Z)",
     re.IGNORECASE,
 )
 
@@ -377,7 +379,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     block_code = _merge_spans(fenced + _indented_code_spans(text))
     spans = block_code + _inline_code_spans(text, block_code)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
-    spans.extend(match.span() for match in _HTML_CODE_RE.finditer(text))
+    spans.extend(match.span() for match in _HTML_RAW_TEXT_RE.finditer(text))
     return _merge_spans(spans)
 
 
@@ -864,6 +866,23 @@ def build_user_review_report(
         > USER_REVIEW_MAX_INPUT_CHARACTERS
     ):
         analyzed = analyzed[1:]
+    # Dropping whole messages floors at one, so a single reply longer than the
+    # advertised limit would otherwise be mined in full. Truncate its body
+    # instead of failing. Cutting mid-container is safe in the protective
+    # direction: an unterminated fence or <code>/<pre> now protects through the
+    # end of the text, so a severed block stays protected rather than exposed.
+    if analyzed and len(analyzed[0].content) > USER_REVIEW_MAX_INPUT_CHARACTERS:
+        oversized = analyzed[0]
+        analyzed = [
+            SourceMessage(
+                language=oversized.language,
+                content=oversized.content[:USER_REVIEW_MAX_INPUT_CHARACTERS],
+                source_line=oversized.source_line,
+            )
+        ] + analyzed[1:]
+        content_truncated = True
+    else:
+        content_truncated = False
 
     config = MiningConfig(threshold=DEFAULT_THRESHOLD)
     while True:
@@ -899,7 +918,9 @@ def build_user_review_report(
         "summary": {
             "assistant_message_count": len(messages),
             "analyzed_message_count": len(analyzed),
-            "messages_truncated": len(analyzed) < len(messages),
+            "messages_truncated": (
+                len(analyzed) < len(messages) or content_truncated
+            ),
             "candidate_count": len(all_candidates),
             "returned_candidate_count": len(candidates),
             "candidates_truncated": len(candidates) < len(all_candidates),

@@ -872,3 +872,28 @@ def test_queries_do_not_hand_live_cache_buckets_to_the_summarizer(tmp_path):
     store.record_decision("Neko", _decision(response_id="turn"), now=now)
     assert day_result["totals"]["detected"] == 1
     assert response_result["totals"]["detected"] == 1
+
+
+def test_availability_reflects_in_period_buckets_not_file_existence(tmp_path):
+    """`clear_effects` leaves an empty payload on disk.
+
+    Reporting availability from file existence made the panel skip its "no
+    records for this period" state and render a row of zeros right after the
+    user cleared the statistics. A nonempty sidecar whose buckets all fall
+    outside the requested window had the same problem.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+
+    assert store.query_effects("Neko", 30, now=now)["source_available"] is True
+
+    store.clear_effects("Neko")
+    assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
+    assert store.query_effects("Neko", 30, now=now)["source_available"] is False
+
+    # Buckets outside the requested window are equally unavailable.
+    store.record_decision("Neko", _decision(), now=now)
+    much_later = now + 60 * 24 * 60 * 60
+    assert store.query_effects("Neko", 7, now=much_later)["source_available"] is False

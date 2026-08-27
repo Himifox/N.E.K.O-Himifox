@@ -926,10 +926,6 @@ class AntiRepeatEffectStore:
             raise ValueError("effect days must be one of 7, 30, or 90")
         timestamp = time.time() if now is None else float(now)
         name = _resolve_name(name)
-        cached = self._cache.get(name)
-        source_available = os.path.exists(self._existing_file_path(name)) or bool(
-            cached and cached.get("daily_buckets")
-        )
         with self._get_lock(name):
             payload = self._load_unlocked(name, timestamp)
             staged = self._stage_unlocked(name) if self._prune(payload, timestamp) else None
@@ -954,7 +950,14 @@ class AntiRepeatEffectStore:
 
         result = {
             "schema_version": SCHEMA_VERSION,
-            "source_available": source_available,
+            # Availability means "there are aggregates IN THIS WINDOW", not "a
+            # sidecar file exists". ``clear_effects`` leaves an empty payload on
+            # disk, so file existence reported available right after the user
+            # cleared the statistics and the panel skipped its "no records for
+            # this period" state to render a row of zeros. A nonempty sidecar
+            # whose buckets all fall outside the 7/30/90-day window had the same
+            # problem.
+            "source_available": bool(buckets),
             "started_at": started_at,
             "period_days": days,
         }

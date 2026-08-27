@@ -61,6 +61,9 @@ class LatestAssistantTexts:
 
 _ANTI_REPEAT_RESPONSE_ID_KEY = "anti_repeat_response_id"
 _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY = "anti_repeat_visible_text_length"
+# A visible-text length is one reply's character count; 12 digits is already
+# absurdly generous and stays far under CPython's int-conversion digit limit.
+_MAX_VISIBLE_LENGTH_DIGITS = 12
 
 _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
     re.compile(pattern)
@@ -151,7 +154,20 @@ def _assistant_record_from_stored_message(
         raw_visible_length = additional_kwargs.get(
             _ANTI_REPEAT_VISIBLE_TEXT_LENGTH_KEY
         )
-        if isinstance(raw_visible_length, str) and raw_visible_length.isdigit():
+        if raw_visible_length is not None:
+            # A digit string longer than CPython's int-conversion limit (4300 by
+            # default) passes isdigit() and then raises ValueError, which escaped
+            # this per-row parser and failed the WHOLE request — one damaged
+            # field blocking analysis of every otherwise valid reply. Bound the
+            # field, and treat a present-but-unusable value as a reason to drop
+            # the row: falling back to the legacy stripper would risk reading
+            # past the visible text and exposing the hidden tail.
+            if (
+                not isinstance(raw_visible_length, str)
+                or not raw_visible_length.isdigit()
+                or len(raw_visible_length) > _MAX_VISIBLE_LENGTH_DIGITS
+            ):
+                return None
             visible_text_length = int(raw_visible_length)
 
     content = data.get("content")

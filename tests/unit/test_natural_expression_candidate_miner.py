@@ -1111,3 +1111,42 @@ def test_html_code_protection_does_not_swallow_prose():
         "we always decode the exact same thing and encode it",
     ):
         assert any("always" in phrase for phrase in _mined(text)), text
+
+
+def test_script_and_style_bodies_are_protected():
+    """`<script>` / `<style>` are raw-text elements; their bodies are code."""
+    for text in (
+        "<script>secret_token_helper = compute()</script>",
+        "<style>.secret_token_helper{color:red}</style>",
+        "<script>secret_token_helper = compute()",
+    ):
+        assert not [
+            phrase for phrase in _mined(text) if "secret" in phrase or "helper" in phrase
+        ], text
+
+
+def test_raw_text_containers_do_not_cross_match():
+    """The closing tag is a backreference, so `<pre>` cannot close a `<code>`."""
+    text = "<pre>alpha</pre> we always say the exact same thing <code>beta</code>"
+
+    spans = candidate_core._protected_spans(text)
+
+    assert len(spans) == 2
+    assert any("always" in phrase for phrase in _mined(text))
+
+
+def test_a_single_oversized_reply_is_truncated_to_the_character_budget():
+    """Dropping whole messages floors at one, so the last one must be trimmed.
+
+    Otherwise a reply larger than the advertised limit is mined in full and the
+    report claims a budget it never enforced.
+    """
+    oversized = "alpha beta gamma delta. " * 9000
+    assert len(oversized) > candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+
+    summary = candidate_core.build_user_review_report(
+        [candidate_core.SourceMessage("en", oversized, 1)], rules_by_language={}
+    )["summary"]
+
+    assert summary["analyzed_message_count"] == 1
+    assert summary["messages_truncated"] is True

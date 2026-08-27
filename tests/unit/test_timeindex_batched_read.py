@@ -1106,3 +1106,30 @@ def test_latest_assistant_texts_keep_response_ids_positionally_aligned(
     assert result.messages == ["oldest reply", "middle reply", "newest reply"]
     assert len(result.response_ids) == len(result.messages)
     assert result.response_ids == [None, "turn-b", None]
+
+
+def test_damaged_visible_length_drops_only_its_own_row():
+    """One damaged metadata field must not fail the whole insights request.
+
+    A digit string longer than CPython's int-conversion limit passes isdigit()
+    and then raises ValueError, which escaped the per-row parser. A
+    present-but-unusable value drops just that row: falling back to the legacy
+    stripper could read past the visible text and expose the hidden tail.
+    """
+    from memory.timeindex import _assistant_record_from_stored_message
+
+    def _row(value):
+        return json.dumps(
+            {
+                "type": "ai",
+                "data": {
+                    "content": "hello there",
+                    "additional_kwargs": {"anti_repeat_visible_text_length": value},
+                },
+            }
+        )
+
+    assert _assistant_record_from_stored_message(_row("9" * 5000)) is None
+    assert _assistant_record_from_stored_message(_row("abc")) is None
+    assert _assistant_record_from_stored_message(_row(12)) is None
+    assert _assistant_record_from_stored_message(_row("5")) == ("hello", None)
