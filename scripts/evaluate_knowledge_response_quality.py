@@ -12,17 +12,23 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import websockets
 
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
 from knowledge.api import KnowledgeService
 from knowledge.models import normalize_knowledge_title
 
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "tests" / "fixtures" / "knowledge_response_quality_cases.json"
 
 

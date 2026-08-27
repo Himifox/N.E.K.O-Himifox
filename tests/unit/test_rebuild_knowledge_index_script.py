@@ -404,6 +404,31 @@ def test_discard_job_action_only_removes_quarantined_job(
     assert not job_dir.exists()
 
 
+def test_discard_job_action_removes_crashed_creation_directory(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    job_id = f".creating-{'a' * 32}"
+    job_dir = tmp_path / ".staging" / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "partial").write_bytes(b"partial")
+    args = MODULE._build_parser().parse_args(
+        [
+            "--discard-job",
+            job_id,
+            "--knowledge-root",
+            str(tmp_path),
+        ]
+    )
+
+    result = asyncio.run(MODULE._run(args))
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["ok"] is True
+    assert not job_dir.exists()
+
+
 def test_status_splits_failed_retry_boundaries(tmp_path: Path) -> None:
     database = tmp_path / "knowledge.db"
     _write_v6_chunks(database)

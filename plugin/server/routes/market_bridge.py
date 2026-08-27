@@ -89,6 +89,7 @@ _TASK_MAX_ENTRIES = 200
 # 短期一次性配对码；成功交换后立即消费。
 _ONE_TIME_CODES: dict[str, float] = {}
 _ONE_TIME_CODE_TTL_SECONDS = 5 * 60
+_PLUGIN_MANAGER_DEV_PORT = 5173
 
 # OAuth 登录状态存储在本机用户目录，仅供本地插件面板使用。
 _OAUTH_CLIENT_ID = NEKO_AUTH_CLIENT_ID
@@ -348,7 +349,11 @@ def _require_local_bridge_token_access(request: Request) -> int:
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
 
     origin = request.headers.get("origin")
-    expected_origin_ports = {request_port, _main_server_port()}
+    expected_origin_ports = {
+        request_port,
+        _main_server_port(),
+        _PLUGIN_MANAGER_DEV_PORT,
+    }
     if origin and not _is_local_bridge_origin(origin, expected_origin_ports):
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
     return request_port

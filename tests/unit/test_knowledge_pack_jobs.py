@@ -728,9 +728,9 @@ async def test_quarantined_job_is_not_processed_or_cleaned(tmp_path):
     assert service.list_packs() == ()
 
 
-def test_incomplete_creation_directory_cannot_be_discarded_as_a_public_job(tmp_path):
+def test_incomplete_creation_directory_requires_explicit_discard(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
-    orphan = tmp_path / ".staging" / ".creating-crashed"
+    orphan = tmp_path / ".staging" / f".creating-{'a' * 32}"
     orphan.mkdir(parents=True)
     (orphan / "partial").write_bytes(b"partial")
 
@@ -743,8 +743,11 @@ def test_incomplete_creation_directory_cannot_be_discarded_as_a_public_job(tmp_p
     listed = service.list_pack_jobs()[0]
     assert listed["state"] == "degraded"
     assert listed["orphan"] is True
-    assert discard_degraded_pack_job(tmp_path, listed["job_id"]) is False
-    assert orphan.is_dir()
+    assert listed["reason"] == "incomplete_job_creation"
+    assert cancel_pack_job(tmp_path, listed["job_id"]) is False
+    assert discard_degraded_pack_job(tmp_path, listed["job_id"]) is True
+    assert not orphan.exists()
+    assert service.stage_pack(_pack(pack_id="after-discard"))["state"] == "queued"
 
 
 def test_discard_only_removes_degraded_jobs(tmp_path):
@@ -1081,6 +1084,9 @@ async def test_failed_state_race_observes_concurrent_cancel(tmp_path, monkeypatc
         "pack-0123456789AF",
         "pack-0123456789ab/child",
         "pack-0123456789ab\\child",
+        ".creating-crashed",
+        f".creating-{'a' * 31}",
+        f".creating-{'A' * 32}",
     ),
 )
 def test_discard_rejects_non_generated_job_ids_without_touching_root(

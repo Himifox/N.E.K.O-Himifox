@@ -105,7 +105,7 @@ def test_knowledge_bridge_keeps_get_timeout_short(monkeypatch):
     )
 
 
-def test_local_bridge_accepts_only_plugin_or_dynamic_main_server_origin(monkeypatch):
+def test_local_bridge_accepts_only_supported_local_origins(monkeypatch):
     from plugin.server.routes import market_bridge as module
 
     monkeypatch.setattr(module, "_main_server_port", lambda: 49321)
@@ -121,6 +121,12 @@ def test_local_bridge_accepts_only_plugin_or_dynamic_main_server_origin(monkeypa
     ) == 48910
     assert module._require_local_bridge_token_access(
         request("http://127.0.0.1:49321")
+    ) == 48910
+    assert module._require_local_bridge_token_access(
+        request("http://localhost:5173")
+    ) == 48910
+    assert module._require_local_bridge_token_access(
+        request("http://127.0.0.1:5173")
     ) == 48910
 
     denied_origins = (

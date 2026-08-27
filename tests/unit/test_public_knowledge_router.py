@@ -206,11 +206,11 @@ def test_local_pack_validation_runs_off_the_request_event_loop(monkeypatch, tmp_
     assert thread_ids["validation"] != thread_ids["request"]
 
 
-def test_incomplete_creation_directory_is_not_a_discardable_public_job(
+def test_incomplete_creation_directory_can_be_explicitly_discarded(
     monkeypatch,
     tmp_path,
 ):
-    orphan = tmp_path / ".staging" / ".creating-crashed"
+    orphan = tmp_path / ".staging" / f".creating-{'a' * 32}"
     orphan.mkdir(parents=True)
     client = _client(monkeypatch, tmp_path)
 
@@ -220,12 +220,17 @@ def test_incomplete_creation_directory_is_not_a_discardable_public_job(
     ).json()
     discarded = client.post(
         "/api/public-knowledge/packs/jobs/discard",
-        json={"job_id": ".creating-crashed"},
+        json={"job_id": orphan.name},
+    ).json()
+    recovered = client.post(
+        "/api/public-knowledge/packs/import",
+        json={"pack": _pack(pack_id="after-discard")},
     ).json()
 
     assert rejected == {"ok": False, "reason": "knowledge_job_registry_invalid"}
-    assert discarded == {"ok": False, "reason": "not_found"}
-    assert orphan.is_dir()
+    assert discarded == {"ok": True, "reason": ""}
+    assert not orphan.exists()
+    assert recovered["ok"] is True
 
 
 @pytest.mark.parametrize("error_type", [ValueError, KnowledgeStoreError])

@@ -70,6 +70,7 @@ JOB_STATES = frozenset(
     )
 )
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}-[0-9a-f]{12}$")
+_CREATING_JOB_ID_RE = re.compile(r"^\.creating-[0-9a-f]{32}$")
 _JOB_SUFFIX_RE = re.compile(r"^[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 logger = logging.getLogger(__name__)
@@ -225,19 +226,16 @@ def _validated_staging_database_path(
     return safe_job_dir / "knowledge.db"
 
 
-def _external_job_dir(
+def _external_staging_child(
     knowledge_root: str | Path,
-    job_id: str,
+    name: str,
     *,
     require_existing: bool = False,
 ) -> Path | None:
-    """Resolve one generated job ID without permitting path traversal or links."""
-    if not _JOB_ID_RE.fullmatch(str(job_id)):
-        return None
     jobs_root = _validated_jobs_root(knowledge_root)
     if jobs_root is None:
         return None
-    job_dir = jobs_root / job_id
+    job_dir = jobs_root / name
     if not require_existing:
         return job_dir
     try:
@@ -248,6 +246,40 @@ def _external_job_dir(
     if _is_link_or_reparse(job_dir) or resolved_job.parent != resolved_root:
         return None
     return job_dir
+
+
+def _external_job_dir(
+    knowledge_root: str | Path,
+    job_id: str,
+    *,
+    require_existing: bool = False,
+) -> Path | None:
+    """Resolve one generated job ID without permitting path traversal or links."""
+    job_id = str(job_id)
+    if not _JOB_ID_RE.fullmatch(job_id):
+        return None
+    return _external_staging_child(
+        knowledge_root,
+        job_id,
+        require_existing=require_existing,
+    )
+
+
+def _external_discardable_job_dir(
+    knowledge_root: str | Path,
+    job_id: str,
+    *,
+    require_existing: bool = False,
+) -> Path | None:
+    """Resolve a published job or one crashed atomic-creation directory."""
+    job_id = str(job_id)
+    if not (_JOB_ID_RE.fullmatch(job_id) or _CREATING_JOB_ID_RE.fullmatch(job_id)):
+        return None
+    return _external_staging_child(
+        knowledge_root,
+        job_id,
+        require_existing=require_existing,
+    )
 
 
 def _revalidated_job_dir(job_dir: Path) -> Path | None:
@@ -979,7 +1011,11 @@ def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
         jobs_root = _validated_jobs_root(knowledge_root)
         if jobs_root is None:
             return False
-        job_dir = _external_job_dir(knowledge_root, job_id, require_existing=True)
+        job_dir = _external_discardable_job_dir(
+            knowledge_root,
+            job_id,
+            require_existing=True,
+        )
         if job_dir is None:
             return False
         if not job_dir.is_dir() or _read_job(job_dir).get("state") != DEGRADED_STATE:

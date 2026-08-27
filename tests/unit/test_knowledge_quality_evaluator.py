@@ -10,6 +10,16 @@ from knowledge.service import KnowledgeTurnContext
 from scripts import evaluate_knowledge_response_quality as evaluator
 
 
+@pytest.mark.parametrize(
+    "script_name",
+    ("import_geng_guide.py", "evaluate_knowledge_response_quality.py"),
+)
+def test_direct_knowledge_cli_bootstraps_repository_before_import(script_name):
+    source = (evaluator.ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert source.index("sys.path.insert") < source.index("from knowledge")
+
+
 @pytest.mark.asyncio
 async def test_route_preflight_uses_production_context_builder(monkeypatch, tmp_path):
     service = object()
