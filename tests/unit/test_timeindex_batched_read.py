@@ -1256,3 +1256,78 @@ def test_engine_disposal_shares_the_initialization_lock(timeindex_module):
     assert disposed.is_set()
     assert not initializer.is_alive()
     assert not disposer.is_alive()
+
+
+def test_disposal_waits_for_an_in_flight_latest_assistant_read(
+    timeindex_module,
+    tmp_path,
+):
+    """A read in flight must keep its engine until it finishes.
+
+    The lock used to be released as soon as the engine was acquired, so
+    `dispose_engine` could take it and tear down the very engine the schema
+    probe and paging queries were still using — surfacing to the caller as
+    RuntimeError("latest assistant history read failed").
+    """
+    rows = [
+        {
+            "session_id": str(index),
+            "message": _stored_message("ai", f"reply {index}"),
+            "timestamp": f"2026-01-0{index} 00:00:00.000000",
+        }
+        for index in range(1, 4)
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    # The shared fixture builds the manager through __new__ and assigns only
+    # what the read path needs; disposal also consults this ledger.
+    manager._undisposed_pools = {}
+
+    read_started = threading.Event()
+    allow_read_to_finish = threading.Event()
+    disposal_returned = threading.Event()
+    results: list[object] = []
+    failures: list[BaseException] = []
+
+    original_validate = manager._validate_table_name
+
+    def blocking_validate(table_name):
+        # Called after the engine is acquired and before the schema probe, i.e.
+        # exactly the window the lock has to keep covered.
+        read_started.set()
+        allow_read_to_finish.wait(2)
+        return original_validate(table_name)
+
+    manager._validate_table_name = blocking_validate
+
+    def run_read():
+        try:
+            results.append(manager.retrieve_latest_assistant_texts("cat", 10))
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `failures`
+            failures.append(exc)
+
+    def run_dispose():
+        try:
+            manager.dispose_engine("cat")
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `failures`
+            failures.append(exc)
+        disposal_returned.set()
+
+    reader = threading.Thread(target=run_read)
+    disposer = threading.Thread(target=run_dispose)
+    try:
+        reader.start()
+        assert read_started.wait(2)
+        disposer.start()
+        assert not disposal_returned.wait(0.2), "disposal ran during an in-flight read"
+        allow_read_to_finish.set()
+        reader.join(5)
+        disposer.join(5)
+    finally:
+        allow_read_to_finish.set()
+        engine.dispose()
+
+    assert not reader.is_alive()
+    assert not disposer.is_alive()
+    assert failures == []
+    assert disposal_returned.is_set()
+    assert results and results[0].messages == ["reply 1", "reply 2", "reply 3"]

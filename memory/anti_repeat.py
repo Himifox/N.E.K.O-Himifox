@@ -352,17 +352,30 @@ class AntiRepeatCorpus:
         the lock: a snapshot older than what is already on disk is dropped, so
         a late writer can never resurrect a stale window.
         """
-        with self._get_write_lock(name):
-            if seq <= self._written_seq.get(name, 0):
-                return
-            try:
-                atomic_write_json(
-                    self._file_path(name), payload, indent=2, ensure_ascii=False,
-                )
-            except Exception as exc:
-                logger.warning("[AntiRepeat] save failed for %s: %s", name, exc)
-                return
-            self._written_seq[name] = seq
+        # 写入屏障必须在临界区内建立：云存档导入会整体替换 memory/<name>/，
+        # 而一个在替换之前就 stage 好的快照，其 seq 仍然大于 _written_seq，
+        # 光靠事后驱逐拦不住它——它会拿到写锁、通过序号检查，把导入进来的
+        # 内容盖回旧数据，而事后的栅栏无法还原已被覆盖的文件。
+        # 交给 cloudsave_writable_transaction：导入围栏关闭期间它直接抛
+        # MaintenanceModeError，这次落盘就被跳过。与
+        # memory/anti_repeat_effects.py 的写入路径同款。
+        try:
+            from utils.cloudsave_runtime import cloudsave_writable_transaction
+
+            with cloudsave_writable_transaction(
+                self._config_manager,
+                operation="save",
+                target=f"memory/{name}/anti_repeat.json",
+            ):
+                with self._get_write_lock(name):
+                    if seq <= self._written_seq.get(name, 0):
+                        return
+                    atomic_write_json(
+                        self._file_path(name), payload, indent=2, ensure_ascii=False,
+                    )
+                    self._written_seq[name] = seq
+        except Exception as exc:
+            logger.warning("[AntiRepeat] save failed for %s: %s", name, exc)
 
     # ── load / save (锁由调用方持有) ───────────────────────
 

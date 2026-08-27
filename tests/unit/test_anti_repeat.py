@@ -20,6 +20,8 @@ import asyncio
 import json
 import os
 import threading
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -970,3 +972,40 @@ def test_detached_flush_ignores_a_none_handle(tmp_path):
     store = _build_store(tmp_path)
     store.flush_staged_detached(None)
     assert not store._detached_flushes
+
+
+def test_stale_flush_is_refused_while_the_cloud_import_fence_is_closed(monkeypatch, tmp_path):
+    """A snapshot staged before a cloud import must not land on top of it.
+
+    Eviction alone cannot stop it: the snapshot's sequence is still above
+    `_written_seq`, so it takes the write lock, passes the check and writes the
+    old payload over the file the import just restored — which no later fence
+    can undo. The write barrier therefore has to live inside the flush, the way
+    `memory/anti_repeat_effects.py` already does it.
+    """
+    import memory.anti_repeat as anti_repeat_module
+    from utils.cloudsave_runtime import MaintenanceModeError
+
+    corpus = anti_repeat_module.AntiRepeatCorpus()
+    config_manager = SimpleNamespace(memory_dir=str(tmp_path))
+    corpus._config_manager = config_manager
+    (tmp_path / "Neko").mkdir()
+
+    calls: list[str] = []
+
+    @contextmanager
+    def _closed_fence(_config_manager, *, operation="write", target=""):
+        calls.append(target)
+        raise MaintenanceModeError("importing", operation=operation, target=target)
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+    monkeypatch.setattr(
+        "utils.cloudsave_runtime.cloudsave_writable_transaction", _closed_fence
+    )
+
+    corpus._flush_snapshot("Neko", {"version": 1, "window": [{"stale": True}]}, 5)
+
+    assert calls == ["memory/Neko/anti_repeat.json"]
+    assert not (tmp_path / "Neko" / "anti_repeat.json").exists()
+    # The sequence must NOT advance: the write never happened.
+    assert corpus._written_seq.get("Neko", 0) == 0

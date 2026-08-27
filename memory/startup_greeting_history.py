@@ -256,21 +256,36 @@ class StartupGreetingHistory:
         return name, payload, seq
 
     def _flush_snapshot(self, name: str, payload: dict[str, Any], seq: int) -> None:
-        with self._get_write_lock(name):
-            if seq <= self._written_seq.get(name, 0):
-                return
-            try:
-                atomic_write_json(
-                    self._file_path(name), payload, indent=2, ensure_ascii=False
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[StartupGreetingHistory] save failed for %s: %s",
-                    name,
-                    exc,
-                )
-                return
-            self._written_seq[name] = seq
+        # The write barrier has to be inside the import critical section: a
+        # cloud-save import replaces `memory/<name>/` wholesale, and a snapshot
+        # staged BEFORE the replacement still carries a seq above
+        # `_written_seq`, so evicting afterwards cannot stop it — it takes the
+        # write lock, passes the sequence check and writes the old payload back
+        # over the imported file, which no later fence can undo.
+        # `cloudsave_writable_transaction` raises MaintenanceModeError while the
+        # import fence is closed, so the flush is skipped. Same shape as
+        # `memory/anti_repeat_effects.py`.
+        try:
+            from utils.cloudsave_runtime import cloudsave_writable_transaction
+
+            with cloudsave_writable_transaction(
+                self._config_manager,
+                operation="save",
+                target=f"memory/{name}/startup_greeting_history.json",
+            ):
+                with self._get_write_lock(name):
+                    if seq <= self._written_seq.get(name, 0):
+                        return
+                    atomic_write_json(
+                        self._file_path(name), payload, indent=2, ensure_ascii=False
+                    )
+                    self._written_seq[name] = seq
+        except Exception as exc:
+            logger.warning(
+                "[StartupGreetingHistory] save failed for %s: %s",
+                name,
+                exc,
+            )
 
     async def apreload(self, name: str) -> None:
         """Warm the disk-backed history before synchronous commit-point reads."""

@@ -372,6 +372,11 @@ def token_overlap(left: list[str], right: list[str]) -> float:
     return 2 * len(left_set & right_set) / (len(left_set) + len(right_set))
 
 
+# Bootstraps the per-instance engine-lock guard for instances built through
+# __new__ (test fixtures), where __init__ never ran.
+_ENGINE_LOCK_BOOTSTRAP = threading.Lock()
+
+
 class TimeIndexedMemory:
     def __init__(
         self,
@@ -450,8 +455,20 @@ class TimeIndexedMemory:
         Re-entrant because the in-place repair branches of
         ``_ensure_engine_exists_unlocked`` (db_path drift, readonly → writable
         switch) call ``dispose_engine`` while already holding it.
+
+        Self-sufficient rather than relying on ``__init__``: this class is
+        constructed through ``__new__`` in several test fixtures that assign
+        attributes by hand, so an accessor that assumed the constructor ran
+        would break every one of them on any new field.
         """
-        with self._engine_locks_guard:
+        guard = getattr(self, "_engine_locks_guard", None)
+        if guard is None:
+            with _ENGINE_LOCK_BOOTSTRAP:
+                guard = getattr(self, "_engine_locks_guard", None)
+                if guard is None:
+                    self._engine_locks = getattr(self, "_engine_locks", None) or {}
+                    guard = self._engine_locks_guard = threading.Lock()
+        with guard:
             return self._engine_locks.setdefault(lanlan_name, threading.RLock())
 
     def _ensure_engine_exists(
@@ -916,11 +933,33 @@ class TimeIndexedMemory:
         SQLite rows are scanned newest-first so a bounded UI request does not
         materialize the whole history. The returned messages are reversed back
         into chronological order before analysis.
+
+        The per-character engine lock is held for the WHOLE read, not just for
+        acquisition: the schema probe and every paging query go through
+        ``self.engines[lanlan_name]``, and ``dispose_engine`` takes the same
+        lock, so releasing it after acquisition would let a concurrent disposal
+        pull the engine out from under a read already in flight — surfacing as
+        ``RuntimeError("latest assistant history read failed")``. The work is
+        bounded (at most ``limit`` messages, ``batch_size`` rows per page), so
+        holding it cannot stall a writer indefinitely.
         """
         if limit < 1:
             raise ValueError("limit must be greater than zero")
         if batch_size < 1:
             raise ValueError("batch_size must be greater than zero")
+        with self._get_engine_lock(lanlan_name):
+            return self._retrieve_latest_assistant_texts_locked(
+                lanlan_name, limit, batch_size=batch_size
+            )
+
+    def _retrieve_latest_assistant_texts_locked(
+        self,
+        lanlan_name: str,
+        limit: int,
+        *,
+        batch_size: int,
+    ) -> LatestAssistantTexts:
+        """Body of ``retrieve_latest_assistant_texts``; the engine lock is held."""
         try:
             if not self._ensure_engine_exists(lanlan_name, readonly=True):
                 return LatestAssistantTexts([], False)
