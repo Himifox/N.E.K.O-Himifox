@@ -1,0 +1,9 @@
+[plugin_runtime]
+enabled = true
+auto_start = false
+
+[yui_stardew]
+port = 48910
+token = ""
+connect_timeout_seconds = 3.0
+request_timeout_seconds = 6.0

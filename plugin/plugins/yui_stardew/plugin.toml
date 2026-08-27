@@ -1,0 +1,16 @@
+[plugin]
+id = "yui_stardew"
+name = "Yui 星露谷驱动"
+description = "通过仅限本机的鉴权桥，让 N.E.K.O 驱动 HimiYui 执行召唤、跟随、等待和持续工作。"
+short_description = "Drive HimiYui in Stardew Valley through an authenticated localhost bridge."
+keywords = ["yui", "stardew", "game", "companion", "agent"]
+version = "0.1.0"
+type = "plugin"
+entry = "plugin.plugins.yui_stardew:YuiStardewPlugin"
+
+[plugin.author]
+name = "Himifox"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
