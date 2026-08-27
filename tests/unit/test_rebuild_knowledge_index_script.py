@@ -21,6 +21,49 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def _write_staged_job_fixture(
+    root: Path,
+    *,
+    pack_id: str,
+    suffix: str = "0123456789ab",
+    created_at: int = 1,
+    state_created_at: object = 1,
+    state: str = "queued",
+) -> Path:
+    job_id = f"{pack_id}-{suffix}"
+    job_dir = root / ".staging" / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "identity.json").write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "pack_id": pack_id,
+                "created_at": created_at,
+                "entries_total": 1,
+                "chunks_total": 1,
+                "content_bytes": 1,
+                "pack_sha256": "0" * 64,
+                "has_subscription": False,
+                "subscription_sha256": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "pack_id": pack_id,
+                "state": state,
+                "created_at": state_created_at,
+                "updated_at": created_at,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return job_dir
+
+
 def _write_v5_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
@@ -123,31 +166,10 @@ def test_status_is_read_only_and_does_not_migrate_v5(tmp_path: Path) -> None:
 def test_status_lists_staging_jobs_without_opening_their_database(
     tmp_path: Path,
 ) -> None:
-    job_dir = tmp_path / ".staging" / "fixture-job"
-    job_dir.mkdir(parents=True)
-    (job_dir / "identity.json").write_text(
-        json.dumps(
-            {
-                "job_id": "fixture-job",
-                "pack_id": "fixture-pack",
-                "created_at": 1,
-                "entries_total": 1,
-                "chunks_total": 1,
-                "content_bytes": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
-    (job_dir / "state.json").write_text(
-        json.dumps(
-            {
-                "job_id": "fixture-job",
-                "pack_id": "fixture-pack",
-                "state": "embedding",
-                "created_at": 1,
-            }
-        ),
-        encoding="utf-8",
+    job_dir = _write_staged_job_fixture(
+        tmp_path,
+        pack_id="fixture-pack",
+        state="embedding",
     )
     staging_database = job_dir / "knowledge.db"
 
@@ -167,47 +189,34 @@ def test_status_sorts_jobs_safely_when_created_at_is_damaged(tmp_path: Path) -> 
         "invalid-negative": -1,
         "invalid-unicode": "１２",
     }
-    for job_id, created_at in created_values.items():
-        job_dir = tmp_path / ".staging" / job_id
-        job_dir.mkdir(parents=True)
-        trusted_created_at = int(created_at) if job_id.startswith("valid-") else 0
-        (job_dir / "identity.json").write_text(
-            json.dumps(
-                {
-                    "job_id": job_id,
-                    "pack_id": f"pack-{job_id}",
-                    "created_at": trusted_created_at,
-                    "entries_total": 1,
-                    "chunks_total": 1,
-                    "content_bytes": 1,
-                }
-            ),
-            encoding="utf-8",
+    job_ids: dict[str, str] = {}
+    for pack_id, state_created_at in created_values.items():
+        trusted_created_at = (
+            int(state_created_at) if pack_id.startswith("valid-") else 0
         )
-        (job_dir / "state.json").write_text(
-            json.dumps(
-                {
-                    "job_id": job_id,
-                    "pack_id": f"pack-{job_id}",
-                    "created_at": created_at,
-                }
-            ),
-            encoding="utf-8",
+        job_dir = _write_staged_job_fixture(
+            tmp_path,
+            pack_id=pack_id,
+            created_at=trusted_created_at,
+            state_created_at=state_created_at,
         )
+        job_ids[pack_id] = job_dir.name
 
     jobs = MODULE.inspect_pack_jobs(tmp_path)
 
     assert [item["job_id"] for item in jobs] == [
-        "valid-new",
-        "valid-old",
-        "invalid-bool",
-        "invalid-float",
-        "invalid-list",
-        "invalid-negative",
-        "invalid-unicode",
+        job_ids["valid-new"],
+        job_ids["valid-old"],
+        job_ids["invalid-bool"],
+        job_ids["invalid-float"],
+        job_ids["invalid-list"],
+        job_ids["invalid-negative"],
+        job_ids["invalid-unicode"],
     ]
     assert all(
         item["state"] == "degraded"
+        and item["reason"] == "invalid_job_timestamps"
+        and item["created_at"] == 0
         for item in jobs
         if item["job_id"].startswith("invalid-")
     )
@@ -350,33 +359,8 @@ def test_preflight_pack_reports_work_without_staging(tmp_path: Path, capsys) -> 
 
 
 def test_cancel_job_action_removes_staged_payload(tmp_path: Path, capsys) -> None:
-    job_id = "cancel-pack-0123456789ab"
-    job_dir = tmp_path / ".staging" / job_id
-    job_dir.mkdir(parents=True)
-    identity = {
-            "job_id": job_id,
-        "pack_id": "cancel-pack",
-        "created_at": 1,
-        "entries_total": 1,
-        "chunks_total": 1,
-        "content_bytes": 1,
-    }
-    (job_dir / "identity.json").write_text(
-        json.dumps(identity),
-        encoding="utf-8",
-    )
-    (job_dir / "state.json").write_text(
-        json.dumps(
-            {
-                    "job_id": job_id,
-                "pack_id": "cancel-pack",
-                "state": "queued",
-                "created_at": 1,
-                "updated_at": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    job_dir = _write_staged_job_fixture(tmp_path, pack_id="cancel-pack")
+    job_id = job_dir.name
     (job_dir / "pack.json").write_text("{}", encoding="utf-8")
     args = MODULE._build_parser().parse_args(
         [
