@@ -28,6 +28,7 @@ from .packs import (
     pack_payload,
     preflight_pack,
     validate_pack,
+    validate_pack_subscription,
 )
 from .subscriptions import canonical_pack_bytes, validate_subscription
 
@@ -530,7 +531,10 @@ def stage_pack(
     """Persist validated source data without making it searchable yet."""
     root = Path(service.knowledge_root)
     preflight = preflight_pack(pack)
-    canonical_subscription = _canonical_staged_subscription(subscription)
+    canonical_subscription = _canonical_staged_subscription(
+        subscription,
+        pack=pack,
+    )
     ensure_install_capacity(root, preflight)
     root = _create_trusted_knowledge_root(root)
     if root is None:
@@ -841,13 +845,22 @@ def _load_capacity_validated_job_pack(
 
 def _canonical_staged_subscription(
     payload: object,
+    *,
+    pack: KnowledgePack | None = None,
 ) -> dict[str, str] | None:
     if payload is None:
         return None
-    subscription = validate_subscription(payload)
-    if subscription.provider == "plugin-market" and not subscription.provider_package_id:
+    canonical = (
+        validate_pack_subscription(pack, payload)
+        if pack is not None
+        else validate_subscription(payload).to_dict()
+    )
+    if (
+        canonical["provider"] == "plugin-market"
+        and not canonical.get("provider_package_id")
+    ):
         raise ValueError("plugin-market subscription requires provider_package_id")
-    return subscription.to_dict()
+    return canonical
 
 
 def _identity_validated_subscription(

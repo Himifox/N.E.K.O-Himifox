@@ -125,6 +125,17 @@ def pack_identity_sha256(pack: KnowledgePack) -> str:
     return hashlib.sha256(canonical_pack_bytes(payload)).hexdigest()
 
 
+def validate_pack_subscription(
+    pack: KnowledgePack,
+    payload: object,
+) -> dict[str, str]:
+    """Validate one subscription and bind its material type to the pack."""
+    subscription = validate_subscription(payload)
+    if subscription.material_type != pack.material_type:
+        raise ValueError("knowledge pack subscription material_type mismatch")
+    return subscription.to_dict()
+
+
 def get_pack_registry_path(database_path: str | Path) -> Path:
     return Path(database_path).with_name("packs.json")
 
@@ -286,7 +297,7 @@ def install_pack(
     if embedding_policy not in {"local", "prebuilt_only"}:
         raise ValueError("unsupported knowledge pack embedding policy")
     canonical_subscription = (
-        validate_subscription(subscription).to_dict()
+        validate_pack_subscription(pack, subscription)
         if subscription is not None
         else None
     )

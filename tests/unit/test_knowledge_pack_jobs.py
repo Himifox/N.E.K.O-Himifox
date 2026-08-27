@@ -141,6 +141,25 @@ def test_prebuilt_verification_resumes_from_persisted_state(tmp_path):
     assert KnowledgeStore(job_dir / "knowledge.db").chunk_status()["chunks_ready"] == 1
 
 
+def test_staging_rejects_subscription_material_type_mismatch_without_side_effects(
+    tmp_path,
+):
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+
+    with pytest.raises(ValueError, match="material_type mismatch"):
+        service.stage_pack(
+            pack,
+            subscription={**subscription, "material_type": "corpus"},
+            index_manifest=artifacts.manifest,
+            vectors=artifacts.vectors,
+        )
+
+    assert not (tmp_path / ".staging").exists()
+    assert not service.database_path().exists()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ("missing", "invalid", "replacement"))
 async def test_staged_subscription_must_match_immutable_job_identity(

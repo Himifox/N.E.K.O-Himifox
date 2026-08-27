@@ -747,6 +747,23 @@ def test_subscription_metadata_is_stored_outside_entries(tmp_path):
     }
 
 
+def test_direct_install_rejects_subscription_material_type_mismatch(
+    tmp_path,
+):
+    service = open_knowledge(tmp_path)
+    payload = _payload()
+    subscription = {
+        **_market_subscription(payload, pack_id="community-fixture"),
+        "material_type": "corpus",
+    }
+
+    with pytest.raises(ValueError, match="material_type mismatch"):
+        service.install_pack(validate_pack(payload), subscription=subscription)
+
+    assert not service.database_path().exists()
+    assert service.list_packs() == ()
+
+
 def test_subscription_requires_supported_material_type():
     payload = {
         "provider": "plugin-market",
