@@ -1325,3 +1325,51 @@ def test_a_reset_that_gives_up_leaves_the_file_matching_memory(tmp_path):
         "the abandoned reset left its cut on disk"
     )
     assert persisted["started_at"] == now
+
+
+def test_a_failed_restore_surfaces_instead_of_being_swallowed(tmp_path, monkeypatch):
+    """The restore is the last thing standing between the cut and the file.
+
+    Flushing it with the default raise_on_error swallowed an atomic-write
+    failure, so the reset raised its race message while the file kept the cut --
+    the same loss the restore exists to prevent, one level down.
+
+    The real ``_flush_snapshot`` has to run for this to mean anything: stubbing
+    it out entirely would raise from the stub and never consult the flag at
+    all. So only the write underneath it is made to fail.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+
+    writes = []
+    real_write = anti_repeat_effects.atomic_write_json
+
+    def _fail_the_restore_write(*args, **kwargs):
+        writes.append(True)
+        if len(writes) > anti_repeat_effects._CLEAR_ATTEMPTS:
+            raise OSError("restore write failed")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        anti_repeat_effects, "atomic_write_json", _fail_the_restore_write
+    )
+
+    original_flush = store._flush_snapshot
+
+    def _outrun(*args, **kwargs):
+        original_flush(*args, **kwargs)
+        with store._get_lock("Neko"):
+            store._staged_seq["Neko"] = store._staged_seq.get("Neko", 0) + 1
+
+    store._flush_snapshot = _outrun
+    try:
+        with pytest.raises(OSError):
+            store.clear_effects("Neko")
+    finally:
+        store._flush_snapshot = original_flush
+
+    assert len(writes) == anti_repeat_effects._CLEAR_ATTEMPTS + 1, (
+        "the restore never reached the write layer"
+    )

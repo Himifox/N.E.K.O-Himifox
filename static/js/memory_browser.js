@@ -4750,7 +4750,17 @@
                 syncMemoryRoleTriggerLabel();
                 if (!repetitionInsightsLanguageTouched && !repetitionInsightsReport) {
                     const insightsLanguage = document.getElementById('memory-insights-language');
-                    if (insightsLanguage) insightsLanguage.value = repetitionInsightLanguageFromLocale();
+                    const localeLanguage = repetitionInsightLanguageFromLocale();
+                    if (insightsLanguage && insightsLanguage.value !== localeLanguage) {
+                        insightsLanguage.value = localeLanguage;
+                        // A request already in flight was submitted under the
+                        // OLD language. Its candidates are tokenized that way,
+                        // so rendering them under the label the selector now
+                        // shows would misstate what was analysed. The manual
+                        // language handler resets the panel, which bumps this
+                        // id; the automatic one has to do it too.
+                        repetitionInsightsRequestId++;
+                    }
                 }
                 refreshRepetitionInsightsStatus();
                 renderRepetitionInsightsResults();

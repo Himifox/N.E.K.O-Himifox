@@ -1104,7 +1104,13 @@ class AntiRepeatEffectStore:
         with self._get_lock(name):
             restore = self._stage_unlocked(name) if name in self._cache else None
         if restore is not None:
-            self._flush_snapshot(*restore)
+            # raise_on_error, because swallowing here recreates the very loss
+            # this restore exists to prevent, one level down: the last cut
+            # would stay on the file while the endpoint reports failure, and
+            # the aggregates would come back erased after a restart. A failed
+            # restore is the more severe condition, so it surfaces instead of
+            # the race message.
+            self._flush_snapshot(*restore, raise_on_error=True)
         raise RuntimeError("anti-repeat reset lost the race to concurrent writes")
 
     def _evict_unlocked(self, name: str) -> None:
