@@ -15,6 +15,7 @@ from main_logic.proactive_chat.contracts import (
     PROACTIVE_REASON_PASS_DUPLICATE,
 )
 from main_logic.proactive_chat.delivery import _commit_proactive_delivery
+from main_logic.proactive_chat import generation as generation_module
 from main_logic.proactive_chat.generation import (
     _guard_phase2_output,
     _merge_regen_avoid_terms,
@@ -719,9 +720,11 @@ async def test_regenerated_fresh_music_recomputes_text_exemption(monkeypatch):
         "get_anti_repeat_corpus",
         lambda: corpus,
     )
-    literal_guard = MagicMock(return_value=(False, 0.0))
+    literal_guard = MagicMock(
+        return_value=generation_module.ProactiveSimilarityMatch()
+    )
     monkeypatch.setattr(
-        "main_logic.proactive_chat.generation._is_similar_to_recent_proactive_chat",
+        "main_logic.proactive_chat.generation._find_similar_recent_proactive_chat",
         literal_guard,
     )
 
@@ -868,9 +871,11 @@ async def test_initial_music_without_material_keeps_text_rechecks(monkeypatch):
         "get_anti_repeat_corpus",
         lambda: corpus,
     )
-    literal_guard = MagicMock(return_value=(False, 0.0))
+    literal_guard = MagicMock(
+        return_value=generation_module.ProactiveSimilarityMatch()
+    )
     monkeypatch.setattr(
-        "main_logic.proactive_chat.generation._is_similar_to_recent_proactive_chat",
+        "main_logic.proactive_chat.generation._find_similar_recent_proactive_chat",
         literal_guard,
     )
     mgr = SimpleNamespace(

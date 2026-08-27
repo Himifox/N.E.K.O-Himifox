@@ -76,9 +76,9 @@ from .music_recommendation import (
 )
 from .state import (
     _PROACTIVE_SIMILARITY_THRESHOLD,
+    ProactiveSimilarityMatch,
     _find_similar_recent_proactive_chat,
     _is_recent_proactive_material,
-    _is_similar_to_recent_proactive_chat,
     _proactive_material_key,
     _proactive_turn_still_owned,
 )
@@ -1133,17 +1133,21 @@ async def _guard_phase2_output(
             material_key or "(none)",
         )
 
-    is_duplicate, similarity_score = False, 0.0
-    if not exempt_text_dedup:
-        is_duplicate, similarity_score = _is_similar_to_recent_proactive_chat(
-            lanlan_name,
-            response_text,
-        )
+    # One scan, not two: the guard verdict and the evidence fragment used by the
+    # effect record come from the same match. ``_is_similar_to_recent_proactive_chat``
+    # is only the historical (bool, score) wrapper around this call, so calling it
+    # first and then re-deriving the match ran the whole SequenceMatcher sweep over
+    # the recent-chat window twice on the block path. Both guard sites in this
+    # module go through the match object directly; the tuple wrapper stays in
+    # ``state`` for its other callers.
+    literal_match = (
+        ProactiveSimilarityMatch()
+        if exempt_text_dedup
+        else _find_similar_recent_proactive_chat(lanlan_name, response_text)
+    )
+    is_duplicate = literal_match.is_duplicate
+    similarity_score = literal_match.best_score
     if is_duplicate:
-        literal_match = _find_similar_recent_proactive_chat(
-            lanlan_name,
-            response_text,
-        )
         record_anti_repeat_decision(
             lanlan_name,
             AntiRepeatDecision(
@@ -1526,11 +1530,13 @@ async def _guard_phase2_output(
                     )
                 )
             )
-        regen_duplicate, regen_similarity = False, 0.0
-        if not regen_exempt_text_dedup:
-            regen_duplicate, regen_similarity = _is_similar_to_recent_proactive_chat(
-                lanlan_name, cleaned
-            )
+        regen_match = (
+            ProactiveSimilarityMatch()
+            if regen_exempt_text_dedup
+            else _find_similar_recent_proactive_chat(lanlan_name, cleaned)
+        )
+        regen_duplicate = regen_match.is_duplicate
+        regen_similarity = regen_match.best_score
         if regen_duplicate:
             record_regen_effect(
                 "blocked_after_regen_literal",
