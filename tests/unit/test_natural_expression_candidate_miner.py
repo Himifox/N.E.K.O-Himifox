@@ -1513,3 +1513,53 @@ def test_stray_delimiters_in_speech_do_not_swallow_catchphrases(
     label, text, must_remain_visible
 ):
     assert must_remain_visible in _unprotected(text), label
+
+
+# Containers alternate. One blockquote pass followed by one list pass only found
+# an opener in the orders it happened to be written in, so a fence inside
+# `- > ...` was invisible while `> - ...` worked.
+_NESTED_CONTAINER_CASES = [
+    ("list then quote", ["- > ~~~python", "  > SECRET=1", "  > ~~~", "tail"]),
+    ("quote then list", ["> - ~~~python", ">   SECRET=1", ">   ~~~", "tail"]),
+    ("list then quote, unclosed", ["- > ~~~python", "  > SECRET=1"]),
+    ("two quote levels", ["- > > ~~~", "  > > SECRET=1", "  > > ~~~", "tail"]),
+    ("ordered then quote", ["1. > ~~~", "   > SECRET=1", "   > ~~~", "tail"]),
+    # Needs more than one strip: list, quote, list, quote. A single pass finds
+    # the opener only for the shallowest nesting.
+    (
+        "alternating twice",
+        ["- > - > ~~~", "  >   > SECRET=1", "  >   > ~~~", "tail"],
+    ),
+]
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize(
+    "label, rows",
+    _NESTED_CONTAINER_CASES,
+    ids=[row[0] for row in _NESTED_CONTAINER_CASES],
+)
+def test_fences_nested_in_alternating_containers_are_protected(label, rows, eol):
+    unprotected = _unprotected(_lines(*rows, eol=eol))
+    assert "SECRET" not in unprotected, label
+    if rows[-1] == "tail":
+        # The fence must also CLOSE. Getting the container depth wrong hides
+        # the secret too -- by never closing and swallowing the rest of the
+        # reply -- so the leak assertion alone cannot tell the two apart.
+        assert "tail" in unprotected, label
+
+
+_NESTED_CONTAINER_SPEECH = [
+    ("bulleted speech", ["- 今天也辛苦了呢", "- 我们一起去吃饭吧"]),
+    ("quoted speech", ["> 今天也辛苦了呢", "> 我们一起去吃饭吧"]),
+    ("bulleted quoted speech", ["- > 今天也辛苦了呢", "- > 我们一起去吃饭吧"]),
+]
+
+
+@pytest.mark.parametrize(
+    "label, rows",
+    _NESTED_CONTAINER_SPEECH,
+    ids=[row[0] for row in _NESTED_CONTAINER_SPEECH],
+)
+def test_container_markers_alone_do_not_protect_speech(label, rows):
+    assert "我们一起去吃饭吧" in _unprotected(_lines(*rows)), label

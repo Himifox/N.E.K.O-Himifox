@@ -301,13 +301,25 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     for line in text.splitlines(keepends=True):
         body, depth = _split_blockquote_prefix(line)
         if fence_start is None:
-            # Only an OPENING fence may sit behind a list marker. Stripping
-            # the marker on every line let a content line that happens to
-            # read "- ```" be rewritten into a bare run and close the active
-            # fence, exposing the rest of the block.
-            list_marker = _LIST_MARKER_PREFIX_RE.match(body)
-            if list_marker is not None:
+            # Only an OPENING fence may sit behind a container marker.
+            # Stripping on every line let a content line that happens to read
+            # "- ```" be rewritten into a bare run and close the active fence,
+            # exposing the rest of the block.
+            #
+            # Containers alternate -- "- > ```", "> - ```", "- > > ```" -- so
+            # one blockquote pass followed by one list pass finds the opener
+            # only for the orders it happens to be written in. Loop instead,
+            # accumulating depth, so the closer at the same nesting matches.
+            while True:
+                list_marker = _LIST_MARKER_PREFIX_RE.match(body)
+                if list_marker is None:
+                    break
                 body = body[list_marker.end() :]
+                inner_body, inner_depth = _split_blockquote_prefix(body)
+                if inner_depth == 0:
+                    break
+                body = inner_body
+                depth += inner_depth
         stripped = body.lstrip(" \t")
         indent = len(body) - len(stripped)
         if indent <= 3:
