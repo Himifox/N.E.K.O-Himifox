@@ -36,6 +36,8 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
     for case in payload:
         if not isinstance(case, dict):
             raise ValueError("each quality case must use the documented fields")
+        if not required <= set(case):
+            raise ValueError("each quality case must use the documented fields")
         case_id = str(case["id"])
         if not case_id or case_id in seen:
             raise ValueError("quality case ids must be non-empty and unique")

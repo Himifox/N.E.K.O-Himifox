@@ -97,6 +97,20 @@ def test_quality_fixture_binds_every_strong_case_to_one_entry():
     assert all(case["expected_title"] for case in strong)
 
 
+@pytest.mark.parametrize("missing_field", ("id", "expected_mode"))
+def test_quality_fixture_missing_required_field_uses_schema_error(
+    tmp_path,
+    missing_field,
+):
+    cases = json.loads(evaluator.DEFAULT_CASES.read_text(encoding="utf-8"))
+    cases[0].pop(missing_field)
+    fixture = tmp_path / "cases.json"
+    fixture.write_text(json.dumps(cases), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="documented fields"):
+        evaluator._load_cases(fixture)
+
+
 @pytest.mark.asyncio
 async def test_live_receiver_waits_for_explicit_turn_end():
     class SlowWebSocket:
