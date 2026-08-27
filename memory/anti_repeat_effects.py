@@ -223,6 +223,77 @@ def _empty_bucket() -> dict[str, Any]:
     }
 
 
+def _copy_bucket(raw: Any) -> dict[str, Any]:
+    """Copy one aggregate bucket so no dict is shared with the live cache."""
+    if not isinstance(raw, dict):
+        return _empty_bucket()
+    counters = raw.get("counters")
+    reason_counts = raw.get("reason_counts")
+    bm25 = raw.get("bm25")
+    patterns = raw.get("patterns")
+    return {
+        "counters": dict(counters) if isinstance(counters, dict) else _empty_counters(),
+        "reason_counts": dict(reason_counts) if isinstance(reason_counts, dict) else {},
+        "bm25": dict(bm25) if isinstance(bm25, dict) else {},
+        "patterns": (
+            {
+                pattern_id: {
+                    **pattern,
+                    "reasons": (
+                        dict(pattern["reasons"])
+                        if isinstance(pattern.get("reasons"), dict)
+                        else {}
+                    ),
+                }
+                for pattern_id, pattern in patterns.items()
+                if isinstance(pattern, dict)
+            }
+            if isinstance(patterns, dict)
+            else {}
+        ),
+    }
+
+
+def _copy_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Snapshot the normalized schema without a JSON serialize/parse round trip.
+
+    Every container in the fixed schema is rebuilt and every leaf is a JSON
+    scalar, so the result shares no mutable object with the live cache. That
+    isolation is the whole point and cannot be traded for structural sharing:
+    ``_flush_snapshot`` serializes the snapshot on a background thread while
+    holding only the WRITE lock, whereas ``_apply_decision`` / ``_prune`` mutate
+    the cached payload under the separate per-name lock. Reusing "unchanged"
+    sub-dicts would therefore let ``atomic_write_json`` iterate a dict that
+    another turn is concurrently writing to — a torn file at best, and a
+    ``RuntimeError: dictionary changed size during iteration`` at worst.
+    """
+    daily_buckets = payload.get("daily_buckets")
+    response_buckets = payload.get("response_buckets")
+    return {
+        "version": payload.get("version", 1),
+        "schema_version": payload.get("schema_version", SCHEMA_VERSION),
+        "started_at": payload.get("started_at", 0.0),
+        "daily_buckets": (
+            {day: _copy_bucket(bucket) for day, bucket in daily_buckets.items()}
+            if isinstance(daily_buckets, dict)
+            else {}
+        ),
+        "response_buckets": (
+            {
+                response_key: {
+                    "created_at": response.get("created_at", 0.0),
+                    "delivered_at": response.get("delivered_at", 0.0),
+                    "bucket": _copy_bucket(response.get("bucket")),
+                }
+                for response_key, response in response_buckets.items()
+                if isinstance(response, dict)
+            }
+            if isinstance(response_buckets, dict)
+            else {}
+        ),
+    }
+
+
 def _as_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
@@ -470,6 +541,8 @@ class AntiRepeatEffectStore:
         self._locks_guard = threading.Lock()
         self._staged_seq: dict[str, int] = {}
         self._written_seq: dict[str, int] = {}
+        # Names retired by ``evict_character``; see ``_write_file_path``.
+        self._retired: set[str] = set()
         self._detached_flushes: set[asyncio.Task] = set()
 
     def _existing_file_path(self, name: str) -> str:
@@ -479,11 +552,34 @@ class AntiRepeatEffectStore:
             "anti_repeat_effects.json",
         )
 
-    def _write_file_path(self, name: str) -> str:
+    def _write_file_path(self, name: str) -> str | None:
+        """Resolve the write target, or ``None`` for a retired identity.
+
+        The normal path stays identical to every sibling memory writer
+        (``facts.py``, ``event_log.py``, ``cursors.py``, ``anti_repeat.py`` …):
+        ``ensure_character_dir`` lazily creates ``memory/<name>/`` on first write,
+        because nothing creates it eagerly at character-creation time.
+
+        The exception is a name ``evict_character`` retired. ``evict_character``
+        alone only fences snapshots staged *before* the eviction, so a decision
+        recorded while delete/rename was still in flight would call
+        ``ensure_character_dir`` and ``makedirs`` the directory back into
+        existence right after ``shutil.rmtree`` removed it — leaving an orphan
+        that makes ``character_memory_exists`` report the removed character
+        again. For a retired name whose directory is genuinely gone the write is
+        dropped instead. If the directory exists again the identity is live (the
+        rename target, or a re-created character), so retirement is lifted and
+        the write proceeds.
+        """
         from memory import ensure_character_dir
 
+        memory_dir = self._config_manager.memory_dir
+        if name in self._retired:
+            if not os.path.isdir(os.path.join(str(memory_dir), name)):
+                return None
+            self._retired.discard(name)
         return os.path.join(
-            ensure_character_dir(self._config_manager.memory_dir, name),
+            ensure_character_dir(memory_dir, name),
             "anti_repeat_effects.json",
         )
 
@@ -555,7 +651,23 @@ class AntiRepeatEffectStore:
         return self._cache[name]
 
     @staticmethod
-    def _prune(payload: dict[str, Any], now: float) -> bool:
+    def _prune(
+        payload: dict[str, Any],
+        now: float,
+        *,
+        protect_response_key: str | None = None,
+    ) -> bool:
+        """Drop expired and over-capacity aggregates.
+
+        ``protect_response_key`` fences the bucket the caller is in the middle of
+        writing. Capacity eviction prefers to keep DELIVERED buckets, so a freshly
+        created one — always ``delivered_at == 0`` — sorts ahead of every delivered
+        bucket and would be the first victim. Once the store reaches steady state
+        (every retained bucket delivered, because delivery converts them and
+        blocked ones are evicted first) that made each turn delete the very bucket
+        it had just created, so ``stage_response_delivered`` never found it again
+        and message linkage stopped for good.
+        """
         changed = False
         cutoff = (
             datetime.fromtimestamp(now, timezone.utc).date()
@@ -570,6 +682,8 @@ class AntiRepeatEffectStore:
         response_buckets = payload.get("response_buckets", {})
         cutoff_timestamp = now - RETENTION_DAYS * 24 * 60 * 60
         for response_key, response in list(response_buckets.items()):
+            if response_key == protect_response_key:
+                continue
             retention_timestamp = (
                 max(
                     _as_float(response.get("created_at")),
@@ -585,11 +699,13 @@ class AntiRepeatEffectStore:
                 del response_buckets[response_key]
                 changed = True
         if len(response_buckets) > MAX_RESPONSE_BUCKETS:
-            oldest = sorted(
-                response_buckets,
+            evictable = sorted(
+                (key for key in response_buckets if key != protect_response_key),
                 key=lambda key: _response_retention_key(response_buckets[key]),
             )
-            for response_key in oldest[: len(response_buckets) - MAX_RESPONSE_BUCKETS]:
+            for response_key in evictable[
+                : len(response_buckets) - MAX_RESPONSE_BUCKETS
+            ]:
                 del response_buckets[response_key]
                 changed = True
         return changed
@@ -597,7 +713,11 @@ class AntiRepeatEffectStore:
     def _stage_unlocked(self, name: str) -> tuple[str, dict[str, Any], int]:
         seq = self._staged_seq.get(name, 0) + 1
         self._staged_seq[name] = seq
-        payload = json.loads(json.dumps(self._cache[name], ensure_ascii=False))
+        # ``_copy_payload`` replaces a json.dumps/json.loads round trip that ran
+        # on the event loop for every recorded decision and soft hint. See its
+        # docstring for why the copy has to stay complete rather than sharing
+        # the untouched sub-dicts.
+        payload = _copy_payload(self._cache[name])
         return name, payload, seq
 
     def _flush_snapshot(
@@ -619,8 +739,20 @@ class AntiRepeatEffectStore:
                 with self._get_write_lock(name):
                     if seq <= self._written_seq.get(name, 0):
                         return
+                    target = self._write_file_path(name)
+                    if target is None:
+                        # Character directory is gone (deleted or renamed while
+                        # this turn was in flight). Fence the sequence so later
+                        # snapshots do not retry into a removed identity, and
+                        # drop this one rather than recreating the directory.
+                        self._written_seq[name] = seq
+                        logger.debug(
+                            "[AntiRepeatEffects] skip save for removed character %s",
+                            name,
+                        )
+                        return
                     atomic_write_json(
-                        self._write_file_path(name),
+                        target,
                         payload,
                         indent=2,
                         ensure_ascii=False,
@@ -650,9 +782,10 @@ class AntiRepeatEffectStore:
             _apply_decision_to_bucket(bucket, decision, now)
 
             if decision.response_id:
+                response_key = _response_key(decision.response_id)
                 response_buckets = payload.setdefault("response_buckets", {})
                 response_bucket = response_buckets.setdefault(
-                    _response_key(decision.response_id),
+                    response_key,
                     {
                         "created_at": now,
                         "delivered_at": 0.0,
@@ -664,7 +797,7 @@ class AntiRepeatEffectStore:
                     now,
                 )
                 _apply_decision_to_bucket(response_bucket["bucket"], decision, now)
-                self._prune(payload, now)
+                self._prune(payload, now, protect_response_key=response_key)
 
             self._cache[name] = payload
             return self._stage_unlocked(name)
@@ -693,13 +826,15 @@ class AntiRepeatEffectStore:
         name = _resolve_name(name)
         with self._get_lock(name):
             payload = self._load_unlocked(name, timestamp)
-            response = payload.get("response_buckets", {}).get(
-                _response_key(response_id)
-            )
+            response_key = _response_key(response_id)
+            response = payload.get("response_buckets", {}).get(response_key)
             if not isinstance(response, dict):
                 return None
             response["delivered_at"] = timestamp
-            self._prune(payload, timestamp)
+            # ``timestamp`` is the publication instant, which is slightly in the
+            # past by the time this runs; without the fence the bucket just marked
+            # delivered would look future-dated to _prune and be dropped.
+            self._prune(payload, timestamp, protect_response_key=response_key)
             self._cache[name] = payload
             return self._stage_unlocked(name)
 
@@ -883,6 +1018,10 @@ class AntiRepeatEffectStore:
                 self._cache.pop(name, None)
                 self._staged_seq[name] = fence
                 self._written_seq[name] = fence
+                # The sequence fence only covers snapshots staged BEFORE this
+                # call. Retirement is what stops a decision recorded while the
+                # delete/rename is still in flight from recreating the directory.
+                self._retired.add(name)
 
 
 _GLOBAL_STORE: Optional[AntiRepeatEffectStore] = None

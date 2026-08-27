@@ -653,3 +653,150 @@ def test_character_storage_rename_and_delete_evict_effect_cache(
     delete_character_memory_storage(config_manager, "New")
     assert "New" not in store._cache
     assert not (tmp_path / "New").exists()
+
+
+def _decision(outcome: str = "blocked_initial", **kwargs) -> AntiRepeatDecision:
+    return AntiRepeatDecision(
+        source="proactive",
+        reasons=("bm25",),
+        action="block",
+        outcome=outcome,
+        **kwargs,
+    )
+
+
+def test_capacity_eviction_keeps_the_bucket_the_current_turn_just_created(tmp_path):
+    """A full, all-delivered store must not swallow the in-flight response bucket.
+
+    Capacity eviction prefers to keep DELIVERED buckets, so a freshly created one
+    (``delivered_at == 0``) sorts ahead of every delivered bucket. Once the store
+    reaches steady state — delivery converts buckets, blocked ones are evicted
+    first — each turn deleted the very bucket it had just created, and
+    ``stage_response_delivered`` could never find it again.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+
+    for index in range(anti_repeat_effects.MAX_RESPONSE_BUCKETS):
+        response_id = f"old-turn-{index}"
+        store.record_decision("Neko", _decision(response_id=response_id), now=now)
+        store._flush_snapshot(
+            *store.stage_response_delivered("Neko", response_id, now=now)
+        )
+
+    payload = store._cache["Neko"]
+    assert len(payload["response_buckets"]) == anti_repeat_effects.MAX_RESPONSE_BUCKETS
+    assert all(
+        bucket["delivered_at"] > 0 for bucket in payload["response_buckets"].values()
+    )
+
+    store.record_decision("Neko", _decision(response_id="fresh-turn"), now=now + 1)
+    assert store.stage_response_delivered("Neko", "fresh-turn", now=now + 2) is not None
+
+    linked = store.query_effects_for_responses(
+        "Neko", ["fresh-turn"], 100, now=now + 3
+    )
+    assert linked["source_available"] is True
+    assert linked["linked_message_count"] == 1
+    assert linked["totals"]["detected"] == 1
+
+
+def test_delivery_mark_survives_a_publication_timestamp_in_the_past(tmp_path):
+    """``mark_anti_repeat_response_delivered`` passes the publication instant.
+
+    That instant is already in the past when the mark runs, so pruning with it
+    must not treat the bucket being marked as future-dated.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+
+    store.record_decision("Neko", _decision(response_id="turn"), now=now + 10)
+    staged = store.stage_response_delivered("Neko", "turn", now=now)
+
+    assert staged is not None
+    linked = store.query_effects_for_responses("Neko", ["turn"], 100, now=now + 20)
+    assert linked["linked_message_count"] == 1
+
+
+def test_staged_snapshot_shares_no_mutable_state_with_the_live_cache(tmp_path):
+    """The snapshot is serialized on a worker thread that does not hold the
+    per-name lock, so sharing any sub-dict with the cache would let
+    ``atomic_write_json`` iterate a dict another turn is writing to."""
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    signature = RepeatSignature("quiet lantern", "quiet lantern", "en")
+    store.record_decision(
+        "Neko", _decision(signature=signature, response_id="turn"), now=now
+    )
+
+    _name, snapshot, _seq = store.stage_decision(
+        "Neko", _decision(signature=signature, response_id="turn"), now=now
+    )
+    live = store._cache["Neko"]
+    day = anti_repeat_effects._utc_day(now)
+
+    assert snapshot is not live
+    assert snapshot["daily_buckets"] is not live["daily_buckets"]
+    assert snapshot["daily_buckets"][day] is not live["daily_buckets"][day]
+    assert (
+        snapshot["daily_buckets"][day]["counters"]
+        is not live["daily_buckets"][day]["counters"]
+    )
+    live_patterns = live["daily_buckets"][day]["patterns"]
+    pattern_id = next(iter(live_patterns))
+    assert snapshot["daily_buckets"][day]["patterns"] is not live_patterns
+    assert (
+        snapshot["daily_buckets"][day]["patterns"][pattern_id]["reasons"]
+        is not live_patterns[pattern_id]["reasons"]
+    )
+    response_key = next(iter(live["response_buckets"]))
+    assert (
+        snapshot["response_buckets"][response_key]["bucket"]
+        is not live["response_buckets"][response_key]["bucket"]
+    )
+
+    expected = json.loads(json.dumps(live, ensure_ascii=False))
+    assert snapshot == expected
+
+    # Mutating the cache the way a later turn would must not reach the snapshot.
+    store.record_decision("Neko", _decision(response_id="turn"), now=now)
+    assert snapshot["daily_buckets"][day]["counters"]["detected"] == 2
+
+
+def test_decision_after_eviction_does_not_recreate_a_removed_character_dir(tmp_path):
+    """``evict_character`` fences snapshots staged before it, not after it.
+
+    Without the retirement guard, a decision recorded while delete/rename was
+    still in flight went through ``ensure_character_dir`` and made the directory
+    the caller had just removed reappear.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.record_decision("Neko", _decision(), now=now)
+    assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
+
+    import shutil
+
+    store.evict_character("Neko")
+    shutil.rmtree(tmp_path / "Neko")
+
+    store.record_decision("Neko", _decision(), now=now + 1)
+
+    assert not (tmp_path / "Neko").exists()
+
+
+def test_a_recreated_character_starts_persisting_again(tmp_path):
+    """Retirement is lifted once the identity is live on disk again."""
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    store.evict_character("Neko")
+
+    store.record_decision("Neko", _decision(), now=now)
+
+    assert (tmp_path / "Neko" / "anti_repeat_effects.json").exists()
+    assert "Neko" not in store._retired
