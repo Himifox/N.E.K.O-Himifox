@@ -657,6 +657,21 @@ def test_repetition_insights_runs_only_on_request_and_is_session_scoped(
     assert len(requests) == 3
 
     mock_page.set_viewport_size({"width": 768, "height": 720})
+    # The panel opens with `memory-aux-panel-in`, a 220ms translateX(12px) -> 0
+    # slide. Measuring straight after the resize catches a mid-animation frame
+    # and the fixed panel reads a few pixels past the viewport edge, which looks
+    # exactly like a narrow-window overflow bug. Settle the animation first so
+    # the assertion below is about layout only.
+    mock_page.wait_for_function(
+        """
+        () => {
+            const panel = document.getElementById('memory-insights-panel');
+            return panel.getAnimations().every(
+                (animation) => animation.playState === 'finished'
+            );
+        }
+        """
+    )
     geometry = mock_page.evaluate(
         """
         () => {
