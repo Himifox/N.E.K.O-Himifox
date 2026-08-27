@@ -31,6 +31,7 @@ from knowledge.catalog_overrides import (
     load_disabled_entries,
 )
 from knowledge.models import normalize_knowledge_title
+from knowledge.store import KnowledgeStoreError, assert_supported_schema
 
 DEFAULT_CASES = (
     PROJECT_ROOT / "tests" / "fixtures" / "knowledge_hybrid_real_model_cases.json"
@@ -146,6 +147,10 @@ def _load_vectors(
         raise EvaluationUnavailable("catalog_override_unavailable") from exc
     try:
         with _open_read_only(database_path) as connection:
+            try:
+                assert_supported_schema(connection)
+            except KnowledgeStoreError as exc:
+                raise EvaluationUnavailable("index_schema_unavailable") from exc
             tables = {
                 str(row[0])
                 for row in connection.execute(

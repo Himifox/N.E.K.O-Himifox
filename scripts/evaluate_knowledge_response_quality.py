@@ -19,6 +19,7 @@ from typing import Any
 import websockets
 
 from knowledge.api import KnowledgeService
+from knowledge.models import normalize_knowledge_title
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,9 +31,10 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
     if not isinstance(payload, list) or not payload:
         raise ValueError("quality cases must be a non-empty JSON array")
     required = {"id", "category", "message", "expected_mode", "intent", "forbidden"}
+    identity_fields = {"expected_source_tag", "expected_title"}
     seen: set[str] = set()
     for case in payload:
-        if not isinstance(case, dict) or set(case) != required:
+        if not isinstance(case, dict):
             raise ValueError("each quality case must use the documented fields")
         case_id = str(case["id"])
         if not case_id or case_id in seen:
@@ -40,6 +42,23 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
         seen.add(case_id)
         if case["expected_mode"] not in {"strong", "none"}:
             raise ValueError(f"invalid expected_mode for {case_id}")
+        expected_fields = (
+            required | identity_fields
+            if case["expected_mode"] == "strong"
+            else required
+        )
+        if set(case) != expected_fields:
+            raise ValueError("each quality case must use the documented fields")
+        if case["expected_mode"] == "strong":
+            source_tag = case["expected_source_tag"]
+            title = case["expected_title"]
+            if (
+                not isinstance(source_tag, str)
+                or not source_tag.startswith("source:")
+                or not isinstance(title, str)
+                or not normalize_knowledge_title(title)
+            ):
+                raise ValueError(f"invalid expected identity for {case_id}")
         if not isinstance(case["forbidden"], list):
             raise ValueError(f"forbidden must be a list for {case_id}")
     return payload
@@ -67,12 +86,22 @@ async def _route_preflight(
             flags=re.MULTILINE,
         )
         actual_mode = "strong" if context.hit_count else "none"
+        identity_matches = (
+            case["expected_mode"] != "strong"
+            or (
+                context.source_tag == case["expected_source_tag"]
+                and normalize_knowledge_title(context.entry_title)
+                == normalize_knowledge_title(case["expected_title"])
+            )
+        )
         results.append({
             **case,
             "actual_mode": actual_mode,
             "production_match_mode": context.match_mode,
             "matched_term": term_match.group(1) if term_match else "",
-            "route_pass": actual_mode == case["expected_mode"],
+            "route_pass": (
+                actual_mode == case["expected_mode"] and identity_matches
+            ),
             "card_chars": len(context.text),
         })
     return results

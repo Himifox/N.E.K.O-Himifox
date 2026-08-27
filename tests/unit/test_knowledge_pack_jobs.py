@@ -911,6 +911,73 @@ def test_reparse_job_directory_is_not_listed_cancelled_or_discarded(
     assert (job_dir / "state.json").read_bytes() == state_before
 
 
+@pytest.mark.parametrize("restart_boundary", (False, True))
+def test_staged_database_symlink_is_rejected_without_touching_target(
+    tmp_path,
+    restart_boundary,
+):
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    database_path = job_dir / "knowledge.db"
+    if restart_boundary:
+        assert _prepare_job(job_dir)["state"] == "verifying_index"
+        database_path.unlink()
+    outside_database = tmp_path / "outside.db"
+    KnowledgeStore(outside_database).upsert(
+        _pack(title="Outside sentinel").entries[0]
+    )
+    try:
+        database_path.symlink_to(outside_database)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "knowledge_staging_database_invalid"
+    assert KnowledgeStore(outside_database).count() == 1
+    assert KnowledgeStore(outside_database).get_entry(
+        "source:community.staged-fixture",
+        "Outside sentinel",
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    "database_name",
+    (
+        "knowledge.db",
+        "knowledge.db-wal",
+        "knowledge.db-shm",
+        "knowledge.db-journal",
+    ),
+)
+def test_staged_database_file_family_rejects_reparse_markers(
+    tmp_path,
+    monkeypatch,
+    database_name,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    marked_path = job_dir / database_name
+    marked_path.write_bytes(b"sentinel")
+    original_check = pack_jobs._is_link_or_reparse
+    monkeypatch.setattr(
+        pack_jobs,
+        "_is_link_or_reparse",
+        lambda path: path == marked_path or original_check(path),
+    )
+
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "knowledge_staging_database_invalid"
+    assert marked_path.read_bytes() == b"sentinel"
+
+
 def test_cancel_revalidates_staging_root_after_registry_lock(tmp_path, monkeypatch):
     import knowledge.pack_jobs as pack_jobs
 
@@ -1295,9 +1362,11 @@ async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
         ready_vector_chunks=0,
     )
 
-    assert result["state"] == "failed"
+    assert result["state"] == "degraded"
     assert service.list_packs() == ()
-    assert service.list_pack_jobs()[0]["retrieval_mode"] == "none"
+    listed = service.list_pack_jobs()[0]
+    assert listed["retrieval_mode"] == "none"
+    assert listed["reason"] == "knowledge_staging_database_invalid"
 
 
 @pytest.mark.asyncio

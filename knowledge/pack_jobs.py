@@ -47,6 +47,12 @@ VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
 ACTIVATION_NAME = "activation.json"
 ACTIVATION_COMMITS_NAME = "activation-commits.json"
+STAGING_DATABASE_NAMES = (
+    "knowledge.db",
+    "knowledge.db-wal",
+    "knowledge.db-shm",
+    "knowledge.db-journal",
+)
 IDENTITY_CAPACITY_FIELDS = ("entries_total", "chunks_total", "content_bytes")
 IDENTITY_SUBSCRIPTION_FIELDS = ("has_subscription", "subscription_sha256")
 IDENTITY_PACK_FIELDS = ("pack_sha256",)
@@ -178,6 +184,45 @@ def _activation_commits_path(knowledge_root: str | Path) -> Path | None:
         if _is_link_or_reparse(path):
             return None
     return path
+
+
+def _validated_staging_database_path(
+    job_dir: Path,
+    *,
+    require_database: bool = False,
+) -> Path | None:
+    """Return a staging database only when its complete file family is local."""
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return None
+    try:
+        resolved_job_dir = safe_job_dir.resolve(strict=True)
+    except OSError:
+        return None
+    database_exists = False
+    for name in STAGING_DATABASE_NAMES:
+        path = safe_job_dir / name
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if (
+            _is_link_or_reparse(path)
+            or not stat.S_ISREG(metadata.st_mode)
+        ):
+            return None
+        try:
+            if path.resolve(strict=True).parent != resolved_job_dir:
+                return None
+        except OSError:
+            return None
+        if name == "knowledge.db":
+            database_exists = True
+    if require_database and not database_exists:
+        return None
+    return safe_job_dir / "knowledge.db"
 
 
 def _external_job_dir(
@@ -1036,9 +1081,7 @@ def _cleanup_payload_validated(job_dir: Path) -> None:
         INDEX_MANIFEST_NAME,
         VECTOR_ARTIFACT_NAME,
         "subscription.json",
-        "knowledge.db",
-        "knowledge.db-wal",
-        "knowledge.db-shm",
+        *STAGING_DATABASE_NAMES,
     ):
         try:
             (job_dir / name).unlink(missing_ok=True)
@@ -1069,6 +1112,19 @@ def _subscription_mismatch_state(
         state=DEGRADED_STATE,
         retrieval_mode="none",
         reason="job_subscription_identity_mismatch",
+    )
+
+
+def _staging_database_mismatch_state(
+    job_dir: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    return _write_state(
+        job_dir,
+        state,
+        state=DEGRADED_STATE,
+        retrieval_mode="none",
+        reason="knowledge_staging_database_invalid",
     )
 
 
@@ -1103,7 +1159,10 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
         staging_store: KnowledgeStore | None = None
         if state.get("state") in {"queued", "validating", "building_fts"}:
             state = _write_state(job_dir, state, state="building_fts")
-            staging_store = KnowledgeStore(job_dir / "knowledge.db")
+            database_path = _validated_staging_database_path(job_dir)
+            if database_path is None:
+                return _staging_database_mismatch_state(job_dir, state)
+            staging_store = KnowledgeStore(database_path)
             staging_store.replace_source(
                 pack.source_tag,
                 pack.entries,
@@ -1122,7 +1181,10 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
                 # ``verifying_index`` is a durable restart boundary.  Reopen and
                 # reconcile the staging database instead of relying on locals
                 # created by the preceding in-process state transition.
-                staging_store = KnowledgeStore(job_dir / "knowledge.db")
+                database_path = _validated_staging_database_path(job_dir)
+                if database_path is None:
+                    return _staging_database_mismatch_state(job_dir, state)
+                staging_store = KnowledgeStore(database_path)
                 staging_store.replace_source(
                     pack.source_tag,
                     pack.entries,
@@ -1230,6 +1292,11 @@ def _activate_job_validated(
         pack = _load_capacity_validated_job_pack(job_dir, current)
         if pack is None:
             return _capacity_mismatch_state(job_dir, current)
+        if mode == "hybrid" and _validated_staging_database_path(
+            job_dir,
+            require_database=True,
+        ) is None:
+            return _staging_database_mismatch_state(job_dir, current)
         embeddings = (
             _strict_staged_vector_snapshot(job_dir, current, subscription)
             if mode == "hybrid"
@@ -1333,8 +1400,11 @@ def _strict_staged_vector_snapshot(
 ) -> tuple[dict[str, object], ...]:
     from .prebuilt_index import validate_prebuilt_index
 
-    database_path = job_dir / "knowledge.db"
-    if not database_path.is_file():
+    database_path = _validated_staging_database_path(
+        job_dir,
+        require_database=True,
+    )
+    if database_path is None:
         raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
     expected_subscription = subscription or {}
     try:

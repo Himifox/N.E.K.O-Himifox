@@ -1226,6 +1226,12 @@ class KnowledgeService:
         source_material_types = (
             self._source_material_types(store) if store is not None else {}
         )
+        unresolved_community_sources = {
+            str(row.get("tag") or "")
+            for row in source_counts
+            if str(row.get("tag") or "").startswith("source:community.")
+            and str(row.get("tag") or "") not in source_material_types
+        }
         knowledge_entries = sum(
             int(row.get("entries") or 0)
             for row in source_counts
@@ -1251,7 +1257,8 @@ class KnowledgeService:
             )
             and override_state != "invalid"
             and registry_state != "invalid"
-            and job_registry_state != "invalid",
+            and job_registry_state != "invalid"
+            and not unresolved_community_sources,
             "disabled_entries": len(disabled),
             "catalog_override_state": override_state,
             "pack_registry_state": registry_state,

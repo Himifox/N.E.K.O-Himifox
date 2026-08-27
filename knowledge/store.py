@@ -50,6 +50,41 @@ class KnowledgeSchemaTooNewError(KnowledgeStoreError):
         )
 
 
+def assert_supported_schema(connection: sqlite3.Connection) -> None:
+    """Apply the production schema-marker contract without modifying SQLite."""
+    user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    metadata_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
+    ).fetchone()
+    metadata_version: int | None = None
+    if metadata_table is not None:
+        row = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()
+        if row is not None:
+            raw = str(row[0])
+            if not raw.isdecimal() or str(int(raw)) != raw or int(raw) <= 0:
+                raise KnowledgeStoreError(
+                    "knowledge database schema version is invalid"
+                )
+            metadata_version = int(raw)
+
+    detected_versions = tuple(
+        version
+        for version in (user_version, metadata_version)
+        if version not in (None, 0)
+    )
+    too_new = tuple(
+        version for version in detected_versions if version > SCHEMA_VERSION
+    )
+    if too_new:
+        raise KnowledgeSchemaTooNewError(max(too_new))
+    if len(set(detected_versions)) > 1:
+        raise KnowledgeStoreError("knowledge database schema markers disagree")
+    if user_version and metadata_version is None:
+        raise KnowledgeStoreError("knowledge database schema metadata is missing")
+
+
 class KnowledgeStore:
     """Own a small rebuildable database without touching character memory."""
 
@@ -252,37 +287,7 @@ class KnowledgeStore:
 
     @staticmethod
     def _assert_supported_schema(connection: sqlite3.Connection) -> None:
-        user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        metadata_table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
-        ).fetchone()
-        metadata_version: int | None = None
-        if metadata_table is not None:
-            row = connection.execute(
-                "SELECT value FROM metadata WHERE key='schema_version'"
-            ).fetchone()
-            if row is not None:
-                raw = str(row["value"])
-                if not raw.isdecimal() or str(int(raw)) != raw or int(raw) <= 0:
-                    raise KnowledgeStoreError(
-                        "knowledge database schema version is invalid"
-                    )
-                metadata_version = int(raw)
-
-        detected_versions = tuple(
-            version
-            for version in (user_version, metadata_version)
-            if version not in (None, 0)
-        )
-        too_new = tuple(
-            version for version in detected_versions if version > SCHEMA_VERSION
-        )
-        if too_new:
-            raise KnowledgeSchemaTooNewError(max(too_new))
-        if len(set(detected_versions)) > 1:
-            raise KnowledgeStoreError("knowledge database schema markers disagree")
-        if user_version and metadata_version is None:
-            raise KnowledgeStoreError("knowledge database schema metadata is missing")
+        assert_supported_schema(connection)
 
     def assert_compatible(self) -> None:
         """Initialize supported schemas or raise before touching newer schemas."""

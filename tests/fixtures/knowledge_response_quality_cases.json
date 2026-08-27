@@ -4,6 +4,8 @@
     "category": "self_deprecation",
     "message": "我以为稳了，结果小丑竟是我自己。",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "小丑竟是我自己",
     "intent": "认可预期落空后的自嘲反转，并顺势回应",
     "forbidden": ["否认自嘲表达", "直接套安慰话术", "只追问发生了什么", "只复述原句"]
   },
@@ -12,6 +14,8 @@
     "category": "quotation",
     "message": "你这瓜保熟吗？",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "这瓜保熟吗",
     "intent": "识别固定引用，并在当前语境里轻量接话",
     "forbidden": ["按普通水果质量咨询回答", "询问是不是梗", "编造固定下一句"]
   },
@@ -20,6 +24,8 @@
     "category": "adapted_expression",
     "message": "他这是在CPU我吧？",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "他在cpu你",
     "intent": "理解为精神操控或话术影响，而不是计算机硬件",
     "forbidden": ["解释计算机CPU", "否认用户感受", "询问是不是新梗"]
   },
@@ -28,6 +34,8 @@
     "category": "wordplay",
     "message": "你这句评价真是虾仁猪心啊。",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "虾仁猪心",
     "intent": "理解为杀人诛心式的谐音调侃，并轻量呼应",
     "forbidden": ["解释虾仁和猪心食材", "只复述原句", "主动讲出处"]
   },
@@ -60,6 +68,8 @@
     "category": "emotion",
     "message": "看到这个结果我真的破防了。",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "破防了",
     "intent": "理解为情绪防线被击穿，并结合结果回应",
     "forbidden": ["解释物理防御设施", "只重复破防", "询问是不是梗"]
   },
@@ -68,6 +78,8 @@
     "category": "explicit_meaning",
     "message": "电子榨菜到底是指什么？",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "电子榨菜",
     "intent": "先直接说明吃饭时用于下饭的内容",
     "forbidden": ["先玩梗不回答", "询问用户是不是在说梗", "编造出处"]
   },
@@ -76,6 +88,8 @@
     "category": "explicit_distinction",
     "message": "凡尔赛和普通炫耀有什么区别？",
     "expected_mode": "strong",
+    "expected_source_tag": "source:chime",
+    "expected_title": "凡尔赛",
     "intent": "先说明隐晦反向炫耀与直接炫耀的区别",
     "forbidden": ["只说都在炫耀", "先反问语境", "编造出处"]
   },

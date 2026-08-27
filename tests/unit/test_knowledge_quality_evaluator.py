@@ -18,6 +18,8 @@ async def test_route_preflight_uses_production_context_builder(monkeypatch, tmp_
             text="Knowledge term: fixture",
             hit_count=1,
             match_mode="automatic_hybrid",
+            entry_title="Fixture",
+            source_tag="source:fixture",
         )
     )
     monkeypatch.setattr(
@@ -28,13 +30,71 @@ async def test_route_preflight_uses_production_context_builder(monkeypatch, tmp_
     monkeypatch.setattr(evaluator, "_build_production_context", builder)
 
     results = await evaluator._route_preflight(
-        [{"message": "semantic fixture", "expected_mode": "strong"}],
+        [{
+            "message": "semantic fixture",
+            "expected_mode": "strong",
+            "expected_source_tag": "source:fixture",
+            "expected_title": "fixture",
+        }],
         tmp_path / "knowledge.db",
     )
 
     builder.assert_awaited_once_with(service, "semantic fixture")
     assert results[0]["route_pass"] is True
     assert results[0]["production_match_mode"] == "automatic_hybrid"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entry_title", "source_tag"),
+    (("Unrelated", "source:fixture"), ("Fixture", "source:other")),
+)
+async def test_route_preflight_rejects_unrelated_strong_hit(
+    monkeypatch,
+    tmp_path,
+    entry_title,
+    source_tag,
+):
+    monkeypatch.setattr(
+        evaluator.KnowledgeService,
+        "for_database",
+        lambda _database: object(),
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_build_production_context",
+        AsyncMock(
+            return_value=KnowledgeTurnContext(
+                text=f"Knowledge term: {entry_title}",
+                hit_count=1,
+                match_mode="automatic_hybrid",
+                entry_title=entry_title,
+                source_tag=source_tag,
+            )
+        ),
+    )
+
+    results = await evaluator._route_preflight(
+        [{
+            "message": "semantic fixture",
+            "expected_mode": "strong",
+            "expected_source_tag": "source:fixture",
+            "expected_title": "Fixture",
+        }],
+        tmp_path / "knowledge.db",
+    )
+
+    assert results[0]["actual_mode"] == "strong"
+    assert results[0]["route_pass"] is False
+
+
+def test_quality_fixture_binds_every_strong_case_to_one_entry():
+    cases = evaluator._load_cases(evaluator.DEFAULT_CASES)
+
+    strong = [case for case in cases if case["expected_mode"] == "strong"]
+    assert len(strong) == 7
+    assert {case["expected_source_tag"] for case in strong} == {"source:chime"}
+    assert all(case["expected_title"] for case in strong)
 
 
 @pytest.mark.asyncio

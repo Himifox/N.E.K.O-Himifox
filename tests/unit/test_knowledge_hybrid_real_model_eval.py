@@ -9,6 +9,7 @@ import pytest
 
 from knowledge.catalog_overrides import get_catalog_override_path
 from knowledge.chunking import CHUNKER_VERSION
+from knowledge.store import SCHEMA_VERSION
 from knowledge.vector_index import SEMANTIC_THRESHOLD
 from scripts.evaluate_knowledge_hybrid_retrieval import (
     EvaluationUnavailable,
@@ -207,6 +208,40 @@ def test_vector_corpus_rejects_mismatched_chunker_version(tmp_path):
 
     with pytest.raises(EvaluationUnavailable, match="chunker_version_mismatch"):
         _load_vector_corpus(tmp_path, model_id="fixture-model", dimensions=2)
+
+
+@pytest.mark.parametrize(
+    ("metadata_version", "user_version"),
+    (
+        (str(SCHEMA_VERSION + 1), 0),
+        (str(SCHEMA_VERSION + 1), SCHEMA_VERSION + 1),
+        (str(SCHEMA_VERSION - 1), SCHEMA_VERSION),
+        ("01", 0),
+        (None, SCHEMA_VERSION),
+    ),
+)
+def test_vector_corpus_reuses_production_schema_marker_contract(
+    tmp_path,
+    metadata_version,
+    user_version,
+):
+    database = tmp_path / "knowledge.db"
+    _write_vector_database(database)
+    with sqlite3.connect(database) as connection:
+        if metadata_version is None:
+            connection.execute("DELETE FROM metadata WHERE key='schema_version'")
+        else:
+            connection.execute(
+                "UPDATE metadata SET value=? WHERE key='schema_version'",
+                (metadata_version,),
+            )
+        connection.execute(f"PRAGMA user_version={user_version}")
+    before = database.read_bytes()
+
+    with pytest.raises(EvaluationUnavailable, match="index_schema_unavailable"):
+        _load_vector_corpus(tmp_path, model_id="fixture-model", dimensions=2)
+
+    assert database.read_bytes() == before
 
 
 def test_calibration_positive_matches_source_and_normalized_title():

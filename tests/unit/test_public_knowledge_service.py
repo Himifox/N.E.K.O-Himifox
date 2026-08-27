@@ -199,6 +199,37 @@ def test_missing_installed_database_is_degraded_without_recreation(
     assert not database_path.exists()
 
 
+@pytest.mark.parametrize("with_registered_pack", (False, True))
+def test_unregistered_community_rows_degrade_management_health(
+    tmp_path,
+    monkeypatch,
+    with_registered_pack,
+):
+    service = open_knowledge(tmp_path)
+    monkeypatch.setattr(service, "refresh_routing_index", lambda **_kwargs: None)
+    if with_registered_pack:
+        service.install_pack(
+            _pack(
+                pack_id="registered-fixture",
+                material_type="knowledge",
+                title="Registered fixture",
+            )
+        )
+    KnowledgeStore(service.database_path()).upsert(
+        _entry("Orphaned fixture", "source:community.orphaned-fixture")
+    )
+
+    status = service.get_status()
+
+    assert status["integrity_ok"] is False
+    assert status["pack_registry_state"] == (
+        "ready" if with_registered_pack else "missing"
+    )
+    assert status["entries"] == (2 if with_registered_pack else 1)
+    assert status["knowledge_entries"] == (1 if with_registered_pack else 0)
+    assert status["corpus_entries"] == 0
+
+
 def test_lexical_exact_match_preserves_meaningful_punctuation(tmp_path):
     service = open_knowledge(tmp_path)
     store = KnowledgeStore(service.database_path())
