@@ -249,3 +249,72 @@ def test_legacy_staged_pack_json_rejects_a_symlink(tmp_path):
 
     with pytest.raises(ValueError, match="not a regular file"):
         _load_job_pack(job_dir)
+
+
+def test_staged_artifact_read_is_bound_to_the_validated_descriptor(
+    tmp_path, monkeypatch
+):
+    """Validation and read must share one descriptor, not two path lookups.
+
+    Checking the path and then calling read_bytes() re-opens by name, so a writer
+    that swaps the artifact in between defeats both the link refusal and the size
+    cap. Here the swap is fired from inside fstat: a path-based implementation
+    never calls os.fstat at all, and one that re-opens would pick up the decoy.
+    """
+    from knowledge.pack_jobs import PACK_ARTIFACT_NAME, _load_job_pack
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    target = job_dir / PACK_ARTIFACT_NAME
+    target.write_bytes(json.dumps(_pack("original", "原包")).encode("utf-8"))
+
+    decoy = tmp_path / "decoy.json"
+    decoy.write_bytes(json.dumps(_pack("swapped", "掉包")).encode("utf-8"))
+
+    real_fstat = os.fstat
+    swapped = {"done": False, "possible": True}
+
+    def fstat_then_swap(fd):
+        info = real_fstat(fd)
+        if not swapped["done"]:
+            swapped["done"] = True
+            try:
+                os.replace(decoy, target)
+            except OSError:
+                # Windows refuses to replace a file that is currently open.
+                swapped["possible"] = False
+        return info
+
+    monkeypatch.setattr(os, "fstat", fstat_then_swap)
+    pack = _load_job_pack(job_dir)
+
+    # A path-based implementation would never have reached os.fstat.
+    assert swapped["done"], "artifact was not validated through a descriptor"
+    if not swapped["possible"]:
+        pytest.skip("this platform cannot swap an open file; descriptor use verified")
+    assert pack.pack_id == "original"
+
+
+def test_staged_artifact_reader_never_reopens_by_path():
+    """Structural dual: the fix is 'do not look the path up a second time'."""
+    import ast
+    import inspect
+    import textwrap
+
+    from knowledge.pack_jobs import _read_staged_artifact
+
+    source = textwrap.dedent(inspect.getsource(_read_staged_artifact))
+    tree = ast.parse(source)
+    called = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "read_bytes" not in called and "read_text" not in called, (
+        "re-opening the artifact by path after validating it reintroduces the "
+        "swap window the descriptor was meant to close"
+    )
+    assert {"open", "fstat", "read", "close"} <= called, (
+        f"expected the descriptor-based read to survive; saw {sorted(called)}"
+    )

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import stat
@@ -107,26 +108,55 @@ def _staged_artifact_limits() -> dict[str, int]:
 
 
 def _read_staged_artifact(job_dir: Path, name: str) -> bytes:
-    """Read one fixed staged artifact after proving it is a bounded regular file.
+    """Read one fixed staged artifact through a single validated descriptor.
 
-    Every path *leading to* staging is already link-guarded, but the artifacts
-    themselves were read with a plain ``is_file()`` + ``read_bytes()``. Both
-    follow a symlink, so an artifact swapped between admission and indexing could
-    pull an unbounded external file into memory before the digest, schema, or
-    protocol size limit is ever checked. Same guard the jobs root gets.
+    Every path *leading to* staging is link-guarded, but the artifacts themselves
+    were not: they were read with ``is_file()`` + ``read_bytes()``, which follows
+    a symlink and materializes whatever it finds before the digest, schema or
+    protocol limit is ever checked.
+
+    Validating the path and then calling ``read_bytes()`` is not enough either —
+    that re-opens by name, so a concurrent writer can swap the artifact in
+    between and slip past both checks. Everything below therefore happens on one
+    descriptor: open, ``fstat`` it, and read from that same descriptor.
     """
     path = job_dir / name
+    limit = _staged_artifact_limits()[name]
+    # Validate and read through ONE descriptor. Checking the path and then
+    # calling read_bytes() re-opens by name, so a concurrent writer could swap
+    # the artifact between the two and defeat both the link refusal and the size
+    # cap. O_NOFOLLOW makes the refusal atomic where it exists; on Windows it
+    # does not, so the pre-open lstat below still carries that half and the size
+    # cap is enforced against the descriptor we actually read.
     if _is_link_or_reparse(path):
         raise ValueError("staged knowledge artifact is not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        metadata = path.stat()
+        descriptor = os.open(path, flags)
     except OSError as exc:
         raise ValueError("staged knowledge artifact is unavailable") from exc
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ValueError("staged knowledge artifact is not a regular file")
-    if metadata.st_size > _staged_artifact_limits()[name]:
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("staged knowledge artifact is not a regular file")
+        if metadata.st_size > limit:
+            raise ValueError("staged knowledge artifact exceeds its protocol limit")
+        # Read at most limit + 1 so a file that grew after fstat is still caught
+        # instead of being materialized in full.
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    if len(raw) > limit:
         raise ValueError("staged knowledge artifact exceeds its protocol limit")
-    return path.read_bytes()
+    return raw
 
 
 def _staged_artifact_present(job_dir: Path, name: str) -> bool:
