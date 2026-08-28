@@ -3,8 +3,17 @@ id = "yui_stardew"
 name = "Yui 星露谷驱动"
 description = "通过仅限本机的鉴权桥，让 N.E.K.O 驱动 HimiYui 执行召唤、跟随、等待和持续工作。"
 short_description = "Drive HimiYui in Stardew Valley through an authenticated localhost bridge."
-keywords = ["yui", "stardew", "game", "companion", "agent"]
-version = "0.1.0"
+keywords = [
+  "yui",
+  "stardew",
+  "星露谷",
+  "游戏里的你",
+  "可以进(?:来|游戏)?了",
+  "进来吧",
+  "现在能进了",
+  "我弄好了",
+]
+version = "0.1.1"
 type = "plugin"
 entry = "plugin.plugins.yui_stardew:YuiStardewPlugin"
 

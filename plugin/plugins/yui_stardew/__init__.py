@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -90,6 +91,10 @@ ACTION_DESCRIPTION = (
     "这就是对该动作的确认，本回合必须立即提交对应工具，不能再次确认。‘一起做’表示你也要用自己的游戏"
     "身体提交对应 work，不是只在文字里陪伴。‘陪我出门做某事’先提交 follow；主人随后说‘开始/开干/来割草’"
     "时立即提交先前说的工作。\n\n"
+    "进入许可：当前对话明确在讨论 Stardew Valley/HimiYui，且主人说‘可以进了’、‘可以进来了’、‘进来吧’、"
+    "‘现在能进了’或‘我弄好了’来承接你进入游戏的上下文时，视为 summon。你准备表达‘我现在进游戏’、"
+    "‘加载游戏去找你’、‘我进来了’、‘马上现身’等进入承诺时，必须先在同一回合调用 action=summon；"
+    "没有成功工具回执就不能输出这些进入、加载、现身或已到场的表演文字。与游戏无关的‘我弄好了’不触发。\n\n"
     "结果真实性：只有回执 ok=true 才能说该指令已被游戏接受；STARTED/ACCEPTED 只代表游戏接受了开始命令，"
     "不证明已经走到目标、挥动工具或改变目标。"
     "ok=false 时必须按 code/message/state 如实说明失败，不能描写自己已经移动、跟随或完成。"
@@ -118,6 +123,7 @@ class YuiStardewPlugin(YuiStardewHostedUiMixin, NekoPluginBase):
         self._settings = BridgeSettings()
         self._client = YuiStardewBridgeClient(self._settings)
         self._selected_instance_id = ""
+        self._last_summon_accepted_at = 0.0
 
     async def _load_config(self) -> None:
         config = _mapping(await self.config.dump(timeout=5.0))
@@ -242,11 +248,55 @@ class YuiStardewPlugin(YuiStardewHostedUiMixin, NekoPluginBase):
     ):
         try:
             arguments = self._build_arguments(action, kind, radius, completion_policy)
-            return Ok(await self._request_bridge(action, arguments))
+            response = await self._request_bridge(action, arguments)
+            self._remember_summon_acceptance(action, response)
+            return Ok(response)
         except (BridgeError, ValueError) as error:
             if isinstance(error, BridgeError):
                 return Err(f"{error.code}: {error.message}")
             return Err(str(error))
+
+    @plugin_entry(
+        id="yui_stardew_reconcile_summon",
+        name="补偿执行已确认的 Yui 进入游戏",
+        description=(
+            "仅用于对话结束后的召唤可靠性补偿。只有最近对话明确处于 Stardew Valley/HimiYui 游戏语境，"
+            "并且主人用‘可以进了/可以进来了/进来吧/现在能进了/我弄好了’承接此前让你进入游戏的上下文，"
+            "或者角色刚明确承诺进入游戏却没有工具回执时调用。与游戏无关的‘我弄好了’、普通加载页面或"
+            "仅询问状态时禁止调用。入口会先读取桥状态；已经在场或刚提交过 summon 时不会重复召唤。"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["ok", "code", "message", "state", "reconciled"],
+        metadata={"agent_auto": True},
+    )
+    async def reconcile_summon_entry(self, **_: Any):
+        try:
+            status = await self._request_bridge("status")
+            state = _mapping(status.get("state"))
+            if state.get("body_present") is True:
+                return Ok(
+                    {
+                        **status,
+                        "reconciled": False,
+                        "message": "Yui 已经在游戏世界中，没有重复召唤。",
+                    }
+                )
+            if time.monotonic() - self._last_summon_accepted_at < 8.0:
+                return Ok(
+                    {
+                        **status,
+                        "reconciled": False,
+                        "message": "召唤已经提交，正在等待游戏生成 Yui 身体。",
+                    }
+                )
+            if state.get("world_ready") is not True:
+                return Err("WORLD-NOT-READY: 当前存档尚未就绪，未提交召唤。")
+
+            response = await self._request_bridge("summon")
+            self._remember_summon_acceptance("summon", response)
+            return Ok({**response, "reconciled": response.get("ok") is True})
+        except BridgeError as error:
+            return Err(f"{error.code}: {error.message}")
 
     @plugin_entry(
         id="yui_stardew_reload_config",
@@ -285,6 +335,7 @@ class YuiStardewPlugin(YuiStardewHostedUiMixin, NekoPluginBase):
                         )
                         return stopped
             response = await self._request_bridge(action, arguments)
+            self._remember_summon_acceptance(action, response)
             if replaced_work_kind:
                 response["replaced_work_kind"] = replaced_work_kind
             response["embodiment"] = (
@@ -306,6 +357,14 @@ class YuiStardewPlugin(YuiStardewHostedUiMixin, NekoPluginBase):
         except BridgeError as error:
             self.logger.warning("Yui Stardew bridge request failed: {}", error.code)
             return self._tool_error(error.code, error.message)
+
+    def _remember_summon_acceptance(
+        self,
+        action: str,
+        response: Mapping[str, Any],
+    ) -> None:
+        if action == "summon" and response.get("ok") is True:
+            self._last_summon_accepted_at = time.monotonic()
 
     @staticmethod
     def _build_arguments(
