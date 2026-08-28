@@ -1572,3 +1572,49 @@ def test_container_bodies_never_reach_the_sidecar(label, draft):
     assert build_repeat_signature(
         draft, ["secret_helper"], language="en"
     ) is None, label
+
+
+def test_a_backward_clock_step_does_not_delete_recorded_effects(tmp_path):
+    """A record dated ahead of the clock means the CLOCK moved, not corruption.
+
+    A manual correction, a VM restore or a stepped time sync all leave every
+    existing record "newer than now". ``_prune`` runs on every query and every
+    recorded decision and its result is flushed, so deleting on that reading
+    permanently destroyed the message-linked aggregates -- and a correction
+    across midnight took a whole day of daily buckets with them.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+    recorded_day = anti_repeat_effects._utc_day(now)
+
+    store.record_decision("Neko", _decision(response_id="turn"), now=now)
+    assert store.stage_response_delivered("Neko", "turn", now=now) is not None
+
+    # Far enough back to cross a UTC midnight, still inside the skew window.
+    stepped_back = now - 23 * 60 * 60
+    linked = store.query_effects_for_responses(
+        "Neko", ["turn"], 100, now=stepped_back
+    )
+
+    assert linked["linked_message_count"] == 1
+    assert recorded_day in store._cache["Neko"]["daily_buckets"]
+
+
+def test_records_beyond_the_skew_window_are_still_dropped(tmp_path):
+    """The tolerance is bounded on purpose.
+
+    Past the window a timestamp cannot be explained by clock skew, and keeping
+    it would let the record outlive the retention period entirely.
+    """
+    store = _store(tmp_path)
+    (tmp_path / "Neko").mkdir()
+    now = 1_700_000_000.0
+
+    store.record_decision("Neko", _decision(response_id="turn"), now=now)
+    assert store.stage_response_delivered("Neko", "turn", now=now) is not None
+
+    beyond = now - (anti_repeat_effects.FUTURE_SKEW_SECONDS + 60 * 60)
+    linked = store.query_effects_for_responses("Neko", ["turn"], 100, now=beyond)
+
+    assert linked["linked_message_count"] == 0

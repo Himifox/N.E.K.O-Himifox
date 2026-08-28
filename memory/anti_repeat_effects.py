@@ -43,6 +43,17 @@ RETENTION_DAYS = 120
 MAX_PATTERNS_PER_DAY = 64
 MAX_RESPONSE_BUCKETS = 512
 MAX_PHRASE_CHARS = 48
+# How far ahead of the wall clock a record may sit and still be kept.
+#
+# A record dated slightly in the future is far likelier to mean the CLOCK
+# moved backwards -- a manual correction, a VM restore, a stepped NTP sync --
+# than to mean the file is corrupt. ``_prune`` runs on every query and every
+# recorded decision and its result is flushed, so treating "newer than now" as
+# invalid meant a few seconds of skew permanently deleted the message-linked
+# aggregates, and a correction across midnight took out a whole day of them.
+# Past this window the reading cannot be explained by skew, and keeping it
+# would let a record outlive the retention period entirely.
+FUTURE_SKEW_SECONDS = 24 * 60 * 60
 _DEFAULT_KEY = "default"
 _BLOCKED_OUTCOMES = frozenset(
     {
@@ -732,14 +743,15 @@ class AntiRepeatEffectStore:
             datetime.fromtimestamp(now, timezone.utc).date()
             - timedelta(days=RETENTION_DAYS - 1)
         ).isoformat()
-        current_day = _utc_day(now)
+        latest_day = _utc_day(now + FUTURE_SKEW_SECONDS)
         buckets = payload.get("daily_buckets", {})
         for day in list(buckets):
-            if day < cutoff or day > current_day:
+            if day < cutoff or day > latest_day:
                 del buckets[day]
                 changed = True
         response_buckets = payload.get("response_buckets", {})
         cutoff_timestamp = now - RETENTION_DAYS * 24 * 60 * 60
+        skew_limit = now + FUTURE_SKEW_SECONDS
         for response_key, response in list(response_buckets.items()):
             if response_key == protect_response_key:
                 continue
@@ -753,7 +765,7 @@ class AntiRepeatEffectStore:
             )
             if (
                 retention_timestamp < cutoff_timestamp
-                or retention_timestamp > now
+                or retention_timestamp > skew_limit
             ):
                 del response_buckets[response_key]
                 changed = True
