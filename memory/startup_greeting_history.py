@@ -647,24 +647,31 @@ class StartupGreetingHistory:
 # directory straight back. Measured: retiring before construction recreated
 # ``memory/<name>/`` and its sidecar, retiring after did not.
 _PENDING_RETIREMENTS: set[str] = set()
-_PENDING_RETIREMENTS_LOCK = threading.Lock()
 
 
-def _record_pending_retirement(character_names, *, retired: bool) -> None:
-    with _PENDING_RETIREMENTS_LOCK:
+def _record_pending_retirement(character_names, *, retired: bool):
+    """Update the pending set and return the singleton, under ONE lock.
+
+    The lock is _GLOBAL_HISTORY_LOCK, deliberately, and not a second lock of its own.
+    A builder that had copied the pending set but not yet published would
+    otherwise race a concurrent retire/revive: that caller reads ``None``,
+    returns early, and leaves its update only in the set the builder had
+    already copied -- so the published instance carries stale state, and a
+    delete can be resurrected or a live character blocked from creating
+    its directory. Sharing the lock makes both interleavings safe: either
+    the update lands before the copy, or it sees the published instance.
+    """
+    with _GLOBAL_HISTORY_LOCK:
         for character_name in character_names:
             if retired:
                 _PENDING_RETIREMENTS.add(character_name)
             else:
-                # Eviction and revival both LIFT retirement, so they have to
-                # clear the pending record too -- otherwise a name retired and
-                # revived before construction would stay retired forever.
+                # Eviction and revival both LIFT retirement, so they have
+                # to clear the pending record too -- otherwise a name
+                # retired and revived before construction would stay
+                # retired forever.
                 _PENDING_RETIREMENTS.discard(character_name)
-
-
-def _pending_retirements() -> set[str]:
-    with _PENDING_RETIREMENTS_LOCK:
-        return set(_PENDING_RETIREMENTS)
+        return _GLOBAL_HISTORY
 
 
 _GLOBAL_HISTORY: StartupGreetingHistory | None = None
@@ -674,8 +681,7 @@ _GLOBAL_HISTORY_LOCK = threading.Lock()
 def evict_cached_startup_greeting_history(*character_names: str) -> None:
     """Evict loaded identities without creating the global history."""
     names = list(dict.fromkeys(character_names))
-    _record_pending_retirement(names, retired=False)
-    history = _GLOBAL_HISTORY
+    history = _record_pending_retirement(names, retired=False)
     if history is None:
         return
     for character_name in names:
@@ -684,8 +690,7 @@ def evict_cached_startup_greeting_history(*character_names: str) -> None:
 def revive_cached_startup_greeting_history(*character_names: str) -> None:
     """Lift retirement for live identities without touching their caches."""
     names = list(dict.fromkeys(character_names))
-    _record_pending_retirement(names, retired=False)
-    history = _GLOBAL_HISTORY
+    history = _record_pending_retirement(names, retired=False)
     if history is None:
         return
     for character_name in names:
@@ -695,8 +700,7 @@ def revive_cached_startup_greeting_history(*character_names: str) -> None:
 def retire_cached_startup_greeting_history(*character_names: str) -> None:
     """Retire removed identities without creating the global history."""
     names = list(dict.fromkeys(character_names))
-    _record_pending_retirement(names, retired=True)
-    history = _GLOBAL_HISTORY
+    history = _record_pending_retirement(names, retired=True)
     if history is None:
         return
     for character_name in names:
@@ -709,6 +713,8 @@ def get_startup_greeting_history() -> StartupGreetingHistory:
         with _GLOBAL_HISTORY_LOCK:
             if _GLOBAL_HISTORY is None:
                 built = StartupGreetingHistory()
-                built._retired.update(_pending_retirements())
+                # Already under the lock, so read the set directly: a
+                # helper that re-acquired it would deadlock.
+                built._retired.update(_PENDING_RETIREMENTS)
                 _GLOBAL_HISTORY = built
     return _GLOBAL_HISTORY

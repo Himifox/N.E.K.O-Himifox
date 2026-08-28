@@ -1704,9 +1704,12 @@ def _retirement_probe(tmp_path, monkeypatch, *, order):
             outcome="blocked_initial",
         ),
     )
-    for _ in range(40):
-        if not store._detached_flushes:
-            break
+    deadline = time.monotonic() + 15.0
+    while store._detached_flushes:
+        # Failing loudly matters: returning the directory state on timeout
+        # would let a slow flush decide the verdict, and both of these
+        # assertions read "directory absent" as the fixed behaviour.
+        assert time.monotonic() < deadline, "the detached flush never drained"
         time.sleep(0.02)
     return (tmp_path / "Ghost").exists()
 
@@ -1739,3 +1742,96 @@ def test_a_revived_name_does_not_stay_pending(tmp_path, monkeypatch):
 
 def test_a_live_name_is_unaffected(tmp_path, monkeypatch):
     assert _retirement_probe(tmp_path, monkeypatch, order="none") is True
+
+
+class _WindowedPendingSet:
+    """A pending set that opens a window AFTER it has been copied.
+
+    Not a ``set`` subclass on purpose: ``set.update`` takes an internal fast
+    path for set-like arguments and would never call ``__iter__``, so the
+    window would never open.
+    """
+
+    def __init__(self, copied, retirer_done):
+        self._names: set[str] = set()
+        self._copied = copied
+        self._retirer_done = retirer_done
+
+    def add(self, name):
+        self._names.add(name)
+
+    def discard(self, name):
+        self._names.discard(name)
+
+    def __contains__(self, name):
+        return name in self._names
+
+    def __iter__(self):
+        snapshot = iter(tuple(self._names))
+        self._copied.set()
+        # Under one shared lock the retiring thread cannot get here, so this
+        # times out and the builder publishes -- correct. Under two locks it
+        # completes, and the builder then publishes a store seeded from the
+        # snapshot taken above, without the retirement.
+        self._retirer_done.wait(1.0)
+        return snapshot
+
+
+def test_pending_retirement_transfer_is_atomic_with_singleton_publication(
+    tmp_path, monkeypatch
+):
+    """The builder must not publish an instance seeded from a stale set.
+
+    The dangerous window is between COPYING the pending set and assigning the
+    global. A concurrent retire that slips into it reads ``None``, returns
+    early, and leaves its update only in the set already copied -- so the
+    published store carries no retirement and the deleted directory comes
+    back. Both sides take the SAME lock, which is what closes it.
+
+    Pinning this needed the window in the right place: an earlier version
+    paused before the copy instead, which is the benign ordering, and it
+    stayed green with the two-lock version restored.
+    """
+    import threading
+
+    from memory import anti_repeat_effects
+
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(tmp_path)
+    config_manager.app_docs_dir = str(tmp_path)
+    config_manager.load_root_state.return_value = {"mode": "normal"}
+
+    copied = threading.Event()
+    retirer_done = threading.Event()
+    monkeypatch.setattr(anti_repeat_effects, "_GLOBAL_STORE", None)
+    monkeypatch.setattr(
+        anti_repeat_effects,
+        "_PENDING_RETIREMENTS",
+        _WindowedPendingSet(copied, retirer_done),
+    )
+    monkeypatch.setattr(
+        anti_repeat_effects, "get_config_manager", lambda: config_manager
+    )
+
+    built: list = []
+
+    def _build() -> None:
+        built.append(anti_repeat_effects.get_anti_repeat_effect_store())
+
+    def _retire() -> None:
+        anti_repeat_effects.retire_cached_anti_repeat_effects("Ghost")
+        retirer_done.set()
+
+    builder = threading.Thread(target=_build)
+    builder.start()
+    assert copied.wait(10.0), "the builder never reached the pending-set copy"
+    retirer = threading.Thread(target=_retire)
+    retirer.start()
+    builder.join(20.0)
+    retirer.join(20.0)
+    assert not builder.is_alive() and not retirer.is_alive()
+
+    store = built[0]
+    assert "Ghost" in store._retired, (
+        "the retirement was lost between copying the pending set and publishing"
+    )
