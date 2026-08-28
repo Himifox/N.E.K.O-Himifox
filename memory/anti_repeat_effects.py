@@ -799,6 +799,30 @@ class AntiRepeatEffectStore:
         *,
         raise_on_error: bool = False,
     ) -> None:
+        """Write one staged snapshot, best effort unless the caller says otherwise.
+
+        The write barrier has to be established INSIDE the critical section: a
+        cloud import replaces ``memory/<name>/`` wholesale, and a snapshot
+        staged before that replacement still carries ``seq > _written_seq``, so
+        evicting after the fact cannot stop it -- it would take the write lock,
+        pass the sequence check, and overwrite the imported file, which no
+        later fence can undo. ``cloudsave_writable_transaction`` is what stops
+        it: while the fence is closed it raises and this flush is skipped. Same
+        shape as ``memory/anti_repeat.py``.
+
+        Swallowing that rejection is deliberate, and so is NOT retrying it.
+        Staging copies the WHOLE payload rather than a delta
+        (``_stage_unlocked``), so the next staged write for this name carries
+        everything the rejected one carried -- measured: a rejected flush
+        leaves ``_written_seq`` behind, and the following flush brings the file
+        back to the cache exactly, pattern entries and response buckets
+        included. Retrying here would resurrect the pre-import snapshot the
+        barrier exists to reject; retrying from the import success path is
+        worse still, since that call site holds the process guard on the event
+        loop while the flush would run on a worker thread. A fence rejection
+        is therefore the same class of event as a full disk here: unflushed
+        until the next staged write, not lost.
+        """
         try:
             from utils.cloudsave_runtime import cloudsave_writable_transaction
 
