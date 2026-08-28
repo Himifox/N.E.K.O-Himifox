@@ -5528,3 +5528,123 @@ def test_every_selectable_legacy_root_file_is_also_migrated(tmp_path):
         moved = root / "Carol" / target
         assert moved.exists(), f"{pattern} was offered but never migrated"
         assert not legacy.exists(), f"{pattern} was copied, not moved"
+
+
+@pytest.mark.unit
+def test_a_rename_fences_the_target_against_its_deleted_identity(tmp_path):
+    """A previously deleted target stays fenced until the rename publishes.
+
+    The helper used to EVICT the target as its first act, which lifts the
+    retirement left by an earlier delete. Anything still holding that name
+    -- an in-flight proactive turn, a session bound to it before the delete
+    -- was then free to write for the duration of the move, and both
+    outcomes were bad. Its flush creates memory/<target>/, so
+    _merge_directories hits its colliding-child pre-flight and raises,
+    aborting the rename and stranding an orphan directory; or it stages
+    first and flushes after the move, and since staging copies the WHOLE
+    payload rather than a delta, the merged history is replaced by that one
+    record.
+
+    Retiring instead holds the name shut for the window -- a retired name
+    never creates a directory -- and the lift moves to the end, where the
+    rename has actually committed.
+
+    The lift has to be the EVICTING one. Publication drops the cache, and
+    that is what makes the next write re-read the merged file instead of
+    flushing whatever was staged during the window over the top of it.
+    """
+    import json
+
+    import memory.anti_repeat_effects as effects_module
+    import utils.character_memory as character_memory
+
+    cm = _make_config_manager(tmp_path)
+    memory_root = Path(cm.memory_dir)
+
+    def detected(path):
+        if not path.exists():
+            return 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return sum(
+            bucket["counters"]["detected"]
+            for bucket in payload["daily_buckets"].values()
+        )
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        # The fixture hands the stores a SimpleNamespace carrying only
+        # memory_dir, while the write path reads app_docs_dir -- and the
+        # store swallows the AttributeError, so nothing reaches disk and
+        # every assertion below would pass over a file that was never
+        # written. Rebind to the real config manager, and prove it took.
+        for sidecar in (store, corpus, greeting):
+            sidecar._config_manager = cm
+
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+
+        (memory_root / "Source").mkdir(parents=True, exist_ok=True)
+        for tick in range(4):
+            store.record_decision(
+                "Source", decision, now=1_700_000_000.0 + tick * 60
+            )
+        source_file = memory_root / "Source" / "anti_repeat_effects.json"
+        assert detected(source_file) == 4, (
+            "the source history never reached disk, so this test would be "
+            "asserting over a file that does not exist"
+        )
+
+        # The target name was deleted earlier, so it is retired and has no
+        # directory of its own.
+        character_memory.retire_character_runtime_caches("Target")
+        assert not (memory_root / "Target").exists()
+
+        # A turn belonging to the DELETED target identity is still running
+        # and records inside the window -- after the lifecycle calls, before
+        # the move.
+        real_merge = character_memory._merge_directories
+        fired = []
+
+        def _record_inside_the_window(source_dir, target_dir):
+            # ONCE, and before any root has been merged. There are two
+            # memory roots, so this hook runs twice; letting it write on the
+            # second pass would be testing something else entirely, because
+            # by then the first merge has created the directory and a
+            # retired name is allowed to write into one that exists. That
+            # narrower exposure -- staged before the move, flushed after it
+            # and before publication -- is NOT closed by this change and is
+            # recorded in the commit rather than pinned here.
+            if not fired:
+                fired.append(True)
+                store.record_decision(
+                    "Target", decision, now=1_700_100_000.0
+                )
+            return real_merge(source_dir, target_dir)
+
+        with patch.object(
+            character_memory, "_merge_directories", _record_inside_the_window
+        ):
+            result = character_memory.rename_character_memory_storage(
+                cm, "Source", "Target",
+            )
+
+        assert fired, "the in-window write never happened"
+        assert result["exists_after"]
+        target_file = memory_root / "Target" / "anti_repeat_effects.json"
+        assert detected(target_file) == 4, (
+            "the renamed character lost its merged history to a write from "
+            "the identity that used to own the name"
+        )
+
+        # The dual, so the fix cannot pass by stranding the target retired:
+        # publication lifts it, and the next write appends to the merged
+        # file rather than replacing it.
+        assert "Target" not in store._retired
+        store.record_decision("Target", decision, now=1_700_200_000.0)
+        assert detected(target_file) == 5, (
+            "after publication the target either could not write at all, or "
+            "flushed a stale cache over the merged file"
+        )

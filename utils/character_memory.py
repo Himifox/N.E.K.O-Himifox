@@ -496,12 +496,30 @@ def rename_character_memory_storage(
     generation_snapshot: dict[str, tuple[int, int]] = {}
     pending_snapshot: dict[Path, list[Any]] = {}
     try:
-        # The SOURCE name loses its directory to the move, so it retires. The
-        # TARGET is a live identity that keeps writing, so it only invalidates:
-        # retiring it would deny it the lazy directory creation every sibling
-        # memory writer gets.
+        # BOTH names are held shut for the duration of the move, and the
+        # target is only lifted once the rename has actually committed,
+        # below. The source loses its directory to the move. The target may
+        # have been DELETED earlier and still be retired, and evicting here
+        # lifted that retirement before anything had been moved -- so
+        # anything still holding the old name (an in-flight proactive turn, a
+        # session bound to it before the delete) was free to write for the
+        # whole window, and both outcomes were bad. Its flush creates
+        # memory/<new_name>/, which trips _merge_directories' colliding-child
+        # pre-flight and aborts the rename outright; or it stages first and
+        # flushes after the move, and since staging copies the WHOLE payload
+        # rather than a delta, the merged history is replaced by that one
+        # record -- four merged entries became one. All three stores stage
+        # the whole cached collection rather than a delta, so none of them
+        # is exempt.
+        #
+        # The reason this used to give -- that retiring the target would deny
+        # it the lazy directory creation every sibling writer gets -- does
+        # not survive measurement. It holds only until the move creates the
+        # directory, after which a retired name writes into it perfectly
+        # well; and the lift below always runs, so the target creates and
+        # writes normally afterwards even when there was nothing to merge.
         retire_character_runtime_caches(old_name)
-        evict_character_runtime_caches(new_name)
+        retire_character_runtime_caches(new_name)
         # 目标角色名可能曾被改走；复用该名字前必须切断旧跳转，否则新角色会写进旧目标。
         (
             _,
@@ -545,6 +563,22 @@ def rename_character_memory_storage(
             )
         set_recent_pending_unlocked(target_recent, target_pending)
         redirect_recent_paths(pending_sources, target_recent)
+
+        # Publication: the move has happened and this call is about to
+        # commit, so the target becomes a live identity again. As late as
+        # possible, because everything before it is still window.
+        #
+        # The lift has to DROP THE CACHE, not merely mark the name live: a
+        # write refused during the window still staged into it, and the move
+        # has just replaced the directory underneath, so nothing held for
+        # this name is still valid. Dropping it makes the next write re-read
+        # the merged file instead of flushing a window record over it.
+        #
+        # revive_character_runtime_caches would behave identically HERE --
+        # measured, and its retired branch evicts for this very reason -- but
+        # only because the target is retired by the line above. evict does
+        # not depend on that, so it is the one that states the intent.
+        evict_character_runtime_caches(new_name)
 
         result = {
             "changed": changed,
