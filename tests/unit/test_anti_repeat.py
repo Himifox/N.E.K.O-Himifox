@@ -1005,8 +1005,12 @@ def test_stale_flush_is_refused_while_the_cloud_import_fence_is_closed(monkeypat
 
     corpus._flush_snapshot("Neko", {"version": 1, "window": [{"stale": True}]}, 5)
 
-    assert calls == ["memory/Neko/anti_repeat.json"]
-    assert not (tmp_path / "Neko" / "anti_repeat.json").exists()
+    # Both names must be the file this store actually writes. They read
+    # "anti_repeat.json" -- a separate literal from the write path, which had
+    # drifted -- so the first assertion pinned the drift and the second was
+    # vacuous, checking the absence of a file that could never appear.
+    assert calls == ["memory/Neko/anti_repeat_corpus.json"]
+    assert not (tmp_path / "Neko" / "anti_repeat_corpus.json").exists()
     # The sequence must NOT advance: the write never happened.
     assert corpus._written_seq.get("Neko", 0) == 0
 
