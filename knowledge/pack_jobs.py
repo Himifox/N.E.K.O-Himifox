@@ -42,6 +42,8 @@ TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
 DEGRADED_STATE = "degraded"
 TERMINAL_JOB_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_TERMINAL_JOB_DIRECTORIES = 100
+# Staging metadata is a few KB in practice; this only has to exclude absurdity.
+MAX_STAGED_METADATA_BYTES = 1024 * 1024
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 LEGACY_PACK_ARTIFACT_NAME = "pack.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
@@ -107,6 +109,60 @@ def _staged_artifact_limits() -> dict[str, int]:
     }
 
 
+def _read_bounded_staged_file(path: Path, *, max_bytes: int) -> bytes:
+    """Open once, validate on that descriptor, and read from the same descriptor.
+
+    Validating a path and then re-opening it by name leaves a window in which a
+    concurrent writer can swap the file, defeating both the link refusal and the
+    size cap. O_NOFOLLOW makes the refusal atomic where the platform has it; on
+    Windows it does not exist, so the pre-open lstat carries that half there and
+    the size cap stays atomic because it is checked against the descriptor that
+    is actually read.
+
+    Raises ValueError for a rejected file so callers can tell "we refuse to read
+    this" apart from a genuine I/O error.
+    """
+    # Not _is_link_or_reparse(): that folds "does not exist" into "is a link",
+    # which would turn a missing state.json from `missing` into `invalid` and
+    # change how the job state machine treats it. Absence must stay absence.
+    try:
+        link_metadata = path.lstat()
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise ValueError("staged file is unavailable") from exc
+    file_attributes = getattr(link_metadata, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if stat.S_ISLNK(link_metadata.st_mode) or bool(
+        file_attributes & reparse_attribute
+    ):
+        raise ValueError("staged file is not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("staged file is not a regular file")
+        if metadata.st_size > max_bytes:
+            raise ValueError("staged file exceeds its size limit")
+        # Read at most max_bytes + 1 so a file that grew after fstat is rejected
+        # instead of being materialized in full.
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    if len(raw) > max_bytes:
+        raise ValueError("staged file exceeds its size limit")
+    return raw
+
+
 def _read_staged_artifact(job_dir: Path, name: str) -> bytes:
     """Read one fixed staged artifact through a single validated descriptor.
 
@@ -120,43 +176,9 @@ def _read_staged_artifact(job_dir: Path, name: str) -> bytes:
     between and slip past both checks. Everything below therefore happens on one
     descriptor: open, ``fstat`` it, and read from that same descriptor.
     """
-    path = job_dir / name
-    limit = _staged_artifact_limits()[name]
-    # Validate and read through ONE descriptor. Checking the path and then
-    # calling read_bytes() re-opens by name, so a concurrent writer could swap
-    # the artifact between the two and defeat both the link refusal and the size
-    # cap. O_NOFOLLOW makes the refusal atomic where it exists; on Windows it
-    # does not, so the pre-open lstat below still carries that half and the size
-    # cap is enforced against the descriptor we actually read.
-    if _is_link_or_reparse(path):
-        raise ValueError("staged knowledge artifact is not a regular file")
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ValueError("staged knowledge artifact is unavailable") from exc
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("staged knowledge artifact is not a regular file")
-        if metadata.st_size > limit:
-            raise ValueError("staged knowledge artifact exceeds its protocol limit")
-        # Read at most limit + 1 so a file that grew after fstat is still caught
-        # instead of being materialized in full.
-        chunks: list[bytes] = []
-        remaining = limit + 1
-        while remaining > 0:
-            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    finally:
-        os.close(descriptor)
-    raw = b"".join(chunks)
-    if len(raw) > limit:
-        raise ValueError("staged knowledge artifact exceeds its protocol limit")
-    return raw
+    return _read_bounded_staged_file(
+        job_dir / name, max_bytes=_staged_artifact_limits()[name]
+    )
 
 
 def _staged_artifact_present(job_dir: Path, name: str) -> bool:
@@ -225,8 +247,20 @@ def trusted_live_root(knowledge_root: str | Path) -> Path | None:
     if _is_link_or_reparse(root) or not root.is_dir():
         return None
     try:
-        root.resolve(strict=True)
+        resolved = root.resolve(strict=True)
     except OSError:
+        return None
+    # resolve() was previously called only to prove the path exists — its result
+    # was discarded, so a redirected *ancestor* passed: the leaf is not a link,
+    # yet the whole subtree lives somewhere else. Compare against the normalized
+    # absolute path so an ancestor symlink/junction is refused too. os.path
+    # normalization (not casefold) keeps this correct on case-insensitive
+    # volumes without matching two genuinely different directories.
+    try:
+        declared = Path(os.path.normpath(os.path.abspath(root)))
+    except OSError:
+        return None
+    if os.path.normcase(str(resolved)) != os.path.normcase(str(declared)):
         return None
     return root
 
@@ -404,12 +438,21 @@ def _pack_payload(pack: KnowledgePack) -> dict[str, object]:
 
 
 def _read_json_result(path: Path) -> _JsonReadResult:
+    # Staging metadata (state/identity/activation/subscription/commits) decides
+    # how the job state machine proceeds and is just as attacker-mutable as the
+    # pack artifact, so it gets the same bounded, link-checked read. A rejected
+    # file is deterministic — retrying cannot help — so it maps to "invalid"
+    # rather than the transient "unreadable".
     for attempt in range(3):
         try:
-            text = path.read_text(encoding="utf-8")
+            text = _read_bounded_staged_file(
+                path, max_bytes=MAX_STAGED_METADATA_BYTES
+            ).decode("utf-8")
             break
         except FileNotFoundError:
             return _JsonReadResult("missing", {})
+        except ValueError:
+            return _JsonReadResult("invalid", {})
         except OSError:
             if attempt == 2:
                 return _JsonReadResult("unreadable", {})

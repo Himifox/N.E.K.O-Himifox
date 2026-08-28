@@ -505,18 +505,17 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
     )
 
     assert result["ok"] is True
-    assert calls[-1] == (
-        "POST",
-        "packs/remove",
-        {
-            "json": {
-                "pack_id": "fixture-pack",
-                "expected_provider": "plugin-market",
-                "expected_provider_package_id": "7",
-                "expected_remote_id": "knowledge/fixture-pack",
-            }
-        },
-    )
+    method, path, kwargs = calls[-1]
+    assert (method, path) == ("POST", "packs/remove")
+    assert kwargs["json"] == {
+        "pack_id": "fixture-pack",
+        "expected_provider": "plugin-market",
+        "expected_provider_package_id": "7",
+        "expected_remote_id": "knowledge/fixture-pack",
+    }
+    # Removal runs on what is left of the shared settlement budget, never on a
+    # fresh full timeout that could outlive the Main Server proxy.
+    assert 0 < kwargs["timeout"] <= module._UNSUBSCRIBE_TOTAL_BUDGET_SECONDS
 
 
 @pytest.mark.asyncio
@@ -1109,20 +1108,16 @@ async def test_unsubscribe_old_cancellation_does_not_override_new_subscription(
     )
 
     assert result["removed_pack"] is True
-    assert calls == [
-        (
-            "POST",
-            "packs/remove",
-            {
-                "json": {
-                    "pack_id": "fixture-pack",
-                    "expected_provider": "plugin-market",
-                    "expected_provider_package_id": "7",
-                    "expected_remote_id": "knowledge/fixture-pack",
-                }
-            },
-        )
-    ]
+    assert len(calls) == 1
+    method, path, kwargs = calls[0]
+    assert (method, path) == ("POST", "packs/remove")
+    assert kwargs["json"] == {
+        "pack_id": "fixture-pack",
+        "expected_provider": "plugin-market",
+        "expected_provider_package_id": "7",
+        "expected_remote_id": "knowledge/fixture-pack",
+    }
+    assert 0 < kwargs["timeout"] <= module._UNSUBSCRIBE_TOTAL_BUDGET_SECONDS
     assert reports == [7]
 
 

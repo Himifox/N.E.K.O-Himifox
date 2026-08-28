@@ -31,6 +31,7 @@ from knowledge.catalog_overrides import (
     load_disabled_entries,
 )
 from knowledge.models import normalize_knowledge_title
+from knowledge.packs import list_installed_packs, pack_registry_state
 from knowledge.store import KnowledgeStoreError, assert_supported_schema
 
 DEFAULT_CASES = (
@@ -188,6 +189,21 @@ def _load_vectors(
             f"database_unavailable:{type(exc).__name__}"
         ) from exc
 
+    # Production derives its allowed source set from the installed-pack registry
+    # (KnowledgeService._source_material_types), so a community source with no
+    # registry entry is never served. Ready vectors for such a source would
+    # otherwise inflate recall here and calibrate a threshold against entries the
+    # runtime will not return. list_installed_packs() collapses a corrupt registry
+    # into an empty tuple, which is fail-closed for production but would silently
+    # invalidate a calibration run, so check the registry state explicitly.
+    registry_state = pack_registry_state(database_path)
+    if registry_state == "invalid":
+        raise EvaluationUnavailable("pack_registry_invalid")
+    installed_source_tags = {
+        str(pack.get("source_tag") or "")
+        for pack in list_installed_packs(database_path)
+    }
+
     vectors: list[np.ndarray] = []
     result_rows: list[dict[str, object]] = []
     invalid_vectors = 0
@@ -209,6 +225,11 @@ def _load_vectors(
         if (source_tags[0], title_key) in disabled:
             disabled_vectors += 1
             continue
+        if (
+            source_tags[0].startswith("source:community.")
+            and source_tags[0] not in installed_source_tags
+        ):
+            raise EvaluationUnavailable("unresolved_community_source")
         raw = row["embedding"]
         if (
             int(row["embedding_dimensions"] or 0) != dimensions
@@ -244,6 +265,7 @@ def _load_vectors(
             "ready_vectors": len(vectors),
             "invalid_vectors": invalid_vectors,
             "disabled_vectors": disabled_vectors,
+            "pack_registry_state": registry_state,
         },
     )
 

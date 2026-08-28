@@ -19,6 +19,7 @@ from knowledge.subscriptions import (
     load_canonical_pack_artifact,
 )
 from knowledge.limits import MAX_PACK_BYTES
+from knowledge.timeouts import KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
 from plugin.logging_config import get_logger
 from plugin.settings import MARKET_API_URL, NEKO_AUTH_CLIENT_ID
 from plugin.server.routes.market_bridge import (
@@ -32,6 +33,18 @@ from plugin.server.routes.market_bridge import (
 
 
 router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
+
+# The Main Server proxy wraps this whole request in
+# KNOWLEDGE_MAIN_TO_PLUGIN_MUTATION_TIMEOUT_SECONDS. Settlement runs shielded, so
+# without a budget of its own it can keep going after the proxy has already
+# returned 504 and still remove the pack — the user sees a failed operation whose
+# durable result changes afterwards. Stay strictly under the proxy so the caller
+# always learns the real outcome.
+_UNSUBSCRIBE_TOTAL_BUDGET_SECONDS = KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
+
+
+def _remaining_budget(deadline: float) -> float:
+    return max(deadline - asyncio.get_running_loop().time(), 0.0)
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
 _task_workers: dict[str, asyncio.Task[None]] = {}
@@ -283,8 +296,11 @@ async def unsubscribe_knowledge_package(
         )
     _unsubscribing_package_ids.add(payload.package_id)
     try:
+        deadline = (
+            asyncio.get_running_loop().time() + _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS
+        )
         settlement = asyncio.create_task(
-            _settle_knowledge_unsubscribe(payload),
+            _settle_knowledge_unsubscribe(payload, deadline=deadline),
             name=f"market-knowledge-unsubscribe-{payload.package_id}",
         )
     except Exception:
@@ -311,10 +327,13 @@ def _unsubscribe_settlement_done(
 
 async def _settle_knowledge_unsubscribe(
     payload: KnowledgeUnsubscribeRequest,
+    *,
+    deadline: float,
 ) -> dict[str, Any]:
     active_task = await _cancel_active_subscription(
         payload.package_id,
         claimed_pack_id=payload.pack_id,
+        deadline=deadline,
     )
     if active_task is not None and active_task.get("preinstall_cancelled") is True:
         await _report_unsubscribe_best_effort(payload.package_id)
@@ -328,6 +347,7 @@ async def _settle_knowledge_unsubscribe(
         result = await _main_request(
             "POST",
             "packs/remove",
+            timeout=_remaining_budget(deadline),
             json={
                 "pack_id": pack_id,
                 "expected_provider": "plugin-market",
@@ -359,6 +379,7 @@ async def _cancel_active_subscription(
     package_id: int,
     *,
     claimed_pack_id: str,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     task_id = _active_package_tasks.get(package_id)
     task = _tasks.get(task_id) if task_id else None
@@ -412,10 +433,24 @@ async def _cancel_active_subscription(
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
     if installation_mutation is not None:
-        await asyncio.gather(
+        # Shielded on purpose: a running installation must finish rather than be
+        # torn in half. Bounded on purpose too: if it outlives our budget we stop
+        # waiting and report busy, instead of pushing the caller past the proxy
+        # timeout and settling behind its back.
+        waiter = asyncio.gather(
             asyncio.shield(installation_mutation),
             return_exceptions=True,
         )
+        if deadline is None:
+            await waiter
+        else:
+            try:
+                await asyncio.wait_for(waiter, timeout=_remaining_budget(deadline))
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "knowledge_installation_busy"},
+                ) from exc
         installation_outcome = _installation_outcome_of(installation_mutation)
         if task is not None:
             task["_installation_outcome"] = installation_outcome

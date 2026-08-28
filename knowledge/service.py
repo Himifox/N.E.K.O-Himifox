@@ -1115,6 +1115,7 @@ class KnowledgeService:
         title: str,
         disabled: bool,
     ) -> int:
+        self._require_trusted_live_root()
         database_path = self.database_path()
         count = set_entry_disabled(
             get_catalog_override_path(database_path),
@@ -1297,9 +1298,22 @@ class KnowledgeService:
             ),
         }
 
+    def _require_trusted_live_root(self) -> None:
+        """Refuse any live database/registry write through a redirected root.
+
+        cancel_and_remove_pack already did this; every other mutation reaches the
+        same knowledge.db / packs.json and needs the same refusal, otherwise the
+        guard only documents an intent it does not enforce.
+        """
+        from .pack_jobs import trusted_live_root
+
+        if trusted_live_root(self.knowledge_root) is None:
+            raise KnowledgeStoreError("knowledge root is not a trusted local directory")
+
     def install_pack(self, pack, *, subscription=None):
         from .packs import install_pack
 
+        self._require_trusted_live_root()
         result = install_pack(
             self.database_path(),
             pack,
@@ -1353,6 +1367,7 @@ class KnowledgeService:
         from .packs import install_pack, load_pack
 
         pack = load_pack(path)
+        self._require_trusted_live_root()
         result = install_pack(self.database_path(), pack)
         self.refresh_routing_index(background=True)
         return result
@@ -1376,15 +1391,13 @@ class KnowledgeService:
             cancel_pack_job,
             list_pack_jobs,
             pack_operation_lock,
-            trusted_live_root,
         )
         from .packs import remove_pack
 
         # Reject a redirected root before taking the lock or touching the live
         # database/registry — jobs-side guards return empty for a linked root and
         # would otherwise let removal proceed straight into an external store.
-        if trusted_live_root(self.knowledge_root) is None:
-            raise KnowledgeStoreError("knowledge root is not a trusted local directory")
+        self._require_trusted_live_root()
 
         with pack_operation_lock(self.knowledge_root, pack_id):
             installed = next(
@@ -1469,6 +1482,7 @@ class KnowledgeService:
     ) -> None:
         from .packs import set_pack_auto_context
 
+        self._require_trusted_live_root()
         set_pack_auto_context(
             self.database_path(),
             pack_id,
@@ -1486,6 +1500,7 @@ class KnowledgeService:
         from .indexer import notify_knowledge_index_changed
         from .packs import set_pack_index_policy
 
+        self._require_trusted_live_root()
         set_pack_index_policy(
             self.database_path(),
             pack_id,
@@ -1501,6 +1516,7 @@ class KnowledgeService:
     ) -> None:
         from .packs import set_pack_material_type_override
 
+        self._require_trusted_live_root()
         set_pack_material_type_override(
             self.database_path(),
             pack_id,
