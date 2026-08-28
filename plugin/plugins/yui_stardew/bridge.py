@@ -4,11 +4,11 @@ import asyncio
 import json
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 DEFAULT_PORT = 48910
 MAXIMUM_REQUEST_BYTES = 8 * 1024
 MAXIMUM_RESPONSE_BYTES = 32 * 1024
@@ -17,7 +17,7 @@ MAXIMUM_RESPONSE_BYTES = 32 * 1024
 @dataclass(frozen=True, slots=True)
 class BridgeSettings:
     port: int = DEFAULT_PORT
-    token: str = ""
+    token: str = field(default="", repr=False)
     connect_timeout_seconds: float = 3.0
     request_timeout_seconds: float = 6.0
 
@@ -67,7 +67,7 @@ class YuiStardewBridgeClient:
         if not self.configured:
             raise BridgeError(
                 "BRIDGE-NOT-CONFIGURED",
-                "请先为 NEKO 与 HimiYui 配置同一个 16～256 字符本机密钥。",
+                "请先启动一次装有 HimiYui 的 Stardew Valley；插件会自动发现本机桥。",
             )
 
         request_id = uuid.uuid4().hex

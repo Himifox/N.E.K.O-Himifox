@@ -1,9 +1,11 @@
 [plugin_runtime]
 enabled = true
-auto_start = false
+auto_start = true
 
 [yui_stardew]
+# 以下三项仅供旧版兼容覆盖；正常使用保持默认和空值。
 port = 48910
 token = ""
+himi_yui_config_path = ""
 connect_timeout_seconds = 3.0
 request_timeout_seconds = 6.0

@@ -14,3 +14,14 @@ name = "Himifox"
 [plugin.sdk]
 recommended = ">=0.1.0,<0.2.0"
 supported = ">=0.1.0,<0.3.0"
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "Yui 星露谷驱动"
+entry = "ui/panel.tsx"
+mode = "hosted-tsx"
+context = "dashboard"
+permissions = ["state:read", "action:call"]
