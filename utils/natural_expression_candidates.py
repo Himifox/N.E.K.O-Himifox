@@ -773,9 +773,13 @@ def _markdown_link_target_spans(
 ) -> list[tuple[int, int]]:
     """Return the TARGET half of Markdown links -- ``](`` through its close.
 
-    Never the link text: that is prose a character may legitimately repeat,
-    and a bare path in prose stays minable too, because protecting every
-    ``/foo/bar`` would eat dates and fractions.
+    Never the link text: that is prose a character may legitimately repeat.
+    A bare path in prose stays minable too -- this scanner's job is link
+    TARGETS, and a general path rule is a separate one nobody has asked for.
+    Not for the reason once recorded here ("would eat dates and fractions"):
+    an anchored rule sees neither, because in ``2026/08/27``, ``1/2`` and
+    ``and/or`` the slash follows an alphanumeric and the anchor rejects it.
+    Measured collateral is only the emote forms ``/shrug`` and ``/me``.
 
     A scanner rather than a pattern because targets nest parentheses to any
     depth (``/api/f(g(x))``), and a regex that allows one level simply fails
