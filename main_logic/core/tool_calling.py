@@ -122,9 +122,16 @@ class ToolCallingMixin:
     # 替换 ``_handle_recall_memory_call`` 即可，不动注册 / 同步链路。
 
     def _public_knowledge_lookup_enabled(self) -> bool:
-        """Choose the schema from the session that will own the next turn."""
-        session = getattr(self, "pending_session", None) or getattr(self, "session", None)
-        return isinstance(session, OmniRealtimeClient)
+        """Both modes get explicit lookup.
+
+        This used to be realtime-only, on the reasoning that a text turn had
+        already resolved knowledge deterministically before the reply. That
+        holds only when automatic retrieval actually matched: it is threshold
+        gated, so anything below the bar was simply never looked up, and the
+        model had no way to ask. Text sessions now keep the tool as the
+        fallback for exactly that case.
+        """
+        return True
 
     def _register_builtin_tools(
         self,
@@ -182,9 +189,10 @@ class ToolCallingMixin:
                 public_knowledge_lookup_enabled = (
                     self._public_knowledge_lookup_enabled()
                 )
-            # Text sessions resolve ordinary lookup deterministically before the
-            # response. Realtime sessions cannot safely inject late transcript
-            # context, so their tool owns the explicit lookup capability.
+            # Automatic (passive) context and this tool are complements, not
+            # alternatives: passive covers the confident matches, the tool covers
+            # everything the threshold rejected. The description tells the model
+            # not to re-query what it can already see.
             register_public_knowledge_tool(
                 self.tool_registry,
                 language=_lang,

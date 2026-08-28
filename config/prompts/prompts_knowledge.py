@@ -20,7 +20,8 @@ PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
         "神话、塔罗、电影、颜色、动物、食物、职业和情绪素材。当用户明确要求抽取、"
         "随机选择或提供这类素材时，必须先以 mode=sample 调用本工具，不要自行编造结果。"
         "返回内容可能是事实、梗、对话样例、参考回答或写作素材；应根据用户意图按需引用、"
-        "改写或模仿，不要因其是样例就拒绝使用。本工具不会联网或读取用户记忆。"
+        "改写或模仿，不要因其是样例就拒绝使用。若上下文已给出相关参考资料，直接使用即可，"
+        "不必重复调用。本工具不会联网或读取用户记忆。"
     ),
     "en": (
         "Query local public knowledge or draw entries from an allowed material category. "
@@ -28,15 +29,16 @@ PUBLIC_KNOWLEDGE_TOOL_DESCRIPTION = {
         "and moods. When the user explicitly asks to draw, randomly choose, or provide such "
         "material, you must call this tool with mode=sample before answering instead of "
         "inventing a result. Results may be facts or corpus examples; quote, rewrite, or "
-        "imitate examples when that matches the request. It never accesses the network or "
-        "user memory."
+        "imitate examples when that matches the request. If relevant reference material is "
+        "already present in the context, use it directly instead of querying again. It never "
+        "accesses the network or user memory."
     ),
-    "ja": "ローカル公開知識を検索します。素材の抽選やランダム選択を明示された場合は、回答前に必ず mode=sample で呼び出してください。ネットワークやユーザー記憶にはアクセスしません。",
-    "ko": "로컬 공개 지식을 검색합니다. 소재 추첨이나 무작위 선택을 명시적으로 요청받으면 답변 전에 반드시 mode=sample로 호출해야 합니다. 네트워크나 사용자 기억에는 접근하지 않습니다.",
-    "es": "Consulta conocimiento público local. Si el usuario pide extraer o elegir material al azar, debes llamar primero a esta herramienta con mode=sample. No accede a la red ni a la memoria del usuario.",
-    "pt": "Consulta conhecimento público local. Se o usuário pedir material aleatório, chame primeiro esta ferramenta com mode=sample. Não acessa a rede nem a memória do usuário.",
-    "ru": "Ищет в локальной базе знаний. Если пользователь просит выбрать случайный материал, сначала обязательно вызовите инструмент с mode=sample. Сеть и память пользователя не используются.",
-    "zh-TW": "查詢本機公共知識。使用者明確要求抽取或隨機選擇素材時，必須先用 mode=sample 呼叫本工具，不可自行編造；不會連網或讀取使用者記憶。",
+    "ja": "ローカル公開知識を検索します。素材の抽選やランダム選択を明示された場合は、回答前に必ず mode=sample で呼び出してください。文脈に関連する参考資料が既にある場合は、再検索せずそのまま使ってください。ネットワークやユーザー記憶にはアクセスしません。",
+    "ko": "로컬 공개 지식을 검색합니다. 소재 추첨이나 무작위 선택을 명시적으로 요청받으면 답변 전에 반드시 mode=sample로 호출해야 합니다. 맥락에 관련 참고 자료가 이미 있으면 다시 조회하지 말고 그대로 사용하세요. 네트워크나 사용자 기억에는 접근하지 않습니다.",
+    "es": "Consulta conocimiento público local. Si el usuario pide extraer o elegir material al azar, debes llamar primero a esta herramienta con mode=sample. Si el contexto ya incluye material de referencia relevante, úsalo directamente en lugar de consultar de nuevo. No accede a la red ni a la memoria del usuario.",
+    "pt": "Consulta conhecimento público local. Se o usuário pedir material aleatório, chame primeiro esta ferramenta com mode=sample. Se o contexto já trouxer material de referência relevante, use-o diretamente em vez de consultar de novo. Não acessa a rede nem a memória do usuário.",
+    "ru": "Ищет в локальной базе знаний. Если пользователь просит выбрать случайный материал, сначала обязательно вызовите инструмент с mode=sample. Если в контексте уже есть подходящий справочный материал, используйте его, а не запрашивайте повторно. Сеть и память пользователя не используются.",
+    "zh-TW": "查詢本機公共知識。使用者明確要求抽取或隨機選擇素材時，必須先用 mode=sample 呼叫本工具，不可自行編造；若上下文已有相關參考資料，直接使用即可，不必重複呼叫；不會連網或讀取使用者記憶。",
 }
 
 PUBLIC_KNOWLEDGE_SAMPLE_TOOL_DESCRIPTION = {

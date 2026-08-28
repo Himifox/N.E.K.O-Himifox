@@ -301,19 +301,30 @@ def test_realtime_public_knowledge_tool_exposes_lookup_and_sample():
     assert tool.parameters["properties"]["mode"]["default"] == "lookup"
 
 
-def test_public_knowledge_capability_follows_final_session_type():
+def test_public_knowledge_lookup_is_available_in_both_modes():
+    """Explicit lookup is no longer realtime-only.
+
+    It used to be gated on the session type, on the reasoning that a text turn
+    had already resolved knowledge deterministically before replying. Automatic
+    retrieval is threshold gated, so anything below the bar was never looked up
+    and the model had no way to ask; the tool is now the fallback for exactly
+    that case in both modes.
+    """
     from main_logic.core.tool_calling import ToolCallingMixin
     from main_logic.omni_offline_client import OmniOfflineClient
     from main_logic.omni_realtime_client import OmniRealtimeClient
 
-    manager = SimpleNamespace(
+    text_manager = SimpleNamespace(
         session=OmniOfflineClient.__new__(OmniOfflineClient),
         pending_session=None,
     )
-    assert ToolCallingMixin._public_knowledge_lookup_enabled(manager) is False
+    assert ToolCallingMixin._public_knowledge_lookup_enabled(text_manager) is True
 
-    manager.pending_session = OmniRealtimeClient.__new__(OmniRealtimeClient)
-    assert ToolCallingMixin._public_knowledge_lookup_enabled(manager) is True
+    voice_manager = SimpleNamespace(
+        session=None,
+        pending_session=OmniRealtimeClient.__new__(OmniRealtimeClient),
+    )
+    assert ToolCallingMixin._public_knowledge_lookup_enabled(voice_manager) is True
 
 
 @pytest.mark.asyncio
@@ -428,7 +439,7 @@ async def test_automatic_context_timeout_fails_open_without_stacking(monkeypatch
             await release.wait()
             return KnowledgeTurnContext(match_mode="automatic_miss")
 
-    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASK", None)
+    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASKS", {})
     monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: _SlowService())
     monkeypatch.setattr(
         settings,
@@ -470,7 +481,7 @@ async def test_slow_knowledge_open_does_not_block_the_event_loop(monkeypatch):
         await asyncio.sleep(0.005)
         heartbeat.set()
 
-    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASK", None)
+    monkeypatch.setattr(knowledge_tool, "_AUTO_CONTEXT_TASKS", {})
     monkeypatch.setattr(knowledge_tool, "open_knowledge", _slow_open)
     monkeypatch.setattr(
         settings,
@@ -483,3 +494,180 @@ async def test_slow_knowledge_open_does_not_block_the_event_loop(monkeypatch):
     await asyncio.wait_for(heartbeat.wait(), timeout=0.05)
     await tick
     await asyncio.sleep(0.1)
+
+
+# --- passive injection must stay occasional ----------------------------------
+
+
+def _turn_context(title: str, source: str = "source:community.demo"):
+    from knowledge.service import KnowledgeTurnContext
+
+    return KnowledgeTurnContext(
+        text=f"card for {title}",
+        hit_count=1,
+        match_mode="automatic_hybrid",
+        entry_title=title,
+        source_tag=source,
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_card_is_not_injected_twice_in_a_row(monkeypatch):
+    """Retrieval runs every turn; delivery must not.
+
+    The same topic keeps matching across consecutive turns, so without a
+    cooldown the identical reference card is re-injected turn after turn, which
+    is what makes passive injection read as a stutter.
+    """
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context("永动机")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+
+    first = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan"
+    )
+    assert first.context, "the first match should be delivered"
+
+    second = await knowledge_tool.build_public_knowledge_turn_context(
+        "再说说永动机", session_key="lanlan"
+    )
+    assert second.context == "", "the same card must not be delivered again"
+
+
+@pytest.mark.asyncio
+async def test_cooldown_is_scoped_per_session(monkeypatch):
+    """One character's delivered card must not silence another character's."""
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context("永动机")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+
+    first = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan-a"
+    )
+    assert first.context
+
+    # The other half of "scoped": A must actually be on cooldown, otherwise a
+    # globally broken cooldown would satisfy the B assertion just as well.
+    again = await knowledge_tool.build_public_knowledge_turn_context(
+        "再说说永动机", session_key="lanlan-a"
+    )
+    assert again.context == ""
+
+    other = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan-b"
+    )
+    assert other.context, "another character must not inherit A's cooldown"
+
+
+@pytest.mark.asyncio
+async def test_a_different_card_still_gets_through(monkeypatch):
+    """The cooldown is per card, not a blanket mute on the session."""
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    titles = iter(["永动机", "薛定谔的猫"])
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context(next(titles))
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+
+    first = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan"
+    )
+    second = await knowledge_tool.build_public_knowledge_turn_context(
+        "那薛定谔的猫呢", session_key="lanlan"
+    )
+    assert first.context and second.context
+
+
+@pytest.mark.asyncio
+async def test_cooldown_expires(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context("永动机")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+    monkeypatch.setattr(knowledge_tool, "_INJECTION_COOLDOWN_SECONDS", 0.0)
+
+    first = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan"
+    )
+    second = await knowledge_tool.build_public_knowledge_turn_context(
+        "再说说永动机", session_key="lanlan"
+    )
+    assert first.context and second.context
+
+
+@pytest.mark.asyncio
+async def test_retrieval_single_flight_does_not_starve_another_character(monkeypatch):
+    """The in-flight slot is per session, so characters do not block each other."""
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+    release = asyncio.Event()
+
+    async def _slow_context(*_args, **_kwargs):
+        await release.wait()
+        return _turn_context("慢词条")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _slow_context
+    )
+
+    slow = asyncio.create_task(
+        knowledge_tool.build_public_knowledge_turn_context(
+            "慢查询", session_key="lanlan-a"
+        )
+    )
+    await asyncio.sleep(0)
+
+    # A different character starting now must get its own slot rather than being
+    # reported busy because someone else is mid-retrieval.
+    with knowledge_tool._AUTO_CONTEXT_LOCK:
+        tasks = dict(knowledge_tool._AUTO_CONTEXT_TASKS)
+    assert "lanlan-a" in tasks
+
+    started = knowledge_tool._start_automatic_context_task(
+        _slow_context, session_key="lanlan-b"
+    )
+    assert started is not None, "a second character must not be refused a slot"
+    # Same character while busy: still single-flight.
+    assert (
+        knowledge_tool._start_automatic_context_task(
+            _slow_context, session_key="lanlan-a"
+        )
+        is None
+    )
+
+    release.set()
+    await slow
+    started.cancel()
+    knowledge_tool.reset_public_knowledge_injection_state()

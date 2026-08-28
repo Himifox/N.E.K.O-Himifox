@@ -489,6 +489,7 @@ class StreamingMixin:
 
                     _knowledge_turn_result = await build_public_knowledge_turn_context(
                         record_data,
+                        session_key=str(getattr(self, "lanlan_name", "") or ""),
                     )
                     _knowledge_turn_context = _knowledge_turn_result.context
                     _route_request_id = str(text_request_id or "")

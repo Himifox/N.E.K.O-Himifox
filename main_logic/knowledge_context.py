@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
 import re
 import threading
@@ -33,7 +34,16 @@ from utils.logger_config import get_module_logger
 logger = get_module_logger(__name__, "Main")
 _T = TypeVar("_T")
 _AUTO_CONTEXT_LOCK = threading.Lock()
-_AUTO_CONTEXT_TASK: asyncio.Task[object] | None = None
+# Keyed by session. A module-wide slot let one character's retrieval starve
+# another's for the whole turn, which is not a budget decision anyone made.
+_AUTO_CONTEXT_TASKS: dict[str, asyncio.Task[object]] = {}
+# Passive injection is meant to be occasional. Retrieval runs every turn, but a
+# card that was just delivered must not be delivered again a turn later — the
+# same topic keeps matching, and repeating the reference reads as a stutter.
+_RECENT_INJECTIONS: dict[str, "OrderedDict[tuple[str, str], float]"] = {}
+_INJECTION_COOLDOWN_SECONDS = 600.0
+_MAX_TRACKED_SESSIONS = 32
+_MAX_TRACKED_CARDS_PER_SESSION = 64
 _CORPUS_INTENT_TERMS = (
     "参考回复",
     "怎么回复",
@@ -111,25 +121,81 @@ async def _wait_task_until(
 
 
 def _finish_automatic_context_task(task: asyncio.Task[object]) -> None:
-    global _AUTO_CONTEXT_TASK
     _consume_task_result(task)
     with _AUTO_CONTEXT_LOCK:
-        if _AUTO_CONTEXT_TASK is task:
-            _AUTO_CONTEXT_TASK = None
+        for key, tracked in list(_AUTO_CONTEXT_TASKS.items()):
+            if tracked is task:
+                del _AUTO_CONTEXT_TASKS[key]
+                break
 
 
 def _start_automatic_context_task(
     factory: Callable[[], Awaitable[_T]],
+    *,
+    session_key: str,
 ) -> asyncio.Task[_T] | None:
-    global _AUTO_CONTEXT_TASK
+    """Serialize retrieval per session, not across the whole process."""
     with _AUTO_CONTEXT_LOCK:
-        active = _AUTO_CONTEXT_TASK
+        active = _AUTO_CONTEXT_TASKS.get(session_key)
         if active is not None and not active.done():
             return None
-        task = asyncio.create_task(factory(), name="public-knowledge-auto-context")
-        _AUTO_CONTEXT_TASK = task
+        task = asyncio.create_task(
+            factory(), name=f"public-knowledge-auto-context:{session_key or '-'}"
+        )
+        _AUTO_CONTEXT_TASKS[session_key] = task
+        while len(_AUTO_CONTEXT_TASKS) > _MAX_TRACKED_SESSIONS:
+            for stale_key, stale in list(_AUTO_CONTEXT_TASKS.items()):
+                if stale.done():
+                    del _AUTO_CONTEXT_TASKS[stale_key]
+                    break
+            else:
+                break
     task.add_done_callback(_finish_automatic_context_task)
     return task
+
+
+def _card_identity(result) -> tuple[str, str]:
+    """Identify the delivered card so the same one is not repeated."""
+    return (
+        str(getattr(result, "source_tag", "") or ""),
+        str(getattr(result, "entry_title", "") or ""),
+    )
+
+
+def _injection_on_cooldown(session_key: str, identity: tuple[str, str]) -> bool:
+    if not any(identity):
+        return False
+    now = time.monotonic()
+    with _AUTO_CONTEXT_LOCK:
+        seen = _RECENT_INJECTIONS.get(session_key)
+        if seen is None:
+            return False
+        delivered_at = seen.get(identity)
+        return (
+            delivered_at is not None
+            and now - delivered_at < _INJECTION_COOLDOWN_SECONDS
+        )
+
+
+def _record_injection(session_key: str, identity: tuple[str, str]) -> None:
+    if not any(identity):
+        return
+    now = time.monotonic()
+    with _AUTO_CONTEXT_LOCK:
+        seen = _RECENT_INJECTIONS.setdefault(session_key, OrderedDict())
+        seen[identity] = now
+        seen.move_to_end(identity)
+        while len(seen) > _MAX_TRACKED_CARDS_PER_SESSION:
+            seen.popitem(last=False)
+        while len(_RECENT_INJECTIONS) > _MAX_TRACKED_SESSIONS:
+            _RECENT_INJECTIONS.pop(next(iter(_RECENT_INJECTIONS)))
+
+
+def reset_public_knowledge_injection_state() -> None:
+    """Drop per-session retrieval and cooldown state (tests / session teardown)."""
+    with _AUTO_CONTEXT_LOCK:
+        _AUTO_CONTEXT_TASKS.clear()
+        _RECENT_INJECTIONS.clear()
 
 
 async def handle_public_knowledge_call(
@@ -448,8 +514,15 @@ async def build_automatic_public_knowledge_context(
 
 async def build_public_knowledge_turn_context(
     user_text: str,
+    *,
+    session_key: str = "",
 ) -> PublicKnowledgeTurnResult:
-    """Resolve one turn-local card without leaking knowledge concerns into core."""
+    """Resolve one turn-local card without leaking knowledge concerns into core.
+
+    ``session_key`` scopes both the single-flight slot and the repeat-injection
+    cooldown, so one character's retrieval neither starves another's nor shares
+    its recently-delivered cards.
+    """
     fallback_query = _extract_explicit_local_knowledge_query(user_text)
     if fallback_query:
         from config.public_knowledge_settings import (
@@ -509,7 +582,9 @@ async def build_public_knowledge_turn_context(
                 deadline_monotonic=deadline,
             )
 
-        task = _start_automatic_context_task(_build_automatic_context)
+        task = _start_automatic_context_task(
+            _build_automatic_context, session_key=session_key
+        )
         if task is None:
             from knowledge.diagnostics import record_knowledge_route
 
@@ -527,16 +602,31 @@ async def build_public_knowledge_turn_context(
             return PublicKnowledgeTurnResult()
         from knowledge.diagnostics import record_knowledge_route
 
+        identity = _card_identity(result)
+        repeated = bool(result.text) and _injection_on_cooldown(session_key, identity)
         record_knowledge_route(
             entry_title=result.entry_title,
             source_tag=result.source_tag,
             match_mode=result.match_mode,
-            card_delivered=bool(result.text),
-            result="matched" if result.hit_count else "miss",
+            card_delivered=bool(result.text) and not repeated,
+            result="skipped_recent"
+            if repeated
+            else ("matched" if result.hit_count else "miss"),
             knowledge_hits=result.knowledge_hits,
             corpus_hits=result.corpus_hits,
             elapsed_ms=result.elapsed_ms,
         )
+        if repeated:
+            # Same card, same session, still inside the cooldown. Retrieval was
+            # cheap and already done; re-delivering it is what makes passive
+            # injection feel repetitive.
+            logger.info(
+                "[public-knowledge] automatic turn context suppressed as recent: %s",
+                result.entry_title,
+            )
+            return PublicKnowledgeTurnResult()
+        if result.text:
+            _record_injection(session_key, identity)
         logger.info(
             "[public-knowledge] automatic turn context hits=%d mode=%s",
             result.hit_count,
