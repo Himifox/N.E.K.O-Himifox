@@ -1753,6 +1753,10 @@ _URL_LEAK_CASES = [
     ("bare host after hanzi", "看这个吧h.io/SECRET_TOKEN，很好玩哦"),
     ("bare host after kana", "ネコはneko.jp/SECRET_TOKEN"),
     ("mixed case host", "see Example.com/SECRET_TOKEN here"),
+    # DNS is case-insensitive, so an UPPER-case TLD is a real host. Only a
+    # Capitalised one is rejected, because that is a resumed sentence.
+    ("uppercase tld", "see Example.COM/SECRET_TOKEN here"),
+    ("all caps host", "see EXAMPLE.COM/SECRET_TOKEN here"),
     ("scheme upper", "see HTTP://Example.TEST/SECRET_TOKEN here"),
     ("www upper", "see WWW.Example.TEST/SECRET_TOKEN here"),
     ("localhost upper", "see LOCALHOST:8080/SECRET_TOKEN here"),
@@ -1778,6 +1782,7 @@ _URL_OVER_PROTECTION_CASES = [
     # A missing space after sentence punctuation is ordinary en/es/pt model
     # output, not a hostname.
     ("run-on english", "That is so cute.Nice to meet you again", "Nice to meet you again"),
+    ("run-on capitalised tld shape", "I said.Okay then, see you tomorrow", "Okay then"),
     ("run-on spanish", "Te extranaste mucho hoy.Vamos a cenar juntos", "Vamos a cenar juntos"),
     # An UNBALANCED "(" must extend nothing. This one is kept even though
     # ordinary over-protection is accepted here: a scan that runs to the end

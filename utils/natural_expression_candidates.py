@@ -104,12 +104,14 @@ _URL_RE = re.compile(
     # token was persisted verbatim -- and zh/zh-TW/ja/ko, half the languages
     # this module supports, are written without spaces.
     r"(?<![A-Za-z0-9_-])(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    # The TLD stays lowercase while the labels do not. ``re.IGNORECASE`` over
-    # the whole pattern read a missing space after a period as a host --
-    # "cute.Nice", "hola.Mi", "fine.Thanks" -- which is ordinary en/es/pt model
-    # output; dropping case-insensitivity outright would instead stop protecting
-    # "Example.com/secret".
-    r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
+    # A TLD may be all-lower or all-UPPER but never Capitalised. DNS is
+    # case-insensitive, so "Example.COM/secret" is a real host and has to be
+    # protected; but ``re.IGNORECASE`` over the whole pattern also read a
+    # missing space after a period as one -- "cute.Nice", "hola.Mi",
+    # "fine.Thanks" -- and that is ordinary en/es/pt model output. The two are
+    # separable by case SHAPE rather than by case: a sentence resumed after a
+    # period is Capitalised, which no TLD spelling ever is.
+    r"(?:[a-z]{2,63}|[A-Z]{2,63}|(?i:xn--[a-z0-9-]{2,59}))|(?:\d{1,3}\.){3}\d{1,3})"
     r"(?::\d{1,5})?(?:/" + _URL_TAIL + "*)?|"
     r"(?<![A-Za-z0-9_-])(?i:localhost)"
     r"(?:(?::\d{1,5})(?:/" + _URL_TAIL + "*)?|/" + _URL_TAIL + "*)"
