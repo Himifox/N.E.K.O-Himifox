@@ -355,7 +355,9 @@ def export_cloudsave_character_unit(config_manager, character_name: str, *, over
             cloud_state["last_successful_export_at"] = exported_at
             config_manager.save_cloudsave_local_state(cloud_state)
         except Exception:
-            _restore_backup_records(config_manager, backup_records)
+            _restore_backup_records(
+                config_manager, backup_records, evict_sidecar_caches=False
+            )
             raise
 
         detail = build_cloudsave_character_detail(config_manager, character_name)
@@ -520,7 +522,9 @@ def import_cloudsave_character_unit(
                 detail = build_cloudsave_character_detail(config_manager, character_name)
             except BaseException:
                 try:
-                    _restore_backup_records(config_manager, backup_records)
+                    _restore_backup_records(
+                        config_manager, backup_records, evict_sidecar_caches=False
+                    )
                 finally:
                     for recent_path, messages in pending_snapshot.items():
                         set_recent_pending_unlocked(recent_path, messages)
@@ -728,17 +732,31 @@ def _memory_character_names_from_backup_records(config_manager, backup_records):
 
 
 def _restore_backup_records(
-    config_manager, backup_records: list[dict[str, Any]]
+    config_manager,
+    backup_records: list[dict[str, Any]],
+    *,
+    evict_sidecar_caches: bool,
 ) -> None:
-    """Put backed-up targets back, and drop the caches they shadow.
+    """Put backed-up targets back, evicting sidecar caches only on request.
 
-    Unlike the apply -- which writes only MANAGED_MEMORY_FILENAMES and leaves
-    the anti-repeat and startup-greeting sidecars untouched -- this
-    rmtree+copytree's whole ``memory/<name>/`` directories, so it DOES put
-    those sidecars back to their pre-operation contents underneath any loaded
-    cache. The eviction lives here rather than at the call sites because this
-    is the one function that does the replacing; four callers already restore
-    through it.
+    This rmtree+copytree's whole ``memory/<name>/`` directories, so unlike
+    the apply -- which writes only MANAGED_MEMORY_FILENAMES -- it does put
+    the three sidecars back to whatever the backup holds. Whether that
+    should drop their caches depends on WHY the restore is running, which
+    is why the flag is required rather than defaulted.
+
+    Rolling back a FAILED export or import: no. The apply never touched
+    the sidecars, so the only difference the restore can make to them is to
+    revert a flush that landed while the operation was in flight. The cache
+    is then strictly fresher than the file written over it, and evicting
+    adopts the older state -- the sequence fence advances, the pending
+    flush early-returns on ``seq <= _written_seq``, and the reply just
+    delivered is lost. Leaving the cache alone lets the next flush put it
+    back.
+
+    Restoring an operation backup on purpose: yes. There the older state
+    is exactly what was asked for, and a cache left loaded would write the
+    rolled-back content straight back out.
     """
     for record in sorted(backup_records, key=lambda item: len(item["target"].parts), reverse=True):
         target_path = record["target"]
@@ -754,9 +772,12 @@ def _restore_backup_records(
             shutil.copytree(backup_path, target_path, dirs_exist_ok=True)
         else:
             _facade._apply_runtime_file(backup_path, target_path)
-    evict_character_runtime_caches(
-        *_memory_character_names_from_backup_records(config_manager, backup_records)
-    )
+    if evict_sidecar_caches:
+        evict_character_runtime_caches(
+            *_memory_character_names_from_backup_records(
+                config_manager, backup_records
+            )
+        )
 
 
 def _write_operation_backup_metadata(
@@ -875,7 +896,9 @@ def restore_cloudsave_operation_backup(
             }
             current_deleted = snapshot_recent_deletions(list(backup_recent_paths))
             try:
-                _restore_backup_records(config_manager, backup_records)
+                _restore_backup_records(
+                    config_manager, backup_records, evict_sidecar_caches=True
+                )
                 for path in backup_recent_paths:
                     set_recent_pending_unlocked(path, [])
                 if recent_locks_held:
@@ -942,7 +965,9 @@ def restore_cloudsave_operation_backup(
         }
         current_deleted = snapshot_recent_deletions(list(recent_paths))
         try:
-            _restore_backup_records(config_manager, backup_records)
+            _restore_backup_records(
+                config_manager, backup_records, evict_sidecar_caches=True
+            )
             for path in recent_paths:
                 set_recent_pending_unlocked(path, pending_snapshot.get(path, []))
             if recent_locks_held:

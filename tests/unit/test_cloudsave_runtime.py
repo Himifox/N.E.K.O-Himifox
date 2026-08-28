@@ -2523,6 +2523,85 @@ def test_restore_cloudsave_operation_backup_restores_previous_character_state(tm
         )
 
 
+
+@pytest.mark.unit
+def test_restoring_an_operation_backup_evicts_the_sidecar_caches(tmp_path):
+    """The dual of the failed-rollback case, driven through the real entry.
+
+    A failed export or import must NOT evict, because it only reverts a
+    flush that raced it and the cache is the fresher copy. Rolling an
+    operation back on purpose is the opposite: the older files are what
+    was asked for, and a cache left loaded writes the rolled-back content
+    straight back out.
+
+    This drives ``restore_cloudsave_operation_backup`` rather than the
+    private helper. The helper is already covered directly, and that
+    turned out to prove nothing about the call sites: flipping either of
+    them to False left the whole suite green.
+    """
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+        restore_cloudsave_operation_backup,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="小满")
+    export_cloudsave_character_unit(source_cm, "小满")
+    _write_runtime_state(target_cm, character_name="小满")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+
+    import_result = import_cloudsave_character_unit(
+        target_cm, "小满", overwrite=True
+    )
+
+    with _isolated_sidecar_stores(
+        Path(target_cm.memory_dir), config_manager=target_cm
+    ) as (store, corpus, greeting):
+        store._cache["小满"] = {"version": 1, "daily_buckets": {"stale": {}}}
+        corpus._cache["小满"] = [{"stale": True}]
+        greeting._cache["小满"] = ["stale"]
+
+        restore_cloudsave_operation_backup(
+            target_cm, import_result["backup_path"]
+        )
+
+        assert "小满" not in store._cache, (
+            "the rollback reverted the files but left a cache to write them back"
+        )
+        assert "小满" not in corpus._cache
+        assert "小满" not in greeting._cache
+
+        # The same entry has a second restore path for schema-1 metadata,
+        # sixty lines away from the one above. Flipping only that one left
+        # the suite green, so it is driven here too rather than assumed to
+        # match its neighbour.
+        metadata_path = Path(import_result["backup_path"]) / "_operation.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.pop("recent_state", None)
+        metadata["schema_version"] = 1
+        metadata_path.write_text(
+            json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+        )
+
+        store._cache["小满"] = {"version": 1, "daily_buckets": {"stale": {}}}
+        corpus._cache["小满"] = [{"stale": True}]
+        greeting._cache["小满"] = ["stale"]
+
+        restore_cloudsave_operation_backup(
+            target_cm, import_result["backup_path"]
+        )
+
+        assert "小满" not in store._cache, (
+            "the schema-1 restore path left a cache to write the files back"
+        )
+        assert "小满" not in corpus._cache
+        assert "小满" not in greeting._cache
+
+
 @pytest.mark.unit
 def test_export_creates_valid_sqlite_shadow_copy_for_time_indexed_db(tmp_path):
     cm = _make_config_manager(tmp_path)
@@ -3407,6 +3486,89 @@ def test_a_download_does_not_discard_a_staged_sidecar_write(tmp_path):
 
 
 @pytest.mark.unit
+def test_a_failed_download_does_not_discard_a_staged_sidecar_write(
+    tmp_path, monkeypatch
+):
+    """The dual of the success path: a rollback must not fence one either.
+
+    The apply never writes the three sidecars, so the failure rollback
+    puts them back byte-identical -- except for anything flushed while the
+    operation was in flight, which it reverts. The loaded cache is
+    therefore at least as fresh as the file it is restored over, and
+    evicting adopts the older state: the sequence fence advances, the
+    pending flush early-returns on ``seq <= _written_seq``, and the reply
+    just delivered never reaches disk.
+
+    The deliberate rollback in ``restore_cloudsave_operation_backup`` is
+    the opposite case and still evicts -- there the older state is what
+    was asked for.
+    """
+    import memory.anti_repeat_effects as effects_module
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+        operations,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="云端角色")
+    export_cloudsave_character_unit(source_cm, "云端角色")
+    _write_runtime_state(target_cm, character_name="云端角色")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+
+    with _isolated_sidecar_stores(
+        Path(target_cm.memory_dir), config_manager=target_cm
+    ) as (store, _c, _g):
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+        store.record_decision(
+            "云端角色", decision, now=1_700_000_000.0
+        )
+        # Staged, deliberately not flushed -- the detached-flush window.
+        staged = store.stage_decision(
+            "云端角色", decision, now=1_700_000_001.0
+        )
+
+        # Fail AFTER the apply, so the rollback runs with a write in
+        # flight. This is the only difference from the success-path test.
+        def _detail_fails(*args, **kwargs):
+            raise RuntimeError("detail build failed")
+
+        monkeypatch.setattr(
+            operations, "build_cloudsave_character_detail", _detail_fails
+        )
+        with pytest.raises(RuntimeError):
+            import_cloudsave_character_unit(
+                target_cm, "云端角色", overwrite=True
+            )
+        monkeypatch.undo()
+
+        store._flush_snapshot(*staged)
+
+    persisted = json.loads(
+        (
+            Path(target_cm.memory_dir)
+            / "云端角色"
+            / "anti_repeat_effects.json"
+        ).read_text(encoding="utf-8")
+    )
+    detected = [
+        bucket["counters"]["detected"]
+        for bucket in persisted["daily_buckets"].values()
+    ]
+    assert detected == [2], (
+        "the failed import fenced away a staged sidecar write: %s" % persisted
+    )
+
+
+@pytest.mark.unit
 def test_restoring_a_backup_drops_the_caches_it_replaces(tmp_path):
     """The RESTORE does replace the sidecars, unlike the apply.
 
@@ -3443,6 +3605,7 @@ def test_restoring_a_backup_drops_the_caches_it_replaces(tmp_path):
         operations._restore_backup_records(
             cm,
             [{"target": character_dir, "backup": backup_dir, "is_dir": True}],
+            evict_sidecar_caches=True,
         )
 
         assert "小满" not in store._cache, (
