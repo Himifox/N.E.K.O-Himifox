@@ -85,6 +85,15 @@ _URL_RE = re.compile(
     r"(?<![\w-])localhost(?:(?::\d{1,5})(?:/[^\s<>()]*)?|/[^\s<>()]*)",
     re.IGNORECASE,
 )
+# Only the TARGET half of a Markdown link, never the link text -- the text is
+# prose a character may legitimately repeat. A relative target
+# (``[endpoint](/api/secret_token_helper)``) is not a URL by `_URL_RE`, so it
+# was mined and could reach the persisted signature. Requiring the ``](`` …
+# ``)`` structure is what keeps this from swallowing ordinary speech: a bare
+# path in prose stays minable, deliberately, because protecting every
+# ``/foo/bar`` would eat dates and fractions.
+_MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^()\s]*(?:[ \t]+[^()]*)?\)")
+
 _TEMPLATE_RE = re.compile(
     # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
     # interpolation and ERB scriptlets are ordinary shapes, and a body that
@@ -265,6 +274,12 @@ _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
 # detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
 # the container that decides whether a closer belongs to this fence.
 _LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
+# The same marker, but consuming only ONE space after it. The greedy form
+# above is right when a fence opener follows, and wrong when INDENTATION
+# follows: "-     code" is a marker, its single padding space, and then a
+# four-column indented code block -- eating all five spaces measured it as
+# zero columns and mined the code as prose.
+_LIST_MARKER_MIN_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
 
 
 def _strip_blockquote_prefix(line: str) -> str:
@@ -473,10 +488,17 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
     offset = 0
     for line in text.splitlines(keepends=True):
         line_end = offset + len(line)
-        # Same reason as in _fenced_code_spans: the blockquote container is not
-        # part of the code block's indentation, so a quoted indented block
-        # (">     code") measured 0 columns and was mined as prose.
+        # Same reason as in _fenced_code_spans: a container prefix is not part
+        # of the code block's indentation, so a quoted indented block
+        # (">     code") measured 0 columns and was mined as prose. Containers
+        # alternate, so strip them in a loop -- one blockquote pass alone left
+        # "- >     code" measuring from the list marker.
         body = _strip_blockquote_prefix(line)
+        while True:
+            list_marker = _LIST_MARKER_MIN_RE.match(body)
+            if list_marker is None:
+                break
+            body = _strip_blockquote_prefix(body[list_marker.end() :])
         indent_columns = 0
         for character in body:
             if character == " ":
@@ -511,6 +533,29 @@ _HTML_RAW_TEXT_OPEN_RE = re.compile(
     r"<(pre|code|script|style)\b[^>]*>",
     re.IGNORECASE,
 )
+
+
+def _html_comment_spans(text: str) -> list[tuple[int, int]]:
+    """Return ``<!-- ... -->`` spans, including ones that wrap.
+
+    A single-line comment was masked only incidentally, by the generic
+    ``<...>`` template alternative; the moment it wrapped, that alternative
+    stopped matching and the body was mined -- and it reached the persisted
+    signature too. No line budget is needed here, unlike the brace and ERB
+    containers: ``<!--`` and ``-->`` are four and three characters, so a
+    stray opener in speech is not a realistic accident. An unterminated
+    comment runs to end of text, matching the other containers.
+    """
+    spans: list[tuple[int, int]] = []
+    position = 0
+    while True:
+        start = text.find("<!--", position)
+        if start < 0:
+            return spans
+        closing = text.find("-->", start + 4)
+        end = len(text) if closing < 0 else closing + 3
+        spans.append((start, end))
+        position = end
 
 
 def _html_raw_text_spans(text: str) -> list[tuple[int, int]]:
@@ -560,11 +605,19 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
-    """Return fenced, indented, inline-code, and URL spans."""
+    """Return fenced, indented, inline-code, URL and HTML-container spans.
+
+    Shared with ``build_repeat_signature``, so anything missing here can be
+    persisted to the effects sidecar, not merely mined into a report.
+    """
     fenced = _fenced_code_spans(text)
     block_code = _merge_spans(fenced + _indented_code_spans(text))
     spans = block_code + _inline_code_spans(text, block_code)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
+    spans.extend(
+        match.span() for match in _MARKDOWN_LINK_TARGET_RE.finditer(text)
+    )
+    spans.extend(_html_comment_spans(text))
     spans.extend(_html_raw_text_spans(text))
     return _merge_spans(spans)
 

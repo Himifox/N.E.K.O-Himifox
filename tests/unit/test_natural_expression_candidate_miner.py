@@ -1607,3 +1607,56 @@ _CLOSER_SPEECH_CASES = [
 )
 def test_the_exact_run_rule_does_not_swallow_speech(label, text, must_remain_visible):
     assert must_remain_visible in _unprotected(text), label
+
+
+# Three container/target shapes that reached the report AND the persisted
+# signature: a Markdown link's relative target, a wrapped HTML comment, and an
+# indented code block nested in a list (alone or with a blockquote).
+_UNPROTECTED_CONTAINER_CASES = [
+    ("relative link target", "see [endpoint](/api/SECRET_TOKEN) here"),
+    ("link target with title", 'see [x](/api/SECRET_TOKEN "t") here'),
+    ("wrapped html comment", "<!--\nSECRET_TOKEN should never render\n-->"),
+    ("comment inside prose", "hello <!--\nSECRET_TOKEN\n--> bye"),
+    ("unterminated comment", "hello <!--\nSECRET_TOKEN"),
+    ("list then quote, indented", "- >     SECRET_TOKEN = 1\n- >     more = 2"),
+    ("quote then list, indented", "> -     SECRET_TOKEN = 1"),
+    ("list, indented", "-     SECRET_TOKEN = 1"),
+    ("ordered list, indented", "1.     SECRET_TOKEN = 1"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _UNPROTECTED_CONTAINER_CASES,
+    ids=[row[0] for row in _UNPROTECTED_CONTAINER_CASES],
+)
+def test_link_targets_comments_and_nested_indents_are_protected(label, text):
+    unprotected = _unprotected(text)
+    assert "SECRET_TOKEN" not in unprotected, label
+    if text.endswith(" bye"):
+        # The container must also END. Treating it as unterminated hides the
+        # secret too -- by swallowing the rest of the reply -- so the leak
+        # assertion alone cannot tell a closing scanner from a runaway one.
+        assert "bye" in unprotected, label
+
+
+_CONTAINER_SPEECH_CASES = [
+    # Only the link TARGET is protected; the text is prose a character may
+    # legitimately repeat, and a bare path in prose stays minable on purpose --
+    # protecting every `/foo/bar` would eat dates.
+    ("link text is prose", "[我们一起去吃饭吧](/x) 好不好", "我们一起去吃饭吧"),
+    ("bare path", "今天是 2024/01/02 我们一起去吃饭吧", "我们一起去吃饭吧"),
+    ("bulleted speech", "- 今天也辛苦了呢\n- 我们一起去吃饭吧", "我们一起去吃饭吧"),
+    ("padded bullet", "-   我们一起去吃饭吧", "我们一起去吃饭吧"),
+    ("quoted bullet", "> - 我们一起去吃饭吧", "我们一起去吃饭吧"),
+    ("comparison", "记住 3 < 5\n我们一起去吃饭吧", "我们一起去吃饭吧"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _CONTAINER_SPEECH_CASES,
+    ids=[row[0] for row in _CONTAINER_SPEECH_CASES],
+)
+def test_the_new_containers_do_not_swallow_speech(label, text, must_remain_visible):
+    assert must_remain_visible in _unprotected(text), label

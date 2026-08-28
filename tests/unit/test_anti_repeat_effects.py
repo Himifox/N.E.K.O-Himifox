@@ -1540,3 +1540,35 @@ def test_a_missing_sidecar_still_reads_as_empty(tmp_path):
 
     assert effects["source_available"] is False
     assert "Neko" in store._cache
+
+
+_SIGNATURE_CONTAINER_DRAFTS = [
+    ("relative link target", "we always say [endpoint](/api/secret_helper) ok"),
+    (
+        "wrapped html comment",
+        "we always say <!--" + chr(10) + "secret_helper" + chr(10) + "--> ok",
+    ),
+    (
+        "list-nested indented code",
+        "sure" + chr(10) + "-     secret_helper = 1" + chr(10) + "done",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label, draft",
+    _SIGNATURE_CONTAINER_DRAFTS,
+    ids=[row[0] for row in _SIGNATURE_CONTAINER_DRAFTS],
+)
+def test_container_bodies_never_reach_the_sidecar(label, draft):
+    """These three shapes were reaching the PERSISTED signature, not just reports.
+
+    `_without_protected_text` shares `_runtime_protected_spans` with the miner,
+    so a container the miner does not know about is one the sidecar will accept
+    evidence from. Asserted here as well as in the miner tests because the two
+    paths have drifted before -- the template alternatives were fixed in the
+    miner while the signature copy kept leaking.
+    """
+    assert build_repeat_signature(
+        draft, ["secret_helper"], language="en"
+    ) is None, label
