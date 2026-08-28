@@ -106,6 +106,26 @@ def _normalized_phrase(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip(_EDGE_PUNCTUATION).casefold()
 
 
+# Decoration at the EDGES of a draft, for the whole-draft check only. The
+# check exists so a signature can never be the entire rejected reply, and a
+# plain equality test was defeated by anything the reply happened to end
+# with: "quiet lantern 😊", "quiet lantern~~~" and
+# "quiet lantern https://a.com/x" all persisted "quiet lantern", i.e.
+# essentially the whole draft. Trailing "!!!" did not, only because
+# ``_EDGE_PUNCTUATION`` happens to list it -- which is the point: a fixed
+# literal set cannot enumerate emoji, symbols and elongation marks.
+_DECORATIVE_EDGE_RE = re.compile(r"^[\W_]+|[\W_]+$")
+
+
+def _linguistic_core(value: str) -> str:
+    """A normalized phrase with non-word edges removed.
+
+    Word characters keep their Unicode meaning here, so CJK, kana and
+    Cyrillic bodies are untouched; only decoration at the ends goes.
+    """
+    return _DECORATIVE_EDGE_RE.sub("", value)
+
+
 def _safe_fragment(value: str) -> str:
     fragment = unicodedata.normalize("NFKC", value or "")
     if _URL_RE.search(fragment) or _PROTECTED_RE.search(fragment):
@@ -206,11 +226,21 @@ def build_repeat_signature(
         seen.add(normalized)
         if normalized in _normalized_phrase(draft_normalized):
             candidates.append(term)
+    # Compare against the draft stripped of edge decoration as well as the
+    # draft itself: the boundary is "this signature IS the whole reply", and
+    # a trailing emoji, elongation mark or protected URL must not buy an
+    # exemption from it.
+    draft_cores = {
+        full_draft_phrase,
+        _linguistic_core(full_draft_phrase),
+        unprotected_draft_phrase,
+        _linguistic_core(unprotected_draft_phrase),
+    }
     for phrase in candidates:
         normalized = _normalized_phrase(phrase)
         if (
             len(normalized) < 2
-            or normalized == full_draft_phrase
+            or normalized in draft_cores
             or normalized not in unprotected_draft_phrase
         ):
             continue
@@ -1243,6 +1273,34 @@ class AntiRepeatEffectStore:
                 self._retired.add(name)
 
 
+# A retirement recorded BEFORE the singleton exists must not be lost. Delete
+# and rename retire the identity and only then remove the tree, while the
+# singleton is built lazily on the first runtime event -- so a generation
+# already in flight could construct a fresh instance with an empty retirement
+# set, whose first flush calls ``ensure_character_dir`` and puts the deleted
+# directory straight back. Measured: retiring before construction recreated
+# ``memory/<name>/`` and its sidecar, retiring after did not.
+_PENDING_RETIREMENTS: set[str] = set()
+_PENDING_RETIREMENTS_LOCK = threading.Lock()
+
+
+def _record_pending_retirement(character_names, *, retired: bool) -> None:
+    with _PENDING_RETIREMENTS_LOCK:
+        for character_name in character_names:
+            if retired:
+                _PENDING_RETIREMENTS.add(character_name)
+            else:
+                # Eviction and revival both LIFT retirement, so they have to
+                # clear the pending record too -- otherwise a name retired and
+                # revived before construction would stay retired forever.
+                _PENDING_RETIREMENTS.discard(character_name)
+
+
+def _pending_retirements() -> set[str]:
+    with _PENDING_RETIREMENTS_LOCK:
+        return set(_PENDING_RETIREMENTS)
+
+
 _GLOBAL_STORE: Optional[AntiRepeatEffectStore] = None
 _GLOBAL_LOCK = threading.Lock()
 
@@ -1252,33 +1310,41 @@ def get_anti_repeat_effect_store() -> AntiRepeatEffectStore:
     if _GLOBAL_STORE is None:
         with _GLOBAL_LOCK:
             if _GLOBAL_STORE is None:
-                _GLOBAL_STORE = AntiRepeatEffectStore()
+                built = AntiRepeatEffectStore()
+                built._retired.update(_pending_retirements())
+                _GLOBAL_STORE = built
     return _GLOBAL_STORE
 
 
 def evict_cached_anti_repeat_effects(*character_names: str) -> None:
     """Evict loaded identities without creating the global store."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=False)
     store = _GLOBAL_STORE
     if store is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         store.evict_character(character_name)
 
 def revive_cached_anti_repeat_effects(*character_names: str) -> None:
     """Lift retirement for live identities without touching their caches."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=False)
     store = _GLOBAL_STORE
     if store is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         store.revive_character(character_name)
 
 
 def retire_cached_anti_repeat_effects(*character_names: str) -> None:
     """Retire identities whose directories are being removed."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=True)
     store = _GLOBAL_STORE
     if store is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         store.retire_character(character_name)
 
 

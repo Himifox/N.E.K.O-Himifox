@@ -639,33 +639,67 @@ class StartupGreetingHistory:
                 self._retired.add(resolved)
 
 
+# A retirement recorded BEFORE the singleton exists must not be lost. Delete
+# and rename retire the identity and only then remove the tree, while the
+# singleton is built lazily on the first runtime event -- so a generation
+# already in flight could construct a fresh instance with an empty retirement
+# set, whose first flush calls ``ensure_character_dir`` and puts the deleted
+# directory straight back. Measured: retiring before construction recreated
+# ``memory/<name>/`` and its sidecar, retiring after did not.
+_PENDING_RETIREMENTS: set[str] = set()
+_PENDING_RETIREMENTS_LOCK = threading.Lock()
+
+
+def _record_pending_retirement(character_names, *, retired: bool) -> None:
+    with _PENDING_RETIREMENTS_LOCK:
+        for character_name in character_names:
+            if retired:
+                _PENDING_RETIREMENTS.add(character_name)
+            else:
+                # Eviction and revival both LIFT retirement, so they have to
+                # clear the pending record too -- otherwise a name retired and
+                # revived before construction would stay retired forever.
+                _PENDING_RETIREMENTS.discard(character_name)
+
+
+def _pending_retirements() -> set[str]:
+    with _PENDING_RETIREMENTS_LOCK:
+        return set(_PENDING_RETIREMENTS)
+
+
 _GLOBAL_HISTORY: StartupGreetingHistory | None = None
 _GLOBAL_HISTORY_LOCK = threading.Lock()
 
 
 def evict_cached_startup_greeting_history(*character_names: str) -> None:
     """Evict loaded identities without creating the global history."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=False)
     history = _GLOBAL_HISTORY
     if history is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         history.evict_character(character_name)
 
 def revive_cached_startup_greeting_history(*character_names: str) -> None:
     """Lift retirement for live identities without touching their caches."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=False)
     history = _GLOBAL_HISTORY
     if history is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         history.revive_character(character_name)
 
 
 def retire_cached_startup_greeting_history(*character_names: str) -> None:
     """Retire removed identities without creating the global history."""
+    names = list(dict.fromkeys(character_names))
+    _record_pending_retirement(names, retired=True)
     history = _GLOBAL_HISTORY
     if history is None:
         return
-    for character_name in dict.fromkeys(character_names):
+    for character_name in names:
         history.retire_character(character_name)
 
 
@@ -674,5 +708,7 @@ def get_startup_greeting_history() -> StartupGreetingHistory:
     if _GLOBAL_HISTORY is None:
         with _GLOBAL_HISTORY_LOCK:
             if _GLOBAL_HISTORY is None:
-                _GLOBAL_HISTORY = StartupGreetingHistory()
+                built = StartupGreetingHistory()
+                built._retired.update(_pending_retirements())
+                _GLOBAL_HISTORY = built
     return _GLOBAL_HISTORY

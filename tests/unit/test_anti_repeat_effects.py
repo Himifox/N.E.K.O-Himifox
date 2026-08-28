@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -1618,3 +1619,123 @@ def test_records_beyond_the_skew_window_are_still_dropped(tmp_path):
     linked = store.query_effects_for_responses("Neko", ["turn"], 100, now=beyond)
 
     assert linked["linked_message_count"] == 0
+
+
+_DECORATED_WHOLE_DRAFT_CASES = [
+    ("plain", "quiet lantern"),
+    ("emoji tail", "quiet lantern \U0001F60A"),
+    ("emoji both ends", "\U0001F60Aquiet lantern\U0001F60A"),
+    ("ascii elongation", "quiet lantern~~~"),
+    ("fullwidth elongation", "quiet lantern\uff5e\uff5e"),
+    ("sentence punctuation", "quiet lantern!!!"),
+    ("protected url tail", "quiet lantern https://a.com/x"),
+    ("code tail", "quiet lantern `x = 1`"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, draft",
+    _DECORATED_WHOLE_DRAFT_CASES,
+    ids=[row[0] for row in _DECORATED_WHOLE_DRAFT_CASES],
+)
+def test_a_decorated_whole_draft_is_still_the_whole_draft(label, draft):
+    """The signature may never be the entire rejected reply.
+
+    A plain equality test against the draft was defeated by whatever the reply
+    happened to end with -- an emoji, an elongation mark, a protected URL --
+    so the sidecar could retain essentially the complete text. Trailing "!!!"
+    was rejected only because ``_EDGE_PUNCTUATION`` lists it, which is exactly
+    why a fixed literal set is the wrong tool.
+    """
+    assert build_repeat_signature(draft, ["quiet lantern"], language="en") is None, label
+
+
+def test_a_genuine_partial_still_builds_a_signature():
+    """The dual: narrowing the boundary must not silence real evidence."""
+    assert build_repeat_signature(
+        "quiet lantern and more prose", ["quiet lantern"], language="en"
+    ) == RepeatSignature("quiet lantern", "quiet lantern", "en")
+    assert build_repeat_signature(
+        "我们一起去吃饭吧真的好开心", ["我们一起去吃饭吧"], language="zh-CN"
+    ) == RepeatSignature("我们一起去吃饭吧", "我们一起去吃饭吧", "zh-CN")
+
+
+def _retirement_probe(tmp_path, monkeypatch, *, order):
+    """Drive a delete through the module helpers in a given ordering."""
+    import time
+
+    from memory import anti_repeat_effects
+
+    (tmp_path / "Ghost").mkdir()
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(tmp_path)
+    config_manager.app_docs_dir = str(tmp_path)
+    config_manager.load_root_state.return_value = {"mode": "normal"}
+
+    monkeypatch.setattr(anti_repeat_effects, "_GLOBAL_STORE", None)
+    monkeypatch.setattr(anti_repeat_effects, "_PENDING_RETIREMENTS", set())
+
+    if order == "retire_before_store":
+        anti_repeat_effects.retire_cached_anti_repeat_effects("Ghost")
+        shutil.rmtree(tmp_path / "Ghost")
+    elif order == "retire_then_revive":
+        anti_repeat_effects.retire_cached_anti_repeat_effects("Ghost")
+        anti_repeat_effects.revive_cached_anti_repeat_effects("Ghost")
+        # The directory goes too, so the assertion has teeth: a LIVE name is
+        # allowed to recreate it, a retired one is not. Without the removal a
+        # stuck retirement is invisible, because the surviving directory is
+        # writable either way.
+        shutil.rmtree(tmp_path / "Ghost")
+
+    # Build through the REAL factory. Seeding the store by hand here would
+    # bypass the very wiring under test: with the seeding line removed from
+    # get_anti_repeat_effect_store, a hand-seeded fixture stayed green.
+    monkeypatch.setattr(
+        anti_repeat_effects, "get_config_manager", lambda: config_manager
+    )
+    store = anti_repeat_effects.get_anti_repeat_effect_store()
+
+    anti_repeat_effects.record_anti_repeat_decision(
+        "Ghost",
+        anti_repeat_effects.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+    )
+    for _ in range(40):
+        if not store._detached_flushes:
+            break
+        time.sleep(0.02)
+    return (tmp_path / "Ghost").exists()
+
+
+def test_retirement_recorded_before_the_store_exists_still_blocks_resurrection(
+    tmp_path, monkeypatch
+):
+    """Delete and rename retire the identity BEFORE removing the tree.
+
+    The store is built lazily on the first detector hit, so a generation
+    already in flight could construct one with an empty retirement set, whose
+    first flush calls ``ensure_character_dir`` and puts the deleted directory
+    straight back -- the exact resurrection ``_write_file_path`` exists to
+    prevent. Measured before the fix: the directory and its sidecar both came
+    back.
+    """
+    assert _retirement_probe(tmp_path, monkeypatch, order="retire_before_store") is False
+
+
+def test_a_revived_name_does_not_stay_pending(tmp_path, monkeypatch):
+    """The dual: revival lifts retirement, so it must clear the pending record.
+
+    A revived name is LIVE, and a live name may create its own directory --
+    an imported profile that ships no managed memory files has none yet. If
+    the pending record survived the revival, its aggregates would silently
+    stop persisting while the character is in active use.
+    """
+    assert _retirement_probe(tmp_path, monkeypatch, order="retire_then_revive") is True
+
+
+def test_a_live_name_is_unaffected(tmp_path, monkeypatch):
+    assert _retirement_probe(tmp_path, monkeypatch, order="none") is True
