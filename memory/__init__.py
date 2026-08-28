@@ -106,16 +106,20 @@ def ensure_character_dir(memory_dir: str, name: str) -> str:
 
 
 # 旧文件名 → 新文件名的映射（不含 name 后缀）
-_MIGRATION_MAP = {
-    'facts_{name}.json':                'facts.json',
-    'persona_{name}.json':              'persona.json',
-    'persona_corrections_{name}.json':  'persona_corrections.json',
-    'reflections_{name}.json':          'reflections.json',
-    'surfaced_{name}.json':             'surfaced.json',
-    'settings_{name}.json':             'settings.json',
-    'recent_{name}.json':               'recent.json',
-    'time_indexed_{name}':              'time_indexed.db',
-}
+#
+# Borrowed from utils.character_memory rather than copied. The copy that used
+# to live here had drifted three entries behind: time_indexed_{name}.db,
+# facts_archive_{name}.json and reflections_archive_{name}.json were all
+# renameable and selectable but never migrated, so a character whose only
+# history was one of those files was offered in the panel and then reported
+# as having none -- the startup migration left the file in the memory root
+# while every reader looked inside memory/{name}/.
+#
+# utils.character_memory imports nothing from this package, so the direction
+# is safe.
+from utils.character_memory import (  # noqa: E402
+    LEGACY_CHARACTER_MEMORY_FILE_MAP as _MIGRATION_MAP,
+)
 
 
 def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:

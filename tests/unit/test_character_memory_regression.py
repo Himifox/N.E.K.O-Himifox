@@ -5474,3 +5474,57 @@ def test_sidecar_isolation_does_not_touch_the_process_singletons(tmp_path):
     assert effects_module._GLOBAL_STORE is outer[0]
     assert anti_repeat_module._GLOBAL_CORPUS is outer[1]
     assert greeting_module._GLOBAL_HISTORY is outer[2]
+
+
+def test_every_selectable_legacy_root_file_is_also_migrated(tmp_path):
+    """A name the panel offers has to have its history moved where readers look.
+
+    The selector decodes an owner out of a legacy root entry, so a memory
+    root holding only ``time_indexed_Carol.db`` offers "Carol". Every reader
+    then looks in ``memory/Carol/``, and the startup migration is what puts
+    it there. Its map was a second copy that had fallen three entries behind
+    the rename path's -- the dotted database and both archive files -- so
+    those characters were offered and then reported as having no history.
+
+    Driven off the SELECTOR's patterns, not the migration map, so a pattern
+    the panel can offer but the migration cannot move fails here. Each runs
+    in its own root because two of the patterns share a destination.
+    """
+    import memory as memory_pkg
+    from utils.character_memory import (
+        LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES,
+        _LEGACY_ROOT_ENTRY_PATTERNS,
+        legacy_root_entry_owner,
+    )
+
+    # The extra entries are directories with their own destination
+    # ("semantic_memory_legacy"), handled by the rename path rather than by
+    # this file-for-file migration.
+    file_patterns = [
+        pattern
+        for pattern in _LEGACY_ROOT_ENTRY_PATTERNS
+        if pattern not in LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES
+    ]
+    assert file_patterns, "no selectable file patterns -- the test is inert"
+
+    for index, pattern in enumerate(file_patterns):
+        root = tmp_path / f"root{index}"
+        root.mkdir()
+        legacy = root / pattern.replace("{name}", "Carol")
+        legacy.write_text("legacy", encoding="utf-8")
+
+        assert legacy_root_entry_owner(legacy.name) == "Carol", (
+            f"the selector does not decode {legacy.name} -- this pattern is "
+            "not actually offerable, so the loop is testing the wrong thing"
+        )
+
+        memory_pkg.migrate_to_character_dirs(str(root), ["Carol"])
+
+        target = memory_pkg._MIGRATION_MAP.get(pattern)
+        assert target is not None, (
+            f"{pattern} is offered as Carol's history but the startup "
+            "migration has no rule for it"
+        )
+        moved = root / "Carol" / target
+        assert moved.exists(), f"{pattern} was offered but never migrated"
+        assert not legacy.exists(), f"{pattern} was copied, not moved"
