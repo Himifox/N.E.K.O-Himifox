@@ -1844,3 +1844,58 @@ def test_pending_retirement_transfer_is_atomic_with_singleton_publication(
     assert "Ghost" in store._retired, (
         "the retirement was lost between copying the pending set and publishing"
     )
+
+
+_MASKING_PARITY_CASES = [
+    ("emoticon pair", "I love it <3 you are so cute >_< really"),
+    ("comparisons", "记住哦 3 < 5，我们一起去吃饭吧，10 > 7 呢"),
+    ("arrows", "心情 <- 超好，我们一起去吃饭吧 ->"),
+    ("real inline tag", "a <b>SECRET_TOKEN</b> b"),
+    ("real code container", "see <code>SECRET_TOKEN</code> ok"),
+    ("unterminated code container", "use <code> then SECRET_TOKEN"),
+    ("attributed tag", "看看 <div class=x> 好不好"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _MASKING_PARITY_CASES,
+    ids=[row[0] for row in _MASKING_PARITY_CASES],
+)
+def test_the_miner_and_the_sidecar_mask_the_same_text(label, text):
+    """The two masking paths are supposed to agree, and drifted apart once.
+
+    The miner's ``<...>`` alternative was tightened to require a tag shape and
+    this one was not, so the sidecar went on pairing the "<" of "<3" with the
+    ">" of ">_<". It masked the speech between them and dropped a signature the
+    miner reported happily -- on one of the commonest shapes in this project's
+    speech.
+
+    Asserting only "the sidecar no longer masks emoticons" would be rescued by
+    deleting the alternative outright, which would stop masking real tags. This
+    compares the two paths instead, so they can only pass together. Whitespace
+    is normalised because the sidecar substitutes a blank where the miner drops
+    the span; the surviving text is what has to match.
+    """
+    import re
+
+    from utils.natural_expression_candidates import _protected_spans
+
+    spans = _protected_spans(text)
+    mined = "".join(
+        char for index, char in enumerate(text)
+        if not any(start <= index < end for start, end in spans)
+    )
+    masked = anti_repeat_effects._without_protected_text(text)
+    normalise = lambda value: re.sub(r"\s+", " ", value).strip()  # noqa: E731
+
+    assert normalise(mined) == normalise(masked), label
+
+
+def test_the_dropped_conversational_signature_comes_back():
+    """The user-visible half of the same drift."""
+    assert build_repeat_signature(
+        "I love it <3 you are so cute >_< really",
+        ["you are so cute"],
+        language="en",
+    ) == RepeatSignature("you are so cute", "you are so cute", "en")

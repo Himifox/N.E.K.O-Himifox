@@ -77,8 +77,8 @@ _PROTECTED_RE = re.compile(
     # Same bounded multiline containers as the miner's `_TEMPLATE_RE`, and for
     # the same reason: a template body that merely wrapped was left searchable
     # here, so evidence taken from inside it could reach the sidecar even though
-    # its single-line twin was rejected. `<...>` stays line-bounded -- see the
-    # miner for the speech it swallows otherwise.
+    # its single-line twin was rejected. `<...>` stays line-bounded AND
+    # tag-shaped -- see the miner for the speech it swallows otherwise.
     # The body forbids only the CLOSER, not every brace: a template body may
     # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
     # of [^{}] made all three containers miss it and mine the payload. The
@@ -94,7 +94,13 @@ _PROTECTED_RE = re.compile(
     # 120-day leak untouched while every miner-side test goes green.
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
-    r"<[^<>\r\n]{1,80}>|"
+    # Must LOOK LIKE A TAG, exactly as the miner requires. Left loose here it
+    # paired the "<" of "<3" with the ">" of ">_<" and masked the speech
+    # between them, so a signature the miner happily reported was dropped by
+    # this side alone -- the two paths are supposed to mask the same text,
+    # and the divergence silently cost the effects record a legitimate
+    # signature on one of the commonest shapes in this project's speech.
+    r"</?[A-Za-z][^<>\r\n]{0,79}>|"
     r"\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
 # How many times a reset re-cuts when a concurrent write lands after its
