@@ -714,20 +714,29 @@ def _snapshot_existing_targets(config_manager, backup_root: Path, targets: set[P
 def _memory_character_names_from_backup_records(config_manager, backup_records):
     """Character names whose memory directory a restore is about to replace.
 
-    Unlike the apply, ``_restore_backup_records`` rmtree+copytree's whole
-    ``memory/<name>/`` directories, so it DOES put the three sidecars back to
-    their pre-operation contents underneath any loaded cache. That was
-    incidentally covered while the success path evicted; now that the success
-    path only lifts retirement, the restore has to evict for itself.
+    Only a DELIBERATE restore asks for this -- see the flag on
+    ``_restore_backup_records``. It rmtree+copytree's whole ``memory/<name>/``
+    directories, so it puts the three sidecars back to whatever the backup
+    holds, and a cache left loaded would write the rolled-back content
+    straight back out.
     """
-    memory_root = Path(config_manager.memory_dir)
+    # Resolved on BOTH sides. restore_cloudsave_operation_backup builds its
+    # targets through _resolve_managed_target_path, which resolves, so a
+    # memory_dir carrying a symlink, a "~", or a ".." never matched the raw
+    # parent -- the name list came back empty, nothing was evicted, and the
+    # stale caches wrote over the files the rollback had just restored.
+    memory_root = Path(config_manager.memory_dir).expanduser().resolve(strict=False)
     names: list[str] = []
     for record in backup_records:
-        target = Path(record.get("target") or "")
-        if not record.get("is_dir") or target.parent != memory_root:
+        raw_target = str(record.get("target") or "")
+        # Guarded before resolving: Path("") is ".", which resolves to the
+        # working directory and would contribute its name.
+        if not raw_target or not record.get("is_dir"):
             continue
-        if target.name:
-            names.append(target.name)
+        target = Path(raw_target).expanduser().resolve(strict=False)
+        if target.parent != memory_root or not target.name:
+            continue
+        names.append(target.name)
     return tuple(dict.fromkeys(names))
 
 

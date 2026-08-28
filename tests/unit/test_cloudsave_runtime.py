@@ -3618,3 +3618,82 @@ def test_restoring_a_backup_drops_the_caches_it_replaces(tmp_path):
         (character_dir / "anti_repeat_effects.json").read_text(encoding="utf-8")
     )
     assert restored["daily_buckets"] == {"before": {}}
+
+
+@pytest.mark.unit
+def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
+    """A memory_dir that is not already normalised still matches.
+
+    ``restore_cloudsave_operation_backup`` builds its targets through
+    ``_resolve_managed_target_path``, which resolves. Comparing those against
+    a raw ``config_manager.memory_dir`` meant a root carrying a symlink, a
+    "~" or a ".." never matched: the name list came back empty, nothing was
+    evicted, and the stale caches wrote over what the rollback had just put
+    back.
+
+    The unnormalised form here is a ".." rather than a symlink -- it
+    reproduces the same mismatch, is a real way to configure a path, and
+    does not need a privilege Windows CI cannot grant. The call site itself
+    is covered by the restore test above.
+    """
+    from utils.cloudsave_runtime import operations
+
+    memory_root = tmp_path / "memory"
+    character_dir = memory_root / "小满"
+    character_dir.mkdir(parents=True)
+    records = [{"target": character_dir.resolve(), "is_dir": True}]
+
+    straight = SimpleNamespace(memory_dir=str(memory_root))
+    assert operations._memory_character_names_from_backup_records(
+        straight, records
+    ) == ("小满",)
+
+    # Same directory, spelled with a detour. Path keeps ".." literally, so
+    # an unresolved comparison sees a different string.
+    detour = tmp_path / "sidestep" / ".." / "memory"
+    (tmp_path / "sidestep").mkdir()
+    assert Path(detour) != memory_root, (
+        "the detour normalised on its own -- this test would prove nothing"
+    )
+    assert Path(detour).resolve() == memory_root.resolve()
+
+    crooked = SimpleNamespace(memory_dir=str(detour))
+    assert operations._memory_character_names_from_backup_records(
+        crooked, records
+    ) == ("小满",), (
+        "an unnormalised memory_dir found no characters to evict"
+    )
+
+    # The dual: a directory that is genuinely elsewhere is still refused.
+    outside = tmp_path / "elsewhere" / "小满"
+    outside.mkdir(parents=True)
+    assert operations._memory_character_names_from_backup_records(
+        straight, [{"target": outside.resolve(), "is_dir": True}]
+    ) == ()
+
+    # The other side of the comparison: a TARGET spelled with a detour has
+    # to normalise too, not just the root.
+    (memory_root / "sidestep").mkdir()
+    crooked_target = memory_root / "sidestep" / ".." / "小满"
+    assert Path(crooked_target) != character_dir
+    assert operations._memory_character_names_from_backup_records(
+        straight, [{"target": crooked_target, "is_dir": True}]
+    ) == ("小满",), (
+        "an unnormalised target found no character to evict"
+    )
+
+    # And an empty target contributes nothing rather than resolving to the
+    # working directory and donating its name. Only observable when the
+    # working directory really is a child of the configured root, so the
+    # root is chosen to make it so -- otherwise the guard is decorative and
+    # deleting it would stay green.
+    assert operations._memory_character_names_from_backup_records(
+        straight, [{"target": "", "is_dir": True}]
+    ) == ()
+    cwd_parent = SimpleNamespace(memory_dir=str(Path.cwd().parent))
+    assert operations._memory_character_names_from_backup_records(
+        cwd_parent, [{"target": "", "is_dir": True}]
+    ) == (), (
+        "an empty target resolved to the working directory and was treated "
+        "as a character"
+    )
