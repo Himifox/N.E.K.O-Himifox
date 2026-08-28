@@ -85,6 +85,10 @@ const routes: RouteRecordRaw[] = [
         meta: {
           titleKey: 'nav.adapterUI'
         }
+      },
+      {
+        path: ':pathMatch(.*)*',
+        redirect: '/'
       }
     ]
   }
