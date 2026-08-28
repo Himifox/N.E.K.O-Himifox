@@ -79,13 +79,19 @@ _PROTECTED_RE = re.compile(
     # here, so evidence taken from inside it could reach the sidecar even though
     # its single-line twin was rejected. `<...>` stays line-bounded -- see the
     # miner for the speech it swallows otherwise.
-    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    # The body forbids only the CLOSER, not every brace: a template body may
+    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
+    # of [^{}] made all three containers miss it and mine the payload. The
+    # tempered form keeps the same bound as before, since the closer is still
+    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
+    # because the two-character opener is still required.
+    r"\{\{(?:(?!\}\})[^\r\n])*(?:\r?\n(?:(?!\}\})[^\r\n])*){0,3}\}\}|"
+    r"\{%(?:(?!%\})[^\r\n])*(?:\r?\n(?:(?!%\})[^\r\n])*){0,3}%\}|"
+    r"\{\#(?:(?!\#\})[^\r\n])*(?:\r?\n(?:(?!\#\})[^\r\n])*){0,3}\#\}|"
     # The SAME two alternatives as the miner. This pattern is the one the
     # sidecar actually consults -- ``_TEMPLATE_RE`` is not in
     # ``_runtime_protected_spans`` -- so patching only the miner leaves the
     # 120-day leak untouched while every miner-side test goes green.
-    r"\{%[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}%\}|"
-    r"\{#[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}#\}|"
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     r"<[^<>\r\n]{1,80}>|"

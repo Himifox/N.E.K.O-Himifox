@@ -1109,6 +1109,10 @@ _WRAPPED_TEMPLATE_DRAFTS = [
     # miner leaves this leak open while every miner-side test goes green.
     ("jinja statement", "sure {%" + chr(10) + "secret helper phrase" + chr(10) + "%} enjoy"),
     ("jinja comment", "sure {#" + chr(10) + "secret helper phrase" + chr(10) + "#} enjoy"),
+    # Braces inside the body, on the sidecar side too.
+    ("jinja dict", 'sure {{ {"k": "secret helper phrase"} }} enjoy'),
+    ("jinja statement dict", 'sure {% set c = {"k": "secret helper phrase"} %} enjoy'),
+    ("jinja comment dict", 'sure {# {"k": "secret helper phrase"} #} enjoy'),
 ]
 
 

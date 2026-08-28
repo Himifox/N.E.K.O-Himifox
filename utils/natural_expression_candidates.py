@@ -155,12 +155,18 @@ _TEMPLATE_RE = re.compile(
     # was masked. The line budget is the point -- an unbounded newline-crossing
     # match turns one stray delimiter in prose into a span that swallows the
     # rest of the reply.
-    r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    # The body forbids only the CLOSER, not every brace: a template body may
+    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
+    # of [^{}] made all three containers miss it and mine the payload. The
+    # tempered form keeps the same bound as before, since the closer is still
+    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
+    # because the two-character opener is still required.
+    r"\{\{(?:(?!\}\})[^\r\n])*(?:\r?\n(?:(?!\}\})[^\r\n])*){0,3}\}\}|"
+    r"\{%(?:(?!%\})[^\r\n])*(?:\r?\n(?:(?!%\})[^\r\n])*){0,3}%\}|"
+    r"\{\#(?:(?!\#\})[^\r\n])*(?:\r?\n(?:(?!\#\})[^\r\n])*){0,3}\#\}|"
     # Jinja statement and comment blocks, on the same line budget: a
     # ``{% set api_key = "..." %}`` carried its payload straight past the brace
     # pattern, which only knew the expression form.
-    r"\{%[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}%\}|"
-    r"\{#[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}#\}|"
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries

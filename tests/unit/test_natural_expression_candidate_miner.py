@@ -1494,6 +1494,11 @@ _MULTILINE_TEMPLATE_CASES = [
     # Statement and comment blocks, which the expression form does not cover.
     ("jinja statement", "{%\nsecret helper phrase\n%}"),
     ("jinja comment", "{#\nsecret helper phrase\n#}"),
+    # A template body may hold a brace of its own. Forbidding every brace
+    # made all three containers miss a dict literal and mine the payload.
+    ("jinja expression with a dict", '{{ {"k": "secret helper phrase"} }}'),
+    ("jinja statement with a dict", '{% set c = {"k": "secret helper phrase"} %}'),
+    ("jinja comment with a dict", '{# {"k": "secret helper phrase"} #}'),
 ]
 
 
