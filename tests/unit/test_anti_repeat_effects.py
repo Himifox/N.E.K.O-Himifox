@@ -1899,3 +1899,112 @@ def test_the_dropped_conversational_signature_comes_back():
         ["you are so cute"],
         language="en",
     ) == RepeatSignature("you are so cute", "you are so cute", "en")
+
+
+_SIDECAR_STORE_MODULES = (
+    ("memory.anti_repeat", "AntiRepeatCorpus", "anti_repeat_corpus.json"),
+    ("memory.anti_repeat_effects", "AntiRepeatEffectStore", "anti_repeat_effects.json"),
+    (
+        "memory.startup_greeting_history",
+        "StartupGreetingHistory",
+        "startup_greetings.json",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "module_name, class_name, filename",
+    _SIDECAR_STORE_MODULES,
+    ids=[row[0].rsplit(".", 1)[-1] for row in _SIDECAR_STORE_MODULES],
+)
+def test_a_retired_name_never_writes_outside_its_own_directory(
+    module_name, class_name, filename, tmp_path
+):
+    """All three sidecar stores must refuse the same paths, not just one.
+
+    These three carry the same write path three times over, and this PR has
+    now fixed the same defect in one copy and left the others four separate
+    times. Parametrising over the modules is what makes the next divergence
+    fail here rather than in review: "." resolves to the memory ROOT, which
+    always exists, so the is-a-directory check alone let a retired identity
+    drop its sidecar straight into memory/.
+    """
+    import importlib
+    import os
+
+    module = importlib.import_module(module_name)
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(tmp_path)
+    config_manager.app_docs_dir = str(tmp_path)
+
+    store = getattr(module, class_name).__new__(getattr(module, class_name))
+    store._config_manager = config_manager
+    store._retired = {".", "..", "a/b"}
+
+    for name in (".", "..", "a/b"):
+        target = store._write_file_path(name)
+        assert target is None, f"{module_name} would have written {name!r} to {target}"
+
+    # The dual: a retired name whose own directory exists still writes there,
+    # which is what keeps a rescued rename from losing its aggregates.
+    (tmp_path / "Live").mkdir()
+    store._retired = {"Live"}
+    live_target = store._write_file_path("Live")
+    assert live_target is not None
+    assert os.path.dirname(live_target) == str(tmp_path / "Live")
+    assert os.path.basename(live_target) == filename
+
+
+@pytest.mark.parametrize(
+    "module_name, class_name, filename",
+    _SIDECAR_STORE_MODULES,
+    ids=[row[0].rsplit(".", 1)[-1] for row in _SIDECAR_STORE_MODULES],
+)
+def test_the_fence_target_names_the_file_actually_written(
+    module_name, class_name, filename, tmp_path
+):
+    """The cloud-save fence target must name the real file.
+
+    It was a separate literal from the write path, and two of the three stores
+    had already drifted -- `anti_repeat.json` for a store that writes
+    `anti_repeat_corpus.json`, `startup_greeting_history.json` for one that
+    writes `startup_greetings.json`. The target is diagnostics only, so the
+    cost was a MaintenanceModeError, and a client payload, naming a file that
+    does not exist.
+    """
+    import importlib
+    import os
+    from unittest.mock import patch
+
+    from utils.cloudsave_runtime import MaintenanceModeError
+
+    module = importlib.import_module(module_name)
+    assert module._SIDECAR_FILENAME == filename
+
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(tmp_path)
+    config_manager.app_docs_dir = str(tmp_path)
+    # Built through the real constructor: _flush_snapshot needs the lock and
+    # sequence state that __new__ would skip.
+    with patch.object(module, "get_config_manager", lambda: config_manager):
+        store = getattr(module, class_name)()
+    store._config_manager = config_manager
+
+    written = store._write_file_path("Neko")
+    assert os.path.basename(written) == filename
+
+    captured = {}
+
+    def _capture(_config_manager, *, operation="write", target=""):
+        captured["target"] = target
+        raise MaintenanceModeError("maintenance_readonly", operation=operation, target=target)
+
+    with patch("utils.cloudsave_runtime.cloudsave_writable_transaction", _capture):
+        try:
+            store._flush_snapshot("Neko", {}, 1)
+        except Exception:
+            pass
+
+    assert captured.get("target") == f"memory/Neko/{filename}", (
+        f"{module_name} announced {captured.get('target')!r} but writes {filename!r}"
+    )

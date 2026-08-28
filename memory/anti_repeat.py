@@ -106,7 +106,13 @@ _SCHEMA_VERSION = 1
 _DEFAULT_KEY = "default"
 
 
+# One name, used by the write path AND by the cloud-save fence target.
+# They were separate literals and two of the three stores had already
+# drifted, so a fenced write reported a file that does not exist.
+_SIDECAR_FILENAME = "anti_repeat_corpus.json"
+
 @dataclass(frozen=True, slots=True)
+
 class UnansweredProactiveRepeatSignal:
     """Long-window evidence that the user keeps ignoring the same content shape."""
 
@@ -316,7 +322,7 @@ class AntiRepeatCorpus:
         return os.path.join(
             str(self._config_manager.memory_dir),
             name,
-            "anti_repeat_corpus.json",
+            _SIDECAR_FILENAME,
         )
 
     def _write_file_path(self, name: str) -> str | None:
@@ -337,14 +343,23 @@ class AntiRepeatCorpus:
         from memory import ensure_character_dir
 
         memory_dir = self._config_manager.memory_dir
+        root = os.path.abspath(str(memory_dir))
         if name in self._retired:
             character_dir = os.path.join(str(memory_dir), name)
             if not os.path.isdir(character_dir):
                 return None
-            return os.path.join(character_dir, "anti_repeat_corpus.json")
+            # ...and it has to be a PROPER child of the memory root. A
+            # historical unsafe name resolves the other way: "." lands on
+            # the root itself, which always exists, so the retirement
+            # check above passed and a post-deletion write dropped
+            # anti_repeat_corpus.json straight into memory/.
+            resolved = os.path.abspath(character_dir)
+            if resolved == root or os.path.commonpath([root, resolved]) != root:
+                return None
+            return os.path.join(character_dir, _SIDECAR_FILENAME)
         return os.path.join(
             ensure_character_dir(memory_dir, name),
-            "anti_repeat_corpus.json",
+            _SIDECAR_FILENAME,
         )
 
     def _get_lock(self, name: str) -> threading.Lock:
@@ -402,7 +417,7 @@ class AntiRepeatCorpus:
             with cloudsave_writable_transaction(
                 self._config_manager,
                 operation="save",
-                target=f"memory/{name}/anti_repeat.json",
+                target=f"memory/{name}/{_SIDECAR_FILENAME}",
             ):
                 with self._get_write_lock(name):
                     if seq <= self._written_seq.get(name, 0):

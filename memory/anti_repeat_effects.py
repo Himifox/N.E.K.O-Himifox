@@ -173,7 +173,13 @@ def _without_protected_text(value: str) -> str:
     return "".join(chunks)
 
 
+# One name, used by the write path AND by the cloud-save fence target.
+# They were separate literals and two of the three stores had already
+# drifted, so a fenced write reported a file that does not exist.
+_SIDECAR_FILENAME = "anti_repeat_effects.json"
+
 @dataclass(frozen=True, slots=True)
+
 class RepeatSignature:
     phrase: str
     normalized_phrase: str
@@ -633,7 +639,7 @@ class AntiRepeatEffectStore:
         return os.path.join(
             str(self._config_manager.memory_dir),
             name,
-            "anti_repeat_effects.json",
+            _SIDECAR_FILENAME,
         )
 
     def _write_file_path(self, name: str) -> str | None:
@@ -682,10 +688,10 @@ class AntiRepeatEffectStore:
             resolved = os.path.abspath(character_dir)
             if resolved == root or os.path.commonpath([root, resolved]) != root:
                 return None
-            return os.path.join(character_dir, "anti_repeat_effects.json")
+            return os.path.join(character_dir, _SIDECAR_FILENAME)
         return os.path.join(
             ensure_character_dir(memory_dir, name),
-            "anti_repeat_effects.json",
+            _SIDECAR_FILENAME,
         )
 
     def _get_lock(self, name: str) -> threading.Lock:
@@ -886,7 +892,7 @@ class AntiRepeatEffectStore:
             with cloudsave_writable_transaction(
                 self._config_manager,
                 operation="save",
-                target=f"memory/{name}/anti_repeat_effects.json",
+                target=f"memory/{name}/{_SIDECAR_FILENAME}",
             ):
                 with self._get_write_lock(name):
                     if seq <= self._written_seq.get(name, 0):
