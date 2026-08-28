@@ -85,21 +85,6 @@ _URL_RE = re.compile(
     r"(?<![\w-])localhost(?:(?::\d{1,5})(?:/[^\s<>()]*)?|/[^\s<>()]*)",
     re.IGNORECASE,
 )
-# Only the TARGET half of a Markdown link, never the link text -- the text is
-# prose a character may legitimately repeat. A relative target
-# (``[endpoint](/api/secret_token_helper)``) is not a URL by `_URL_RE`, so it
-# was mined and could reach the persisted signature. Requiring the ``](`` …
-# ``)`` structure is what keeps this from swallowing ordinary speech: a bare
-# path in prose stays minable, deliberately, because protecting every
-# ``/foo/bar`` would eat dates and fractions.
-#
-# One level of balanced parentheses, which CommonMark allows and real targets
-# use (``/api/f(1)/x``). Rejecting them outright made the whole match fail, so
-# the target was mined exactly as if there were no rule at all.
-_MARKDOWN_LINK_TARGET_RE = re.compile(
-    r"\]\((?:[^()\s]|\([^()]*\))*(?:[ \t]+\"[^\"]*\")?\)"
-)
-
 _TEMPLATE_RE = re.compile(
     # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
     # interpolation and ERB scriptlets are ordinary shapes, and a body that
@@ -541,6 +526,50 @@ _HTML_RAW_TEXT_OPEN_RE = re.compile(
 )
 
 
+def _markdown_link_target_spans(text: str) -> list[tuple[int, int]]:
+    """Return the TARGET half of Markdown links -- ``](`` through its close.
+
+    Never the link text: that is prose a character may legitimately repeat,
+    and a bare path in prose stays minable too, because protecting every
+    ``/foo/bar`` would eat dates and fractions. Requiring the ``](`` structure
+    is what keeps this off ordinary speech.
+
+    A scanner rather than a pattern because targets nest parentheses to any
+    depth (``/api/f(g(x))``), and a regex that allows one level simply fails
+    to match deeper ones -- leaving the target mined as if there were no rule.
+    An unbalanced ``](`` protects NOTHING: running to end of text would be the
+    over-protection this module keeps having to undo.
+    """
+    spans: list[tuple[int, int]] = []
+    position = 0
+    while True:
+        start = text.find("](", position)
+        if start < 0:
+            return spans
+        limit = _paragraph_end(text, start)
+        depth = 0
+        cursor = start + 1
+        end = -1
+        while cursor < limit:
+            character = text[cursor]
+            if character == chr(92):
+                cursor += 2
+                continue
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    end = cursor + 1
+                    break
+            cursor += 1
+        if end < 0:
+            position = start + 2
+            continue
+        spans.append((start, end))
+        position = end
+
+
 def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
     return any(start <= position < end for start, end in spans)
 
@@ -645,9 +674,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     # after it. The bounded regexes need no such guard.
     code_spans = _merge_spans(spans)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
-    spans.extend(
-        match.span() for match in _MARKDOWN_LINK_TARGET_RE.finditer(text)
-    )
+    spans.extend(_markdown_link_target_spans(text))
     # Comments first: a tag inside a comment BODY is not a container either,
     # so the raw-text scanner has to see the comment spans as well.
     comment_spans = _html_comment_spans(text, code_spans)

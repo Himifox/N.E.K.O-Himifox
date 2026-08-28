@@ -1646,6 +1646,14 @@ _CONTAINER_SPEECH_CASES = [
     # protecting every `/foo/bar` would eat dates.
     ("link text is prose", "[我们一起去吃饭吧](/x) 好不好", "我们一起去吃饭吧"),
     ("bare path", "今天是 2024/01/02 我们一起去吃饭吧", "我们一起去吃饭吧"),
+    # An unbalanced "](" protects NOTHING. Running to end of text would be the
+    # over-protection this module keeps having to undo.
+    (
+        "unbalanced link open",
+        "看 [x](/api/f( 然后" + chr(10) + "我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+    ("bare bracket then paren", "数组 a[0](1) 然后 我们一起去吃饭吧", "我们一起去吃饭吧"),
     ("bulleted speech", "- 今天也辛苦了呢\n- 我们一起去吃饭吧", "我们一起去吃饭吧"),
     ("padded bullet", "-   我们一起去吃饭吧", "我们一起去吃饭吧"),
     ("quoted bullet", "> - 我们一起去吃饭吧", "我们一起去吃饭吧"),
@@ -1689,6 +1697,14 @@ def test_a_displayed_html_opener_opens_nothing(label, text):
 _REAL_CONTAINER_CASES = [
     ("balanced parens target", "see [x](/api/f(1)/SECRET_TOKEN) here"),
     ("nested parens target", "see [x](/api/secret(SECRET_TOKEN)) here"),
+    # Targets nest to any depth, so this is a scanner, not a pattern: a regex
+    # allowing one level simply fails to match deeper ones and mines the
+    # target as if there were no rule at all.
+    ("two levels deep", "see [x](/api/f(g(SECRET_TOKEN))) here"),
+    ("three levels deep", "see [x](/a(b(c(SECRET_TOKEN)))) here"),
+    ("escaped close inside", "see [x](/api/SECRET_TOKEN\\)more) here"),
+    ("escaped open inside", "see [x](/api/\\(SECRET_TOKEN) here"),
+    ("target with a title", 'see [x](/api/SECRET_TOKEN "t") here'),
     ("real comment", "<!--\nSECRET_TOKEN\n-->"),
     ("real code tag", "<code>SECRET_TOKEN</code>"),
     ("nested same tag", "<code>a <code>b</code> SECRET_TOKEN</code>"),
