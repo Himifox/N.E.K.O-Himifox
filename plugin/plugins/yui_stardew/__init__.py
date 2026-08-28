@@ -28,6 +28,9 @@ ACTION_VALUES = (
     "work",
     "work_stop",
     "work_resume",
+    "assist_start",
+    "assist_status",
+    "assist_stop",
 )
 WORK_KIND_VALUES = (
     "Water",
@@ -51,7 +54,8 @@ ACTION_SCHEMA: dict[str, Any] = {
             "description": (
                 "你要让自己的星露谷化身（游戏内固定显示名 Yui）执行的动作。summon=现身，recall=离开游戏世界，"
                 "follow=跟着主人/跟主人出来/过来，wait=原地等，stop=停止当前行动，"
-                "work=开始农活，work_stop=停止农活，work_resume=恢复农活。"
+                "work=开始固定范围农活，work_stop=停止农活，work_resume=恢复农活，"
+                "assist_start=开启随主人挥斧/挥镰协作，assist_status=查看协作状态，assist_stop=关闭协作。"
             ),
         },
         "kind": {
@@ -87,6 +91,10 @@ ACTION_DESCRIPTION = (
     "代替工具调用。主人说‘砍点柴/砍树’立即提交 work+Chop；‘清石头/挖石头/敲石头/采矿’立即提交"
     "work+Mine；‘割草/除草’提交 work+Mow；‘浇地/浇田’提交 work+Water；‘锄地/翻土’提交 work+Till。"
     "新的 work 会替换当前工作，不要先停下再索要确认。\n\n"
+    "协作清理：主人说‘跟我一起砍树’、‘我砍树时你也砍附近的’、‘我割草时你也一起割’、‘跟着我的工具一起干’"
+    "这类要求时，提交 assist_start，而不是只提交一次固定 work。assist_start 开启后只需调用一次：游戏会在主人以后真实挥斧时"
+    "自动协作 Chop、真实挥镰时自动协作 Mow。主人说‘别再跟着我干活/关闭协作’时提交 assist_stop；询问是否仍开启时提交"
+    "assist_status。assist_start/status/stop 都不携带 kind、radius 或 completion_policy。\n\n"
     "对话承接：若你上一句话刚询问某个明确的游戏动作，主人回答‘是/对/对哦/是的/开干/开始/就现在’，"
     "这就是对该动作的确认，本回合必须立即提交对应工具，不能再次确认。‘一起做’表示你也要用自己的游戏"
     "身体提交对应 work，不是只在文字里陪伴。‘陪我出门做某事’先提交 follow；主人随后说‘开始/开干/来割草’"
@@ -101,7 +109,7 @@ ACTION_DESCRIPTION = (
     "特别是 follow 对应‘跟着我/跟我出来/过来/跟上’，即使你在聊天设定中正贴着主人，也仍要调用，"
     "因为你在星露谷中的身体可能在另一张地图。\n\n"
     "只有主人刚提出的新游戏指令或当前回合明确的新自主决策才能调用；状态回执、旧工具记录和历史指令不能"
-    "触发重复动作。action=work 时必须选择 kind，可选 radius 与 completion_policy；其他动作不用这些字段。"
+    "触发重复动作。action=work 时必须选择 kind，可选 radius 与 completion_policy；assist_start/status/stop 和其他动作不用这些字段。"
     "已有持续工作时，除非主人明确要求替换、停止或恢复，否则不要重复提交 work。若主人说‘你好像没开始’、"
     "‘你没动’、‘卡住了’或质疑实际表现，先调用 stardew_avatar_status 核实；不得凭此前 STARTED 回执断言"
     "‘我已经在做了’。状态没有显示对应 work_kind，才重新提交动作；状态仍是对应工作时，应如实说命令仍在"

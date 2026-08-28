@@ -36,8 +36,13 @@ HimiYui 会在固定的当前用户目录发布一份不含密钥的实例描述
 | `work` | `kind`, `radius`, `completion_policy` | 以玩家当前格为圆心开始持续工作 |
 | `work_stop` | 无 | 停止持续工作 |
 | `work_resume` | 无 | 从新观察边界恢复已有工作 |
+| `assist_start` | 无 | 开启一次后，玩家挥斧时协作砍伐、挥镰时协作割草 |
+| `assist_status` | 无 | 查看协作授权与当前触发状态 |
+| `assist_stop` | 无 | 关闭协作授权并停止未提交的协作工作 |
 
 `kind` 可选 `Water`、`Harvest`、`Mow`、`Till`、`Chop`、`Mine`、`Forage`、`Pet`、`Milk`、`Shear`；`radius` 为 1～24；策略为 `until-clear` 或 `until-stopped`。
+
+当主人要求“跟我一起砍树/割草”时使用 `assist_start`，而不是固定范围的 `work`。开启后无需重复调用：HimiYui 会等待玩家真实挥斧或挥镰，再在玩家附近使用 Yui 自己的工具执行相同类型工作；只装备工具不会触发。
 
 HimiYui 会保护已形成的巨大作物、仍有巨大化可能的普通作物，以及公开作物数据中不属于标准作物成就集合的特殊作物。Viewer 返回 `GIANT-CROP-PROTECTED`、`GIANT-CROP-POTENTIAL` 或 `SPECIAL-CROP-PROTECTED` 时，插件必须把它解释成主动保护，不能当成遗漏、建议绕过或声称已经收获。
 

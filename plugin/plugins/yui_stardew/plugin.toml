@@ -13,7 +13,7 @@ keywords = [
   "现在能进了",
   "我弄好了",
 ]
-version = "0.1.1"
+version = "0.1.2"
 type = "plugin"
 entry = "plugin.plugins.yui_stardew:YuiStardewPlugin"
 
