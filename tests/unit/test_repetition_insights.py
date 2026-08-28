@@ -797,6 +797,66 @@ async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_configured_character_is_not_decoded_as_a_legacy_owner(
+    tmp_path,
+):
+    """A real character can be named like a legacy store, and one is.
+
+    "semantic_memory_Alice" is a legal character name, and its ordinary
+    per-character directory has exactly the shape a pre-layout vector store
+    has. Decoding it offered a phantom "Alice" that survived the existence
+    filter -- the same directory satisfies it -- and then analysed to
+    nothing, because the history is in memory/semantic_memory_Alice/ while
+    the panel asked for memory/Alice/.
+
+    Being a directory cannot tell the two layouts apart; being configured
+    can. The dual below keeps the legacy case working, so the fix cannot
+    pass by refusing to decode anything.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "semantic_memory_Alice").mkdir()
+
+    configured = SimpleNamespace(
+        aload_characters=AsyncMock(
+            return_value={"猫娘": {"semantic_memory_Alice": {}}}
+        ),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(
+        config_manager, "get_config_manager", return_value=configured
+    ):
+        characters = (await memory_router.get_insight_characters())["characters"]
+
+    assert "semantic_memory_Alice" in characters
+    assert "Alice" not in characters, (
+        "a configured character was decoded as a legacy owner, offering a "
+        "phantom name that analyses to nothing"
+    )
+
+    # The dual: with nobody configured under that name, the directory IS a
+    # legacy vector store and its owner still has to be offered.
+    unconfigured = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(
+        config_manager, "get_config_manager", return_value=unconfigured
+    ):
+        characters = (await memory_router.get_insight_characters())["characters"]
+
+    assert "Alice" in characters, (
+        "the legacy owner stopped being offered -- the fix refused to "
+        "decode anything rather than just the configured case"
+    )
+
+
+@pytest.mark.asyncio
 async def test_insight_characters_decodes_flat_legacy_entries(tmp_path):
     """A pre-layout install stores memory as ``<kind>_<name>`` at the root.
 

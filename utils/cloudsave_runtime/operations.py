@@ -726,7 +726,8 @@ def _memory_character_names_from_backup_records(config_manager, backup_records):
     # parent -- the name list came back empty, nothing was evicted, and the
     # stale caches wrote over the files the rollback had just restored.
     memory_root = Path(config_manager.memory_dir).expanduser().resolve(strict=False)
-    names: list[str] = []
+    restored: list[str] = []
+    removed: list[str] = []
     for record in backup_records:
         raw_target = str(record.get("target") or "")
         # Guarded before resolving: Path("") is ".", which resolves to the
@@ -736,8 +737,17 @@ def _memory_character_names_from_backup_records(config_manager, backup_records):
         target = Path(raw_target).expanduser().resolve(strict=False)
         if target.parent != memory_root or not target.name:
             continue
-        names.append(target.name)
-    return tuple(dict.fromkeys(names))
+        # Nothing to put back means the restore DELETES this directory --
+        # the operation being rolled back is what created it. Evicting
+        # there would leave the name live, and a write still in flight
+        # would recreate the directory for a character the restored
+        # characters.json no longer contains. Retirement is what refuses
+        # that: a retired name never creates a directory.
+        if record.get("backup") is None:
+            removed.append(target.name)
+        else:
+            restored.append(target.name)
+    return tuple(dict.fromkeys(restored)), tuple(dict.fromkeys(removed))
 
 
 def _restore_backup_records(
@@ -770,6 +780,10 @@ def _restore_backup_records(
     for record in sorted(backup_records, key=lambda item: len(item["target"].parts), reverse=True):
         target_path = record["target"]
         if target_path.exists():
+            # Refreshed from disk: the recorded flag is from BACKUP time,
+            # so a directory this operation created carries False and its
+            # character would never reach the lifecycle handling below.
+            record["is_dir"] = target_path.is_dir()
             if target_path.is_dir():
                 shutil.rmtree(target_path, ignore_errors=True)
             else:
@@ -782,11 +796,11 @@ def _restore_backup_records(
         else:
             _facade._apply_runtime_file(backup_path, target_path)
     if evict_sidecar_caches:
-        evict_character_runtime_caches(
-            *_memory_character_names_from_backup_records(
-                config_manager, backup_records
-            )
+        restored, removed = _memory_character_names_from_backup_records(
+            config_manager, backup_records
         )
+        evict_character_runtime_caches(*restored)
+        retire_character_runtime_caches(*removed)
 
 
 def _write_operation_backup_metadata(

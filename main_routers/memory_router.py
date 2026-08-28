@@ -903,6 +903,12 @@ async def get_insight_characters():
         if selectable
     }
 
+    # Raw, not selectable: this is compared against directory names on disk,
+    # which carry the character name as configured.
+    configured_names = {
+        name for name in configured if isinstance(name, str) and name
+    }
+
     # Enumerate through the same roots the predicate reads, so a root added
     # there cannot silently become invisible here.
     candidates: set[str] = set()
@@ -918,6 +924,18 @@ async def get_insight_characters():
             # offered "semantic_memory_Alice" and never "Alice", and could not
             # see "Carol" at all -- yet ``character_memory_exists`` accepts
             # both owners, so the route served a name the panel hid.
+            #
+            # Not when the entry IS a configured character, though. A
+            # character legitimately named "semantic_memory_Alice" has a
+            # per-character directory of exactly the shape a legacy vector
+            # store has, and decoding it offered a phantom "Alice" that
+            # passed the existence filter -- the same directory satisfies
+            # it -- and then analysed to nothing, because the history is in
+            # memory/semantic_memory_Alice/ and the panel asked for
+            # memory/Alice/. Being a directory cannot tell the two layouts
+            # apart; being a configured character can.
+            if child.name in configured_names:
+                continue
             owner = legacy_root_entry_owner(child.name)
             if owner:
                 candidates.add(owner)

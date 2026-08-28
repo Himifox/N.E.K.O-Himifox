@@ -3641,12 +3641,16 @@ def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
     memory_root = tmp_path / "memory"
     character_dir = memory_root / "小满"
     character_dir.mkdir(parents=True)
-    records = [{"target": character_dir.resolve(), "is_dir": True}]
+    backup_dir = tmp_path / "backup" / "小满"
+    backup_dir.mkdir(parents=True)
+    records = [
+        {"target": character_dir.resolve(), "backup": backup_dir, "is_dir": True}
+    ]
 
     straight = SimpleNamespace(memory_dir=str(memory_root))
     assert operations._memory_character_names_from_backup_records(
         straight, records
-    ) == ("小满",)
+    ) == (("小满",), ())
 
     # Same directory, spelled with a detour. Path keeps ".." literally, so
     # an unresolved comparison sees a different string.
@@ -3660,7 +3664,7 @@ def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
     crooked = SimpleNamespace(memory_dir=str(detour))
     assert operations._memory_character_names_from_backup_records(
         crooked, records
-    ) == ("小满",), (
+    ) == (("小满",), ()), (
         "an unnormalised memory_dir found no characters to evict"
     )
 
@@ -3668,8 +3672,9 @@ def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
     outside = tmp_path / "elsewhere" / "小满"
     outside.mkdir(parents=True)
     assert operations._memory_character_names_from_backup_records(
-        straight, [{"target": outside.resolve(), "is_dir": True}]
-    ) == ()
+        straight,
+        [{"target": outside.resolve(), "backup": backup_dir, "is_dir": True}],
+    ) == ((), ())
 
     # The other side of the comparison: a TARGET spelled with a detour has
     # to normalise too, not just the root.
@@ -3677,8 +3682,9 @@ def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
     crooked_target = memory_root / "sidestep" / ".." / "小满"
     assert Path(crooked_target) != character_dir
     assert operations._memory_character_names_from_backup_records(
-        straight, [{"target": crooked_target, "is_dir": True}]
-    ) == ("小满",), (
+        straight,
+        [{"target": crooked_target, "backup": backup_dir, "is_dir": True}],
+    ) == (("小满",), ()), (
         "an unnormalised target found no character to evict"
     )
 
@@ -3689,11 +3695,107 @@ def test_the_eviction_name_lookup_resolves_both_sides(tmp_path):
     # deleting it would stay green.
     assert operations._memory_character_names_from_backup_records(
         straight, [{"target": "", "is_dir": True}]
-    ) == ()
+    ) == ((), ())
     cwd_parent = SimpleNamespace(memory_dir=str(Path.cwd().parent))
     assert operations._memory_character_names_from_backup_records(
         cwd_parent, [{"target": "", "is_dir": True}]
-    ) == (), (
+    ) == ((), ()), (
         "an empty target resolved to the working directory and was treated "
         "as a character"
     )
+
+    # A record with NO backup is one the restore DELETES -- the operation
+    # being rolled back is what created the directory. Those names have to
+    # come back on the retire side, not the evict side: evicting leaves the
+    # name live, and a write still in flight would recreate the directory
+    # for a character the restored characters.json no longer contains.
+    assert operations._memory_character_names_from_backup_records(
+        straight,
+        [{"target": character_dir.resolve(), "backup": None, "is_dir": True}],
+    ) == ((), ("小满",)), (
+        "a directory the restore removes was queued for eviction, which "
+        "leaves the deleted name free to recreate it"
+    )
+
+
+@pytest.mark.unit
+def test_restoring_away_a_downloaded_character_retires_it(tmp_path):
+    """Deleting a directory the operation created must retire, not evict.
+
+    A download that creates a previously absent character records its
+    memory directory with no backup -- there was nothing there to save --
+    and with is_dir False, because that flag is captured before the
+    directory exists. Rolling the operation back deletes the directory, but
+    the successful import had already revived the sidecar stores for that
+    name, so an anti-repeat or greeting write still in flight would recreate
+    memory/<name>/ for a character the restored characters.json no longer
+    contains.
+
+    Driven through the real import and restore rather than the name helper:
+    the helper alone stayed green with the retire call deleted and with the
+    is_dir refresh deleted.
+    """
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+        restore_cloudsave_operation_backup,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="新来的")
+    export_cloudsave_character_unit(source_cm, "新来的")
+    # The target knows a DIFFERENT character, so the downloaded one is
+    # genuinely absent before the import.
+    _write_runtime_state(target_cm, character_name="小满")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+    memory_root = Path(target_cm.memory_dir)
+    assert not (memory_root / "新来的").exists()
+
+    with _isolated_sidecar_stores(
+        memory_root, config_manager=target_cm
+    ) as (store, corpus, greeting):
+        result = import_cloudsave_character_unit(
+            target_cm, "新来的", overwrite=True
+        )
+        assert (memory_root / "新来的").is_dir(), (
+            "the import did not create the directory, so the scenario "
+            "under test never happened"
+        )
+        assert "新来的" not in store._retired
+
+        restore_cloudsave_operation_backup(
+            target_cm, result["backup_path"]
+        )
+
+        assert not (memory_root / "新来的").exists(), (
+            "the restore did not remove the downloaded directory"
+        )
+        for label, sidecar in (
+            ("effects", store), ("corpus", corpus), ("greeting", greeting),
+        ):
+            assert "新来的" in sidecar._retired, (
+                f"{label} left the deleted name live, so a write still in "
+                "flight would recreate its directory"
+            )
+
+        # The behaviour that retirement buys: an in-flight write does not
+        # put the directory back.
+        import memory.anti_repeat_effects as effects_module
+
+        store.record_decision(
+            "新来的",
+            effects_module.AntiRepeatDecision(
+                source="proactive",
+                reasons=("bm25",),
+                action="block",
+                outcome="blocked_initial",
+            ),
+            now=1_700_000_000.0,
+        )
+        assert not (memory_root / "新来的").exists(), (
+            "a write after the rollback recreated the deleted character's "
+            "directory"
+        )
