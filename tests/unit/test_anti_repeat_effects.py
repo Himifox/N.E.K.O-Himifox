@@ -1966,6 +1966,51 @@ def test_a_retired_name_never_writes_outside_its_own_directory(
     assert os.path.basename(live_target) == filename
 
 
+def test_the_separator_rule_holds_under_posix_path_semantics(monkeypatch):
+    """The name check must not depend on which separator the platform has.
+
+    On Windows a backslash IS a separator, so normalisation alone already
+    refuses a name carrying one and the explicit check never fires. On
+    POSIX the same character is an ordinary filename character: the name
+    arrives as a legal DIRECT child of the memory root, every structural
+    check passes it, and the store creates a directory literally named
+    with it. The same profile would then resolve to a nested path once it
+    moved to Windows.
+
+    So this runs the REAL helper with the path flavour swapped, rather
+    than reimplementing the rule against posixpath -- a copy would stay
+    green while the shipped helper regressed. Only the module-level "os"
+    name is replaced, so nothing outside the helper is affected.
+    """
+    import posixpath
+
+    import memory as memory_pkg
+
+    class _PosixOs:
+        path = posixpath
+
+    monkeypatch.setattr(memory_pkg, "os", _PosixOs)
+
+    root = "/tmp/mem"
+    refused = (
+        ".",
+        "..",
+        "a/b",
+        "a" + chr(92) + "b",
+        "./x",
+        "../y",
+    )
+    for name in refused:
+        assert not memory_pkg._is_within_memory_root(
+            root, name, posixpath.join(root, name)
+        ), f"POSIX would have accepted {name!r} as a character directory"
+
+    # The dual, so the rule cannot pass by refusing everything.
+    assert memory_pkg._is_within_memory_root(
+        root, "Neko", posixpath.join(root, "Neko")
+    )
+
+
 @pytest.mark.parametrize(
     "module_name, class_name, filename",
     _SIDECAR_STORE_MODULES,

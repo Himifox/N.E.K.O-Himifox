@@ -70,6 +70,17 @@ def _is_within_memory_root(memory_dir: str, name: str, character_dir: str) -> bo
     store asks this before resolving a write, so the answer lives here
     rather than three times over.
     """
+    # Before normalisation, because normalisation is what differs between
+    # platforms: POSIX treats a backslash as an ordinary filename character,
+    # so "a\b" arrives as a legal DIRECT child and every check below passes
+    # it. On Windows the same name is a separator and gets rejected. The
+    # backslash half is what makes the answer the same on both; the forward
+    # slash is already refused below, because the basename can never equal a
+    # name containing one -- it is listed here so the two read as one rule,
+    # and so it still holds if that equality is ever relaxed. Measured: only
+    # dropping the backslash half reddens the guard.
+    if "/" in name or "\\" in name:
+        return False
     root = os.path.abspath(str(memory_dir))
     resolved = os.path.abspath(character_dir)
     # DIRECT child, and named exactly for the character. "a/b" nests a level
