@@ -837,8 +837,72 @@ def test_user_review_narrows_window_when_occurrence_budget_is_exceeded(monkeypat
     assert 0 < summary["analyzed_message_count"] < 16
 
 
+def test_user_review_truncates_a_single_over_budget_reply(monkeypatch):
+    """One long reply must narrow, not dead-end the panel.
+
+    Halving the window floors at one message. Rethrowing there turned every
+    selection containing that reply into a 422 the panel can only render as
+    "please try again", and retrying never helps -- the same reply is still
+    the newest one. The body is halved instead.
+    """
+    # ~5 occurrences per CJK character, so this budget fits about 4k
+    # characters -- comfortably above the floor, which is what makes this
+    # exercise the halving rather than the give-up branch next door.
+    budget = 20_000
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", budget)
+    body = "今天天气真好啊我们一起去散步吧" * 800
+    assert budget // 5 > candidate_core._USER_REVIEW_MIN_TRUNCATED_CHARACTERS, (
+        "the budget has to leave room above the floor, or this would pin "
+        "the give-up branch next door instead"
+    )
+    assert len(body) > budget // 5, "the reply has to start over budget"
+
+    report = candidate_core.build_user_review_report(
+        [candidate_core.SourceMessage("zh-CN", body, 1)],
+        message_count_threshold=1,
+        rules_by_language={},
+    )
+
+    summary = report["summary"]
+    assert summary["content_truncated"] is True
+    assert summary["analyzed_message_count"] == 1
+    # Reported separately from a dropped window: nothing was dropped here.
+    assert summary["messages_truncated"] is False
+
+
+def test_a_chinese_reply_inside_the_advertised_limit_is_analysable():
+    """The character limit the panel advertises has to be reachable.
+
+    Mining generates a fixed number of n-grams per character -- about five
+    for CJK -- so the occurrence budget bites long before the character one:
+    measured, an uninterrupted Chinese reply stopped fitting at roughly 20k
+    characters, a sixth of the 128 KiB advertised. This asserts only that a
+    reply well inside the advertised limit returns a report rather than
+    raising, so it stays honest if either budget is retuned.
+    """
+    body = ("今天天气真好啊我们一起去散步吧" * 1500)[:21_000]
+    assert len(body) < candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS, (
+        "the point of this test is a reply INSIDE the advertised limit"
+    )
+
+    report = candidate_core.build_user_review_report(
+        [candidate_core.SourceMessage("zh-CN", body, 1)],
+        message_count_threshold=1,
+        rules_by_language={},
+    )
+
+    assert report["summary"]["assistant_message_count"] == 1
+    assert isinstance(report["candidates"], list)
+
+
 def test_user_review_still_reports_a_single_unanalyzable_message(monkeypatch):
-    """The narrowing loop floors at one message rather than looping forever."""
+    """The narrowing loop floors rather than looping forever.
+
+    A single over-budget reply now has its body halved instead of raising,
+    so what is left here is the floor: below
+    ``_USER_REVIEW_MIN_TRUNCATED_CHARACTERS`` no amount of halving fits, and
+    that means the budget was configured too small to analyse anything.
+    """
     monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 1)
     messages = [
         candidate_core.SourceMessage("en", "quiet lantern glows", 1),

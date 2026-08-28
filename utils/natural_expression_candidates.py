@@ -53,6 +53,12 @@ DEFAULT_MIN_LENGTH = 4
 USER_REVIEW_MAX_INPUT_CHARACTERS = 128 * 1024
 USER_REVIEW_MAX_OCCURRENCES = 100_000
 USER_REVIEW_MAX_CANDIDATES = 200
+# Below this, halving a single reply has stopped being narrowing and the
+# budget itself is the problem. Mining generates a fixed number of n-grams
+# per character -- about five for CJK -- so 512 characters is roughly 2,500
+# occurrences, far inside any sane limit. Reaching the floor means the limit
+# was configured too small to analyse anything, which is worth surfacing.
+_USER_REVIEW_MIN_TRUNCATED_CHARACTERS = 512
 
 _LANGUAGE_ALIASES = {
     "en": "en",
@@ -1563,11 +1569,35 @@ def build_user_review_report(
             )
             break
         except CandidateBudgetExceededError:
-            # Halve toward the newest messages. A single reply that busts the
-            # budget on its own is genuinely exceptional and still propagates.
-            if len(analyzed) <= 1:
+            # Halve toward the newest messages.
+            if len(analyzed) > 1:
+                analyzed = analyzed[-(len(analyzed) // 2):]
+                continue
+            # One reply left and it still busts the budget. Dropping whole
+            # messages floors at one, so rethrowing here turned every
+            # selection containing that reply into a 422 the panel can only
+            # render as "please try again" -- and retrying never helps,
+            # because the same reply is still the newest one. Halve its BODY
+            # instead, which is the move the character cap above already
+            # makes for the same reason.
+            #
+            # Not an exotic input: mining generates a fixed number of n-grams
+            # per character, so an uninterrupted Chinese reply stops fitting
+            # at about 20k characters -- a sixth of the 128 KiB the character
+            # limit advertises. ASCII reaches roughly twice as far. Cutting
+            # mid-container stays safe in the protective direction, for the
+            # same reason the character cap gives above.
+            remaining = analyzed[0]
+            if len(remaining.content) <= _USER_REVIEW_MIN_TRUNCATED_CHARACTERS:
                 raise
-            analyzed = analyzed[-(len(analyzed) // 2):]
+            analyzed = [
+                SourceMessage(
+                    language=remaining.language,
+                    content=remaining.content[: len(remaining.content) // 2],
+                    source_line=remaining.source_line,
+                )
+            ]
+            content_truncated = True
     all_candidates = maintainer_report["candidates"]
     candidates = all_candidates[:USER_REVIEW_MAX_CANDIDATES]
     parameters = dict(maintainer_report["parameters"])
