@@ -92,7 +92,13 @@ _URL_RE = re.compile(
 # ``)`` structure is what keeps this from swallowing ordinary speech: a bare
 # path in prose stays minable, deliberately, because protecting every
 # ``/foo/bar`` would eat dates and fractions.
-_MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^()\s]*(?:[ \t]+[^()]*)?\)")
+#
+# One level of balanced parentheses, which CommonMark allows and real targets
+# use (``/api/f(1)/x``). Rejecting them outright made the whole match fail, so
+# the target was mined exactly as if there were no rule at all.
+_MARKDOWN_LINK_TARGET_RE = re.compile(
+    r"\]\((?:[^()\s]|\([^()]*\))*(?:[ \t]+\"[^\"]*\")?\)"
+)
 
 _TEMPLATE_RE = re.compile(
     # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
@@ -535,7 +541,13 @@ _HTML_RAW_TEXT_OPEN_RE = re.compile(
 )
 
 
-def _html_comment_spans(text: str) -> list[tuple[int, int]]:
+def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in spans)
+
+
+def _html_comment_spans(
+    text: str, ignore: Sequence[tuple[int, int]] = ()
+) -> list[tuple[int, int]]:
     """Return ``<!-- ... -->`` spans, including ones that wrap.
 
     A single-line comment was masked only incidentally, by the generic
@@ -552,13 +564,22 @@ def _html_comment_spans(text: str) -> list[tuple[int, int]]:
         start = text.find("<!--", position)
         if start < 0:
             return spans
+        if _starts_inside(start, ignore):
+            # Being DISPLAYED as code, not opening anything. Honouring it ran
+            # the container past the code block and ate the prose after it --
+            # over-protection, which for this module is the worse direction:
+            # it deletes the catchphrases the feature exists to surface.
+            position = start + 4
+            continue
         closing = text.find("-->", start + 4)
         end = len(text) if closing < 0 else closing + 3
         spans.append((start, end))
         position = end
 
 
-def _html_raw_text_spans(text: str) -> list[tuple[int, int]]:
+def _html_raw_text_spans(
+    text: str, ignore: Sequence[tuple[int, int]] = ()
+) -> list[tuple[int, int]]:
     """Return raw-text element spans, counting NESTED same-tag opens.
 
     A non-greedy regex stopped at the FIRST closing tag, so
@@ -570,6 +591,11 @@ def _html_raw_text_spans(text: str) -> list[tuple[int, int]]:
     position = 0
     while True:
         opening = _HTML_RAW_TEXT_OPEN_RE.search(text, position)
+        while opening is not None and _starts_inside(opening.start(), ignore):
+            # Displayed as code, or sitting inside an HTML COMMENT -- either
+            # way it opens nothing. A tag in a comment body was read as an
+            # unterminated container and protected to end of text.
+            opening = _HTML_RAW_TEXT_OPEN_RE.search(text, opening.end())
         if opening is None:
             return spans
         tag = opening.group(1).lower()
@@ -613,12 +639,22 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     fenced = _fenced_code_spans(text)
     block_code = _merge_spans(fenced + _indented_code_spans(text))
     spans = block_code + _inline_code_spans(text, block_code)
+    # An HTML opener that is itself displayed as code opens nothing, and the
+    # two scanners below run to a closer that may be far away -- so honouring
+    # such an opener ran the container past the code block and ate the prose
+    # after it. The bounded regexes need no such guard.
+    code_spans = _merge_spans(spans)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
     spans.extend(
         match.span() for match in _MARKDOWN_LINK_TARGET_RE.finditer(text)
     )
-    spans.extend(_html_comment_spans(text))
-    spans.extend(_html_raw_text_spans(text))
+    # Comments first: a tag inside a comment BODY is not a container either,
+    # so the raw-text scanner has to see the comment spans as well.
+    comment_spans = _html_comment_spans(text, code_spans)
+    spans.extend(comment_spans)
+    spans.extend(
+        _html_raw_text_spans(text, _merge_spans(code_spans + comment_spans))
+    )
     return _merge_spans(spans)
 
 

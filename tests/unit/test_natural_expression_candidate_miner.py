@@ -1660,3 +1660,45 @@ _CONTAINER_SPEECH_CASES = [
 )
 def test_the_new_containers_do_not_swallow_speech(label, text, must_remain_visible):
     assert must_remain_visible in _unprotected(text), label
+
+
+# An HTML opener that is DISPLAYED as code, or that sits inside a comment body,
+# opens nothing. Both scanners run to a closer that may be far away, so honouring
+# such an opener ran the container past the code block and ate the prose after
+# it. Over-protection is the worse direction here: it deletes the catchphrases
+# the feature exists to surface.
+_DISPLAYED_OPENER_CASES = [
+    ("comment opener in a fence", "```\n<!-- showing this\n```\n我们一起去吃饭吧"),
+    ("code tag in a fence", "```\n<code>example\n```\n我们一起去吃饭吧"),
+    ("script tag in a fence", "```\n<script>x=1\n```\n我们一起去吃饭吧"),
+    ("opener in an inline span", "看这个 `<!--` 符号\n我们一起去吃饭吧"),
+    ("tag inside a comment", "hello <!-- <code> --> 我们一起去吃饭吧"),
+    ("tag inside a wrapped comment", "hello <!--\n<code>\n--> 我们一起去吃饭吧"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _DISPLAYED_OPENER_CASES,
+    ids=[row[0] for row in _DISPLAYED_OPENER_CASES],
+)
+def test_a_displayed_html_opener_opens_nothing(label, text):
+    assert "我们一起去吃饭吧" in _unprotected(text), label
+
+
+_REAL_CONTAINER_CASES = [
+    ("balanced parens target", "see [x](/api/f(1)/SECRET_TOKEN) here"),
+    ("nested parens target", "see [x](/api/secret(SECRET_TOKEN)) here"),
+    ("real comment", "<!--\nSECRET_TOKEN\n-->"),
+    ("real code tag", "<code>SECRET_TOKEN</code>"),
+    ("nested same tag", "<code>a <code>b</code> SECRET_TOKEN</code>"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _REAL_CONTAINER_CASES,
+    ids=[row[0] for row in _REAL_CONTAINER_CASES],
+)
+def test_real_containers_still_protect(label, text):
+    assert "SECRET_TOKEN" not in _unprotected(text), label
