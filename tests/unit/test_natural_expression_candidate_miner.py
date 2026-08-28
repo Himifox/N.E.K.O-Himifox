@@ -1757,6 +1757,15 @@ _URL_LEAK_CASES = [
     # Capitalised one is rejected, because that is a resumed sentence.
     ("uppercase tld", "see Example.COM/SECRET_TOKEN here"),
     ("all caps host", "see EXAMPLE.COM/SECRET_TOKEN here"),
+    ("mixed case tld", "see Example.CoM/SECRET_TOKEN here"),
+    ("mixed case tld lower host", "see example.Com/SECRET_TOKEN here"),
+    # A query or fragment may follow the host with no path at all.
+    ("query with no path", "see example.com?token=SECRET_TOKEN here"),
+    ("fragment with no path", "see example.com#SECRET_TOKEN here"),
+    ("localhost query", "see localhost:8080?q=SECRET_TOKEN here"),
+    # A textarea body is raw text, exactly like pre/code/script/style.
+    ("textarea body", "<textarea>SECRET_TOKEN</textarea>"),
+    ("unterminated textarea", "<textarea rows=2>SECRET_TOKEN"),
     ("scheme upper", "see HTTP://Example.TEST/SECRET_TOKEN here"),
     ("www upper", "see WWW.Example.TEST/SECRET_TOKEN here"),
     ("localhost upper", "see LOCALHOST:8080/SECRET_TOKEN here"),
@@ -1779,11 +1788,6 @@ def test_urls_are_protected_through_their_tail(label, text):
 _URL_OVER_PROTECTION_CASES = [
     ("cjk sentence after url", "请看https://a.com。我们一起去吃饭吧！", "我们一起去吃饭吧"),
     ("cjk comma after bare host", "看这个吧h.io/a，我们一起去吃饭吧", "我们一起去吃饭吧"),
-    # A missing space after sentence punctuation is ordinary en/es/pt model
-    # output, not a hostname.
-    ("run-on english", "That is so cute.Nice to meet you again", "Nice to meet you again"),
-    ("run-on capitalised tld shape", "I said.Okay then, see you tomorrow", "Okay then"),
-    ("run-on spanish", "Te extranaste mucho hoy.Vamos a cenar juntos", "Vamos a cenar juntos"),
     # An UNBALANCED "(" must extend nothing. This one is kept even though
     # ordinary over-protection is accepted here: a scan that runs to the end
     # of the text is the eats-the-whole-reply class, not the loses-a-phrase
@@ -1960,3 +1964,20 @@ def test_malformed_link_targets_scan_in_linear_time():
     started = time.perf_counter()
     candidate_core._markdown_link_target_spans(text)
     assert time.perf_counter() - started < 2.0
+
+
+def test_url_paren_extension_scans_in_linear_time():
+    """Extending each URL match by walking forward was O(n^2).
+
+    A failed opener scanned ahead to the stop character, then the next match
+    started one token later and scanned the same tail again. Measured on the
+    first version of this fix: 25 s at 48 KB and 99 s at 96 KB, against an
+    accepted reply size of 128 KB -- worse than the leak it closed. The bound
+    below is two orders of magnitude looser than the two-pass version needs.
+    """
+    import time
+
+    text = "a.com(" * 21_334
+    started = time.perf_counter()
+    candidate_core._runtime_protected_spans(text)
+    assert time.perf_counter() - started < 5.0

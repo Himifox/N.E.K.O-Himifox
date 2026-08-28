@@ -105,16 +105,22 @@ _URL_RE = re.compile(
     # this module supports, are written without spaces.
     r"(?<![A-Za-z0-9_-])(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     # A TLD may be all-lower or all-UPPER but never Capitalised. DNS is
-    # case-insensitive, so "Example.COM/secret" is a real host and has to be
-    # protected; but ``re.IGNORECASE`` over the whole pattern also read a
-    # missing space after a period as one -- "cute.Nice", "hola.Mi",
-    # "fine.Thanks" -- and that is ordinary en/es/pt model output. The two are
-    # separable by case SHAPE rather than by case: a sentence resumed after a
-    # period is Capitalised, which no TLD spelling ever is.
-    r"(?:[a-z]{2,63}|[A-Z]{2,63}|(?i:xn--[a-z0-9-]{2,59}))|(?:\d{1,3}\.){3}\d{1,3})"
-    r"(?::\d{1,5})?(?:/" + _URL_TAIL + "*)?|"
+    # case-insensitive, so every spelling of a TLD is a real host and has to
+    # be protected. The cost is that a missing space after a period reads as
+    # one too -- "cute.Nice", "hola.Mi", "fine.Thanks", ordinary en/es/pt
+    # model output -- which merely stops those sentences being mined. That is
+    # the accepted direction for this module: over-protection loses a
+    # catchphrase, under-protection persists a URL for 120 days. An earlier
+    # revision tried to separate the two by case SHAPE (all-lower or
+    # all-UPPER is a TLD, Capitalised is a resumed sentence); it left
+    # "Example.CoM/secret" unprotected, which is the wrong way to be wrong.
+    r"(?i:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
+    # A query or fragment may follow the host with no path at all
+    # ("example.com?token=..."), and stopping at the host left the query
+    # minable.
+    r"(?::\d{1,5})?(?:[/?#]" + _URL_TAIL + "*)?|"
     r"(?<![A-Za-z0-9_-])(?i:localhost)"
-    r"(?:(?::\d{1,5})(?:/" + _URL_TAIL + "*)?|/" + _URL_TAIL + "*)"
+    r"(?:(?::\d{1,5})(?:[/?#]" + _URL_TAIL + "*)?|[/?#]" + _URL_TAIL + "*)"
 )
 
 _TEMPLATE_RE = re.compile(
@@ -644,9 +650,9 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # form and for an unclosed fence. The pattern requires the literal ``<code`` /
 # ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
 # containing comparisons or words like "decode" is unaffected.
-_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style")
+_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea")
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
-    r"<(pre|code|script|style)\b[^>]*>",
+    r"<(pre|code|script|style|textarea)\b[^>]*>",
     re.IGNORECASE,
 )
 
@@ -663,38 +669,51 @@ def _url_spans(text: str) -> list[tuple[int, int]]:
     exactly how a URL in speech came to swallow the sentence after it, and a
     group whose body hits a stop character is not part of the URL either.
     """
-    return [
-        (match.start(), _url_end_with_parens(text, match.end()))
-        for match in _URL_RE.finditer(text)
-    ]
+    matches = list(_URL_RE.finditer(text))
+    if not matches:
+        return []
+    tail_end = _url_tail_ends(text)
+    return [(match.start(), tail_end[match.end()]) for match in matches]
 
 
-def _url_end_with_parens(text: str, end: int) -> int:
-    """Extend a URL match end across balanced ``(...)`` groups and their tails."""
-    limit = len(text)
-    while end < limit and text[end] == "(":
-        depth = 0
-        cursor = end
-        closed = -1
-        while cursor < limit:
-            character = text[cursor]
-            if character == "(":
-                depth += 1
-            elif character == ")":
-                depth -= 1
-                if depth == 0:
-                    closed = cursor + 1
-                    break
-            elif not _URL_ATOM_RE.match(text, cursor):
-                # Whitespace or CJK punctuation: the group is prose, not a path.
-                break
-            cursor += 1
-        if closed < 0:
-            return end
-        end = closed
-        while end < limit and _URL_ATOM_RE.match(text, end):
-            end += 1
-    return end
+def _url_tail_ends(text: str) -> list[int]:
+    """For every offset, where a URL tail starting there ends.
+
+    Two linear passes, because walking forward from each match was O(n^2): a
+    failed opener scanned to the stop character and the next match started one
+    token later and scanned the same tail again. Measured on ``"a.com(" * n``
+    before this: 25 s at 48 KB, 99 s at 96 KB, against a 128 KB accepted reply.
+
+    Pass one pairs parentheses on a stack; a stop character clears the stack,
+    because a parenthetical holding whitespace or CJK punctuation is prose, not
+    a path segment. Pass two resolves each opener to the end of its whole chain
+    of groups and trailing atoms, right to left, so every answer it needs is
+    already computed.
+    """
+    length = len(text)
+    closer_of: dict[int, int] = {}
+    stack: list[int] = []
+    for index, character in enumerate(text):
+        if character == "(":
+            stack.append(index)
+        elif character == ")":
+            if stack:
+                closer_of[stack.pop()] = index + 1
+        elif not _URL_ATOM_RE.match(text, index):
+            stack.clear()
+
+    atom_run_end = [length] * (length + 1)
+    for index in range(length - 1, -1, -1):
+        atom_run_end[index] = (
+            atom_run_end[index + 1] if _URL_ATOM_RE.match(text, index) else index
+        )
+
+    tail_end = list(range(length + 1))
+    for index in range(length - 1, -1, -1):
+        closed = closer_of.get(index)
+        if closed is not None:
+            tail_end[index] = tail_end[atom_run_end[closed]]
+    return tail_end
 
 
 def _paragraph_bounds(text: str, start: int) -> tuple[int, int]:
