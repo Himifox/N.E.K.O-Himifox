@@ -1,4 +1,5 @@
 import json
+import time
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -5697,4 +5698,56 @@ def test_memory_browser_web_popup_restart_drives_opener_maintenance_overlay(mock
     expect(home_page.locator('[role="progressbar"]')).to_be_visible(timeout=10_000)
     assert home_page.locator("body").evaluate(
         "node => node.classList.contains('storage-location-modal-open')"
+    )
+
+
+def test_insight_identities_are_requested_only_after_storage_settles(
+    mock_page: Page,
+    running_server: str,
+    seed_memory_file,
+):
+    """The identity list must answer for the SETTLED root, not the boot root.
+
+    ``initRepetitionInsights`` runs before ``await initStorageLocationPanel()``,
+    and the identity request latches on SUCCESS -- it clears only on failure.
+    So a request issued against the pre-settle root would stick for the life of
+    the page, hiding every character in the settled root that has no
+    ``recent.json`` to fall back on.
+    """
+    timeline: list[str] = []
+
+    def handle_bootstrap(route):
+        timeline.append("bootstrap:start")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            json={"limited": False, "selected_root": "primary"},
+        )
+        timeline.append("bootstrap:done")
+
+    def handle_identities(route):
+        timeline.append("identities")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            json={"characters": ["测试猫娘"]},
+        )
+
+    mock_page.route("**/api/storage/location/bootstrap", handle_bootstrap)
+    mock_page.route("**/api/memory/insight_characters", handle_identities)
+    mock_page.goto(f"{running_server}/memory_browser")
+    mock_page.wait_for_function(
+        "() => document.getElementById('memory-insights-analyze') !== null"
+    )
+    # The panel is collapsed by default, so wait on the recorded traffic
+    # rather than on a visible node.
+    deadline = time.monotonic() + 10.0
+    while "identities" not in timeline and time.monotonic() < deadline:
+        mock_page.wait_for_timeout(100)
+
+    assert "identities" in timeline, (
+        f"the identity list was never requested at all: {timeline}"
+    )
+    assert timeline.index("bootstrap:done") < timeline.index("identities"), (
+        f"the identity request preceded the settled root: {timeline}"
     )

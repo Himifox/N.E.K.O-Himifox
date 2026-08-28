@@ -1031,6 +1031,13 @@
     }
 
     async function loadRepetitionInsightCharacters() {
+        // Not before storage settles. `initRepetitionInsights` runs BEFORE
+        // `await initStorageLocationPanel()`, so a request issued here would
+        // answer for the PRE-settle root -- and the latch below only clears on
+        // failure, so a successful stale load would stick for the life of the
+        // page, hiding every character in the settled root that has no
+        // `recent.json` to fall back on.
+        if (memoryStorageLimited) return;
         if (repetitionInsightCharactersRequested) return;
         if (Date.now() < repetitionInsightCharacterRetryAt) return;
         repetitionInsightCharactersRequested = true;
@@ -4731,6 +4738,12 @@
             memoryStorageLimited = false;
             setReviewControlsEnabled(true);
             setPowerfulMemoryControlsEnabled(true);
+            // Load the identity list now that the root is settled. Measured
+            // as redundant today -- a later control sync reaches it anyway,
+            // and removing this line keeps the guard test green -- but that
+            // is an incidental property of the current init sequence, not a
+            // contract. The gate above is the load-bearing half.
+            loadRepetitionInsightCharacters();
             await loadMemoryFileList();
             if (!currentCatName) {
                 try {

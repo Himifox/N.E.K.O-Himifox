@@ -99,6 +99,14 @@ _URL_ATOM_RE = re.compile(_URL_ATOM)
 _URL_TAIL = _URL_ATOM
 _URL_RE = re.compile(
     r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
+    # Other schemes carry the same kind of payload, and two of them carry
+    # PERSONAL data rather than a path. An address survived as "name@"
+    # because only its domain half matched the bare-host branch below.
+    r"(?i:mailto|tel|data|file|ftp|sftp|wss?):" + _URL_TAIL + "+|"
+    # A bare address too, which is how one actually appears in a reply. The
+    # local part is the identifying half, so matching only from the domain
+    # was worse than not matching at all.
+    r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|"
     # An ASCII-only lookbehind. ``\w`` counts CJK as a word character, so a bare
     # host written straight after a hanzi never matched at all and its path
     # token was persisted verbatim -- and zh/zh-TW/ja/ko, half the languages

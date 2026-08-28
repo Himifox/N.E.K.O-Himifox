@@ -1776,6 +1776,16 @@ _URL_LEAK_CASES = [
     ("www upper", "see WWW.Example.TEST/SECRET_TOKEN here"),
     ("localhost upper", "see LOCALHOST:8080/SECRET_TOKEN here"),
     ("localhost", "see localhost:8080/SECRET_TOKEN here"),
+    # Other URI schemes carry the same payload, and an address carries
+    # PERSONAL data: only its domain half used to match, so the local part
+    # -- the identifying half -- was mined and persisted.
+    ("mailto", "write to mailto:SECRET_TOKEN@example.com now"),
+    ("bare address", "write to SECRET_TOKEN@example.com now"),
+    ("address after hanzi", "请联系SECRET_TOKEN@example.com啊"),
+    ("tel", "see tel:+1555SECRET_TOKEN now"),
+    ("data uri", "see data:text/plain,SECRET_TOKEN now"),
+    ("file uri", "see file:///c/SECRET_TOKEN now"),
+    ("ftp", "see ftp://host/SECRET_TOKEN now"),
 ]
 
 
@@ -1809,6 +1819,10 @@ _URL_OVER_PROTECTION_CASES = [
         "请看https://a.com/x(然后。)我们一起去吃饭吧",
         "我们一起去吃饭吧",
     ),
+    # An "@" without a DOTTED domain is not an address, so the token itself
+    # has to stay visible -- asserting only that the sentence around it
+    # survives passes either way, since the span would cover just "a@b".
+    ("at sign without a domain", "看看这个 a@b 好不好呀我们一起去吃饭吧", "a@b"),
     (
         "whitespace inside the group",
         "请看https://a.com/x(然后 空格)我们一起去吃饭吧",
