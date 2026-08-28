@@ -669,9 +669,18 @@ class AntiRepeatEffectStore:
         from memory import ensure_character_dir
 
         memory_dir = self._config_manager.memory_dir
+        root = os.path.abspath(str(memory_dir))
         if name in self._retired:
             character_dir = os.path.join(str(memory_dir), name)
             if not os.path.isdir(character_dir):
+                return None
+            # ...and it has to be a PROPER child of the memory root. A
+            # historical unsafe name resolves the other way: "." lands on
+            # the root itself, which always exists, so the retirement check
+            # above passed and a post-deletion write dropped
+            # anti_repeat_effects.json straight into memory/.
+            resolved = os.path.abspath(character_dir)
+            if resolved == root or os.path.commonpath([root, resolved]) != root:
                 return None
             return os.path.join(character_dir, "anti_repeat_effects.json")
         return os.path.join(

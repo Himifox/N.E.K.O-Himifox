@@ -1611,6 +1611,111 @@ async def test_body_delete_rescues_unsafe_dot_character_without_touching_memory_
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe_name", [".", "a/b"])
+async def test_unsafe_name_rescue_retires_the_sidecar_stores(unsafe_name):
+    """A rescued deletion must end the identity, not just its configuration.
+
+    Every other end-of-identity path retires the sidecar stores; this branch
+    returned without doing so, and a snapshot staged while the removal was in
+    flight then flushed afterwards -- writing ``anti_repeat_effects.json``
+    straight into the memory ROOT for ".", and creating a phantom "a/b/" tree
+    for a name carrying historical separators. ``facts_sync`` enumerates any
+    directory under ``memory/`` as a character, so the artifact outlives the
+    deletion.
+
+    The assertion is on the DISK, deliberately, not on the retirement flag: for
+    "." the flag can be set while the file still lands, because ``memory/.`` is
+    the root and therefore already exists, so ``_write_file_path`` still returns
+    a real path. What actually suppresses the write is the sequence fence, and
+    only a disk assertion sees that.
+    """
+    from memory import anti_repeat_effects
+
+    with TemporaryDirectory() as td:
+        cm = _make_config_manager(Path(td))
+        bootstrap_local_cloudsave_environment(cm)
+
+        async def _noop_init():
+            return None
+
+        async def _noop_any(*args, **kwargs):
+            return None
+
+        with patch("utils.config_manager._config_manager", cm):
+            init_shared_state(
+                role_state={},
+                steamworks=None,
+                templates=None,
+                config_manager=cm,
+                logger=None,
+                initialize_character_data=_noop_init,
+                switch_current_catgirl_fast=_noop_any,
+                init_one_catgirl=_noop_any,
+                remove_one_catgirl=_noop_any,
+            )
+
+            characters = cm.load_characters()
+            characters.setdefault("猫娘", {})["正常角色"] = {"昵称": "正常角色"}
+            characters.setdefault("猫娘", {})[unsafe_name] = {"昵称": "坏角色"}
+            characters["当前猫娘"] = "正常角色"
+            cm.save_characters(characters, bypass_write_fence=True)
+
+            memory_root = Path(cm.memory_dir)
+            memory_root.mkdir(parents=True, exist_ok=True)
+            before = {path.name for path in memory_root.iterdir()}
+
+            store = anti_repeat_effects.AntiRepeatEffectStore()
+            store._config_manager = cm
+            with patch.object(anti_repeat_effects, "_GLOBAL_STORE", store):
+                # Staged while the removal is in flight, flushed after it lands.
+                staged = store.stage_decision(
+                    unsafe_name,
+                    anti_repeat_effects.AntiRepeatDecision(
+                        source="proactive",
+                        reasons=("bm25",),
+                        action="block",
+                        outcome="blocked_initial",
+                    ),
+                )
+
+                crud = reload_module("main_routers.characters_router.crud")
+                with (
+                    patch.object(
+                        crud, "notify_memory_server_reload", AsyncMock(return_value=True)
+                    ),
+                    patch.object(crud, "delete_character_memory_storage"),
+                ):
+                    result = await crud.delete_catgirl_by_body(
+                        _DummyRequest({"name": unsafe_name})
+                    )
+
+                assert result["success"] is True
+                assert result["unsafe_name_rescue"] is True
+
+                store._flush_snapshot(*staged)
+                # A SECOND write after the deletion pins the fence rather than
+                # the flag: a name whose directory happens to exist would
+                # otherwise keep writing.
+                store._flush_snapshot(
+                    *store.stage_decision(
+                        unsafe_name,
+                        anti_repeat_effects.AntiRepeatDecision(
+                            source="proactive",
+                            reasons=("bm25",),
+                            action="block",
+                            outcome="blocked_initial",
+                        ),
+                    )
+                )
+
+            after = {path.name for path in memory_root.iterdir()}
+            assert after == before, (
+                f"the rescued deletion left {sorted(after - before)} under memory/"
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_character_read_endpoints_disable_caching():
     with TemporaryDirectory() as td:
         cm = _make_config_manager(Path(td))
@@ -4838,7 +4943,7 @@ def test_timeindexed_dispose_and_rebuild_when_memory_dir_drifts(monkeypatch, tmp
 def test_timeindexed_short_circuits_when_memory_dir_unchanged(monkeypatch, tmp_path):
     """对偶用例：cached 与 expected 一致时 drift 检测不该误伤——cache 命中
     应仍然短路，不重建 engine。
-    """
+    """  # noqa: DOCSTRING_CJK
     from memory.timeindex import TimeIndexedMemory
 
     class _DummyEngine:

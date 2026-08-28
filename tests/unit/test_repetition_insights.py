@@ -1114,3 +1114,47 @@ async def test_insight_characters_applies_the_analysis_routes_admission_rule():
         validation = validate_character_name(name, allow_dots=True)
         admitted = validation.ok or validation.code == "reserved_route_name"
         assert (name in characters) is admitted, name
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_insight_selector_and_route_share_the_name_length_cap():
+    """The public route and the panel must use the INTERNAL route's cap.
+
+    Without it an over-long name was offered, accepted by the public route,
+    rejected by the internal one with 400, and remapped to
+    "local memory analysis unavailable" -- a 503 that sends the user hunting a
+    memory-server fault that does not exist.
+
+    The constant-equality line is deliberate: deriving the fixture from the cap
+    alone would let a change to the cap silently re-derive the test.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+    from utils.character_name import PROFILE_NAME_MAX_UNITS
+
+    assert PROFILE_NAME_MAX_UNITS == 60
+    too_long = "L" * (PROFILE_NAME_MAX_UNITS + 2)
+    at_cap = "S" * PROFILE_NAME_MAX_UNITS
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(
+            return_value={"猫娘": {too_long: {}, at_cap: {}}}
+        ),
+        memory_dir=str(Path(tempfile.mkdtemp()) / "absent"),
+        project_memory_dir=str(Path(tempfile.mkdtemp()) / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        listed = (await memory_router.get_insight_characters())["characters"]
+
+    assert too_long not in listed, "selector offered a name the analysis route 400s"
+    assert at_cap in listed, "the cap itself must still be analyzable"
+
+    # The route half: fixing only the selector leaves a direct POST, or a stale
+    # panel, answering 503 instead of naming the real problem.
+    response = await memory_router.repetition_insights(
+        memory_router.RepetitionInsightsRequest(
+            character_name=too_long, language="en", effect_days=7
+        )
+    )
+    assert response.status_code == 422

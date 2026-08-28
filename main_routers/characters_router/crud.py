@@ -1552,6 +1552,21 @@ async def _delete_catgirl_by_name_serialized(name: str):
                 error_message = f"{error_message}; 回滚失败: {rollback_error}"
             return JSONResponse({"success": False, "error": error_message}, status_code=500)
 
+        # Every other end-of-identity path retires the sidecar stores; this
+        # branch returned without doing so, and a snapshot staged while the
+        # removal was in flight then flushed afterwards -- writing
+        # anti_repeat_effects.json straight into the memory ROOT for ".",
+        # and creating a phantom "a/b/" tree for a name carrying historical
+        # separators. facts_sync enumerates any directory under memory/ as a
+        # character, so the artifact outlives the deletion.
+        #
+        # Placement is load-bearing: this has to run AFTER the last point a
+        # rollback can fire. Both rollback calls above pass no
+        # restored_live_character_names, which is the only thing that lifts
+        # retirement, so retiring inside the try would return the name to
+        # characters.json retired and silently drop every later write.
+        retire_character_runtime_caches(name)
+
         return {
             "success": True,
             "unsafe_name_rescue": True,

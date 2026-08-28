@@ -40,7 +40,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
-from utils.character_name import validate_character_name
+from utils.character_name import PROFILE_NAME_MAX_UNITS, validate_character_name
 from utils.character_memory import (
     character_memory_exists,
     iter_character_memory_roots,
@@ -574,7 +574,15 @@ logger = get_module_logger(__name__, "Main")
 @router.post('/repetition_insights')
 async def repetition_insights(request: RepetitionInsightsRequest):
     """Run an explicit, local-only review of persisted assistant text."""
-    validation = validate_character_name(request.character_name, allow_dots=True)
+    # The same cap the INTERNAL analysis route enforces. Without it an
+    # over-long name passed here, failed there with 400, and got remapped
+    # to "local memory analysis unavailable" -- a 503 that sends the user
+    # hunting a memory-server fault that does not exist.
+    validation = validate_character_name(
+        request.character_name,
+        allow_dots=True,
+        max_units=PROFILE_NAME_MAX_UNITS,
+    )
     if not validation.ok and validation.code != "reserved_route_name":
         return JSONResponse(
             {"success": False, "error": "invalid character name"},
@@ -858,7 +866,9 @@ def _insight_selectable_name(name: str) -> str | None:
     for, so it really can still be in characters.json. The reserved-route
     exception is intentional and shared with the route.
     """
-    validation = validate_character_name(name, allow_dots=True)
+    validation = validate_character_name(
+        name, allow_dots=True, max_units=PROFILE_NAME_MAX_UNITS
+    )
     if not validation.ok and validation.code != "reserved_route_name":
         return None
     return validation.normalized or None
