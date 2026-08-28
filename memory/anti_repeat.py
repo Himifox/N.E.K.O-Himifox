@@ -339,6 +339,12 @@ class AntiRepeatCorpus:
         A retired name may only write into a directory that already exists; it
         never creates one. Only ``evict_character`` lifts retirement, and only
         callers that KNOW the identity is live reach for it.
+
+        A same-named identity reusing a recreated directory can still pick up
+        the old one's data through the cache. It reproduces here too; what
+        holds it shut, why it is left as is, and what a new writer has to do
+        are recorded once in ``memory/anti_repeat_effects.py``
+        ``_write_file_path`` rather than three times over.
         """
         from memory import _is_within_memory_root, ensure_character_dir
 

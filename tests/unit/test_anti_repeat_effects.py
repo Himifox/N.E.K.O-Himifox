@@ -2118,3 +2118,100 @@ def test_the_fence_target_names_the_file_actually_written(
     assert captured.get("target") == f"memory/Neko/{filename}", (
         f"{module_name} announced {captured.get('target')!r} but writes {filename!r}"
     )
+
+
+def test_eviction_is_what_keeps_a_reused_name_from_inheriting_old_data(
+    tmp_path,
+):
+    """The carry-over is held shut by the callers, so pin their mechanism.
+
+    A record made between the retirement and the rmtree reloads the deleted
+    identity into the cache. If the directory is then recreated for a
+    different character of the same name, the next write carries that data
+    in. Nothing in the store stops it -- every route that recreates the
+    directory lifts retirement first, and lifting drops the cache.
+
+    So this asserts on the mechanism those routes share,
+    ``evict_character_runtime_caches``, with the no-eviction control right
+    next to it. Without the control the test would pass for the wrong
+    reason -- a scenario that never contaminates in the first place looks
+    identical to one the eviction cleaned.
+
+    On FILE CONTENTS, not on the file existing: the guards at
+    ``test_a_retired_name_never_writes_outside_its_own_directory`` and
+    ``test_a_retired_name_writes_again_only_once_a_directory_exists`` assert
+    existence, which is why this slipped past them.
+    """
+    import json
+    import shutil
+
+    import memory.anti_repeat_effects as effects_module
+    from utils.character_memory import evict_character_runtime_caches
+
+    name = "Reused"
+    decision = effects_module.AntiRepeatDecision(
+        source="proactive",
+        reasons=("bm25",),
+        action="block",
+        outcome="blocked_initial",
+    )
+
+    def detected_in_file(root):
+        path = root / name / "anti_repeat_effects.json"
+        if not path.exists():
+            return 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return sum(
+            bucket["counters"]["detected"]
+            for bucket in payload["daily_buckets"].values()
+        )
+
+    def run(root, *, evict):
+        root.mkdir()
+        (root / name).mkdir()
+        config_manager = MagicMock()
+        config_manager.memory_dir = str(root)
+        config_manager.app_docs_dir = str(root)
+        store = effects_module.AntiRepeatEffectStore()
+        store._config_manager = config_manager
+
+        previous = effects_module._GLOBAL_STORE
+        effects_module._GLOBAL_STORE = store
+        try:
+            for tick in range(3):
+                store.record_decision(
+                    name, decision, now=1_700_000_000.0 + tick * 60
+                )
+            accumulated = detected_in_file(root)
+
+            # Delete retires BEFORE it removes the tree, and a turn can
+            # land in that window.
+            store.retire_character(name)
+            store.record_decision(name, decision, now=1_700_000_500.0)
+            shutil.rmtree(root / name)
+
+            if evict:
+                evict_character_runtime_caches(name)
+
+            # A different character, same name, directory back.
+            (root / name).mkdir()
+            store.record_decision(name, decision, now=1_700_100_000.0)
+            return accumulated, detected_in_file(root)
+        finally:
+            effects_module._GLOBAL_STORE = previous
+
+    # Control: without the lift, the old identity comes across.
+    accumulated, carried = run(tmp_path / "control", evict=False)
+    assert accumulated == 3
+    assert carried > 1, (
+        "the control did not contaminate, so this test cannot show that "
+        "eviction is what prevents it"
+    )
+
+    # What every reuse route actually does.
+    accumulated, after = run(tmp_path / "evicted", evict=True)
+    assert accumulated == 3
+    assert after == 1, (
+        "a reused name inherited the deleted identity's data: %d entries"
+        % after
+    )

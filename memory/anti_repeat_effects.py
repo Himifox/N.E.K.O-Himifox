@@ -671,6 +671,38 @@ class AntiRepeatEffectStore:
         no directory yet, and a retired name never creates one, so its
         aggregates would keep failing to persist while the character is in
         active use.
+
+        KNOWN, and held shut by the CALLERS rather than by this check: a
+        record made between the retirement and the ``rmtree`` reloads the old
+        identity into the cache, and if the directory is then recreated for a
+        different character of the same name, the next write carries that
+        data into it. Measured: it reproduces in all three stores, and once
+        it is on disk a later lift does not heal it -- eviction drops the
+        cache and the next write re-reads the poisoned file.
+
+        What stops it today is that every route which recreates the
+        directory lifts retirement first, and lifting goes through
+        ``_evict_unlocked``, which drops the cache: create
+        (``crud.py``), card import (``cards.py``), workshop sync
+        (``sync_cards.py``), rename (``character_memory.py``) and cloud
+        import (``cloudsave_runtime/operations.py``). Driving the real
+        create path through the scenario comes back clean; deleting that
+        one eviction line turns every clean scenario dirty.
+
+        So a NEW writer that creates ``memory/<name>/`` for a reused name
+        must lift retirement before it writes, not merely find the
+        directory present. That is not enforced here, and roughly fifteen
+        sibling writers call ``ensure_character_dir`` knowing nothing about
+        retirement.
+
+        Left as is deliberately. Both closures cost more than they buy:
+        refusing the write while retired stops the REUSED name's own
+        sidecars from persisting until a lift, and refusing only the reload
+        looks free at 0 of 289 tests but is not -- the flush writes the
+        whole payload, so a write after a blocked reload overwrites the
+        file with only what it staged. Measured on this store: three
+        accumulated records became one, where today they become four. That
+        is the rename window losing the source's history.
         """
         from memory import _is_within_memory_root, ensure_character_dir
 
