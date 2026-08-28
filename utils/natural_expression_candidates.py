@@ -24,6 +24,7 @@ candidate. Its output is intentionally incompatible with
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import re
@@ -646,52 +647,101 @@ _HTML_RAW_TEXT_OPEN_RE = re.compile(
 )
 
 
-def _markdown_link_target_spans(text: str) -> list[tuple[int, int]]:
+def _paragraph_bounds(text: str, start: int) -> tuple[int, int]:
+    """Return the end of the paragraph at ``start`` and the start of the next."""
+    match = _BLANK_LINE_RE.search(text, start)
+    if match is None:
+        return len(text), len(text) + 1
+    return match.start(), match.end()
+
+
+def _markdown_link_target_spans(
+    text: str, ignore: Sequence[tuple[int, int]] = ()
+) -> list[tuple[int, int]]:
     """Return the TARGET half of Markdown links -- ``](`` through its close.
 
     Never the link text: that is prose a character may legitimately repeat,
     and a bare path in prose stays minable too, because protecting every
-    ``/foo/bar`` would eat dates and fractions. Requiring the ``](`` structure
-    is what keeps this off ordinary speech.
+    ``/foo/bar`` would eat dates and fractions.
 
     A scanner rather than a pattern because targets nest parentheses to any
     depth (``/api/f(g(x))``), and a regex that allows one level simply fails
     to match deeper ones -- leaving the target mined as if there were no rule.
     An unbalanced ``](`` protects NOTHING: running to end of text would be the
     over-protection this module keeps having to undo.
+
+    ONE pass per paragraph, matching every ``(`` to its closer on a stack.
+    Rescanning the paragraph tail for each failed opener was quadratic: 16 KiB
+    of repeated ``](`` took seconds, and a persisted reply may be 128 KiB --
+    long enough for the analysis thread to outlive the router's own timeout
+    and hold a shared worker while it does.
     """
     spans: list[tuple[int, int]] = []
-    position = 0
-    while True:
-        start = text.find("](", position)
-        if start < 0:
-            return spans
-        limit = _paragraph_end(text, start)
-        depth = 0
-        cursor = start + 1
-        end = -1
-        while cursor < limit:
-            character = text[cursor]
-            if character == chr(92):
-                cursor += 2
-                continue
-            if character == "(":
-                depth += 1
-            elif character == ")":
-                depth -= 1
-                if depth == 0:
-                    end = cursor + 1
-                    break
-            cursor += 1
-        if end < 0:
-            position = start + 2
+    cursor = 0
+    while cursor <= len(text):
+        limit, next_paragraph = _paragraph_bounds(text, cursor)
+        _collect_link_targets(text, cursor, limit, ignore, spans)
+        cursor = next_paragraph
+    return spans
+
+
+def _collect_link_targets(
+    text: str,
+    start: int,
+    limit: int,
+    ignore: Sequence[tuple[int, int]],
+    spans: list[tuple[int, int]],
+) -> None:
+    """Append every balanced link target in one paragraph to ``spans``."""
+    open_parens: list[int] = []
+    closer_of: dict[int, int] = {}
+    openers: list[int] = []
+    labelled = False
+    cursor = start
+    while cursor < limit:
+        character = text[cursor]
+        if character == chr(92):
+            cursor += 2
             continue
-        spans.append((start, end))
-        position = end
+        if character == "[":
+            labelled = True
+        elif character == "(":
+            open_parens.append(cursor)
+        elif character == ")":
+            if open_parens:
+                closer_of[open_parens.pop()] = cursor + 1
+        elif (
+            character == "]"
+            and labelled
+            and cursor + 1 < limit
+            and text[cursor + 1] == "("
+        ):
+            # A link needs a LABEL. Without the opening bracket requirement any
+            # "](" started a target scan, so "好呀](我们一起去公园散步吧)" --
+            # ordinary CJK punctuation, and no <a> element by any reader --
+            # lost the whole parenthetical.
+            openers.append(cursor)
+        cursor += 1
+    for opener in openers:
+        end = closer_of.get(opener + 1)
+        # A DISPLAYED opener opens nothing, the same rule the two HTML scanners
+        # already follow: "](", shown inside a code span, still ran its
+        # close-paren search out of the code block and into the speech after it.
+        if end is not None and not _starts_inside(opener, ignore):
+            spans.append((opener, end))
 
 
 def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
-    return any(start <= position < end for start, end in spans)
+    """True when ``position`` sits inside one of ``spans``.
+
+    ``spans`` must be sorted and non-overlapping -- every caller passes the
+    output of ``_merge_spans``. Binary search rather than a scan because the
+    container scanners call this once per candidate opener AND closer, so a
+    linear probe is quadratic in exactly the input that motivates it: a long
+    reply with many delimiters and few real containers.
+    """
+    index = bisect.bisect_right(spans, position, key=lambda span: span[0]) - 1
+    return index >= 0 and spans[index][0] <= position < spans[index][1]
 
 
 def _html_comment_spans(
@@ -721,6 +771,11 @@ def _html_comment_spans(
             position = start + 4
             continue
         closing = text.find("-->", start + 4)
+        while closing >= 0 and _starts_inside(closing, ignore):
+            # A displayed CLOSER closes nothing either. Only the opener was
+            # checked, so "<!-- a `-->` SECRET -->" ended the comment at the
+            # quoted arrow and left the real body minable -- and persisted.
+            closing = text.find("-->", closing + 3)
         end = len(text) if closing < 0 else closing + 3
         spans.append((start, end))
         position = end
@@ -755,12 +810,23 @@ def _html_raw_text_spans(
         end = len(text)
         while depth:
             next_close = close_re.search(text, cursor)
+            while next_close is not None and _starts_inside(
+                next_close.start(), ignore
+            ):
+                # Displayed closers close nothing; see _html_comment_spans.
+                next_close = close_re.search(text, next_close.end())
             if next_close is None:
                 # Unterminated: protect through the end of the text, the same
                 # way an unclosed fence behaves.
                 end = len(text)
                 break
             next_open = open_re.search(text, cursor)
+            while next_open is not None and _starts_inside(
+                next_open.start(), ignore
+            ):
+                # ...and the dual: a displayed nested opener must not deepen
+                # the count, or the element runs past its real closer.
+                next_open = open_re.search(text, next_open.end())
             if next_open is not None and next_open.start() < next_close.start():
                 depth += 1
                 cursor = next_open.end()
@@ -774,8 +840,16 @@ def _html_raw_text_spans(
 
 def _protected_spans(text: str) -> list[tuple[int, int]]:
     """Return merged spans for code, URLs, and obvious template placeholders."""
-    spans = _runtime_protected_spans(text)
-    spans.extend(match.span() for match in _TEMPLATE_RE.finditer(text))
+    runtime = _runtime_protected_spans(text)
+    spans = list(runtime)
+    # A template delimiter DISPLAYED as code opens nothing. This pattern is
+    # independent of the scanners above, so an opener sitting in one code span
+    # paired with a closer in another and erased the prose between them.
+    spans.extend(
+        match.span()
+        for match in _TEMPLATE_RE.finditer(text)
+        if not _starts_inside(match.start(), runtime)
+    )
     return _merge_spans(spans)
 
 
@@ -794,7 +868,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     # after it. The bounded regexes need no such guard.
     code_spans = _merge_spans(spans)
     spans.extend(match.span() for match in _URL_RE.finditer(text))
-    spans.extend(_markdown_link_target_spans(text))
+    spans.extend(_markdown_link_target_spans(text, code_spans))
     # Comments first: a tag inside a comment BODY is not a container either,
     # so the raw-text scanner has to see the comment spans as well.
     comment_spans = _html_comment_spans(text, code_spans)

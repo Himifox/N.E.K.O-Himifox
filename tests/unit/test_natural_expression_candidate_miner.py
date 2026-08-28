@@ -1848,3 +1848,82 @@ def test_block_code_behind_a_container_prefix_is_protected(label, text):
 
     assert "SECRET_TOKEN" not in _unprotected(text), label
     assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
+
+
+# A container opener or closer that is DISPLAYED as code opens and closes
+# nothing. Both halves matter: honouring an opener runs the container past the
+# code block and eats the speech after it, honouring a closer ends the
+# container early and leaks the body it was meant to cover.
+_DISPLAYED_DELIMITER_OVER_CASES = [
+    # These two carry a real label earlier in the paragraph, so the bracket
+    # requirement does not save them -- only the ignore list does.
+    (
+        "link opener in a code span",
+        "看这个 [标签] 好呀`](`我们一起去吃饭吧)！",
+        "我们一起去吃饭吧",
+    ),
+    (
+        "link opener in a fence",
+        "看这个 [标签] 好呀\n```\n](\n```\n我们一起去吃饭吧)！",
+        "我们一起去吃饭吧",
+    ),
+    # No opening bracket, so there is no link label and nothing to target.
+    ("paren after a bare bracket", "好呀](我们一起去吃饭吧)", "我们一起去吃饭吧"),
+    (
+        "template delimiters in code spans",
+        "Use `{{` repeated helper phrase `}}` in templates",
+        "repeated helper phrase",
+    ),
+    # The dual of a displayed CLOSER: a displayed nested opener must not
+    # deepen the count either, or the element runs past its real closer.
+    (
+        "nested opener displayed as code",
+        "<code>a `<code>` x</code> 我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _DISPLAYED_DELIMITER_OVER_CASES,
+    ids=[row[0] for row in _DISPLAYED_DELIMITER_OVER_CASES],
+)
+def test_a_displayed_delimiter_opens_nothing(label, text, must_remain_visible):
+    assert must_remain_visible in _unprotected(text), label
+
+
+_DISPLAYED_CLOSER_CASES = [
+    ("displayed comment closer", "<!-- alpha `-->` SECRET_TOKEN here -->"),
+    ("displayed code closer", "<code>alpha `</code>` SECRET_TOKEN here </code>"),
+    ("displayed closer in a fence", "<code>\n```\n</code>\n```\nSECRET_TOKEN here</code>"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _DISPLAYED_CLOSER_CASES,
+    ids=[row[0] for row in _DISPLAYED_CLOSER_CASES],
+)
+def test_a_displayed_closer_closes_nothing(label, text):
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    assert "SECRET_TOKEN" not in _unprotected(text), label
+    assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
+
+
+def test_malformed_link_targets_scan_in_linear_time():
+    """A persisted reply is accepted up to 128 KiB, and this ran once per opener.
+
+    Rescanning the paragraph tail for every failed ``](`` made 16 KiB take
+    seconds, so a reply of the maximum size kept the analysis thread busy long
+    past the router's own timeout while holding a shared worker. The bound
+    below is two orders of magnitude looser than the one-pass scanner needs;
+    it exists to fail loudly if the quadratic shape comes back.
+    """
+    import time
+
+    text = "](" * 64_000
+    started = time.perf_counter()
+    candidate_core._markdown_link_target_spans(text)
+    assert time.perf_counter() - started < 2.0
