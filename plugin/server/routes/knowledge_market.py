@@ -41,6 +41,7 @@ router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 # durable result changes afterwards. Stay strictly under the proxy so the caller
 # always learns the real outcome.
 _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS = KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
+_CONNECT_TIMEOUT_SECONDS = 2.0
 
 
 def _remaining_budget(deadline: float) -> float:
@@ -343,11 +344,19 @@ async def _settle_knowledge_unsubscribe(
         claimed_pack_id=payload.pack_id,
         active_task=active_task,
     )
+    removal_budget = _remaining_budget(deadline)
+    if removal_budget <= 0:
+        # Waiting on the in-flight install ate the whole budget. Sending a request
+        # that cannot finish would just surface as a confusing transport error.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "knowledge_installation_busy"},
+        )
     try:
         result = await _main_request(
             "POST",
             "packs/remove",
-            timeout=_remaining_budget(deadline),
+            timeout=removal_budget,
             json={
                 "pack_id": pack_id,
                 "expected_provider": "plugin-market",
@@ -925,9 +934,14 @@ async def _main_request(
         if method == "POST"
         else KNOWLEDGE_GET_TIMEOUT_SECONDS
     )
+    # httpx treats connect/read/write/pool independently, so a fixed connect
+    # budget silently outlives a shorter overall timeout — with a deadline-derived
+    # timeout the request could still spend 2s connecting after the budget was
+    # already spent. Clamp it into whatever the caller actually has left.
+    connect_timeout = min(_CONNECT_TIMEOUT_SECONDS, request_timeout)
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(request_timeout, connect=2.0),
+            timeout=httpx.Timeout(request_timeout, connect=connect_timeout),
             trust_env=False,
         ) as client:
             response = await client.request(

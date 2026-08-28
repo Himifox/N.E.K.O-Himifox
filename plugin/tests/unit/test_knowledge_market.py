@@ -1512,3 +1512,83 @@ async def test_market_task_stops_polling_when_staged_job_is_degraded(monkeypatch
         await module._wait_for_pack_job(task, job_id="fixture-job")
 
     assert exc_info.value.code == "job_degraded"
+
+
+def test_connect_timeout_never_outlives_the_request_budget(monkeypatch):
+    """httpx treats connect independently of the overall timeout.
+
+    With a deadline-derived budget a fixed connect=2.0 would let the request keep
+    connecting after the budget it was given is already gone, which is exactly
+    what the shared deadline exists to prevent.
+    """
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class _FakeClient:
+        def __init__(self, *, timeout, trust_env):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def request(self, *_args, **_kwargs):
+            return _FakeResponse()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", _FakeClient)
+
+    asyncio.run(module._main_request("POST", "packs/remove", json={}, timeout=0.5))
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect <= 0.5
+
+    # A generous budget still gets the ordinary connect ceiling, not the whole
+    # request timeout.
+    asyncio.run(module._main_request("POST", "packs/remove", json={}, timeout=40.0))
+    assert captured["timeout"].connect == module._CONNECT_TIMEOUT_SECONDS
+
+
+def test_unsubscribe_reports_busy_when_the_budget_is_already_spent(monkeypatch):
+    """An exhausted budget must fail as a budget failure, not a transport error."""
+    calls: list[tuple] = []
+
+    async def _fake_main_request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(module, "_main_request", _fake_main_request)
+    async def _no_active_subscription(*_args, **_kwargs):
+        return None
+
+    async def _owned(*_args, **_kwargs):
+        return "fixture-pack", "knowledge/fixture-pack"
+
+    monkeypatch.setattr(module, "_cancel_active_subscription", _no_active_subscription)
+    monkeypatch.setattr(module, "_resolve_owned_subscription", _owned)
+
+    payload = module.KnowledgeUnsubscribeRequest(package_id=7, pack_id="fixture-pack")
+    loop = asyncio.new_event_loop()
+    try:
+        past_deadline = loop.time() - 1.0
+        with pytest.raises(HTTPException) as excinfo:
+            loop.run_until_complete(
+                module._settle_knowledge_unsubscribe(payload, deadline=past_deadline)
+            )
+    finally:
+        loop.close()
+
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["code"] == "knowledge_installation_busy"
+    assert calls == [], "no removal request may be sent once the budget is gone"
