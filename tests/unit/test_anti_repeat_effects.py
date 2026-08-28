@@ -1939,11 +1939,22 @@ def test_a_retired_name_never_writes_outside_its_own_directory(
 
     store = getattr(module, class_name).__new__(getattr(module, class_name))
     store._config_manager = config_manager
-    store._retired = {".", "..", "a/b"}
 
-    for name in (".", "..", "a/b"):
-        target = store._write_file_path(name)
-        assert target is None, f"{module_name} would have written {name!r} to {target}"
+    # BOTH branches: the live path calls ensure_character_dir, so it is the
+    # one that would actually create the stray directory.
+    unsafe = (".", "..", "a/b", "a" + chr(92) + "b", "./x", "../y")
+    for retired in (set(), set(unsafe)):
+        store._retired = set(retired)
+        state = "retired" if retired else "live"
+        for name in unsafe:
+            try:
+                target = store._write_file_path(name)
+            except OSError:
+                target = "the OS refused the name, but the store still offered it"
+            assert target is None, (
+                f"{module_name} ({state}) would have written {name!r} to {target}"
+            )
+    store._retired = set()
 
     # The dual: a retired name whose own directory exists still writes there,
     # which is what keeps a rescued rename from losing its aggregates.

@@ -340,21 +340,20 @@ class AntiRepeatCorpus:
         never creates one. Only ``evict_character`` lifts retirement, and only
         callers that KNOW the identity is live reach for it.
         """
-        from memory import ensure_character_dir
+        from memory import _is_within_memory_root, ensure_character_dir
 
         memory_dir = self._config_manager.memory_dir
-        root = os.path.abspath(str(memory_dir))
+        character_dir = os.path.join(str(memory_dir), name)
+        if not _is_within_memory_root(str(memory_dir), name, character_dir):
+            # A historical unsafe name resolves outside its own
+            # directory: "." lands on the memory root itself and ".."
+            # escapes it entirely, so the sidecar would be written
+            # beside -- or above -- the whole memory tree. Refused for a
+            # LIVE name as well as a retired one, and refused BEFORE
+            # ensure_character_dir below can create anything.
+            return None
         if name in self._retired:
-            character_dir = os.path.join(str(memory_dir), name)
             if not os.path.isdir(character_dir):
-                return None
-            # ...and it has to be a PROPER child of the memory root. A
-            # historical unsafe name resolves the other way: "." lands on
-            # the root itself, which always exists, so the retirement
-            # check above passed and a post-deletion write dropped
-            # anti_repeat_corpus.json straight into memory/.
-            resolved = os.path.abspath(character_dir)
-            if resolved == root or os.path.commonpath([root, resolved]) != root:
                 return None
             return os.path.join(character_dir, _SIDECAR_FILENAME)
         return os.path.join(

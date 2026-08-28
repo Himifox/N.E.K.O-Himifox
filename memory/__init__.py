@@ -61,6 +61,27 @@ from .reflection import ReflectionEngine
 _logger = logging.getLogger(__name__)
 
 
+def _is_within_memory_root(memory_dir: str, name: str, character_dir: str) -> bool:
+    """Whether character_dir is a DIRECT child of the memory root.
+
+    A character name reaches this as a path component, and a historical
+    unsafe one resolves somewhere else entirely: "." lands on the root, ".."
+    escapes above it, and a name carrying a separator nests. Every sidecar
+    store asks this before resolving a write, so the answer lives here
+    rather than three times over.
+    """
+    root = os.path.abspath(str(memory_dir))
+    resolved = os.path.abspath(character_dir)
+    # DIRECT child, and named exactly for the character. "a/b" nests a level
+    # deeper and leaves an "a/" behind that facts_sync reads as a character
+    # of its own; "./x" lands on the same directory as a character actually
+    # called "x" and would share its sidecar.
+    return (
+        os.path.dirname(resolved) == root
+        and os.path.basename(resolved) == name
+    )
+
+
 def ensure_character_dir(memory_dir: str, name: str) -> str:
     """Return the character-specific directory memory_dir/{name}/, creating it if missing."""
     char_dir = os.path.join(str(memory_dir), name)
