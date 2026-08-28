@@ -1757,6 +1757,12 @@ _URL_LEAK_CASES = [
     # Capitalised one is rejected, because that is a resumed sentence.
     ("uppercase tld", "see Example.COM/SECRET_TOKEN here"),
     ("all caps host", "see EXAMPLE.COM/SECRET_TOKEN here"),
+    # Punycode has to be tried BEFORE the generic TLD branch, which matches
+    # the bare "xn" and stops there because everything after a TLD is
+    # optional -- leaving the rest of the label and the path minable.
+    ("punycode tld", "see example.xn--p1ai/SECRET_TOKEN here"),
+    ("punycode both labels", "see xn--fiqs8s.xn--fiqz9s/SECRET_TOKEN here"),
+    ("punycode upper", "see EXAMPLE.XN--P1AI/SECRET_TOKEN here"),
     ("mixed case tld", "see Example.CoM/SECRET_TOKEN here"),
     ("mixed case tld lower host", "see example.Com/SECRET_TOKEN here"),
     # A query or fragment may follow the host with no path at all.

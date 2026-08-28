@@ -848,6 +848,22 @@ def _recent_browser_conflict_response(
     )
 
 
+def _insight_selectable_name(name: str) -> str | None:
+    """Return the name the analysis route would accept, or None.
+
+    The selector and the route have to share one admission rule. Building
+    the list from any non-empty configured string offered names the route
+    then rejected with 422 -- a historical unsafe name such as "." is a
+    supported state that the delete route deliberately keeps a rescue path
+    for, so it really can still be in characters.json. The reserved-route
+    exception is intentional and shared with the route.
+    """
+    validation = validate_character_name(name, allow_dots=True)
+    if not validation.ok and validation.code != "reserved_route_name":
+        return None
+    return validation.normalized or None
+
+
 @router.get('/insight_characters')
 async def get_insight_characters():
     """List the identities the repetition-insights route will accept.
@@ -869,7 +885,13 @@ async def get_insight_characters():
     configured = (
         characters.get("猫娘", {}) if isinstance(characters, dict) else {}
     )
-    names = {name for name in configured if isinstance(name, str) and name}
+    names = {
+        selectable
+        for name in configured
+        if isinstance(name, str) and name
+        for selectable in (_insight_selectable_name(name),)
+        if selectable
+    }
 
     # Enumerate through the same roots the predicate reads, so a root added
     # there cannot silently become invisible here.
@@ -895,8 +917,9 @@ async def get_insight_characters():
                 candidates.add(candidate)
 
     for candidate in candidates - names:
-        if character_memory_exists(config_manager, candidate):
-            names.add(candidate)
+        selectable = _insight_selectable_name(candidate)
+        if selectable and character_memory_exists(config_manager, selectable):
+            names.add(selectable)
 
     return {"characters": sorted(names)}
 

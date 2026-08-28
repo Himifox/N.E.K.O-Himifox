@@ -114,7 +114,10 @@ _URL_RE = re.compile(
     # revision tried to separate the two by case SHAPE (all-lower or
     # all-UPPER is a TLD, Capitalised is a resumed sentence); it left
     # "Example.CoM/secret" unprotected, which is the wrong way to be wrong.
-    r"(?i:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
+    # Punycode FIRST: the generic branch matches the bare "xn" of "xn--p1ai"
+    # and the pattern then ends there, because everything after the TLD is
+    # optional -- so the rest of the label and the whole path stayed minable.
+    r"(?i:xn--[a-z0-9-]{2,59}|[a-z]{2,63})|(?:\d{1,3}\.){3}\d{1,3})"
     # A query or fragment may follow the host with no path at all
     # ("example.com?token=..."), and stopping at the host left the query
     # minable.

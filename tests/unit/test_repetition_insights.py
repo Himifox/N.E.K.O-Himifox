@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1066,3 +1068,49 @@ async def test_repetition_insights_route_ships_folded_associations():
     # The card's number is the sum across all three patterns, unchanged.
     assert associations[0]["detected_count"] == 15
     assert associations[0]["association_type"] == "exact"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_insight_characters_applies_the_analysis_routes_admission_rule():
+    """The selector must never offer a name the route answers 422 to.
+
+    A historical unsafe name such as "." can still sit in characters.json --
+    the delete route keeps a rescue path for exactly that state -- and the
+    selector admitted any non-empty configured string. The reserved-route
+    exception is deliberate and shared with the route, so "chat" stays.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = Path(tempfile.mkdtemp()) / "memory"
+    memory_dir.mkdir()
+    # A disk-derived candidate the rule NORMALIZES rather than rejects: the
+    # route would ask about "Bob", which has no memory, so offering the
+    # trailing-space spelling means offering a name the route cannot serve.
+    (memory_dir / "recent_Bob .json").write_text("[]", encoding="utf-8")
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(
+            return_value={"猫娘": {"Alice": {}, ".": {}, "..": {}, "chat": {}}}
+        ),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(Path(tempfile.mkdtemp()) / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        result = await memory_router.get_insight_characters()
+
+    characters = result["characters"]
+    assert "Alice" in characters
+    assert "chat" in characters, "the reserved-route exception is intentional"
+    assert "." not in characters, "the route rejects this with unsafe_dot"
+    assert ".." not in characters
+    assert "Bob " not in characters, "the disk side skipped the same rule"
+    assert "Bob" not in characters
+
+    # Anti-drift, stated as the route states it.
+    from utils.character_name import validate_character_name
+
+    for name in ("Alice", "chat", ".", ".."):
+        validation = validate_character_name(name, allow_dots=True)
+        admitted = validation.ok or validation.code == "reserved_route_name"
+        assert (name in characters) is admitted, name
