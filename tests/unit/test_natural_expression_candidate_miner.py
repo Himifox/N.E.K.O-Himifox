@@ -1734,3 +1734,52 @@ _REAL_CONTAINER_CASES = [
 )
 def test_real_containers_still_protect(label, text):
     assert "SECRET_TOKEN" not in _unprotected(text), label
+
+
+# A URL is protected because this module promises never to persist one. Both
+# halves of that promise are pinned here: the tail has to reach the end of a
+# real URL, and it must not run past one into the sentence that follows.
+_URL_LEAK_CASES = [
+    ("parenthesised path", "see https://example.com/(SECRET_TOKEN) here"),
+    ("parens mid path", "see https://example.com/a(SECRET_TOKEN)/b here"),
+    ("bare host after hanzi", "看这个吧h.io/SECRET_TOKEN，很好玩哦"),
+    ("bare host after kana", "ネコはneko.jp/SECRET_TOKEN"),
+    ("mixed case host", "see Example.com/SECRET_TOKEN here"),
+    ("scheme upper", "see HTTP://Example.TEST/SECRET_TOKEN here"),
+    ("www upper", "see WWW.Example.TEST/SECRET_TOKEN here"),
+    ("localhost upper", "see LOCALHOST:8080/SECRET_TOKEN here"),
+    ("localhost", "see localhost:8080/SECRET_TOKEN here"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _URL_LEAK_CASES,
+    ids=[row[0] for row in _URL_LEAK_CASES],
+)
+def test_urls_are_protected_through_their_tail(label, text):
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    assert "SECRET_TOKEN" not in _unprotected(text), label
+    assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
+
+
+_URL_OVER_PROTECTION_CASES = [
+    ("cjk sentence after url", "请看https://a.com。我们一起去吃饭吧！", "我们一起去吃饭吧"),
+    ("cjk comma after bare host", "看这个吧h.io/a，我们一起去吃饭吧", "我们一起去吃饭吧"),
+    # A missing space after sentence punctuation is ordinary en/es/pt model
+    # output, not a hostname.
+    ("run-on english", "That is so cute.Nice to meet you again", "Nice to meet you again"),
+    ("run-on spanish", "Te extranaste mucho hoy.Vamos a cenar juntos", "Vamos a cenar juntos"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _URL_OVER_PROTECTION_CASES,
+    ids=[row[0] for row in _URL_OVER_PROTECTION_CASES],
+)
+def test_a_url_does_not_swallow_the_sentence_after_it(
+    label, text, must_remain_visible
+):
+    assert must_remain_visible in _unprotected(text), label

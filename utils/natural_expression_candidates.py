@@ -77,14 +77,41 @@ _LANGUAGE_ALIASES = {
 }
 _WHITESPACE_LANGUAGES = frozenset({"en", "es", "pt", "ru"})
 _TEXT_BOUNDARY_RE = re.compile(r"[\r\n.!?。！？；;:：,，、]+")
-_URL_RE = re.compile(
-    r"(?:https?://|www\.)[^\s<>()]+|"
-    r"(?<![\w-])(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
-    r"(?::\d{1,5})?(?:/[^\s<>()]*)?|"
-    r"(?<![\w-])localhost(?:(?::\d{1,5})(?:/[^\s<>()]*)?|/[^\s<>()]*)",
-    re.IGNORECASE,
+# A URL ends at CJK punctuation. The old tail excluded only whitespace and
+# brackets, and CJK prose has neither -- so a reply reading
+# "请看https://a.com。我们一起去吃饭吧！" protected the sentence terminator AND
+# every following sentence on the line, deleting the catchphrase after the URL.
+# ``re`` reads the ``\uXXXX`` escapes itself, so these stay raw and legible:
+# general CJK punctuation, then the fullwidth ASCII punctuation blocks.
+_URL_STOP = (
+    r"\u2018\u2019\u201c\u201d\u2026"
+    r"\u3000-\u303f\uff01-\uff0f\uff1a-\uff20"
+    r"\uff3b-\uff40\uff5b-\uff65"
 )
+_URL_ATOM = r"[^\s<>()" + _URL_STOP + r"]"
+# One level of balanced parentheses, the way GFM autolinks resolve them. A path
+# such as ``/(helper_path)`` otherwise ended AT the paren and left its body
+# minable -- and minable here means persisted to the effects sidecar for 120
+# days, by a module whose whole promise is that it never persists a URL.
+_URL_TAIL = r"(?:" + _URL_ATOM + r"|\(" + _URL_ATOM + r"*\))"
+_URL_RE = re.compile(
+    r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
+    # An ASCII-only lookbehind. ``\w`` counts CJK as a word character, so a bare
+    # host written straight after a hanzi never matched at all and its path
+    # token was persisted verbatim -- and zh/zh-TW/ja/ko, half the languages
+    # this module supports, are written without spaces.
+    r"(?<![A-Za-z0-9_-])(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    # The TLD stays lowercase while the labels do not. ``re.IGNORECASE`` over
+    # the whole pattern read a missing space after a period as a host --
+    # "cute.Nice", "hola.Mi", "fine.Thanks" -- which is ordinary en/es/pt model
+    # output; dropping case-insensitivity outright would instead stop protecting
+    # "Example.com/secret".
+    r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})|(?:\d{1,3}\.){3}\d{1,3})"
+    r"(?::\d{1,5})?(?:/" + _URL_TAIL + "*)?|"
+    r"(?<![A-Za-z0-9_-])(?i:localhost)"
+    r"(?:(?::\d{1,5})(?:/" + _URL_TAIL + "*)?|/" + _URL_TAIL + "*)"
+)
+
 _TEMPLATE_RE = re.compile(
     # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
     # interpolation and ERB scriptlets are ordinary shapes, and a body that
