@@ -1332,25 +1332,26 @@ _INLINE_CODE_MATRIX = [
 ]
 
 
-@pytest.mark.parametrize("tick", ["`", "｀"], ids=["ascii", "fullwidth"])
 @pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize(
     "label, text, secret_visible",
     _INLINE_CODE_MATRIX,
     ids=[row[0] for row in _INLINE_CODE_MATRIX],
 )
-def test_inline_code_span_matrix(label, text, secret_visible, eol, tick):
-    """Line endings AND delimiter style are matrix dimensions.
+def test_inline_code_span_matrix(label, text, secret_visible, eol):
+    """Line endings are a matrix dimension.
 
     An LF-only blank-line pattern skips a CRLF blank line, so the paragraph runs
     to end of text and a later delimiter is mistaken for the closer, swallowing
-    prose that should have produced candidates. A CJK input method produces the
-    fullwidth grave accent, which Markdown does not treat as code but which
-    still wraps real code.
+    prose that should have produced candidates.
+
+    The fullwidth grave accent is NOT a second dimension here: it is a kaomoji
+    face part, so pairing on it deleted speech far more often than it caught
+    code. See ``_SPEECH_ELONGATION_CASES``.
     """
     from memory.anti_repeat_effects import build_repeat_signature
 
-    text = text.replace("\n", eol).replace("`", tick)
+    text = text.replace("\n", eol)
     unprotected = _unprotected(text)
 
     assert ("SECRET" in unprotected) is secret_visible, label
@@ -1401,16 +1402,24 @@ def test_html_raw_text_container_matrix(label, text, must_remain_visible):
         assert fragment in unprotected, label
 
 
-# Fullwidth tilde is the commonest elongation mark in this project's character
-# speech. Treating it as an inline code delimiter protected the text between two
-# of them and silently dropped real catchphrases -- the exact thing this feature
-# exists to surface. Inline delimiters are backticks only; fences keep the tilde
-# forms, which need a run of three at the start of a line.
+# Fullwidth punctuation that a CJK IME produces is SPEECH, not code. Treating
+# it as an inline delimiter protected the text between two occurrences and
+# silently dropped real catchphrases -- the exact thing this feature exists to
+# surface. Inline delimiters are the ASCII backtick only, and the fence
+# alphabet excludes the fullwidth tilde because a line of them is a decorative
+# divider whose unclosed fence eats the rest of the reply.
 _SPEECH_ELONGATION_CASES = [
     ("japanese", "そうですね～また明日ね～", "また明日ね"),
     ("chinese", "好呀～我们一起去吧～", "我们一起去吧"),
     ("repeated tildes", "はい～～ありがとう～～", "ありがとう"),
     ("ascii tilde prose", "we always say ~the exact same thing~ here", "always"),
+    # U+FF40 in a kaomoji face, which is where it actually occurs.
+    ("kaomoji pair", "（｀・ω・´）今天也要加油哦！（｀・ω・´）", "今天也要加油哦"),
+    ("kaomoji unpaired", "(*･ω｀*) また一緒に散歩しようね", "また一緒に散歩しようね"),
+    # A fullwidth-tilde divider line: an unclosed fence would protect to the
+    # end of the text, so this one row costs the whole remainder of the reply.
+    ("tilde divider", "你好呀\n～～～\n晚安啦做个好梦", "晚安啦做个好梦"),
+    ("tilde divider behind marker", "- ～～～\n- 我们一起去吃饭吧", "我们一起去吃饭吧"),
 ]
 
 
@@ -1423,13 +1432,16 @@ def test_tilde_elongation_is_speech_not_code(label, text, must_remain_visible):
     assert must_remain_visible in _unprotected(text), label
 
 
+# Deliberately NOT here: `a ｀SECRET=1｀ b` and a ～～～ fence. Both were pinned
+# and both are removed on purpose -- they are structurally indistinguishable
+# from the kaomoji and divider rows in _SPEECH_ELONGATION_CASES above, and the
+# speech direction is the one that fails silently. The fullwidth FENCE forms
+# stay, so a code block typed in Chinese input mode is still protected.
 _FULLWIDTH_CODE_CASES = [
     ("ascii inline", "a `SECRET=1` b"),
-    ("fullwidth tick inline", "a ｀SECRET=1｀ b"),
     ("ascii fence", "```\nSECRET=1\n```\ntail"),
     ("tilde fence", "~~~\nSECRET=1\n~~~\ntail"),
     ("fullwidth tick fence", "｀｀｀\nSECRET=1\n｀｀｀\ntail"),
-    ("fullwidth tilde fence", "～～～\nSECRET=1\n～～～\ntail"),
 ]
 
 
@@ -1501,6 +1513,11 @@ _TEMPLATE_OVER_PROTECTION_CASES = [
     # pattern swallowed 99.7% of a 200-line reply.
     ("stray brace past the budget", "那个 ${\nA呢\n我们一起去吃饭吧\nB呢\n最后那个括号 }", "我们一起去吃饭吧"),
     ("comparison operators", "记住哦 3 < 5\n我们一起去吃饭吧\n然后 10 > 7", "我们一起去吃饭吧"),
+    # Line-bounding alone did not cover the commoner one-line spelling, which
+    # is why the alternative now has to look like a tag.
+    ("emoticons on one line", "I love it <3 you are so cute >_<", "you are so cute"),
+    ("comparisons on one line", "记住哦 3 < 5，我们一起去吃饭吧，10 > 7 呢", "我们一起去吃饭吧"),
+    ("arrow pair", "心情 <- 超好，我们一起去吃饭吧 ->", "我们一起去吃饭吧"),
 ]
 
 
@@ -1574,7 +1591,6 @@ def test_container_markers_alone_do_not_protect_speech(label, rows):
 # also reaches the persisted signature.
 _LONGER_RUN_CASES = [
     ("two runs", "run this `echo ```a`` export SECRET_TOKEN` ok"),
-    ("two runs, fullwidth", "reply ｀code ｀｀｀x｀｀ SECRET_TOKEN｀ done"),
     ("single longer run", "reply `code ``inner`` SECRET_TOKEN` done"),
     ("opened with two", "reply ``code ```x``` SECRET_TOKEN`` done"),
     ("across lines", "你好 `代码 x\n继续 ```y`` SECRET_TOKEN\n` 完毕"),
