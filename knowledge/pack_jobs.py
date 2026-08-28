@@ -42,6 +42,7 @@ DEGRADED_STATE = "degraded"
 TERMINAL_JOB_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_TERMINAL_JOB_DIRECTORIES = 100
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
+LEGACY_PACK_ARTIFACT_NAME = "pack.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
 VECTOR_ARTIFACT_NAME = "pack.neko-knowledge.vectors.f16"
 IDENTITY_NAME = "identity.json"
@@ -99,6 +100,7 @@ def _staged_artifact_limits() -> dict[str, int]:
 
     return {
         PACK_ARTIFACT_NAME: MAX_PACK_BYTES,
+        LEGACY_PACK_ARTIFACT_NAME: MAX_PACK_BYTES,
         INDEX_MANIFEST_NAME: MAX_PREBUILT_MANIFEST_BYTES,
         VECTOR_ARTIFACT_NAME: MAX_PREBUILT_VECTOR_BYTES,
     }
@@ -1090,13 +1092,17 @@ def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
 
 
 def _load_job_pack(job_dir: Path) -> KnowledgePack:
-    if _staged_artifact_present(job_dir, PACK_ARTIFACT_NAME):
-        raw = _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME)
+    # Both the canonical artifact and the legacy fallback are attacker-mutable
+    # staging files, so each goes through the same bounded, link-checked read.
+    for name in (PACK_ARTIFACT_NAME, LEGACY_PACK_ARTIFACT_NAME):
+        if not _staged_artifact_present(job_dir, name):
+            continue
+        raw = _read_staged_artifact(job_dir, name)
         try:
             return validate_pack(json.loads(raw.decode("utf-8")))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("staged knowledge pack is invalid") from exc
-    return validate_pack(_read_json(job_dir / "pack.json"))
+    raise ValueError("staged knowledge pack is missing")
 
 
 def _load_capacity_validated_job_pack(

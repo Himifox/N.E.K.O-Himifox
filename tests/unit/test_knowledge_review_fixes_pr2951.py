@@ -206,3 +206,46 @@ def test_pack_removal_refuses_a_linked_knowledge_root(tmp_path):
     result = service.cancel_and_remove_pack("removable")
     assert result["removed_pack"] is True
     assert service.list_packs() == ()
+
+
+def test_legacy_staged_pack_json_is_bounded_too(tmp_path, monkeypatch):
+    """The legacy `pack.json` fallback is just as attacker-mutable as the new one.
+
+    The first version of the fix bounded only the canonical artifact, so removing
+    it and dropping an oversized/symlinked `pack.json` in its place walked
+    straight back into the unbounded read.
+    """
+    from knowledge import pack_jobs
+    from knowledge.pack_jobs import LEGACY_PACK_ARTIFACT_NAME, _load_job_pack
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / LEGACY_PACK_ARTIFACT_NAME).write_text(
+        json.dumps(_pack("legacy", "旧包")), encoding="utf-8"
+    )
+
+    # Normal legacy file still loads.
+    assert _load_job_pack(job_dir).pack_id == "legacy"
+
+    monkeypatch.setattr(
+        pack_jobs, "_staged_artifact_limits", lambda: {LEGACY_PACK_ARTIFACT_NAME: 8}
+    )
+    with pytest.raises(ValueError, match="exceeds its protocol limit"):
+        _load_job_pack(job_dir)
+
+
+def test_legacy_staged_pack_json_rejects_a_symlink(tmp_path):
+    from knowledge.pack_jobs import LEGACY_PACK_ARTIFACT_NAME, _load_job_pack
+
+    if not _supports_symlink(tmp_path):
+        pytest.skip("symlink creation is not permitted in this environment")
+
+    external = tmp_path / "external.json"
+    external.write_text(json.dumps(_pack("linked-legacy", "外部旧包")), encoding="utf-8")
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    os.symlink(external, job_dir / LEGACY_PACK_ARTIFACT_NAME)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        _load_job_pack(job_dir)

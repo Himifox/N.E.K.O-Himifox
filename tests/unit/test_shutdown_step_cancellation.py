@@ -132,14 +132,12 @@ async def test_later_cancel_helper_still_runs_after_an_absorbed_cancel() -> None
     assert ran == ["victim-stopped", "reached-end"]
 
 
-@pytest.mark.unit
-def test_on_shutdown_routes_every_await_through_the_guard() -> None:
-    """No bare ``await`` of a cleanup helper may remain in ``on_shutdown``.
+def _unprotected_shutdown_awaits() -> list[tuple[int, str]]:
+    """Every await in ``on_shutdown`` a cancellation can escape from.
 
-    The regression this covers: ``_cancel_task_if_running`` grew a re-raise, and
-    the two *new* call sites were guarded while the pre-existing game-cleanup
-    await was not, so a cancellation there skipped connector, ZMQ, Cloud Save,
-    HTTP-pool and knowledge-indexer cleanup.
+    Escape means: not wrapped in ``_run_shutdown_step`` AND not inside a ``try``
+    whose handlers catch ``CancelledError``/``BaseException``. ``except
+    Exception`` does not count — ``CancelledError`` is a ``BaseException``.
     """
     import ast
     import inspect
@@ -147,29 +145,105 @@ def test_on_shutdown_routes_every_await_through_the_guard() -> None:
 
     from app.main_server import on_shutdown
 
-    source = textwrap.dedent(inspect.getsource(on_shutdown))
-    tree = ast.parse(source)
+    tree = ast.parse(textwrap.dedent(inspect.getsource(on_shutdown)))
+    fn = tree.body[0]
+    found: list[tuple[int, str]] = []
 
-    guarded_calls = {
-        "_cancel_task_if_running",
-        "close_voice_identity_runtime",
-        "join_sync_connector_threads",
-        "_stop_neko_servers_integration_workers",
+    def catches_cancel(handler: ast.ExceptHandler) -> bool:
+        if handler.type is None:
+            return True
+        raw = handler.type
+        names = (
+            [ast.unparse(e) for e in raw.elts]
+            if isinstance(raw, ast.Tuple)
+            else [ast.unparse(raw)]
+        )
+        return any(n.endswith("CancelledError") or n == "BaseException" for n in names)
+
+    def walk(node, try_stack) -> None:
+        # Every case is decided on entry, so the classification does not depend
+        # on which branch recursed into this node.
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            # Nested coroutines own their own cancellation semantics.
+            return
+        if isinstance(node, ast.Try):
+            # Only the body is covered by this try's handlers; code inside the
+            # handlers and finally is not.
+            for st in node.body:
+                walk(st, try_stack + [node])
+            for handler in node.handlers:
+                for st in handler.body:
+                    walk(st, try_stack)
+            for st in node.orelse + node.finalbody:
+                walk(st, try_stack)
+            return
+        if isinstance(node, ast.Await):
+            value = node.value
+            wrapped = (
+                isinstance(value, ast.Call)
+                and getattr(value.func, "id", None) == "_run_shutdown_step"
+            )
+            protected = any(
+                any(catches_cancel(h) for h in t.handlers) for t in try_stack
+            )
+            if not wrapped and not protected:
+                found.append((node.lineno, ast.unparse(value)[:80]))
+        for child in ast.iter_child_nodes(node):
+            walk(child, try_stack)
+
+    for statement in fn.body:
+        walk(statement, [])
+    return found
+
+
+# Pre-existing awaits a cancellation can still escape from. Frozen as a ratchet
+# baseline rather than silently fixed: wrapping these touches Cloud Save,
+# character release, memory-server and HTTP-pool business branches (two of them
+# need the awaited value, so the caller has to grow a cancelled path), and
+# whether shutdown should absorb cancellation that far is a product call — the
+# direct-run entry point deliberately keeps a 30s watchdog and an os._exit(130)
+# on a second signal. The steps this PR touches ARE wrapped; this list must only
+# ever shrink.
+_KNOWN_CANCELLATION_ESCAPES = frozenset(
+    {
+        "agent_event_bridge.stop()",
+        "close_fn()",
+        "asyncio.wait_for(close_all_crawlers(), timeout=1.0)",
+        "asyncio.wait_for(asyncio.gather(*(_release_one(n) for n in releasable_names), re",
+        "_run_cloudsave_manager_action('upload_existing_snapshot', **upload_action_kwargs",
+        "_request_memory_server_shutdown()",
+        "asyncio.wait_for(aclose_internal_http_client(), timeout=1.0)",
+        "asyncio.wait_for(aclose_external_http_client(), timeout=2.0)",
+        "asyncio.wait({knowledge_finish_task}, timeout=knowledge_shutdown_timeout_seconds",
     }
-    unguarded: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Await):
-            continue
-        call = node.value
-        if not isinstance(call, ast.Call):
-            continue
-        func = call.func
-        name = getattr(func, "id", None) or getattr(func, "attr", None)
-        if name in guarded_calls:
-            unguarded.append(name)
+)
 
-    assert unguarded == [], (
-        "these cleanups are awaited directly instead of through "
-        "_run_shutdown_step, so a cancellation there skips the rest of "
-        f"shutdown: {sorted(set(unguarded))}"
+
+@pytest.mark.unit
+def test_on_shutdown_adds_no_new_cancellation_escape() -> None:
+    """Derive escapes from the AST instead of checking a hand-written call list.
+
+    The first version of this guard named four helpers and asserted none of them
+    was awaited bare. That is the list-shaped failure: it passed while nine other
+    cleanups were still unwrapped, purely because they were not on the list. This
+    version enumerates every escape and diffs against a frozen baseline, so a new
+    unwrapped await fails even if nobody remembers to update a list.
+    """
+    current = {code for _, code in _unprotected_shutdown_awaits()}
+    new = current - _KNOWN_CANCELLATION_ESCAPES
+    assert not new, (
+        "new awaits let a cancellation escape on_shutdown and skip every cleanup "
+        "after them; wrap them in _run_shutdown_step:\n"
+        + "\n".join(f"  {code}" for code in sorted(new))
+    )
+
+
+@pytest.mark.unit
+def test_cancellation_escape_baseline_only_shrinks() -> None:
+    """The baseline must not rot: an entry that got fixed has to be removed."""
+    current = {code for _, code in _unprotected_shutdown_awaits()}
+    stale = _KNOWN_CANCELLATION_ESCAPES - current
+    assert not stale, (
+        "these awaits are no longer cancellation escapes — drop them from "
+        f"_KNOWN_CANCELLATION_ESCAPES so the ratchet keeps its teeth: {sorted(stale)}"
     )
