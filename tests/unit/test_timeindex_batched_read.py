@@ -1370,3 +1370,156 @@ def test_latest_assistant_texts_stop_at_the_scan_budget(timeindex_module, tmp_pa
         "the scan ran past its budget to reach the buried assistant row"
     )
     assert result.skipped_row_count <= budget + 256
+
+
+def _user_bodies_seen(timeindex_module, monkeypatch):
+    """Record every stored message the Python-side parser is handed."""
+    seen: list[object] = []
+    original = timeindex_module._assistant_record_from_stored_message
+
+    def _spy(message_raw):
+        seen.append(message_raw)
+        return original(message_raw)
+
+    monkeypatch.setattr(
+        timeindex_module, "_assistant_record_from_stored_message", _spy
+    )
+    return seen
+
+
+def test_user_turn_bodies_never_reach_this_process(
+    timeindex_module, tmp_path, monkeypatch
+):
+    """The role filter runs in SQL, so a user turn's text is never transferred.
+
+    Without it every row in the scanned window was SELECTed and materialized to
+    produce a handful of assistant replies -- reported as 4.3 MB of user prose
+    read to return one 17-character answer.
+    """
+    monkeypatch.setattr(timeindex_module, "_json1_supported", None)
+    seen = _user_bodies_seen(timeindex_module, monkeypatch)
+    timestamp = "2026-01-01 00:00:00.000000"
+    rows = [
+        {
+            "session_id": str(index),
+            "message": _stored_message("human", "PRIVATE-USER-TEXT " * 4096),
+            "timestamp": timestamp,
+        }
+        for index in range(8)
+    ]
+    rows.append(
+        {
+            "session_id": "9",
+            "message": _stored_message("ai", "the visible reply"),
+            "timestamp": timestamp,
+        }
+    )
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 100, batch_size=256)
+    finally:
+        engine.dispose()
+
+    # The reply still comes back, and the user rows are still counted as
+    # skipped -- otherwise "no user text was read" would also hold for a query
+    # that returned nothing at all.
+    assert result.messages == ["the visible reply"]
+    assert result.skipped_row_count == 8
+    assert not any("PRIVATE-USER-TEXT" in str(body) for body in seen)
+
+
+def test_the_role_filter_falls_back_when_the_sqlite_build_lacks_json1(
+    timeindex_module, tmp_path, monkeypatch
+):
+    """An older build without JSON1 reads more, but must not lose the feature."""
+    monkeypatch.setattr(timeindex_module, "_json1_supported", False)
+    seen = _user_bodies_seen(timeindex_module, monkeypatch)
+    timestamp = "2026-01-01 00:00:00.000000"
+    rows = [
+        {
+            "session_id": "1",
+            "message": _stored_message("human", "user secret"),
+            "timestamp": timestamp,
+        },
+        {
+            "session_id": "2",
+            "message": _stored_message("ai", "the visible reply"),
+            "timestamp": timestamp,
+        },
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 100, batch_size=256)
+    finally:
+        engine.dispose()
+
+    assert result.messages == ["the visible reply"]
+    assert result.skipped_row_count == 1
+    assert any("user secret" in str(body) for body in seen)
+
+
+def test_paging_advances_through_a_window_with_no_assistant_rows(
+    timeindex_module, tmp_path, monkeypatch
+):
+    """The cursor comes from the KEY window, not from the surviving rows.
+
+    Pushing the filter into the paged query would have made LIMIT count
+    matching rows, so one statement could walk an unbounded stretch of history;
+    keeping the two queries separate is what preserves the scan budget, and it
+    means a page containing no assistant row must still advance the cursor.
+    """
+    monkeypatch.setattr(timeindex_module, "_json1_supported", None)
+    timestamp = "2026-01-01 00:00:00.000000"
+    rows = [
+        {
+            "session_id": "0",
+            "message": _stored_message("ai", "the oldest answer"),
+            "timestamp": timestamp,
+        }
+    ]
+    rows += [
+        {
+            "session_id": str(index + 1),
+            "message": _stored_message("human", f"user turn {index}"),
+            "timestamp": timestamp,
+        }
+        for index in range(300)
+    ]
+    manager, engine = _create_manager(timeindex_module, tmp_path, rows)
+    try:
+        result = manager.retrieve_latest_assistant_texts("cat", 5, batch_size=2)
+    finally:
+        engine.dispose()
+
+    assert result.messages == ["the oldest answer"]
+    assert result.skipped_row_count == 300
+
+
+def test_the_json1_probe_reports_a_modern_build(
+    timeindex_module, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(timeindex_module, "_json1_supported", None)
+    manager, engine = _create_manager(timeindex_module, tmp_path, [])
+    try:
+        assert timeindex_module._supports_json1(engine) is True
+    finally:
+        engine.dispose()
+
+
+def test_the_json1_probe_failing_costs_the_filter_not_the_feature(
+    timeindex_module, monkeypatch
+):
+    """JSON1 ships by default from SQLite 3.38, but an older build must not 500.
+
+    Falling back to an unfiltered body read costs memory on such a build;
+    letting the probe's error escape would cost the whole insights feature.
+    """
+    monkeypatch.setattr(timeindex_module, "_json1_supported", None)
+
+    class _BuildWithoutJson1:
+        def connect(self):
+            raise RuntimeError("no such function: json_valid")
+
+    assert timeindex_module._supports_json1(_BuildWithoutJson1()) is False
+    # Cached, so the probe costs one query per process rather than one per page.
+    assert timeindex_module._json1_supported is False

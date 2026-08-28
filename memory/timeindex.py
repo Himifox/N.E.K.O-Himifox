@@ -80,6 +80,46 @@ _MAX_VISIBLE_LENGTH_DIGITS = 12
 # "fewer replies analyzed", which the panel already reports.
 _LATEST_ASSISTANT_SCAN_BUDGET_FACTOR = 20
 _LATEST_ASSISTANT_MIN_SCAN_BUDGET = 2_000
+# Reading a page of history is two queries, not one.
+#
+# The first selects only the ORDERING KEYS, so a window of user turns costs
+# almost nothing; the second fetches bodies for that window with the role
+# filter pushed into SQL, so a user turn's text is never transferred into this
+# process at all. Measured on the reported reproducer: 4.3 MB of user prose was
+# being SELECTed, materialized by fetchall() and JSON-parsed to yield one
+# 17-character assistant reply.
+#
+# The split is what keeps the scan budget honest. Putting the filter on the
+# single paged query would have made LIMIT count MATCHING rows, so one
+# statement could walk an unbounded stretch of history looking for them; the
+# key query still pages a fixed number of rows and still advances the cursor
+# from the window's last row, whether or not anything in it survives.
+_ASSISTANT_ROW_FILTER = (
+    "json_valid(message) AND json_extract(message, '$.type') = 'ai'"
+)
+# At most this many rowids per body query. SQLite's bound-parameter ceiling is
+# 999 on builds before 3.32, and ``batch_size`` is a caller argument.
+_ASSISTANT_BODY_CHUNK = 200
+_json1_supported: bool | None = None
+
+
+def _supports_json1(engine) -> bool:
+    """Whether this SQLite build has the JSON1 functions, probed once.
+
+    JSON1 is compiled in by default from SQLite 3.38, but an older build would
+    raise on ``json_valid`` and take the whole feature down with it. Falling
+    back to an unfiltered body read costs memory on such a build; failing the
+    request costs the feature.
+    """
+    global _json1_supported
+    if _json1_supported is None:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT json_valid('{}')")).scalar()
+            _json1_supported = True
+        except Exception:
+            _json1_supported = False
+    return _json1_supported
 
 _LEGACY_PROACTIVE_ACTION_NOTE_PATTERNS = tuple(
     re.compile(pattern)
@@ -963,6 +1003,34 @@ class TimeIndexedMemory:
                 lanlan_name, limit, batch_size=batch_size
             )
 
+    def _assistant_bodies_by_rowid(
+        self,
+        conn,
+        table_name: str,
+        rowids: list[int],
+    ) -> dict[int, object]:
+        """Return the stored message for each ASSISTANT row in ``rowids``.
+
+        The role filter runs in SQL when the build supports it, so a user turn's
+        body is never transferred into this process. A row missing from the
+        result is a row this analysis skips, which is what the caller counts.
+        """
+        filtered = _supports_json1(conn.engine)
+        bodies: dict[int, object] = {}
+        for start in range(0, len(rowids), _ASSISTANT_BODY_CHUNK):
+            chunk = rowids[start : start + _ASSISTANT_BODY_CHUNK]
+            placeholders = ", ".join(f":r{index}" for index in range(len(chunk)))
+            sql = (
+                f"SELECT rowid, message FROM {table_name} "
+                f"WHERE rowid IN ({placeholders})"
+            )
+            if filtered:
+                sql += f" AND {_ASSISTANT_ROW_FILTER}"
+            params = {f"r{index}": value for index, value in enumerate(chunk)}
+            for row in conn.execute(text(sql), params).fetchall():
+                bodies[int(row[0])] = row[1]
+        return bodies
+
     def _retrieve_latest_assistant_texts_locked(
         self,
         lanlan_name: str,
@@ -1004,7 +1072,7 @@ class TimeIndexedMemory:
         while len(records) < limit and scanned_row_count < scan_budget:
             timestamp_expression = "timestamp" if has_timestamp else "NULL"
             sql = (
-                f"SELECT {timestamp_expression}, rowid, message FROM {table_name} "
+                f"SELECT {timestamp_expression}, rowid FROM {table_name} "
                 "WHERE 1=1"
             )
             params: dict[str, object] = {"page_size": batch_size}
@@ -1033,7 +1101,14 @@ class TimeIndexedMemory:
 
             try:
                 with self.engines[lanlan_name].connect() as conn:
-                    rows = conn.execute(text(sql), params).fetchall()
+                    keys = conn.execute(text(sql), params).fetchall()
+                    bodies = (
+                        self._assistant_bodies_by_rowid(
+                            conn, table_name, [int(key[1]) for key in keys]
+                        )
+                        if keys
+                        else {}
+                    )
             except Exception as exc:
                 logger.warning(
                     "[TimeIndexedMemory] latest assistant history read failed for %s: %s",
@@ -1042,19 +1117,26 @@ class TimeIndexedMemory:
                 )
                 raise RuntimeError("latest assistant history read failed") from exc
 
-            if not rows:
+            if not keys:
                 break
-            scanned_row_count += len(rows)
-            for row in rows:
-                assistant_record = _assistant_record_from_stored_message(row[2])
+            scanned_row_count += len(keys)
+            for key in keys:
+                message = bodies.get(int(key[1]))
+                # Absent because the role filter dropped it, or present and
+                # rejected by the parser -- both are rows this analysis skips,
+                # and the count has always meant exactly that.
+                assistant_record = (
+                    None if message is None
+                    else _assistant_record_from_stored_message(message)
+                )
                 if assistant_record is None:
                     skipped_row_count += 1
                     continue
                 records.append(assistant_record)
                 if len(records) >= limit:
                     break
-            cursor = (rows[-1][0], int(rows[-1][1]))
-            if len(rows) < batch_size:
+            cursor = (keys[-1][0], int(keys[-1][1]))
+            if len(keys) < batch_size:
                 break
             if scanned_row_count >= scan_budget and len(records) < limit:
                 logger.warning(
