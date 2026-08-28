@@ -179,6 +179,63 @@ def _phrases_contain_each_other(language: str, left: str, right: str) -> bool:
     )
 
 
+def _aggregate_repetition_associations(associations: list[dict]) -> list[dict]:
+    """Fold per-pattern associations into one row per candidate.
+
+    The panel only ever reduces these to four totals plus an "any at all?"
+    test (``static/js/memory_browser.js`` at 1208 and 1461); no consumer reads
+    the per-pattern fields. Shipping one row per (candidate, pattern) pair made
+    the payload the PRODUCT of two capped lists -- 200 candidates against up to
+    1920 window patterns -- measured at 5,366 rows / 1.62 MiB at that cap, and
+    24,036 rows / 7.94 MiB for a character whose n-grams all contain one
+    another. Folding bounds it by the candidate count instead, and every
+    displayed number stays identical because the panel was summing anyway.
+
+    Capping the list instead would have been wrong: a truncated array turns
+    those sums into silently WRONG totals on the card, which is worse than a
+    large payload.
+
+    Nothing becomes unrecoverable. Associations are derived per request from
+    the mined candidates and the effects sidecar; no store and no export keeps
+    them, so restoring per-pattern detail later is a server-side change and a
+    re-run, not a migration.
+    """
+    folded: dict[tuple[str, str], dict] = {}
+    for association in associations:
+        key = (association["language"], association["normalized_phrase"])
+        row = folded.get(key)
+        if row is None:
+            row = {
+                "normalized_phrase": association["normalized_phrase"],
+                "language": association["language"],
+                # "exact" wins over "contained": the card's meaning is "the
+                # runtime has handled this phrase", and an exact hit is the
+                # stronger claim.
+                "association_type": association["association_type"],
+                "effect_pattern_count": 0,
+                "detected_count": 0,
+                "regen_triggered_count": 0,
+                "regen_guard_passed_count": 0,
+                "blocked_count": 0,
+                "residual_occurrence_count": association[
+                    "residual_occurrence_count"
+                ],
+                "residual_message_count": association["residual_message_count"],
+            }
+            folded[key] = row
+        if association["association_type"] == "exact":
+            row["association_type"] = "exact"
+        row["effect_pattern_count"] += 1
+        for field in (
+            "detected_count",
+            "regen_triggered_count",
+            "regen_guard_passed_count",
+            "blocked_count",
+        ):
+            row[field] += association[field]
+    return list(folded.values())
+
+
 def _associate_repetition_effects(
     candidates: list,
     patterns: list,
@@ -618,9 +675,11 @@ async def repetition_insights(request: RepetitionInsightsRequest):
         candidates = payload.get("candidates")
         patterns = effects.get("patterns")
         payload["effectiveness"] = effects
-        payload["associations"] = _associate_repetition_effects(
-            candidates if isinstance(candidates, list) else [],
-            patterns if isinstance(patterns, list) else [],
+        payload["associations"] = _aggregate_repetition_associations(
+            _associate_repetition_effects(
+                candidates if isinstance(candidates, list) else [],
+                patterns if isinstance(patterns, list) else [],
+            )
         )
         return payload
     except Exception as exc:

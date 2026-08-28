@@ -864,3 +864,205 @@ def test_legacy_root_entry_owner_boundaries():
     # Not a legacy shape at all.
     assert legacy_root_entry_owner("Dave") is None
     assert legacy_root_entry_owner("recent.json") is None
+
+
+def _association_pair(phrase, effect_phrase, association_type, **counts):
+    row = {
+        "normalized_phrase": phrase,
+        "language": "zh-CN",
+        "effect_normalized_phrase": effect_phrase,
+        "association_type": association_type,
+        "detected_count": 0,
+        "regen_triggered_count": 0,
+        "regen_guard_passed_count": 0,
+        "blocked_count": 0,
+        "residual_occurrence_count": 3,
+        "residual_message_count": 2,
+    }
+    row.update(counts)
+    return row
+
+
+def test_associations_fold_to_one_row_per_candidate_without_changing_totals():
+    """The payload is bounded by the candidate count, not by the product.
+
+    One row per (candidate, pattern) pair made the response the PRODUCT of two
+    capped lists -- 200 candidates against up to 1920 window patterns. The
+    panel only ever reduces them to four totals plus an "any at all?" test, so
+    folding keeps every displayed number identical while dropping the row
+    count by more than an order of magnitude.
+
+    Capping instead would have been the wrong fix: a truncated array turns
+    those totals into silently wrong numbers on the card.
+    """
+    from main_routers.memory_router import _aggregate_repetition_associations
+
+    pairs = [
+        _association_pair("一起去吃饭吧", "一起去吃饭", "contained", detected_count=4),
+        _association_pair("一起去吃饭吧", "一起去吃饭吧", "exact", detected_count=6,
+                          regen_triggered_count=2),
+        _association_pair("一起去吃饭吧", "去吃饭吧", "contained", blocked_count=1,
+                          regen_guard_passed_count=3),
+        _association_pair("今天也辛苦了", "今天也辛苦", "contained", detected_count=5),
+    ]
+
+    folded = _aggregate_repetition_associations(pairs)
+
+    assert [row["normalized_phrase"] for row in folded] == [
+        "一起去吃饭吧",
+        "今天也辛苦了",
+    ]
+    first = folded[0]
+    # Exactly what the card displays, summed the way the browser sums it.
+    assert first["detected_count"] == 10
+    assert first["regen_triggered_count"] == 2
+    assert first["regen_guard_passed_count"] == 3
+    assert first["blocked_count"] == 1
+    # An exact hit anywhere in the group is the stronger claim and must win.
+    assert first["association_type"] == "exact"
+    assert first["effect_pattern_count"] == 3
+    assert first["residual_occurrence_count"] == 3
+    assert first["residual_message_count"] == 2
+    assert folded[1]["association_type"] == "contained"
+    assert folded[1]["effect_pattern_count"] == 1
+
+
+def test_folded_associations_preserve_the_totals_of_the_pair_list():
+    """Differential check: the four sums must survive folding exactly."""
+    from main_routers.memory_router import (
+        _aggregate_repetition_associations,
+        _associate_repetition_effects,
+    )
+
+    phrases = ["一起去吃饭吧", "今天也辛苦了呢", "晚安啦做个好梦"]
+    grams = [
+        phrase[start : start + size]
+        for phrase in phrases
+        for size in range(2, len(phrase) + 1)
+        for start in range(len(phrase) - size + 1)
+    ]
+    candidates = [
+        {
+            "language": "zh-CN",
+            "normalized_phrase": gram,
+            "occurrence_count": 3,
+            "message_count": 2,
+        }
+        for gram in dict.fromkeys(grams)
+    ]
+    patterns = [
+        {
+            "language": "zh-CN",
+            "normalized_phrase": gram,
+            "detected_count": 2,
+            "regen_triggered_count": 1,
+            "regen_guard_passed_count": 1,
+            "blocked_count": 1,
+            "reasons": {"bm25": 1},
+        }
+        for gram in dict.fromkeys(grams)
+    ]
+
+    pairs = _associate_repetition_effects(candidates, patterns)
+    folded = _aggregate_repetition_associations(pairs)
+
+    fields = (
+        "detected_count",
+        "regen_triggered_count",
+        "regen_guard_passed_count",
+        "blocked_count",
+    )
+    assert len(pairs) > len(folded) * 5, "the fixture must actually exercise folding"
+    assert len(folded) <= len(candidates)
+    for field in fields:
+        assert sum(row[field] for row in pairs) == sum(row[field] for row in folded), field
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repetition_insights_route_ships_folded_associations():
+    """The ROUTE has to fold, not just the helper.
+
+    Testing `_aggregate_repetition_associations` alone left the wiring
+    unpinned: replacing the call at the payload site with the raw pair list
+    kept every helper assertion green while shipping the product-sized array
+    again.
+    """
+    from main_routers import memory_router
+    from memory import anti_repeat_effects
+    from utils import config_manager, internal_http_client
+
+    phrase = "一起去吃饭吧"
+    candidates = [
+        {
+            "language": "zh-CN",
+            "phrase": phrase,
+            "normalized_phrase": phrase,
+            "occurrence_count": 3,
+            "message_count": 3,
+            "status": "pending",
+        }
+    ]
+    # Three window patterns all associate with that single candidate, so an
+    # unfolded payload carries three rows and a folded one carries exactly one.
+    patterns = [
+        {
+            "language": "zh-CN",
+            "phrase": text,
+            "normalized_phrase": text,
+            "detected_count": count,
+            "regen_triggered_count": 0,
+            "regen_guard_passed_count": 0,
+            "blocked_count": 0,
+            "reasons": {"bm25": 1},
+        }
+        for text, count in (
+            (phrase, 4),
+            ("一起去吃饭", 5),
+            ("去吃饭吧", 6),
+        )
+    ]
+
+    client = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(
+                status_code=200,
+                json=lambda: {"success": True, "candidates": candidates},
+            )
+        )
+    )
+    config = SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    effect_store = SimpleNamespace(
+        query_effects=MagicMock(
+            return_value={"source_available": True, "patterns": patterns}
+        )
+    )
+
+    with (
+        patch.object(config_manager, "get_config_manager", return_value=config),
+        patch.object(
+            internal_http_client,
+            "get_internal_http_client",
+            return_value=client,
+        ),
+        patch.object(
+            anti_repeat_effects,
+            "get_anti_repeat_effect_store",
+            return_value=effect_store,
+        ),
+        patch.object(memory_router, "character_memory_exists", return_value=True),
+    ):
+        result = await memory_router.repetition_insights(
+            memory_router.RepetitionInsightsRequest(
+                character_name="test_char",
+                language="zh-CN",
+                effect_days=7,
+            )
+        )
+
+    associations = result["associations"]
+    assert len(associations) == 1, "the route shipped one row per pattern again"
+    assert associations[0]["effect_pattern_count"] == 3
+    # The card's number is the sum across all three patterns, unchanged.
+    assert associations[0]["detected_count"] == 15
+    assert associations[0]["association_type"] == "exact"
