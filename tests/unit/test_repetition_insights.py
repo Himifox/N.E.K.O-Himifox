@@ -792,3 +792,75 @@ async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
                 config, name
             )
             assert (name in result["characters"]) is admitted, name
+
+
+@pytest.mark.asyncio
+async def test_insight_characters_decodes_flat_legacy_entries(tmp_path):
+    """A pre-layout install stores memory as ``<kind>_<name>`` at the root.
+
+    Reading each child's literal basename made the selector offer
+    ``semantic_memory_Alice`` and never ``Alice``, and it could not see ``Carol``
+    at all when her only artifact is a bare ``time_indexed_Carol.db`` FILE --
+    while ``character_memory_exists`` accepts both owners, so the analysis route
+    served a name the panel hid. That is the same anti-drift invariant the test
+    above states, in the direction that costs a user access to their own
+    character.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+    from utils.character_memory import character_memory_exists
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "semantic_memory_Alice").mkdir()
+    (memory_dir / "time_indexed_Carol.db").write_bytes(b"")
+    (memory_dir / "recent_Bob.json").write_text("[]", encoding="utf-8")
+    (memory_dir / "Dave").mkdir()
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        result = await memory_router.get_insight_characters()
+
+    characters = result["characters"]
+    assert "Alice" in characters, "a Chroma-era owner was hidden behind its storage name"
+    assert "Carol" in characters, "a bare legacy .db file names an owner the panel dropped"
+    assert "Bob" in characters
+    assert "Dave" in characters
+    # The extension-less pattern also matches "time_indexed_Carol.db", so the
+    # longest suffix has to win or the owner decodes as "Carol.db".
+    assert "Carol.db" not in characters
+
+    # Same anti-drift invariant as above, now over the legacy shapes. Note
+    # "Carol.db" is deliberately NOT in this set: character_memory_exists
+    # accepts it, because the extension-less pattern formats to the same file,
+    # and by that reading infinitely many strings are "accepted". The selector
+    # offers the OWNER, not every string that happens to decode to an existing
+    # entry; the assertion above pins that choice.
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        for name in ("Alice", "Carol", "Bob", "Dave", "Absent"):
+            assert (name in characters) is character_memory_exists(config, name), name
+
+
+def test_legacy_root_entry_owner_boundaries():
+    """The decoder's own contract, which the panel test cannot reach.
+
+    The router only consumes a truthy owner, so an empty decode is invisible
+    there -- but a pattern that matched its own bare prefix would hand every
+    caller an empty character name.
+    """
+    from utils.character_memory import legacy_root_entry_owner
+
+    assert legacy_root_entry_owner("semantic_memory_Alice") == "Alice"
+    assert legacy_root_entry_owner("time_indexed_Carol.db") == "Carol"
+    assert legacy_root_entry_owner("time_indexed_Carol") == "Carol"
+    assert legacy_root_entry_owner("recent_Bob.json") == "Bob"
+    # A bare prefix names nobody.
+    assert legacy_root_entry_owner("semantic_memory_") is None
+    assert legacy_root_entry_owner("time_indexed_.db") is None
+    # Not a legacy shape at all.
+    assert legacy_root_entry_owner("Dave") is None
+    assert legacy_root_entry_owner("recent.json") is None
