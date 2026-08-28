@@ -1148,9 +1148,15 @@ class KnowledgeService:
         except CatalogOverrideError:
             disabled = frozenset()
             override_state = "invalid"
+        strict_source_counts: tuple[dict, ...] = ()
         if store is not None:
             try:
                 store.assert_compatible()
+                # Malformed `tags` JSON makes json_each() raise while SQLite's
+                # physical integrity_check still returns ok. The tolerant default
+                # would swallow that into an empty source list and report a ready
+                # database with zero entries, so probe strictly and degrade here.
+                strict_source_counts = store.count_by_source_tags(strict=True)
             except (KnowledgeSchemaTooNewError, KnowledgeStoreError) as exc:
                 registry_state = pack_registry_state(database_path)
                 pack_jobs = self.list_pack_jobs()
@@ -1226,7 +1232,7 @@ class KnowledgeService:
             for pack in installed_packs
             if pack.get("effective_material_type") == "corpus"
         )
-        source_counts = store.count_by_source_tags() if store is not None else ()
+        source_counts = strict_source_counts
         source_material_types = (
             self._source_material_types(store) if store is not None else {}
         )
@@ -1370,8 +1376,15 @@ class KnowledgeService:
             cancel_pack_job,
             list_pack_jobs,
             pack_operation_lock,
+            trusted_live_root,
         )
         from .packs import remove_pack
+
+        # Reject a redirected root before taking the lock or touching the live
+        # database/registry — jobs-side guards return empty for a linked root and
+        # would otherwise let removal proceed straight into an external store.
+        if trusted_live_root(self.knowledge_root) is None:
+            raise KnowledgeStoreError("knowledge root is not a trusted local directory")
 
         with pack_operation_lock(self.knowledge_root, pack_id):
             installed = next(

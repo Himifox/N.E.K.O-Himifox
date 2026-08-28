@@ -750,6 +750,35 @@ async def _stop_neko_servers_integration_workers() -> None:
     _client_registration_task = None
 
 
+async def _run_shutdown_step(
+    step,
+    *,
+    what: str,
+    pending_cancellation: asyncio.CancelledError | None = None,
+) -> asyncio.CancelledError | None:
+    """Await one shutdown step, deferring caller cancellation to the very end.
+
+    Shutdown is a sequence of independent cleanups (connector threads, game
+    tasks, integration workers, ZMQ bridge, Cloud Save, HTTP pools, knowledge
+    indexer). A cancellation delivered while any one of them is awaited must not
+    skip the rest, so each step absorbs it here and the caller re-raises once,
+    after everything else has run. ``except Exception`` does NOT cover this:
+    ``CancelledError`` is a ``BaseException``.
+
+    Returns the cancellation to re-raise, keeping the first one observed.
+    """
+    try:
+        await step
+    except asyncio.CancelledError as exc:
+        current = asyncio.current_task()
+        if current is not None:
+            while current.cancelling():
+                current.uncancel()
+        logger.debug("%s was cancelled; finishing remaining shutdown", what)
+        return pending_cancellation if pending_cancellation is not None else exc
+    return pending_cancellation
+
+
 async def _cancel_task_if_running(
     task: asyncio.Task | None, *, name: str, timeout: float = 1.0
 ) -> None:
@@ -1298,22 +1327,15 @@ async def on_shutdown():
         knowledge_stop_task = None
         finish_knowledge_indexer_stop = None
         knowledge_shutdown_timeout_seconds = 0.0
-        try:
-            await _cancel_task_if_running(
+        shutdown_cancellation = await _run_shutdown_step(
+            _cancel_task_if_running(
                 _knowledge_indexer_start_retry_task,
                 name="knowledge indexer start retry",
                 timeout=1.0,
-            )
-        except asyncio.CancelledError as exc:
-            shutdown_cancellation = exc
-            current = asyncio.current_task()
-            if current is not None:
-                while current.cancelling():
-                    current.uncancel()
-            logger.debug(
-                "knowledge indexer retry cleanup was cancelled; "
-                "finishing remaining shutdown"
-            )
+            ),
+            what="knowledge indexer retry cleanup",
+            pending_cancellation=shutdown_cancellation,
+        )
         _knowledge_indexer_start_retry_task = None
         try:
             from knowledge.indexer import (
@@ -1329,23 +1351,21 @@ async def on_shutdown():
         try:
             from .voice_identity_runtime import close_voice_identity_runtime
 
-            await close_voice_identity_runtime()
-        except asyncio.CancelledError as exc:
-            if shutdown_cancellation is None:
-                shutdown_cancellation = exc
-            current = asyncio.current_task()
-            if current is not None:
-                while current.cancelling():
-                    current.uncancel()
-            logger.debug(
-                "voice identity cleanup was cancelled; finishing remaining shutdown"
+            shutdown_cancellation = await _run_shutdown_step(
+                close_voice_identity_runtime(),
+                what="voice identity cleanup",
+                pending_cancellation=shutdown_cancellation,
             )
         except Exception as e:
             logger.debug(f"voice identity cleanup failed: {e}")
         cleanup()
         try:
             # join_sync_connector_threads 内部已经 gather 并行 join，直接 await
-            await join_sync_connector_threads(3.0)
+            shutdown_cancellation = await _run_shutdown_step(
+                join_sync_connector_threads(3.0),
+                what="同步连接器线程清理",
+                pending_cancellation=shutdown_cancellation,
+            )
         except Exception as e:
             logger.debug(f"同步连接器线程清理失败: {e}", exc_info=True)
 
@@ -1367,11 +1387,19 @@ async def on_shutdown():
                 )
             _preload_task = None
 
-        await _cancel_task_if_running(
-            _game_cleanup_task, name="game cleanup", timeout=1.0
+        shutdown_cancellation = await _run_shutdown_step(
+            _cancel_task_if_running(
+                _game_cleanup_task, name="game cleanup", timeout=1.0
+            ),
+            what="game cleanup",
+            pending_cancellation=shutdown_cancellation,
         )
         _game_cleanup_task = None
-        await _stop_neko_servers_integration_workers()
+        shutdown_cancellation = await _run_shutdown_step(
+            _stop_neko_servers_integration_workers(),
+            what="integration workers cleanup",
+            pending_cancellation=shutdown_cancellation,
+        )
 
         # Clean up agent_event_bridge (ZMQ context/sockets/recv thread)
         if agent_event_bridge is not None:

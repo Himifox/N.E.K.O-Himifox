@@ -153,12 +153,20 @@ class KnowledgeRoutingState:
                     dirty = self._dirty
                 if not dirty and self._snapshot is not None:
                     return
-                snapshot = RoutingSnapshot(_safe_load_records(self.config))
+                records = _safe_load_records(self.config)
+                snapshot = RoutingSnapshot(records or ())
                 with self._lock:
                     self._snapshot = snapshot
-                    if self._generation == generation:
+                    if self._generation != generation:
+                        continue
+                    # A load failure (unreadable/invalid catalog.override.json,
+                    # transient sqlite error) yields no records — publishing that
+                    # as clean would strand routing empty until an unrelated
+                    # mutation bumps the generation, because repairing the file
+                    # does not. Stay dirty so the next match() retries.
+                    if records is not None:
                         self._dirty = False
-                        return
+                    return
 
     def refresh_in_background(self) -> None:
         with self._lock:
@@ -267,11 +275,16 @@ def _load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
     return tuple(records)
 
 
-def _safe_load_records(config: RoutingConfig) -> tuple[RouteRecord, ...]:
+def _safe_load_records(config: RoutingConfig) -> tuple[RouteRecord, ...] | None:
+    """Return records, or ``None`` when the load failed.
+
+    ``None`` and ``()`` are different: an empty database legitimately routes
+    nothing, while a failure must not be cached as a clean empty snapshot.
+    """
     try:
         return _load_records(config)
     except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-        return ()
+        return None
 
 
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")

@@ -602,6 +602,8 @@ async def remove_public_knowledge_pack(request: Request):
         )
     except PermissionError:
         return {"ok": False, "reason": "subscription_identity_mismatch"}
+    except KnowledgeStoreError:
+        return {"ok": False, "reason": "knowledge_root_untrusted"}
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, **result}

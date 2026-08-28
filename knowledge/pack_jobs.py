@@ -90,6 +90,52 @@ def _jobs_root(knowledge_root: str | Path) -> Path:
     return Path(knowledge_root) / STAGING_DIRECTORY
 
 
+def _staged_artifact_limits() -> dict[str, int]:
+    from .limits import (
+        MAX_PACK_BYTES,
+        MAX_PREBUILT_MANIFEST_BYTES,
+        MAX_PREBUILT_VECTOR_BYTES,
+    )
+
+    return {
+        PACK_ARTIFACT_NAME: MAX_PACK_BYTES,
+        INDEX_MANIFEST_NAME: MAX_PREBUILT_MANIFEST_BYTES,
+        VECTOR_ARTIFACT_NAME: MAX_PREBUILT_VECTOR_BYTES,
+    }
+
+
+def _read_staged_artifact(job_dir: Path, name: str) -> bytes:
+    """Read one fixed staged artifact after proving it is a bounded regular file.
+
+    Every path *leading to* staging is already link-guarded, but the artifacts
+    themselves were read with a plain ``is_file()`` + ``read_bytes()``. Both
+    follow a symlink, so an artifact swapped between admission and indexing could
+    pull an unbounded external file into memory before the digest, schema, or
+    protocol size limit is ever checked. Same guard the jobs root gets.
+    """
+    path = job_dir / name
+    if _is_link_or_reparse(path):
+        raise ValueError("staged knowledge artifact is not a regular file")
+    try:
+        metadata = path.stat()
+    except OSError as exc:
+        raise ValueError("staged knowledge artifact is unavailable") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("staged knowledge artifact is not a regular file")
+    if metadata.st_size > _staged_artifact_limits()[name]:
+        raise ValueError("staged knowledge artifact exceeds its protocol limit")
+    return path.read_bytes()
+
+
+def _staged_artifact_present(job_dir: Path, name: str) -> bool:
+    """Report presence without following a link (a link is present but invalid)."""
+    try:
+        (job_dir / name).lstat()
+    except OSError:
+        return False
+    return True
+
+
 def _is_link_or_reparse(path: Path) -> bool:
     """Return whether ``path`` redirects filesystem access elsewhere."""
     try:
@@ -132,6 +178,25 @@ def _validated_jobs_root(knowledge_root: str | Path) -> Path | None:
     if resolved_jobs_root.parent != resolved_knowledge_root:
         return None
     return jobs_root
+
+
+def trusted_live_root(knowledge_root: str | Path) -> Path | None:
+    """Validate the configured root before any live database/registry mutation.
+
+    Read paths tolerate a redirected root — they only ever surface what the user
+    pointed at. A destructive mutation must not: following a symlink or junction
+    into an external store would delete rows from a database the user never
+    configured. Staging already refuses a linked root; this is the same guard for
+    the live side, which reaches ``knowledge.db`` / ``packs.json`` directly.
+    """
+    root = Path(knowledge_root)
+    if _is_link_or_reparse(root) or not root.is_dir():
+        return None
+    try:
+        root.resolve(strict=True)
+    except OSError:
+        return None
+    return root
 
 
 def _create_trusted_knowledge_root(knowledge_root: str | Path) -> Path | None:
@@ -1025,11 +1090,11 @@ def discard_degraded_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
 
 
 def _load_job_pack(job_dir: Path) -> KnowledgePack:
-    artifact_path = job_dir / PACK_ARTIFACT_NAME
-    if artifact_path.is_file():
+    if _staged_artifact_present(job_dir, PACK_ARTIFACT_NAME):
+        raw = _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME)
         try:
-            return validate_pack(json.loads(artifact_path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError) as exc:
+            return validate_pack(json.loads(raw.decode("utf-8")))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("staged knowledge pack is invalid") from exc
     return validate_pack(_read_json(job_dir / "pack.json"))
 
@@ -1240,17 +1305,17 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
                     return _capacity_mismatch_state(job_dir, state)
             manifest_path = job_dir / INDEX_MANIFEST_NAME
             vectors_path = job_dir / VECTOR_ARTIFACT_NAME
-            has_manifest = manifest_path.is_file()
-            has_vectors = vectors_path.is_file()
+            has_manifest = _staged_artifact_present(job_dir, INDEX_MANIFEST_NAME)
+            has_vectors = _staged_artifact_present(job_dir, VECTOR_ARTIFACT_NAME)
             if has_manifest and has_vectors:
                 from .prebuilt_index import validate_prebuilt_index
 
                 expected_subscription = subscription or {}
                 try:
                     validated = validate_prebuilt_index(
-                        (job_dir / PACK_ARTIFACT_NAME).read_bytes(),
-                        manifest_path.read_bytes(),
-                        vectors_path.read_bytes(),
+                        _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME),
+                        _read_staged_artifact(job_dir, INDEX_MANIFEST_NAME),
+                        _read_staged_artifact(job_dir, VECTOR_ARTIFACT_NAME),
                         expected_pack_sha256=str(
                             expected_subscription.get("artifact_sha256") or ""
                         ),
@@ -1454,9 +1519,9 @@ def _strict_staged_vector_snapshot(
     expected_subscription = subscription or {}
     try:
         validated = validate_prebuilt_index(
-            (job_dir / PACK_ARTIFACT_NAME).read_bytes(),
-            (job_dir / INDEX_MANIFEST_NAME).read_bytes(),
-            (job_dir / VECTOR_ARTIFACT_NAME).read_bytes(),
+            _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME),
+            _read_staged_artifact(job_dir, INDEX_MANIFEST_NAME),
+            _read_staged_artifact(job_dir, VECTOR_ARTIFACT_NAME),
             expected_pack_sha256=str(
                 expected_subscription.get("artifact_sha256") or ""
             ),
