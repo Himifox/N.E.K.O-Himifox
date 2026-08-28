@@ -296,12 +296,18 @@ _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
 # detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
 # the container that decides whether a closer belongs to this fence.
 _LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
-# The same marker, but consuming only ONE space after it. The greedy form
-# above is right when a fence opener follows, and wrong when INDENTATION
-# follows: "-     code" is a marker, its single padding space, and then a
-# four-column indented code block -- eating all five spaces measured it as
-# zero columns and mined the code as prose.
-_LIST_MARKER_MIN_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
+# The same markers, minus the leading padding and consuming only ONE space
+# after the marker. The greedy form above is right when a fence opener
+# follows and wrong when INDENTATION follows: "-     code" is a marker, its
+# single padding space, and then a four-column indented code block -- eating
+# all five spaces measured it as zero columns and mined the code as prose.
+# The padding is stripped separately, and by COLUMN, because a tab is worth
+# four of them; see ``_strip_containers_by_column``.
+_LIST_MARKER_COLUMN_RE = re.compile(r"(?:[-+*]|\d{1,9}[.)])[ \t]")
+_BLOCKQUOTE_COLUMN_RE = re.compile(r">[ \t]?")
+# The tick characters a fence may be built from, as opposed to the tilde
+# forms: only these carry the CommonMark info-string restriction.
+_FENCE_TICKS = "`｀"
 
 
 def _strip_blockquote_prefix(line: str) -> str:
@@ -314,6 +320,72 @@ def _split_blockquote_prefix(line: str) -> tuple[str, int]:
     if not match:
         return line, 0
     return line[match.end() :], match.group(0).count(">")
+
+
+def _indent_columns(body: str) -> int:
+    """Leading indentation in COLUMNS, expanding a tab to the next multiple of 4."""
+    columns = 0
+    for character in body:
+        if character == " ":
+            columns += 1
+        elif character == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+    return columns
+
+
+def _strip_containers_by_column(body: str) -> tuple[str, bool, int]:
+    r"""Strip container markers whose own padding is worth at most three columns.
+
+    The two marker patterns above both open with ``[ \t]{0,3}``, and a TAB
+    matched there is worth FOUR columns, not one. So a tab-indented code block
+    whose first content character happened to be ``-`` or ``>`` had that
+    character stripped as if it were a container marker, the residual indent
+    measured zero, and the line was mined as prose -- and persisted. Only
+    SPACES, at most three, can pad a marker.
+
+    Also reports whether a LIST marker was consumed and how deep the
+    blockquote prefix ran, which is what tells the caller a new block starts
+    here -- a list marker or a fresh quote level interrupts the paragraph
+    above it, while the same quote prefix repeated just continues one.
+    """
+    list_opened = False
+    quote_depth = 0
+    while True:
+        lead = len(body) - len(body.lstrip(" "))
+        if lead > 3:
+            return body, list_opened, quote_depth
+        rest = body[lead:]
+        quote = _BLOCKQUOTE_COLUMN_RE.match(rest)
+        if quote is not None:
+            quote_depth += 1
+            body = rest[quote.end() :]
+            continue
+        marker = _LIST_MARKER_COLUMN_RE.match(rest)
+        if marker is None:
+            return body, list_opened, quote_depth
+        list_opened = True
+        body = rest[marker.end() :]
+
+
+def _fence_open(stripped: str) -> re.Match[str] | None:
+    """Match a fence opener, rejecting a backtick fence with a backtick info string.
+
+    CommonMark forbids a backtick anywhere in the info string of a backtick
+    fence, so a line reading three backticks, a letter and a fourth backtick is
+    a paragraph. Reading it as an opener paired it with the NEXT fence line,
+    which put every later delimiter one out of step: the real code block went
+    unprotected, and in the other direction the paragraph it actually is got
+    protected through to the end of the text.
+    """
+    match = _FENCE_OPEN_RE.match(stripped)
+    if match is None:
+        return None
+    marker = match.group(1)
+    if marker[0] in _FENCE_TICKS and marker[0] in stripped[match.end() :]:
+        return None
+    return match
 
 
 def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
@@ -347,21 +419,28 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
             # one blockquote pass followed by one list pass finds the opener
             # only for the orders it happens to be written in. Loop instead,
             # accumulating depth, so the closer at the same nesting matches.
+            #
+            # The loop has to continue while EITHER container consumed
+            # something. Breaking when no blockquote followed the list marker
+            # stripped exactly one marker, so "- - ```" never opened and the
+            # block leaked, while the single-marker form protected fine.
             while True:
                 list_marker = _LIST_MARKER_PREFIX_RE.match(body)
-                if list_marker is None:
-                    break
-                body = body[list_marker.end() :]
-                inner_body, inner_depth = _split_blockquote_prefix(body)
-                if inner_depth == 0:
+                rest = body if list_marker is None else body[list_marker.end() :]
+                inner_body, inner_depth = _split_blockquote_prefix(rest)
+                if list_marker is None and inner_depth == 0:
                     break
                 body = inner_body
                 depth += inner_depth
         stripped = body.lstrip(" \t")
-        indent = len(body) - len(stripped)
-        if indent <= 3:
+        # COLUMNS, not characters. ``_indented_code_spans`` expands a tab to
+        # four and this counted it as one, so a tab-indented fence line passed
+        # the opener test here while being code CONTENT there -- and an opener
+        # with no closer protects to end of text, so the disagreement cost the
+        # whole remainder of the reply.
+        if _indent_columns(body) <= 3:
             if fence_start is None:
-                opening = _FENCE_OPEN_RE.match(stripped)
+                opening = _fence_open(stripped)
                 if opening:
                     marker = opening.group(1)
                     fence_start = offset
@@ -373,7 +452,7 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
                     stripped,
                 )
-                reopening = _FENCE_OPEN_RE.match(stripped)
+                reopening = _fence_open(stripped)
                 if closing and depth == fence_depth:
                     # Depth-matched closer: an ordinary close.
                     spans.append((fence_start, offset + len(line)))
@@ -513,32 +592,34 @@ def _inline_code_spans(
 
 
 def _indented_code_spans(text: str) -> list[tuple[int, int]]:
-    """Return Markdown code lines indented by at least four columns."""
+    """Return Markdown code lines indented by at least four columns.
+
+    An indented code block cannot INTERRUPT a paragraph, so the previous line
+    decides. Without that rule every indented continuation line -- centred
+    ASCII art, an aligned lyric, a clause wrapped for width -- was deleted from
+    mining, on 6% of a code-free speech corpus.
+    """
     spans: list[tuple[int, int]] = []
     offset = 0
+    paragraph_open = False
+    quote_depth = 0
     for line in text.splitlines(keepends=True):
         line_end = offset + len(line)
-        # Same reason as in _fenced_code_spans: a container prefix is not part
-        # of the code block's indentation, so a quoted indented block
-        # (">     code") measured 0 columns and was mined as prose. Containers
-        # alternate, so strip them in a loop -- one blockquote pass alone left
-        # "- >     code" measuring from the list marker.
-        body = _strip_blockquote_prefix(line)
-        while True:
-            list_marker = _LIST_MARKER_MIN_RE.match(body)
-            if list_marker is None:
-                break
-            body = _strip_blockquote_prefix(body[list_marker.end() :])
-        indent_columns = 0
-        for character in body:
-            if character == " ":
-                indent_columns += 1
-            elif character == "\t":
-                indent_columns += 4 - (indent_columns % 4)
-            else:
-                break
-        if indent_columns >= 4 and body.strip():
+        body, list_opened, line_quote_depth = _strip_containers_by_column(line)
+        if list_opened or line_quote_depth != quote_depth:
+            # A list marker or a new quote level opens a block, and nothing
+            # can be a continuation of a paragraph that is not in it.
+            paragraph_open = False
+        quote_depth = line_quote_depth
+        is_code = (
+            _indent_columns(body) >= 4 and bool(body.strip()) and not paragraph_open
+        )
+        if is_code:
             spans.append((offset, line_end))
+        # The CONTAINER-STRIPPED body decides, not the raw line: inside a
+        # blockquote a bare ">" is a blank line, and reading it as prose kept
+        # the paragraph open so the indented code after it was mined.
+        paragraph_open = bool(body.strip()) and not is_code
         offset = line_end
     return spans
 

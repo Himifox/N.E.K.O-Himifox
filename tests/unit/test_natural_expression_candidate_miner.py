@@ -1783,3 +1783,68 @@ def test_a_url_does_not_swallow_the_sentence_after_it(
     label, text, must_remain_visible
 ):
     assert must_remain_visible in _unprotected(text), label
+
+
+# The two block scanners have to agree about what an indent IS, and about where
+# a code block may START. Both directions are pinned: speech that merely looks
+# indented stays minable, and a code block behind a container prefix does not.
+_BLOCK_OVER_PROTECTION_CASES = [
+    # CommonMark: an indented code block cannot INTERRUPT a paragraph.
+    ("indented continuation", "今天天气真好呀\n    我们一起去吃饭吧\n", "我们一起去吃饭吧"),
+    ("nested list item", "- plan\n    - 一起去玩吧好不好", "一起去玩吧好不好"),
+    # ...but a quote prefix REPEATED from the line above only continues that
+    # line's paragraph, so this is a lazy continuation and not code.
+    (
+        "quoted lazy continuation",
+        "> 今天天气真好呀\n>     我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+    # A tab is four columns, so this "```" is code CONTENT of an indented block,
+    # not a fence opener -- and an opener with no closer eats the whole reply.
+    ("tab before a fence", "你好呀\n\n\t```\n我们一起去吃饭吧！", "我们一起去吃饭吧"),
+    # A backtick fence may not carry a backtick in its info string, so this line
+    # is a paragraph rather than an unclosed fence.
+    ("backtick in info string", "```a`\n我们一起去吃饭吧！", "我们一起去吃饭吧"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _BLOCK_OVER_PROTECTION_CASES,
+    ids=[row[0] for row in _BLOCK_OVER_PROTECTION_CASES],
+)
+def test_indented_speech_is_not_a_code_block(label, text, must_remain_visible):
+    assert must_remain_visible in _unprotected(text), label
+
+
+_BLOCK_LEAK_CASES = [
+    # A TAB is worth four columns, so it can never be the "at most three spaces"
+    # of padding a container marker is allowed. Stripping it as padding measured
+    # the residual indent as zero and mined the code line as prose.
+    ("tab then list marker", "see this:\n\n\t- SECRET_TOKEN here\n"),
+    ("tab then blockquote", "see this:\n\n\t>SECRET_TOKEN here"),
+    # A marker OPENS a block, so the paragraph above it is not continuing and
+    # the indented content really is code.
+    ("list marker interrupts a paragraph", "sure\n-     SECRET_TOKEN = 1\ndone"),
+    ("quote marker interrupts a paragraph", "sure\n>     SECRET_TOKEN = 1\ndone"),
+    ("spaces and tab then ordered marker", "see this:\n\n  \t1. SECRET_TOKEN here"),
+    # Two list markers: stripping stopped after the first, so the fence never
+    # opened, while the one-marker spelling protected the block in full.
+    ("fence two list levels deep", "- - ~~~\nSECRET_TOKEN\n~~~"),
+    ("fence list then ordered", "- 2) ~~~\nSECRET_TOKEN\n~~~"),
+    # Line one is NOT an opener, so line two opens the real, unclosed fence.
+    # Reading line one as an opener put every later delimiter one out of step.
+    ("backtick info string offsets the fence", "```a`\n```\nSECRET_TOKEN"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _BLOCK_LEAK_CASES,
+    ids=[row[0] for row in _BLOCK_LEAK_CASES],
+)
+def test_block_code_behind_a_container_prefix_is_protected(label, text):
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    assert "SECRET_TOKEN" not in _unprotected(text), label
+    assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
