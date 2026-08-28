@@ -81,8 +81,13 @@ def _is_within_memory_root(memory_dir: str, name: str, character_dir: str) -> bo
     # dropping the backslash half reddens the guard.
     if "/" in name or "\\" in name:
         return False
-    root = os.path.abspath(str(memory_dir))
-    resolved = os.path.abspath(character_dir)
+    # realpath, not abspath: abspath is pure string arithmetic and leaves a
+    # symlink unresolved, so a memory/<name> pointing anywhere at all still
+    # looked like a direct child and the sidecar was written THROUGH the link.
+    # Both sides get the same treatment, so a memory root that is itself a
+    # link (a tree moved to another drive) keeps working.
+    root = os.path.realpath(str(memory_dir))
+    resolved = os.path.realpath(character_dir)
     # DIRECT child, and named exactly for the character. "a/b" nests a level
     # deeper and leaves an "a/" behind that facts_sync reads as a character
     # of its own; "./x" lands on the same directory as a character actually

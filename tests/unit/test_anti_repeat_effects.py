@@ -2011,6 +2011,60 @@ def test_the_separator_rule_holds_under_posix_path_semantics(monkeypatch):
     )
 
 
+def test_a_symlinked_character_directory_is_refused(monkeypatch):
+    """Containment has to survive a link, which abspath cannot see.
+
+    abspath is pure string arithmetic: it normalises "." and ".." and
+    stops there. A memory/<name> that is a symlink to a directory
+    somewhere else therefore still reads as a direct child, and the
+    sidecar is written THROUGH the link -- outside the tree the rule
+    exists to keep it inside. Only realpath resolves it.
+
+    The link is injected rather than created, because making a real one
+    on Windows needs a privilege CI does not grant, and a skipped test
+    would leave the fix unverified on the machine it was written on.
+    The helper under test is the real one; only path resolution is
+    substituted.
+    """
+    import posixpath
+
+    import memory as memory_pkg
+
+    root = "/tmp/mem"
+    linked = posixpath.join(root, "Linked")
+
+    class _Path:
+        """posixpath, except that "Linked" points out of the tree."""
+
+        def __getattr__(self, item):
+            return getattr(posixpath, item)
+
+        @staticmethod
+        def realpath(path):
+            if path == linked:
+                return "/elsewhere/Linked"
+            return posixpath.normpath(path)
+
+        @staticmethod
+        def abspath(path):
+            # Present so that reverting the fix to abspath still runs --
+            # and fails, which is the point.
+            return posixpath.normpath(path)
+
+    class _Os:
+        path = _Path()
+
+    monkeypatch.setattr(memory_pkg, "os", _Os)
+
+    assert not memory_pkg._is_within_memory_root(root, "Linked", linked), (
+        "a symlinked character directory was accepted as a direct child"
+    )
+    # The dual: an ordinary directory under the same root still passes.
+    assert memory_pkg._is_within_memory_root(
+        root, "Neko", posixpath.join(root, "Neko")
+    )
+
+
 @pytest.mark.parametrize(
     "module_name, class_name, filename",
     _SIDECAR_STORE_MODULES,
