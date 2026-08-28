@@ -1742,6 +1742,14 @@ def test_real_containers_still_protect(label, text):
 _URL_LEAK_CASES = [
     ("parenthesised path", "see https://example.com/(SECRET_TOKEN) here"),
     ("parens mid path", "see https://example.com/a(SECRET_TOKEN)/b here"),
+    # A path nests parentheses to any depth, so this is a scanner and not a
+    # pattern: one level encoded in the regex stopped at the inner "(" and
+    # left the rest of the path minable -- and persisted.
+    ("nested parens", "see https://example.com/f(g(SECRET_TOKEN)) here"),
+    ("three paren levels", "see https://example.com/a(b(c(SECRET_TOKEN))) here"),
+    ("tail after a group", "see https://example.com/f(g)/SECRET_TOKEN here"),
+    ("two groups", "see https://example.com/f(g)/h(i(SECRET_TOKEN)) here"),
+    ("nested parens on a bare host", "see example.com/f(g(SECRET_TOKEN)) here"),
     ("bare host after hanzi", "看这个吧h.io/SECRET_TOKEN，很好玩哦"),
     ("bare host after kana", "ネコはneko.jp/SECRET_TOKEN"),
     ("mixed case host", "see Example.com/SECRET_TOKEN here"),
@@ -1771,6 +1779,26 @@ _URL_OVER_PROTECTION_CASES = [
     # output, not a hostname.
     ("run-on english", "That is so cute.Nice to meet you again", "Nice to meet you again"),
     ("run-on spanish", "Te extranaste mucho hoy.Vamos a cenar juntos", "Vamos a cenar juntos"),
+    # An UNBALANCED "(" must extend nothing. This one is kept even though
+    # ordinary over-protection is accepted here: a scan that runs to the end
+    # of the text is the eats-the-whole-reply class, not the loses-a-phrase
+    # class.
+    (
+        "unbalanced paren after a url",
+        "请看https://a.com/x(然后我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+    # A group whose body hits a stop character is prose, not a path segment.
+    (
+        "cjk punctuation inside the group",
+        "请看https://a.com/x(然后。)我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+    (
+        "whitespace inside the group",
+        "请看https://a.com/x(然后 空格)我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
 ]
 
 

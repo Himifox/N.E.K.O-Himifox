@@ -90,11 +90,13 @@ _URL_STOP = (
     r"\uff3b-\uff40\uff5b-\uff65"
 )
 _URL_ATOM = r"[^\s<>()" + _URL_STOP + r"]"
-# One level of balanced parentheses, the way GFM autolinks resolve them. A path
-# such as ``/(helper_path)`` otherwise ended AT the paren and left its body
-# minable -- and minable here means persisted to the effects sidecar for 120
-# days, by a module whose whole promise is that it never persists a URL.
-_URL_TAIL = r"(?:" + _URL_ATOM + r"|\(" + _URL_ATOM + r"*\))"
+_URL_ATOM_RE = re.compile(_URL_ATOM)
+# Parentheses are NOT in the pattern. A path nests them to any depth
+# (``/f(g(x))``), and one level encoded here stopped at the inner ``(``,
+# leaving the rest of the path minable -- and minable means persisted to the
+# effects sidecar for 120 days, by a module whose whole promise is that it
+# never persists a URL. ``_url_spans`` extends each match instead.
+_URL_TAIL = _URL_ATOM
 _URL_RE = re.compile(
     r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
     # An ASCII-only lookbehind. ``\w`` counts CJK as a word character, so a bare
@@ -647,6 +649,52 @@ _HTML_RAW_TEXT_OPEN_RE = re.compile(
 )
 
 
+def _url_spans(text: str) -> list[tuple[int, int]]:
+    """Return URL spans, extended through balanced parentheses to any depth.
+
+    A path nests parentheses -- ``/f(g(x))`` -- and encoding ONE level in the
+    pattern simply stopped at the inner ``(``, leaving the rest of the path
+    minable and, because this feeds ``build_repeat_signature``, persistable.
+    Same reason ``_markdown_link_target_spans`` is a scanner and not a pattern.
+
+    An UNBALANCED ``(`` extends nothing. Running to the end of the paragraph is
+    exactly how a URL in speech came to swallow the sentence after it, and a
+    group whose body hits a stop character is not part of the URL either.
+    """
+    return [
+        (match.start(), _url_end_with_parens(text, match.end()))
+        for match in _URL_RE.finditer(text)
+    ]
+
+
+def _url_end_with_parens(text: str, end: int) -> int:
+    """Extend a URL match end across balanced ``(...)`` groups and their tails."""
+    limit = len(text)
+    while end < limit and text[end] == "(":
+        depth = 0
+        cursor = end
+        closed = -1
+        while cursor < limit:
+            character = text[cursor]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    closed = cursor + 1
+                    break
+            elif not _URL_ATOM_RE.match(text, cursor):
+                # Whitespace or CJK punctuation: the group is prose, not a path.
+                break
+            cursor += 1
+        if closed < 0:
+            return end
+        end = closed
+        while end < limit and _URL_ATOM_RE.match(text, end):
+            end += 1
+    return end
+
+
 def _paragraph_bounds(text: str, start: int) -> tuple[int, int]:
     """Return the end of the paragraph at ``start`` and the start of the next."""
     match = _BLANK_LINE_RE.search(text, start)
@@ -867,7 +915,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     # such an opener ran the container past the code block and ate the prose
     # after it. The bounded regexes need no such guard.
     code_spans = _merge_spans(spans)
-    spans.extend(match.span() for match in _URL_RE.finditer(text))
+    spans.extend(_url_spans(text))
     spans.extend(_markdown_link_target_spans(text, code_spans))
     # Comments first: a tag inside a comment BODY is not a container either,
     # so the raw-text scanner has to see the comment spans as well.
