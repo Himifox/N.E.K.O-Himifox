@@ -687,6 +687,14 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
 # containing comparisons or words like "decode" is unaffected.
 _HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea")
+# HTML RAW-TEXT elements: their content is text by definition, so a
+# start-tag-shaped string inside the body is a STRING, not a nested
+# element, and the first matching close tag ends them. Depth-counting them
+# ran the span past the real closer -- `<script>const m = "<script>";
+# </script>` then protected to END OF TEXT, across a blank line, eating the
+# reply after it. `pre` and `code` are ordinary elements that really do
+# nest, so they keep the counter.
+_HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
     r"<(pre|code|script|style|textarea)\b[^>]*>",
     re.IGNORECASE,
@@ -840,7 +848,11 @@ def _collect_link_targets(
 # label may carry anything; only the destination is protected, and only when it
 # looks like one -- see ``_reference_definition_spans``.
 _REFERENCE_DEFINITION_RE = re.compile(
-    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]+(?P<target>[^ \t\r\n]+)",
+    # The space after the colon is OPTIONAL -- "[cfg]:/api/token" is a valid
+    # definition, and requiring one left its destination minable. The
+    # destination-shape check in the scanner is what keeps this off ordinary
+    # speech, not the space.
+    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*(?P<target>[^ \t\r\n]+)",
     re.MULTILINE,
 )
 
@@ -969,7 +981,11 @@ def _html_raw_text_spans(
                 # way an unclosed fence behaves.
                 end = len(text)
                 break
-            next_open = open_re.search(text, cursor)
+            next_open = (
+                None
+                if tag in _HTML_NON_NESTING_TAGS
+                else open_re.search(text, cursor)
+            )
             while next_open is not None and _starts_inside(
                 next_open.start(), ignore
             ):

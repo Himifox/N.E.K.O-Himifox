@@ -2088,3 +2088,62 @@ def test_a_bracketed_speaker_beat_is_not_a_reference_definition():
     assert candidate_core._runtime_protected_spans(
         "[^1]: 我今天真的很开心呢"
     ) == []
+
+
+# A raw-text element's content is TEXT, so a start-tag-shaped string inside it
+# is a string, not a nested element. Depth-counting those ran the span past the
+# real closer and out to end of text -- the one over-protection shape this
+# module refuses, because it eats the rest of the reply rather than one phrase.
+_RAW_TEXT_NO_NESTING_CASES = [
+    (
+        "script holding its own tag as a string",
+        '<script>const marker = "<script>";</script> 我们一起去吃饭吧',
+        "我们一起去吃饭吧",
+    ),
+    (
+        "across a blank line",
+        '<style>a { content: "<style>"; }</style>\n\n我们一起去吃饭吧',
+        "我们一起去吃饭吧",
+    ),
+    (
+        "textarea",
+        "<textarea>a <textarea> b</textarea> 我们一起去吃饭吧",
+        "我们一起去吃饭吧",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text, must_remain_visible",
+    _RAW_TEXT_NO_NESTING_CASES,
+    ids=[row[0] for row in _RAW_TEXT_NO_NESTING_CASES],
+)
+def test_a_raw_text_element_ends_at_its_first_closer(
+    label, text, must_remain_visible
+):
+    assert must_remain_visible in _unprotected(text), label
+
+
+def test_pre_and_code_still_count_nesting():
+    """The dual: ordinary elements really do nest, so they keep the counter.
+
+    Without this the fix could be 'stop counting everywhere', which ends
+    `<code>a <code>b</code> SECRET</code>` at the inner closer and leaks the
+    rest of the outer element.
+    """
+    assert "SECRET_TOKEN" not in _unprotected(
+        "<code>a <code>b</code> SECRET_TOKEN</code>"
+    )
+    assert "SECRET_TOKEN" not in _unprotected("<script>SECRET_TOKEN</script>")
+    assert "SECRET_TOKEN" not in _unprotected("<script>SECRET_TOKEN")
+
+
+def test_a_reference_definition_may_omit_the_space_after_its_colon():
+    """Markdown allows `[cfg]:/api/token`; requiring a space left it minable."""
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    text = "morning\n\n[cfg]:/api/SECRET_TOKEN\n"
+    assert "SECRET_TOKEN" not in _unprotected(text)
+    assert build_repeat_signature(text, ["/api/SECRET_TOKEN"], language="en") is None
+    # The destination-shape check, not the space, is what keeps this off speech.
+    assert candidate_core._runtime_protected_spans("[小八]:我们一起去吃饭吧！") == []
