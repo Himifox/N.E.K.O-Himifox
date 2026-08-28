@@ -99,10 +99,24 @@ _URL_ATOM_RE = re.compile(_URL_ATOM)
 _URL_TAIL = _URL_ATOM
 _URL_RE = re.compile(
     r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
-    # Other schemes carry the same kind of payload, and two of them carry
-    # PERSONAL data rather than a path. An address survived as "name@"
-    # because only its domain half matched the bare-host branch below.
-    r"(?i:mailto|tel|data|file|ftp|sftp|wss?):" + _URL_TAIL + "+|"
+    # ANY scheme, as a rule rather than a list. A fixed allowlist guarantees
+    # another round of "you missed one", and the ones it missed carried real
+    # payloads: an otpauth:// TOTP secret, a postgres:// password, an
+    # ssh/magnet/sms target and a Windows path all reached the 120-day
+    # sidecar verbatim.
+    #
+    # The two lookaheads are what keep this off speech: after the colon
+    # there must be an OPAQUE PART -- at least two atoms, at least one of
+    # them alphanumeric -- so "together:D", "3:4" and a CJK sentence after
+    # "note:" match nothing. Without them the rule runs to end of text on
+    # CJK, which is the one over-protection shape this module refuses.
+    #
+    # Given up deliberately, since none carries a payload: the degenerate
+    # "data:,", "tel:5" and "mailto:a" the old list covered. A real
+    # "tel:+1-555-1234", "data:image/png;base64,..." and a real mailto
+    # address stay protected.
+    r"(?i:[a-z][a-z0-9+.\-]*):"
+    r"(?=" + _URL_TAIL + "{2,})(?=" + _URL_TAIL + "*[0-9A-Za-z])" + _URL_TAIL + "+|"
     # A bare address too, which is how one actually appears in a reply. The
     # local part is the identifying half, so matching only from the domain
     # was worse than not matching at all.
@@ -142,6 +156,11 @@ _TEMPLATE_RE = re.compile(
     # match turns one stray delimiter in prose into a span that swallows the
     # rest of the reply.
     r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    # Jinja statement and comment blocks, on the same line budget: a
+    # ``{% set api_key = "..." %}`` carried its payload straight past the brace
+    # pattern, which only knew the expression form.
+    r"\{%[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}%\}|"
+    r"\{#[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}#\}|"
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
@@ -811,6 +830,15 @@ def _collect_link_targets(
             spans.append((opener, end))
 
 
+# ``[label]: destination`` at line start, the reference form of a link. The
+# label may carry anything; only the destination is protected, and only when it
+# looks like one -- see ``_reference_definition_spans``.
+_REFERENCE_DEFINITION_RE = re.compile(
+    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]+(?P<target>[^ \t\r\n]+)",
+    re.MULTILINE,
+)
+
+
 def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
     """True when ``position`` sits inside one of ``spans``.
 
@@ -822,6 +850,41 @@ def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
     """
     index = bisect.bisect_right(spans, position, key=lambda span: span[0]) - 1
     return index >= 0 and spans[index][0] <= position < spans[index][1]
+
+
+def _reference_definition_spans(
+    text: str, ignore: Sequence[tuple[int, int]] = ()
+) -> list[tuple[int, int]]:
+    """Return the DESTINATION half of a Markdown reference definition.
+
+    ``[label]: /srv/keys/token`` puts a path where the inline form puts it
+    behind ``](``, so the inline scanner never saw it and the destination was
+    mined -- and persisted. Same rule as that scanner: the label half is prose
+    a character may repeat, only the destination is protected.
+
+    The destination has to LOOK like one, or an ordinary line of speech that
+    happens to start with a bracketed name -- a script beat, a footnote-ish
+    aside -- would be protected to end of line. It qualifies when it is a
+    closed angle-bracket pair, or starts with ``/``, ``./`` or ``../``, or the
+    module's own ``_URL_RE`` matches it from offset zero. No new list: the
+    URL rule is reused rather than restated.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _REFERENCE_DEFINITION_RE.finditer(text):
+        start = match.start("target")
+        if _starts_inside(match.start(), ignore):
+            continue
+        target = match.group("target")
+        if target.startswith("<"):
+            if not target.endswith(">") or len(target) < 2:
+                continue
+        elif not (
+            target.startswith(("/", "./", "../"))
+            or _URL_RE.match(target)
+        ):
+            continue
+        spans.append((start, start + len(target)))
+    return spans
 
 
 def _html_comment_spans(
@@ -949,6 +1012,7 @@ def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
     code_spans = _merge_spans(spans)
     spans.extend(_url_spans(text))
     spans.extend(_markdown_link_target_spans(text, code_spans))
+    spans.extend(_reference_definition_spans(text, code_spans))
     # Comments first: a tag inside a comment BODY is not a container either,
     # so the raw-text scanner has to see the comment spans as well.
     comment_spans = _html_comment_spans(text, code_spans)

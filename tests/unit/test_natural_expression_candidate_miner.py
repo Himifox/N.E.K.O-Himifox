@@ -1491,6 +1491,9 @@ _MULTILINE_TEMPLATE_CASES = [
     ("shell block", "${\nalpha\nsecret helper phrase\n}"),
     ("erb block", "<%\nalpha\nsecret helper phrase\n%>"),
     ("crlf jinja", "{{\r\nsecret helper phrase\r\n}}"),
+    # Statement and comment blocks, which the expression form does not cover.
+    ("jinja statement", "{%\nsecret helper phrase\n%}"),
+    ("jinja comment", "{#\nsecret helper phrase\n#}"),
 ]
 
 
@@ -2001,3 +2004,82 @@ def test_url_paren_extension_scans_in_linear_time():
     started = time.perf_counter()
     candidate_core._runtime_protected_spans(text)
     assert time.perf_counter() - started < 5.0
+
+
+# A scheme is matched by RULE, not by a list. Every entry here is chosen so that
+# adding one more name to an allowlist could NOT rescue it.
+_SCHEME_RULE_LEAK_CASES = [
+    ("otpauth totp secret", "scan otpauth://totp/N?secret=SECRET_TOKEN now"),
+    ("database password", "db is postgres://neko:SECRET_TOKEN@dbhost/app ok"),
+    ("magnet", "grab magnet:?xt=urn:btih:SECRET_TOKEN now"),
+    ("windows path", "open file:///C:/Users/me/SECRET_TOKEN here"),
+    # A scheme name nobody would ever enumerate: this row is the whole point.
+    ("arbitrary scheme shape", "odd zq7+x-.foo:SECRET_TOKEN here"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _SCHEME_RULE_LEAK_CASES,
+    ids=[row[0] for row in _SCHEME_RULE_LEAK_CASES],
+)
+def test_any_uri_scheme_is_protected(label, text):
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    assert "SECRET_TOKEN" not in _unprotected(text), label
+    assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
+
+
+_SCHEME_RULE_SPEECH_CASES = [
+    # The opaque-part lookaheads are what separate a scheme from a colon in
+    # speech. "together:D" is the discriminating one: a variant that merely
+    # forbids CJK after the colon still eats it.
+    ("emoticon after a colon", "see you together:D that was so much fun today"),
+    ("cjk after a colon", "note:今天要早点睡觉哦明天还要早起呢我们一起加油吧"),
+    ("ratio", "比例是 3:4 啊我们一起去吃饭吧"),
+    ("clock", "时间 12:30 见面好不好呀"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    _SCHEME_RULE_SPEECH_CASES,
+    ids=[row[0] for row in _SCHEME_RULE_SPEECH_CASES],
+)
+def test_a_colon_in_speech_is_not_a_scheme(label, text):
+    assert candidate_core._runtime_protected_spans(text) == [], label
+
+
+def test_a_reference_definition_destination_is_protected():
+    """``[label]: /path`` puts a destination where the inline form hides it.
+
+    The inline scanner only knows ``](``, so the reference form was mined and
+    persisted.
+    """
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    text = "morning\n\n[cfg]: /srv/lanlan/keys/SECRET_TOKEN\n"
+    assert "SECRET_TOKEN" not in _unprotected(text)
+    assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None
+
+
+def test_only_a_reference_definition_protects_that_path():
+    """Reverse anchor: the same path in prose has to stay minable.
+
+    Without this, widening ``_URL_RE`` until every bare ``/path`` is protected
+    would satisfy the test above -- a far larger change that would eat every
+    slash in ordinary speech.
+    """
+    assert candidate_core._runtime_protected_spans(
+        "we saved it to /srv/lanlan/keys/owner-token today ok"
+    ) == []
+
+
+def test_a_bracketed_speaker_beat_is_not_a_reference_definition():
+    """The destination has to LOOK like one, or a script beat runs to line end."""
+    assert candidate_core._runtime_protected_spans(
+        "[小八]:我们一起去吃饭吧！今天也辛苦了呢！"
+    ) == []
+    assert candidate_core._runtime_protected_spans(
+        "[^1]: 我今天真的很开心呢"
+    ) == []

@@ -1104,6 +1104,11 @@ _WRAPPED_TEMPLATE_DRAFTS = [
     # Opener and closer on their own lines with a two-line body.
     ("jinja block", "ok {{" + chr(10) + "alpha" + chr(10) + "secret helper phrase" + chr(10) + "}} done"),
     ("shell block", "ok ${" + chr(10) + "alpha" + chr(10) + "secret helper phrase" + chr(10) + "} done"),
+    # The sidecar consults its OWN pattern, so the statement and comment
+    # forms have to be added here as well as in the miner. Patching only the
+    # miner leaves this leak open while every miner-side test goes green.
+    ("jinja statement", "sure {%" + chr(10) + "secret helper phrase" + chr(10) + "%} enjoy"),
+    ("jinja comment", "sure {#" + chr(10) + "secret helper phrase" + chr(10) + "#} enjoy"),
 ]
 
 

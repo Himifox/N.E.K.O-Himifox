@@ -999,8 +999,8 @@
     // and each analyze start/stop. A time window rather than an attempt count --
     // an attempt count is spent by the three syncs that fire during bootstrap,
     // ~126ms apart, so a momentary blip at page load would give up permanently.
-    let repetitionInsightCharacterRetryAt = 0;
-    const REPETITION_INSIGHT_CHARACTER_RETRY_DELAY_MS = 5000;
+    let repetitionInsightCharacterThrottleUntil = 0;
+    const REPETITION_INSIGHT_CHARACTER_THROTTLE_MS = 5000;
 
     // The panel analyses a CHARACTER; the editor opens a FILE. Those are the
     // same identity for anyone with a recent.json, and the panel piggybacked on
@@ -1039,7 +1039,7 @@
         // `recent.json` to fall back on.
         if (memoryStorageLimited) return;
         if (repetitionInsightCharactersRequested) return;
-        if (Date.now() < repetitionInsightCharacterRetryAt) return;
+        if (Date.now() < repetitionInsightCharacterThrottleUntil) return;
         repetitionInsightCharactersRequested = true;
         let loaded = false;
         try {
@@ -1060,11 +1060,20 @@
             // overlapping syncs still collapse into one request, but a transient
             // failure must not silence the selector for the rest of the window's
             // life -- the identities it carries have no file-list button to fall
-            // back on. The retry window keeps a persistently dead endpoint down to
-            // one request every few seconds instead of one per sync.
+            // back on.
+            //
+            // This is a THROTTLE, not a scheduled retry, and the name says so.
+            // Nothing sets a timer here, deliberately: opening the insights
+            // panel calls syncRepetitionInsightsControls, and the selector is
+            // only visible inside that panel -- so the action that would reveal
+            // a stale list is the same action that reloads it. A timer would
+            // instead poll a dead endpoint every few seconds for the life of an
+            // idle tab, logging each failure. The throttle keeps a persistently
+            // dead endpoint down to one request every few seconds rather than
+            // one per sync.
             if (!loaded) {
-                repetitionInsightCharacterRetryAt = Date.now()
-                    + REPETITION_INSIGHT_CHARACTER_RETRY_DELAY_MS;
+                repetitionInsightCharacterThrottleUntil = Date.now()
+                    + REPETITION_INSIGHT_CHARACTER_THROTTLE_MS;
                 repetitionInsightCharactersRequested = false;
             }
         }

@@ -80,6 +80,12 @@ _PROTECTED_RE = re.compile(
     # its single-line twin was rejected. `<...>` stays line-bounded -- see the
     # miner for the speech it swallows otherwise.
     r"\{\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}\}|"
+    # The SAME two alternatives as the miner. This pattern is the one the
+    # sidecar actually consults -- ``_TEMPLATE_RE`` is not in
+    # ``_runtime_protected_spans`` -- so patching only the miner leaves the
+    # 120-day leak untouched while every miner-side test goes green.
+    r"\{%[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}%\}|"
+    r"\{#[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}#\}|"
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     r"<[^<>\r\n]{1,80}>|"
