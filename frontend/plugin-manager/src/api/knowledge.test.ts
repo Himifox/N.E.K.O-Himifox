@@ -288,3 +288,36 @@ describe('knowledge API response handling', () => {
     expect(axiosMocks.request.mock.calls[3]![0].params.token).toBe('fresh-token')
   })
 })
+
+describe('knowledge vector presentation state', () => {
+  it.each([
+    [{ prebuilt_chunks_ready: 0, prebuilt_chunks_missing: 0 }, 'none'],
+    [{ prebuilt_chunks_ready: 4, prebuilt_chunks_missing: 0 }, 'complete'],
+    [{ prebuilt_chunks_ready: 0, prebuilt_chunks_missing: 4, local_embedding_enabled: true }, 'building'],
+    [{ prebuilt_chunks_ready: 2, prebuilt_chunks_missing: 2, local_embedding_enabled: false }, 'partial'],
+    [{ prebuilt_chunks_ready: 0, prebuilt_chunks_missing: 4, local_embedding_enabled: false }, 'waiting'],
+    [{ prebuilt_chunks_ready: -2, prebuilt_chunks_missing: -3, local_embedding_enabled: true }, 'none'],
+    [{ prebuilt_chunks_ready: 4, prebuilt_chunks_missing: -3 }, 'complete'],
+  ])('derives one state for class and label consumers: %j', async (pack, expected) => {
+    const { packVectorState } = await loadKnowledgeApi()
+    expect(packVectorState(pack)).toBe(expected)
+  })
+
+  it('aggregates all packs by explicit priority independent of input order', async () => {
+    const { aggregateVectorState } = await loadKnowledgeApi()
+    const states = ['complete', 'waiting', 'partial', 'building'] as const
+
+    expect(aggregateVectorState(states, { ready: 9, total: 9 })).toBe('building')
+    expect(aggregateVectorState([...states].reverse(), { ready: 9, total: 9 })).toBe('building')
+    expect(aggregateVectorState(['complete', 'partial'], { ready: 9, total: 9 })).toBe('partial')
+  })
+
+  it('uses global counts only when there are no pack states', async () => {
+    const { aggregateVectorState } = await loadKnowledgeApi()
+
+    expect(aggregateVectorState([], { ready: 4, total: 4 })).toBe('complete')
+    expect(aggregateVectorState([], { ready: 2, total: 4 })).toBe('partial')
+    expect(aggregateVectorState([], { ready: 0, total: 4 })).toBe('waiting')
+    expect(aggregateVectorState([], { ready: -1, total: -1 })).toBe('none')
+  })
+})

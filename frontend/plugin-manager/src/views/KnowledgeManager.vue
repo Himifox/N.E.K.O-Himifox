@@ -369,7 +369,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, removeManagedPack, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob } from '@/api/knowledge'
+import { aggregateVectorState, knowledgePackVectorCounts, KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, packVectorState, removeManagedPack, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob, type KnowledgeVectorState } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
 import { createLatestRequestGate } from '@/utils/latestRequest'
@@ -499,10 +499,10 @@ const packRuntimeCards = computed(() => {
     ? packVectorSnapshot.ready
     : Math.min(vectorTotal, Math.max(0, Number(status.value?.chunks_ready) || 0))
   const vectorPercent = vectorTotal > 0 ? Math.round(vectorReady * 1000 / vectorTotal) / 10 : 0
-  const vectorBuilding = packs.value.some((pack) => {
-    const counts = packVectorCounts(pack)
-    return pack.local_embedding_enabled === true && counts.total > counts.ready
-  })
+  const vectorState = aggregateVectorState(
+    packs.value.map(packVectorState),
+    { ready: vectorReady, total: vectorTotal },
+  )
   return [
     {
       key: 'auto-context',
@@ -516,11 +516,9 @@ const packRuntimeCards = computed(() => {
       label: t('knowledge.indexStatus'),
       value: `${vectorReady} / ${vectorTotal}`,
       meta: vectorTotal > 0
-        ? `${vectorReady === vectorTotal ? t('knowledge.vectorComplete') : t('knowledge.vectorBuilding')} · ${t('knowledge.vectorReadyPercent', { percent: vectorPercent })}`
+        ? `${vectorStateLabel(vectorState)} · ${t('knowledge.vectorReadyPercent', { percent: vectorPercent })}`
         : t('knowledge.noVectorChunks'),
-      tone: vectorTotal > 0 && vectorReady === vectorTotal
-        ? 'success'
-        : (vectorBuilding ? 'info' : (vectorReady > 0 ? 'warning' : 'muted')),
+      tone: vectorStateTone(vectorState),
     },
     {
       key: 'index-health',
@@ -540,9 +538,7 @@ const packRuntimeCards = computed(() => {
 })
 
 function packVectorCounts(pack: KnowledgePackSummary): { ready: number; total: number } {
-  const ready = Math.max(0, Number(pack.prebuilt_chunks_ready) || 0)
-  const missing = Math.max(0, Number(pack.prebuilt_chunks_missing) || 0)
-  return { ready, total: ready + missing }
+  return knowledgePackVectorCounts(pack)
 }
 
 function formatPackVectorProgress(pack: KnowledgePackSummary): string {
@@ -552,19 +548,32 @@ function formatPackVectorProgress(pack: KnowledgePackSummary): string {
 }
 
 function packVectorStateClass(pack: KnowledgePackSummary): string {
-  const { ready, total } = packVectorCounts(pack)
-  if (total > 0 && ready === total) return 'is-enabled'
-  if (total > ready && pack.local_embedding_enabled === true) return 'is-progress'
-  if (ready > 0) return 'is-warning'
-  return 'is-disabled'
+  const classByState: Record<KnowledgeVectorState, string> = {
+    none: 'is-disabled',
+    complete: 'is-enabled',
+    building: 'is-progress',
+    partial: 'is-warning',
+    waiting: 'is-disabled',
+  }
+  return classByState[packVectorState(pack)]
+}
+
+function vectorStateLabel(state: KnowledgeVectorState): string {
+  if (state === 'complete') return t('knowledge.vectorComplete')
+  if (state === 'building') return t('knowledge.vectorBuilding')
+  if (state === 'none') return t('knowledge.noVectorChunks')
+  return t('knowledge.vectorWaiting')
+}
+
+function vectorStateTone(state: KnowledgeVectorState): 'success' | 'info' | 'warning' | 'muted' {
+  if (state === 'complete') return 'success'
+  if (state === 'building') return 'info'
+  if (state === 'partial') return 'warning'
+  return 'muted'
 }
 
 function packVectorStateLabel(pack: KnowledgePackSummary): string {
-  const { ready, total } = packVectorCounts(pack)
-  if (total > 0 && ready === total) return t('knowledge.vectorComplete')
-  if (total > 0 && ready === 0) return t('knowledge.vectorWaiting')
-  if (total > ready && pack.local_embedding_enabled === true) return t('knowledge.vectorBuilding')
-  return t('knowledge.vectorWaiting')
+  return vectorStateLabel(packVectorState(pack))
 }
 
 function displayImportJobState(state: string): string {

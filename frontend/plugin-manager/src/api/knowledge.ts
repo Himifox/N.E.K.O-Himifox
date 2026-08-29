@@ -183,6 +183,46 @@ export interface KnowledgePackIndexPolicy {
   local_embedding_enabled: boolean
 }
 
+export type KnowledgeVectorState = 'none' | 'complete' | 'building' | 'partial' | 'waiting'
+
+export function knowledgePackVectorCounts(
+  pack: Pick<KnowledgePackSummary, 'prebuilt_chunks_ready' | 'prebuilt_chunks_missing'>,
+): { ready: number; total: number } {
+  const ready = Math.max(0, Number(pack.prebuilt_chunks_ready) || 0)
+  const missing = Math.max(0, Number(pack.prebuilt_chunks_missing) || 0)
+  const total = ready + missing
+  return { ready: Math.min(ready, total), total }
+}
+
+export function packVectorState(
+  pack: Pick<KnowledgePackSummary, 'local_embedding_enabled' | 'prebuilt_chunks_ready' | 'prebuilt_chunks_missing'>,
+): KnowledgeVectorState {
+  const { ready, total } = knowledgePackVectorCounts(pack)
+  if (total <= 0) return 'none'
+  if (ready >= total) return 'complete'
+  if (pack.local_embedding_enabled === true) return 'building'
+  if (ready > 0) return 'partial'
+  return 'waiting'
+}
+
+export function aggregateVectorState(
+  states: readonly KnowledgeVectorState[],
+  globalSnapshot: { ready: number; total: number },
+): KnowledgeVectorState {
+  if (states.length > 0) {
+    for (const state of ['building', 'partial', 'waiting', 'complete'] as const) {
+      if (states.includes(state)) return state
+    }
+    return 'none'
+  }
+  const total = Math.max(0, Number(globalSnapshot.total) || 0)
+  const ready = Math.min(total, Math.max(0, Number(globalSnapshot.ready) || 0))
+  if (total <= 0) return 'none'
+  if (ready >= total) return 'complete'
+  if (ready > 0) return 'partial'
+  return 'waiting'
+}
+
 export interface KnowledgePackJob {
   job_id: string
   pack_id: string
