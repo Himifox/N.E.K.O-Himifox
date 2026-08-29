@@ -1621,8 +1621,39 @@ def build_user_review_report(
             )
             break
         except CandidateBudgetExceededError:
-            # Halve toward the newest messages.
+            # When the NEWEST reply is the outlier, halve ITS body first.
+            #
+            # Halving the window instead discarded the very history that
+            # makes the distinct-message threshold reachable: three ordinary
+            # replies sharing a phrase plus one very long reply narrowed to
+            # that one reply, and the repeated phrase went with the messages
+            # that carried it. The panel then reported not enough history.
+            # Same ordering fault the character budget had, in the path that
+            # actually binds: a reply long enough to matter passes the
+            # occurrence budget long before the character one.
+            #
+            # "Outlier" is measured against the rest rather than assumed, so
+            # a window that is merely large as a whole still narrows by
+            # dropping messages, which is the cheaper cut.
             if len(analyzed) > 1:
+                newest = analyzed[-1]
+                preceding = sum(
+                    len(message.content) for message in analyzed[:-1]
+                )
+                if (
+                    len(newest.content) > preceding
+                    and len(newest.content)
+                    > _USER_REVIEW_MIN_TRUNCATED_CHARACTERS
+                ):
+                    analyzed = analyzed[:-1] + [
+                        SourceMessage(
+                            language=newest.language,
+                            content=newest.content[: len(newest.content) // 2],
+                            source_line=newest.source_line,
+                        )
+                    ]
+                    content_truncated = True
+                    continue
                 analyzed = analyzed[-(len(analyzed) // 2):]
                 continue
             # One reply left and it still busts the budget. Dropping whole

@@ -2303,3 +2303,80 @@ def test_a_link_closer_must_close_its_own_label():
     )
     # And with no label at all nothing changes.
     assert not protects("okay](" + catchphrase + ")", catchphrase)
+
+
+def test_an_occurrence_heavy_reply_does_not_hide_the_history_behind_it():
+    """The occurrence budget has the same ordering problem as the character one.
+
+    Its narrowing loop halves toward the newest reply and only clips a body
+    once nothing else is left, so one very long reply discards the very
+    history that makes the distinct-message threshold reachable. The report
+    then holds one message, the repeated phrase from the earlier replies is
+    gone, and the panel says there is not enough history.
+
+    This is the path that binds with the shipped constants -- a reply long
+    enough to matter passes the occurrence budget long before the character
+    one.
+    """
+    phrase = "晚安啦做个好梦"
+    filler = "今天天气真好啊"
+    ordinary = [
+        candidate_core.SourceMessage(
+            "zh-CN", filler + phrase + filler, index
+        )
+        for index in range(1, 4)
+    ]
+    heavy = candidate_core.SourceMessage(
+        "zh-CN", filler * (30_000 // len(filler)), 4
+    )
+
+    report = candidate_core.build_user_review_report(
+        ordinary + [heavy],
+        message_count_threshold=3,
+        rules_by_language={},
+    )
+
+    summary = report["summary"]
+    assert summary["analyzed_message_count"] >= 3, (
+        "one long reply crowded the window down to %d message(s)"
+        % summary["analyzed_message_count"]
+    )
+    normalized = {
+        candidate.get("normalized_phrase", "")
+        for candidate in report["candidates"]
+    }
+    assert any(phrase in value for value in normalized), (
+        "the phrase repeated across the earlier replies was lost with them"
+    )
+
+
+def test_a_uniformly_large_window_narrows_without_cutting_a_body():
+    """No outlier means dropping messages, which is the cheaper cut.
+
+    Clipping the newest whenever the budget is exceeded would shave a reply
+    that is no larger than its neighbours, losing its content for nothing --
+    the window is over budget as a whole, not because of one reply. The
+    outlier test is what keeps those two cases apart.
+    """
+    filler = "今天天气真好啊"
+    uniform = [
+        candidate_core.SourceMessage(
+            "zh-CN", filler * (4_000 // len(filler)), index
+        )
+        for index in range(1, 13)
+    ]
+    lengths = {len(message.content) for message in uniform}
+    assert len(lengths) == 1, "the window has to be uniform for this test"
+
+    report = candidate_core.build_user_review_report(
+        uniform, message_count_threshold=1, rules_by_language={}
+    )
+
+    summary = report["summary"]
+    assert summary["messages_truncated"] is True, (
+        "this window should have been over budget and narrowed"
+    )
+    assert summary["content_truncated"] is False, (
+        "a reply no larger than its neighbours had its body cut, which "
+        "loses content the narrowing alone would have kept"
+    )
