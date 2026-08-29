@@ -654,7 +654,7 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     replacement = validate_pack(_payload(title="replacement title"))
     monkeypatch.setattr(
         packs,
-        "atomic_write_json",
+        "_write_registry",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
     )
 
@@ -669,7 +669,10 @@ def test_registry_failure_restores_the_previous_source(monkeypatch, tmp_path):
     assert restored[0]["embedding"] == previous_vector
 
 
-def test_remove_failure_restores_entries_policy_and_vectors(monkeypatch, tmp_path):
+def test_remove_registry_publish_failure_leaves_database_and_recovers_intent(
+    monkeypatch,
+    tmp_path,
+):
     import knowledge.packs as packs
 
     service = open_knowledge(tmp_path)
@@ -695,7 +698,7 @@ def test_remove_failure_restores_entries_policy_and_vectors(monkeypatch, tmp_pat
     before_embeddings = store.ready_embedding_records(source_tag=pack.source_tag)
     monkeypatch.setattr(
         packs,
-        "atomic_write_json",
+        "_write_registry",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
     )
 
@@ -708,6 +711,177 @@ def test_remove_failure_restores_entries_policy_and_vectors(monkeypatch, tmp_pat
         "prebuilt_only": 1,
     }
     assert store.ready_embedding_records(source_tag=pack.source_tag) == before_embeddings
+    assert (tmp_path / "pack-remove-intent.json").is_file()
+    packs.recover_pack_remove_intent(service.database_path())
+    assert not (tmp_path / "pack-remove-intent.json").exists()
+
+
+def test_registry_reader_rejects_oversize_before_sqlite_mutation(monkeypatch, tmp_path):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    monkeypatch.setattr(packs, "MAX_PACK_REGISTRY_BYTES", 32)
+    registry_path.write_bytes(b"{" + b" " * 32 + b"}")
+
+    def unexpected_mutation(*_args, **_kwargs):
+        pytest.fail("oversize registry must be rejected before SQLite mutation")
+
+    monkeypatch.setattr(KnowledgeStore, "replace_source", unexpected_mutation)
+    assert pack_registry_state(service.database_path()) == "invalid"
+    with pytest.raises(KnowledgePackRegistryError, match="unreadable"):
+        install_pack(service.database_path(), validate_pack(_payload(title="replacement")))
+
+
+def test_registry_writer_checks_size_before_sqlite_mutation(monkeypatch, tmp_path):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    before_registry = registry_path.read_bytes()
+    before_entries = KnowledgeStore(service.database_path()).count()
+    monkeypatch.setattr(
+        packs,
+        "MAX_PACK_REGISTRY_BYTES",
+        len(before_registry) + 8,
+    )
+
+    def unexpected_mutation(*_args, **_kwargs):
+        pytest.fail("oversize generated registry must precede SQLite mutation")
+
+    monkeypatch.setattr(KnowledgeStore, "replace_source", unexpected_mutation)
+    with pytest.raises(KnowledgePackRegistryError, match="size limit"):
+        install_pack(
+            service.database_path(),
+            validate_pack(_payload(pack_id="second-pack", title="second")),
+        )
+
+    assert registry_path.read_bytes() == before_registry
+    assert KnowledgeStore(service.database_path()).count() == before_entries
+
+
+def test_registry_symlink_is_not_followed(tmp_path):
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    registry_path = service.database_path().with_name("packs.json")
+    external = tmp_path / "external-registry.json"
+    external.write_bytes(registry_path.read_bytes())
+    registry_path.unlink()
+    try:
+        registry_path.symlink_to(external)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_packs(service.database_path()) == ()
+    assert external.read_bytes()
+
+
+def test_registry_directory_is_invalid_and_not_traversed(tmp_path):
+    service = open_knowledge(tmp_path)
+    registry_path = service.database_path().with_name("packs.json")
+    registry_path.mkdir()
+    (registry_path / "sentinel").write_text("keep", encoding="utf-8")
+
+    assert pack_registry_state(service.database_path()) == "invalid"
+    assert list_installed_packs(service.database_path()) == ()
+    assert (registry_path / "sentinel").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("crash_point", ("intent", "registry", "sqlite"))
+def test_remove_journal_recovers_each_durable_crash_point(
+    monkeypatch,
+    tmp_path,
+    crash_point,
+):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    pack = validate_pack(_payload())
+    service.install_pack(pack)
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    intent_path = database_path.with_name("pack-remove-intent.json")
+    original_write_registry = packs._write_registry
+    original_replace_source = KnowledgeStore.replace_source
+    original_delete_intent = packs._delete_remove_intent
+
+    if crash_point == "intent":
+        monkeypatch.setattr(
+            packs,
+            "_write_registry",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt("after intent")
+            ),
+        )
+    elif crash_point == "registry":
+        def crash_before_sqlite(store, source_tag, entries, **kwargs):
+            if source_tag == pack.source_tag and not entries:
+                raise KeyboardInterrupt("after registry")
+            return original_replace_source(store, source_tag, entries, **kwargs)
+
+        monkeypatch.setattr(KnowledgeStore, "replace_source", crash_before_sqlite)
+    else:
+        monkeypatch.setattr(
+            packs,
+            "_delete_remove_intent",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt("after sqlite")
+            ),
+        )
+
+    with pytest.raises(KeyboardInterrupt):
+        service.remove_pack(pack.pack_id)
+
+    assert intent_path.is_file()
+    monkeypatch.setattr(packs, "_write_registry", original_write_registry)
+    monkeypatch.setattr(KnowledgeStore, "replace_source", original_replace_source)
+    monkeypatch.setattr(packs, "_delete_remove_intent", original_delete_intent)
+    packs.recover_pack_remove_intent(database_path)
+
+    assert not intent_path.exists()
+    if crash_point == "intent":
+        assert json.loads(registry_path.read_text(encoding="utf-8"))["packs"]
+        assert KnowledgeStore(database_path).count_by_source_tag(pack.source_tag) == 1
+    else:
+        assert json.loads(registry_path.read_text(encoding="utf-8"))["packs"] == {}
+        assert KnowledgeStore(database_path).count_by_source_tag(pack.source_tag) == 0
+
+
+def test_remove_journal_third_registry_digest_requires_manual_recovery(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.packs as packs
+
+    service = open_knowledge(tmp_path)
+    pack = validate_pack(_payload())
+    service.install_pack(pack)
+    database_path = service.database_path()
+    registry_path = database_path.with_name("packs.json")
+    original_write_registry = packs._write_registry
+    monkeypatch.setattr(
+        packs,
+        "_write_registry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        service.remove_pack(pack.pack_id)
+    monkeypatch.setattr(packs, "_write_registry", original_write_registry)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["packs"][pack.pack_id]["auto_context"] = True
+    original_write_registry(registry_path, registry)
+
+    with pytest.raises(
+        packs.KnowledgePackRecoveryRequiredError,
+        match="pack_registry_recovery_required",
+    ):
+        packs.recover_pack_remove_intent(database_path)
+    assert pack_registry_state(database_path) == "recovery_required"
+    with pytest.raises(packs.KnowledgePackRecoveryRequiredError):
+        service.set_pack_auto_context(pack.pack_id, enabled=False)
 
 
 def test_subscription_metadata_is_stored_outside_entries(tmp_path):
@@ -1068,7 +1242,7 @@ def test_index_policy_registry_failure_restores_previous_policy(monkeypatch, tmp
     source_tag = "source:community.community-fixture"
     monkeypatch.setattr(
         packs,
-        "atomic_write_json",
+        "_write_registry",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("fixture failure")),
     )
 

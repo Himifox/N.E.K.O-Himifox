@@ -633,6 +633,25 @@ class KnowledgeService:
             else self.knowledge_root / "knowledge.db"
         )
         self._routing_state: KnowledgeRoutingState | None = None
+        intent_path = self._database_path.with_name("pack-remove-intent.json")
+        try:
+            intent_path.lstat()
+        except OSError:
+            pass
+        else:
+            try:
+                from .pack_jobs import trusted_live_root
+                from .packs import recover_pack_remove_intent
+
+                if trusted_live_root(self.knowledge_root) is None:
+                    raise KnowledgeStoreError(
+                        "knowledge root is not a trusted local directory"
+                    )
+                recover_pack_remove_intent(self._database_path)
+            except Exception:
+                # Status exposes recovery_required and every mutation retries
+                # the same gate; construction itself remains read-safe.
+                pass
 
     @classmethod
     def from_root(cls, knowledge_root: str | Path) -> "KnowledgeService":
@@ -1316,7 +1335,7 @@ class KnowledgeService:
                 else not missing_installed_database
             )
             and override_state != "invalid"
-            and registry_state != "invalid"
+            and registry_state not in {"invalid", "recovery_required"}
             and job_registry_state != "invalid"
             and not unresolved_community_sources,
             "disabled_entries": len(disabled),
@@ -1441,7 +1460,7 @@ class KnowledgeService:
             list_pack_jobs,
             pack_operation_lock,
         )
-        from .packs import remove_pack
+        from .packs import recover_pack_remove_intent, remove_pack
 
         # Reject a redirected root before taking the lock or touching the live
         # database/registry — jobs-side guards return empty for a linked root and
@@ -1449,6 +1468,7 @@ class KnowledgeService:
         self._require_trusted_live_root()
 
         with pack_operation_lock(self.knowledge_root, pack_id):
+            recover_pack_remove_intent(self.database_path())
             installed = next(
                 (
                     item

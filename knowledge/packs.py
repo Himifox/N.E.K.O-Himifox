@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 import re
 import shutil
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from utils.file_utils import atomic_write_json
+from utils.file_utils import atomic_write_bytes
 
 from ._mutation_lock import mutation_lock
+from ._strict_file import read_bounded_regular_file
 from .chunking import derive_knowledge_chunks
 from .filters import sanitize_external_text
 from .limits import MAX_PACK_BYTES
@@ -34,6 +39,10 @@ MAX_PACK_TERM_BYTES_PER_ENTRY = 32 * 1024
 MAX_PACK_TAGS_PER_ENTRY = 64
 MAX_PACK_TAG_BYTES_PER_ENTRY = 32 * 1024
 MIN_INSTALL_FREE_BYTES = 512 * 1024 * 1024
+MAX_PACK_REGISTRY_BYTES = 32 * 1024 * 1024
+MAX_PACK_REMOVE_INTENT_BYTES = 48 * 1024 * 1024
+PACK_REMOVE_INTENT_SCHEMA_VERSION = 1
+PACK_REMOVE_INTENT_NAME = "pack-remove-intent.json"
 _PACK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TERM_ROLES = frozenset(("alias", "recognition"))
@@ -41,6 +50,10 @@ _TERM_ROLES = frozenset(("alias", "recognition"))
 
 class KnowledgePackRegistryError(ValueError):
     """Raised when an existing pack registry cannot be trusted."""
+
+
+class KnowledgePackRecoveryRequiredError(KnowledgePackRegistryError):
+    """Raised when registry and SQLite evidence cannot be reconciled safely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +98,12 @@ class _SourceSnapshot:
     entries: tuple[KnowledgeEntry, ...]
     ready_embeddings: tuple[dict[str, object], ...]
     embedding_policy: str
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistrySnapshot:
+    payload: dict[str, Any]
+    raw: bytes
 
 
 def pack_payload(pack: KnowledgePack) -> dict[str, object]:
@@ -138,6 +157,43 @@ def validate_pack_subscription(
 
 def get_pack_registry_path(database_path: str | Path) -> Path:
     return Path(database_path).with_name("packs.json")
+
+
+def _pack_remove_intent_path(database_path: str | Path) -> Path:
+    return Path(database_path).with_name(PACK_REMOVE_INTENT_NAME)
+
+
+def _registry_bytes(payload: dict[str, Any]) -> bytes:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    if len(raw) > MAX_PACK_REGISTRY_BYTES:
+        raise KnowledgePackRegistryError(
+            "knowledge pack registry exceeds its size limit"
+        )
+    return raw
+
+
+def _write_registry(path: Path, payload: dict[str, Any]) -> bytes:
+    raw = _registry_bytes(payload)
+    atomic_write_bytes(path, raw)
+    _fsync_parent(path)
+    return raw
+
+
+def _fsync_parent(path: Path) -> None:
+    if os.name == "nt":
+        # atomic_write_bytes flushes the replacement file itself. Windows does
+        # not expose a portable directory fsync; closing the replace handle is
+        # the strongest generally available contract here.
+        return
+    descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def load_pack(path: str | Path) -> KnowledgePack:
@@ -304,6 +360,7 @@ def install_pack(
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(database_path, registry_path)
         old_registry = _load_registry(registry_path)
         existing = old_registry.get("packs", {}).get(pack.pack_id)
         if isinstance(existing, dict):
@@ -326,6 +383,7 @@ def install_pack(
             index_metadata=index_metadata,
             local_embedding_enabled=local_embedding_enabled,
         )
+        _registry_bytes(new_registry)
         try:
             store.replace_source(
                 pack.source_tag,
@@ -338,7 +396,7 @@ def install_pack(
                     raise ValueError(
                         "prebuilt knowledge index was not imported completely"
                     )
-            atomic_write_json(registry_path, new_registry, ensure_ascii=False, indent=2)
+            _write_registry(registry_path, new_registry)
         except Exception:
             _restore_source(store, pack.source_tag, snapshot)
             raise
@@ -404,9 +462,25 @@ def list_installed_packs(
 
 def pack_registry_state(database_path: str | Path) -> str:
     """Return missing/ready/invalid without collapsing corruption into empty."""
+    intent_path = _pack_remove_intent_path(database_path)
+    try:
+        intent_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return "recovery_required"
+    else:
+        try:
+            recover_pack_remove_intent(database_path)
+        except KnowledgePackRegistryError:
+            return "recovery_required"
     registry_path = get_pack_registry_path(database_path)
-    if not registry_path.is_file():
+    try:
+        registry_path.lstat()
+    except FileNotFoundError:
         return "missing"
+    except OSError:
+        return "invalid"
     try:
         _load_registry(registry_path)
     except KnowledgePackRegistryError:
@@ -470,13 +544,14 @@ def set_pack_auto_context(
     pack_id = _identifier(pack_id, "pack_id")
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(Path(database_path), registry_path)
         registry = _load_registry(registry_path)
         packs = registry.get("packs")
         if not isinstance(packs, dict) or not isinstance(packs.get(pack_id), dict):
             raise ValueError("knowledge pack is not installed")
         metadata = packs[pack_id]
         packs[pack_id] = {**metadata, "auto_context": bool(enabled)}
-        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+        _write_registry(registry_path, registry)
 
 
 def set_pack_material_type_override(
@@ -490,6 +565,7 @@ def set_pack_material_type_override(
     normalized = None if material_type is None else _material_type(material_type)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(Path(database_path), registry_path)
         registry = _load_registry(registry_path)
         packs = registry.get("packs")
         metadata = packs.get(pack_id) if isinstance(packs, dict) else None
@@ -507,7 +583,7 @@ def set_pack_material_type_override(
             else bool(metadata.get("auto_context")),
         }
         registry["schema_version"] = PACK_REGISTRY_SCHEMA_VERSION
-        atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+        _write_registry(registry_path, registry)
 
 
 def set_pack_index_policy(
@@ -521,6 +597,7 @@ def set_pack_index_policy(
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(database_path, registry_path)
         registry = _load_registry(registry_path)
         packs = registry.get("packs")
         metadata = packs.get(pack_id) if isinstance(packs, dict) else None
@@ -536,21 +613,183 @@ def set_pack_index_policy(
             **metadata,
             "local_embedding_enabled": bool(local_embedding_enabled),
         }
+        _registry_bytes(registry)
         try:
             store.set_source_embedding_policy(source_tag, policy)
-            atomic_write_json(registry_path, registry, ensure_ascii=False, indent=2)
+            _write_registry(registry_path, registry)
         except Exception:
             _restore_source(store, source_tag, snapshot)
             raise
 
 
+def _remove_intent_bytes(payload: dict[str, Any]) -> bytes:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(raw) > MAX_PACK_REMOVE_INTENT_BYTES:
+        raise KnowledgePackRecoveryRequiredError(
+            "knowledge pack remove intent exceeds its size limit"
+        )
+    return raw
+
+
+def _write_remove_intent(path: Path, payload: dict[str, Any]) -> None:
+    atomic_write_bytes(path, _remove_intent_bytes(payload))
+    _fsync_parent(path)
+
+
+def _read_remove_intent(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = read_bounded_regular_file(path, max_bytes=MAX_PACK_REMOVE_INTENT_BYTES)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise KnowledgePackRecoveryRequiredError(
+            "pack_registry_recovery_required"
+        ) from exc
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise KnowledgePackRecoveryRequiredError(
+            "pack_registry_recovery_required"
+        ) from exc
+    expected_fields = {
+        "schema_version",
+        "operation_id",
+        "pack_id",
+        "source_tag",
+        "expected_entries",
+        "before_registry_sha256",
+        "after_registry_sha256",
+        "target_registry_base64",
+        "created_at",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+    operation_id = payload.get("operation_id")
+    pack_id = payload.get("pack_id")
+    source_tag = payload.get("source_tag")
+    expected_entries = payload.get("expected_entries")
+    created_at = payload.get("created_at")
+    if (
+        payload.get("schema_version") != PACK_REMOVE_INTENT_SCHEMA_VERSION
+        or not isinstance(operation_id, str)
+        or len(operation_id) != 32
+        or any(character not in "0123456789abcdef" for character in operation_id)
+        or not isinstance(pack_id, str)
+        or not _PACK_ID_RE.fullmatch(pack_id)
+        or source_tag != f"source:community.{pack_id}"
+        or type(expected_entries) is not int
+        or expected_entries < 0
+        or type(created_at) is not int
+        or created_at <= 0
+    ):
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+    before_digest = payload.get("before_registry_sha256")
+    after_digest = payload.get("after_registry_sha256")
+    if (
+        not isinstance(before_digest, str)
+        or not _SHA256_RE.fullmatch(before_digest)
+        or not isinstance(after_digest, str)
+        or not _SHA256_RE.fullmatch(after_digest)
+    ):
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+    try:
+        target_raw = base64.b64decode(
+            str(payload.get("target_registry_base64") or ""),
+            validate=True,
+        )
+    except (ValueError, TypeError) as exc:
+        raise KnowledgePackRecoveryRequiredError(
+            "pack_registry_recovery_required"
+        ) from exc
+    if (
+        not target_raw
+        or len(target_raw) > MAX_PACK_REGISTRY_BYTES
+        or hashlib.sha256(target_raw).hexdigest() != after_digest
+        or _registry_bytes(_decode_registry(target_raw)) != target_raw
+    ):
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+    return {**payload, "target_registry_bytes": target_raw}
+
+
+def _strict_source_entry_count(database_path: Path, source_tag: str) -> int:
+    if not database_path.is_file():
+        return 0
+    usage = KnowledgeStore(database_path).community_usage(
+        source_tag=source_tag,
+        strict=True,
+    )
+    return int(usage["entries_total"])
+
+
+def _delete_remove_intent(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    _fsync_parent(path)
+
+
+def _recover_pack_remove_intent_locked(
+    database_path: Path,
+    registry_path: Path,
+) -> None:
+    intent_path = _pack_remove_intent_path(database_path)
+    intent = _read_remove_intent(intent_path)
+    if intent is None:
+        return
+    try:
+        registry_snapshot = _load_registry_snapshot(registry_path, missing_ok=False)
+    except KnowledgePackRegistryError as exc:
+        raise KnowledgePackRecoveryRequiredError(
+            "pack_registry_recovery_required"
+        ) from exc
+    current_digest = hashlib.sha256(registry_snapshot.raw).hexdigest()
+    before_digest = str(intent["before_registry_sha256"])
+    after_digest = str(intent["after_registry_sha256"])
+    source_tag = str(intent["source_tag"])
+    expected_entries = int(intent["expected_entries"])
+    actual_entries = _strict_source_entry_count(database_path, source_tag)
+    if current_digest == before_digest:
+        if actual_entries != expected_entries:
+            raise KnowledgePackRecoveryRequiredError(
+                "pack_registry_recovery_required"
+            )
+        _delete_remove_intent(intent_path)
+        return
+    if current_digest == after_digest:
+        if registry_snapshot.raw != intent["target_registry_bytes"]:
+            raise KnowledgePackRecoveryRequiredError(
+                "pack_registry_recovery_required"
+            )
+        if actual_entries:
+            KnowledgeStore(database_path).replace_source(source_tag, ())
+        if _strict_source_entry_count(database_path, source_tag) != 0:
+            raise KnowledgePackRecoveryRequiredError(
+                "pack_registry_recovery_required"
+            )
+        _delete_remove_intent(intent_path)
+        return
+    raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+
+
+def recover_pack_remove_intent(database_path: str | Path) -> None:
+    database_path = Path(database_path)
+    registry_path = get_pack_registry_path(database_path)
+    with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(database_path, registry_path)
+
+
 def remove_pack(database_path: str | Path, pack_id: str) -> int:
-    """Remove one community pack with registry rollback on failure."""
+    """Remove one pack using a registry-first crash-recoverable journal."""
     pack_id = _identifier(pack_id, "pack_id")
     database_path = Path(database_path)
     registry_path = get_pack_registry_path(database_path)
     with mutation_lock(registry_path):
-        registry = _load_registry(registry_path)
+        _recover_pack_remove_intent_locked(database_path, registry_path)
+        registry_snapshot = _load_registry_snapshot(registry_path)
+        registry = registry_snapshot.payload
         packs = registry.get("packs")
         metadata = packs.get(pack_id) if isinstance(packs, dict) else None
         if not isinstance(metadata, dict):
@@ -559,22 +798,37 @@ def remove_pack(database_path: str | Path, pack_id: str) -> int:
         if not source_tag.startswith("source:community."):
             raise ValueError("only community packs can be removed")
 
-        store = KnowledgeStore(database_path)
-        snapshot = _snapshot_source(store, source_tag, metadata)
+        removed_entries = _strict_source_entry_count(database_path, source_tag)
         new_packs = dict(packs)
         new_packs.pop(pack_id, None)
-        store.replace_source(source_tag, ())
-        try:
-            atomic_write_json(
-                registry_path,
-                {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": new_packs},
-                ensure_ascii=False,
-                indent=2,
+        target_registry = {
+            "schema_version": PACK_REGISTRY_SCHEMA_VERSION,
+            "packs": new_packs,
+        }
+        target_raw = _registry_bytes(target_registry)
+        intent = {
+            "schema_version": PACK_REMOVE_INTENT_SCHEMA_VERSION,
+            "operation_id": uuid.uuid4().hex,
+            "pack_id": pack_id,
+            "source_tag": source_tag,
+            "expected_entries": removed_entries,
+            "before_registry_sha256": hashlib.sha256(
+                registry_snapshot.raw
+            ).hexdigest(),
+            "after_registry_sha256": hashlib.sha256(target_raw).hexdigest(),
+            "target_registry_base64": base64.b64encode(target_raw).decode("ascii"),
+            "created_at": int(time.time()),
+        }
+        intent_path = _pack_remove_intent_path(database_path)
+        _write_remove_intent(intent_path, intent)
+        _write_registry(registry_path, target_registry)
+        KnowledgeStore(database_path).replace_source(source_tag, ())
+        if _strict_source_entry_count(database_path, source_tag) != 0:
+            raise KnowledgePackRecoveryRequiredError(
+                "pack_registry_recovery_required"
             )
-        except Exception:
-            _restore_source(store, source_tag, snapshot)
-            raise
-    return len(snapshot.entries)
+        _delete_remove_intent(intent_path)
+    return removed_entries
 
 
 def enabled_pack_source_tags(database_path: str | Path) -> tuple[str, ...]:
@@ -758,21 +1012,35 @@ def _load_registry(
     *,
     missing_ok: bool = True,
 ) -> dict[str, Any]:
+    return _load_registry_snapshot(path, missing_ok=missing_ok).payload
+
+
+def _load_registry_snapshot(
+    path: Path,
+    *,
+    missing_ok: bool = True,
+) -> _RegistrySnapshot:
     try:
-        text = path.read_text(encoding="utf-8")
+        raw = read_bounded_regular_file(path, max_bytes=MAX_PACK_REGISTRY_BYTES)
     except FileNotFoundError as exc:
         if not missing_ok:
             raise KnowledgePackRegistryError(
                 "knowledge pack registry disappeared during migration"
             ) from exc
-        return {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
-    except (OSError, UnicodeError) as exc:
+        payload = {"schema_version": PACK_REGISTRY_SCHEMA_VERSION, "packs": {}}
+        return _RegistrySnapshot(payload=payload, raw=_registry_bytes(payload))
+    except (OSError, ValueError) as exc:
         raise KnowledgePackRegistryError(
             "knowledge pack registry is unreadable"
         ) from exc
+    return _RegistrySnapshot(payload=_decode_registry(raw), raw=raw)
+
+
+def _decode_registry(raw: bytes) -> dict[str, Any]:
     try:
+        text = raw.decode("utf-8")
         payload = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise KnowledgePackRegistryError(
             "knowledge pack registry is corrupt"
         ) from exc
