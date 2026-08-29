@@ -2211,3 +2211,56 @@ def test_a_reference_definition_may_omit_the_space_after_its_colon():
     assert build_repeat_signature(text, ["/api/SECRET_TOKEN"], language="en") is None
     # The destination-shape check, not the space, is what keeps this off speech.
     assert candidate_core._runtime_protected_spans("[小八]:我们一起去吃饭吧！") == []
+
+
+def test_one_oversized_reply_does_not_hide_the_history_behind_it(monkeypatch):
+    """A long latest reply must not make a full history look like one message.
+
+    Narrowing ran first, so an oversized newest reply held the total over
+    budget until every older reply had been dropped, and only the survivor
+    was clipped. The window then held one message, the distinct-message
+    threshold removed every candidate, and the panel reported not enough
+    history for a character that had plenty.
+
+    Clipping it to the whole budget would not fix that either -- it would
+    still fill the window alone. It has to leave room.
+
+    The OCCURRENCE budget is raised here so the CHARACTER budget is the one
+    under test. With the shipped constants the occurrence budget binds first
+    -- a reply long enough to exceed 128 KiB is far past 100,000 occurrences
+    -- and reaches the same one-message window through its own narrowing
+    loop. That loop is not restructured here; it halves the body, which is
+    what keeps the request from failing outright.
+    """
+    monkeypatch.setattr(
+        candidate_core, "USER_REVIEW_MAX_OCCURRENCES", 100_000_000
+    )
+    line = "今天天气真好啊我们一起去散步吧"
+    older = [
+        candidate_core.SourceMessage("zh-CN", line * 40, index)
+        for index in range(1, 5)
+    ]
+    huge = candidate_core.SourceMessage(
+        "zh-CN",
+        line * (candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS // len(line) + 10),
+        5,
+    )
+    assert len(huge.content) > candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+
+    report = candidate_core.build_user_review_report(
+        older + [huge],
+        message_count_threshold=3,
+        rules_by_language={},
+    )
+
+    summary = report["summary"]
+    assert summary["content_truncated"] is True
+    assert summary["analyzed_message_count"] >= 3, (
+        "the oversized reply crowded the window down to %d message(s), so a "
+        "3-message threshold can never be met"
+        % summary["analyzed_message_count"]
+    )
+    assert report["candidates"], (
+        "no candidates survived, which is what the panel renders as "
+        "insufficient history"
+    )

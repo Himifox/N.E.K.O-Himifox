@@ -1541,17 +1541,54 @@ def build_user_review_report(
         raise CandidateMinerError("message_count_threshold must be at least 1")
 
     analyzed = list(messages)
+    content_truncated = False
+
+    # Clip the NEWEST reply BEFORE narrowing, and leave room behind it.
+    #
+    # Narrowing first meant an oversized newest reply kept the total over
+    # budget until every older reply had been dropped, and only the survivor
+    # was then clipped. A character with plenty of ordinary history plus one
+    # very long latest reply was therefore analysed as a single message, the
+    # distinct-message threshold removed every candidate, and the panel told
+    # the user there was not enough history -- while their history sat right
+    # there.
+    #
+    # Clipping it to the WHOLE budget would not have helped: it would still
+    # fill the window on its own and the loop below would still drop the
+    # rest. So when there is history behind it, the newest reply may take at
+    # most half, and the loop fills the remainder with as many preceding
+    # replies as fit.
+    #
+    # Cutting mid-container is safe in the protective direction: an
+    # unterminated fence or <code>/<pre> protects through the end of the
+    # text, so a severed block stays protected rather than exposed.
+    if analyzed:
+        newest_budget = (
+            USER_REVIEW_MAX_INPUT_CHARACTERS // 2
+            if len(analyzed) > 1
+            else USER_REVIEW_MAX_INPUT_CHARACTERS
+        )
+        newest = analyzed[-1]
+        if len(newest.content) > newest_budget:
+            analyzed = analyzed[:-1] + [
+                SourceMessage(
+                    language=newest.language,
+                    content=newest.content[:newest_budget],
+                    source_line=newest.source_line,
+                )
+            ]
+            content_truncated = True
+
     while (
         len(analyzed) > 1
         and sum(len(message.content) for message in analyzed)
         > USER_REVIEW_MAX_INPUT_CHARACTERS
     ):
         analyzed = analyzed[1:]
-    # Dropping whole messages floors at one, so a single reply longer than the
-    # advertised limit would otherwise be mined in full. Truncate its body
-    # instead of failing. Cutting mid-container is safe in the protective
-    # direction: an unterminated fence or <code>/<pre> now protects through the
-    # end of the text, so a severed block stays protected rather than exposed.
+
+    # A lone survivor can still be over the budget if it was never the
+    # newest -- it cannot be, since narrowing keeps the newest, but the
+    # single-message case takes the full budget above and needs no second cut.
     if analyzed and len(analyzed[0].content) > USER_REVIEW_MAX_INPUT_CHARACTERS:
         oversized = analyzed[0]
         analyzed = [
@@ -1562,8 +1599,6 @@ def build_user_review_report(
             )
         ] + analyzed[1:]
         content_truncated = True
-    else:
-        content_truncated = False
 
     config = MiningConfig(threshold=DEFAULT_THRESHOLD)
     while True:
