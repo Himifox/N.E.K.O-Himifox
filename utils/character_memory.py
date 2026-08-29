@@ -18,6 +18,7 @@ import asyncio
 import json
 import shutil
 import sys
+import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,94 @@ def _run_character_cache_evictors(names: tuple[str, ...], *, mode: str) -> None:
                 module_name,
                 type(exc).__name__,
             )
+
+
+_WRITE_FENCED: set[str] = set()
+_WRITE_FENCE_LOCK = threading.Lock()
+
+
+def set_character_write_fence(name: str, *, fenced: bool) -> None:
+    """Refuse or re-permit sidecar writes for one name, whatever is on disk.
+
+    Retirement is not enough for an operation that CREATES the directory
+    partway through. It only refuses to MAKE one, so a rename's merge opens
+    the door halfway: from that moment a write belonging to the identity
+    that used to own the name is allowed in, and because staging copies the
+    whole payload it replaces the history just moved there rather than
+    adding to it. This fence never consults the filesystem, so it holds for
+    the whole operation.
+
+    Process-wide rather than per store, deliberately. All three sidecars
+    have to refuse together or the gap only moves; and a store built DURING
+    the fenced window would otherwise start with an empty set of its own --
+    the hazard ``_PENDING_RETIREMENTS`` exists to work around for
+    retirement, which this shape avoids entirely.
+
+    It lives here rather than in ``memory`` because utils is the lower
+    layer: memory may import utils, not the other way round, and the stores
+    reach it from there.
+
+    Releasing is a discard, so it cannot raise and cannot leave a character
+    permanently unable to persist. Callers still have to release it in a
+    ``finally``: a fence left up is worse than the write it prevents.
+
+    A SET and not a counter, deliberately, even though that means one
+    release disarms every holder. The failure modes are not symmetric: an
+    unbalanced release with a counter leaves the fence up for the life of
+    the process, while an extra release with a set only reopens a window.
+    It relies on renames being serialised -- ``character_config_mutation_lock``
+    wraps the whole operation, and the recent-file locks serialise them
+    again -- so a second holder never arises today. A caller that renames
+    outside that lock would make the difference live.
+
+    SCOPE, measured rather than assumed: this covers the three sidecar
+    stores and nothing else. Every file-producing call in them goes through
+    ``_write_file_path`` or the corrupt-file backup, and both ask. Other
+    writers under the same ``memory/<name>/`` -- ``user_directives`` and its
+    siblings -- call ``ensure_character_dir`` unconditionally and are NOT
+    fenced, so the harms described at the rename call site remain reachable
+    through them. Closing that means fencing every writer, which is a
+    larger change than this one.
+
+    If it ever did leak, the blast radius is bounded: writes are dropped
+    while it is up, but the cache keeps them and the first write after the
+    release rewrites the whole payload. Persistence stops; data already in
+    memory is not lost.
+    """
+    if not name:
+        return
+    with _WRITE_FENCE_LOCK:
+        if fenced:
+            _WRITE_FENCED.add(name)
+        else:
+            _WRITE_FENCED.discard(name)
+
+
+def is_character_write_fenced(name: str) -> bool:
+    """Whether sidecar writes for this name are currently refused."""
+    if not name:
+        return False
+    with _WRITE_FENCE_LOCK:
+        return name in _WRITE_FENCED
+
+
+def fence_character_runtime_writes(*character_names: str) -> None:
+    """Refuse sidecar writes for these names until they are unfenced.
+
+    Retirement is the wrong tool for an operation that creates the
+    directory partway through -- see ``set_character_write_fence`` above.
+    Every caller must pair this with ``unfence_character_runtime_writes``
+    in a ``finally``: a fence left up silences that character's sidecars
+    for the life of the process.
+    """
+    for name in dict.fromkeys(n for n in character_names if n):
+        set_character_write_fence(name, fenced=True)
+
+
+def unfence_character_runtime_writes(*character_names: str) -> None:
+    """Re-permit sidecar writes. A discard, so it cannot fail."""
+    for name in dict.fromkeys(n for n in character_names if n):
+        set_character_write_fence(name, fenced=False)
 
 
 def evict_character_runtime_caches(*character_names: str) -> None:
@@ -520,6 +609,18 @@ def rename_character_memory_storage(
         # writes normally afterwards even when there was nothing to merge.
         retire_character_runtime_caches(old_name)
         retire_character_runtime_caches(new_name)
+        # Retirement alone leaves the window open from the moment the
+        # merge below creates the directory. The fence does not consult
+        # the filesystem, so it covers the whole operation; the finally
+        # is what guarantees it comes back down.
+        #
+        # Which makes retiring the TARGET above redundant, measured: with
+        # this fence in place, lifting there instead -- or not touching the
+        # target at all -- reddens nothing. It stays as the independent
+        # cover for the half before the merge creates the directory, for
+        # the case where this fence is somehow never set. Retiring the
+        # SOURCE is not redundant: its directory is going away.
+        fence_character_runtime_writes(new_name)
         # 目标角色名可能曾被改走；复用该名字前必须切断旧跳转，否则新角色会写进旧目标。
         (
             _,
@@ -619,6 +720,11 @@ def rename_character_memory_storage(
         if not keep_recent_locks:
             release_character_recent_transaction(transaction)
         raise
+    finally:
+        # Unconditional, and after the publication lift above: a fence that
+        # survived a raise would silence this character for the life of the
+        # process, which is worse than the write it exists to stop.
+        unfence_character_runtime_writes(new_name)
 
 
 def finalize_character_recent_rename(result: dict[str, Any]) -> None:

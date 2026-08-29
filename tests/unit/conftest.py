@@ -247,3 +247,12 @@ def _reset_pending_retirements():
         pending = getattr(module, "_PENDING_RETIREMENTS", None)
         if isinstance(pending, set):
             pending.clear()
+
+    # Same hazard, worse consequence: the rename write fence is process-wide
+    # and has no expiry, so a test that leaves one up makes every later test
+    # for that name write nothing at all. The product releases it in a
+    # ``finally``; a test that sets it by hand has no such guarantee.
+    character_memory = sys.modules.get("utils.character_memory")
+    fenced = getattr(character_memory, "_WRITE_FENCED", None)
+    if isinstance(fenced, set):
+        fenced.clear()

@@ -347,6 +347,16 @@ class AntiRepeatCorpus:
         ``_write_file_path`` rather than three times over.
         """
         from memory import _is_within_memory_root, ensure_character_dir
+        from utils.character_memory import is_character_write_fenced
+
+        # Refused for the WHOLE of an operation that will create this
+        # directory partway through. Retirement below only declines to make
+        # one, so once a rename's merge has made it, a late write from the
+        # identity that used to own the name would land on the history just
+        # moved in -- and staging copies the whole payload, so it replaces
+        # it rather than adding to it.
+        if is_character_write_fenced(name):
+            return None
 
         memory_dir = self._config_manager.memory_dir
         character_dir = os.path.join(str(memory_dir), name)

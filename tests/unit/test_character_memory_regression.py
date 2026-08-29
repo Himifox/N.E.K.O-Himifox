@@ -5570,6 +5570,19 @@ def test_a_rename_fences_the_target_against_its_deleted_identity(tmp_path):
             for bucket in payload["daily_buckets"].values()
         )
 
+    def days(path):
+        """Which day buckets are on disk -- the IDENTITY of the content.
+
+        Counting alone cannot tell the merged history from the same number
+        of late writes replacing it: staging copies the whole payload, so a
+        replacement can carry an identical entry count. The source records
+        and the injected ones are deliberately a day apart.
+        """
+        if not path.exists():
+            return set()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return set(payload["daily_buckets"])
+
     with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
         # The fixture hands the stores a SimpleNamespace carrying only
         # memory_dir, while the write path reads app_docs_dir -- and the
@@ -5613,10 +5626,11 @@ def test_a_rename_fences_the_target_against_its_deleted_identity(tmp_path):
             # memory roots, so this hook runs twice; letting it write on the
             # second pass would be testing something else entirely, because
             # by then the first merge has created the directory and a
-            # retired name is allowed to write into one that exists. That
-            # narrower exposure -- staged before the move, flushed after it
-            # and before publication -- is NOT closed by this change and is
-            # recorded in the commit rather than pinned here.
+            # retired name is allowed to write into one that exists. This
+            # test pins the window BEFORE the directory exists, which is the
+            # half retirement can cover on its own; the pass after it is
+            # what the write fence covers, and
+            # ``test_the_rename_fence_covers_the_whole_merge`` pins that.
             if not fired:
                 fired.append(True)
                 store.record_decision(
@@ -5638,6 +5652,10 @@ def test_a_rename_fences_the_target_against_its_deleted_identity(tmp_path):
             "the renamed character lost its merged history to a write from "
             "the identity that used to own the name"
         )
+        assert days(target_file) == {"2023-11-14"}, (
+            "the entry COUNT survived but the content did not -- a whole-"
+            "payload write replaced the merged history with its own"
+        )
 
         # The dual, so the fix cannot pass by stranding the target retired:
         # publication lifts it, and the next write appends to the merged
@@ -5648,3 +5666,173 @@ def test_a_rename_fences_the_target_against_its_deleted_identity(tmp_path):
             "after publication the target either could not write at all, or "
             "flushed a stale cache over the merged file"
         )
+        assert days(target_file) == {"2023-11-14", "2023-11-17"}, (
+            "the post-publication write replaced the merged history rather "
+            "than adding to it"
+        )
+
+
+@pytest.mark.unit
+def test_the_rename_fence_covers_the_whole_merge(tmp_path):
+    """Retirement stops short of the moment the merge creates the directory.
+
+    A retired name may not CREATE its directory but may write into one that
+    exists, so the first merge opens the door for everything after it: a
+    write from the identity that used to own the name lands on the history
+    just moved in, and staging copies the whole payload, so it replaces it.
+    Measured before the fence: four merged entries became two.
+
+    The injected write therefore fires on EVERY merge call, not just the
+    first -- there are two memory roots, and the second one is the pass that
+    used to get through.
+    """
+    import json
+
+    import memory.anti_repeat_effects as effects_module
+    import utils.character_memory as character_memory
+
+    cm = _make_config_manager(tmp_path)
+    memory_root = Path(cm.memory_dir)
+
+    def detected(path):
+        if not path.exists():
+            return 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return sum(
+            bucket["counters"]["detected"]
+            for bucket in payload["daily_buckets"].values()
+        )
+
+    def days(path):
+        """Which day buckets are on disk -- the IDENTITY of the content.
+
+        Counting alone cannot tell the merged history from the same number
+        of late writes replacing it: staging copies the whole payload, so a
+        replacement can carry an identical entry count. The source records
+        and the injected ones are deliberately a day apart.
+        """
+        if not path.exists():
+            return set()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return set(payload["daily_buckets"])
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        for sidecar in (store, corpus, greeting):
+            sidecar._config_manager = cm
+
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+        (memory_root / "Source").mkdir(parents=True, exist_ok=True)
+        for tick in range(4):
+            store.record_decision(
+                "Source", decision, now=1_700_000_000.0 + tick * 60
+            )
+        assert detected(memory_root / "Source" / "anti_repeat_effects.json") == 4
+
+        character_memory.retire_character_runtime_caches("Target")
+
+        real_merge = character_memory._merge_directories
+        calls = []
+
+        def _record_on_every_pass(source_dir, target_dir):
+            calls.append(True)
+            store.record_decision(
+                "Target", decision, now=1_700_100_000.0 + len(calls)
+            )
+            return real_merge(source_dir, target_dir)
+
+        with patch.object(
+            character_memory, "_merge_directories", _record_on_every_pass
+        ):
+            character_memory.rename_character_memory_storage(
+                cm, "Source", "Target",
+            )
+
+        assert len(calls) > 1, (
+            "only one merge pass ran, so the pass this test exists for "
+            "never happened"
+        )
+        target_file = memory_root / "Target" / "anti_repeat_effects.json"
+        assert detected(target_file) == 4, (
+            "a write after the merge created the directory replaced the "
+            "history that had just been moved into it"
+        )
+        assert days(target_file) == {"2023-11-14"}, (
+            "the entry COUNT survived but the content did not -- a whole-"
+            "payload write replaced the merged history with its own"
+        )
+
+        # And the fence is down afterwards, so the character still persists.
+        store.record_decision("Target", decision, now=1_700_200_000.0)
+        assert detected(target_file) == 5
+        assert days(target_file) == {"2023-11-14", "2023-11-17"}, (
+            "the post-publication write replaced the merged history rather "
+            "than adding to it"
+        )
+
+
+@pytest.mark.unit
+def test_a_failed_rename_releases_the_write_fence(tmp_path):
+    """A fence that survived a raise would silence the character for good.
+
+    It is process-wide and has no expiry, so a leak is permanent: every
+    later sidecar write for that name returns None and the character stops
+    persisting, with nothing on disk to show why. That is worse than the
+    write the fence exists to stop, which is why the release is in a
+    ``finally`` rather than after the last statement of the try.
+
+    Asserted through behaviour and not only the flag: the name is retired by
+    the rollback, so this lifts that the way a later publication would and
+    then checks a real write lands.
+    """
+    import json
+
+    import memory.anti_repeat_effects as effects_module
+    import utils.character_memory as character_memory
+    from utils.character_memory import is_character_write_fenced
+
+    cm = _make_config_manager(tmp_path)
+    memory_root = Path(cm.memory_dir)
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        for sidecar in (store, corpus, greeting):
+            sidecar._config_manager = cm
+        (memory_root / "Source").mkdir(parents=True, exist_ok=True)
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("cross-device move")
+
+        with patch.object(character_memory, "_merge_directories", _boom):
+            with pytest.raises(OSError):
+                character_memory.rename_character_memory_storage(
+                    cm, "Source", "Target",
+                )
+
+        assert not is_character_write_fenced("Target"), (
+            "the fence survived the failure and would silence this name for "
+            "the life of the process"
+        )
+
+        # Behaviour, not just the flag: lift the rollback's retirement the
+        # way a later publication would, and a real write has to land.
+        character_memory.evict_character_runtime_caches("Target")
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+        store.record_decision("Target", decision, now=1_700_300_000.0)
+        target_file = memory_root / "Target" / "anti_repeat_effects.json"
+        assert target_file.exists(), (
+            "the character could not persist after a failed rename"
+        )
+        payload = json.loads(target_file.read_text(encoding="utf-8"))
+        assert sum(
+            bucket["counters"]["detected"]
+            for bucket in payload["daily_buckets"].values()
+        ) == 1
