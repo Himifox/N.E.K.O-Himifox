@@ -75,6 +75,24 @@ def test_embedded_knowledge_words_do_not_claim_the_route(text):
     assert knowledge_tool._extract_explicit_local_knowledge_query(text) == ""
 
 
+def test_knowledge_query_candidates_bound_work_and_deduplicate():
+    import main_logic.knowledge_context as knowledge_tool
+
+    query = ";".join(
+        ["repeated topic"] * 100
+        + [f"unique topic {index}" for index in range(100)]
+    ) + "x" * 10_000
+
+    candidates = knowledge_tool._knowledge_query_candidates(query)
+
+    assert len(candidates) == knowledge_tool._MAX_KNOWLEDGE_QUERY_CANDIDATES
+    assert len(candidates) == len(set(candidates))
+    assert all(
+        len(candidate) <= knowledge_tool._MAX_KNOWLEDGE_QUERY_CHARS
+        for candidate in candidates
+    )
+
+
 def test_compound_explicit_lookup_is_not_a_pure_tool_owner_candidate():
     import main_logic.knowledge_context as knowledge_tool
 

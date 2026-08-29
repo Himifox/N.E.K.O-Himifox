@@ -1415,7 +1415,11 @@ async def test_market_task_waits_for_staged_pack_activation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_market_task_retries_transient_job_poll_failure(monkeypatch):
+@pytest.mark.parametrize(
+    "error_code",
+    ("main_server_unavailable", "main_server_timeout"),
+)
+async def test_market_task_retries_transient_job_poll_failure(monkeypatch, error_code):
     calls = 0
     task = {"stage": "installing", "progress": 0.75, "message": ""}
 
@@ -1424,8 +1428,8 @@ async def test_market_task_retries_transient_job_poll_failure(monkeypatch):
         calls += 1
         if calls == 1:
             raise module._KnowledgeTaskError(
-                "main_server_unavailable",
-                "Main Server unavailable",
+                error_code,
+                "transient Main Server poll failure",
             )
         return {
             "ok": True,

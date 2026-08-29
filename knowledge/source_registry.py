@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,9 +65,13 @@ def _get_pack_source(tag: str, registry_path: Path) -> KnowledgeSource | None:
 
 
 def _get_pack_sources(registry_path: Path) -> dict[str, KnowledgeSource]:
+    # Keep display metadata on the same bounded, regular-file-only trust path as
+    # routing and mutation code. Import lazily to avoid coupling module startup.
+    from .packs import KnowledgePackRegistryError, _load_registry
+
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = _load_registry(registry_path)
+    except KnowledgePackRegistryError:
         return {}
     packs = payload.get("packs") if isinstance(payload, dict) else None
     if not isinstance(packs, dict):

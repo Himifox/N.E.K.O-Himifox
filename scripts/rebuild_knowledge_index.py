@@ -500,6 +500,8 @@ def _completion_state(status: dict[str, Any], *, last_batch_state: str = "") -> 
         return "failed_exhausted"
     if local_failed > 0:
         return "retry_scheduled"
+    if int(status.get("entries_missing_chunks", 0)) > 0:
+        return "backfill_incomplete"
     if (
         int(status.get("chunks_local_pending", status["chunks_pending"])) == 0
         and int(status.get("chunks_local_stale", status["chunks_stale"])) == 0

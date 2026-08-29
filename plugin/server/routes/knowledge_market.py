@@ -1146,7 +1146,7 @@ async def _wait_for_pack_job(
         try:
             payload = await _main_request("GET", "packs/jobs")
         except _KnowledgeTaskError as exc:
-            if exc.code != "main_server_unavailable":
+            if exc.code not in {"main_server_unavailable", "main_server_timeout"}:
                 raise
             await asyncio.sleep(_JOB_POLL_SECONDS)
             continue

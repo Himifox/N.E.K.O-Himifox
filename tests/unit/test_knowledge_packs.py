@@ -722,13 +722,18 @@ def test_registry_reader_rejects_oversize_before_sqlite_mutation(monkeypatch, tm
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))
     registry_path = service.database_path().with_name("packs.json")
+    assert registry_path.stat().st_size > 32
     monkeypatch.setattr(packs, "MAX_PACK_REGISTRY_BYTES", 32)
-    registry_path.write_bytes(b"{" + b" " * 32 + b"}")
 
     def unexpected_mutation(*_args, **_kwargs):
         pytest.fail("oversize registry must be rejected before SQLite mutation")
 
     monkeypatch.setattr(KnowledgeStore, "replace_source", unexpected_mutation)
+    source = get_source(
+        "source:community.community-fixture",
+        database_path=service.database_path(),
+    )
+    assert source.license == "Unknown"
     assert pack_registry_state(service.database_path()) == "invalid"
     with pytest.raises(KnowledgePackRegistryError, match="unreadable"):
         install_pack(service.database_path(), validate_pack(_payload(title="replacement")))

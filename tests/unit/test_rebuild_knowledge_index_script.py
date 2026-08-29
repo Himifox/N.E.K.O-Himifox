@@ -514,6 +514,7 @@ def test_maintenance_counts_only_local_policy_work(tmp_path: Path) -> None:
         ),
         ({"chunks_pending": 1}, "not_ready", "embedding_unavailable"),
         ({"chunks_stale": 1}, "ready", "processing_incomplete"),
+        ({"entries_missing_chunks": 1}, "ready", "backfill_incomplete"),
     ),
 )
 def test_completion_state_is_explicit(
@@ -528,6 +529,7 @@ def test_completion_state_is_explicit(
         "chunks_failed_retryable_now": 0,
         "chunks_failed_waiting": 0,
         "chunks_failed_exhausted": 0,
+        "entries_missing_chunks": 0,
         **overrides,
     }
 

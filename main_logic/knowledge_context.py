@@ -48,6 +48,8 @@ _RECENT_INJECTIONS: dict[
 _INJECTION_COOLDOWN_SECONDS = 600.0
 _MAX_TRACKED_SESSIONS = 32
 _MAX_TRACKED_CARDS_PER_SESSION = 64
+_MAX_KNOWLEDGE_QUERY_CHARS = 4_096
+_MAX_KNOWLEDGE_QUERY_CANDIDATES = 32
 _REVOKED_LOGICAL_SESSIONS: "OrderedDict[str, None]" = OrderedDict()
 _CORPUS_INTENT_TERMS = (
     "参考回复",
@@ -386,21 +388,27 @@ def _material_query_plan(
 
 def _knowledge_query_candidates(query: str) -> tuple[str, ...]:
     """Build a small ordered set of search phrases from a conversational query."""
-    original = query.strip()
+    original = query.strip()[:_MAX_KNOWLEDGE_QUERY_CHARS]
     candidates: list[str] = []
+    seen: set[str] = set()
 
-    def _add(value: str) -> None:
+    def _add(value: str, *, limit: int = _MAX_KNOWLEDGE_QUERY_CANDIDATES) -> None:
+        if len(candidates) >= limit:
+            return
         value = value.strip(" \t\r\n:：,，。！？!?；;‘’“”\"'")
-        if len(value) >= 2 and value not in candidates:
+        if len(value) >= 2 and value not in seen:
+            seen.add(value)
             candidates.append(value)
 
     for clause in _QUERY_CLAUSE_SPLIT.split(original):
+        if len(candidates) >= _MAX_KNOWLEDGE_QUERY_CANDIDATES - 1:
+            break
         cleaned = _QUERY_SPEAKER_PREFIX.sub("", clause.strip(), count=1)
         cleaned = _QUERY_FIRST_PERSON_PREFIX.sub("", cleaned, count=1)
         explanation_term = _QUERY_EXPLANATION_SUFFIX.sub("", cleaned, count=1)
         if explanation_term != cleaned:
-            _add(explanation_term)
-        _add(cleaned)
+            _add(explanation_term, limit=_MAX_KNOWLEDGE_QUERY_CANDIDATES - 1)
+        _add(cleaned, limit=_MAX_KNOWLEDGE_QUERY_CANDIDATES - 1)
     _add(original)
     return tuple(candidates)
 
