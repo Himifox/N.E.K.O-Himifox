@@ -968,7 +968,10 @@ async def test_unsubscribe_reconciles_installation_without_durable_state(
 
     async def fake_main(method, path, **_kwargs):
         main_calls.append((method, path))
-        assert mutation_outcome == "failed"
+        if (method, path) == ("GET", "packs"):
+            assert mutation_outcome == "rejected"
+            return {"ok": True, "packs": []}
+        assert mutation_outcome == "failed" and path == "packs/remove"
         return {"ok": False, "reason": "not_found"}
 
     reports = []
@@ -1003,7 +1006,9 @@ async def test_unsubscribe_reconciles_installation_without_durable_state(
         "cancelled_jobs": 0,
     }
     assert main_calls == (
-        [] if mutation_outcome == "rejected" else [("POST", "packs/remove")]
+        [("GET", "packs")]
+        if mutation_outcome == "rejected"
+        else [("POST", "packs/remove")]
     )
     assert reports == [7]
     assert task["preinstall_cancelled"] is True
@@ -1017,8 +1022,12 @@ async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeyp
         started.set()
         await asyncio.Event().wait()
 
-    async def unexpected_main(*_args, **_kwargs):
-        raise AssertionError("pre-install cancellation must not inspect local artifacts")
+    main_calls = []
+
+    async def empty_durable_registry(method, path, **_kwargs):
+        main_calls.append((method, path))
+        assert (method, path) == ("GET", "packs")
+        return {"ok": True, "packs": []}
 
     reports = []
 
@@ -1027,7 +1036,7 @@ async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeyp
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_execute_subscription", blocked)
-    monkeypatch.setattr(module, "_main_request", unexpected_main)
+    monkeypatch.setattr(module, "_main_request", empty_durable_registry)
     monkeypatch.setattr(module, "_report_unsubscribe_best_effort", report)
     await module.subscribe_knowledge_package(
         module.KnowledgeSubscribeRequest(
@@ -1054,6 +1063,7 @@ async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeyp
         "removed_entries": 0,
         "cancelled_jobs": 0,
     }
+    assert main_calls == [("GET", "packs"), ("GET", "packs")]
     assert reports == [7, 7]
 
 
@@ -1682,6 +1692,44 @@ async def test_successful_remove_does_not_wait_past_deadline_for_report(monkeypa
     assert delete_started.is_set()
     assert result["local_removed"] is True
     assert result["remote_reported"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancelling_update_still_removes_the_older_installed_pack(monkeypatch):
+    resolved_with = []
+    main_calls = []
+
+    async def cancelled_update(*_args, **_kwargs):
+        return {"preinstall_cancelled": True, "requested_pack_id": "fixture-pack"}
+
+    async def resolve_durable(*_args, **kwargs):
+        resolved_with.append(kwargs["active_task"])
+        return "fixture-pack", "knowledge/fixture-pack"
+
+    async def fake_main(method, path, **kwargs):
+        main_calls.append((method, path, kwargs))
+        return {"ok": True, "removed_pack": True, "removed_entries": 1}
+
+    async def report(_package_id, *, deadline):
+        return True
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_cancel_active_subscription", cancelled_update)
+    monkeypatch.setattr(module, "_resolve_owned_subscription", resolve_durable)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", report)
+
+    result = await module.unsubscribe_knowledge_package(
+        module.KnowledgeUnsubscribeRequest(package_id=7, pack_id="fixture-pack"),
+        token="fixture",
+    )
+
+    assert resolved_with == [None]
+    assert [(method, path) for method, path, _kwargs in main_calls] == [
+        ("POST", "packs/remove")
+    ]
+    assert result["local_removed"] is True
+    assert result["remote_reported"] is True
 
 
 @pytest.mark.asyncio

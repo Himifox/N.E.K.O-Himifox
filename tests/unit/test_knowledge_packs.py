@@ -1258,6 +1258,50 @@ def test_index_policy_registry_failure_restores_previous_policy(monkeypatch, tmp
     assert service.list_packs()[0]["local_embedding_enabled"] is False
 
 
+def test_index_policy_reconciles_sqlite_from_registry_after_interrupted_update(
+    monkeypatch,
+    tmp_path,
+):
+    from knowledge.packs import reconcile_installed_source_embedding_policies
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_payload()))
+    database_path = service.database_path()
+    source_tag = "source:community.community-fixture"
+    original_set_policy = KnowledgeStore.set_source_embedding_policy
+
+    def interrupt_after_registry(*_args, **_kwargs):
+        raise OSError("simulated process exit before sqlite policy commit")
+
+    monkeypatch.setattr(
+        KnowledgeStore,
+        "set_source_embedding_policy",
+        interrupt_after_registry,
+    )
+    with pytest.raises(OSError, match="before sqlite policy commit"):
+        service.set_pack_index_policy(
+            "community-fixture",
+            local_embedding_enabled=True,
+        )
+
+    assert service.list_packs()[0]["local_embedding_enabled"] is True
+    assert KnowledgeStore(database_path).embedding_policy_counts(
+        source_tag=source_tag
+    ) == {"local": 0, "prebuilt_only": 1}
+
+    monkeypatch.setattr(
+        KnowledgeStore,
+        "set_source_embedding_policy",
+        original_set_policy,
+    )
+    assert reconcile_installed_source_embedding_policies(database_path) == {
+        source_tag: "local"
+    }
+    assert KnowledgeStore(database_path).embedding_policy_counts(
+        source_tag=source_tag
+    ) == {"local": 1, "prebuilt_only": 0}
+
+
 def test_community_chunk_backfill_preserves_explicit_embedding_policy(tmp_path):
     service = open_knowledge(tmp_path)
     service.install_pack(validate_pack(_payload()))

@@ -10,6 +10,15 @@ from knowledge import indexer
 from knowledge.vector_index import _KnowledgeInferenceCoordinator
 
 
+@pytest.fixture(autouse=True)
+def _isolate_writer_admission():
+    from knowledge.mutation_runtime import open_knowledge_writer_admission
+
+    open_knowledge_writer_admission()
+    yield
+    open_knowledge_writer_admission()
+
+
 @pytest.mark.asyncio
 async def test_indexer_lifecycle_is_idempotent_and_wakeable(
     monkeypatch: pytest.MonkeyPatch,

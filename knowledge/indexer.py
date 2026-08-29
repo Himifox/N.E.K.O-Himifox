@@ -104,7 +104,7 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
 
     from .diagnostics import record_knowledge_index_batch
-    from .packs import installed_source_embedding_policies
+    from .packs import reconcile_installed_source_embedding_policies
     from .store import KnowledgeStore
     from .pack_jobs import MAX_READY_VECTOR_CHUNKS, process_pack_jobs
     from .service import KnowledgeService
@@ -141,7 +141,11 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
         try:
             remaining = MAX_CHUNKS_PER_ROUND
             embedding_activity = False
-            embedding_policies = installed_source_embedding_policies(database_path)
+            embedding_policies = await run_knowledge_writer(
+                knowledge_root,
+                reconcile_installed_source_embedding_policies,
+                database_path,
+            )
             # Derive at most one legacy entry per round. This is deterministic
             # SQLite work and does not load the ONNX model.
             for store in stores:

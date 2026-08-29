@@ -346,18 +346,35 @@ async def _settle_knowledge_unsubscribe(
         claimed_pack_id=payload.pack_id,
         deadline=work_deadline,
     )
-    if active_task is not None and active_task.get("preinstall_cancelled") is True:
-        await _report_unsubscribe_best_effort(
-            payload.package_id,
+    preinstall_cancelled = (
+        active_task is not None and active_task.get("preinstall_cancelled") is True
+    )
+    if preinstall_cancelled:
+        try:
+            # A cancelled update may sit on top of an older durable install. Do
+            # not let the ephemeral task prove absence; inspect the registry.
+            pack_id, remote_id = await _resolve_owned_subscription(
+                package_id=payload.package_id,
+                claimed_pack_id=payload.pack_id,
+                active_task=None,
+                deadline=work_deadline,
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if exc.status_code != 404 or detail.get("code") != "subscription_not_found":
+                raise
+            await _report_unsubscribe_best_effort(
+                payload.package_id,
+                deadline=work_deadline,
+            )
+            return _preinstall_cancellation_result()
+    else:
+        pack_id, remote_id = await _resolve_owned_subscription(
+            package_id=payload.package_id,
+            claimed_pack_id=payload.pack_id,
+            active_task=active_task,
             deadline=work_deadline,
         )
-        return _preinstall_cancellation_result()
-    pack_id, remote_id = await _resolve_owned_subscription(
-        package_id=payload.package_id,
-        claimed_pack_id=payload.pack_id,
-        active_task=active_task,
-        deadline=work_deadline,
-    )
     removal_budget = _remaining_budget(work_deadline)
     if removal_budget <= 0:
         # Waiting on the in-flight install ate the whole budget. Sending a request

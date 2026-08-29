@@ -422,6 +422,51 @@ def test_removal_status_reports_unknown_operation(monkeypatch, tmp_path):
     }
 
 
+@pytest.mark.asyncio
+async def test_pending_removal_status_resumes_the_same_operation_after_restart(
+    monkeypatch,
+    tmp_path,
+):
+    import main_routers.public_knowledge_router as module
+    from knowledge.removal_operations import (
+        begin_removal_operation,
+        get_removal_operation,
+    )
+
+    operation_id = "remove-operation-restart-0001"
+    operation_request = {
+        "pack_id": "market-fixture",
+        "expected_provider": "plugin-market",
+        "expected_provider_package_id": "7",
+        "expected_remote_id": "knowledge/market-fixture",
+    }
+    begin_removal_operation(tmp_path, operation_id, operation_request)
+    calls = 0
+    service = SimpleNamespace(
+        knowledge_root=tmp_path,
+        cancel_and_remove_pack=lambda *_args, **_kwargs: None,
+    )
+
+    async def fake_service():
+        return service
+
+    async def fake_writer(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"removed_pack": True, "removed_entries": 1, "cancelled_jobs": 0}
+
+    monkeypatch.setattr(module, "_service_async", fake_service)
+    monkeypatch.setattr(module, "run_knowledge_writer", fake_writer)
+
+    status = await module.get_public_knowledge_pack_removal_status(operation_id)
+    assert status["operation_status"] == "pending"
+    recovery = module._pack_removal_tasks[operation_id]
+    await recovery
+
+    assert get_removal_operation(tmp_path, operation_id)["status"] == "committed"
+    assert calls == 1
+
+
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(

@@ -671,6 +671,20 @@ async def get_public_knowledge_pack_removal_status(
         return {"ok": False, "status": "unknown", "reason": str(exc)}
     if record is None:
         return {"ok": False, "status": "unknown", "operation_id": operation_id}
+    if record["status"] == "pending" and operation_id not in _pack_removal_tasks:
+        task = asyncio.create_task(
+            _execute_pack_removal_operation(
+                service,
+                operation_id,
+                dict(record["request"]),
+            ),
+            name=f"knowledge-pack-remove-recovery:{operation_id}",
+        )
+        _pack_removal_tasks[operation_id] = task
+        task.add_done_callback(
+            lambda completed, *, operation_id=operation_id:
+            _pack_removal_operation_done(operation_id, completed)
+        )
     return _removal_operation_response(record)
 
 

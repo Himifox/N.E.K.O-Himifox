@@ -519,9 +519,14 @@ def installed_source_embedding_policies(
 ) -> dict[str, str]:
     """Return explicit generation ownership for installed community sources."""
     try:
-        packs = _load_registry(get_pack_registry_path(database_path))["packs"]
+        registry = _load_registry(get_pack_registry_path(database_path))
     except KnowledgePackRegistryError:
         return {}
+    return _embedding_policies_from_registry(registry)
+
+
+def _embedding_policies_from_registry(registry: dict[str, Any]) -> dict[str, str]:
+    packs = registry["packs"]
     policies: dict[str, str] = {}
     for metadata in packs.values():
         source_tag = str(metadata.get("source_tag") or "")
@@ -533,6 +538,21 @@ def installed_source_embedding_policies(
             else "prebuilt_only"
         )
     return policies
+
+
+def reconcile_installed_source_embedding_policies(
+    database_path: str | Path,
+) -> dict[str, str]:
+    """Make the durable registry authoritative before any indexing selection."""
+    database_path = Path(database_path)
+    registry_path = get_pack_registry_path(database_path)
+    with mutation_lock(registry_path):
+        _recover_pack_remove_intent_locked(database_path, registry_path)
+        policies = _embedding_policies_from_registry(_load_registry(registry_path))
+        store = KnowledgeStore(database_path)
+        for source_tag, policy in policies.items():
+            store.set_source_embedding_policy(source_tag, policy)
+        return policies
 
 
 def set_pack_auto_context(
@@ -608,18 +628,15 @@ def set_pack_index_policy(
             raise ValueError("only community packs have an index policy")
         policy = "local" if local_embedding_enabled else "prebuilt_only"
         store = KnowledgeStore(database_path)
-        snapshot = _snapshot_source(store, source_tag, metadata)
         packs[pack_id] = {
             **metadata,
             "local_embedding_enabled": bool(local_embedding_enabled),
         }
         _registry_bytes(registry)
-        try:
-            store.set_source_embedding_policy(source_tag, policy)
-            _write_registry(registry_path, registry)
-        except Exception:
-            _restore_source(store, source_tag, snapshot)
-            raise
+        # Publish consent first. If the process exits before SQLite converges,
+        # the indexer reconciles chunks from this registry before selecting work.
+        _write_registry(registry_path, registry)
+        store.set_source_embedding_policy(source_tag, policy)
 
 
 def _remove_intent_bytes(payload: dict[str, Any]) -> bytes:
