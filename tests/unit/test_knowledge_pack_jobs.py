@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
+import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -138,7 +139,67 @@ def test_prebuilt_verification_resumes_from_persisted_state(tmp_path):
     assert first["state"] == "verifying_index"
     assert resumed["state"] == "verifying_index"
     assert resumed["index_validation"] == "accepted"
-    assert KnowledgeStore(job_dir / "knowledge.db").chunk_status()["chunks_ready"] == 1
+    assert resumed["validation_peak_bytes"] <= resumed["validation_budget_bytes"]
+    assert not tuple(job_dir.glob("knowledge.db*"))
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_activation_never_opens_staging_sqlite(tmp_path, monkeypatch):
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    original_init = KnowledgeStore.__init__
+    opened_databases = []
+
+    def track_database(store, database_path, *args, **kwargs):
+        opened_databases.append(Path(database_path))
+        original_init(store, database_path, *args, **kwargs)
+
+    monkeypatch.setattr(KnowledgeStore, "__init__", track_database)
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "ready_hybrid", (
+        result,
+        service.list_pack_jobs()[0].get("reason"),
+        opened_databases,
+    )
+    assert all(path.parent != job_dir for path in opened_databases)
+    assert not tuple(job_dir.glob("knowledge.db*"))
+
+
+def test_prebuilt_validation_memory_budget_fails_closed_with_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    monkeypatch.setattr(pack_jobs, "MAX_STAGING_VALIDATION_MEMORY_BYTES", 1)
+
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "knowledge_staging_memory_budget_exceeded"
+    assert state["validation_peak_bytes"] > state["validation_budget_bytes"]
+    assert (job_dir / "pack.neko-knowledge.json").is_file()
+    assert (job_dir / "pack.neko-knowledge.index.json").is_file()
+    assert (job_dir / "pack.neko-knowledge.vectors.f16").is_file()
 
 
 def test_staging_rejects_subscription_material_type_mismatch_without_side_effects(
@@ -571,18 +632,26 @@ def test_corrupt_job_state_is_quarantined_and_still_counts_capacity(
 
 
 def test_staged_chunk_total_must_match_identity(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
     service = KnowledgeService.from_root(tmp_path)
-    job = service.stage_pack(_pack())
+    pack = _pack()
+    artifacts, subscription = _prebuilt(pack)
+    job = service.stage_pack(
+        pack,
+        subscription=subscription,
+        index_manifest=artifacts.manifest,
+        vectors=artifacts.vectors,
+    )
     job_dir = tmp_path / ".staging" / str(job["job_id"])
-    original_chunk_status = KnowledgeStore.chunk_status
+    original_validate = pack_jobs._validate_staged_prebuilt
 
-    def mismatched_chunk_status(store):
-        status = original_chunk_status(store)
-        if store.database_path.parent == job_dir:
-            status["chunks_total"] = int(status["chunks_total"]) + 1
-        return status
+    def mismatched_chunks(*args, **kwargs):
+        validated, estimated_peak = original_validate(*args, **kwargs)
+        object.__setattr__(validated, "chunks", (*validated.chunks, validated.chunks[0]))
+        return validated, estimated_peak
 
-    monkeypatch.setattr(KnowledgeStore, "chunk_status", mismatched_chunk_status)
+    monkeypatch.setattr(pack_jobs, "_validate_staged_prebuilt", mismatched_chunks)
 
     state = _prepare_job(job_dir)
 
@@ -624,7 +693,7 @@ def test_staged_artifact_must_match_immutable_capacity_identity(
 
     assert state["state"] == "degraded"
     assert state["reason"] == "job_capacity_identity_mismatch"
-    assert not (job_dir / "knowledge.db").exists()
+    assert not tuple(job_dir.glob("knowledge.db*"))
     assert service.list_packs() == ()
 
 
@@ -775,6 +844,61 @@ def test_first_stage_creates_missing_trusted_knowledge_root(tmp_path):
 
     assert knowledge_root.is_dir()
     assert (knowledge_root / ".staging" / str(job["job_id"])).is_dir()
+
+
+def test_stage_rejects_preexisting_redirected_ancestor_without_external_writes(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    redirected_parent = tmp_path / "redirected-parent"
+    try:
+        redirected_parent.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    service = KnowledgeService.from_root(redirected_parent / "knowledge")
+
+    with pytest.raises(
+        KnowledgeJobRegistryError,
+        match="knowledge_job_registry_path_invalid",
+    ):
+        service.stage_pack(_pack())
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (outside / "knowledge").exists()
+
+
+def test_windows_staged_leaf_uses_native_handle_and_rejects_reparse(tmp_path, monkeypatch):
+    if os.name != "nt":
+        pytest.skip("Windows native handle contract")
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    artifact_path = job_dir / "pack.neko-knowledge.json"
+    external = tmp_path / "external-pack.json"
+    external.write_bytes(artifact_path.read_bytes())
+    artifact_path.unlink()
+    try:
+        artifact_path.symlink_to(external)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    original_native_open = pack_jobs._open_windows_staged_file
+    native_paths = []
+
+    def tracked_native_open(path, *, max_bytes):
+        native_paths.append(Path(path))
+        return original_native_open(path, max_bytes=max_bytes)
+
+    monkeypatch.setattr(pack_jobs, "_open_windows_staged_file", tracked_native_open)
+    state = _prepare_job(job_dir)
+
+    assert state["state"] == "degraded"
+    assert state["reason"] == "job_capacity_identity_mismatch"
+    assert artifact_path in native_paths
+    assert external.read_bytes()
 
 
 def test_stage_rejects_reparse_knowledge_root_before_writing_locks(
@@ -934,7 +1058,7 @@ def test_reparse_job_directory_is_not_listed_cancelled_or_discarded(
 
 
 @pytest.mark.parametrize("restart_boundary", (False, True))
-def test_staged_database_symlink_is_rejected_without_touching_target(
+def test_legacy_staged_database_symlink_is_preserved_without_opening_target(
     tmp_path,
     restart_boundary,
 ):
@@ -944,7 +1068,6 @@ def test_staged_database_symlink_is_rejected_without_touching_target(
     database_path = job_dir / "knowledge.db"
     if restart_boundary:
         assert _prepare_job(job_dir)["state"] == "verifying_index"
-        database_path.unlink()
     outside_database = tmp_path / "outside.db"
     KnowledgeStore(outside_database).upsert(
         _pack(title="Outside sentinel").entries[0]
@@ -957,7 +1080,8 @@ def test_staged_database_symlink_is_rejected_without_touching_target(
     state = _prepare_job(job_dir)
 
     assert state["state"] == "degraded"
-    assert state["reason"] == "knowledge_staging_database_invalid"
+    assert state["reason"] == "knowledge_staging_database_legacy"
+    assert database_path.is_symlink()
     assert KnowledgeStore(outside_database).count() == 1
     assert KnowledgeStore(outside_database).get_entry(
         "source:community.staged-fixture",
@@ -974,29 +1098,19 @@ def test_staged_database_symlink_is_rejected_without_touching_target(
         "knowledge.db-journal",
     ),
 )
-def test_staged_database_file_family_rejects_reparse_markers(
+def test_legacy_staged_database_file_family_is_preserved_for_explicit_discard(
     tmp_path,
-    monkeypatch,
     database_name,
 ):
-    import knowledge.pack_jobs as pack_jobs
-
     service = KnowledgeService.from_root(tmp_path)
     job = service.stage_pack(_pack())
     job_dir = tmp_path / ".staging" / str(job["job_id"])
     marked_path = job_dir / database_name
     marked_path.write_bytes(b"sentinel")
-    original_check = pack_jobs._is_link_or_reparse
-    monkeypatch.setattr(
-        pack_jobs,
-        "_is_link_or_reparse",
-        lambda path: path == marked_path or original_check(path),
-    )
-
     state = _prepare_job(job_dir)
 
     assert state["state"] == "degraded"
-    assert state["reason"] == "knowledge_staging_database_invalid"
+    assert state["reason"] == "knowledge_staging_database_legacy"
     assert marked_path.read_bytes() == b"sentinel"
 
 
@@ -1355,12 +1469,7 @@ async def test_vector_budget_recounts_live_vectors_at_activation(
 
 
 @pytest.mark.asyncio
-async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
-    tmp_path,
-    monkeypatch,
-):
-    import knowledge.pack_jobs as pack_jobs
-
+async def test_canonical_prebuilt_job_resumes_without_staging_database(tmp_path):
     service = KnowledgeService.from_root(tmp_path)
     pack = _pack()
     artifacts, subscription = _prebuilt(pack)
@@ -1371,15 +1480,9 @@ async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
         vectors=artifacts.vectors,
     )
     job_dir = tmp_path / ".staging" / str(job["job_id"])
-    original_prepare = pack_jobs._prepare_job
-
-    def prepare_then_remove_database(selected_job_dir):
-        prepared = original_prepare(selected_job_dir)
-        assert prepared["index_validation"] == "accepted"
-        (selected_job_dir / "knowledge.db").unlink()
-        return prepared
-
-    monkeypatch.setattr(pack_jobs, "_prepare_job", prepare_then_remove_database)
+    prepared = _prepare_job(job_dir)
+    assert prepared["index_validation"] == "accepted"
+    assert not tuple(job_dir.glob("knowledge.db*"))
 
     result = await process_pack_jobs(
         service,
@@ -1387,11 +1490,9 @@ async def test_missing_staged_vector_database_cannot_activate_as_hybrid(
         ready_vector_chunks=0,
     )
 
-    assert result["state"] == "degraded"
-    assert service.list_packs() == ()
-    listed = service.list_pack_jobs()[0]
-    assert listed["retrieval_mode"] == "none"
-    assert listed["reason"] == "knowledge_staging_database_invalid"
+    assert result["state"] == "ready_hybrid"
+    assert service.list_packs()[0]["retrieval_mode"] == "hybrid"
+    assert not tuple(job_dir.glob("knowledge.db*"))
 
 
 @pytest.mark.asyncio
@@ -1417,11 +1518,9 @@ async def test_tampered_staged_vector_bytes_cannot_activate_as_hybrid(
         prepared = original_prepare(selected_job_dir)
         assert prepared["index_validation"] == "accepted"
         replacement = bytes.fromhex("0040") * PREBUILT_DIMENSIONS
-        with sqlite3.connect(selected_job_dir / "knowledge.db") as connection:
-            connection.execute(
-                "UPDATE knowledge_chunks SET embedding=?",
-                (replacement,),
-            )
+        (selected_job_dir / "pack.neko-knowledge.vectors.f16").write_bytes(
+            replacement
+        )
         return prepared
 
     monkeypatch.setattr(pack_jobs, "_prepare_job", prepare_then_replace_vector)

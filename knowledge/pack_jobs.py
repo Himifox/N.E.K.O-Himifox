@@ -45,6 +45,8 @@ TERMINAL_JOB_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_TERMINAL_JOB_DIRECTORIES = 100
 # Staging metadata is a few KB in practice; this only has to exclude absurdity.
 MAX_STAGED_METADATA_BYTES = 1024 * 1024
+MAX_STAGING_VALIDATION_MEMORY_BYTES = 128 * 1024 * 1024
+STAGING_VALIDATION_CHUNK_OVERHEAD_BYTES = 12 * 1024
 PACK_ARTIFACT_NAME = "pack.neko-knowledge.json"
 LEGACY_PACK_ARTIFACT_NAME = "pack.json"
 INDEX_MANIFEST_NAME = "pack.neko-knowledge.index.json"
@@ -85,6 +87,12 @@ class KnowledgeJobRegistryError(ValueError):
     """Raised when staging state cannot be trusted for capacity decisions."""
 
 
+class KnowledgeStagingMemoryBudgetError(KnowledgeJobRegistryError):
+    def __init__(self, estimated_peak: int) -> None:
+        self.estimated_peak = int(estimated_peak)
+        super().__init__("knowledge_staging_memory_budget_exceeded")
+
+
 @dataclass(frozen=True, slots=True)
 class _JsonReadResult:
     state: Literal["valid", "missing", "invalid", "unreadable"]
@@ -123,6 +131,13 @@ def _read_bounded_staged_file(path: Path, *, max_bytes: int) -> bytes:
     Raises ValueError for a rejected file so callers can tell "we refuse to read
     this" apart from a genuine I/O error.
     """
+    if os.name == "nt":
+        descriptor = _open_windows_staged_file(path, max_bytes=max_bytes)
+        try:
+            return _read_bounded_descriptor(descriptor, max_bytes=max_bytes)
+        finally:
+            os.close(descriptor)
+
     # Not _is_link_or_reparse(): that folds "does not exist" into "is a link",
     # which would turn a missing state.json from `missing` into `invalid` and
     # change how the job state machine treats it. Absence must stay absence.
@@ -146,22 +161,133 @@ def _read_bounded_staged_file(path: Path, *, max_bytes: int) -> bytes:
             raise ValueError("staged file is not a regular file")
         if metadata.st_size > max_bytes:
             raise ValueError("staged file exceeds its size limit")
-        # Read at most max_bytes + 1 so a file that grew after fstat is rejected
-        # instead of being materialized in full.
-        chunks: list[bytes] = []
-        remaining = max_bytes + 1
-        while remaining > 0:
-            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
+        return _read_bounded_descriptor(descriptor, max_bytes=max_bytes)
     finally:
         os.close(descriptor)
+
+
+def _read_bounded_descriptor(descriptor: int, *, max_bytes: int) -> bytes:
+    # Read at most max_bytes + 1 so a file that grew after the handle check is
+    # rejected instead of being materialized in full.
+    chunks: list[bytes] = []
+    remaining = max_bytes + 1
+    while remaining > 0:
+        chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
     raw = b"".join(chunks)
     if len(raw) > max_bytes:
         raise ValueError("staged file exceeds its size limit")
     return raw
+
+
+def _open_windows_staged_file(path: Path, *, max_bytes: int) -> int:
+    """Open a Windows leaf once without traversing a reparse point."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("last_access_time", wintypes.FILETIME),
+            ("last_write_time", wintypes.FILETIME),
+            ("volume_serial_number", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    invalid_handle = ctypes.c_void_p(-1).value
+    handle = create_file(
+        str(path),
+        0x80000000,  # GENERIC_READ
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,  # OPEN_EXISTING
+        0x00200000 | 0x08000000,  # OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+        None,
+    )
+    if handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error in {2, 3}:
+            raise FileNotFoundError(error, os.strerror(error), str(path))
+        raise OSError(error, os.strerror(error), str(path))
+    descriptor: int | None = None
+    try:
+        get_file_type = kernel32.GetFileType
+        get_file_type.argtypes = (wintypes.HANDLE,)
+        get_file_type.restype = wintypes.DWORD
+        if get_file_type(handle) != 0x0001:  # FILE_TYPE_DISK
+            raise ValueError("staged file is not a regular disk file")
+
+        information = _ByHandleFileInformation()
+        get_information = kernel32.GetFileInformationByHandle
+        get_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(_ByHandleFileInformation),
+        )
+        get_information.restype = wintypes.BOOL
+        if not get_information(handle, ctypes.byref(information)):
+            error = ctypes.get_last_error()
+            raise OSError(error, os.strerror(error), str(path))
+        if information.file_attributes & (0x00000400 | 0x00000010):
+            raise ValueError("staged file is a reparse point or directory")
+        size = (int(information.file_size_high) << 32) | int(
+            information.file_size_low
+        )
+        if size > max_bytes:
+            raise ValueError("staged file exceeds its size limit")
+
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = (
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        )
+        get_final_path.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_final_path(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            error = ctypes.get_last_error()
+            raise OSError(error, os.strerror(error), str(path))
+        final_path = buffer.value
+        if final_path.startswith("\\\\?\\UNC\\"):
+            final_path = "\\\\" + final_path[8:]
+        elif final_path.startswith("\\\\?\\"):
+            final_path = final_path[4:]
+        declared = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+        opened = os.path.normcase(os.path.normpath(os.path.abspath(final_path)))
+        if opened != declared:
+            raise ValueError("staged file final path does not match its declared leaf")
+
+        descriptor = msvcrt.open_osfhandle(
+            int(handle),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+        handle = None
+        return descriptor
+    finally:
+        if handle is not None:
+            kernel32.CloseHandle(handle)
 
 
 def _read_staged_artifact(job_dir: Path, name: str) -> bytes:
@@ -267,19 +393,57 @@ def trusted_live_root(knowledge_root: str | Path) -> Path | None:
 
 
 def _create_trusted_knowledge_root(knowledge_root: str | Path) -> Path | None:
-    """Create the configured write root without accepting a redirected path."""
-    root = Path(knowledge_root)
+    """Create a write root only below currently real, non-redirected ancestors."""
+    root = Path(os.path.abspath(knowledge_root))
+    if not _existing_directory_chain_is_trusted(root, allow_missing_leaf=True):
+        return None
     try:
         root.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    if _is_link_or_reparse(root) or not root.is_dir():
+    if not _existing_directory_chain_is_trusted(root, allow_missing_leaf=False):
         return None
     try:
-        root.resolve(strict=True)
+        resolved = root.resolve(strict=True)
     except OSError:
         return None
+    if os.path.normcase(str(resolved)) != os.path.normcase(str(root)):
+        return None
     return root
+
+
+def _existing_directory_chain_is_trusted(
+    path: Path,
+    *,
+    allow_missing_leaf: bool,
+) -> bool:
+    """Reject redirects already present anywhere in the declared path chain.
+
+    This deliberately covers a static/pre-existing namespace. It is not a
+    directory-handle capability against a same-user replacement race.
+    """
+    absolute = Path(os.path.abspath(path))
+    chain = [*reversed(absolute.parents), absolute]
+    missing_seen = False
+    for item in chain:
+        try:
+            metadata = item.lstat()
+        except FileNotFoundError:
+            missing_seen = True
+            continue
+        except OSError:
+            return False
+        if missing_seen:
+            return False
+        file_attributes = int(getattr(metadata, "st_file_attributes", 0))
+        reparse_attribute = int(
+            getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
+        )
+        if stat.S_ISLNK(metadata.st_mode) or file_attributes & reparse_attribute:
+            return False
+        if not stat.S_ISDIR(metadata.st_mode):
+            return False
+    return allow_missing_leaf or not missing_seen
 
 
 def _jobs_registry_lock(knowledge_root: str | Path):
@@ -319,43 +483,20 @@ def _activation_commits_path(knowledge_root: str | Path) -> Path | None:
     return path
 
 
-def _validated_staging_database_path(
-    job_dir: Path,
-    *,
-    require_database: bool = False,
-) -> Path | None:
-    """Return a staging database only when its complete file family is local."""
+def _legacy_staging_database_present(job_dir: Path) -> bool:
+    """Detect old derived SQLite evidence without opening or deleting it."""
     safe_job_dir = _revalidated_job_dir(job_dir)
     if safe_job_dir is None:
-        return None
-    try:
-        resolved_job_dir = safe_job_dir.resolve(strict=True)
-    except OSError:
-        return None
-    database_exists = False
+        return False
     for name in STAGING_DATABASE_NAMES:
-        path = safe_job_dir / name
         try:
-            metadata = path.lstat()
+            (safe_job_dir / name).lstat()
         except FileNotFoundError:
             continue
         except OSError:
-            return None
-        if (
-            _is_link_or_reparse(path)
-            or not stat.S_ISREG(metadata.st_mode)
-        ):
-            return None
-        try:
-            if path.resolve(strict=True).parent != resolved_job_dir:
-                return None
-        except OSError:
-            return None
-        if name == "knowledge.db":
-            database_exists = True
-    if require_database and not database_exists:
-        return None
-    return safe_job_dir / "knowledge.db"
+            return True
+        return True
+    return False
 
 
 def _external_staging_child(
@@ -1310,7 +1451,7 @@ def _subscription_mismatch_state(
     )
 
 
-def _staging_database_mismatch_state(
+def _legacy_staging_database_state(
     job_dir: Path,
     state: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1319,8 +1460,41 @@ def _staging_database_mismatch_state(
         state,
         state=DEGRADED_STATE,
         retrieval_mode="none",
-        reason="knowledge_staging_database_invalid",
+        reason="knowledge_staging_database_legacy",
     )
+
+
+def _validate_staged_prebuilt(
+    job_dir: Path,
+    subscription: dict[str, str] | None,
+):
+    from .prebuilt_index import validate_prebuilt_index
+
+    pack_artifact = _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME)
+    manifest_artifact = _read_staged_artifact(job_dir, INDEX_MANIFEST_NAME)
+    vectors_artifact = _read_staged_artifact(job_dir, VECTOR_ARTIFACT_NAME)
+    expected_subscription = subscription or {}
+    validated = validate_prebuilt_index(
+        pack_artifact,
+        manifest_artifact,
+        vectors_artifact,
+        expected_pack_sha256=str(expected_subscription.get("artifact_sha256") or ""),
+        expected_manifest_sha256=str(
+            expected_subscription.get("index_manifest_sha256") or ""
+        ),
+        expected_vectors_sha256=str(
+            expected_subscription.get("vectors_sha256") or ""
+        ),
+    )
+    estimated_peak = (
+        len(pack_artifact)
+        + len(manifest_artifact)
+        + len(vectors_artifact) * 2
+        + len(validated.chunks) * STAGING_VALIDATION_CHUNK_OVERHEAD_BYTES
+    )
+    if estimated_peak > MAX_STAGING_VALIDATION_MEMORY_BYTES:
+        raise KnowledgeStagingMemoryBudgetError(estimated_peak)
+    return validated, estimated_peak
 
 
 def _prepare_job(job_dir: Path) -> dict[str, Any]:
@@ -1337,13 +1511,15 @@ def _prepare_job(job_dir: Path) -> dict[str, Any]:
 
 
 def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
-    """Build the staging FTS/chunks off the event loop and resume idempotently."""
+    """Validate canonical staging artifacts without creating derived SQLite."""
     with mutation_lock(_state_path(job_dir)):
         state = _read_job(job_dir)
         if state.get("state") == DEGRADED_STATE:
             return state
         if not state or state.get("state") in TERMINAL_STATES:
             return state
+        if _legacy_staging_database_present(job_dir):
+            return _legacy_staging_database_state(job_dir, state)
         try:
             subscription = _identity_validated_subscription(job_dir, state)
         except KnowledgeJobRegistryError:
@@ -1351,72 +1527,27 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
         pack = _load_capacity_validated_job_pack(job_dir, state)
         if pack is None:
             return _capacity_mismatch_state(job_dir, state)
-        staging_store: KnowledgeStore | None = None
         if state.get("state") in {"queued", "validating", "building_fts"}:
             state = _write_state(job_dir, state, state="building_fts")
-            database_path = _validated_staging_database_path(job_dir)
-            if database_path is None:
-                return _staging_database_mismatch_state(job_dir, state)
-            staging_store = KnowledgeStore(database_path)
-            staging_store.replace_source(
-                pack.source_tag,
-                pack.entries,
-                embedding_policy="prebuilt_only",
-            )
-            status = staging_store.chunk_status()
-            if int(status["chunks_total"]) != int(state["chunks_total"]):
-                return _capacity_mismatch_state(job_dir, state)
             state = _write_state(
                 job_dir,
                 state,
                 state="verifying_index",
             )
         if state.get("state") == "verifying_index":
-            if staging_store is None:
-                # ``verifying_index`` is a durable restart boundary.  Reopen and
-                # reconcile the staging database instead of relying on locals
-                # created by the preceding in-process state transition.
-                database_path = _validated_staging_database_path(job_dir)
-                if database_path is None:
-                    return _staging_database_mismatch_state(job_dir, state)
-                staging_store = KnowledgeStore(database_path)
-                staging_store.replace_source(
-                    pack.source_tag,
-                    pack.entries,
-                    embedding_policy="prebuilt_only",
-                )
-                status = staging_store.chunk_status()
-                if int(status["chunks_total"]) != int(state["chunks_total"]):
-                    return _capacity_mismatch_state(job_dir, state)
             manifest_path = job_dir / INDEX_MANIFEST_NAME
             vectors_path = job_dir / VECTOR_ARTIFACT_NAME
             has_manifest = _staged_artifact_present(job_dir, INDEX_MANIFEST_NAME)
             has_vectors = _staged_artifact_present(job_dir, VECTOR_ARTIFACT_NAME)
             if has_manifest and has_vectors:
-                from .prebuilt_index import validate_prebuilt_index
-
-                expected_subscription = subscription or {}
                 try:
-                    validated = validate_prebuilt_index(
-                        _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME),
-                        _read_staged_artifact(job_dir, INDEX_MANIFEST_NAME),
-                        _read_staged_artifact(job_dir, VECTOR_ARTIFACT_NAME),
-                        expected_pack_sha256=str(
-                            expected_subscription.get("artifact_sha256") or ""
-                        ),
-                        expected_manifest_sha256=str(
-                            expected_subscription.get("index_manifest_sha256") or ""
-                        ),
-                        expected_vectors_sha256=str(
-                            expected_subscription.get("vectors_sha256") or ""
-                        ),
-                    )
-                    stored = staging_store.store_chunk_embeddings_strict(
-                        validated.prepared_embeddings()
+                    validated, estimated_peak = _validate_staged_prebuilt(
+                        job_dir,
+                        subscription,
                     )
                     total = len(validated.chunks)
-                    if stored != total:
-                        raise ValueError("prebuilt index import was incomplete")
+                    if total != int(state.get("chunks_total") or 0):
+                        return _capacity_mismatch_state(job_dir, state)
                     state = _write_state(
                         job_dir,
                         state,
@@ -1426,6 +1557,18 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
                         index_fallback_reason="",
                         prebuilt_chunks_ready=total,
                         prebuilt_chunks_missing=0,
+                        validation_peak_bytes=estimated_peak,
+                        validation_budget_bytes=MAX_STAGING_VALIDATION_MEMORY_BYTES,
+                    )
+                except KnowledgeStagingMemoryBudgetError as exc:
+                    return _write_state(
+                        job_dir,
+                        state,
+                        state=DEGRADED_STATE,
+                        retrieval_mode="none",
+                        reason="knowledge_staging_memory_budget_exceeded",
+                        validation_peak_bytes=exc.estimated_peak,
+                        validation_budget_bytes=MAX_STAGING_VALIDATION_MEMORY_BYTES,
                     )
                 except (OSError, ValueError):
                     manifest_path.unlink(missing_ok=True)
@@ -1439,6 +1582,8 @@ def _prepare_job_validated(job_dir: Path) -> dict[str, Any]:
                         index_fallback_reason="prebuilt_index_rejected",
                         prebuilt_chunks_ready=0,
                         prebuilt_chunks_missing=int(state.get("chunks_total") or 0),
+                        validation_peak_bytes=0,
+                        validation_budget_bytes=MAX_STAGING_VALIDATION_MEMORY_BYTES,
                     )
             else:
                 state = _write_state(
@@ -1487,11 +1632,8 @@ def _activate_job_validated(
         pack = _load_capacity_validated_job_pack(job_dir, current)
         if pack is None:
             return _capacity_mismatch_state(job_dir, current)
-        if mode == "hybrid" and _validated_staging_database_path(
-            job_dir,
-            require_database=True,
-        ) is None:
-            return _staging_database_mismatch_state(job_dir, current)
+        if _legacy_staging_database_present(job_dir):
+            return _legacy_staging_database_state(job_dir, current)
         embeddings = (
             _strict_staged_vector_snapshot(job_dir, current, subscription)
             if mode == "hybrid"
@@ -1593,66 +1735,22 @@ def _strict_staged_vector_snapshot(
     state: dict[str, Any],
     subscription: dict[str, str] | None,
 ) -> tuple[dict[str, object], ...]:
-    from .prebuilt_index import validate_prebuilt_index
-
-    database_path = _validated_staging_database_path(
-        job_dir,
-        require_database=True,
-    )
-    if database_path is None:
-        raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
-    expected_subscription = subscription or {}
     try:
-        validated = validate_prebuilt_index(
-            _read_staged_artifact(job_dir, PACK_ARTIFACT_NAME),
-            _read_staged_artifact(job_dir, INDEX_MANIFEST_NAME),
-            _read_staged_artifact(job_dir, VECTOR_ARTIFACT_NAME),
-            expected_pack_sha256=str(
-                expected_subscription.get("artifact_sha256") or ""
-            ),
-            expected_manifest_sha256=str(
-                expected_subscription.get("index_manifest_sha256") or ""
-            ),
-            expected_vectors_sha256=str(
-                expected_subscription.get("vectors_sha256") or ""
-            ),
-        )
+        validated, estimated_peak = _validate_staged_prebuilt(job_dir, subscription)
     except (OSError, ValueError) as exc:
         raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete") from exc
-    store = KnowledgeStore(database_path)
-    status = store.chunk_status(strict=True)
     expected_total = int(state.get("chunks_total") or 0)
     expected_ready = int(state.get("prebuilt_chunks_ready") or 0)
-    embeddings = store.ready_embedding_records(strict=True)
-    expected = validated.prepared_embeddings()
-    expected_by_key = {
-        (str(record["chunk_id"]), str(record["content_hash"])): record
-        for record in expected
-    }
-    embeddings_by_key = {
-        (str(record["chunk_id"]), str(record["content_hash"])): record
-        for record in embeddings
-    }
     if (
         state.get("index_validation") != "accepted"
         or expected_ready != expected_total
-        or int(status["chunks_total"]) != expected_total
-        or int(status["chunks_ready"]) != expected_ready
-        or len(embeddings) != expected_ready
-        or len(expected_by_key) != len(expected)
-        or len(embeddings_by_key) != len(embeddings)
-        or expected_by_key.keys() != embeddings_by_key.keys()
+        or len(validated.chunks) != expected_total
+        or estimated_peak > MAX_STAGING_VALIDATION_MEMORY_BYTES
     ):
         raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
-    for key, expected_record in expected_by_key.items():
-        record = embeddings_by_key[key]
-        if (
-            record.get("embedding_policy") != "prebuilt_only"
-            or record.get("model_id") != expected_record.get("model_id")
-            or record.get("dimensions") != expected_record.get("dimensions")
-            or record.get("embedding") != expected_record.get("embedding")
-        ):
-            raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
+    embeddings = validated.prepared_embeddings()
+    if len(embeddings) != expected_ready:
+        raise KnowledgeJobRegistryError("knowledge_staged_vectors_incomplete")
     return embeddings
 
 
