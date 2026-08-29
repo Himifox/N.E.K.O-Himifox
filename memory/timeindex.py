@@ -1058,6 +1058,23 @@ class TimeIndexedMemory:
                 type(exc).__name__,
             )
             raise RuntimeError("latest assistant history read failed") from exc
+        if not columns:
+            # PRAGMA table_info returns an EMPTY list for a table that does
+            # not exist -- it does not raise -- so an empty or partially
+            # restored database read as "a schema with no timestamp column"
+            # and the SELECT below then failed against a missing table. That
+            # surfaced as a 503, which the panel renders as a retryable
+            # error, and no amount of retrying can create the table.
+            #
+            # No table is exactly what source_available=False already means,
+            # and it is the same answer the two branches above give when the
+            # engine cannot be opened at all.
+            logger.debug(
+                "[TimeIndexedMemory] %s has no %s table; reporting no source",
+                lanlan_name,
+                table_name,
+            )
+            return LatestAssistantTexts([], False)
         has_timestamp = any(str(row[1]).lower() == "timestamp" for row in columns)
 
         cursor: tuple[object, int] | None = None

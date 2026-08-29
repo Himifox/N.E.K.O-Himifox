@@ -1523,3 +1523,65 @@ def test_the_json1_probe_failing_costs_the_filter_not_the_feature(
     assert timeindex_module._supports_json1(_BuildWithoutJson1()) is False
     # Cached, so the probe costs one query per process rather than one per page.
     assert timeindex_module._json1_supported is False
+
+
+def test_a_database_without_the_history_table_reports_no_source(
+    timeindex_module, tmp_path
+):
+    """PRAGMA table_info does not raise for a missing table -- it returns [].
+
+    So an empty or partially restored database read as "a schema with no
+    timestamp column", and the SELECT that followed failed against a table
+    that is not there. That surfaced as a 503, which the panel renders as a
+    retryable error, and no amount of retrying can create the table.
+
+    No table is exactly what source_available=False already means, and it is
+    the answer the engine-unavailable branches above give too.
+    """
+    from sqlalchemy import create_engine
+
+    manager = timeindex_module.TimeIndexedMemory(recent_history_manager=None)
+
+    # A real, perfectly readable database that simply holds something else.
+    db_path = tmp_path / "time_indexed.db"
+    engine = create_engine("sqlite:///" + str(db_path))
+    with engine.connect() as conn:
+        conn.execute(text("CREATE TABLE something_else (id INTEGER)"))
+        conn.commit()
+
+    manager.engines["Carol"] = engine
+    manager._ensure_engine_exists = lambda *_a, **_k: True
+
+    result = manager._retrieve_latest_assistant_texts_locked(
+        "Carol", 5, batch_size=200,
+    )
+
+    assert result.messages == []
+    assert result.source_available is False, (
+        "a missing table was reported as a failed read, which the panel shows "
+        "as retryable even though retrying cannot create it"
+    )
+
+    # The dual: a database that DOES have the table still reads from it, so
+    # the check cannot pass by reporting no source for everything.
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE " + timeindex_module.TIME_ORIGINAL_TABLE_NAME
+                + " (rowid INTEGER PRIMARY KEY, message TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO " + timeindex_module.TIME_ORIGINAL_TABLE_NAME
+                + " (message) VALUES (:m)"
+            ),
+            {"m": json.dumps({"type": "ai", "data": {"content": "hello there"}})},
+        )
+        conn.commit()
+
+    populated = manager._retrieve_latest_assistant_texts_locked(
+        "Carol", 5, batch_size=200,
+    )
+    assert populated.source_available is True
+    assert populated.messages == ["hello there"]
