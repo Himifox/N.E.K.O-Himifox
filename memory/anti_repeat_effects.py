@@ -940,8 +940,9 @@ class AntiRepeatEffectStore:
                         return
                     target = self._write_file_path(name)
                     if target is None:
-                        # Character directory is gone (deleted or renamed while
-                        # this turn was in flight). Fence the sequence so later
+                        # Refused: the directory is gone (deleted or renamed
+                        # while this turn was in flight), or the name is
+                        # retired or write-fenced. Fence the sequence so later
                         # snapshots do not retry into a removed identity, and
                         # drop this one rather than recreating the directory.
                         self._written_seq[name] = seq
@@ -949,6 +950,22 @@ class AntiRepeatEffectStore:
                             "[AntiRepeatEffects] skip save for removed character %s",
                             name,
                         )
+                        if raise_on_error:
+                            # A caller that asked to hear about failures has to
+                            # hear about THIS one. Returning quietly told the
+                            # reset route its cut was durable when nothing had
+                            # been written: the generation check passes, because
+                            # the retirement that caused the refusal bumped it
+                            # BEFORE the reset captured it, and the sequence
+                            # check passes because this fenced it above. The
+                            # user was told the statistics were cleared while
+                            # the file still held them, and a rolled-back delete
+                            # or rename would restore them.
+                            raise RuntimeError(
+                                "anti-repeat sidecar refused the write: "
+                                + name
+                                + " is retired, write-fenced, or has no directory"
+                            )
                         return
                     atomic_write_json(
                         target,

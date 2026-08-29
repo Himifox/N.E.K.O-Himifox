@@ -2215,3 +2215,91 @@ def test_eviction_is_what_keeps_a_reused_name_from_inheriting_old_data(
         "a reused name inherited the deleted identity's data: %d entries"
         % after
     )
+
+
+def test_a_reset_fails_loudly_when_the_sidecar_refuses_the_write(tmp_path):
+    """Telling the user their statistics were cleared has to mean they were.
+
+    ``_flush_snapshot`` RETURNS when ``_write_file_path`` refuses -- it does
+    not raise -- so ``raise_on_error=True`` did not cover the refusal. The
+    reset then passed both of its own checks: the generation is unchanged,
+    because whatever retired the name bumped it BEFORE the reset captured
+    it, and the staged sequence matches, because the refusal fenced it. The
+    route reported success while the file still held every statistic, and a
+    rolled-back delete or rename would put them back.
+
+    Both refusal shapes are covered. The second only became reachable with
+    the rename write fence, so the change that widened this is the one that
+    has to pin it.
+    """
+    import json
+    import shutil
+
+    import memory.anti_repeat_effects as effects_module
+    from utils.character_memory import (
+        fence_character_runtime_writes,
+        unfence_character_runtime_writes,
+    )
+
+    name = "Refused"
+    decision = effects_module.AntiRepeatDecision(
+        source="proactive",
+        reasons=("bm25",),
+        action="block",
+        outcome="blocked_initial",
+    )
+
+    def build(root):
+        root.mkdir(parents=True, exist_ok=True)
+        config_manager = MagicMock()
+        config_manager.memory_dir = str(root)
+        config_manager.app_docs_dir = str(root)
+        store = effects_module.AntiRepeatEffectStore()
+        store._config_manager = config_manager
+        store.record_decision(name, decision, now=1_700_000_000.0)
+        return store
+
+    def detected(root):
+        path = root / name / "anti_repeat_effects.json"
+        if not path.exists():
+            return 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return sum(
+            bucket["counters"]["detected"]
+            for bucket in payload["daily_buckets"].values()
+        )
+
+    # CONTROL: an ordinary reset still succeeds and really does cut the file,
+    # so the raises below are about the refusal and not about reset being
+    # broken outright.
+    ok_root = tmp_path / "ok"
+    ok_store = build(ok_root)
+    assert detected(ok_root) == 1
+    ok_store.clear_effects(name)
+    assert detected(ok_root) == 0
+
+    # A: retired, and the directory already removed -- delete retires first
+    # and only then rmtree's the tree.
+    gone_root = tmp_path / "gone"
+    gone_store = build(gone_root)
+    gone_store.retire_character(name)
+    shutil.rmtree(gone_root / name)
+    with pytest.raises(RuntimeError):
+        gone_store.clear_effects(name)
+
+    # B: write-fenced by a rename in progress. The directory is still there,
+    # so only the fence refuses.
+    fenced_root = tmp_path / "fenced"
+    fenced_store = build(fenced_root)
+    assert detected(fenced_root) == 1
+    fence_character_runtime_writes(name)
+    try:
+        with pytest.raises(RuntimeError):
+            fenced_store.clear_effects(name)
+    finally:
+        unfence_character_runtime_writes(name)
+
+    assert detected(fenced_root) == 1, (
+        "the reset was refused, so the statistics must still be on disk -- "
+        "reporting success here is what told the user otherwise"
+    )
