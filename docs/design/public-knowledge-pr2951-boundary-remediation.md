@@ -2455,36 +2455,40 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 
 ### 第三十轮新增不变量
 
-1. Clean shutdown 以最后一个 pack mutation worker 真实返回为准；coordinator task 结束、收到取消或 launcher 收到 shutdown-complete 都不能代替该事实。
-2. 存储迁移只能读取已经关闭 mutation admission、排空进程内 worker 并取得跨进程知识根 barrier 的静止快照。
+1. Clean shutdown 以最后一个 knowledge writer 真实返回为准；pack prepare/activate、backfill、vector writeback/reconcile、HTTP mutation、catalog/policy mutation 等必须共享一个 root barrier/admission 系统，coordinator task 结束、收到取消或 launcher 收到 shutdown-complete 都不能代替该事实。
+2. 存储迁移只能读取已经关闭 mutation admission、排空进程内 writer 并取得跨进程知识根 barrier 的静止快照；launcher 还必须独立证明旧 Main 进程已经退出，barrier 只作纵深防御。
 3. 一个 monotonic absolute deadline 覆盖退订的等待、删除和 best-effort report；phase timeout 只是内层保护，不得重置总预算。
-4. 配置根、staging 文件和 live registry 的身份必须由创建/打开时持有的目录或文件句柄证明；`lstat/resolve` 后再按字符串路径打开不构成安全边界。
-5. SQLite 与 JSON registry 的跨文件 mutation 必须有 durable intent 和数据库 commit marker；Python `except` rollback 不能替代崩溃恢复。
-6. routing 的合法空集合与加载失败是不同类型；失败既不能清除 dirty，也不能覆盖最后一次健康快照。
-7. 自动上下文以真实会话和实际交付的每张卡为身份；容量必须在创建 coroutine/task 前准入。
+4. canonical artifact leaf 与 live registry 的身份必须由同一次打开得到的文件句柄证明；knowledge root ancestor 本轮明确只防御检查时已经存在的 symlink/junction/reparse，连续同用户 namespace race 不在本轮威胁模型内，不宣称字符串路径链等价于完整 capability。
+5. pack remove 采用 registry-first durable journal：先让 registry 不再发布目标包，再幂等删除 SQLite source；Python `except` rollback 不能替代崩溃恢复。除 remove 外不泛化为所有 SQLite/JSON mutation 均已 journaled。
+6. routing 的合法空集合与加载失败是不同类型；失败既不能清除 dirty，也不能覆盖最后一次健康快照，disable/remove/policy mutation 还必须同步建立 visibility tombstone，禁止 last-good 继续暴露已撤销内容。
+7. 自动上下文以 logical user session 和最终实际插入文本的每张卡为身份；容量必须在创建 coroutine/task 前准入，已取消但仍运行的底层任务继续占用容量。
 8. Marketplace 信任只能由 Plugin Server 获取并验证 descriptor 后建立；浏览器 token 不授予构造 `trusted_market` subscription 的能力。
-9. 同一展示状态只推导一次。CSS class、文案和概览 tone 不得分别重新解释相同计数。
+9. 单包展示状态只推导一次；概览是多包聚合，必须通过独立纯函数按显式优先级聚合单包状态与全局 fallback，CSS class、文案和概览 tone 不得各自重新解释原始计数。
+10. 全局锁序固定为 `root barrier -> package guard -> jobs lock（若需要）-> registry lock -> SQLite transaction -> state/ledger`；正常路径、恢复、retention 与 retained-source cleanup 都不得反向获取。
 
 ### EW：统一 shutdown 取消屏障并跟踪真实 mutation worker
 
-- `on_shutdown()` 中所有异步清理均通过可携带返回值的 `_run_shutdown_step()`：agent bridge、translation、music crawler、Cloud Save release/upload、memory server、两个 HTTP pool 和 knowledge finish 不再裸 `await`。
-- helper 只在当前 shutdown task 确实处于 `cancelling()` 时保存第一份 caller `CancelledError` 并临时清除取消计数；被等待子任务自身取消按该步骤失败处理。全部独立清理完成后重新抛出第一份 caller cancellation。
-- `_prepare_job()` 与两条 `_activate_job()` 的 `asyncio.to_thread()` 统一由 `_run_tracked_pack_mutation()` 创建独立强引用 task，并用 `asyncio.shield()` 等待。取消 coordinator 不取消内部 worker；只有线程函数真实返回后才消费异常并移除记录。
-- `request_knowledge_indexer_stop()` 先关闭新的 pack-mutation admission，再取消 coordinator。`finish_knowledge_indexer_stop()` 同时 drain coordinator 和已登记 worker；超时只能返回“未排空”，不得报告 clean stop。
-- 同步 mutation 在 knowledge 目录外取得按 source root 区分的跨进程 barrier。storage migration 在读取 source snapshot 前取得同一 barrier并持有到复制、验证和 policy commit；获取失败返回稳定 `knowledge_mutation_busy`，不开始复制。
+- `on_shutdown()` 中所有异步清理均通过接受 coroutine factory 的 `_run_shutdown_step(factory, *, deadline)`：helper创建独立强引用task并以`asyncio.shield()`观察，agent bridge、translation、music crawler、Cloud Save release/upload、memory server、两个 HTTP pool 和 knowledge finish 不再裸 `await`。
+- 每一步有自己的 monotonic deadline，整个 shutdown 另有 global deadline。caller取消时只保存第一份 cancellation，继续 shield/观察当前cleanup直至该步骤deadline；只消费本helper捕获的那一次取消计数，不得用`uncancel()`清空其它并发取消。子任务自身取消按该步骤失败处理，最后重新抛出原caller cancellation。
+- 步骤超时标记`clean=false`并继续后续cleanup；达到global deadline后由既有watchdog完成退出，不能无界等待，也不能报告clean shutdown。
+- `_prepare_job()`、两条`_activate_job()`、backfill、vector writeback/reconcile、HTTP mutation route、catalog/policy mutation以及未来所有knowledge writer统一经过root admission与强引用worker registry。取消coordinator不取消内部worker；只有真实writer返回后才消费异常并移除记录。
+- `request_knowledge_indexer_stop()` 关闭整个knowledge writer admission后再取消coordinator。`finish_knowledge_indexer_stop()` drain coordinator和全部已登记writer；超时只能返回“未排空”。
+- 跨进程barrier lock不放在可能被迁移的knowledge目录内，而放在稳定anchor的`state/knowledge-root-locks/<canonical-root-id>.lock`；root ID优先取final path与volume/file identity，退化时至少是规范化、大小写归一的绝对根标识。storage migration和retained-source cleanup都取得同一barrier。
+- launcher必须先用进程句柄/退出状态确认旧Main已死，再允许migration；不能把“拿到barrier”当成旧进程退出证明。
 - 顺序固定为：关闭 admission → 请求 indexer stop → 等待真实 worker → 完成其它清理 → 旧进程退出 → migration 取得 barrier → snapshot/copy/verify/policy commit。不得用 sleep 或 coordinator done 猜测 writer 已退出。
 
-验收：在每个剩余 shutdown await 注入 caller cancellation，后续哨兵仍全部执行并最终重抛；分别阻塞 prepare/activate 线程，取消 coordinator 后 finish 不提前成功；worker 持锁时 migration 不读取 source、不切换 policy，释放后重试才成功；关闭 admission 后 factory 不再提交新 mutation。
+验收：在每个剩余 shutdown await 注入caller cancellation和重复cancellation，后续哨兵仍执行、只消费目标取消并最终重抛；步骤/global deadline均无无界等待；分别阻塞prepare/activate/backfill/vector/HTTP writer，取消coordinator后finish不提前成功；旧Main存活时即使barrier可得也不迁移；worker持锁时migration与retained cleanup均不读取/删除source，释放后重试才成功；关闭admission后factory不再提交新mutation。
 
 ### EX：退订的删除与上报共享一个绝对期限
 
 - reservation 建立后立即计算唯一 `deadline = loop.time() + total_budget`；取消安装、等待 mutation、解析 ownership、Main Server remove 和 report 均消费该期限，任何阶段不得重新获得完整预算。
-- 增加 absolute-deadline await helper，以 `asyncio.timeout_at(deadline)` 或等价逻辑包住完整 `_main_request()` coroutine。HTTPX connect/read/write/pool timeout继续按剩余预算 clamp，但不能替代外层墙钟守门。
-- deadline 已耗尽时不得再发起 remove 或 report。installation mutation 尚未结束时，由受强引用 drain task继续持有 package guard并只等待真实 mutation；本次请求返回稳定 `knowledge_installation_busy`，drain 不偷偷执行 remove。
-- `_report_unsubscribe_best_effort()` 接受同一 deadline，OAuth refresh、DELETE、响应读取和 client close 全部受剩余预算约束。无预算、认证失败、timeout 或远端错误只记录诊断，不改变已经提交的本地删除结果。
-- 若以后要求可靠远端同步，应另建持久 outbox；本轮不以无界后台 task 延长用户请求或伪装可靠投递。
+- client 在调用 Main remove 前生成 `removal_operation_id`。Main 先持久化有界 remove intent/status，再把阻塞删除放入受强引用任务；提供按operation ID查询`pending/committed/failed/unknown`的内部status API。HTTP request取消或timeout不能被解释为服务端删除已停止。
+- 增加 absolute-deadline await helper，以 `asyncio.timeout_at(deadline)` 或等价逻辑包住 ownership resolve、descriptor/OAuth、Main GET/remove/status与report；HTTPX connect/read/write/pool timeout继续按剩余预算 clamp，并为编码最终响应保留固定margin。
+- package guard ownership可从settlement task显式转移给removal drain task；done callback只有在持有者真实结束或完成转移后才能释放，不能因外层请求timeout提前释放。
+- deadline耗尽而Main终态未确认时返回`removal_pending`；请求是否到达Main都无法证明时返回`removal_operation_unknown`。drain继续持guard并只查询/完成同一operation，不能重复生成remove。只有确认`local_removed=true`后才允许远端unsubscribe report。
+- `_report_unsubscribe_best_effort()` 接受同一deadline，OAuth refresh、DELETE、响应读取和client close全部受剩余预算约束。返回诊断明确区分`local_removed=true, remote_reported=false`；本轮远端状态仍定义为best-effort，若产品把它提升为一致性状态，必须先增加persistent outbox，不以后台裸task伪装可靠投递。
 
-验收：模拟多个 HTTP phase 各自低于 phase timeout但累计超过总预算，外层仍按 absolute deadline终止；remove 已成功而 report 卡住时接口按原成功结果准时返回；OAuth 耗尽预算后不发送 DELETE；mutation 超时期间 package guard 不提前释放。
+验收：模拟多个HTTP phase各自低于phase timeout但累计超过总预算，外层仍按absolute deadline终止；在Main收到remove前、提交intent后、SQLite提交后分别取消HTTP，按同一operation查询最终得到确定状态或明确unknown；remove已成功而report卡住时接口以`local_removed=true, remote_reported=false`准时返回；OAuth耗尽预算后不发送DELETE；settlement向drain转移期间package guard不提前释放，且同一operation只执行一次。
 
 ### EY：浏览器管理 Bridge 不拥有 Marketplace apply 能力
 
@@ -2497,78 +2501,93 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 
 ### EZ：把完整 `knowledge/` 纳入有写入屏障的存储迁移
 
-- 将 `knowledge` 加入 `MIGRATED_RUNTIME_ENTRY_NAMES`，让 source discovery、size estimate、copy、target verification、diagnostics 和 retained-root cleanup 复用同一名单，不另写只复制 `knowledge.db` 的特例。
+- 将 `knowledge` 加入 `MIGRATED_RUNTIME_ENTRY_NAMES`，但同步升级migration checkpoint schema；不能只改名单，否则旧v1 completed checkpoint会把从未复制过的source knowledge误判为可清理。
+- 新checkpoint记录`copied_entries`以及每个entry经验证的manifest/digest。旧v1 completed checkpoint若source仍有knowledge而target没有对应证据，进入`knowledge_migration_repair_required`：先恢复复制与验证，cleanup保持阻塞；不能借用旧completed标记补写虚假证据。
 - 迁移整个目录，包括 SQLite file family、`packs.json`、override、durable staged jobs、activation commit ledger、mutation journal及未来同根状态；迁移过程不解释或升级知识 schema。
 - EW 的 mutation barrier 必须先于 source snapshot。仅靠文件数或字节数相同不能证明 SQLite 与 registry 来自同一时点。
-- 任一知识文件复制或验证失败沿用 migration failure：旧 policy 和旧根保持有效，target 不成为 current root，retained source 不得清理。
+- 目录树复制使用no-follow walker，拒绝symlink、junction/reparse及非普通文件/目录。manifest逐项记录relative path、type、size与SHA-256；SQLite family还须只读打开并做integrity/schema检查。
+- 每个entry先复制到transaction staging directory，验证manifest后再原子发布；已有target先备份或保持不覆盖。`use_existing_target`按entry合并/修复，target有其它runtime内容不能成为跳过source knowledge的理由。
+- cleanup只能删除该transaction在`copied_entries`中明确记录且digest复验通过的source entry。任一复制/验证/发布失败时旧policy和旧根保持有效，target不成为current root，retained source不得清理。
+- barrier获取失败稳定返回`knowledge_mutation_busy`并保持pending/retryable，不写成泛化migration failed。
 
-验收：source 只有 `knowledge/` 时也被识别为运行时内容；数据库、registry、override、ledger 和嵌套 job 完整迁移；注入 copy/verify 失败后 policy不切换、旧根不删除；仅含 knowledge 的 retained root 仍进入显式清理流程。
+验收：source只有`knowledge/`时也被识别；数据库、registry、override、ledger和嵌套job完整迁移；v1 completed+source knowledge+无target证据时进入repair且不cleanup；已有target其它内容仍逐entry补knowledge；嵌套link/reparse/special file失败关闭；在stage/verify/publish各点崩溃均不覆盖健康target；只有本transaction已复制验证的entry可被retained cleanup删除。
 
 ### FA：staging 只消费 canonical artifacts，根目录创建固定真实祖先
 
 - 不再把 `.staging/.../knowledge.db*` 作为处理或恢复输入。只要实现仍是“检查路径，再 `sqlite3.connect(path)`”，跨平台 TOCTOU 就仍存在；本轮选择移除该可重开派生缓存，而不是继续叠加路径检查。
-- staging 可信输入只包括现有同一描述符有界读取的 canonical pack、manifest、vectors 和 subscription。BM25/chunks 与 prepared embeddings 从这些制品确定性重建；需要临时 SQLite 时仅允许 worker 独占的 `:memory:` connection。
-- durable state 可以记录验证进度，但重启后仍重新读取并验证 canonical artifacts，不得凭 `verifying_index` 状态跳过。任意 staged `knowledge.db*` 项都进入稳定 `degraded/knowledge_staging_database_invalid`，不打开、不删除、不跟随目标。
-- `_create_trusted_knowledge_root()` 不再先 `mkdir(parents=True)`。从可信配置根开始逐组件固定祖先：POSIX 使用 directory fd 与 `openat/mkdirat` 的 no-follow 语义；Windows 使用拒绝 reparse、固定 final path 且不共享 delete 的目录 handle。不能证明身份的平台失败关闭。
-- root 与 `.staging` 都由同一 secure-directory-chain helper创建和验证后，才允许建立 lock、临时 job 目录或写 identity/state；live root 与 staging root 共用声明路径等于最终句柄路径的规范。
+- staging可信输入只包括canonical pack、manifest、vectors和subscription；使用单个稳定句柄流式读取，直接将prepared embeddings交给`validate_prebuilt_index()`并由`install_pack()`重建entries/FTS/chunks，不创建`:memory:` SQLite，也不同时保留raw bytes、完整tuple与第二份数据库。
+- 设计预算必须覆盖最坏内存峰值：10 MiB pack、2 MiB manifest和约30 MiB/5000 chunks vectors叠加Python对象后可达70–100 MiB。实现应尽早释放raw buffer、按阶段记录峰值指标并设置取消点；超过明确上界稳定失败。
+- durable state可以记录验证进度，但重启后仍重新读取并验证canonical artifacts。历史queued/verifying job若只剩旧`knowledge.db*`证据，保留证据并进入`degraded/knowledge_staging_database_legacy`，要求显式discard/re-import；不打开、不静默删除、不假装可恢复。
+- canonical artifact leaf在Windows必须用原生`CreateFileW(..., FILE_FLAG_OPEN_REPARSE_POINT, ...)`取得handle后校验类型/final path并从同一handle读取；不能继续使用`lstat -> os.open`窗口。POSIX继续使用同一fd与no-follow语义。
+- `_create_trusted_knowledge_root()`在`mkdir`前逐层拒绝已经存在的symlink/junction/reparse，并在创建后复验final path。这里明确采用较窄威胁模型：防御预先存在或静态重定向祖先；连续同用户攻击者在检查与创建之间替换namespace不在本轮保证内。若将来要覆盖主动竞争，需另建`RootCapability`并把mkdir/open/replace/lock全部改成dirfd/native handle相对操作。
+- root与`.staging`在写identity/state、lock或临时job前都执行同一静态祖先检查；文档、错误名与测试不得声称其已提供完整active-race capability。
 
-验收：在旧 validation/connect 窗口替换主库或 sidecar 时，新实现没有任何 `.staging/.../knowledge.db` connect，外部 sentinel 不变；合法 prebuilt job重启后仅凭 canonical artifacts仍可安装；祖先 symlink/junction 指向外部时，外部目录中不产生 knowledge、staging、lock 或临时文件；普通真实祖先仍支持首次创建。
+验收：在旧validation/connect窗口替换主库或sidecar时，新实现没有任何`.staging/.../knowledge.db` connect，外部sentinel不变；合法prebuilt job重启后仅凭canonical artifacts仍可安装；旧DB-only job保留证据并明确要求re-import；大向量包峰值受预算和指标约束；Windows leaf reparse在原生handle层拒绝；预先存在的祖先symlink/junction指向外部时外部不产生文件，普通真实祖先仍支持首次创建。
 
 ### FB：注册表有界句柄读取，删除使用 durable intent
 
-- `packs.json` 建立唯一 strict reader：从同一 fd/handle证明普通文件、非 link/reparse、可信最终父目录和当前大小，再最多读取 `MAX_PACK_REGISTRY_BYTES + 1`。缺失与 invalid/unreadable 是不同状态；所有读取、状态、路由和 mutation 复用该入口。
+- `packs.json`建立唯一strict reader：POSIX从同一fd、Windows从`CreateFileW(FILE_FLAG_OPEN_REPARSE_POINT)`同一handle证明普通文件、非link/reparse、可信final path和当前大小，再最多读取`MAX_PACK_REGISTRY_BYTES + 1`。缺失与invalid/unreadable是不同状态；所有读取、状态、路由和mutation复用该入口。
+- 定义并记录兼容现有健康registry的固定`MAX_PACK_REGISTRY_BYTES`；上线前扫描/fixture证明既有合法最大值低于上界。writer在任何数据库mutation前生成canonical UTF-8 bytes并预检大小。
 - writer 先生成 canonical UTF-8 bytes并检查同一上界，再 atomic replace；生成超限时旧 registry和 live rows均保持不变。读取期间增长、非法 UTF-8、JSON/schema 错误都失败关闭。
-- SQLite 与 JSON 无法组成单一事务，因此删除增加有界、严格且非重解析的 `pack-mutation.json`。intent 绑定 operation ID、pack/source identity、before/after registry digest及 canonical target bytes。
-- 删除顺序固定为：验证并预检 target registry → fsync intent与父目录 → 单个 SQLite `BEGIN IMMEDIATE` 中删除 source并写相同 operation ID 的 commit marker → atomic发布 target registry并fsync → 清理 intent和marker。
-- recovery 在服务初始化和任意 pack mutation 前取得同一锁顺序并按证据收敛：无 marker且 registry为before则保留旧状态并清理未提交intent；marker匹配则发布或确认after registry；第三种registry、损坏journal或marker不一致进入 `pack_registry_recovery_required`，不猜测重建。
-- 锁顺序固定为 package guard（若有）→ registry mutation lock → live database transaction；正常路径和 recovery 不得反向获取。
+- SQLite与JSON无法组成单一事务，因此remove采用registry-first有界journal。intent绑定operation ID、pack/source identity、before/after registry digest与canonical target bytes；不增加容易形成第三份真相的SQLite marker table。
+- 删除顺序固定为：strict-load registry并预检target bytes/digests → 写/fsync intent与父目录 → atomic publish/fsync registry-after（目标包先停止被服务）→ 单个SQLite事务幂等删除source → 复验删除 → 最后删除/fsync intent。失败时保留intent供recovery，不回写伪造旧状态。
+- recovery在服务初始化和任意pack mutation前运行：registry==before时publication未提交，只有DB也未变才清理或重试intent；registry==after时幂等完成DB删除再清intent；第三digest、损坏intent或DB证据冲突进入`pack_registry_recovery_required`，不猜测重建。
+- `install_pack()`拆成已持锁private入口，避免内部重新获取registry/jobs锁。全局锁序固定为`root barrier -> package guard -> jobs lock（若需要）-> registry lock -> SQLite transaction -> state/ledger`；所有pack mutation先完成recovery，并在intent未收敛时阻塞。
+- journal的保证明确只覆盖本轮remove；其它SQLite+JSON mutation除非采用同一协议，不得被宣称具有跨文件崩溃原子性。
 
-验收：registry 是链接、目录、设备、FIFO、reparse 或上界加一时不跟随、不无界读取且 mutation 不触碰 SQLite；分别在 intent fsync、SQLite commit、registry replace 和 intent cleanup 后崩溃，重启都收敛为旧状态完整保留或删除完整完成；证据冲突稳定 degraded且不触碰外部目标。
+验收：registry是链接、目录、设备、FIFO、reparse或上界加一时不跟随、不无界读取且mutation不触碰SQLite；既有最大合法registry仍可读写；分别在intent fsync、registry-after publish、SQLite commit、delete verify和intent cleanup后崩溃，重启均收敛为旧状态完整保留或删除完整完成；第三digest/DB冲突稳定degraded；并发install/remove/recovery的锁序测试无反向获取。
 
-### FC：先释放终态目录容量，再裁剪 activation commit
+### FC：live commit 后执行可重试 retention，不提前删除旧终态
 
 - activation commit 是现存 active job 的提交证明；只要对应目录仍存在，就不能因第 101 次 activation 被 ledger 独立裁掉。
-- live install 前、持有 jobs registry lock 时执行 retention reservation，为当前 job预留终态名额。按既有 TTL/数量顺序先重新证明候选目录是可信直接子目录和 terminal，再删除目录并确认不存在，最后才移除对应 commit。
-- 需要腾出名额但目录删除或 ledger写回失败时，当前 activation在 live install前返回稳定 `knowledge_job_retention_unavailable`；旧 active及commit保持可验证，当前job保留可重试状态。
-- reconciler只删除没有对应目录的孤儿commit；任一真实active目录的commit必须保留。普通list不得先因缺commit把目录降级，再使其逃过terminal prune。
+- retention允许受控瞬时101：先完成当前live install、当前job terminal目录、receipt/state与activation commit，确保新旧证据都完整，再在jobs lock下选择并删除最旧terminal目录。
+- 删除顺序为：复验证明victim是可信直接子目录且terminal → 删除目录 → fsync staging parent → 删除对应旧commit并持久化ledger。任一步cleanup失败都保留第101份证据并标记`retention_pending`，后台/下一次mutation重试；不得回滚已live的新包或先删commit。
+- 设置小的hard overflow门槛（初始建议102，最终常量需测试证明）：101/cleanup失败可继续恢复，达到门槛后才拒绝新的activation并返回`knowledge_job_retention_pending`，避免无界增长。
+- `list_pack_jobs()`等read path只报告状态，不执行破坏性prune。reconciler可删除“无对应目录”的孤儿commit；可信active目录的commit永不删除；failed/cancelled目录没有commit且可独立prune。
+- victim排除current、nonterminal、degraded、orphan或身份不可证明目录，排序使用可信terminal time加`job_id`稳定打破平局。
 
-验收：100 个有效terminal目录激活第101个job时，先删除确定的最旧目录及其commit，随后99旧+1新全部可验证；注入rmtree失败时当前包尚未live install；在目录删除后、ledger写回前崩溃只产生可安全清理的孤儿commit，不降级其它active job。
+验收：100个有效terminal目录激活第101个job时先完成新job全部提交证据，再删除确定的最旧目录及其commit，最终保持100；注入rmtree/fsync/ledger失败时新旧101份证据均可验证并出现`retention_pending`；恢复后收敛到100；达到hard overflow才拒绝后续activation；list不删文件；目录删除后、ledger写回前崩溃只产生可安全清理的孤儿commit。
 
 ### FD：routing 读取失败明确传播，刷新只发布完整快照
 
 - `KnowledgeStore.load_routing_entries()` 成功时返回同一读事务中的 revision与完整records；SQLite、revision转换、row JSON或identity解析任一失败均抛出，不得返回 `(0, ())` 或跳过坏row后宣称完整。
 - 合法健康空库仍返回当前revision与空tuple。`_safe_load_records()` 是唯一把领域错误转换为 `None` 的自动路由边界，并记录不含用户数据的限频诊断。
-- `KnowledgeRoutingState.refresh()` 只在records完整加载且generation仍一致时原子发布新snapshot并清dirty。加载失败保持旧snapshot对象和dirty；首次失败且没有旧snapshot才表现为miss。
-- 成功加载合法空集合允许清空旧路由；加载期间generation变化则丢弃结果并重试。后台refresh失败时并发reader继续读取旧immutable snapshot，不出现短暂空窗口。
+- `KnowledgeRoutingState.refresh()`以single-flight执行，只在records完整加载且generation仍一致时原子发布新snapshot并清dirty；必须在赋值`_snapshot`之前复验generation。加载失败保持旧snapshot对象和dirty；首次失败且没有旧snapshot时只尝试一次并快速miss。
+- 有last-good时reader立即返回经过visibility过滤的旧snapshot，并只调度一个重试。重试采用monotonic指数backoff加jitter与上限，generation变化只使当前结果失效并安排下一次重试，不能在一次refresh内自旋。
+- disable/remove/policy mutation同步递增visibility generation并写入pack/source tombstone；旧snapshot在匹配时先应用tombstone/fail-closed，直到成功refresh发布包含该generation的新snapshot后才清理相应tombstone。因加载失败不得继续服务已撤销内容。
+- 成功加载合法空集合允许清空旧路由；后台refresh失败时并发reader继续读取过滤后的旧immutable snapshot，不出现短暂空窗口，也不形成每次match都访问坏SQLite的重试风暴。
 
-验收：空数据库是成功空快照；SQLite busy/损坏row/override损坏均保持dirty且不覆盖旧可命中snapshot；输入恢复后下一次refresh原子切换；健康删除全部records仍能发布空快照。
+验收：空数据库是成功空快照；SQLite busy/损坏row/override损坏均保持dirty且不覆盖旧snapshot；100个并发match只产生一个refresh并遵守backoff；disable/remove后即使refresh持续失败也不再命中被撤销包；generation在加载期间变化时旧结果从未赋值且不自旋；输入恢复后原子切换，健康删除全部records可发布空快照并清对应tombstone。
 
 ### FE：自动上下文以真实会话和逐卡身份准入、过滤和记账
 
 - task admission在锁内先清理done槽位，再检查同session single-flight，最后检查全局active count；只有容量未满时才调用factory并创建task。返回值区分 `started`、`session_busy`、`capacity_exhausted`，对应稳定diagnostics。
-- 实际LLM session创建时生成opaque runtime session key；同一key同时划分single-flight和cooldown。角色名、空字符串、用户文本都不能充当key；session teardown只清理该key的task/cooldown状态。
+- opaque key表示logical user session，而不是角色名、request ID或transport session。hot-swap/prewarm创建的pending session在promote时继承logical key；只有真实会话结束后新建的session才轮换key。
+- session teardown先撤销结果交付并取消async wrapper，但底层task仍被强引用、仍计入全局容量，直到真实done callback运行；不能通过从table删除仍运行task释放虚假槽位。容量满诊断包含deadline/oldest-active-age等有界信息，便于识别饥饿而不泄露用户内容。
 - 建立规范 `KnowledgeCardIdentity(source_tag, normalized_title)`。`KnowledgeTurnContext`携带按最终渲染顺序排列的全部card identities，旧的首卡title/source只保留为兼容诊断。
-- 检索前取得该session未过期identity集合并作为excluded identities传给service；在knowledge/corpus配额和总limit截断前排除，使冷却首卡不占名额、新卡和候补卡仍可交付。
-- 只有context确实交付给当前turn后，才批量记录所有实际交付identity。miss、timeout、busy、capacity、异常或取消不写cooldown；检索与渲染过程不持全局锁。
+- 检索前取得该session未过期identity集合，以keyword-only、默认空集合的`excluded_identities`传给service；在knowledge/corpus配额和总limit截断前排除，并补取足够候选，使冷却首卡不占名额、新卡和候补卡仍可交付。
+- renderer返回“最终2000字符文本实际包含”的identity列表；整张被截掉或只存在于候选中的卡不进入context identity。只有该context确实交付给当前turn后才批量记录实际插入identity。
+- `KnowledgeTurnContext`新增字段均有向后兼容默认值，调用者不被迫同步位置参数。miss、timeout、busy、capacity、异常、取消或已撤销delivery均不写cooldown；检索与渲染过程不持全局锁。
 
-验收：32个未完成session后第33个请求在factory执行前被拒绝；同角色两个真实session互不共享task/cooldown；A+B交付后两卡都进入cooldown；A冷却而B或候补C新鲜时仍交付新卡；teardown后新session不继承旧十分钟窗口。
+验收：32个未完成session后第33个请求在factory执行前被拒绝并带oldest-age诊断；teardown一个仍阻塞task后容量仍为32，真实done才释放；同角色两个logical session互不共享cooldown，hot-swap promote继续继承原key；A+B候选但B被2000字符截掉时只记录A；A冷却时补取B/C；旧调用者不传新字段仍可运行；真实end后的新session不继承旧窗口。
 
-### FF：公共知识工具结果向同一当前 turn 传播内部 owner
+### FF：公共知识工具先产生同一 turn 的 provisional evidence
 
-- Tool执行结果增加仅进程内消费的结构化route owner；公共知识handler只在实际完成受信本地知识调用并产生应归属结果时返回 `public_knowledge`，普通工具、失败、无效结果和远端工具不能声明该owner。
-- owner不能由工具名称、输出文本或用户可控metadata猜测；只有内建注册来源可产生规范owner，wire output仍不向模型或插件序列化该字段。
-- offline/realtime共用的tool-call提交点在执行前捕获当前turn/request identity，完成后仅写回同一个仍存活的turn；迟到结果、已结束请求或已切换turn直接丢弃owner。
-- turn end继续复用现有owner输出和agent analyze守门；正常、取消、异常和discard路径清理turn-scoped owner，不能污染下一轮。
+- tool执行结果增加仅进程内消费的内部evidence字段，默认空且serializer省略；由registry private wrapper或内建provider注入，remote/user metadata不能声明。公共知识handler成功时只产生provisional `knowledge_used`，不能直接把整个turn设为exclusive owner。
+- offline/realtime在执行前捕获immutable session token与provider-captured host turn ID；await后只向同一仍存活session/turn提交evidence，绝不重新读取可变`_active_text_request_id`。迟到、结束、切换session/turn的结果直接丢弃。
+- turn end仅在保守证明“纯公共知识问答、没有其它tool、没有task creation/analysis intent、且session/turn仍匹配”时，把provisional evidence提升为exclusive `public_knowledge` owner并跳过普通后台分析。
+- compound请求（如“查X并创建任务”）、multi-tool、miss、timeout、error或无法可靠识别pure intent全部fail-open，继续普通分析。若当前路由层没有可靠pure-intent信号，本轮只能把`knowledge_used`作为nonexclusive hint，不得为了关闭评论强行设置owner。
+- 正常、取消、异常和discard路径清理turn-scoped evidence/owner，不能污染下一轮；wire output不向模型或插件序列化内部字段。
 
-验收：公共知识工具成功后对应turn end携带`public_knowledge`并跳过普通后台分析；普通工具、失败或迟到的旧turn结果不取得owner；offline与realtime使用同一组反例。
+验收：纯公共知识问答成功后对应turn end可提升为`public_knowledge`；“查X并创建任务”、公共知识+其它tool、miss/timeout/error均不取得exclusive owner且普通分析仍运行；旧turn结果在新turn活跃时不能借可变request ID写入；remote metadata伪造evidence无效；offline与realtime使用同一组反例。
 
 ### FG：向量状态由单一枚举映射颜色、文案和概览
 
-- 建立纯函数 `packVectorState(pack)`，固定返回 `none`、`complete`、`building`、`partial` 或 `waiting`：无chunks为none；ready达到total为complete；embedding enabled且ready不足为building（包括ready为0）；disabled但已有部分ready为partial；其余为waiting。
-- class、label和overview tone/meta只映射该enum，不得再次读取ready/total/enabled。评论反例必须同时得到progress class和`vectorBuilding`文案。
+- 建立纯函数`packVectorState(pack)`，先把非法/负数count clamp到非负且把ready clamp到total，再固定返回`none`、`complete`、`building`、`partial`或`waiting`：无chunks为none；ready达到total为complete；embedding enabled且ready不足为building（包括ready为0）；disabled但已有部分ready为partial；其余为waiting。
+- 单包class与label只映射该enum，不得再次读取ready/total/enabled。概览是多包状态，不复用最后一个单包：新增纯函数`aggregateVectorState(states, globalSnapshot)`，用显式优先级聚合全部pack enum，并仅在没有可聚合pack时使用global fallback；overview tone/meta只映射聚合结果。
 - 本轮沿用既有i18n协议；partial使用现有warning与未完成类文案，不新增翻译键。若产品要求“部分可用”新文案，另行作为用户文案变更处理。
 
-验收：表驱动覆盖none、complete、zero-ready building、partial disabled和zero-ready waiting，断言class、label、overview一致。
+验收：单包表驱动覆盖none、complete、zero-ready building、partial disabled、zero-ready waiting、负数和ready>total；多包表驱动覆盖状态优先级、输入顺序不变性与global fallback，断言class、label及aggregate overview一致；API字段和现有i18n key保持不变。
 
 ### `discussion_r3878657157`：schema 6 fixture 是误报
 
@@ -2576,16 +2595,19 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 
 ## 第三十轮实施顺序与关闭条件
 
-1. 文档提交：本节、状态说明和评论矩阵。
-2. 关闭屏障提交：EW 的统一 cancellation helper、tracked mutation worker与跨进程root barrier。
-3. 迁移提交：EZ 接入 EW barrier后再把 `knowledge/` 纳入copy/verify；两项顺序不可交换。
-4. 文件身份提交：FA 移除staging文件型SQLite并建立secure directory chain。
-5. 注册表一致性提交：FB 的strict reader与durable removal protocol；随后FC协调terminal目录与commit保留。
-6. 路由提交：FD 严格错误信号和last-good snapshot发布。
-7. 会话提交：FE 的准入/session/card identity与FF的tool owner传播。
-8. 市场提交：EX 的absolute deadline与EY移除browser apply能力。
-9. 前端提交：FG 单一vector state及现有相邻测试。
-10. 回归修正提交：只包含上述边界暴露的必要修正，不扩张无关协议。
+1. 文档修订提交：本节、风险边界、状态机、锁序与评论矩阵。
+2. 关闭屏障提交：EW 的deadline-aware cancellation helper、全部knowledge writer tracking、稳定anchor root barrier与launcher旧进程证明。
+3. 迁移提交：EZ 仅在EW完成后升级checkpoint schema、修复v1 evidence、接入transaction staging/no-follow verify，再迁移`knowledge/`；两项顺序不可交换。
+4. staging提交：FA 移除文件型SQLite，改为canonical artifact直接重建、内存预算、Windows native leaf handle和明确收窄的ancestor威胁模型。
+5. 注册表提交：FB 的Windows/POSIX strict reader、registry-first remove journal、recovery gate及全局锁序重构。
+6. retention提交：FC 采用post-commit受控101、`retention_pending`和hard overflow门槛；不得与FB锁序重构并行落地。
+7. 路由提交：FD 严格错误信号、single-flight/backoff、last-good发布与visibility tombstone。
+8. 会话提交：FE 的logical session lifecycle、真实task容量、渲染后card identity及兼容默认值。
+9. 工具归属提交：FF 的session/turn token、provisional evidence与pure-intent提升规则。
+10. 退订提交：EX 的operation ID、Main durable status、guard transfer和absolute deadline；依赖FB remove终态可查询。
+11. 浏览器提交：EY 移除browser apply能力并更新route-order、文档与既有相邻测试；Plugin内部apply保持。
+12. 前端提交：FG 单包enum、多包aggregate与count clamp。
+13. 回归修正提交：只包含上述边界暴露的必要修正，不扩张无关协议。
 
 每一步独立commit以便审查，但本轮全部实现、测试与回复证据完成后统一一次push，不逐个推送。Python测试只通过项目 `uv` 环境运行；扩展既有测试文件，不新建测试文件。前端运行现有Knowledge Manager/Vitest回归；同时执行受影响Ruff、compileall、构建/类型检查与`git diff --check`。
 
