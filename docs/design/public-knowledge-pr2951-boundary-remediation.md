@@ -2658,3 +2658,12 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - `discussion_r3886492699`：rebuild 的 chunk 计数为零不能证明所有 entry 已成功 backfill。只要 `entries_missing_chunks > 0`，完成状态现在明确为 `backfill_incomplete`、`complete=false`，因此 malformed/无法派生的 entry 不会被静默报告为成功。
 
 实现提交 `f4ec75a0f` 同时加入对应反例。四个受影响测试文件通过 `224 passed, 1 skipped`；知识、存储、shutdown、turn 与 Plugin Market 扩大回归在 UTF-8 模式下通过 `2021 passed, 16 skipped, 21362 deselected`。第一次使用 Windows 默认编码运行时，唯一失败是既有测试未指定编码而以 GBK 读取 UTF-8 源文件；相同集合用 `uv run python -X utf8 -m pytest` 重跑全绿，因此未把该环境问题混入本轮实现。受影响 Python 文件 Ruff、compileall 与 `git diff --check` 通过。关闭条件保持不变：该提交推送到远端后逐条回复实现与测试证据并 resolve，再对全部 review threads 完整分页，确认没有新未解决 conversation。
+
+### 第三十轮第二次最终分页追评：状态原子性与 override 读取边界
+
+远端 head `055b05210` 的下一次完整分页又新增 2 条有效 conversation：
+
+- `discussion_r3886524194`：过期 pending removal 原先只在 `_write_operations()` 的局部映射中转成 failed。`begin_removal_operation()` 仍返回写入前的 pending 对象，状态查询也不会主动持久化过期，因此首次查询可能创建恢复任务并继续执行删除。现在 begin、complete、get 都在同一 `mutation_lock` 内通过 `_load_operations_for_access()` 读取；过期转换原地更新 payload、立即原子写回，并把 retention 后的实际持久集合回填给调用方。状态查询首次看到过期记录即返回 `removal_operation_expired`，不会创建恢复任务。
+- `discussion_r3886528857`：`catalog.override.json` 原先用 `Path.read_text()` 无界跟随读取。现在读取复用 strict regular-file/no-follow handle reader，采用固定 32 MiB 上限；写入在 atomic publish 前用同一上限检查 canonical UTF-8 bytes，避免生产出下一次无法读取的合法文件。超限、symlink/reparse、特殊文件、非 UTF-8 与损坏 JSON 均保持 `CatalogOverrideError` 失败关闭语义。
+
+实现提交 `77904dd0d` 加入“首次状态查询不恢复过期删除”、有效但超限 override 读取失败和 writer 发布前拒绝三个反例。精确回归 `76 passed`，Ruff、compileall 与 `git diff --check` 通过。该提交推送后与前 4 条一起回复并 resolve，随后再次对全部 review threads 完整分页。
