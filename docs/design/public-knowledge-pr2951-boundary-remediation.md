@@ -2646,4 +2646,4 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - Plugin 对明确的 Main 4xx `main_server_rejected` 直接返回 `subscription_removal_rejected`，只有 timeout、传输/5xx 与无效响应才查询同一 operation 的终态。
 - 测试 teardown 会取消并等待遗留 removal tasks，shutdown writer 测试用 `finally` 恢复 admission，迁移 SQLite fixture 在目录替换前显式关闭连接。
 
-精确回归通过 `259 passed, 8 skipped`；受影响文件 Ruff 与 compileall 通过，`git diff --check` 通过。上述 14 条成立 conversation 只有在远端 head 包含 `160e7b75e` 后才回复实现与测试证据并 resolve；两条不成立 conversation 回复威胁模型依据后 resolve。完成后仍须重新全量分页，因为审查机器人可在同一次 pending check 中继续新增线程。
+精确回归通过 `259 passed, 8 skipped`；统一推送前扩大的知识库、路由、迁移、shutdown、turn 与 Plugin 集合通过 `668 passed, 14 skipped`。受影响文件 Ruff 与 compileall 通过，`git diff --check` 通过。上述 14 条成立 conversation 只有在远端 head 包含 `160e7b75e` 后才回复实现与测试证据并 resolve；两条不成立 conversation 回复威胁模型依据后 resolve。完成后仍须重新全量分页，因为审查机器人可在同一次 pending check 中继续新增线程。
