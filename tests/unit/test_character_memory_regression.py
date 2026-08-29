@@ -5934,3 +5934,113 @@ def test_a_late_source_write_does_not_leave_the_old_directory_behind(tmp_path):
             "a rescued source name could not persist -- the rename left its "
             "write fence up"
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_stale_flush_cannot_overwrite_what_the_rollback_just_restored(
+    tmp_path,
+):
+    """Retirement does not cover the window the restore opens.
+
+    A retired name may write into a directory that already exists -- it only
+    refuses to CREATE one. The rollback recreates memory/<name>/ while the name
+    is still retired, and the ``save_characters`` after it is a real await, so a
+    snapshot staged before the delete lands on the freshly restored file and
+    replaces the whole history with the single decision it was holding.
+
+    The flush is invoked through ``_flush_snapshot`` directly, which is where
+    the detached path (``flush_staged_detached`` -> ``aflush_staged`` ->
+    ``to_thread``) ends up, so the ordering is deterministic rather than racing
+    a worker thread.
+    """
+    import shutil
+
+    import memory.anti_repeat_effects as effects_module
+    from main_routers.characters_router import crud
+    from utils.character_memory import (
+        is_character_write_fenced,
+        retire_character_runtime_caches,
+    )
+
+    cm = _make_config_manager(tmp_path)
+    bootstrap_local_cloudsave_environment(cm)
+    memory_root = Path(cm.memory_dir)
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        for sidecar_store in (store, corpus, greeting):
+            sidecar_store._config_manager = cm
+
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+        sidecar = memory_root / "Restored" / effects_module._SIDECAR_FILENAME
+
+        (memory_root / "Restored").mkdir(parents=True)
+        for tick in range(3):
+            store.record_decision(
+                "Restored", decision, now=1_700_000_000.0 + tick,
+            )
+        restored_bytes = sidecar.read_bytes()
+
+        # The delete, in the order delete_character_memory_storage uses.
+        retire_character_runtime_caches("Restored")
+        shutil.rmtree(memory_root / "Restored")
+
+        # A turn already in flight stages now. The cache was dropped and there
+        # is no file to read, so this snapshot carries ONE decision -- which is
+        # what makes it destructive rather than merely redundant.
+        staged = store.stage_decision(
+            "Restored", decision, now=1_700_000_009.0,
+        )
+        assert staged is not None
+
+        def _restore(_records):
+            (memory_root / "Restored").mkdir(parents=True)
+            sidecar.write_bytes(restored_bytes)
+
+        flushed = []
+
+        def _save_characters(_characters, **_kwargs):
+            # Inside the await, after the restore and before the lifecycle
+            # calls -- exactly where a detached flush lands.
+            store._flush_snapshot(*staged)
+            flushed.append(True)
+
+        with (
+            patch.object(cm, "save_characters", _save_characters),
+            patch.object(crud, "_restore_snapshot_paths", _restore),
+            patch.object(
+                crud, "get_initialize_character_data", return_value=AsyncMock()
+            ),
+            patch.object(
+                crud, "notify_memory_server_reload", AsyncMock(return_value=True)
+            ),
+        ):
+            errors = await crud._rollback_character_operation(
+                cm,
+                characters_snapshot={"CAT": {"Restored": {}}},
+                memory_snapshot_records=[],
+                restored_live_character_names=("Restored",),
+                reason="restore then lifecycle",
+            )
+
+        assert flushed, "the stale flush never ran, so this proves nothing"
+        assert sidecar.read_bytes() == restored_bytes, (
+            "a snapshot staged before the delete overwrote the restored history"
+        )
+        # The rollback still did its job, and did not report the refusal as a
+        # failure of its own.
+        assert errors == "", errors
+
+        # The fence comes down again, so persistence resumes right after.
+        # Without this the guard would also pass if the fence LEAKED, which the
+        # fence's own docstring calls worse than the write it prevents.
+        assert not is_character_write_fenced("Restored")
+        store.record_decision("Restored", decision, now=1_700_000_020.0)
+        assert sidecar.read_bytes() != restored_bytes, (
+            "writes never resumed after the rollback -- the fence leaked"
+        )

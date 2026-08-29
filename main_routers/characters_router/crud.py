@@ -63,7 +63,9 @@ from utils.character_memory import (
     character_config_mutation_lock,
     delete_character_memory_storage,
     evict_character_runtime_caches,
+    fence_character_runtime_writes,
     retire_character_runtime_caches,
+    unfence_character_runtime_writes,
     finalize_character_recent_delete,
     finalize_character_recent_rename,
     list_character_memory_paths,
@@ -506,39 +508,64 @@ async def _rollback_character_operation(
 ) -> str:
     rollback_errors: list[str] = []
 
-    try:
-        await asyncio.to_thread(_restore_snapshot_paths, memory_snapshot_records)
-    except Exception as exc:
-        rollback_errors.append(f"memory restore failed: {exc}")
-
-    try:
-        await asyncio.to_thread(
-            config_manager.save_characters,
-            characters_snapshot,
-            bypass_write_fence=True,
+    # Retirement cannot cover this window, for the same reason a rename's
+    # merge needs the fence: it refuses to CREATE a directory but permits a
+    # write into one that already exists. The restore below recreates
+    # memory/<name>/ while the name is still retired, and the save that
+    # follows is a real await -- so a detached flush staged before the
+    # delete lands on the freshly restored file and overwrites it with the
+    # stale snapshot it was holding. Measured: three decisions restored,
+    # one left on disk. The mirror on rename rollback is the orphan the
+    # re-retirement below says it prevents, one await too late to do so.
+    #
+    # In a finally, and around BOTH steps. Releasing inside the else instead
+    # leaks the fence whenever save_characters raises, and a fence left up
+    # silences that character's sidecars for the life of the process --
+    # worse than the write it was installed to stop.
+    fenced_names = tuple(
+        dict.fromkeys(
+            (*restored_live_character_names, *reretired_absent_character_names)
         )
-    except Exception as exc:
-        rollback_errors.append(f"characters restore failed: {exc}")
-    else:
-        # The name is back in characters.json, so it is a LIVE identity again.
-        # The delete path retired it in every sidecar store before removing
-        # anything, and this restore goes through save_characters rather than
-        # the activation helper, so nothing else lifts that retirement: a
-        # character that had no memory directory yet would keep dropping its
-        # startup greeting and anti-repeat decisions until a restart, because
-        # a retired name never creates its directory.
-        #
-        # Scoped to names the caller says it actually restored, and only on the
-        # branch where the restore SUCCEEDED -- lifting retirement for a name
-        # that is genuinely gone would reinstate the orphan-directory
-        # resurrection the retirement exists to prevent.
-        evict_character_runtime_caches(*restored_live_character_names)
-        # The mirror: a name the operation made live, and the rollback un-made.
-        # A rename target was evicted (lifting any retirement an earlier delete
-        # of that same name installed); once the rename is undone it is not a
-        # live identity, so it goes back to retired or a late flush recreates its
-        # directory for a character that does not exist.
-        retire_character_runtime_caches(*reretired_absent_character_names)
+    )
+    fence_character_runtime_writes(*fenced_names)
+    try:
+        try:
+            await asyncio.to_thread(
+                _restore_snapshot_paths, memory_snapshot_records,
+            )
+        except Exception as exc:
+            rollback_errors.append(f"memory restore failed: {exc}")
+
+        try:
+            await asyncio.to_thread(
+                config_manager.save_characters,
+                characters_snapshot,
+                bypass_write_fence=True,
+            )
+        except Exception as exc:
+            rollback_errors.append(f"characters restore failed: {exc}")
+        else:
+            # The name is back in characters.json, so it is a LIVE identity again.
+            # The delete path retired it in every sidecar store before removing
+            # anything, and this restore goes through save_characters rather than
+            # the activation helper, so nothing else lifts that retirement: a
+            # character that had no memory directory yet would keep dropping its
+            # startup greeting and anti-repeat decisions until a restart, because
+            # a retired name never creates its directory.
+            #
+            # Scoped to names the caller says it actually restored, and only on the
+            # branch where the restore SUCCEEDED -- lifting retirement for a name
+            # that is genuinely gone would reinstate the orphan-directory
+            # resurrection the retirement exists to prevent.
+            evict_character_runtime_caches(*restored_live_character_names)
+            # The mirror: a name the operation made live, and the rollback un-made.
+            # A rename target was evicted (lifting any retirement an earlier delete
+            # of that same name installed); once the rename is undone it is not a
+            # live identity, so it goes back to retired or a late flush recreates its
+            # directory for a character that does not exist.
+            retire_character_runtime_caches(*reretired_absent_character_names)
+    finally:
+        unfence_character_runtime_writes(*fenced_names)
 
     if recent_rename_result is not None:
         try:
