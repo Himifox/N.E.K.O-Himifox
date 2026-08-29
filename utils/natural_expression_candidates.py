@@ -121,7 +121,16 @@ _URL_RE = re.compile(
     # "data:,", "tel:5" and "mailto:a" the old list covered. A real
     # "tel:+1-555-1234", "data:image/png;base64,..." and a real mailto
     # address stay protected.
-    r"(?i:[a-z][a-z0-9+.\-]*):"
+    # A LEFT BOUNDARY, and it is the difference between linear and quadratic.
+    # Without it the engine restarts the scheme scan at every letter of a long
+    # colon-free run, scanning the whole remaining suffix each time: measured
+    # 4.0x per doubling, 38.8s for finditer alone at the module's own 128 KiB
+    # limit, where ordinary prose of the same length takes 0.48s end to end.
+    # That is past the router's 30s timeout, and cancelling the request does
+    # not stop work already handed to a thread. A scheme cannot begin midway
+    # through a run of scheme characters anyway, so refusing to start there
+    # costs no match: "ahttps://x" still matches, from the "a".
+    r"(?<![A-Za-z0-9+.\-])(?i:[a-z][a-z0-9+.\-]*):"
     r"(?=" + _URL_TAIL + "{2,})(?=" + _URL_TAIL + "*[0-9A-Za-z])" + _URL_TAIL + "+|"
     # A bare address too, which is how one actually appears in a reply. The
     # local part is the identifying half, so matching only from the domain
