@@ -1779,7 +1779,28 @@ def build_user_review_report(
             analyzed = clipped
             content_truncated = True
             continue
-        analyzed = analyzed[1:]
+        # Drop the oldest message that is ITSELF over its fair share of
+        # the budget, not simply the oldest. A short old reply is not what
+        # busted the budget and dropping it buys almost nothing, so with
+        # four budget-sized replies in the window the three short ones
+        # ahead of them were thrown away one by one and the window
+        # collapsed to a single message -- the repeated phrase went with
+        # them, and the panel reported not enough history.
+        #
+        # Order among the survivors is untouched: exactly one message
+        # leaves. When nothing is over its share the oldest goes, which is
+        # the behaviour a uniformly large window still gets -- narrowing
+        # rather than cutting bodies, as the sibling test pins.
+        share = USER_REVIEW_MAX_INPUT_CHARACTERS // len(analyzed)
+        victim = next(
+            (
+                index
+                for index, message in enumerate(analyzed)
+                if len(message.content) > share
+            ),
+            0,
+        )
+        analyzed = analyzed[:victim] + analyzed[victim + 1 :]
 
     # A lone survivor can still be over the budget if it was never the
     # newest -- it cannot be, since narrowing keeps the newest, but the

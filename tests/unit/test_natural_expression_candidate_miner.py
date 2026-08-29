@@ -2780,3 +2780,64 @@ def test_two_comparably_heavy_replies_do_not_evict_the_history():
         candidate_core.SourceMessage("zh", "x" * (2 * rest // 3 + 1), 4)
     ]
     assert candidate_core._clip_dominant_message(past_ratio) is not None
+
+
+def test_short_old_replies_are_not_evicted_for_heavy_new_ones():
+    """A short old reply is not what busted the budget.
+
+    Eviction took the OLDEST message each time, so with four budget-sized
+    replies in the window the three short ones ahead of them were thrown away
+    one by one and the window collapsed to a single message. The repeated
+    phrase went with them and the panel reported not enough history -- the same
+    outcome the outlier clip was added to stop, reached by the other half of the
+    loop.
+
+    Measured across two to six heavy replies, so this is not one lucky shape:
+    the collapse started at four, which is exactly where no single reply is
+    dominant any more.
+    """
+    phrase = "我们一起去公园散步吧"
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    fillers = "啊嗯好呢呀哦吧干嘛真"
+
+    for heavy_count in (4, 5, 6):
+        messages = [
+            candidate_core.SourceMessage(
+                "zh", fillers[i] + " " + phrase + " " + fillers[i + 1], i + 1
+            )
+            for i in range(3)
+        ] + [
+            candidate_core.SourceMessage(
+                "zh", fillers[i % len(fillers)] * budget, 100 + i
+            )
+            for i in range(heavy_count)
+        ]
+
+        report = candidate_core.build_user_review_report(messages)
+        summary = report["summary"]
+
+        assert summary["analyzed_message_count"] > 1, (
+            "with %d heavy replies the window collapsed to %d message(s)"
+            % (heavy_count, summary["analyzed_message_count"])
+        )
+        assert any(
+            candidate["message_count"] >= 3
+            and str(candidate["phrase"]) in phrase
+            for candidate in report["candidates"]
+        ), (
+            "the three short replies carrying the phrase were evicted for %d "
+            "heavy ones" % heavy_count
+        )
+
+    # The dual, and the reason this is not simply "never evict": when NOTHING is
+    # over its fair share there is no better victim, so the oldest still goes
+    # and bodies stay intact. That is the uniform case
+    # test_a_uniformly_large_window_narrows_without_cutting_a_body pins.
+    uniform = [
+        candidate_core.SourceMessage("zh", "x" * (budget // 4), index)
+        for index in range(1, 7)
+    ]
+    report = candidate_core.build_user_review_report(
+        uniform, message_count_threshold=1, rules_by_language={}
+    )
+    assert report["summary"]["messages_truncated"] is True
