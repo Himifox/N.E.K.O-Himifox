@@ -2303,3 +2303,91 @@ def test_a_reset_fails_loudly_when_the_sidecar_refuses_the_write(tmp_path):
         "the reset was refused, so the statistics must still be on disk -- "
         "reporting success here is what told the user otherwise"
     )
+
+
+def test_a_newer_schema_version_is_never_overwritten(tmp_path):
+    """An older build must not destroy a sidecar a newer one wrote.
+
+    The version check treated anything but the known version exactly like an
+    empty store, so ``_load_unlocked`` cached that emptiness and the next
+    decision flushed a payload holding only itself over the whole file.
+    Measured before the fix: 1837 bytes became 728, every prior day bucket
+    gone, ``started_at`` reset, and not one log line. There is no backup
+    anywhere in this store, so it was irreversible.
+
+    A version we cannot read is the UNREADABLE case this file already
+    distinguishes, not the corrupt one: the file is intact and
+    authoritative. Raising skips the cache install and the staging that
+    follows it, so the newer file simply stops being recorded into.
+    """
+    import json
+
+    import memory.anti_repeat_effects as effects_module
+
+    name = "Newer"
+    root = tmp_path / "memory"
+    (root / name).mkdir(parents=True)
+    path = root / name / "anti_repeat_effects.json"
+
+    from_the_future = {
+        "version": effects_module._SCHEMA_VERSION + 1,
+        "started_at": 1_600_000_000.0,
+        "daily_buckets": {
+            "2023-11-13": {"counters": {"detected": 7}},
+        },
+        "something_this_build_has_never_heard_of": True,
+    }
+    original = json.dumps(from_the_future, ensure_ascii=False, indent=2)
+    path.write_text(original, encoding="utf-8")
+
+    config_manager = MagicMock()
+    config_manager.memory_dir = str(root)
+    config_manager.app_docs_dir = str(root)
+    store = effects_module.AntiRepeatEffectStore()
+    store._config_manager = config_manager
+
+    decision = effects_module.AntiRepeatDecision(
+        source="proactive",
+        reasons=("bm25",),
+        action="block",
+        outcome="blocked_initial",
+    )
+    # The STORE raises: that is what skips the cache install and the staging
+    # that follows it in the same critical section. The production entry
+    # point is what absorbs it -- asserted below, because "callers swallow"
+    # is a claim about record_anti_repeat_decision and not about this method.
+    with pytest.raises(ValueError):
+        store.record_decision(name, decision, now=1_700_000_000.0)
+
+    assert path.read_text(encoding="utf-8") == original, (
+        "an older build rewrote a newer sidecar, and nothing anywhere kept "
+        "a copy of what it replaced"
+    )
+    assert name not in store._cache, (
+        "the unreadable payload was cached, so the next write would flush "
+        "it over the file"
+    )
+
+    # And the production path absorbs it, so a downgrade degrades to "stops
+    # recording" rather than an error reaching the reply pipeline.
+    previous = effects_module._GLOBAL_STORE
+    effects_module._GLOBAL_STORE = store
+    try:
+        effects_module.record_anti_repeat_decision(name, decision)
+    finally:
+        effects_module._GLOBAL_STORE = previous
+    assert path.read_text(encoding="utf-8") == original
+
+    # The dual: a file this build DOES understand still records normally,
+    # so the check cannot pass by refusing everything.
+    ours = root / "Ours"
+    ours.mkdir()
+    store.record_decision("Ours", decision, now=1_700_000_000.0)
+    payload = json.loads(
+        (ours / "anti_repeat_effects.json").read_text(encoding="utf-8")
+    )
+    assert payload["version"] == effects_module._SCHEMA_VERSION
+    assert sum(
+        bucket["counters"]["detected"]
+        for bucket in payload["daily_buckets"].values()
+    ) == 1

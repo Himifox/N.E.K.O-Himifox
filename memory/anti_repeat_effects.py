@@ -178,6 +178,11 @@ def _without_protected_text(value: str) -> str:
 # drifted, so a fenced write reported a file that does not exist.
 _SIDECAR_FILENAME = "anti_repeat_effects.json"
 
+# Named rather than written out three times, so the read check and the two
+# write sites cannot drift -- the read is what decides whether a file is
+# ours to overwrite.
+_SCHEMA_VERSION = 1
+
 @dataclass(frozen=True, slots=True)
 
 class RepeatSignature:
@@ -274,7 +279,7 @@ def build_repeat_signature(
 
 def _default_payload(now: float) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": _SCHEMA_VERSION,
         "schema_version": SCHEMA_VERSION,
         "started_at": now,
         "daily_buckets": {},
@@ -355,7 +360,7 @@ def _copy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     daily_buckets = payload.get("daily_buckets")
     response_buckets = payload.get("response_buckets")
     return {
-        "version": payload.get("version", 1),
+        "version": payload.get("version", _SCHEMA_VERSION),
         "schema_version": payload.get("schema_version", SCHEMA_VERSION),
         "started_at": payload.get("started_at", 0.0),
         "daily_buckets": (
@@ -749,7 +754,7 @@ class AntiRepeatEffectStore:
 
     @staticmethod
     def _normalize_payload(raw: Any, now: float) -> dict[str, Any]:
-        if not isinstance(raw, dict) or raw.get("version") != 1:
+        if not isinstance(raw, dict) or raw.get("version") != _SCHEMA_VERSION:
             return _default_payload(now)
         payload = _default_payload(now)
         payload["started_at"] = _as_float(raw.get("started_at")) or now
@@ -817,6 +822,30 @@ class AntiRepeatEffectStore:
                 type(exc).__name__,
             )
             return _default_payload(now)
+        if isinstance(raw, dict) and raw.get("version") != _SCHEMA_VERSION:
+            # A version we do not understand is the UNREADABLE case above,
+            # not the corrupt one: the file is intact and authoritative, we
+            # simply cannot interpret it. Treating it like an empty store --
+            # which is what _normalize_payload did -- caches that emptiness
+            # and the next decision writes a v1 payload holding only itself
+            # over the whole file. Measured on a downgrade: 1837 bytes became
+            # 728, every prior day bucket gone, started_at reset, and not one
+            # log line. There is no backup anywhere in this store, so it is
+            # irreversible.
+            #
+            # Raising reuses the same escape the unreadable case documents:
+            # it skips the cache install and the staging that follows in the
+            # same critical section, so a newer file simply stops being
+            # recorded into rather than being destroyed. Every caller already
+            # swallows.
+            logger.warning(
+                "[AntiRepeatEffects] refusing to overwrite %s: schema version"
+                " %r is newer than %r",
+                name,
+                raw.get("version"),
+                _SCHEMA_VERSION,
+            )
+            raise ValueError("anti-repeat effects schema version unsupported")
         return self._normalize_payload(raw, now)
 
     def _load_unlocked(self, name: str, now: float) -> dict[str, Any]:
