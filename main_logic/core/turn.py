@@ -373,6 +373,14 @@ class TurnMixin:
         turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
         route_request_id = str(active_request_id or "")
         route_owner = self._text_route_owners.pop(route_request_id, None)
+        consume_tool_owner = getattr(self, "_consume_tool_turn_route_owner", None)
+        tool_route_owner = (
+            consume_tool_owner(active_request_id)
+            if callable(consume_tool_owner)
+            else None
+        )
+        if route_owner is None:
+            route_owner = tool_route_owner
         if route_owner:
             turn_end_msg['route_owner'] = route_owner
         pending_meta = self._pending_turn_meta
@@ -432,6 +440,9 @@ class TurnMixin:
             interrupted_speech_id = self.current_speech_id
             self._text_route_owners.pop(str(active_request_id or ""), None)
             self._pending_turn_meta = None
+            clear_tool_evidence = getattr(self, "_clear_tool_turn_evidence", None)
+            if callable(clear_tool_evidence):
+                clear_tool_evidence()
             self._current_ai_turn_text = ""
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
@@ -770,6 +781,9 @@ class TurnMixin:
 
         if not will_retry and not _is_too_long_final and _truncated_text is None:
             self._text_route_owners.pop(str(active_request_id or ""), None)
+            clear_tool_evidence = getattr(self, "_clear_tool_turn_evidence", None)
+            if callable(clear_tool_evidence):
+                clear_tool_evidence()
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:
                 self._active_text_request_id = None
@@ -1229,6 +1243,9 @@ class TurnMixin:
             self._activity_tracker.on_voice_rms()
 
         if is_voice_source and record_transcript_text:
+            begin_tool_evidence = getattr(self, "_begin_tool_evidence_turn", None)
+            if callable(begin_tool_evidence):
+                begin_tool_evidence(record_transcript_text)
             self._fire_task(self._broadcast_voice_transcript_observed(record_transcript_text))
 
         if is_voice_source:

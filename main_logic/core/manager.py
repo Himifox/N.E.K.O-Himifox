@@ -321,6 +321,8 @@ class LLMSessionManager(
         self._tts_fallback_uses_default_voice: bool = False
         self._active_text_request_id: Optional[str] = None
         self._text_route_owners: dict[str, str] = {}
+        self._tool_turn_epoch = 0
+        self._tool_turn_evidence: dict | None = None
         self._magic_command_image_drop_request_ids: set[str] = set()
         self._magic_command_image_drop_request_order: deque[str] = deque()
         

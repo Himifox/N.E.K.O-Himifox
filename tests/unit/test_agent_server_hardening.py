@@ -103,6 +103,142 @@ async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
     assert manager._text_route_owners == {}
 
 
+@pytest.mark.asyncio
+async def test_turn_end_can_promote_proven_tool_evidence_owner():
+    from main_logic.core.turn import TurnMixin
+
+    queue = MagicMock()
+    manager = SimpleNamespace(
+        _text_route_owners={},
+        _consume_tool_turn_route_owner=lambda request_id: (
+            "public_knowledge" if request_id == "req-tool" else None
+        ),
+        _pending_turn_meta=None,
+        sync_message_queue=queue,
+        websocket=None,
+        _flush_ai_turn_text_to_tracker=MagicMock(),
+    )
+
+    await TurnMixin._emit_turn_end(manager, "req-tool")
+
+    queue.put.assert_called_once_with(
+        {
+            "type": "system",
+            "data": "turn end",
+            "route_owner": "public_knowledge",
+            "request_id": "req-tool",
+        }
+    )
+
+
+def test_tool_evidence_promotes_only_one_pure_knowledge_call():
+    from main_logic.core.tool_calling import ToolCallingMixin
+
+    session = object()
+    manager = SimpleNamespace(
+        session=session,
+        _tool_turn_epoch=0,
+        _tool_turn_evidence=None,
+    )
+    ToolCallingMixin._begin_tool_evidence_turn(
+        manager,
+        "查询本地知识库：初音未来是谁？",
+        request_id="req-pure",
+    )
+    manager._tool_turn_evidence["call_names"] = ["query_public_knowledge"]
+    manager._tool_turn_evidence["knowledge_used"] = True
+
+    assert (
+        ToolCallingMixin._consume_tool_turn_route_owner(manager, "req-pure")
+        == "public_knowledge"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "calls"),
+    [
+        ("查询本地知识库：初音未来，并创建任务", ["query_public_knowledge"]),
+        (
+            "查询本地知识库：初音未来是谁？",
+            ["query_public_knowledge", "create_task"],
+        ),
+    ],
+)
+def test_compound_or_multi_tool_knowledge_evidence_stays_nonexclusive(text, calls):
+    from main_logic.core.tool_calling import ToolCallingMixin
+
+    manager = SimpleNamespace(
+        session=object(),
+        _tool_turn_epoch=0,
+        _tool_turn_evidence=None,
+    )
+    ToolCallingMixin._begin_tool_evidence_turn(
+        manager,
+        text,
+        request_id="req-compound",
+    )
+    manager._tool_turn_evidence["call_names"] = calls
+    manager._tool_turn_evidence["knowledge_used"] = True
+
+    assert (
+        ToolCallingMixin._consume_tool_turn_route_owner(manager, "req-compound")
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_late_tool_result_cannot_write_into_the_next_turn():
+    from main_logic.core.tool_calling import ToolCallingMixin
+    from main_logic.tool_calling import ToolCall, ToolResult
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Registry:
+        async def execute(self, call):
+            started.set()
+            await release.wait()
+            return ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                output="result",
+                internal_evidence=frozenset({"knowledge_used"}),
+            )
+
+    manager = SimpleNamespace(
+        session=object(),
+        tool_registry=_Registry(),
+        _tool_turn_epoch=0,
+        _tool_turn_evidence=None,
+    )
+    ToolCallingMixin._begin_tool_evidence_turn(
+        manager,
+        "查询本地知识库：旧问题",
+        request_id="req-old",
+    )
+    pending = asyncio.create_task(
+        ToolCallingMixin._on_tool_call(
+            manager,
+            ToolCall(
+                name="query_public_knowledge",
+                arguments={"query": "旧问题"},
+                call_id="call-old",
+            ),
+        )
+    )
+    await started.wait()
+    ToolCallingMixin._begin_tool_evidence_turn(
+        manager,
+        "普通新问题",
+        request_id="req-new",
+    )
+    release.set()
+    await pending
+
+    assert manager._tool_turn_evidence["call_names"] == []
+    assert manager._tool_turn_evidence["knowledge_used"] is False
+
+
 def test_analyzer_route_owner_is_bound_to_one_user_turn():
     from main_logic.cross_server import (
         _pending_analyze_owner,

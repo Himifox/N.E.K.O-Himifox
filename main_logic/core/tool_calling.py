@@ -111,7 +111,70 @@ class ToolCallingMixin:
         call. Just forwards to the registry; the registry is process-
         global and outlives any single session.
         """
-        return await self.tool_registry.execute(call)
+        captured_session = getattr(self, "session", None)
+        captured_epoch = getattr(self, "_tool_turn_epoch", 0)
+        result = await self.tool_registry.execute(call)
+        state = getattr(self, "_tool_turn_evidence", None)
+        if (
+            getattr(self, "session", None) is captured_session
+            and getattr(self, "_tool_turn_epoch", 0) == captured_epoch
+            and state is not None
+            and state.get("session") is captured_session
+            and state.get("epoch") == captured_epoch
+        ):
+            state["call_names"].append(str(call.name or ""))
+            if "knowledge_used" in result.internal_evidence:
+                state["knowledge_used"] = True
+        return result
+
+    def _begin_tool_evidence_turn(
+        self,
+        user_text: str,
+        *,
+        request_id: object = None,
+    ) -> None:
+        """Start one session-bound evidence ledger before provider execution."""
+        from main_logic.knowledge_context import (
+            _is_pure_explicit_local_knowledge_request,
+        )
+
+        self._tool_turn_epoch = getattr(self, "_tool_turn_epoch", 0) + 1
+        self._tool_turn_evidence = {
+            "session": self.session,
+            "epoch": self._tool_turn_epoch,
+            "request_id": str(request_id or ""),
+            "pure_knowledge_candidate": bool(
+                _is_pure_explicit_local_knowledge_request(str(user_text or ""))
+            ),
+            "call_names": [],
+            "knowledge_used": False,
+        }
+
+    def _consume_tool_turn_route_owner(self, request_id: object) -> str | None:
+        """Promote only a conservatively proven pure one-tool knowledge turn."""
+        from main_logic.agent_routing import (
+            ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE,
+        )
+
+        state = getattr(self, "_tool_turn_evidence", None)
+        self._tool_turn_evidence = None
+        if state is None:
+            return None
+        request_key = str(request_id or "")
+        if (
+            state.get("session") is not getattr(self, "session", None)
+            or state.get("epoch") != getattr(self, "_tool_turn_epoch", 0)
+            or str(state.get("request_id") or "") != request_key
+            or not state.get("pure_knowledge_candidate")
+            or not state.get("knowledge_used")
+            or state.get("call_names") != ["query_public_knowledge"]
+        ):
+            return None
+        return ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE
+
+    def _clear_tool_turn_evidence(self) -> None:
+        self._tool_turn_epoch = getattr(self, "_tool_turn_epoch", 0) + 1
+        self._tool_turn_evidence = None
 
     # ------------------------------------------------------------------
     # 内置 pseudo 工具：recall_memory

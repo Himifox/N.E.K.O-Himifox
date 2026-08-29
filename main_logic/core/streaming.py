@@ -475,6 +475,10 @@ class StreamingMixin:
 
                     text_request_id = message.get("request_id")
                     self._active_text_request_id = text_request_id
+                    self._begin_tool_evidence_turn(
+                        record_data,
+                        request_id=text_request_id,
+                    )
                     # Path A (inline) Focus 凝神：score this user message and, if
                     # over the bar, run THIS reply thinking-on. Scored on
                     # ``record_data`` (= memory_text or data) — the user-VISIBLE

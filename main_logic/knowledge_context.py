@@ -27,7 +27,7 @@ from knowledge.service import (
     get_usage_example,
 )
 from main_logic.agent_routing import ANALYZE_ROUTE_OWNER_PUBLIC_KNOWLEDGE
-from main_logic.tool_calling import ToolDefinition
+from main_logic.tool_calling import ToolDefinition, ToolHandlerOutcome
 from utils.config_manager import get_config_manager
 from utils.logger_config import get_module_logger
 
@@ -96,6 +96,14 @@ _QUERY_SPEAKER_PREFIX = re.compile(
 _QUERY_FIRST_PERSON_PREFIX = re.compile(r"^我(?=(?:应该|该|要)?怎么)")
 _QUERY_EXPLANATION_SUFFIX = re.compile(
     r"(?:到底)?(?:是什么|是什么意思|什么意思|有何含义|的含义)$"
+)
+_COMPOUND_ACTION_AFTER_QUERY = re.compile(
+    r"(?:并且|并|然后|同时|再|and\s+then|then)\s*"
+    r"(?:创建|新建|添加|设置|提醒|发送|打开|关闭|修改|删除|联网|上网|搜索网络|"
+    r"检查|分析|总结|对比|比较|执行|运行|下载|上传|保存|写入|改写|"
+    r"create|add|remind|send|open|close|update|delete|check|analyze|summarize|"
+    r"compare|run|download|upload|save|write|search\s+the\s+web)",
+    re.IGNORECASE,
 )
 
 
@@ -486,6 +494,20 @@ def register_public_knowledge_tool(
         },
         "required": ["query"],
     }
+    async def _handle(arguments: dict) -> ToolHandlerOutcome:
+        output = await handle_public_knowledge_call(
+            arguments
+            if lookup_enabled
+            else {**(arguments or {}), "mode": "sample"},
+            language=language,
+        )
+        evidence = (
+            frozenset({"knowledge_used"})
+            if output.startswith("Public knowledge (local reference only; not a memory):")
+            else frozenset()
+        )
+        return ToolHandlerOutcome(output=output, internal_evidence=evidence)
+
     tool_registry.register(
         ToolDefinition(
             name="query_public_knowledge",
@@ -496,12 +518,7 @@ def register_public_knowledge_tool(
                 language,
             ),
             parameters=parameters,
-            handler=lambda arguments: handle_public_knowledge_call(
-                arguments
-                if lookup_enabled
-                else {**(arguments or {}), "mode": "sample"},
-                language=language,
-            ),
+            handler=_handle,
             metadata={"source": "builtin", "domain": "public_knowledge"},
         ),
         replace=True,
@@ -518,6 +535,12 @@ def _extract_explicit_local_knowledge_query(user_text: str) -> str:
     """Return a query only when the whole utterance is an explicit local route."""
     match = _EXPLICIT_LOCAL_KNOWLEDGE_ROUTE.fullmatch(user_text)
     return match.group("query").strip() if match else ""
+
+
+def _is_pure_explicit_local_knowledge_request(user_text: str) -> bool:
+    """Conservatively prove one complete lookup without a chained action."""
+    query = _extract_explicit_local_knowledge_query(user_text)
+    return bool(query and not _COMPOUND_ACTION_AFTER_QUERY.search(query))
 
 
 async def build_automatic_public_knowledge_context(
@@ -561,7 +584,11 @@ async def build_public_knowledge_turn_context(
     cooldown, so one character's retrieval neither starves another's nor shares
     its recently-delivered cards.
     """
-    fallback_query = _extract_explicit_local_knowledge_query(user_text)
+    fallback_query = (
+        _extract_explicit_local_knowledge_query(user_text)
+        if _is_pure_explicit_local_knowledge_request(user_text)
+        else ""
+    )
     if fallback_query:
         from config.public_knowledge_settings import (
             PUBLIC_KNOWLEDGE_EXPLICIT_LOOKUP_BUDGET_SECONDS,

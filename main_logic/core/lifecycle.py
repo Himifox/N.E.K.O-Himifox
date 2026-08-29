@@ -77,6 +77,7 @@ class LifecycleMixin:
             getattr(self, "_public_knowledge_session_key", "") or ""
         )
         invalidate_public_knowledge_session(previous)
+        self._clear_tool_turn_evidence()
         self._public_knowledge_session_key = uuid4().hex
 
     def is_goodbye_silent(self) -> bool:

@@ -137,6 +137,9 @@ class ToolResult:
     output: Any
     is_error: bool = False
     error_message: str = ""
+    # Host-only evidence. Provider serializers intentionally read only
+    # ``output`` and never expose this field on the wire.
+    internal_evidence: frozenset[str] = frozenset()
 
     def output_as_json_string(self) -> str:
         """Render ``output`` as the JSON string that OpenAI Realtime / GLM /
@@ -147,6 +150,14 @@ class ToolResult:
             return json.dumps(self.output, ensure_ascii=False)
         except (TypeError, ValueError):
             return json.dumps({"result": str(self.output)}, ensure_ascii=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolHandlerOutcome:
+    """Trusted in-process handler output plus host-only routing evidence."""
+
+    output: Any
+    internal_evidence: frozenset[str] = frozenset()
 
 
 # Callback shape exposed to the clients. Clients invoke this when the
@@ -251,11 +262,16 @@ class ToolRegistry:
                 result_value = tool.handler(call.arguments or {})
                 if asyncio.iscoroutine(result_value) or isinstance(result_value, asyncio.Future):
                     result_value = await result_value
+                internal_evidence = frozenset()
+                if isinstance(result_value, ToolHandlerOutcome):
+                    internal_evidence = result_value.internal_evidence
+                    result_value = result_value.output
                 return ToolResult(
                     call_id=call.call_id,
                     name=call.name,
                     output=result_value,
                     is_error=False,
+                    internal_evidence=internal_evidence,
                 )
 
             # Remote tool — delegate to the dispatcher (plugin/agent_server).
@@ -269,7 +285,11 @@ class ToolRegistry:
                     is_error=True,
                     error_message=msg,
                 )
-            return await self._remote_dispatcher(call, tool.metadata)
+            remote_result = await self._remote_dispatcher(call, tool.metadata)
+            # Remote/user-controlled metadata and payloads cannot claim host
+            # routing evidence, even if a dispatcher constructed ToolResult.
+            remote_result.internal_evidence = frozenset()
+            return remote_result
         except Exception as e:
             err_text = f"{type(e).__name__}: {e}"
             logger.exception("ToolRegistry.execute: '%s' raised: %s", call.name, err_text)

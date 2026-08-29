@@ -75,6 +75,75 @@ def test_embedded_knowledge_words_do_not_claim_the_route(text):
     assert knowledge_tool._extract_explicit_local_knowledge_query(text) == ""
 
 
+def test_compound_explicit_lookup_is_not_a_pure_tool_owner_candidate():
+    import main_logic.knowledge_context as knowledge_tool
+
+    assert knowledge_tool._extract_explicit_local_knowledge_query(
+        "查询本地知识库：初音未来，并创建任务"
+    )
+    assert not knowledge_tool._is_pure_explicit_local_knowledge_request(
+        "查询本地知识库：初音未来，并创建任务"
+    )
+    assert knowledge_tool._is_pure_explicit_local_knowledge_request(
+        "查询本地知识库：初音未来是谁？"
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_knowledge_tool_marks_success_as_host_only_evidence(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+    from main_logic.tool_calling import ToolCall, ToolRegistry
+
+    monkeypatch.setattr(
+        knowledge_tool,
+        "handle_public_knowledge_call",
+        AsyncMock(
+            return_value=(
+                "Public knowledge (local reference only; not a memory):\n"
+                "- trusted result"
+            )
+        ),
+    )
+    registry = ToolRegistry()
+    knowledge_tool.register_public_knowledge_tool(
+        registry,
+        language="zh",
+        lookup_enabled=True,
+    )
+
+    result = await registry.execute(
+        ToolCall(name="query_public_knowledge", arguments={"query": "初音未来"})
+    )
+
+    assert result.internal_evidence == frozenset({"knowledge_used"})
+    assert "knowledge_used" not in result.output_as_json_string()
+
+
+@pytest.mark.asyncio
+async def test_public_knowledge_tool_miss_has_no_routing_evidence(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+    from main_logic.tool_calling import ToolCall, ToolRegistry
+
+    monkeypatch.setattr(
+        knowledge_tool,
+        "handle_public_knowledge_call",
+        AsyncMock(return_value="No relevant public knowledge is available locally."),
+    )
+    registry = ToolRegistry()
+    knowledge_tool.register_public_knowledge_tool(
+        registry,
+        language="zh",
+        lookup_enabled=True,
+    )
+
+    result = await registry.execute(
+        ToolCall(name="query_public_knowledge", arguments={"query": "missing"})
+    )
+
+    assert result.is_error is False
+    assert result.internal_evidence == frozenset()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("requested_type", "forwarded_type", "expected_titles"),
@@ -271,13 +340,20 @@ async def test_companion_chat_public_knowledge_tool_is_sample_only(monkeypatch):
         lookup_enabled=False,
     )
 
+    from main_logic.tool_calling import ToolCall
+
     tool = registry.get("query_public_knowledge")
     assert tool is not None
     assert tool.parameters["properties"]["mode"]["enum"] == ["sample"]
     assert tool.parameters["properties"]["mode"]["default"] == "sample"
-    assert (
-        await tool.handler({"query": "dataset:animals", "mode": "lookup"}) == "sampled"
+    result = await registry.execute(
+        ToolCall(
+            name="query_public_knowledge",
+            arguments={"query": "dataset:animals", "mode": "lookup"},
+        )
     )
+    assert result.output == "sampled"
+    assert result.internal_evidence == frozenset()
     assert captured["mode"] == "sample"
 
 
@@ -392,6 +468,29 @@ async def test_failed_explicit_lookup_still_keeps_local_route_owner(monkeypatch)
 
     assert result.context == ""
     assert result.route_owner == "public_knowledge"
+
+
+@pytest.mark.asyncio
+async def test_compound_explicit_lookup_does_not_claim_host_route(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+    from knowledge.service import KnowledgeTurnContext
+
+    fallback = AsyncMock(return_value="must not run")
+    service = SimpleNamespace(
+        abuild_conversation_context=AsyncMock(
+            return_value=KnowledgeTurnContext(match_mode="automatic_miss")
+        )
+    )
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: service)
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", fallback)
+
+    result = await knowledge_tool.build_public_knowledge_turn_context(
+        "查询本地知识库：初音未来，并创建任务",
+        session_key="logical-session",
+    )
+
+    assert result.route_owner is None
+    fallback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
