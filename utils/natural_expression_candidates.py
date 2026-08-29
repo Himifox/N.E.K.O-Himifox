@@ -105,6 +105,15 @@ _URL_ATOM_RE = re.compile(_URL_ATOM)
 _URL_TAIL = _URL_ATOM
 _URL_RE = re.compile(
     r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
+    # A structured mailto BEFORE the generic scheme rule, because that rule
+    # requires an ASCII alphanumeric somewhere in the opaque part -- the
+    # guard that keeps it off "note:中文" prose -- and an internationalised
+    # address has none. So "mailto:用户秘密@例子.公司" matched nothing and its
+    # local part, the identifying half, was mined and persisted. Requiring
+    # the local@domain.tld SHAPE is what makes the unbounded alphabet safe
+    # here, so the generic guard below stays exactly as it was.
+    r"(?<![A-Za-z0-9+.\-])(?i:mailto):"
+    + _URL_ATOM + "+@" + _URL_ATOM + r"+(?:\." + _URL_ATOM + "+)+|"
     # ANY scheme, as a rule rather than a list. A fixed allowlist guarantees
     # another round of "you missed one", and the ones it missed carried real
     # payloads: an otpauth:// TOTP secret, a postgres:// password, an
@@ -350,14 +359,26 @@ def read_jsonl(
 # still opens and closes. Without this the ``>`` prefix defeats the fence
 # match, only the delimiter lines end up protected by the inline-code pass,
 # and the code body between them leaks into candidates and the export.
-_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
+# Only SPACES pad the marker, at most three -- the rule
+# ``_strip_containers_by_column`` already states, which this parallel path
+# did not follow. A TAB matched here is worth FOUR columns, so "\t> ```"
+# was stripped to a bare fence and opened one; the column guard in
+# ``_fenced_code_spans`` runs on the body AFTER this strip, so it measured
+# zero indent and could not catch it. That fence never closes, and an
+# opener with no closer protects to end of text -- the whole rest of the
+# reply, silently unminable. It is indented CODE, and
+# ``_indented_code_spans`` already reads it as such.
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?: {0,3}>[ \t]?)+")
 # A list item is also a container: a fence written directly after its marker
 # ("- ```") never matched, so the block stayed unprotected whenever the inline
 # scanner did not happen to cover it — measured leaking for an unclosed list
 # fence, and for one whose closer sat in another paragraph. Stripped for fence
 # detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
 # the container that decides whether a closer belongs to this fence.
-_LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
+# Padded by SPACES only, for the same reason as the blockquote pattern
+# above: "\t- ```" is a tab-indented code line, and a tab counted as one
+# column made it a list item holding a fence.
+_LIST_MARKER_PREFIX_RE = re.compile(r" {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
 # The same markers, minus the leading padding and consuming only ONE space
 # after the marker. The greedy form above is right when a fence opener
 # follows and wrong when INDENTATION follows: "-     code" is a marker, its
@@ -836,6 +857,15 @@ def _collect_link_targets(
     # sitting there was silently never mined, on this path and on the
     # runtime one that shares it.
     open_labels = 0
+    # The "(" positions that open a link TARGET, and how many are open
+    # right now. Brackets inside a target are destination punctuation, not
+    # label markers: "[docs](/api/[v1) okay](...)" handed a label to the
+    # stray "](" after it, so a second link was accepted and ordinary
+    # speech in the parenthetical was protected and never mined. The
+    # accumulated spans cannot answer this -- they are appended below,
+    # after the scan -- so the depth is carried as the scan runs.
+    target_parens: set[int] = set()
+    target_depth = 0
     cursor = start
     while cursor < limit:
         character = text[cursor]
@@ -848,16 +878,26 @@ def _collect_link_targets(
             # okay](...)" hand a label to the stray closer after it, so the
             # parenthetical was protected and a repeated catchphrase in it
             # was never mined.
-            if not _starts_inside(cursor, ignore):
+            if not _starts_inside(cursor, ignore) and not target_depth:
                 open_labels += 1
         elif character == "(":
+            if cursor in target_parens:
+                target_depth += 1
             open_parens.append(cursor)
         elif character == ")":
             if open_parens:
-                closer_of[open_parens.pop()] = cursor + 1
+                opened = open_parens.pop()
+                closer_of[opened] = cursor + 1
+                if opened in target_parens and target_depth:
+                    target_depth -= 1
         elif (
             character == "]"
             and open_labels
+            # Inside a target for the same reason as the opener above: a
+            # "]" written in a destination is punctuation, and spending a
+            # real label on it left the genuine "](" after it opening
+            # nothing, so a real target went unprotected.
+            and not target_depth
             # BOTH sides skip displayed brackets, not just the opener. A "]"
             # shown inside a code span consuming a real label let the label
             # look already closed, so the genuine "](" after it opened
@@ -875,6 +915,7 @@ def _collect_link_targets(
             # ordinary CJK punctuation, and no <a> element by any reader --
             # lost the whole parenthetical.
             openers.append(cursor)
+            target_parens.add(cursor + 1)
         cursor += 1
     for opener in openers:
         end = closer_of.get(opener + 1)
@@ -893,7 +934,13 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # definition, and requiring one left its destination minable. The
     # destination-shape check in the scanner is what keeps this off ordinary
     # speech, not the space.
-    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*(?P<target>[^ \t\r\n]+)",
+    # The <...> form FIRST, and it runs to the closing bracket. A
+    # whitespace-delimited capture stopped at the first space, so
+    # "[cfg]: <../secret helper phrase>" yielded "<../secret"; the
+    # destination-shape check then rejected that fragment for having no
+    # closing ">", and the whole destination stayed minable.
+    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*"
+    r"(?P<target><[^>\r\n]*>|[^ \t\r\n]+)",
     re.MULTILINE,
 )
 

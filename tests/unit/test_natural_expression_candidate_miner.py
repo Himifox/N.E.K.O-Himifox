@@ -2400,3 +2400,140 @@ def test_a_uniformly_large_window_narrows_without_cutting_a_body():
         "a reply no larger than its neighbours had its body cut, which "
         "loses content the narrowing alone would have kept"
     )
+
+
+def _protects(text, needle):
+    """True when ``needle`` sits inside a protected span of ``text``."""
+    at = text.find(needle)
+    assert at >= 0, needle
+    return any(
+        start <= at < end for start, end in candidate_core._protected_spans(text)
+    )
+
+
+def test_an_angle_bracketed_reference_destination_may_hold_spaces():
+    """The <...> form of a reference destination is delimited, not whitespace-split.
+
+    The capture stopped at the first space, so "[cfg]: <../secret helper
+    phrase>" yielded "<../secret"; the destination-shape check then rejected
+    that fragment for having no closing ">", and the whole destination stayed
+    minable -- persisted to the effects sidecar for 120 days by a module whose
+    promise is that it never persists one.
+
+    The needle is deliberately not URL-shaped: a URL-shaped one is protected by
+    ``_url_spans`` whatever this pattern decides, which is how an earlier guard
+    on this file passed with its fix removed.
+    """
+    secret = "secret helper phrase"
+
+    assert _protects(
+        "[cfg]: <../" + secret + ">" + chr(10) + chr(10) + "ordinary speech",
+        secret,
+    ), "an angle-bracketed destination was cut at its first space and left minable"
+
+    # The duals, so this cannot pass by protecting everything shaped like a
+    # bracket: the plain form still works, and bracketed SPEECH does not
+    # become a definition.
+    assert _protects("[cfg]: /api/" + secret.replace(" ", "-") + chr(10), "api")
+    catchphrase = "please remember to rest"
+    assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
+
+
+def test_an_internationalised_mailto_is_protected():
+    """The generic scheme rule requires ASCII in the opaque part; an address may have none.
+
+    That requirement is the guard keeping the rule off "note:<CJK>" prose, so it
+    is not the thing to loosen. But it also rejected a fully internationalised
+    address, and the local part is the identifying half -- matching only from
+    the domain would be worse than not matching at all. A structured mailto
+    alternative, which requires the local@domain.tld shape, is what makes the
+    unbounded alphabet safe here.
+    """
+    local = "\u7528\u6237\u79d8\u5bc6"
+    address = "mailto:" + local + "@\u4f8b\u5b50.\u516c\u53f8"
+
+    assert _protects("\u5199\u4fe1\u7ed9 " + address + " \u5427", local), (
+        "an internationalised mailto address was mined"
+    )
+
+    # The dual that matters most: the generic guard is untouched, so ordinary
+    # CJK speech after a colon is still minable rather than swallowed to the
+    # end of the text.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "\u5907\u6ce8:" + catchphrase + " " + catchphrase, catchphrase
+    ), "a colon in speech began protecting the rest of the reply"
+    assert not _protects(
+        "I said mailto \u5427 " + catchphrase + " " + catchphrase, catchphrase
+    ), "the bare word mailto swallowed the reply"
+    # And an ASCII address still resolves, through the same alternative.
+    assert _protects("write to mailto:ops@example.com now", "ops@example.com")
+
+
+def test_a_bracket_inside_a_link_target_is_not_a_label():
+    """Destination punctuation must not hand a label to the stray closer after it.
+
+    "[docs](/api/[v1) okay](...)" put a "[" where the scan read a label opener,
+    so the "](" following it was accepted as a second link and the ordinary
+    speech in its parenthetical was protected -- silently never mined, here and
+    on the runtime path that shares this scanner.
+
+    The accumulated spans cannot answer this: a paragraph's targets are
+    appended only after its scan loop ends, so the depth is carried as it runs.
+    """
+    catchphrase = "please remember to rest"
+
+    assert not _protects(
+        "[docs](/api/[v1) okay](" + catchphrase + ")", catchphrase
+    ), "a bracket inside a link target was counted as a label opener"
+
+    # The duals. A non-URL needle throughout, so ``_url_spans`` cannot be what
+    # satisfies them.
+    secret = "secret token value"
+    assert _protects("see [docs](" + secret + ") ok", secret)
+    assert _protects("[a](/x) and [b](" + secret + ")", secret)
+    assert _protects("[a](/f(g)/" + secret + ") ok", secret)
+    assert _protects(
+        "[docs](/api/[v1) then [b](" + secret + ")", secret
+    ), "the link after a bracket-holding target stopped being protected"
+
+
+def test_a_tab_cannot_pad_a_container_marker():
+    """A tab is four columns, so a line it indents is CODE, not a quoted fence.
+
+    Both prefix patterns allowed three padding CHARACTERS, and a tab matched
+    there is worth four columns. So "\t> ```" was stripped to a bare fence and
+    opened one. The column guard in ``_fenced_code_spans`` runs on the body
+    AFTER that strip, so it measured zero indent and could not catch it -- and
+    a fence that never closes protects to end of text, silencing the whole rest
+    of the reply. ``_strip_containers_by_column`` already settled this rule for
+    the sibling path; these two patterns never followed it.
+    """
+    catchphrase = "please remember to rest"
+    ticks = chr(96) * 3
+    tab = chr(9)
+
+    for marker in ("> ", "- "):
+        text = tab + marker + ticks + chr(10) + chr(10) + catchphrase + " " + catchphrase
+        assert not _protects(text, catchphrase), (
+            "a tab-padded %r opened a fence that silenced the rest of the reply"
+            % marker
+        )
+
+    # The dual in both directions. The tab-indented line is still CODE, just by
+    # the indented-code scanner...
+    secret = "secret token value"
+    for marker in ("> ", "- "):
+        assert _protects(
+            "text" + chr(10) + chr(10) + tab + marker + secret + chr(10), secret
+        ), "a tab-indented %r line stopped being protected at all" % marker
+
+    # ...and a SPACE-padded container fence still opens, which is the whole
+    # reason these patterns strip a prefix before fence detection.
+    assert _protects(
+        "  > " + ticks + chr(10) + "  > " + secret + chr(10) + "  > " + ticks,
+        secret,
+    )
+    assert _protects(
+        "  - " + ticks + chr(10) + secret + chr(10) + "  - " + ticks, secret
+    )
