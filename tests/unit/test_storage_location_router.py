@@ -1713,6 +1713,35 @@ def test_storage_location_cleanup_retained_source_removes_old_runtime_root(tmp_p
 
 
 @pytest.mark.unit
+def test_storage_location_cleanup_rejects_changed_copy_evidence(tmp_path):
+    config_manager = _make_real_config_manager(tmp_path)
+    source_root = tmp_path / "legacy-runtime" / "N.E.K.O"
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    (source_root / "config").mkdir(parents=True)
+    (source_root / "config" / "characters.json").write_text("original", encoding="utf-8")
+    create_pending_storage_migration(
+        config_manager,
+        source_root=source_root,
+        target_root=target_root,
+        selection_source="recommended",
+    )
+    assert run_pending_storage_migration(config_manager)["completed"] is True
+    (source_root / "config" / "characters.json").write_text("changed!", encoding="utf-8")
+
+    reloaded_manager = _make_real_config_manager(tmp_path)
+    with _build_client(reloaded_manager) as client:
+        cleanup_response = client.post(
+            "/api/storage/location/retained-source/cleanup",
+            json={"retained_root": str(source_root)},
+        )
+
+    assert cleanup_response.status_code == 500
+    assert cleanup_response.json()["error_code"] == "retained_source_cleanup_failed"
+    assert (source_root / "config" / "characters.json").read_text(encoding="utf-8") == "changed!"
+    assert (target_root / "config" / "characters.json").read_text(encoding="utf-8") == "original"
+
+
+@pytest.mark.unit
 def test_storage_location_cleanup_retained_anchor_root_removes_runtime_entries_only(tmp_path):
     config_manager = _make_anchor_root_config_manager(tmp_path)
     source_root = config_manager.app_docs_dir
