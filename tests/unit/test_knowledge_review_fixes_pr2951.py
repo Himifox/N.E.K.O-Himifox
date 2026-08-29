@@ -333,8 +333,9 @@ def test_staged_artifact_read_is_bound_to_the_validated_descriptor(
 
     Checking the path and then calling read_bytes() re-opens by name, so a writer
     that swaps the artifact in between defeats both the link refusal and the size
-    cap. Here the swap is fired from inside fstat: a path-based implementation
-    never calls os.fstat at all, and one that re-opens would pick up the decoy.
+    cap. The swap is fired after the platform-specific opener has validated its
+    handle but before the shared descriptor reader consumes it. A second path
+    lookup would pick up the decoy; the original descriptor must not.
     """
     from knowledge.pack_jobs import PACK_ARTIFACT_NAME, _load_job_pack
 
@@ -346,11 +347,12 @@ def test_staged_artifact_read_is_bound_to_the_validated_descriptor(
     decoy = tmp_path / "decoy.json"
     decoy.write_bytes(json.dumps(_pack("swapped", "掉包")).encode("utf-8"))
 
-    real_fstat = os.fstat
+    import knowledge.pack_jobs as pack_jobs
+
+    real_read = pack_jobs._read_bounded_descriptor
     swapped = {"done": False, "possible": True}
 
-    def fstat_then_swap(fd):
-        info = real_fstat(fd)
+    def swap_then_read(fd, *, max_bytes):
         if not swapped["done"]:
             swapped["done"] = True
             try:
@@ -358,13 +360,12 @@ def test_staged_artifact_read_is_bound_to_the_validated_descriptor(
             except OSError:
                 # Windows refuses to replace a file that is currently open.
                 swapped["possible"] = False
-        return info
+        return real_read(fd, max_bytes=max_bytes)
 
-    monkeypatch.setattr(os, "fstat", fstat_then_swap)
+    monkeypatch.setattr(pack_jobs, "_read_bounded_descriptor", swap_then_read)
     pack = _load_job_pack(job_dir)
 
-    # A path-based implementation would never have reached os.fstat.
-    assert swapped["done"], "artifact was not validated through a descriptor"
+    assert swapped["done"], "artifact was not consumed through the shared descriptor"
     if not swapped["possible"]:
         pytest.skip("this platform cannot swap an open file; descriptor use verified")
     assert pack.pack_id == "original"
@@ -376,9 +377,15 @@ def test_staged_artifact_reader_never_reopens_by_path():
     import inspect
     import textwrap
 
-    from knowledge.pack_jobs import _read_bounded_staged_file
+    from knowledge.pack_jobs import (
+        _read_bounded_descriptor,
+        _read_bounded_staged_file,
+    )
 
-    source = textwrap.dedent(inspect.getsource(_read_bounded_staged_file))
+    source = "\n".join(
+        textwrap.dedent(inspect.getsource(function))
+        for function in (_read_bounded_staged_file, _read_bounded_descriptor)
+    )
     tree = ast.parse(source)
     called = {
         node.func.attr

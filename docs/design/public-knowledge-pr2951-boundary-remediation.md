@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第二十九轮均已实施；第三十轮已完成设计，等待实现。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成；第十九轮由 `f11367626` 完成；第二十至第二十九轮的提交与回归证据记录在各轮实施证据章节。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第二十九轮均已实施；第三十轮的设计与本地实现提交已完成，远端关闭状态以 PR head、CI 和完整分页后的 review threads 为准。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成；第十九轮由 `f11367626` 完成；第二十至第二十九轮的提交与回归证据记录在各轮实施证据章节。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -2610,5 +2610,24 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 13. 回归修正提交：只包含上述边界暴露的必要修正，不扩张无关协议。
 
 每一步独立commit以便审查，但本轮全部实现、测试与回复证据完成后统一一次push，不逐个推送。Python测试只通过项目 `uv` 环境运行；扩展既有测试文件，不新建测试文件。前端运行现有Knowledge Manager/Vitest回归；同时执行受影响Ruff、compileall、构建/类型检查与`git diff --check`。
+
+### 第三十轮本地实施证据
+
+| 单元 | 提交 | 实施结果 |
+| --- | --- | --- |
+| EW | `5c027f664` | shutdown step、writer admission/drain、稳定 root barrier 与旧 Main 退出证明统一到真实 mutation 终态。 |
+| EY | `9cc2458f4` | 浏览器 Bridge 移除 `subscriptions/apply`，可信 apply 仅保留在 Plugin 内部路径。 |
+| FG | `d09f278a8` | 单包向量状态与多包概览分别通过纯函数推导，颜色、文案和聚合不再分叉。 |
+| FD | `5737cd867` | routing 加载失败保留 dirty/last-good，visibility tombstone 阻断已撤销内容。 |
+| FE | `23349295a` | 自动上下文按 logical session 准入，底层 task 真实结束前持续占槽，并逐张记录实际渲染卡片身份。 |
+| FF | `0f0a1f790` | 工具结果只向捕获的 session/turn 写 provisional evidence，复合请求不错误取得 exclusive owner。 |
+| EZ | `48bc34ad5` | `knowledge/` 进入 schema v2 逐项摘要迁移，采用 transaction staging、no-follow 验证、SQLite 检查和可恢复 retained cleanup。 |
+| FA | `d1d4f0f85` | staging 仅从 canonical artifacts 重建，legacy DB-only job 明确 degraded；Windows leaf 使用 native handle，验证峰值受 128 MiB 预算约束。 |
+| FB | `f1bfb6d18` | `packs.json` 统一 32 MiB strict handle reader；删除采用 registry-first intent、digest 判定和幂等恢复。 |
+| FC | `daf43bf7b` | activation 证据先完整提交再执行 retention；失败保留受控 101 和 `retention_pending`，102 hard overflow 才阻止新激活。 |
+| EX | `e2e42c099` | Plugin 使用单一 absolute deadline 与 operation ID；Main 持久化有界 remove status、强引用删除任务并提供查询；不确定结果把 package guard 转交同一 operation drain。 |
+| schema 误报 | 无代码提交 | schema 6 继续由生产兼容契约接受，使用既有精确回归作为关闭证据。 |
+
+统一推送前回归：受影响 Python 集合通过 `uv run pytest` 得到 `673 passed, 28 skipped`；Plugin Manager Vitest 得到 `40 files / 377 tests passed`；`vue-tsc --build`、Vite production build、受影响 Ruff、compileall 与 `git diff --check` 均通过。Windows 下无法替换已打开文件的 descriptor 竞态反例按平台能力 skip，同时结构反例继续证明 validated handle 与 shared descriptor reader 之间没有按路径重开。
 
 关闭条件：18条有效conversation分别具备实现提交、精确反例和相邻宽回归后才回复并resolve；schema误报附上述1 passed证据单独关闭。最后再次使用GraphQL完整分页读取全部review threads，不能受100条限制影响。只有远端head包含全部实现、统一推送成功、CI与分页结果齐全后，才能把文首状态改为“第三十轮已实施”。

@@ -125,9 +125,9 @@ def _read_bounded_staged_file(path: Path, *, max_bytes: int) -> bytes:
     Validating a path and then re-opening it by name leaves a window in which a
     concurrent writer can swap the file, defeating both the link refusal and the
     size cap. O_NOFOLLOW makes the refusal atomic where the platform has it; on
-    Windows it does not exist, so the pre-open lstat carries that half there and
-    the size cap stays atomic because it is checked against the descriptor that
-    is actually read.
+    Windows uses CreateFileW with OPEN_REPARSE_POINT, validates the returned
+    handle and final path, then converts that same handle to a descriptor. The
+    size cap and bytes therefore always describe the opened object.
 
     Raises ValueError for a rejected file so callers can tell "we refuse to read
     this" apart from a genuine I/O error.
