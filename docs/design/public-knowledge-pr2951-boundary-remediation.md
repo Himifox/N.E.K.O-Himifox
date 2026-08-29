@@ -2630,4 +2630,6 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 
 统一推送前回归：受影响 Python 集合通过 `uv run pytest` 得到 `673 passed, 28 skipped`；Plugin Manager Vitest 得到 `40 files / 377 tests passed`；`vue-tsc --build`、Vite production build、受影响 Ruff、compileall 与 `git diff --check` 均通过。Windows 下无法替换已打开文件的 descriptor 竞态反例按平台能力 skip，同时结构反例继续证明 validated handle 与 shared descriptor reader 之间没有按路径重开。
 
+统一推送后新增的 3 条 review thread 由 follow-up 提交 `5bd13b100` 一并处理：取消尚未安装完成的 update 时先查询 durable registry，只有证明不存在旧安装才返回 preinstall success；Main 的 removal status GET 会恢复持久化为 pending 但丢失进程内 task 的同一 operation ID；index-policy 改为 registry-first，并且 indexer 每轮在选择 embedding work 前以 registry 为权威修正 SQLite chunk policy。相关 indexer、packs、Plugin/Main unsubscribe 集合为 `224 passed, 1 skipped`，Ruff、compileall 与 `git diff --check` 通过。
+
 关闭条件：18条有效conversation分别具备实现提交、精确反例和相邻宽回归后才回复并resolve；schema误报附上述1 passed证据单独关闭。最后再次使用GraphQL完整分页读取全部review threads，不能受100条限制影响。只有远端head包含全部实现、统一推送成功、CI与分页结果齐全后，才能把文首状态改为“第三十轮已实施”。
