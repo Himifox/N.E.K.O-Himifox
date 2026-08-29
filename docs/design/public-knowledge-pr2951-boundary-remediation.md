@@ -2657,4 +2657,4 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - `discussion_r3886492697`：Marketplace 等待 staged job 时，Main Server 的单次 timeout 与 unavailable 同属可重试观察故障。现在两者都只在既有 24 小时总 deadline 内继续轮询；4xx 拒绝、无效响应和稳定 job 终态仍立即失败，未扩大重试集合。
 - `discussion_r3886492699`：rebuild 的 chunk 计数为零不能证明所有 entry 已成功 backfill。只要 `entries_missing_chunks > 0`，完成状态现在明确为 `backfill_incomplete`、`complete=false`，因此 malformed/无法派生的 entry 不会被静默报告为成功。
 
-实现提交 `f4ec75a0f` 同时加入对应反例。四个受影响测试文件通过 `224 passed, 1 skipped`；受影响 Python 文件 Ruff、compileall 与 `git diff --check` 通过。关闭条件保持不变：该提交推送到远端后逐条回复实现与测试证据并 resolve，再对全部 review threads 完整分页，确认没有新未解决 conversation。
+实现提交 `f4ec75a0f` 同时加入对应反例。四个受影响测试文件通过 `224 passed, 1 skipped`；知识、存储、shutdown、turn 与 Plugin Market 扩大回归在 UTF-8 模式下通过 `2021 passed, 16 skipped, 21362 deselected`。第一次使用 Windows 默认编码运行时，唯一失败是既有测试未指定编码而以 GBK 读取 UTF-8 源文件；相同集合用 `uv run python -X utf8 -m pytest` 重跑全绿，因此未把该环境问题混入本轮实现。受影响 Python 文件 Ruff、compileall 与 `git diff --check` 通过。关闭条件保持不变：该提交推送到远端后逐条回复实现与测试证据并 resolve，再对全部 review threads 完整分页，确认没有新未解决 conversation。
