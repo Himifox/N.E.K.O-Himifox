@@ -1,6 +1,6 @@
 # PR #2951 公共知识边界收敛设计
 
-> 状态：持续修复记录。第一至第十九轮均已实施。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成；第十九轮由 `f11367626` 完成。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
+> 状态：持续修复记录。第一至第二十九轮均已实施；第三十轮已完成设计，等待实现。第三轮方案基于提交 `2381e79b8` 的全部未解决线程（含 outdated）和 review body 中的 outside-diff 评论整理，并由 `7b972d227` 至 `f4a9aaf31` 的五个提交完成；第四轮及其 review-body 补充由 `d33a80b25` 至 `6e4a3e131` 的六个实现提交完成；第五轮及其后续补充由 `43c138ce4` 至 `079375f14` 的八个实现提交完成；第六轮由 `f2b350d0d` 至 `e6202a280` 的四个实现提交完成；第七轮由 `b5050222c` 与 `aef63512d` 两个实现提交完成；第八轮由 `bcbabbf29` 至 `b7c350c27` 的六个实现提交完成；第九轮由 `b663f327a` 至 `f67093f4a` 的四个实现提交完成；第十轮由 `182639596` 至 `db432daeb` 的七个实现提交完成；第十一轮由 `2d10e7d89`、`324ea2493` 与 `decb1d9a2` 三个实现提交完成；第十二轮由 `0e033249f` 完成；第十三轮由 `9bc071d2f` 与 `8e877fd56` 两个实现提交完成；第十四轮由 `359a2532e`、`6eb28d494`、`4cda7b874` 与 `89b8a30d3` 四个实现提交完成；第十五轮由 `ab899a225` 完成；第十六轮由 `8612faa50` 完成；第十七轮由 `ea79d433f` 完成；第十八轮由 `03f7c5167` 完成；第十九轮由 `f11367626` 完成；第二十至第二十九轮的提交与回归证据记录在各轮实施证据章节。评论数量是对应审查轮次的历史快照，不代表当前未解决线程数量；代码、测试和 CI 是最终事实来源。
 
 ## 目标与非目标
 
@@ -2426,3 +2426,167 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 ## 第二十九轮实施证据
 
 实现提交 `7a57a0f10` 已完成：两个脚本在项目导入前建立仓库根；Bridge 只增加明确的本地 Vite 5173 来源；discard 通过专用临时目录解析器恢复崩溃残留，普通 job ID 与 cancel 边界不变。精确反例为 15 passed；作业生命周期、公共知识路由、Bridge、维护 CLI 和质量评估五个完整测试文件为 170 passed、3 skipped，skip 均为既有 Windows symlink 权限条件。远端 Plugin pytest 随后暴露一条仍把 5173 当作拒绝场景的旧集成断言；同步为 5173 成功、5174 拒绝后，完整 Market Bridge 集成文件为 98 passed。两个脚本的真实 `--help` 入口、相关 Ruff、compileall 与 `git diff --check` 均通过。本轮没有新增用户文案或 i18n 键。
+
+## 第三十轮：关闭屏障、持久一致性与会话身份必须共享真实终态
+
+第二十九轮实施后，PR #2951 已累计 478 条评论。通过 GraphQL 完整分页读取 review threads、关闭 11 条已有实现证据的 conversation 后，剩余 19 条全部指向当前提交 `cf6be823d`。第二次沿完整调用链复核得到 18 条真实问题和 1 条误报；相关问题不能按文件逐条堆补丁，而应收敛为关闭屏障、绝对期限、路径身份、跨文件提交、路由快照和会话身份等共享边界。
+
+| 线程 | 单元 | 复核结论 |
+| --- | --- | --- |
+| `discussion_r3877428992` | EW | shutdown 后半段裸 `await` 可跳过后续清理，成立 |
+| `discussion_r3878968996` | EW | 取消 indexer coordinator 不会停止 `to_thread` mutation worker，成立 |
+| `discussion_r3877648029` | EX | HTTPX 分阶段 timeout 不是退订绝对墙钟期限，成立 |
+| `discussion_r3877679300` | EX | 删除后的 report 可在总 deadline 外继续等待，成立 |
+| `discussion_r3878672086` | EY | 浏览器 Bridge 暴露内部 `subscriptions/apply`，成立 |
+| `discussion_r3878672093` | EZ | 存储迁移固定名单遗漏 `knowledge/`，成立 |
+| `discussion_r3877428995` | FA | staging SQLite 校验后仍按路径重开，TOCTOU 成立 |
+| `discussion_r3878672089` | FA | 创建 knowledge root 前未拒绝重定向祖先，成立 |
+| `discussion_r3878968969` | FB | live `packs.json` 无界读取且可跟随特殊文件，成立 |
+| `discussion_r3878968976` | FB | pack 删除跨 SQLite/registry 缺少崩溃协议，成立 |
+| `discussion_r3878968987` | FC | activation commit 可早于对应终态目录被裁剪，成立 |
+| `discussion_r3877679309` | FD | Store 把 routing 读取失败伪装成合法空集，成立 |
+| `discussion_r3878657145` | FD | routing 刷新失败仍覆盖最后健康快照，成立 |
+| `discussion_r3878093370` | FE | 自动检索在创建 task 后才检查容量，成立 |
+| `discussion_r3878130342` | FE | cooldown 使用角色名而非真实会话身份，成立 |
+| `discussion_r3878130346` | FE | 多卡上下文只记录第一张卡身份，成立 |
+| `discussion_r3878130334` | FF | 工具查询没有传播当前 turn route owner，成立 |
+| `discussion_r3870443115` | FG | 向量样式与文案从不同判断顺序推导，成立 |
+| `discussion_r3878657157` | 无实现 | schema 6 fixture 被生产兼容契约接受，误报 |
+
+### 第三十轮新增不变量
+
+1. Clean shutdown 以最后一个 pack mutation worker 真实返回为准；coordinator task 结束、收到取消或 launcher 收到 shutdown-complete 都不能代替该事实。
+2. 存储迁移只能读取已经关闭 mutation admission、排空进程内 worker 并取得跨进程知识根 barrier 的静止快照。
+3. 一个 monotonic absolute deadline 覆盖退订的等待、删除和 best-effort report；phase timeout 只是内层保护，不得重置总预算。
+4. 配置根、staging 文件和 live registry 的身份必须由创建/打开时持有的目录或文件句柄证明；`lstat/resolve` 后再按字符串路径打开不构成安全边界。
+5. SQLite 与 JSON registry 的跨文件 mutation 必须有 durable intent 和数据库 commit marker；Python `except` rollback 不能替代崩溃恢复。
+6. routing 的合法空集合与加载失败是不同类型；失败既不能清除 dirty，也不能覆盖最后一次健康快照。
+7. 自动上下文以真实会话和实际交付的每张卡为身份；容量必须在创建 coroutine/task 前准入。
+8. Marketplace 信任只能由 Plugin Server 获取并验证 descriptor 后建立；浏览器 token 不授予构造 `trusted_market` subscription 的能力。
+9. 同一展示状态只推导一次。CSS class、文案和概览 tone 不得分别重新解释相同计数。
+
+### EW：统一 shutdown 取消屏障并跟踪真实 mutation worker
+
+- `on_shutdown()` 中所有异步清理均通过可携带返回值的 `_run_shutdown_step()`：agent bridge、translation、music crawler、Cloud Save release/upload、memory server、两个 HTTP pool 和 knowledge finish 不再裸 `await`。
+- helper 只在当前 shutdown task 确实处于 `cancelling()` 时保存第一份 caller `CancelledError` 并临时清除取消计数；被等待子任务自身取消按该步骤失败处理。全部独立清理完成后重新抛出第一份 caller cancellation。
+- `_prepare_job()` 与两条 `_activate_job()` 的 `asyncio.to_thread()` 统一由 `_run_tracked_pack_mutation()` 创建独立强引用 task，并用 `asyncio.shield()` 等待。取消 coordinator 不取消内部 worker；只有线程函数真实返回后才消费异常并移除记录。
+- `request_knowledge_indexer_stop()` 先关闭新的 pack-mutation admission，再取消 coordinator。`finish_knowledge_indexer_stop()` 同时 drain coordinator 和已登记 worker；超时只能返回“未排空”，不得报告 clean stop。
+- 同步 mutation 在 knowledge 目录外取得按 source root 区分的跨进程 barrier。storage migration 在读取 source snapshot 前取得同一 barrier并持有到复制、验证和 policy commit；获取失败返回稳定 `knowledge_mutation_busy`，不开始复制。
+- 顺序固定为：关闭 admission → 请求 indexer stop → 等待真实 worker → 完成其它清理 → 旧进程退出 → migration 取得 barrier → snapshot/copy/verify/policy commit。不得用 sleep 或 coordinator done 猜测 writer 已退出。
+
+验收：在每个剩余 shutdown await 注入 caller cancellation，后续哨兵仍全部执行并最终重抛；分别阻塞 prepare/activate 线程，取消 coordinator 后 finish 不提前成功；worker 持锁时 migration 不读取 source、不切换 policy，释放后重试才成功；关闭 admission 后 factory 不再提交新 mutation。
+
+### EX：退订的删除与上报共享一个绝对期限
+
+- reservation 建立后立即计算唯一 `deadline = loop.time() + total_budget`；取消安装、等待 mutation、解析 ownership、Main Server remove 和 report 均消费该期限，任何阶段不得重新获得完整预算。
+- 增加 absolute-deadline await helper，以 `asyncio.timeout_at(deadline)` 或等价逻辑包住完整 `_main_request()` coroutine。HTTPX connect/read/write/pool timeout继续按剩余预算 clamp，但不能替代外层墙钟守门。
+- deadline 已耗尽时不得再发起 remove 或 report。installation mutation 尚未结束时，由受强引用 drain task继续持有 package guard并只等待真实 mutation；本次请求返回稳定 `knowledge_installation_busy`，drain 不偷偷执行 remove。
+- `_report_unsubscribe_best_effort()` 接受同一 deadline，OAuth refresh、DELETE、响应读取和 client close 全部受剩余预算约束。无预算、认证失败、timeout 或远端错误只记录诊断，不改变已经提交的本地删除结果。
+- 若以后要求可靠远端同步，应另建持久 outbox；本轮不以无界后台 task 延长用户请求或伪装可靠投递。
+
+验收：模拟多个 HTTP phase 各自低于 phase timeout但累计超过总预算，外层仍按 absolute deadline终止；remove 已成功而 report 卡住时接口按原成功结果准时返回；OAuth 耗尽预算后不发送 DELETE；mutation 超时期间 package guard 不提前释放。
+
+### EY：浏览器管理 Bridge 不拥有 Marketplace apply 能力
+
+- 从浏览器知识管理路径 allowlist 删除 `subscriptions/apply`，并移除仅为该浏览器 envelope 保留的 body-limit 分支。浏览器调用在读取正文、创建下游 client 前返回 404。
+- Main Server 的内部 `/api/public-knowledge/subscriptions/apply`、其 multipart ASGI 上界和 Plugin Server 内部 `_main_request(..., "subscriptions/apply")` 保持不变。
+- 浏览器只提交 package/version/channel 给受信 Market 安装入口；Plugin Server 获取 descriptor，校验 package identity、URL、digest 和制品后，才调用内部 apply。
+- `packs/import` 继续表示普通本地导入，不能产生 `provider=plugin-market` 或 `trusted_market` subscription。
+
+验收：即使具备合法本地 Origin、bridge token 和 multipart，浏览器 apply 仍在消费正文前拒绝且不调用 Main Server；正常 Market subscribe 仍完成 descriptor 验证和内部 apply；本地 import 结果不带 Marketplace 归属。
+
+### EZ：把完整 `knowledge/` 纳入有写入屏障的存储迁移
+
+- 将 `knowledge` 加入 `MIGRATED_RUNTIME_ENTRY_NAMES`，让 source discovery、size estimate、copy、target verification、diagnostics 和 retained-root cleanup 复用同一名单，不另写只复制 `knowledge.db` 的特例。
+- 迁移整个目录，包括 SQLite file family、`packs.json`、override、durable staged jobs、activation commit ledger、mutation journal及未来同根状态；迁移过程不解释或升级知识 schema。
+- EW 的 mutation barrier 必须先于 source snapshot。仅靠文件数或字节数相同不能证明 SQLite 与 registry 来自同一时点。
+- 任一知识文件复制或验证失败沿用 migration failure：旧 policy 和旧根保持有效，target 不成为 current root，retained source 不得清理。
+
+验收：source 只有 `knowledge/` 时也被识别为运行时内容；数据库、registry、override、ledger 和嵌套 job 完整迁移；注入 copy/verify 失败后 policy不切换、旧根不删除；仅含 knowledge 的 retained root 仍进入显式清理流程。
+
+### FA：staging 只消费 canonical artifacts，根目录创建固定真实祖先
+
+- 不再把 `.staging/.../knowledge.db*` 作为处理或恢复输入。只要实现仍是“检查路径，再 `sqlite3.connect(path)`”，跨平台 TOCTOU 就仍存在；本轮选择移除该可重开派生缓存，而不是继续叠加路径检查。
+- staging 可信输入只包括现有同一描述符有界读取的 canonical pack、manifest、vectors 和 subscription。BM25/chunks 与 prepared embeddings 从这些制品确定性重建；需要临时 SQLite 时仅允许 worker 独占的 `:memory:` connection。
+- durable state 可以记录验证进度，但重启后仍重新读取并验证 canonical artifacts，不得凭 `verifying_index` 状态跳过。任意 staged `knowledge.db*` 项都进入稳定 `degraded/knowledge_staging_database_invalid`，不打开、不删除、不跟随目标。
+- `_create_trusted_knowledge_root()` 不再先 `mkdir(parents=True)`。从可信配置根开始逐组件固定祖先：POSIX 使用 directory fd 与 `openat/mkdirat` 的 no-follow 语义；Windows 使用拒绝 reparse、固定 final path 且不共享 delete 的目录 handle。不能证明身份的平台失败关闭。
+- root 与 `.staging` 都由同一 secure-directory-chain helper创建和验证后，才允许建立 lock、临时 job 目录或写 identity/state；live root 与 staging root 共用声明路径等于最终句柄路径的规范。
+
+验收：在旧 validation/connect 窗口替换主库或 sidecar 时，新实现没有任何 `.staging/.../knowledge.db` connect，外部 sentinel 不变；合法 prebuilt job重启后仅凭 canonical artifacts仍可安装；祖先 symlink/junction 指向外部时，外部目录中不产生 knowledge、staging、lock 或临时文件；普通真实祖先仍支持首次创建。
+
+### FB：注册表有界句柄读取，删除使用 durable intent
+
+- `packs.json` 建立唯一 strict reader：从同一 fd/handle证明普通文件、非 link/reparse、可信最终父目录和当前大小，再最多读取 `MAX_PACK_REGISTRY_BYTES + 1`。缺失与 invalid/unreadable 是不同状态；所有读取、状态、路由和 mutation 复用该入口。
+- writer 先生成 canonical UTF-8 bytes并检查同一上界，再 atomic replace；生成超限时旧 registry和 live rows均保持不变。读取期间增长、非法 UTF-8、JSON/schema 错误都失败关闭。
+- SQLite 与 JSON 无法组成单一事务，因此删除增加有界、严格且非重解析的 `pack-mutation.json`。intent 绑定 operation ID、pack/source identity、before/after registry digest及 canonical target bytes。
+- 删除顺序固定为：验证并预检 target registry → fsync intent与父目录 → 单个 SQLite `BEGIN IMMEDIATE` 中删除 source并写相同 operation ID 的 commit marker → atomic发布 target registry并fsync → 清理 intent和marker。
+- recovery 在服务初始化和任意 pack mutation 前取得同一锁顺序并按证据收敛：无 marker且 registry为before则保留旧状态并清理未提交intent；marker匹配则发布或确认after registry；第三种registry、损坏journal或marker不一致进入 `pack_registry_recovery_required`，不猜测重建。
+- 锁顺序固定为 package guard（若有）→ registry mutation lock → live database transaction；正常路径和 recovery 不得反向获取。
+
+验收：registry 是链接、目录、设备、FIFO、reparse 或上界加一时不跟随、不无界读取且 mutation 不触碰 SQLite；分别在 intent fsync、SQLite commit、registry replace 和 intent cleanup 后崩溃，重启都收敛为旧状态完整保留或删除完整完成；证据冲突稳定 degraded且不触碰外部目标。
+
+### FC：先释放终态目录容量，再裁剪 activation commit
+
+- activation commit 是现存 active job 的提交证明；只要对应目录仍存在，就不能因第 101 次 activation 被 ledger 独立裁掉。
+- live install 前、持有 jobs registry lock 时执行 retention reservation，为当前 job预留终态名额。按既有 TTL/数量顺序先重新证明候选目录是可信直接子目录和 terminal，再删除目录并确认不存在，最后才移除对应 commit。
+- 需要腾出名额但目录删除或 ledger写回失败时，当前 activation在 live install前返回稳定 `knowledge_job_retention_unavailable`；旧 active及commit保持可验证，当前job保留可重试状态。
+- reconciler只删除没有对应目录的孤儿commit；任一真实active目录的commit必须保留。普通list不得先因缺commit把目录降级，再使其逃过terminal prune。
+
+验收：100 个有效terminal目录激活第101个job时，先删除确定的最旧目录及其commit，随后99旧+1新全部可验证；注入rmtree失败时当前包尚未live install；在目录删除后、ledger写回前崩溃只产生可安全清理的孤儿commit，不降级其它active job。
+
+### FD：routing 读取失败明确传播，刷新只发布完整快照
+
+- `KnowledgeStore.load_routing_entries()` 成功时返回同一读事务中的 revision与完整records；SQLite、revision转换、row JSON或identity解析任一失败均抛出，不得返回 `(0, ())` 或跳过坏row后宣称完整。
+- 合法健康空库仍返回当前revision与空tuple。`_safe_load_records()` 是唯一把领域错误转换为 `None` 的自动路由边界，并记录不含用户数据的限频诊断。
+- `KnowledgeRoutingState.refresh()` 只在records完整加载且generation仍一致时原子发布新snapshot并清dirty。加载失败保持旧snapshot对象和dirty；首次失败且没有旧snapshot才表现为miss。
+- 成功加载合法空集合允许清空旧路由；加载期间generation变化则丢弃结果并重试。后台refresh失败时并发reader继续读取旧immutable snapshot，不出现短暂空窗口。
+
+验收：空数据库是成功空快照；SQLite busy/损坏row/override损坏均保持dirty且不覆盖旧可命中snapshot；输入恢复后下一次refresh原子切换；健康删除全部records仍能发布空快照。
+
+### FE：自动上下文以真实会话和逐卡身份准入、过滤和记账
+
+- task admission在锁内先清理done槽位，再检查同session single-flight，最后检查全局active count；只有容量未满时才调用factory并创建task。返回值区分 `started`、`session_busy`、`capacity_exhausted`，对应稳定diagnostics。
+- 实际LLM session创建时生成opaque runtime session key；同一key同时划分single-flight和cooldown。角色名、空字符串、用户文本都不能充当key；session teardown只清理该key的task/cooldown状态。
+- 建立规范 `KnowledgeCardIdentity(source_tag, normalized_title)`。`KnowledgeTurnContext`携带按最终渲染顺序排列的全部card identities，旧的首卡title/source只保留为兼容诊断。
+- 检索前取得该session未过期identity集合并作为excluded identities传给service；在knowledge/corpus配额和总limit截断前排除，使冷却首卡不占名额、新卡和候补卡仍可交付。
+- 只有context确实交付给当前turn后，才批量记录所有实际交付identity。miss、timeout、busy、capacity、异常或取消不写cooldown；检索与渲染过程不持全局锁。
+
+验收：32个未完成session后第33个请求在factory执行前被拒绝；同角色两个真实session互不共享task/cooldown；A+B交付后两卡都进入cooldown；A冷却而B或候补C新鲜时仍交付新卡；teardown后新session不继承旧十分钟窗口。
+
+### FF：公共知识工具结果向同一当前 turn 传播内部 owner
+
+- Tool执行结果增加仅进程内消费的结构化route owner；公共知识handler只在实际完成受信本地知识调用并产生应归属结果时返回 `public_knowledge`，普通工具、失败、无效结果和远端工具不能声明该owner。
+- owner不能由工具名称、输出文本或用户可控metadata猜测；只有内建注册来源可产生规范owner，wire output仍不向模型或插件序列化该字段。
+- offline/realtime共用的tool-call提交点在执行前捕获当前turn/request identity，完成后仅写回同一个仍存活的turn；迟到结果、已结束请求或已切换turn直接丢弃owner。
+- turn end继续复用现有owner输出和agent analyze守门；正常、取消、异常和discard路径清理turn-scoped owner，不能污染下一轮。
+
+验收：公共知识工具成功后对应turn end携带`public_knowledge`并跳过普通后台分析；普通工具、失败或迟到的旧turn结果不取得owner；offline与realtime使用同一组反例。
+
+### FG：向量状态由单一枚举映射颜色、文案和概览
+
+- 建立纯函数 `packVectorState(pack)`，固定返回 `none`、`complete`、`building`、`partial` 或 `waiting`：无chunks为none；ready达到total为complete；embedding enabled且ready不足为building（包括ready为0）；disabled但已有部分ready为partial；其余为waiting。
+- class、label和overview tone/meta只映射该enum，不得再次读取ready/total/enabled。评论反例必须同时得到progress class和`vectorBuilding`文案。
+- 本轮沿用既有i18n协议；partial使用现有warning与未完成类文案，不新增翻译键。若产品要求“部分可用”新文案，另行作为用户文案变更处理。
+
+验收：表驱动覆盖none、complete、zero-ready building、partial disabled和zero-ready waiting，断言class、label、overview一致。
+
+### `discussion_r3878657157`：schema 6 fixture 是误报
+
+`tests/unit/test_knowledge_hybrid_real_model_eval.py::_write_vector_database()` 写入schema 6，随后 evaluator调用生产 `assert_supported_schema()`。当前schema为7，但生产契约明确接受不高于当前版本的旧schema；只拒绝future version、marker冲突/缺失和非规范marker。使用 `uv` 运行精确回归 `test_vector_corpus_excludes_disabled_entries` 得到 `1 passed in 2.82s`，证明不会在disabled-entry断言前因schema不兼容失败。本线程不修改fixture；回复该调用链和测试证据后直接resolve。
+
+## 第三十轮实施顺序与关闭条件
+
+1. 文档提交：本节、状态说明和评论矩阵。
+2. 关闭屏障提交：EW 的统一 cancellation helper、tracked mutation worker与跨进程root barrier。
+3. 迁移提交：EZ 接入 EW barrier后再把 `knowledge/` 纳入copy/verify；两项顺序不可交换。
+4. 文件身份提交：FA 移除staging文件型SQLite并建立secure directory chain。
+5. 注册表一致性提交：FB 的strict reader与durable removal protocol；随后FC协调terminal目录与commit保留。
+6. 路由提交：FD 严格错误信号和last-good snapshot发布。
+7. 会话提交：FE 的准入/session/card identity与FF的tool owner传播。
+8. 市场提交：EX 的absolute deadline与EY移除browser apply能力。
+9. 前端提交：FG 单一vector state及现有相邻测试。
+10. 回归修正提交：只包含上述边界暴露的必要修正，不扩张无关协议。
+
+每一步独立commit以便审查，但本轮全部实现、测试与回复证据完成后统一一次push，不逐个推送。Python测试只通过项目 `uv` 环境运行；扩展既有测试文件，不新建测试文件。前端运行现有Knowledge Manager/Vitest回归；同时执行受影响Ruff、compileall、构建/类型检查与`git diff --check`。
+
+关闭条件：18条有效conversation分别具备实现提交、精确反例和相邻宽回归后才回复并resolve；schema误报附上述1 passed证据单独关闭。最后再次使用GraphQL完整分页读取全部review threads，不能受100条限制影响。只有远端head包含全部实现、统一推送成功、CI与分页结果齐全后，才能把文首状态改为“第三十轮已实施”。
