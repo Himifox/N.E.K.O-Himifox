@@ -399,7 +399,9 @@ async def _settle_knowledge_unsubscribe(
             deadline=work_deadline,
             json=removal_request,
         )
-    except _KnowledgeTaskError:
+    except _KnowledgeTaskError as exc:
+        if exc.code == "main_server_rejected":
+            _raise_unsubscribe_error("subscription_removal_rejected")
         result = await _confirm_removal_operation(
             removal_operation_id,
             deadline=work_deadline,

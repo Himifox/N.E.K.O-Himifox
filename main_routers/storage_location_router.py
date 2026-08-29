@@ -1239,7 +1239,7 @@ def _cleanup_retained_runtime_root(
     anchor_root: Path,
     target_root: Path | str | None = None,
     copied_entries: dict | None = None,
-) -> None:
+) -> tuple[str, ...]:
     if not is_retained_root_cleanup_available(
         retained_path,
         current_root=current_root,
@@ -1294,6 +1294,11 @@ def _cleanup_retained_runtime_root(
             retained_path.rmdir()
         except OSError:
             pass
+    return tuple(
+        entry_name
+        for entry_name in MIGRATED_RUNTIME_ENTRY_NAMES
+        if os.path.lexists(retained_path / entry_name)
+    )
 
 
 async def _release_storage_startup_barrier_if_needed(*, reason: str) -> None:
@@ -1530,7 +1535,7 @@ async def _post_storage_location_retained_source_cleanup_locked(
     anchor_root = compute_anchor_root(config_manager, current_root=current_root)
     try:
         # 这一步 rmtree 保留目录，同样不能在取消时把 _storage_mutation_lock 让出去
-        await _run_locked_storage_job(
+        remaining_entries = await _run_locked_storage_job(
             lambda: _cleanup_retained_runtime_root(
                 retained_path,
                 current_root=current_root,
@@ -1547,6 +1552,16 @@ async def _post_storage_location_retained_source_cleanup_locked(
             "ok": False,
             "error_code": "retained_source_cleanup_failed",
             "error": f"清理旧数据保留目录失败: {exc}",
+        }
+
+    if remaining_entries:
+        response.status_code = 409
+        return {
+            "ok": False,
+            "error_code": "retained_source_cleanup_incomplete",
+            "error": "旧数据目录仍含缺少复制证据的运行时条目，已保留供人工确认。",
+            "retained_root": expected_retained_root,
+            "remaining_entries": list(remaining_entries),
         }
 
     def _persist_cleanup_result() -> None:

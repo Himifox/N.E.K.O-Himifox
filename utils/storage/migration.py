@@ -913,6 +913,25 @@ def run_pending_storage_migration(
             "anchor_root": str(normalized_anchor_root),
         }
 
+    transaction_root: Path | None = None
+
+    def _cleanup_unpublished_transaction() -> None:
+        if transaction_root is None:
+            return
+        status = str(payload.get("status") or "").strip().lower()
+        if status not in {
+            STORAGE_MIGRATION_STATUS_PREFLIGHT,
+            STORAGE_MIGRATION_STATUS_COPYING,
+        }:
+            return
+        try:
+            _remove_existing_path(transaction_root)
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Failed to remove unpublished storage migration transaction: %s",
+                cleanup_exc,
+            )
+
     try:
         source_root = normalize_runtime_root(str(payload.get("source_root") or "").strip())
         target_root = normalize_runtime_root(str(payload.get("target_root") or "").strip())
@@ -1192,6 +1211,7 @@ def run_pending_storage_migration(
             selection_source=selection_source,
         )
     except StorageMigrationError as exc:
+        _cleanup_unpublished_transaction()
         if exc.error_code in {
             "knowledge_mutation_busy",
             "knowledge_migration_repair_required",
@@ -1200,6 +1220,7 @@ def run_pending_storage_migration(
             return _finish_retryable(exc.error_code, exc.message)
         return _finish_failure(exc.error_code, exc.message)
     except Exception as exc:
+        _cleanup_unpublished_transaction()
         logger.exception("Unexpected storage migration failure")
         wrapped_exc = StorageMigrationError("storage_migration_unexpected", f"执行存储迁移时发生未预期错误: {exc}")
         return _finish_failure(wrapped_exc.error_code, wrapped_exc.message)

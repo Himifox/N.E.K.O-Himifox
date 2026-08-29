@@ -1127,12 +1127,14 @@ async def test_text_stream_discard_callback_keeps_original_request_owner(monkeyp
     mgr._active_text_request_id = "req-B"
     mgr.websocket = _FakeConnectedWebSocket()
     mgr._clear_tts_pipeline = AsyncMock()
+    mgr._clear_tool_turn_evidence = Mock()
 
     await discard_callback("guard", 1, 3, False, None)
 
     assert mgr.websocket.sent == []
     assert mgr._active_text_request_id == "req-B"
     mgr._clear_tts_pipeline.assert_not_awaited()
+    mgr._clear_tool_turn_evidence.assert_not_called()
     assert {
         "type": "system",
         "data": "response_discarded_clear",

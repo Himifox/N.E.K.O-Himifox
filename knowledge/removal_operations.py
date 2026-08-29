@@ -16,6 +16,8 @@ from .pack_jobs import trusted_live_root
 REMOVAL_OPERATIONS_NAME = "pack-remove-operations.json"
 MAX_REMOVAL_OPERATIONS_BYTES = 512 * 1024
 MAX_TERMINAL_REMOVAL_OPERATIONS = 100
+MAX_PENDING_REMOVAL_OPERATIONS = 32
+PENDING_REMOVAL_OPERATION_TTL_SECONDS = 24 * 60 * 60
 _OPERATION_ID = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _STATUSES = frozenset(("pending", "committed", "failed"))
 
@@ -183,7 +185,9 @@ def _load_operations(path: Path) -> dict[str, Any]:
             or status not in _STATUSES
             or (status == "pending" and result is not None)
             or (status != "pending" and not isinstance(result, dict))
+            or isinstance(value.get("created_at"), bool)
             or not isinstance(value.get("created_at"), (int, float))
+            or isinstance(value.get("updated_at"), bool)
             or not isinstance(value.get("updated_at"), (int, float))
             or isinstance(value.get("attempts"), bool)
             or not isinstance(value.get("attempts"), int)
@@ -205,7 +209,29 @@ def _load_operations(path: Path) -> dict[str, Any]:
 
 
 def _write_operations(path: Path, payload: dict[str, Any]) -> None:
-    operations = payload["operations"]
+    now = time.time()
+    operations = {
+        operation_id: (
+            {
+                **record,
+                "status": "failed",
+                "result": {"ok": False, "reason": "removal_operation_expired"},
+                "updated_at": now,
+            }
+            if record["status"] == "pending"
+            and now - float(record["updated_at"])
+            > PENDING_REMOVAL_OPERATION_TTL_SECONDS
+            else record
+        )
+        for operation_id, record in payload["operations"].items()
+    }
+    pending_count = sum(
+        record["status"] == "pending" for record in operations.values()
+    )
+    if pending_count > MAX_PENDING_REMOVAL_OPERATIONS:
+        raise KnowledgeRemovalOperationError(
+            "knowledge_removal_operation_registry_full"
+        )
     terminal = sorted(
         (
             (operation_id, record)

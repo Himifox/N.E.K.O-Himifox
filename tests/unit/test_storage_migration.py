@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,10 +64,11 @@ def _make_anchor_root_config_manager(tmp_path: Path):
 def _write_knowledge_tree(root: Path, *, marker: str = "source") -> None:
     knowledge_root = root / "knowledge"
     knowledge_root.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(knowledge_root / "knowledge.db") as connection:
-        connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        connection.execute("INSERT INTO metadata VALUES ('schema_version', '7')")
-        connection.execute("PRAGMA user_version = 7")
+    with closing(sqlite3.connect(knowledge_root / "knowledge.db")) as connection:
+        with connection:
+            connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute("INSERT INTO metadata VALUES ('schema_version', '7')")
+            connection.execute("PRAGMA user_version = 7")
     (knowledge_root / "packs.json").write_text(
         '{"schema_version":1,"packs":{}}', encoding="utf-8"
     )
@@ -142,6 +144,36 @@ def test_retained_root_cleanup_rejects_paths_that_contain_protected_roots(tmp_pa
         anchor_root=anchor_root,
         target_root=target_root,
     )
+
+
+@pytest.mark.unit
+def test_staging_failure_removes_partial_transaction(monkeypatch, tmp_path):
+    from utils.storage import migration as migration_module
+
+    config_manager = _make_config_manager(tmp_path)
+    source_root = config_manager.app_docs_dir
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    (source_root / "config").mkdir(parents=True, exist_ok=True)
+    (source_root / "config" / "characters.json").write_text("{}", encoding="utf-8")
+    pending = create_pending_storage_migration(
+        config_manager,
+        source_root=source_root,
+        target_root=target_root,
+        selection_source="recommended",
+    )
+    transaction_root = migration_module._transaction_path(target_root, pending["txid"])
+
+    def fail_mid_copy(_source_entry, staged_entry):
+        staged_entry.mkdir(parents=True)
+        (staged_entry / "partial.tmp").write_text("partial", encoding="utf-8")
+        raise OSError("fixture staging failure")
+
+    monkeypatch.setattr(migration_module, "_copy_runtime_entry", fail_mid_copy)
+    result = run_pending_storage_migration(config_manager)
+
+    assert result["completed"] is False
+    assert result["error_code"] == "storage_migration_unexpected"
+    assert not transaction_root.exists()
 
 
 @pytest.mark.unit

@@ -1733,6 +1733,40 @@ async def test_cancelling_update_still_removes_the_older_installed_pack(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_rejected_remove_does_not_poll_or_start_drain(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def no_active(*_args, **_kwargs):
+        return None
+
+    async def owned(*_args, **_kwargs):
+        return "fixture-pack", "knowledge/fixture-pack"
+
+    async def fake_main(method, path, **_kwargs):
+        calls.append((method, path))
+        raise module._KnowledgeTaskError("main_server_rejected", "fixture")
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_cancel_active_subscription", no_active)
+    monkeypatch.setattr(module, "_resolve_owned_subscription", owned)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == {"code": "subscription_removal_rejected"}
+    assert calls == [("POST", "packs/remove")]
+    assert 7 not in module._unsubscribe_settlements
+
+
+@pytest.mark.asyncio
 async def test_uncertain_remove_transfers_guard_to_same_operation_drain(monkeypatch):
     committed = asyncio.Event()
     posts: list[str] = []

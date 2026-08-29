@@ -28,7 +28,11 @@ from knowledge.mutation_runtime import (
 )
 from knowledge.source_registry import get_source, get_sources
 from knowledge.store import KnowledgeStoreError
-from knowledge.packs import MAX_PACK_BYTES, validate_pack
+from knowledge.packs import (
+    MAX_PACK_BYTES,
+    KnowledgePackRecoveryRequiredError,
+    validate_pack,
+)
 from knowledge.prebuilt_index import (
     MAX_PREBUILT_MANIFEST_BYTES,
     MAX_PREBUILT_VECTOR_BYTES,
@@ -342,6 +346,8 @@ async def set_public_knowledge_entry_disabled(request: Request):
         )
     except CatalogOverrideError:
         return {"ok": False, "reason": "catalog_override_invalid"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     return {"ok": True, "disabled": disabled, "disabled_entries": count}
 
 
@@ -383,6 +389,8 @@ async def import_public_knowledge_pack(request: Request):
         )
     except KnowledgeJobRegistryError:
         return {"ok": False, "reason": "knowledge_job_registry_invalid"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -476,6 +484,8 @@ async def apply_public_knowledge_subscription(
         )
     except KnowledgeJobRegistryError:
         return {"ok": False, "reason": "knowledge_job_registry_invalid"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -499,11 +509,14 @@ async def cancel_public_knowledge_pack_job(request: Request):
     if not job_id:
         return {"ok": False, "reason": "invalid_request"}
     service = await _service_async()
-    cancelled = await run_knowledge_writer(
-        service.knowledge_root,
-        service.cancel_pack_job,
-        job_id,
-    )
+    try:
+        cancelled = await run_knowledge_writer(
+            service.knowledge_root,
+            service.cancel_pack_job,
+            job_id,
+        )
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
 
 
@@ -517,11 +530,14 @@ async def discard_degraded_public_knowledge_pack_job(request: Request):
     if not job_id:
         return {"ok": False, "reason": "invalid_request"}
     service = await _service_async()
-    discarded = await run_knowledge_writer(
-        service.knowledge_root,
-        service.discard_degraded_pack_job,
-        job_id,
-    )
+    try:
+        discarded = await run_knowledge_writer(
+            service.knowledge_root,
+            service.discard_degraded_pack_job,
+            job_id,
+        )
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     return {"ok": discarded, "reason": "" if discarded else "not_found"}
 
 
@@ -543,6 +559,10 @@ async def set_public_knowledge_pack_auto_context(request: Request):
             pack_id,
             enabled=enabled,
         )
+    except KnowledgePackRecoveryRequiredError:
+        return {"ok": False, "reason": "pack_registry_recovery_required"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "auto_context": enabled}
@@ -566,6 +586,10 @@ async def set_public_knowledge_pack_index_policy(request: Request):
             pack_id,
             local_embedding_enabled=enabled,
         )
+    except KnowledgePackRecoveryRequiredError:
+        return {"ok": False, "reason": "pack_registry_recovery_required"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "local_embedding_enabled": enabled}
@@ -592,6 +616,10 @@ async def set_public_knowledge_pack_material_type(request: Request):
             pack_id,
             material_type=material_type,
         )
+    except KnowledgePackRecoveryRequiredError:
+        return {"ok": False, "reason": "pack_registry_recovery_required"}
+    except KnowledgeMutationAdmissionClosed:
+        return _knowledge_mutation_stopping()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "material_type_override": material_type}
@@ -745,7 +773,11 @@ async def _execute_pack_removal_operation(
 
 def _removal_operation_response(record: dict[str, Any]) -> dict[str, Any]:
     result = record.get("result")
-    response = dict(result) if isinstance(result, dict) else {"ok": True}
+    response = (
+        dict(result)
+        if isinstance(result, dict)
+        else {"ok": False, "reason": "removal_in_progress"}
+    )
     return {
         **response,
         "operation_id": str(record["operation_id"]),
@@ -774,6 +806,8 @@ async def _remove_pack_once(
         return {"ok": False, "reason": "subscription_identity_mismatch"}
     except KnowledgeStoreError:
         return {"ok": False, "reason": "knowledge_root_untrusted"}
+    except KnowledgePackRecoveryRequiredError:
+        return {"ok": False, "reason": "pack_registry_recovery_required"}
     except ValueError:
         if resumed:
             return {
@@ -785,8 +819,12 @@ async def _remove_pack_once(
             }
         return {"ok": False, "reason": "not_found"}
     except KnowledgeMutationAdmissionClosed:
-        return {"ok": False, "reason": "knowledge_mutation_stopping"}
+        return _knowledge_mutation_stopping()
     return {"ok": True, **result}
+
+
+def _knowledge_mutation_stopping() -> dict[str, Any]:
+    return {"ok": False, "reason": "knowledge_mutation_stopping"}
 
 
 @router.get("/diagnostics/recent")

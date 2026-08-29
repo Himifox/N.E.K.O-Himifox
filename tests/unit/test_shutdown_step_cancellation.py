@@ -328,17 +328,23 @@ async def test_writer_remains_tracked_after_coordinator_cancel(tmp_path) -> None
         await coordinator
 
     request_knowledge_writer_stop()
-    assert knowledge_writer_state() == (False, 1)
-    assert not await finish_knowledge_writer_stop(
-        deadline_monotonic=time.monotonic() + 0.01
-    )
+    try:
+        assert knowledge_writer_state() == (False, 1)
+        assert not await finish_knowledge_writer_stop(
+            deadline_monotonic=time.monotonic() + 0.01
+        )
 
-    release.set()
-    assert await finish_knowledge_writer_stop(
-        deadline_monotonic=time.monotonic() + 1.0
-    )
-    assert knowledge_writer_state() == (False, 0)
-    open_knowledge_writer_admission()
+        release.set()
+        assert await finish_knowledge_writer_stop(
+            deadline_monotonic=time.monotonic() + 1.0
+        )
+        assert knowledge_writer_state() == (False, 0)
+    finally:
+        release.set()
+        await finish_knowledge_writer_stop(
+            deadline_monotonic=time.monotonic() + 1.0
+        )
+        open_knowledge_writer_admission()
 
 
 @pytest.mark.unit

@@ -782,7 +782,7 @@ class TurnMixin:
         if not will_retry and not _is_too_long_final and _truncated_text is None:
             self._text_route_owners.pop(str(active_request_id or ""), None)
             clear_tool_evidence = getattr(self, "_clear_tool_turn_evidence", None)
-            if callable(clear_tool_evidence):
+            if may_clear_shared_output() and callable(clear_tool_evidence):
                 clear_tool_evidence()
             # Compare-and-clear：仅当共享字段仍是本轮快照时才清空。
             if self._active_text_request_id == active_request_id:

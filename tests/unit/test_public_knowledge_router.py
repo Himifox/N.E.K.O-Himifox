@@ -22,15 +22,172 @@ from knowledge.prebuilt_index import (
 )
 from knowledge.subscriptions import canonical_pack_bytes
 from knowledge.store import KnowledgeStoreError
+from tests.fake_clock import patch_module_clock
 
 
 @pytest.fixture(autouse=True)
-def _clear_pack_removal_tasks():
+async def _clear_pack_removal_tasks():
     import main_routers.public_knowledge_router as module
 
     module._pack_removal_tasks.clear()
     yield
+    tasks = tuple(module._pack_removal_tasks.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     module._pack_removal_tasks.clear()
+
+
+def _removal_request() -> dict[str, str]:
+    return {
+        "pack_id": "market-fixture",
+        "expected_provider": "plugin-market",
+        "expected_provider_package_id": "7",
+        "expected_remote_id": "knowledge/market-fixture",
+    }
+
+
+def test_removal_operation_registry_rejects_bool_timestamps(tmp_path):
+    from knowledge.removal_operations import (
+        KnowledgeRemovalOperationError,
+        begin_removal_operation,
+        get_removal_operation,
+    )
+
+    operation_id = "remove-operation-bool-time-0001"
+    begin_removal_operation(tmp_path, operation_id, _removal_request())
+    path = tmp_path / "pack-remove-operations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["operations"][operation_id]["updated_at"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        KnowledgeRemovalOperationError,
+        match="knowledge_removal_operation_registry_invalid",
+    ):
+        get_removal_operation(tmp_path, operation_id)
+
+
+def test_removal_operation_registry_bounds_pending_records(monkeypatch, tmp_path):
+    import knowledge.removal_operations as operations
+
+    monkeypatch.setattr(operations, "MAX_PENDING_REMOVAL_OPERATIONS", 1)
+    now = [100.0]
+    patch_module_clock(monkeypatch, operations, time=lambda: now[0])
+    first_id = "remove-operation-pending-cap-0001"
+    second_id = "remove-operation-pending-cap-0002"
+    operations.begin_removal_operation(tmp_path, first_id, _removal_request())
+
+    with pytest.raises(
+        operations.KnowledgeRemovalOperationError,
+        match="knowledge_removal_operation_registry_full",
+    ):
+        operations.begin_removal_operation(tmp_path, second_id, _removal_request())
+
+    now[0] += operations.PENDING_REMOVAL_OPERATION_TTL_SECONDS + 1
+    operations.begin_removal_operation(tmp_path, second_id, _removal_request())
+    assert operations.get_removal_operation(tmp_path, first_id)["result"] == {
+        "ok": False,
+        "reason": "removal_operation_expired",
+    }
+    assert operations.get_removal_operation(tmp_path, second_id)["status"] == "pending"
+
+
+def test_pending_removal_operation_response_is_not_successful():
+    import main_routers.public_knowledge_router as module
+
+    response = module._removal_operation_response(
+        {
+            "operation_id": "remove-operation-pending-0001",
+            "status": "pending",
+            "result": None,
+        }
+    )
+
+    assert response == {
+        "ok": False,
+        "reason": "removal_in_progress",
+        "operation_id": "remove-operation-pending-0001",
+        "operation_status": "pending",
+    }
+
+
+def test_pack_setting_surfaces_registry_recovery(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+    from knowledge.packs import KnowledgePackRecoveryRequiredError
+
+    async def recovery_required(*_args, **_kwargs):
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+
+    monkeypatch.setattr(module, "run_knowledge_writer", recovery_required)
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.post(
+            "/api/public-knowledge/packs/auto-context",
+            json={"pack_id": "market-fixture", "enabled": True},
+        )
+
+    assert response.json() == {
+        "ok": False,
+        "reason": "pack_registry_recovery_required",
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    (
+        ("/api/public-knowledge/packs/jobs/cancel", {"job_id": "fixture-job"}),
+        ("/api/public-knowledge/packs/jobs/discard", {"job_id": "fixture-job"}),
+        (
+            "/api/public-knowledge/packs/auto-context",
+            {"pack_id": "market-fixture", "enabled": True},
+        ),
+        (
+            "/api/public-knowledge/packs/index-policy",
+            {"pack_id": "market-fixture", "local_embedding_enabled": True},
+        ),
+        (
+            "/api/public-knowledge/packs/material-type",
+            {"pack_id": "market-fixture", "material_type": "knowledge"},
+        ),
+    ),
+)
+def test_pack_mutations_surface_writer_shutdown(monkeypatch, tmp_path, path, payload):
+    import main_routers.public_knowledge_router as module
+    from knowledge.mutation_runtime import KnowledgeMutationAdmissionClosed
+
+    async def admission_closed(*_args, **_kwargs):
+        raise KnowledgeMutationAdmissionClosed("knowledge_mutation_stopping")
+
+    monkeypatch.setattr(module, "run_knowledge_writer", admission_closed)
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.post(path, json=payload)
+
+    assert response.json() == {
+        "ok": False,
+        "reason": "knowledge_mutation_stopping",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resumed_remove_reports_registry_recovery(monkeypatch, tmp_path):
+    import main_routers.public_knowledge_router as module
+    from knowledge.packs import KnowledgePackRecoveryRequiredError
+
+    async def recovery_required(*_args, **_kwargs):
+        raise KnowledgePackRecoveryRequiredError("pack_registry_recovery_required")
+
+    monkeypatch.setattr(module, "run_knowledge_writer", recovery_required)
+    result = await module._remove_pack_once(
+        SimpleNamespace(
+            knowledge_root=tmp_path,
+            cancel_and_remove_pack=lambda *_args, **_kwargs: None,
+        ),
+        _removal_request(),
+        resumed=True,
+    )
+
+    assert result == {"ok": False, "reason": "pack_registry_recovery_required"}
 
 
 def _entry(title: str, source: str, *, summary: str = "A compact summary") -> KnowledgeEntry:

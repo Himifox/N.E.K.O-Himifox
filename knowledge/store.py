@@ -1531,6 +1531,7 @@ class KnowledgeStore:
     def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:
         """Read the database revision and routeable cards in one transaction."""
         with self._connection() as connection:
+            connection.execute("BEGIN")
             revision_row = connection.execute(
                 "SELECT value FROM metadata WHERE key = 'entries_revision'"
             ).fetchone()
