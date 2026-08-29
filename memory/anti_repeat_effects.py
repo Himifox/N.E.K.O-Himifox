@@ -31,8 +31,8 @@ from utils.config_manager import get_config_manager
 from utils.file_utils import atomic_write_json
 from utils.logger_config import get_module_logger
 from utils.natural_expression_candidates import (
+    _protected_spans,
     _URL_RE,
-    _runtime_protected_spans,
     normalize_language,
 )
 
@@ -72,6 +72,11 @@ _VALID_OUTCOMES = _BLOCKED_OUTCOMES | {
     "regen_guard_passed",
     "abandoned_user_interaction",
 }
+# A yes/no question about ONE fragment: does it hold anything protected at
+# all. Span MASKING is not this pattern's job -- ``_without_protected_text``
+# asks the miner, because rebuilding the union here is what let the two
+# drift. The shapes below still have to match the miner's, since a fragment
+# this misses is a fragment that reaches the sidecar.
 _PROTECTED_RE = re.compile(
     r"```[\s\S]*?```|`[^`\r\n]+`|"
     # Same bounded multiline containers as the miner's `_TEMPLATE_RE`, and for
@@ -88,10 +93,10 @@ _PROTECTED_RE = re.compile(
     r"\{\{(?:(?!\}\})[^\r\n])*(?:\r?\n(?:(?!\}\})[^\r\n])*){0,3}\}\}|"
     r"\{%(?:(?!%\})[^\r\n])*(?:\r?\n(?:(?!%\})[^\r\n])*){0,3}%\}|"
     r"\{\#(?:(?!\#\})[^\r\n])*(?:\r?\n(?:(?!\#\})[^\r\n])*){0,3}\#\}|"
-    # The SAME two alternatives as the miner. This pattern is the one the
-    # sidecar actually consults -- ``_TEMPLATE_RE`` is not in
-    # ``_runtime_protected_spans`` -- so patching only the miner leaves the
-    # 120-day leak untouched while every miner-side test goes green.
+    # The SAME two alternatives as the miner. ``_TEMPLATE_RE`` is not in
+    # ``_runtime_protected_spans``, so a fragment check built on the runtime
+    # spans alone would let these through and the payload would reach the
+    # 120-day sidecar.
     r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
     r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
     # Must LOOK LIKE A TAG, exactly as the miner requires. Left loose here it
@@ -157,8 +162,30 @@ def _safe_fragment(value: str) -> str:
 
 
 def _without_protected_text(value: str) -> str:
-    spans = _runtime_protected_spans(value)
-    spans.extend(match.span() for match in _PROTECTED_RE.finditer(value))
+    """Blank out every span the MINER protects, by asking the miner.
+
+    Rebuilding the union here is what let the two drift. The miner filters
+    its template matches through ``_starts_inside``; this side did not, so a
+    match that STARTED inside a runtime span and ENDED past it advanced the
+    cursor to its end and swallowed the speech in between. Measured on
+    21951 synthetic drafts: 185 where this side masked more than the miner,
+    and on those the signature was lost and the decision landed
+    unattributed.
+
+    Adding that one filter here is NOT enough, and the reason is why this
+    delegates instead. ``_PROTECTED_RE`` carries two alternatives
+    ``_TEMPLATE_RE`` does not -- the fenced and inline code forms, which the
+    miner covers with scanners rather than this regex -- so when one of them
+    fires, ``finditer`` resumes at a different offset than the miner's sweep
+    and the two find different matches downstream.
+
+    The direction of the old divergence was one-way: 0 of those 21951
+    drafts had the miner masking something this side did not, so nothing was
+    ever over-persisted. ``_PROTECTED_RE`` stays for ``_safe_fragment``,
+    which asks a yes/no question about one fragment rather than building a
+    span set.
+    """
+    spans = list(_protected_spans(value))
     spans.sort()
     chunks: list[str] = []
     cursor = 0

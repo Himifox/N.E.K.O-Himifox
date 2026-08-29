@@ -1854,6 +1854,27 @@ _MASKING_PARITY_CASES = [
     ("real code container", "see <code>SECRET_TOKEN</code> ok"),
     ("unterminated code container", "use <code> then SECRET_TOKEN"),
     ("attributed tag", "看看 <div class=x> 好不好"),
+    # A container OPENER inside a runtime span, with its closer outside it.
+    # The miner filters such a match out; this side did not, so the match
+    # ran from inside the code to the closer and blanked the speech between
+    # them. Every row above has the whole match either inside or outside a
+    # runtime span, which is why they agreed while these did not.
+    ("url then template opener",
+     "看看 https://example.com/a${x 我们一起去吃饭吧 } 好不好"),
+    ("comment holding a template opener",
+     "<!-- {{ --> 我们一起去吃饭吧 }} 好不好"),
+    ("raw-text container holding a template opener",
+     "<code>{{</code> 我们一起去吃饭吧 }} 好不好"),
+    # Adding the miner's _starts_inside filter here and keeping a separate
+    # sweep is NOT the same fix, and this row is where they part. Once one
+    # of the two alternatives _PROTECTED_RE carries and _TEMPLATE_RE does
+    # not (the inline-code form) has fired, finditer resumes at a different
+    # offset than the miner's sweep, and the two go on to find different
+    # matches -- here, whether the stray </code> is masked at all.
+    ("inline code shifts the sweep off the miner's offsets",
+     "`看 {{`\n</code> 我们一起去吃饭吧 }} 好不好"),
+    ("indented code holding a template opener",
+     "hi\n\n    tpl {{\n我们一起去吃饭吧 }} ok"),
 ]
 
 
@@ -1890,6 +1911,40 @@ def test_the_miner_and_the_sidecar_mask_the_same_text(label, text):
     normalise = lambda value: re.sub(r"\s+", " ", value).strip()  # noqa: E731
 
     assert normalise(mined) == normalise(masked), label
+
+
+def test_a_container_opener_inside_code_does_not_cost_the_signature():
+    """The user-visible half of the nested-span divergence.
+
+    The parity test above compares the sidecar against the miner, and once
+    the sidecar asks the miner for its spans that comparison can only agree.
+    This one asserts the BEHAVIOUR instead, so the fix still has something
+    it can fail: a decision whose evidence sits after a stray template
+    opener used to land unattributed, and a signature is what the panel
+    counts.
+    """
+    drafts = (
+        "看看 https://example.com/a${x 我们一起去吃饭吧 } 好不好",
+        "<!-- {{ --> 我们一起去吃饭吧 }} 好不好",
+        "<code>{{</code> 我们一起去吃饭吧 }} 好不好",
+    )
+    for draft in drafts:
+        signature = build_repeat_signature(
+            draft, ["我们一起去吃饭吧"], language="zh",
+        )
+        assert signature is not None, draft
+        assert signature.phrase == "我们一起去吃饭吧", draft
+
+    # The dual, and the direction that would matter if it broke: a payload
+    # genuinely inside a container is still refused.
+    assert build_repeat_signature(
+        "run ```\nSECRET_TOKEN=abc\n``` now",
+        ["SECRET_TOKEN=abc"],
+        language="en",
+    ) is None
+    assert build_repeat_signature(
+        "see {{ SECRET_TOKEN }} ok", ["SECRET_TOKEN"], language="en",
+    ) is None
 
 
 def test_the_dropped_conversational_signature_comes_back():
