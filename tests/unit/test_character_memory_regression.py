@@ -5836,3 +5836,101 @@ def test_a_failed_rename_releases_the_write_fence(tmp_path):
             bucket["counters"]["detected"]
             for bucket in payload["daily_buckets"].values()
         ) == 1
+
+
+@pytest.mark.unit
+def test_a_late_source_write_does_not_leave_the_old_directory_behind(tmp_path):
+    """The source needs the fence for the same reason the target does.
+
+    Retirement refuses to CREATE a directory but permits writing into one
+    that exists -- and the source directory exists for the whole merge. On
+    the child-by-child path a write for the old name can recreate a file
+    after the children are moved and before ``_merge_directories`` rmdir()s
+    the source. That rmdir swallows its failure, so the rename reports
+    success while memory/<old_name>/ survives with content and the
+    renamed-away identity still looks like it has memory.
+
+    The target must already exist, or the merge takes the whole-directory
+    move instead and never reaches the rmdir at all.
+    """
+    import memory.anti_repeat_effects as effects_module
+    import utils.character_memory as character_memory
+
+    cm = _make_config_manager(tmp_path)
+    memory_root = Path(cm.memory_dir)
+
+    with _isolated_sidecar_stores(memory_root) as (store, corpus, greeting):
+        for sidecar in (store, corpus, greeting):
+            sidecar._config_manager = cm
+
+        decision = effects_module.AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        )
+
+        # The source carries one file, and the TARGET already exists with a
+        # non-colliding one, which is what forces the child-by-child path.
+        (memory_root / "Source").mkdir(parents=True)
+        (memory_root / "Source" / "facts.json").write_text(
+            "[1]", encoding="utf-8"
+        )
+        (memory_root / "Target").mkdir()
+        (memory_root / "Target" / "persona.json").write_text(
+            "[2]", encoding="utf-8"
+        )
+
+        real_move = character_memory._move_path
+        fired = []
+
+        def _write_for_the_old_name_after_the_move(source_path, target_path):
+            moved = real_move(source_path, target_path)
+            if not fired:
+                fired.append(True)
+                # The old identity is still in flight and records now --
+                # after its children moved, before the rmdir.
+                store.record_decision(
+                    "Source", decision, now=1_700_000_000.0
+                )
+            return moved
+
+        with patch.object(
+            character_memory, "_move_path", _write_for_the_old_name_after_the_move
+        ):
+            character_memory.rename_character_memory_storage(
+                cm, "Source", "Target",
+            )
+
+        assert fired, "the in-flight write never happened"
+        assert not (memory_root / "Source").exists(), (
+            "the renamed-away identity kept a directory, so it still looks "
+            "like it has memory: %s"
+            % sorted(
+                q.name for q in (memory_root / "Source").iterdir()
+            )
+        )
+        # The dual: the rename still did its job.
+        assert (memory_root / "Target" / "facts.json").read_text(
+            encoding="utf-8"
+        ) == "[1]"
+        assert (memory_root / "Target" / "persona.json").read_text(
+            encoding="utf-8"
+        ) == "[2]"
+
+        # The fence has to come DOWN for the source too. After the rename it
+        # is retired, so its writes are refused for that reason alone and a
+        # leak hides -- until the name is rescued back, when a fence still up
+        # would silence it for the life of the process.
+        from utils.character_memory import is_character_write_fenced
+
+        assert not is_character_write_fenced("Source")
+        character_memory.evict_character_runtime_caches("Source")
+        (memory_root / "Source").mkdir(exist_ok=True)
+        store.record_decision("Source", decision, now=1_700_100_000.0)
+        assert (
+            memory_root / "Source" / "anti_repeat_effects.json"
+        ).exists(), (
+            "a rescued source name could not persist -- the rename left its "
+            "write fence up"
+        )

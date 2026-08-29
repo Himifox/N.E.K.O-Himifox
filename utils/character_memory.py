@@ -609,10 +609,22 @@ def rename_character_memory_storage(
         # writes normally afterwards even when there was nothing to merge.
         retire_character_runtime_caches(old_name)
         retire_character_runtime_caches(new_name)
-        # Retirement alone leaves the window open from the moment the
-        # merge below creates the directory. The fence does not consult
-        # the filesystem, so it covers the whole operation; the finally
-        # is what guarantees it comes back down.
+        # BOTH names, and for the same reason on each: retirement refuses to
+        # CREATE a directory but permits writing into one that exists.
+        #
+        # Target: the merge creates its directory partway through, and from
+        # that moment a write from the identity that used to own the name
+        # lands on the history just moved in.
+        #
+        # Source: its directory exists for the whole merge. On the
+        # child-by-child path a late write can recreate a file after the
+        # children are moved and before _merge_directories rmdir()s the
+        # source -- and that rmdir swallows its failure, so the rename
+        # reports success while memory/<old_name>/ survives with content and
+        # the renamed-away identity still looks like it has memory.
+        #
+        # The fence does not consult the filesystem, so it covers the whole
+        # operation; the finally is what guarantees it comes back down.
         #
         # Which makes retiring the TARGET above redundant, measured: with
         # this fence in place, lifting there instead -- or not touching the
@@ -620,7 +632,7 @@ def rename_character_memory_storage(
         # cover for the half before the merge creates the directory, for
         # the case where this fence is somehow never set. Retiring the
         # SOURCE is not redundant: its directory is going away.
-        fence_character_runtime_writes(new_name)
+        fence_character_runtime_writes(old_name, new_name)
         # 目标角色名可能曾被改走；复用该名字前必须切断旧跳转，否则新角色会写进旧目标。
         (
             _,
@@ -724,7 +736,7 @@ def rename_character_memory_storage(
         # Unconditional, and after the publication lift above: a fence that
         # survived a raise would silence this character for the life of the
         # process, which is worse than the write it exists to stop.
-        unfence_character_runtime_writes(new_name)
+        unfence_character_runtime_writes(old_name, new_name)
 
 
 def finalize_character_recent_rename(result: dict[str, Any]) -> None:
