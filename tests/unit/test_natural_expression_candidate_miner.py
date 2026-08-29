@@ -2425,17 +2425,37 @@ def test_an_angle_bracketed_reference_destination_may_hold_spaces():
     on this file passed with its fix removed.
     """
     secret = "secret helper phrase"
+    catchphrase = "please remember to rest"
 
     assert _protects(
         "[cfg]: <../" + secret + ">" + chr(10) + chr(10) + "ordinary speech",
         secret,
     ), "an angle-bracketed destination was cut at its first space and left minable"
 
+    # A backslash-escaped ">" does not close it either -- the same
+    # truncation one level down, cutting the capture at the escaped
+    # bracket and leaving the rest of the destination minable.
+    assert _protects(
+        "[cfg]: <../a" + chr(92) + "> " + secret + ">" + chr(10) + chr(10) + "ok",
+        secret,
+    ), "an escaped closing bracket truncated the destination"
+
+    # Escapes are consumed as a UNIT, so neither a trailing lone backslash
+    # nor an unclosed "<" may run past the line into speech -- the
+    # runaway direction this module refuses.
+    catchphrase_pair = catchphrase + " " + catchphrase
+    assert not _protects(
+        "[cfg]: <../a" + chr(92) + chr(10) + chr(10) + catchphrase_pair,
+        catchphrase,
+    )
+    assert not _protects(
+        "[cfg]: <../a b c" + chr(10) + chr(10) + catchphrase_pair, catchphrase,
+    )
+
     # The duals, so this cannot pass by protecting everything shaped like a
     # bracket: the plain form still works, and bracketed SPEECH does not
     # become a definition.
     assert _protects("[cfg]: /api/" + secret.replace(" ", "-") + chr(10), "api")
-    catchphrase = "please remember to rest"
     assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
 
 

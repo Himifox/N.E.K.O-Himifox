@@ -1303,8 +1303,43 @@ async def test_a_padded_configured_key_is_served_not_confused_with_an_orphan(
     )
     url = client.post.await_args.args[0]
     assert url.endswith("/%E3%80%80Bob/repetition_insights"), (
-        "the analysis read the orphan memory/Bob/ instead of the configured "
-        "character: %r" % url
+        "the public route posted the trimmed name: %r" % url
+    )
+
+    # The URL alone is a weaker claim than the one this test makes. The
+    # internal route validated and then re-stripped, so the padded key was
+    # undone on arrival and the analysis read memory/Bob/ anyway -- the
+    # orphan. Drive that route with the segment the public one just posted
+    # and assert which identity actually reaches the history read.
+    from urllib.parse import unquote
+
+    from app.memory_server import routes as memory_server_routes
+
+    asked = []
+
+    from memory.timeindex import LatestAssistantTexts
+
+    async def _retrieve(name, limit):
+        asked.append(name)
+        return LatestAssistantTexts([], True)
+
+    segment = unquote(url.rsplit("/", 2)[-2])
+    with patch.object(
+        memory_server_routes,
+        "runtime",
+        SimpleNamespace(
+            time_manager=SimpleNamespace(
+                aretrieve_latest_assistant_texts=_retrieve
+            )
+        ),
+    ):
+        await memory_server_routes.repetition_insights(
+            segment,
+            memory_server_routes.RepetitionInsightsRequest(language="zh-CN"),
+        )
+    assert asked == [padded], (
+        "the internal route read the orphan memory/Bob/ instead of the "
+        "configured character: %r" % asked
     )
     # The aggregates half of the same response reads the configured key too.
     effect_store.query_effects.assert_called_once_with(padded, 30)

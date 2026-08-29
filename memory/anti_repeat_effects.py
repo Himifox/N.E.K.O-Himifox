@@ -78,6 +78,18 @@ _VALID_OUTCOMES = _BLOCKED_OUTCOMES | {
 # drift. The shapes below still have to match the miner's, since a fragment
 # this misses is a fragment that reaches the sidecar.
 _PROTECTED_RE = re.compile(
+    # The bodies are ATOMIC. Each is a tempered token that stops only at a
+    # newline or at its own closer, so giving a character back can never
+    # let the closer match -- the character handed back is by construction
+    # neither. Without that, an opener with no closer backtracked through
+    # the whole line one character at a time, and a reply full of unmatched
+    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
+    # on the live turn path, since the effects sidecar masks every draft.
+    # Still quadratic in the opener count -- the forward scan per opener
+    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
+    # would make it linear cannot be used: it stops finding a closer past
+    # its bound, which unmasks a long template body rather than merely
+    # costing time.
     r"```[\s\S]*?```|`[^`\r\n]+`|"
     # Same bounded multiline containers as the miner's `_TEMPLATE_RE`, and for
     # the same reason: a template body that merely wrapped was left searchable
@@ -90,15 +102,15 @@ _PROTECTED_RE = re.compile(
     # tempered form keeps the same bound as before, since the closer is still
     # required and the line budget is unchanged; kaomoji like {^_^} cannot match
     # because the two-character opener is still required.
-    r"\{\{(?:(?!\}\})[^\r\n])*(?:\r?\n(?:(?!\}\})[^\r\n])*){0,3}\}\}|"
-    r"\{%(?:(?!%\})[^\r\n])*(?:\r?\n(?:(?!%\})[^\r\n])*){0,3}%\}|"
-    r"\{\#(?:(?!\#\})[^\r\n])*(?:\r?\n(?:(?!\#\})[^\r\n])*){0,3}\#\}|"
+    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
+    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
+    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
     # The SAME two alternatives as the miner. ``_TEMPLATE_RE`` is not in
     # ``_runtime_protected_spans``, so a fragment check built on the runtime
     # spans alone would let these through and the payload would reach the
     # 120-day sidecar.
-    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
-    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
+    r"\$\{(?>[^{}\r\n]*)(?:\r?\n(?>[^{}\r\n]*)){0,3}\}|"
+    r"<%(?>[^%\r\n]*)(?:\r?\n(?>[^%\r\n]*)){0,3}%>|"
     # Must LOOK LIKE A TAG, exactly as the miner requires. Left loose here it
     # paired the "<" of "<3" with the ">" of ">_<" and masked the speech
     # between them, so a signature the miner happily reported was dropped by

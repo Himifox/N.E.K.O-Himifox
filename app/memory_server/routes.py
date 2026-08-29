@@ -97,7 +97,18 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
     )
     if name_validation.code not in {None, "reserved_route_name"}:
         raise HTTPException(status_code=400, detail="Invalid lanlan_name")
-    lanlan_name = name_validation.normalized
+    # Validated on the STRIPPED form, read with the name as given. Every
+    # check above -- path separator, "..", trailing dot, reserved name,
+    # character class -- runs on the stripped value, and surrounding
+    # whitespace cannot reintroduce any of them, so reading the raw name
+    # loosens nothing.
+    #
+    # Re-stripping DOES lose the identity. The public route resolves the
+    # request to a characters.json key before calling here, and a key
+    # carrying padding was stripped straight back on arrival -- so the
+    # analysis read memory/<trimmed>/, which is an unrelated orphan when a
+    # delete left one behind. The two ends have to mean the same
+    # character.
     if runtime.time_manager is None:
         raise HTTPException(
             status_code=503,

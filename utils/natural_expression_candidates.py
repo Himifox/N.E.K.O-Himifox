@@ -173,6 +173,18 @@ _URL_RE = re.compile(
 )
 
 _TEMPLATE_RE = re.compile(
+    # The bodies are ATOMIC. Each is a tempered token that stops only at a
+    # newline or at its own closer, so giving a character back can never
+    # let the closer match -- the character handed back is by construction
+    # neither. Without that, an opener with no closer backtracked through
+    # the whole line one character at a time, and a reply full of unmatched
+    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
+    # on the live turn path, since the effects sidecar masks every draft.
+    # Still quadratic in the opener count -- the forward scan per opener
+    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
+    # would make it linear cannot be used: it stops finding a closer past
+    # its bound, which unmasks a long template body rather than merely
+    # costing time.
     # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
     # interpolation and ERB scriptlets are ordinary shapes, and a body that
     # merely spanned a newline was left unprotected while its single-line twin
@@ -185,14 +197,14 @@ _TEMPLATE_RE = re.compile(
     # tempered form keeps the same bound as before, since the closer is still
     # required and the line budget is unchanged; kaomoji like {^_^} cannot match
     # because the two-character opener is still required.
-    r"\{\{(?:(?!\}\})[^\r\n])*(?:\r?\n(?:(?!\}\})[^\r\n])*){0,3}\}\}|"
-    r"\{%(?:(?!%\})[^\r\n])*(?:\r?\n(?:(?!%\})[^\r\n])*){0,3}%\}|"
-    r"\{\#(?:(?!\#\})[^\r\n])*(?:\r?\n(?:(?!\#\})[^\r\n])*){0,3}\#\}|"
+    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
+    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
+    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
     # Jinja statement and comment blocks, on the same line budget: a
     # ``{% set api_key = "..." %}`` carried its payload straight past the brace
     # pattern, which only knew the expression form.
-    r"\$\{[^{}\r\n]*(?:\r?\n[^{}\r\n]*){0,3}\}|"
-    r"<%[^%\r\n]*(?:\r?\n[^%\r\n]*){0,3}%>|"
+    r"\$\{(?>[^{}\r\n]*)(?:\r?\n(?>[^{}\r\n]*)){0,3}\}|"
+    r"<%(?>[^%\r\n]*)(?:\r?\n(?>[^%\r\n]*)){0,3}%>|"
     # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
     # by far the highest false-positive density in this project's character
     # speech -- `>_<`, `<3`, `->`, `3 < 5`. Line-bounding stopped the tail of
@@ -939,8 +951,14 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # "[cfg]: <../secret helper phrase>" yielded "<../secret"; the
     # destination-shape check then rejected that fragment for having no
     # closing ">", and the whole destination stayed minable.
+    #
+    # A BACKSLASH-ESCAPED ">" does not close it, which is the same
+    # truncation one level down: "[cfg]: <../a\> secret phrase>" cut the
+    # capture at the escaped bracket and left the rest of the destination
+    # minable. Escapes are consumed as a unit, so a trailing lone
+    # backslash still cannot swallow the newline.
     r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*"
-    r"(?P<target><[^>\r\n]*>|[^ \t\r\n]+)",
+    r"(?P<target><(?:\\[^\r\n]|[^>\r\n\\])*>|[^ \t\r\n]+)",
     re.MULTILINE,
 )
 
