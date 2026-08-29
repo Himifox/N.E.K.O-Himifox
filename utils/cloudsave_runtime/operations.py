@@ -777,30 +777,51 @@ def _restore_backup_records(
     is exactly what was asked for, and a cache left loaded would write the
     rolled-back content straight back out.
     """
-    for record in sorted(backup_records, key=lambda item: len(item["target"].parts), reverse=True):
-        target_path = record["target"]
-        if target_path.exists():
-            # Refreshed from disk: the recorded flag is from BACKUP time,
-            # so a directory this operation created carries False and its
-            # character would never reach the lifecycle handling below.
-            record["is_dir"] = target_path.is_dir()
-            if target_path.is_dir():
-                shutil.rmtree(target_path, ignore_errors=True)
+    # In a finally, because the damage is already done by the time anything
+    # in the loop can fail. Records are processed deepest-first, so a
+    # character directory is removed EARLY and the runtime/state files come
+    # after it; one of those raising left the removal in place and skipped
+    # the retirement entirely. The name then stayed live with no directory,
+    # and the next in-flight write recreated it as an orphan --
+    # ``character_memory_exists`` reporting a character the restored
+    # characters.json no longer contains. That is precisely what the
+    # retirement below exists to prevent, so it must not be the thing a
+    # failure skips.
+    #
+    # Reaching it on the error path is also the safer arm on its own terms:
+    # the disk has changed either way, so a cache left loaded is stale
+    # whether the loop finished or not.
+    try:
+        for record in sorted(
+            backup_records,
+            key=lambda item: len(item["target"].parts),
+            reverse=True,
+        ):
+            target_path = record["target"]
+            if target_path.exists():
+                # Refreshed from disk: the recorded flag is from BACKUP
+                # time, so a directory this operation created carries False
+                # and its character would never reach the lifecycle
+                # handling below.
+                record["is_dir"] = target_path.is_dir()
+                if target_path.is_dir():
+                    shutil.rmtree(target_path, ignore_errors=True)
+                else:
+                    target_path.unlink()
+            backup_path = record.get("backup")
+            if backup_path is None or not backup_path.exists():
+                continue
+            if record.get("is_dir"):
+                shutil.copytree(backup_path, target_path, dirs_exist_ok=True)
             else:
-                target_path.unlink()
-        backup_path = record.get("backup")
-        if backup_path is None or not backup_path.exists():
-            continue
-        if record.get("is_dir"):
-            shutil.copytree(backup_path, target_path, dirs_exist_ok=True)
-        else:
-            _facade._apply_runtime_file(backup_path, target_path)
-    if evict_sidecar_caches:
-        restored, removed = _memory_character_names_from_backup_records(
-            config_manager, backup_records
-        )
-        evict_character_runtime_caches(*restored)
-        retire_character_runtime_caches(*removed)
+                _facade._apply_runtime_file(backup_path, target_path)
+    finally:
+        if evict_sidecar_caches:
+            restored, removed = _memory_character_names_from_backup_records(
+                config_manager, backup_records
+            )
+            evict_character_runtime_caches(*restored)
+            retire_character_runtime_caches(*removed)
 
 
 def _write_operation_backup_metadata(

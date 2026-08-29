@@ -3841,6 +3841,98 @@ def test_restoring_away_a_downloaded_character_retires_it(tmp_path):
             "directory"
         )
 
+@pytest.mark.unit
+def test_a_failed_restore_still_retires_the_directory_it_removed(tmp_path):
+    """The retirement must not be the thing a mid-restore failure skips.
+
+    Records are processed deepest-first, so the character directory is removed
+    EARLY and the runtime/state files come after it. The lifecycle handling sat
+    after the loop, so one of those later records raising left the removal in
+    place and skipped the retirement outright -- leaving the name live with no
+    directory, ready for the next in-flight write to recreate it as an orphan
+    that ``character_memory_exists`` reports as a character the restored
+    characters.json no longer contains.
+
+    The failure is injected into the LAST thing the loop does, gated on the
+    directory already being gone, so it can only fire in the window this is
+    about. The sibling test above is the same scenario without the failure.
+    """
+    from utils import cloudsave_runtime as _facade
+    from utils.cloudsave_runtime import (
+        export_cloudsave_character_unit,
+        import_cloudsave_character_unit,
+        restore_cloudsave_operation_backup,
+    )
+
+    source_cm = _make_config_manager(tmp_path / "source")
+    target_cm = _make_config_manager(tmp_path / "target")
+    _write_runtime_state(source_cm, character_name="新来的")
+    export_cloudsave_character_unit(source_cm, "新来的")
+    _write_runtime_state(target_cm, character_name="小满")
+    shutil.copytree(
+        source_cm.cloudsave_dir, target_cm.cloudsave_dir, dirs_exist_ok=True
+    )
+    memory_root = Path(target_cm.memory_dir)
+
+    with _isolated_sidecar_stores(
+        memory_root, config_manager=target_cm
+    ) as (store, corpus, greeting):
+        result = import_cloudsave_character_unit(
+            target_cm, "新来的", overwrite=True
+        )
+        assert (memory_root / "新来的").is_dir(), (
+            "the import did not create the directory, so the scenario "
+            "under test never happened"
+        )
+
+        real_apply = _facade._apply_runtime_file
+        fired = []
+
+        def _fail_once_the_directory_is_gone(source_path, target_path):
+            if not (memory_root / "新来的").exists() and not fired:
+                fired.append(True)
+                raise OSError("a later record could not be put back")
+            return real_apply(source_path, target_path)
+
+        with patch.object(
+            _facade, "_apply_runtime_file", _fail_once_the_directory_is_gone
+        ):
+            with pytest.raises(OSError):
+                restore_cloudsave_operation_backup(
+                    target_cm, result["backup_path"]
+                )
+
+        assert fired, "the injected failure never fired, so this proves nothing"
+        assert not (memory_root / "新来的").exists(), (
+            "the restore did not remove the downloaded directory"
+        )
+        for label, sidecar in (
+            ("effects", store), ("corpus", corpus), ("greeting", greeting),
+        ):
+            assert "新来的" in sidecar._retired, (
+                f"{label} left the deleted name live after the restore failed"
+            )
+
+        # The behaviour the retirement buys, which is the whole point: an
+        # in-flight write does not put the directory back.
+        import memory.anti_repeat_effects as effects_module
+
+        store.record_decision(
+            "新来的",
+            effects_module.AntiRepeatDecision(
+                source="proactive",
+                reasons=("bm25",),
+                action="block",
+                outcome="blocked_initial",
+            ),
+            now=1_700_000_000.0,
+        )
+        assert not (memory_root / "新来的").exists(), (
+            "a write after the failed restore recreated the deleted "
+            "character's directory"
+        )
+
+
 def test_runtime_root_counts_an_interrupted_avatar_transaction_as_content(tmp_path):
     """An interrupted update may leave `.backup` as a tool's only copy; empty means replaced."""
     cm = _make_config_manager(tmp_path)
