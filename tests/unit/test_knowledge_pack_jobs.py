@@ -444,7 +444,7 @@ async def test_active_job_rejects_tampered_external_commit_record(tmp_path):
     assert listed["reason"] == "active_job_commit_unverified"
 
 
-def test_activation_commit_history_is_bounded_and_keeps_current_job(
+def test_activation_commit_is_not_pruned_before_terminal_directory_retention(
     tmp_path,
     monkeypatch,
 ):
@@ -483,9 +483,142 @@ def test_activation_commit_history_is_bounded_and_keeps_current_job(
         (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
     )
 
-    assert len(payload["commits"]) == pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES
+    assert len(payload["commits"]) == pack_jobs.MAX_TERMINAL_JOB_DIRECTORIES + 1
     assert current_job_id in payload["commits"]
-    assert "fixture-000000000001" not in payload["commits"]
+    assert "fixture-000000000001" in payload["commits"]
+
+
+@pytest.mark.asyncio
+async def test_post_commit_retention_deletes_directory_before_its_commit(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_DIRECTORIES", 2)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_HARD_OVERFLOW", 4)
+    monkeypatch.setattr(pack_jobs, "TERMINAL_JOB_TTL_SECONDS", 10**12)
+    for index in range(2):
+        service.stage_pack(_pack(pack_id=f"retained-{index}"))
+        assert (
+            await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+        )["state"] == "ready_bm25"
+
+    current = service.stage_pack(_pack(pack_id="retained-current"))
+    current_job_id = str(current["job_id"])
+    original_rmtree = pack_jobs.shutil.rmtree
+    observed_post_commit = False
+
+    def assert_commit_order(path, *args, **kwargs):
+        nonlocal observed_post_commit
+        observed_post_commit = True
+        current_dir = tmp_path / ".staging" / current_job_id
+        current_state = json.loads(
+            (current_dir / "state.json").read_text(encoding="utf-8")
+        )
+        commits = json.loads(
+            (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
+        )["commits"]
+        assert current_state["state"] == "active"
+        assert current_job_id in commits
+        assert Path(path).name in commits
+        assert len(commits) == 3
+        assert any(pack["pack_id"] == "retained-current" for pack in service.list_packs())
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(pack_jobs.shutil, "rmtree", assert_commit_order)
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "ready_bm25"
+    assert observed_post_commit is True
+    remaining_dirs = tuple((tmp_path / ".staging").iterdir())
+    commits = json.loads(
+        (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
+    )["commits"]
+    assert len(remaining_dirs) == len(commits) == 2
+    assert current_job_id in commits
+
+
+@pytest.mark.asyncio
+async def test_retention_failure_keeps_101_evidence_and_retry_converges(
+    tmp_path,
+    monkeypatch,
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_DIRECTORIES", 2)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_HARD_OVERFLOW", 4)
+    monkeypatch.setattr(pack_jobs, "TERMINAL_JOB_TTL_SECONDS", 10**12)
+    for index in range(2):
+        service.stage_pack(_pack(pack_id=f"pending-{index}"))
+        await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    current = service.stage_pack(_pack(pack_id="pending-current"))
+    current_job_id = str(current["job_id"])
+    original_rmtree = pack_jobs.shutil.rmtree
+    monkeypatch.setattr(
+        pack_jobs.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("busy")),
+    )
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "ready_bm25"
+    current_state = next(
+        job for job in service.list_pack_jobs() if job["job_id"] == current_job_id
+    )
+    assert current_state["state"] == "active"
+    assert current_state["retention_pending"] is True
+    assert len(tuple((tmp_path / ".staging").iterdir())) == 3
+    assert len(
+        json.loads(
+            (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
+        )["commits"]
+    ) == 3
+
+    monkeypatch.setattr(pack_jobs.shutil, "rmtree", original_rmtree)
+    with pack_jobs._jobs_registry_lock(tmp_path):
+        assert pack_jobs._retry_terminal_retention(tmp_path) is False
+    assert len(tuple((tmp_path / ".staging").iterdir())) == 2
+    assert len(
+        json.loads(
+            (tmp_path / "activation-commits.json").read_text(encoding="utf-8")
+        )["commits"]
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_retention_hard_overflow_blocks_new_activation(tmp_path, monkeypatch):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_DIRECTORIES", 2)
+    monkeypatch.setattr(pack_jobs, "MAX_TERMINAL_JOB_HARD_OVERFLOW", 3)
+    monkeypatch.setattr(pack_jobs, "TERMINAL_JOB_TTL_SECONDS", 10**12)
+    for index in range(2):
+        service.stage_pack(_pack(pack_id=f"overflow-{index}"))
+        await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    monkeypatch.setattr(
+        pack_jobs.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("busy")),
+    )
+    service.stage_pack(_pack(pack_id="overflow-third"))
+    assert (
+        await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+    )["state"] == "ready_bm25"
+    service.stage_pack(_pack(pack_id="overflow-blocked"))
+
+    blocked = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert blocked["state"] == "degraded"
+    listed = next(
+        job for job in service.list_pack_jobs() if job["pack_id"] == "overflow-blocked"
+    )
+    assert listed["reason"] == "knowledge_job_retention_pending"
+    assert all(pack["pack_id"] != "overflow-blocked" for pack in service.list_packs())
 
 
 @pytest.mark.asyncio
@@ -1217,7 +1350,7 @@ def test_discard_rejects_non_generated_job_ids_without_touching_root(
     assert registry_path.read_bytes() == b"registry"
 
 
-def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
+def test_list_terminal_job_history_is_read_only(
     tmp_path,
     monkeypatch,
 ):
@@ -1256,11 +1389,10 @@ def test_terminal_job_history_is_pruned_by_count_without_deleting_degraded(
 
     listed = pack_jobs.list_pack_jobs(tmp_path)
 
-    assert not (jobs_root / terminal_job_ids[0]).exists()
-    assert (jobs_root / terminal_job_ids[1]).is_dir()
-    assert (jobs_root / terminal_job_ids[2]).is_dir()
+    assert all((jobs_root / job_id).is_dir() for job_id in terminal_job_ids)
     assert degraded.is_dir()
     assert {item["job_id"] for item in listed} == {
+        terminal_job_ids[0],
         terminal_job_ids[1],
         terminal_job_ids[2],
         "degraded-job",

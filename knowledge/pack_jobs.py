@@ -43,6 +43,7 @@ TERMINAL_STATES = frozenset(("active", "cancelled", "failed"))
 DEGRADED_STATE = "degraded"
 TERMINAL_JOB_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_TERMINAL_JOB_DIRECTORIES = 100
+MAX_TERMINAL_JOB_HARD_OVERFLOW = 102
 # Staging metadata is a few KB in practice; this only has to exclude absurdity.
 MAX_STAGED_METADATA_BYTES = 1024 * 1024
 MAX_STAGING_VALIDATION_MEMORY_BYTES = 128 * 1024 * 1024
@@ -801,17 +802,8 @@ def _record_activation_commit(
             **activation,
             "committed_at": committed_at,
         }
-        current_job_id = str(activation["job_id"])
-        retained_history = sorted(
-            (
-                item
-                for item in commits.items()
-                if item[0] != current_job_id
-            ),
-            key=lambda item: (int(item[1]["committed_at"]), item[0]),
-        )[-(MAX_TERMINAL_JOB_DIRECTORIES - 1):]
         ordered = sorted(
-            (*retained_history, (current_job_id, commits[current_job_id])),
+            commits.items(),
             key=lambda item: (int(item[1]["committed_at"]), item[0]),
         )
         atomic_write_json(
@@ -1212,12 +1204,6 @@ def list_pack_jobs(
             if job_dir.is_dir() and not _is_link_or_reparse(job_dir)
         )
         items = [_read_job(job_dir) for job_dir in job_dirs]
-        _prune_terminal_jobs(jobs_root, job_dirs, items)
-        items = [
-            item
-            for job_dir, item in zip(job_dirs, items, strict=True)
-            if job_dir.is_dir()
-        ]
     return tuple(
         sorted(
             items,
@@ -1229,36 +1215,148 @@ def list_pack_jobs(
     )
 
 
-def _prune_terminal_jobs(
-    jobs_root: Path,
-    job_dirs: tuple[Path, ...],
-    items: list[dict[str, object]],
+def _write_activation_commits(
+    knowledge_root: Path,
+    commits: dict[str, dict[str, object]],
 ) -> None:
-    now = int(time.time())
-    candidates: list[tuple[int, Path]] = []
-    for job_dir, item in zip(job_dirs, items, strict=True):
+    path = _activation_commits_path(knowledge_root)
+    if path is None:
+        raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+    ordered = dict(
+        sorted(
+            commits.items(),
+            key=lambda item: (int(item[1]["committed_at"]), item[0]),
+        )
+    )
+    atomic_write_json(
+        path,
+        {"schema_version": 1, "commits": ordered},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _reconcile_orphan_activation_commits(knowledge_root: Path) -> None:
+    path = _activation_commits_path(knowledge_root)
+    if path is None:
+        raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+    with mutation_lock(path):
+        result = _validated_activation_commits(knowledge_root)
+        if result.state != "valid":
+            raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+        commits = dict(result.payload["commits"])
+        jobs_root = _validated_jobs_root(knowledge_root)
+        if jobs_root is None:
+            raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+        existing = {
+            child.name
+            for child in jobs_root.iterdir()
+            if child.is_dir() and not _is_link_or_reparse(child)
+        }
+        retained = {
+            job_id: commit
+            for job_id, commit in commits.items()
+            if job_id in existing
+        }
+        if retained != commits:
+            _write_activation_commits(knowledge_root, retained)
+
+
+def _terminal_retention_candidates(
+    knowledge_root: Path,
+    *,
+    exclude_job_id: str = "",
+) -> list[tuple[int, str, Path, dict[str, object]]]:
+    jobs_root = _validated_jobs_root(knowledge_root)
+    if jobs_root is None or not jobs_root.is_dir():
+        return []
+    candidates: list[tuple[int, str, Path, dict[str, object]]] = []
+    for job_dir in jobs_root.iterdir():
+        if not job_dir.is_dir() or _is_link_or_reparse(job_dir):
+            continue
+        item = _read_job(job_dir)
         job_id = str(item.get("job_id") or "")
         if (
-            item.get("state") not in TERMINAL_STATES
-            or not job_id
+            job_id == exclude_job_id
             or job_id != job_dir.name
-            or Path(job_id).name != job_id
+            or item.get("state") not in TERMINAL_STATES
+            or item.get("orphan") is True
         ):
             continue
         updated_at = int(item.get("updated_at") or item.get("created_at") or 0)
-        candidates.append((updated_at, job_dir))
-    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1].name))
-    for index, (updated_at, job_dir) in enumerate(candidates):
-        expired = updated_at > 0 and now - updated_at > TERMINAL_JOB_TTL_SECONDS
-        over_count = index >= MAX_TERMINAL_JOB_DIRECTORIES
-        if not expired and not over_count:
-            continue
-        if job_dir.is_symlink() or job_dir.parent.resolve() != jobs_root.resolve():
-            continue
-        try:
-            shutil.rmtree(job_dir)
-        except OSError:
-            logger.warning("failed to prune terminal knowledge job %s", job_dir.name)
+        candidates.append((updated_at, job_id, job_dir, item))
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    return candidates
+
+
+def _fsync_jobs_root(jobs_root: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(
+        jobs_root,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _remove_activation_commit(knowledge_root: Path, job_id: str) -> None:
+    path = _activation_commits_path(knowledge_root)
+    if path is None:
+        raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+    with mutation_lock(path):
+        result = _validated_activation_commits(knowledge_root)
+        if result.state != "valid":
+            raise KnowledgeJobRegistryError("knowledge_activation_registry_invalid")
+        commits = dict(result.payload["commits"])
+        if commits.pop(job_id, None) is not None:
+            _write_activation_commits(knowledge_root, commits)
+
+
+def _retry_terminal_retention(
+    knowledge_root: Path,
+    *,
+    exclude_job_id: str = "",
+) -> bool:
+    """Run destructive retention only from an already locked mutation path."""
+    try:
+        _reconcile_orphan_activation_commits(knowledge_root)
+        candidates = _terminal_retention_candidates(
+            knowledge_root,
+            exclude_job_id=exclude_job_id,
+        )
+        retained_limit = max(
+            MAX_TERMINAL_JOB_DIRECTORIES - int(bool(exclude_job_id)),
+            0,
+        )
+        now = int(time.time())
+        excess = max(len(candidates) - retained_limit, 0)
+        victims: list[tuple[int, str, Path, dict[str, object]]] = []
+        for index, candidate in enumerate(candidates):
+            updated_at = candidate[0]
+            expired = (
+                updated_at > 0 and now - updated_at > TERMINAL_JOB_TTL_SECONDS
+            )
+            if index < excess or expired:
+                victims.append(candidate)
+        for _updated_at, job_id, job_dir, item in victims:
+            safe_job_dir = _revalidated_job_dir(job_dir)
+            if safe_job_dir is None:
+                raise KnowledgeJobRegistryError("knowledge_job_registry_path_invalid")
+            shutil.rmtree(safe_job_dir)
+            _fsync_jobs_root(safe_job_dir.parent)
+            if item.get("state") == "active":
+                _remove_activation_commit(knowledge_root, job_id)
+        remaining = _terminal_retention_candidates(
+            knowledge_root,
+            exclude_job_id=exclude_job_id,
+        )
+        return len(remaining) > retained_limit
+    except Exception:
+        logger.exception("knowledge terminal job retention remains pending")
+        return True
 
 
 def cancel_pack_job(knowledge_root: str | Path, job_id: str) -> bool:
@@ -1625,6 +1723,19 @@ def _activate_job_validated(
             if current.get("state") == "cancelled":
                 _cleanup_payload(job_dir)
             return current
+        _retry_terminal_retention(Path(service.knowledge_root))
+        terminal_count = len(
+            _terminal_retention_candidates(Path(service.knowledge_root))
+        )
+        if terminal_count >= MAX_TERMINAL_JOB_HARD_OVERFLOW:
+            return _write_state(
+                job_dir,
+                current,
+                state=DEGRADED_STATE,
+                retrieval_mode="none",
+                reason="knowledge_job_retention_pending",
+                retention_pending=True,
+            )
         try:
             subscription = _identity_validated_subscription(job_dir, current)
         except KnowledgeJobRegistryError:
@@ -1726,6 +1837,16 @@ def _activate_job_validated(
             service.refresh_routing_index(background=True)
         except Exception:
             logger.exception("knowledge pack activated but routing refresh failed")
+        retention_pending = _retry_terminal_retention(
+            Path(service.knowledge_root),
+            exclude_job_id=str(current["job_id"]),
+        )
+        state = _write_state(
+            job_dir,
+            state,
+            retention_pending=retention_pending,
+            reason="knowledge_job_retention_pending" if retention_pending else "",
+        )
     _cleanup_payload(job_dir)
     return state
 
