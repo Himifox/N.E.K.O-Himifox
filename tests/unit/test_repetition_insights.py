@@ -1218,3 +1218,109 @@ async def test_insight_selector_and_route_share_the_name_length_cap():
         )
     )
     assert response.status_code == 422
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_padded_configured_key_is_served_not_confused_with_an_orphan(
+    tmp_path,
+):
+    """The selector offers a normalized name; the route has to mean the same one.
+
+    ``_insight_selectable_name`` returns the NORMALIZED name and the panel trims
+    it again before posting, but characters.json keys are not normalized. A key
+    carrying padding was therefore offered as its trimmed form and then failed
+    the raw membership test -- a 404 on a name the panel had just listed, which
+    is the drift the selector docstring says cannot happen.
+
+    The 404 is the mild half. An unrelated ``memory/<trimmed>/`` left behind by
+    a delete satisfies the existence arm instead, so the panel reads that orphan
+    and the reset button clears ITS aggregates rather than the configured
+    character's.
+
+    Nothing in this repo writes a padded key -- every characters.json writer
+    strips first -- so this needs a hand-edited config or one from an older
+    build. Both routes are new here, and the invariant is theirs.
+    """
+    from main_routers import memory_router
+    from memory import anti_repeat_effects
+    from utils import config_manager, internal_http_client
+
+    padded = "\u3000Bob"           # ideographic space, which str.strip removes
+    memory_dir = tmp_path / "memory"
+    (memory_dir / padded).mkdir(parents=True)
+    (memory_dir / padded / "time_indexed.db").write_bytes(b"")
+    # The orphan a previous delete could leave behind, under the TRIMMED name.
+    (memory_dir / "Bob").mkdir()
+    (memory_dir / "Bob" / "time_indexed.db").write_bytes(b"")
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {padded: {}}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        listed = await memory_router.get_insight_characters()
+    assert "Bob" in listed["characters"], (
+        "the selector stopped offering the padded key at all"
+    )
+
+    response = SimpleNamespace(
+        status_code=200,
+        json=lambda: {
+            "success": True,
+            "schema_version": "natural-expression-candidates/v1",
+            "artifact_type": "user_review_candidates",
+            "candidates": [],
+        },
+    )
+    client = SimpleNamespace(post=AsyncMock(return_value=response))
+    effect_store = SimpleNamespace(
+        query_effects=MagicMock(return_value=_empty_effects()),
+        clear_effects=MagicMock(return_value={"cleared": True}),
+    )
+
+    with (
+        patch.object(config_manager, "get_config_manager", return_value=config),
+        patch.object(
+            internal_http_client, "get_internal_http_client", return_value=client
+        ),
+        patch.object(
+            anti_repeat_effects,
+            "get_anti_repeat_effect_store",
+            return_value=effect_store,
+        ),
+    ):
+        result = await memory_router.repetition_insights(
+            memory_router.RepetitionInsightsRequest(
+                character_name="Bob", language="zh-CN",
+            )
+        )
+
+    assert getattr(result, "status_code", 200) != 404, (
+        "the route rejected a name its own selector had just offered"
+    )
+    url = client.post.await_args.args[0]
+    assert url.endswith("/%E3%80%80Bob/repetition_insights"), (
+        "the analysis read the orphan memory/Bob/ instead of the configured "
+        "character: %r" % url
+    )
+    # The aggregates half of the same response reads the configured key too.
+    effect_store.query_effects.assert_called_once_with(padded, 30)
+
+    # The reset button shares the shape, and there the wrong target is
+    # destructive rather than merely wrong.
+    with (
+        patch.object(config_manager, "get_config_manager", return_value=config),
+        patch.object(
+            anti_repeat_effects,
+            "get_anti_repeat_effect_store",
+            return_value=effect_store,
+        ),
+    ):
+        await memory_router.reset_repetition_effects(
+            memory_router.RepetitionEffectsResetRequest(character_name="Bob")
+        )
+
+    effect_store.clear_effects.assert_called_once_with(padded)

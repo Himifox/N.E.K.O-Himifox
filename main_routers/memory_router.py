@@ -605,14 +605,21 @@ async def repetition_insights(request: RepetitionInsightsRequest):
         configured_characters = (
             characters.get("猫娘", {}) if isinstance(characters, dict) else {}
         )
-        if (
-            character_name not in configured_characters
-            and not character_memory_exists(config_manager, character_name)
+        # The configured KEY, not the normalized request name: they differ
+        # when a hand-edited characters.json carries padding, and reading
+        # the normalized form there lands on an unrelated orphan directory.
+        configured_key = _configured_character_key(
+            configured_characters, character_name
+        )
+        if configured_key is None and not character_memory_exists(
+            config_manager, character_name
         ):
             return JSONResponse(
                 {"success": False, "error": "character not found"},
                 status_code=404,
             )
+        if configured_key is not None:
+            character_name = configured_key
 
         response = await get_internal_http_client().post(
             "http://127.0.0.1:"
@@ -721,14 +728,21 @@ async def reset_repetition_effects(request: RepetitionEffectsResetRequest):
         configured_characters = (
             characters.get("猫娘", {}) if isinstance(characters, dict) else {}
         )
-        if (
-            character_name not in configured_characters
-            and not character_memory_exists(config_manager, character_name)
+        # The configured KEY, not the normalized request name: they differ
+        # when a hand-edited characters.json carries padding, and reading
+        # the normalized form there lands on an unrelated orphan directory.
+        configured_key = _configured_character_key(
+            configured_characters, character_name
+        )
+        if configured_key is None and not character_memory_exists(
+            config_manager, character_name
         ):
             return JSONResponse(
                 {"success": False, "error": "character not found"},
                 status_code=404,
             )
+        if configured_key is not None:
+            character_name = configured_key
         await asyncio.to_thread(
             get_anti_repeat_effect_store().clear_effects,
             character_name,
@@ -854,6 +868,37 @@ def _recent_browser_conflict_response(
         },
         status_code=409,
     )
+
+
+def _configured_character_key(configured, character_name: str) -> str | None:
+    """The characters.json key this request name identifies, if any.
+
+    Both routes normalize what they are asked for, and the panel offers
+    what ``_insight_selectable_name`` returns, which is normalized too --
+    the frontend trims it again before posting. characters.json keys are
+    NOT normalized: nothing in this repo writes a padded one, but nothing
+    rejects a hand-edited config either. Such a key was offered as its
+    trimmed form and then failed the raw membership test, 404ing on a name
+    the panel had just listed -- the drift the selector docstring says
+    cannot happen.
+
+    Worse than the 404: an unrelated memory/<trimmed>/ left over from a
+    delete satisfied the existence arm instead, so the panel read that
+    orphan and the reset button cleared ITS aggregates rather than the
+    configured character's.
+
+    Exactly inverts the offering rule, so the two cannot drift again, and
+    an exact key always wins -- with both "Bob" and " Bob" configured, the
+    request for "Bob" means "Bob".
+    """
+    if character_name in configured:
+        return character_name
+    for key in configured:
+        if not isinstance(key, str) or not key:
+            continue
+        if _insight_selectable_name(key) == character_name:
+            return key
+    return None
 
 
 def _insight_selectable_name(name: str) -> str | None:
