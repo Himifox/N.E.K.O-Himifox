@@ -843,13 +843,27 @@ def _collect_link_targets(
             cursor += 2
             continue
         if character == "[":
-            open_labels += 1
+            # A DISPLAYED bracket opens nothing -- the same rule the opener
+            # acceptance below already follows. Counting it let "`[LAUGHS`
+            # okay](...)" hand a label to the stray closer after it, so the
+            # parenthetical was protected and a repeated catchphrase in it
+            # was never mined.
+            if not _starts_inside(cursor, ignore):
+                open_labels += 1
         elif character == "(":
             open_parens.append(cursor)
         elif character == ")":
             if open_parens:
                 closer_of[open_parens.pop()] = cursor + 1
-        elif character == "]" and open_labels:
+        elif (
+            character == "]"
+            and open_labels
+            # BOTH sides skip displayed brackets, not just the opener. A "]"
+            # shown inside a code span consuming a real label let the label
+            # look already closed, so the genuine "](" after it opened
+            # nothing and a real target went unprotected.
+            and not _starts_inside(cursor, ignore)
+        ):
             # This "]" closes a label either way; whether it also opens a
             # TARGET depends on the "(" right after it.
             open_labels -= 1

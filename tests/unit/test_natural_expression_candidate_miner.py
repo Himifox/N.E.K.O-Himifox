@@ -2304,6 +2304,26 @@ def test_a_link_closer_must_close_its_own_label():
     # And with no label at all nothing changes.
     assert not protects("okay](" + catchphrase + ")", catchphrase)
 
+    # A DISPLAYED bracket opens nothing either. Counting it handed a label
+    # to the stray closer after it, which is the same defect one layer down:
+    # the opener acceptance already skipped ignored spans, the counter did
+    # not.
+    assert not protects(
+        "`[LAUGHS` okay](" + catchphrase + ")", catchphrase
+    ), "a bracket shown inside a code span was counted as a link label"
+
+    # The mirror: a "]" shown inside a code span must not CONSUME a real
+    # label either, or the genuine "](" after it opens nothing and a real
+    # target goes unprotected. Fixing only the opener side left this.
+    # The target must NOT be URL-shaped, or _url_spans protects it whatever
+    # the link machinery decides and the assertion proves nothing -- which
+    # is how the first version of this case passed with the guard removed.
+    secret = "secret token value"
+    assert protects(
+        "see [the `]` docs](" + secret + ")",
+        secret,
+    ), "a displayed closing bracket consumed the label of a real link"
+
 
 def test_an_occurrence_heavy_reply_does_not_hide_the_history_behind_it():
     """The occurrence budget has the same ordering problem as the character one.
