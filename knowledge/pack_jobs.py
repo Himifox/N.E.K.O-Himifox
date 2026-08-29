@@ -20,6 +20,7 @@ from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
 from .limits import MAX_READY_VECTOR_CHUNKS
+from .mutation_runtime import run_knowledge_writer
 from .store import KnowledgeStore, KnowledgeStoreError
 from .packs import (
     KnowledgePack,
@@ -849,7 +850,12 @@ async def _write_state_async(
     **changes: object,
 ) -> dict[str, Any]:
     """Update the latest non-terminal state off the coordinator event loop."""
-    return await asyncio.to_thread(_update_state_locked, job_dir, **changes)
+    return await run_knowledge_writer(
+        job_dir.parent.parent,
+        _update_state_locked,
+        job_dir,
+        **changes,
+    )
 
 
 def _update_state_locked(job_dir: Path, **changes: object) -> dict[str, Any]:
@@ -1692,7 +1698,8 @@ async def process_pack_jobs(
 ) -> dict[str, object]:
     """Verify and activate at most one staged community pack."""
 
-    all_jobs = await asyncio.to_thread(
+    all_jobs = await run_knowledge_writer(
+        service.knowledge_root,
         _list_jobs_for_processing,
         service.knowledge_root,
     )
@@ -1712,7 +1719,11 @@ async def process_pack_jobs(
     if job_dir is None:
         return {"state": "no_work", "selected": 0, "stored": 0}
     try:
-        state = await asyncio.to_thread(_prepare_job, job_dir)
+        state = await run_knowledge_writer(
+            service.knowledge_root,
+            _prepare_job,
+            job_dir,
+        )
         if state.get("state") == DEGRADED_STATE:
             return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
         if not state or state.get("state") in TERMINAL_STATES:
@@ -1720,7 +1731,8 @@ async def process_pack_jobs(
 
         has_prebuilt = state.get("index_validation") == "accepted"
         if has_prebuilt:
-            activated = await asyncio.to_thread(
+            activated = await run_knowledge_writer(
+                service.knowledge_root,
                 _activate_job,
                 service,
                 job_dir,
@@ -1744,7 +1756,8 @@ async def process_pack_jobs(
                 "selected": ready,
                 "stored": ready,
             }
-        activated = await asyncio.to_thread(
+        activated = await run_knowledge_writer(
+            service.knowledge_root,
             _activate_job,
             service,
             job_dir,

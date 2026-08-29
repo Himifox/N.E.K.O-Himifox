@@ -28,6 +28,7 @@ from .catalog_overrides import (
 )
 from .limits import MAX_READY_VECTOR_CHUNKS
 from .models import KnowledgeHit
+from .mutation_runtime import run_knowledge_writer
 from .store import KnowledgeStore, KnowledgeStoreError
 
 
@@ -585,7 +586,8 @@ async def reconcile_embedding_models(
         return 0
     stale_counts = await asyncio.gather(
         *(
-            asyncio.to_thread(
+            run_knowledge_writer(
+                store.database_path.parent,
                 _mark_store_model_vectors_stale,
                 store,
                 model_id=model_id,
@@ -734,7 +736,8 @@ async def index_embedding_batch(
         return EmbeddingBatchResult(state="embedding_unavailable")
     if not status.ready:
         return EmbeddingBatchResult(state=status.state)
-    chunks = await asyncio.to_thread(
+    chunks = await run_knowledge_writer(
+        store.database_path.parent,
         _select_embedding_chunks,
         store,
         model_id=status.model_id,
@@ -756,7 +759,8 @@ async def index_embedding_batch(
     if inference_state == "inference_busy":
         return EmbeddingBatchResult(elapsed_ms=elapsed_ms, state=inference_state)
     if inference_error is not None:
-        await asyncio.to_thread(
+        await run_knowledge_writer(
+            store.database_path.parent,
             _mark_embedding_chunks_failed,
             store,
             chunks,
@@ -770,7 +774,8 @@ async def index_embedding_batch(
         )
 
     if not isinstance(vectors, (list, tuple)):
-        await asyncio.to_thread(
+        await run_knowledge_writer(
+            store.database_path.parent,
             _mark_embedding_chunks_failed,
             store,
             chunks,
@@ -784,7 +789,8 @@ async def index_embedding_batch(
         )
 
     try:
-        stored, failed, stale_writebacks, capacity_deferred = await asyncio.to_thread(
+        stored, failed, stale_writebacks, capacity_deferred = await run_knowledge_writer(
+            store.database_path.parent,
             _store_embedding_vectors,
             store,
             chunks,

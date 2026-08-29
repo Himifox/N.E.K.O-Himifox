@@ -532,6 +532,8 @@ async def test_main_server_shutdown_defers_cleanup_cancellation(
     from app import main_server
 
     cleanup_order: list[str] = []
+    cancellation_entered = asyncio.Event()
+    cancellation_release = asyncio.Event()
     fake_tracker = SimpleNamespace(
         save=Mock(side_effect=lambda: cleanup_order.append("token"))
     )
@@ -541,6 +543,19 @@ async def test_main_server_shutdown_defers_cleanup_cancellation(
             cleanup_order.append(name)
 
         return _record
+
+    async def _voice_cleanup() -> None:
+        if cancellation_source == "voice":
+            cancellation_entered.set()
+            await cancellation_release.wait()
+
+    async def _cancel_retry(_task, *, name, timeout):
+        del _task, timeout
+        if cancellation_source == "indexer_retry" and name == (
+            "knowledge indexer start retry"
+        ):
+            cancellation_entered.set()
+            await cancellation_release.wait()
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(main_server, "_IS_MAIN_PROCESS", True))
@@ -591,20 +606,10 @@ async def test_main_server_shutdown_defers_cleanup_cancellation(
         stack.enter_context(
             patch(
                 "app.main_server.voice_identity_runtime.close_voice_identity_runtime",
-                AsyncMock(
-                    side_effect=(
-                        asyncio.CancelledError
-                        if cancellation_source == "voice"
-                        else None
-                    )
-                ),
+                AsyncMock(side_effect=_voice_cleanup),
             )
         )
         if cancellation_source == "indexer_retry":
-            async def _cancel_retry(_task, *, name, timeout):
-                if name == "knowledge indexer start retry":
-                    raise asyncio.CancelledError
-
             stack.enter_context(
                 patch.object(
                     main_server,
@@ -640,8 +645,12 @@ async def test_main_server_shutdown_defers_cleanup_cancellation(
                 return_value=fake_tracker,
             )
         )
+        shutdown_task = asyncio.create_task(main_server.on_shutdown())
+        await cancellation_entered.wait()
+        shutdown_task.cancel()
+        cancellation_release.set()
         with pytest.raises(asyncio.CancelledError):
-            await main_server.on_shutdown()
+            await shutdown_task
 
     assert cleanup_order == [
         "cleanup",

@@ -9,6 +9,13 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from .mutation_runtime import (
+    finish_knowledge_writer_stop,
+    open_knowledge_writer_admission,
+    request_knowledge_writer_stop,
+    run_knowledge_writer,
+)
+
 
 logger = logging.getLogger("N.E.K.O.Knowledge.Indexer")
 
@@ -138,7 +145,8 @@ async def _run_indexer(knowledge_root: Path, wake_event: asyncio.Event) -> None:
             # Derive at most one legacy entry per round. This is deterministic
             # SQLite work and does not load the ONNX model.
             for store in stores:
-                derived_entries = await asyncio.to_thread(
+                derived_entries = await run_knowledge_writer(
+                    service.knowledge_root,
                     _backfill_store,
                     store,
                     limit=1,
@@ -267,6 +275,7 @@ def start_knowledge_indexer(knowledge_root: str | Path) -> bool:
     global _TASK, _WAKE_EVENT, _EVENT_LOOP
 
     loop = asyncio.get_running_loop()
+    open_knowledge_writer_admission()
     with _STATE_LOCK:
         if _TASK is not None and not _TASK.done():
             return False
@@ -294,9 +303,10 @@ def notify_knowledge_index_changed() -> None:
 
 
 def request_knowledge_indexer_stop() -> asyncio.Task[None] | None:
-    """Detach and cancel the coordinator without waiting for native work."""
+    """Close writer admission, then detach and cancel the coordinator."""
     global _TASK, _WAKE_EVENT, _EVENT_LOOP
 
+    request_knowledge_writer_stop()
     with _STATE_LOCK:
         task = _TASK
         _TASK = None
@@ -327,6 +337,15 @@ async def finish_knowledge_indexer_stop(
             return False
     if task is not None:
         _consume_task_result(task)
+
+    if not await finish_knowledge_writer_stop(
+        deadline_monotonic=deadline_monotonic,
+    ):
+        logger.warning(
+            "Knowledge mutation workers exceeded the shutdown budget; "
+            "the knowledge root is not drained",
+        )
+        return False
 
     # This model instance belongs to main_server's knowledge runtime.  The
     # separately running memory-server process has its own lifecycle.

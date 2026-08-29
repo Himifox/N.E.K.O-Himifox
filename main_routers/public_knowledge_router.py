@@ -21,6 +21,10 @@ from knowledge.catalog_overrides import (
     load_disabled_entries,
 )
 from knowledge.pack_jobs import KnowledgeJobRegistryError
+from knowledge.mutation_runtime import (
+    KnowledgeMutationAdmissionClosed,
+    run_knowledge_writer,
+)
 from knowledge.source_registry import get_source, get_sources
 from knowledge.store import KnowledgeStoreError
 from knowledge.packs import MAX_PACK_BYTES, validate_pack
@@ -320,7 +324,8 @@ async def set_public_knowledge_entry_disabled(request: Request):
     if entry is None:
         return {"ok": False, "reason": "not_found"}
     try:
-        count = await asyncio.to_thread(
+        count = await run_knowledge_writer(
+            service.knowledge_root,
             service.set_entry_disabled,
             source_tag=source_tag,
             title=title,
@@ -362,7 +367,11 @@ async def import_public_knowledge_pack(request: Request):
         if pack is None:
             return {"ok": False, "reason": "pack_too_large"}
         service = await _service_async()
-        result = await asyncio.to_thread(service.stage_pack, pack)
+        result = await run_knowledge_writer(
+            service.knowledge_root,
+            service.stage_pack,
+            pack,
+        )
     except KnowledgeJobRegistryError:
         return {"ok": False, "reason": "knowledge_job_registry_invalid"}
     except (OSError, ValueError) as exc:
@@ -447,7 +456,8 @@ async def apply_public_knowledge_subscription(
 
     try:
         service = await _service_async()
-        result = await asyncio.to_thread(
+        result = await run_knowledge_writer(
+            service.knowledge_root,
             service.stage_pack,
             knowledge_pack,
             subscription=validated_subscription.to_dict(),
@@ -480,7 +490,11 @@ async def cancel_public_knowledge_pack_job(request: Request):
     if not job_id:
         return {"ok": False, "reason": "invalid_request"}
     service = await _service_async()
-    cancelled = await asyncio.to_thread(service.cancel_pack_job, job_id)
+    cancelled = await run_knowledge_writer(
+        service.knowledge_root,
+        service.cancel_pack_job,
+        job_id,
+    )
     return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
 
 
@@ -494,7 +508,11 @@ async def discard_degraded_public_knowledge_pack_job(request: Request):
     if not job_id:
         return {"ok": False, "reason": "invalid_request"}
     service = await _service_async()
-    discarded = await asyncio.to_thread(service.discard_degraded_pack_job, job_id)
+    discarded = await run_knowledge_writer(
+        service.knowledge_root,
+        service.discard_degraded_pack_job,
+        job_id,
+    )
     return {"ok": discarded, "reason": "" if discarded else "not_found"}
 
 
@@ -510,7 +528,8 @@ async def set_public_knowledge_pack_auto_context(request: Request):
         return {"ok": False, "reason": "invalid_request"}
     try:
         service = await _service_async()
-        await asyncio.to_thread(
+        await run_knowledge_writer(
+            service.knowledge_root,
             service.set_pack_auto_context,
             pack_id,
             enabled=enabled,
@@ -532,7 +551,8 @@ async def set_public_knowledge_pack_index_policy(request: Request):
         return {"ok": False, "reason": "invalid_request"}
     try:
         service = await _service_async()
-        await asyncio.to_thread(
+        await run_knowledge_writer(
+            service.knowledge_root,
             service.set_pack_index_policy,
             pack_id,
             local_embedding_enabled=enabled,
@@ -557,7 +577,8 @@ async def set_public_knowledge_pack_material_type(request: Request):
         return {"ok": False, "reason": "invalid_request"}
     try:
         service = await _service_async()
-        await asyncio.to_thread(
+        await run_knowledge_writer(
+            service.knowledge_root,
             service.set_pack_material_type_override,
             pack_id,
             material_type=material_type,
@@ -593,7 +614,8 @@ async def remove_public_knowledge_pack(request: Request):
         expected_provider_package_id = normalized_package_id
     try:
         service = await _service_async()
-        result = await asyncio.to_thread(
+        result = await run_knowledge_writer(
+            service.knowledge_root,
             service.cancel_and_remove_pack,
             pack_id,
             expected_provider=expected_provider,
@@ -606,6 +628,8 @@ async def remove_public_knowledge_pack(request: Request):
         return {"ok": False, "reason": "knowledge_root_untrusted"}
     except ValueError:
         return {"ok": False, "reason": "not_found"}
+    except KnowledgeMutationAdmissionClosed:
+        return {"ok": False, "reason": "knowledge_mutation_stopping"}
     return {"ok": True, **result}
 
 
