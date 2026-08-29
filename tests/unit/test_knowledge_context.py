@@ -500,7 +500,7 @@ async def test_slow_knowledge_open_does_not_block_the_event_loop(monkeypatch):
 
 
 def _turn_context(title: str, source: str = "source:community.demo"):
-    from knowledge.service import KnowledgeTurnContext
+    from knowledge.service import KnowledgeCardIdentity, KnowledgeTurnContext
 
     return KnowledgeTurnContext(
         text=f"card for {title}",
@@ -508,6 +508,9 @@ def _turn_context(title: str, source: str = "source:community.demo"):
         match_mode="automatic_hybrid",
         entry_title=title,
         source_tag=source,
+        card_identities=(
+            KnowledgeCardIdentity(source, " ".join(title.casefold().split())),
+        ),
     )
 
 
@@ -658,16 +661,89 @@ async def test_retrieval_single_flight_does_not_starve_another_character(monkeyp
     started = knowledge_tool._start_automatic_context_task(
         _slow_context, session_key="lanlan-b"
     )
-    assert started is not None, "a second character must not be refused a slot"
+    assert started.status == "started"
+    assert started.task is not None, "a second character must not be refused a slot"
     # Same character while busy: still single-flight.
-    assert (
-        knowledge_tool._start_automatic_context_task(
-            _slow_context, session_key="lanlan-a"
-        )
-        is None
+    busy = knowledge_tool._start_automatic_context_task(
+        _slow_context, session_key="lanlan-a"
     )
+    assert busy.status == "session_busy"
+    assert busy.task is None
 
     release.set()
     await slow
-    started.cancel()
+    started.task.cancel()
     knowledge_tool.reset_public_knowledge_injection_state()
+
+
+@pytest.mark.asyncio
+async def test_automatic_context_capacity_rejects_before_factory_call():
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+    release = asyncio.Event()
+    factory_calls = 0
+
+    def _factory():
+        nonlocal factory_calls
+        factory_calls += 1
+
+        async def _wait():
+            await release.wait()
+
+        return _wait()
+
+    admissions = [
+        knowledge_tool._start_automatic_context_task(
+            _factory,
+            session_key=f"logical-session-{index}",
+        )
+        for index in range(knowledge_tool._MAX_TRACKED_SESSIONS)
+    ]
+    await asyncio.sleep(0)
+    refused = knowledge_tool._start_automatic_context_task(
+        _factory,
+        session_key="logical-session-overflow",
+    )
+
+    assert all(item.status == "started" for item in admissions)
+    assert factory_calls == knowledge_tool._MAX_TRACKED_SESSIONS
+    assert refused.status == "capacity_exhausted"
+    assert refused.task is None
+    assert refused.oldest_active_age_ms >= 0
+
+    release.set()
+    await asyncio.gather(*(item.task for item in admissions if item.task))
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+
+@pytest.mark.asyncio
+async def test_ended_logical_session_drops_late_context(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _context(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return _turn_context("迟到词条")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+    pending = asyncio.create_task(
+        knowledge_tool.build_public_knowledge_turn_context(
+            "旧会话问题",
+            session_key="logical-session-old",
+        )
+    )
+    await started.wait()
+    knowledge_tool.invalidate_public_knowledge_session("logical-session-old")
+    release.set()
+
+    result = await pending
+    assert result.context == ""
+    assert "logical-session-old" not in knowledge_tool._RECENT_INJECTIONS

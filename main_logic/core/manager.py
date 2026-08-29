@@ -30,6 +30,7 @@ from main_logic.proactive_delivery import ProactiveDeliveryManager
 from config import MEMORY_SERVER_PORT, AVATAR_INTERACTION_DEDUPE_MAX_ITEMS
 from utils.config_manager import get_config_manager
 from queue import Queue
+from uuid import uuid4
 import soxr
 from ._shared import logger, ContextAppendResult
 
@@ -170,6 +171,9 @@ class LLMSessionManager(
         self.pending_session_final_prime_complete_event = None
         self.session_start_time = None
         self._session_turn_count = 0  # 当前 session 的用户输入轮次计数
+        # Opaque identity for the user-visible conversation. Provider hot-swaps
+        # keep it; an accepted real teardown rotates it.
+        self._public_knowledge_session_key = uuid4().hex
         self.pending_connector = None
         self.pending_session = None
         # Closing a detached pending session is owned here, not by whoever

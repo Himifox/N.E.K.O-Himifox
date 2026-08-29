@@ -14,6 +14,7 @@ from knowledge.catalog_overrides import (
 )
 from knowledge.packs import validate_pack
 from knowledge.service import (
+    KnowledgeCardIdentity,
     MaterialKnowledgeHit,
     _AUTOMATIC_CONTEXT_CLOSING_FENCE,
     _AUTOMATIC_CONTEXT_MAX_CHARS,
@@ -597,7 +598,7 @@ async def test_short_natural_corpus_phrase_does_not_require_an_intent_command(
 
 
 @pytest.mark.asyncio
-async def test_automatic_context_keeps_its_closing_fence_when_material_overflows(
+async def test_automatic_context_only_records_whole_cards_that_fit(
     monkeypatch,
     tmp_path,
 ):
@@ -646,13 +647,47 @@ async def test_automatic_context_keeps_its_closing_fence_when_material_overflows
     context = await service.abuild_conversation_context("超长素材问题")
 
     assert context.knowledge_hits == 1
-    assert context.corpus_hits == 1
-    # The budget really was hit — otherwise this test would pass even with the
-    # fence appended after truncation.
-    assert len(context.text) > _AUTOMATIC_CONTEXT_MAX_CHARS - 50
+    assert context.corpus_hits == 0
+    assert len(context.card_identities) == 1
+    assert context.card_identities[0].normalized_title.startswith("超长知识词条")
+    assert "超长语料词条" not in context.text
     assert len(context.text) <= _AUTOMATIC_CONTEXT_MAX_CHARS
     assert context.text.startswith("======[EPHEMERAL CONVERSATION REFERENCE]======")
     assert context.text.endswith(_AUTOMATIC_CONTEXT_CLOSING_FENCE)
+
+
+@pytest.mark.asyncio
+async def test_automatic_context_excludes_cooling_card_before_quota(monkeypatch, tmp_path):
+    service = open_knowledge(tmp_path)
+    cooling = _entry("冷却词条", "source:chime")
+    fresh = _entry("全新词条", "source:chime")
+
+    async def _asearch(*_args, **_kwargs):
+        return [
+            MaterialKnowledgeHit(
+                hit=KnowledgeHit(
+                    entry=entry,
+                    score=1.0,
+                    retrieval_modes=("lexical",),
+                    lexical_score=1.0,
+                ),
+                material_type="knowledge",
+            )
+            for entry in (cooling, fresh)
+        ]
+
+    monkeypatch.setattr(service, "asearch", _asearch)
+    context = await service.abuild_conversation_context(
+        "冷却词条和全新词条",
+        excluded_identities=frozenset(
+            {KnowledgeCardIdentity.from_entry(cooling)}
+        ),
+    )
+
+    assert context.hit_count == 1
+    assert context.entry_title == "全新词条"
+    assert context.card_identities == (KnowledgeCardIdentity.from_entry(fresh),)
+    assert "冷却词条" not in context.text
 
 
 @pytest.mark.asyncio
