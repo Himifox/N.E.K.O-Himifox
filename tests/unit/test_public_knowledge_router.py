@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -21,6 +22,15 @@ from knowledge.prebuilt_index import (
 )
 from knowledge.subscriptions import canonical_pack_bytes
 from knowledge.store import KnowledgeStoreError
+
+
+@pytest.fixture(autouse=True)
+def _clear_pack_removal_tasks():
+    import main_routers.public_knowledge_router as module
+
+    module._pack_removal_tasks.clear()
+    yield
+    module._pack_removal_tasks.clear()
 
 
 def _entry(title: str, source: str, *, summary: str = "A compact summary") -> KnowledgeEntry:
@@ -334,6 +344,82 @@ def test_generic_remove_cannot_delete_a_subscribed_pack(monkeypatch, tmp_path):
         "reason": "subscription_identity_mismatch",
     }
     assert service.list_packs()[0]["pack_id"] == "market-fixture"
+
+
+@pytest.mark.asyncio
+async def test_removal_operation_survives_request_cancellation_and_is_queryable(
+    monkeypatch,
+    tmp_path,
+):
+    import main_routers.public_knowledge_router as module
+    from knowledge.removal_operations import get_removal_operation
+
+    operation_id = "remove-operation-fixture-0001"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    service = SimpleNamespace(
+        knowledge_root=tmp_path,
+        cancel_and_remove_pack=lambda *_args, **_kwargs: None,
+    )
+
+    class _Request:
+        async def json(self):
+            return {
+                "pack_id": "market-fixture",
+                "expected_provider": "plugin-market",
+                "expected_provider_package_id": "7",
+                "expected_remote_id": "knowledge/market-fixture",
+                "removal_operation_id": operation_id,
+            }
+
+    async def fake_writer(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {"removed_pack": True, "removed_entries": 1, "cancelled_jobs": 0}
+
+    async def fake_service():
+        return service
+
+    monkeypatch.setattr(module, "_validate_mutation", lambda *_args: None)
+    monkeypatch.setattr(module, "_service_async", fake_service)
+    monkeypatch.setattr(module, "run_knowledge_writer", fake_writer)
+
+    caller = asyncio.create_task(module.remove_public_knowledge_pack(_Request()))
+    await started.wait()
+    operation_task = module._pack_removal_tasks[operation_id]
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert get_removal_operation(tmp_path, operation_id)["status"] == "pending"
+    assert not operation_task.done()
+    release.set()
+    completed = await operation_task
+
+    assert completed["operation_status"] == "committed"
+    assert get_removal_operation(tmp_path, operation_id)["status"] == "committed"
+    repeated = await module.remove_public_knowledge_pack(_Request())
+    assert repeated["operation_status"] == "committed"
+    assert calls == 1
+
+
+def test_removal_status_reports_unknown_operation(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.get(
+        "/api/public-knowledge/packs/remove/status",
+        params={"operation_id": "remove-operation-missing-0001"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "status": "unknown",
+        "operation_id": "remove-operation-missing-0001",
+    }
 
 
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):

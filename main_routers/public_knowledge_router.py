@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
@@ -33,6 +34,13 @@ from knowledge.prebuilt_index import (
     MAX_PREBUILT_VECTOR_BYTES,
     validate_prebuilt_index,
 )
+from knowledge.removal_operations import (
+    KnowledgeRemovalOperationError,
+    begin_removal_operation,
+    complete_removal_operation,
+    get_removal_operation,
+    validate_removal_operation_id,
+)
 from knowledge.subscriptions import (
     SUBSCRIPTION_PROTOCOL_VERSION,
     canonical_pack_bytes,
@@ -44,6 +52,7 @@ from main_routers.shared_state import get_config_manager
 
 
 router = APIRouter(prefix="/api/public-knowledge", tags=["public-knowledge"])
+_pack_removal_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
 _PACK_ENVELOPE_OVERHEAD_BYTES = 64 * 1024
 
 
@@ -602,6 +611,7 @@ async def remove_public_knowledge_pack(request: Request):
         payload.get("expected_provider_package_id") or ""
     ).strip()
     expected_remote_id = str(payload.get("expected_remote_id") or "").strip()
+    removal_operation_id = str(payload.get("removal_operation_id") or "").strip()
     if expected_provider:
         try:
             normalized_package_id = normalize_provider_package_id(
@@ -612,21 +622,153 @@ async def remove_public_knowledge_pack(request: Request):
         if expected_provider != "plugin-market" or not expected_remote_id:
             return {"ok": False, "reason": "invalid_request"}
         expected_provider_package_id = normalized_package_id
-    try:
+    operation_request = {
+        "pack_id": pack_id,
+        "expected_provider": expected_provider,
+        "expected_provider_package_id": expected_provider_package_id,
+        "expected_remote_id": expected_remote_id,
+    }
+    if removal_operation_id:
+        try:
+            removal_operation_id = validate_removal_operation_id(removal_operation_id)
+        except ValueError:
+            return {"ok": False, "reason": "invalid_request"}
         service = await _service_async()
+        task = _pack_removal_tasks.get(removal_operation_id)
+        if task is None:
+            task = asyncio.create_task(
+                _execute_pack_removal_operation(
+                    service,
+                    removal_operation_id,
+                    operation_request,
+                ),
+                name=f"knowledge-pack-remove:{removal_operation_id}",
+            )
+            _pack_removal_tasks[removal_operation_id] = task
+            task.add_done_callback(
+                lambda completed, *, operation_id=removal_operation_id:
+                _pack_removal_operation_done(operation_id, completed)
+            )
+        return await asyncio.shield(task)
+    return await _remove_pack_once(await _service_async(), operation_request)
+
+
+@router.get("/packs/remove/status")
+async def get_public_knowledge_pack_removal_status(
+    operation_id: str = Query(..., min_length=16, max_length=128),
+):
+    try:
+        operation_id = validate_removal_operation_id(operation_id)
+        service = await _service_async()
+        record = await asyncio.to_thread(
+            get_removal_operation,
+            service.knowledge_root,
+            operation_id,
+        )
+    except ValueError:
+        return {"ok": False, "status": "unknown", "reason": "invalid_request"}
+    except KnowledgeRemovalOperationError as exc:
+        return {"ok": False, "status": "unknown", "reason": str(exc)}
+    if record is None:
+        return {"ok": False, "status": "unknown", "operation_id": operation_id}
+    return _removal_operation_response(record)
+
+
+def _pack_removal_operation_done(
+    operation_id: str,
+    completed: asyncio.Task[dict[str, Any]],
+) -> None:
+    if _pack_removal_tasks.get(operation_id) is completed:
+        _pack_removal_tasks.pop(operation_id, None)
+    if not completed.cancelled():
+        completed.exception()
+
+
+async def _execute_pack_removal_operation(
+    service,
+    operation_id: str,
+    operation_request: dict[str, str],
+) -> dict[str, Any]:
+    try:
+        record = await asyncio.to_thread(
+            begin_removal_operation,
+            service.knowledge_root,
+            operation_id,
+            operation_request,
+        )
+    except (KnowledgeRemovalOperationError, ValueError) as exc:
+        return {
+            "ok": False,
+            "reason": str(exc),
+            "operation_id": operation_id,
+            "operation_status": "failed",
+        }
+    if record["status"] != "pending":
+        return _removal_operation_response(record)
+    result = await _remove_pack_once(
+        service,
+        operation_request,
+        resumed=int(record.get("attempts") or 1) > 1,
+    )
+    status = "committed" if result.get("ok") is True else "failed"
+    try:
+        record = await asyncio.to_thread(
+            complete_removal_operation,
+            service.knowledge_root,
+            operation_id,
+            status=status,
+            result=result,
+        )
+    except KnowledgeRemovalOperationError as exc:
+        return {
+            **result,
+            "reason": str(exc),
+            "operation_id": operation_id,
+            "operation_status": "unknown",
+        }
+    return _removal_operation_response(record)
+
+
+def _removal_operation_response(record: dict[str, Any]) -> dict[str, Any]:
+    result = record.get("result")
+    response = dict(result) if isinstance(result, dict) else {"ok": True}
+    return {
+        **response,
+        "operation_id": str(record["operation_id"]),
+        "operation_status": str(record["status"]),
+    }
+
+
+async def _remove_pack_once(
+    service,
+    operation_request: dict[str, str],
+    *,
+    resumed: bool = False,
+) -> dict[str, Any]:
+    try:
         result = await run_knowledge_writer(
             service.knowledge_root,
             service.cancel_and_remove_pack,
-            pack_id,
-            expected_provider=expected_provider,
-            expected_provider_package_id=expected_provider_package_id,
-            expected_remote_id=expected_remote_id,
+            operation_request["pack_id"],
+            expected_provider=operation_request["expected_provider"],
+            expected_provider_package_id=operation_request[
+                "expected_provider_package_id"
+            ],
+            expected_remote_id=operation_request["expected_remote_id"],
         )
     except PermissionError:
         return {"ok": False, "reason": "subscription_identity_mismatch"}
     except KnowledgeStoreError:
         return {"ok": False, "reason": "knowledge_root_untrusted"}
     except ValueError:
+        if resumed:
+            return {
+                "ok": True,
+                "removed_pack": False,
+                "removed_entries": 0,
+                "cancelled_jobs": 0,
+                "idempotent_recovery": True,
+            }
         return {"ok": False, "reason": "not_found"}
     except KnowledgeMutationAdmissionClosed:
         return {"ok": False, "reason": "knowledge_mutation_stopping"}

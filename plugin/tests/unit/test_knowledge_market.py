@@ -496,7 +496,7 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
 
     result = await module.unsubscribe_knowledge_package(
@@ -507,6 +507,8 @@ async def test_unsubscribe_uses_persisted_provider_identity(monkeypatch):
     assert result["ok"] is True
     method, path, kwargs = calls[-1]
     assert (method, path) == ("POST", "packs/remove")
+    operation_id = kwargs["json"].pop("removal_operation_id")
+    assert len(operation_id) >= 16
     assert kwargs["json"] == {
         "pack_id": "fixture-pack",
         "expected_provider": "plugin-market",
@@ -551,7 +553,7 @@ async def test_unsubscribe_rejects_tampered_persisted_package_identity(monkeypat
             }
         )
 
-    async def unexpected_report(_package_id):
+    async def unexpected_report(_package_id, *, deadline):
         pytest.fail("unverified ownership must not be reported remotely")
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
@@ -583,7 +585,7 @@ async def test_unsubscribe_preserves_not_found_without_settled_installation(
             return {"ok": True, "packs": [_installed_subscription()]}
         return {"ok": False, "reason": "not_found"}
 
-    async def unexpected_report(_package_id):
+    async def unexpected_report(_package_id, *, deadline):
         pytest.fail("failed unsubscribe must not be reported remotely")
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
@@ -670,7 +672,7 @@ async def test_legacy_unsubscribe_uses_matching_trusted_descriptor(monkeypatch):
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
 
     result = await module.unsubscribe_knowledge_package(
@@ -709,7 +711,7 @@ async def test_unsubscribe_cancels_active_worker_and_records_terminal_state(monk
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
     created = await module.subscribe_knowledge_package(
         module.KnowledgeSubscribeRequest(
@@ -792,7 +794,7 @@ async def test_unsubscribe_waits_for_installation_mutation_before_remove(monkeyp
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
     await apply_started.wait()
     unsubscribe = asyncio.create_task(
@@ -878,7 +880,7 @@ async def test_cancelled_unsubscribe_retains_guard_until_installation_settles(
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
     await apply_started.wait()
     request = module.KnowledgeUnsubscribeRequest(
@@ -971,7 +973,7 @@ async def test_unsubscribe_reconciles_installation_without_durable_state(
 
     reports = []
 
-    async def report(package_id):
+    async def report(package_id, *, deadline):
         reports.append(package_id)
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
@@ -1020,7 +1022,7 @@ async def test_unsubscribe_preinstall_cancellation_is_idempotent_success(monkeyp
 
     reports = []
 
-    async def report(package_id):
+    async def report(package_id, *, deadline):
         reports.append(package_id)
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
@@ -1092,7 +1094,7 @@ async def test_unsubscribe_old_cancellation_does_not_override_new_subscription(
 
     reports = []
 
-    async def report(package_id):
+    async def report(package_id, *, deadline):
         reports.append(package_id)
 
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
@@ -1111,6 +1113,8 @@ async def test_unsubscribe_old_cancellation_does_not_override_new_subscription(
     assert len(calls) == 1
     method, path, kwargs = calls[0]
     assert (method, path) == ("POST", "packs/remove")
+    operation_id = kwargs["json"].pop("removal_operation_id")
+    assert len(operation_id) >= 16
     assert kwargs["json"] == {
         "pack_id": "fixture-pack",
         "expected_provider": "plugin-market",
@@ -1162,7 +1166,7 @@ async def test_unsubscribe_corrupt_latest_task_timestamp_uses_durable_registry(
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
 
     result = await module.unsubscribe_knowledge_package(
@@ -1212,7 +1216,7 @@ async def test_unsubscribe_out_of_order_task_times_use_durable_registry(monkeypa
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
 
     result = await module.unsubscribe_knowledge_package(
@@ -1286,7 +1290,7 @@ async def test_subscribe_conflicts_while_unsubscribe_is_reserved(monkeypatch):
     monkeypatch.setattr(
         module,
         "_report_unsubscribe_best_effort",
-        lambda _package_id: asyncio.sleep(0),
+        lambda _package_id, *, deadline: asyncio.sleep(0),
     )
     removing = asyncio.create_task(
         module.unsubscribe_knowledge_package(
@@ -1592,3 +1596,148 @@ def test_unsubscribe_reports_busy_when_the_budget_is_already_spent(monkeypatch):
     assert excinfo.value.status_code == 503
     assert excinfo.value.detail["code"] == "knowledge_installation_busy"
     assert calls == [], "no removal request may be sent once the budget is gone"
+
+
+@pytest.mark.asyncio
+async def test_main_request_absolute_deadline_bounds_all_http_phases(monkeypatch):
+    class _SlowClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def request(self, *_args, **_kwargs):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", _SlowClient)
+    deadline = asyncio.get_running_loop().time() + 0.01
+
+    with pytest.raises(module._KnowledgeTaskError) as excinfo:
+        await module._main_request(
+            "POST",
+            "packs/remove",
+            json={},
+            timeout=1.0,
+            deadline=deadline,
+        )
+
+    assert excinfo.value.code == "main_server_timeout"
+
+
+@pytest.mark.asyncio
+async def test_successful_remove_does_not_wait_past_deadline_for_report(monkeypatch):
+    delete_started = asyncio.Event()
+
+    async def no_active(*_args, **_kwargs):
+        return None
+
+    async def owned(*_args, **_kwargs):
+        return "fixture-pack", "knowledge/fixture-pack"
+
+    async def fake_main(method, path, **_kwargs):
+        assert (method, path) == ("POST", "packs/remove")
+        return {"ok": True, "removed_pack": True, "removed_entries": 1}
+
+    async def oauth():
+        return {"access_token": "fixture"}
+
+    class _BlockedReportClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def delete(self, *_args, **_kwargs):
+            delete_started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_cancel_active_subscription", no_active)
+    monkeypatch.setattr(module, "_resolve_owned_subscription", owned)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_ensure_valid_oauth_token", oauth)
+    monkeypatch.setattr(module.httpx, "AsyncClient", _BlockedReportClient)
+    monkeypatch.setattr(module, "_UNSUBSCRIBE_TOTAL_BUDGET_SECONDS", 0.08)
+    monkeypatch.setattr(module, "_UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS", 0.01)
+
+    result = await asyncio.wait_for(
+        module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        ),
+        timeout=0.3,
+    )
+
+    assert delete_started.is_set()
+    assert result["local_removed"] is True
+    assert result["remote_reported"] is False
+
+
+@pytest.mark.asyncio
+async def test_uncertain_remove_transfers_guard_to_same_operation_drain(monkeypatch):
+    committed = asyncio.Event()
+    posts: list[str] = []
+    queried: list[str] = []
+
+    async def no_active(*_args, **_kwargs):
+        return None
+
+    async def owned(*_args, **_kwargs):
+        return "fixture-pack", "knowledge/fixture-pack"
+
+    async def fake_main(method, path, **kwargs):
+        if (method, path) == ("POST", "packs/remove"):
+            posts.append(kwargs["json"]["removal_operation_id"])
+            raise module._KnowledgeTaskError("main_server_timeout", "fixture")
+        assert (method, path) == ("GET", "packs/remove/status")
+        operation_id = kwargs["params"]["operation_id"]
+        queried.append(operation_id)
+        if committed.is_set():
+            return {
+                "ok": True,
+                "operation_id": operation_id,
+                "operation_status": "committed",
+            }
+        return {
+            "ok": False,
+            "operation_id": operation_id,
+            "operation_status": "pending",
+        }
+
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    monkeypatch.setattr(module, "_cancel_active_subscription", no_active)
+    monkeypatch.setattr(module, "_resolve_owned_subscription", owned)
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_UNSUBSCRIBE_TOTAL_BUDGET_SECONDS", 0.04)
+    monkeypatch.setattr(module, "_UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS", 0.005)
+    monkeypatch.setattr(module, "_REMOVAL_STATUS_POLL_SECONDS", 0.001)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await module.unsubscribe_knowledge_package(
+            module.KnowledgeUnsubscribeRequest(
+                package_id=7,
+                pack_id="fixture-pack",
+            ),
+            token="fixture",
+        )
+
+    assert excinfo.value.detail["code"] == "removal_pending"
+    assert 7 in module._unsubscribing_package_ids
+    assert posts and all(item == posts[0] for item in queried)
+    drain = module._unsubscribe_settlements[7]
+    committed.set()
+    await asyncio.wait_for(asyncio.shield(drain), timeout=0.3)
+    await asyncio.sleep(0)
+    assert 7 not in module._unsubscribing_package_ids
+    assert posts == [posts[0]]

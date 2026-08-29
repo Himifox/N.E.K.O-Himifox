@@ -41,11 +41,20 @@ router = APIRouter(prefix="/market/knowledge", tags=["market-knowledge"])
 # durable result changes afterwards. Stay strictly under the proxy so the caller
 # always learns the real outcome.
 _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS = KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SECONDS
+_UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS = 0.05
+_UNSUBSCRIBE_DRAIN_SECONDS = 24 * 60 * 60
+_REMOVAL_STATUS_POLL_SECONDS = 0.25
 _CONNECT_TIMEOUT_SECONDS = 2.0
 
 
 def _remaining_budget(deadline: float) -> float:
     return max(deadline - asyncio.get_running_loop().time(), 0.0)
+
+
+def _work_deadline(deadline: float) -> float:
+    return deadline - _UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS
+
+
 logger = get_logger("server.routes.knowledge_market")
 _tasks: dict[str, dict[str, Any]] = {}
 _task_workers: dict[str, asyncio.Task[None]] = {}
@@ -321,7 +330,7 @@ def _unsubscribe_settlement_done(
 ) -> None:
     if _unsubscribe_settlements.get(package_id) is completed:
         _unsubscribe_settlements.pop(package_id, None)
-    _unsubscribing_package_ids.discard(package_id)
+        _unsubscribing_package_ids.discard(package_id)
     if not completed.cancelled():
         completed.exception()
 
@@ -331,20 +340,25 @@ async def _settle_knowledge_unsubscribe(
     *,
     deadline: float,
 ) -> dict[str, Any]:
+    work_deadline = _work_deadline(deadline)
     active_task = await _cancel_active_subscription(
         payload.package_id,
         claimed_pack_id=payload.pack_id,
-        deadline=deadline,
+        deadline=work_deadline,
     )
     if active_task is not None and active_task.get("preinstall_cancelled") is True:
-        await _report_unsubscribe_best_effort(payload.package_id)
+        await _report_unsubscribe_best_effort(
+            payload.package_id,
+            deadline=work_deadline,
+        )
         return _preinstall_cancellation_result()
     pack_id, remote_id = await _resolve_owned_subscription(
         package_id=payload.package_id,
         claimed_pack_id=payload.pack_id,
         active_task=active_task,
+        deadline=work_deadline,
     )
-    removal_budget = _remaining_budget(deadline)
+    removal_budget = _remaining_budget(work_deadline)
     if removal_budget <= 0:
         # Waiting on the in-flight install ate the whole budget. Sending a request
         # that cannot finish would just surface as a confusing transport error.
@@ -352,23 +366,38 @@ async def _settle_knowledge_unsubscribe(
             status_code=503,
             detail={"code": "knowledge_installation_busy"},
         )
+    removal_operation_id = secrets.token_urlsafe(24)
+    removal_request = {
+        "pack_id": pack_id,
+        "expected_provider": "plugin-market",
+        "expected_provider_package_id": str(payload.package_id),
+        "expected_remote_id": remote_id,
+        "removal_operation_id": removal_operation_id,
+    }
     try:
         result = await _main_request(
             "POST",
             "packs/remove",
             timeout=removal_budget,
-            json={
-                "pack_id": pack_id,
-                "expected_provider": "plugin-market",
-                "expected_provider_package_id": str(payload.package_id),
-                "expected_remote_id": remote_id,
-            },
+            deadline=work_deadline,
+            json=removal_request,
         )
-    except _KnowledgeTaskError as exc:
+    except _KnowledgeTaskError:
+        result = await _confirm_removal_operation(
+            removal_operation_id,
+            deadline=work_deadline,
+        )
+    if str(result.get("operation_status") or "committed") in {"pending", "unknown"}:
+        _transfer_removal_to_drain(payload.package_id, removal_operation_id)
+        code = (
+            "removal_pending"
+            if result.get("operation_status") == "pending"
+            else "removal_operation_unknown"
+        )
         raise HTTPException(
             status_code=503,
-            detail={"code": exc.code},
-        ) from exc
+            detail={"code": code, "operation_id": removal_operation_id},
+        )
     if result.get("ok") is not True:
         code = str(result.get("reason") or "subscription_not_found")
         if (
@@ -377,11 +406,68 @@ async def _settle_knowledge_unsubscribe(
             and active_task.get("_installation_settled_for_unsubscribe") is True
         ):
             active_task["preinstall_cancelled"] = True
-            await _report_unsubscribe_best_effort(payload.package_id)
+            await _report_unsubscribe_best_effort(
+                payload.package_id,
+                deadline=work_deadline,
+            )
             return _preinstall_cancellation_result()
         raise HTTPException(status_code=409, detail={"code": code})
-    await _report_unsubscribe_best_effort(payload.package_id)
-    return result
+    remote_reported = await _report_unsubscribe_best_effort(
+        payload.package_id,
+        deadline=work_deadline,
+    )
+    return {
+        **result,
+        "local_removed": True,
+        "remote_reported": remote_reported,
+    }
+
+
+async def _confirm_removal_operation(
+    operation_id: str,
+    *,
+    deadline: float,
+) -> dict[str, Any]:
+    last_status = "unknown"
+    while _remaining_budget(deadline) > 0:
+        try:
+            result = await _main_request(
+                "GET",
+                "packs/remove/status",
+                params={"operation_id": operation_id},
+                timeout=_remaining_budget(deadline),
+                deadline=deadline,
+            )
+        except _KnowledgeTaskError:
+            result = {"ok": False, "status": "unknown"}
+        last_status = str(result.get("operation_status") or result.get("status") or "unknown")
+        if last_status in {"committed", "failed"}:
+            return result
+        remaining = _remaining_budget(deadline)
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(_REMOVAL_STATUS_POLL_SECONDS, remaining))
+    return {"ok": False, "operation_status": last_status}
+
+
+def _transfer_removal_to_drain(package_id: int, operation_id: str) -> None:
+    current = asyncio.current_task()
+    if current is None or _unsubscribe_settlements.get(package_id) is not current:
+        return
+    drain = asyncio.create_task(
+        _drain_removal_operation(operation_id),
+        name=f"market-knowledge-remove-drain-{package_id}",
+    )
+    _unsubscribe_settlements[package_id] = drain
+    drain.add_done_callback(
+        lambda completed, *, package_id=package_id:
+        _unsubscribe_settlement_done(package_id, completed)
+    )
+
+
+async def _drain_removal_operation(operation_id: str) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + _UNSUBSCRIBE_DRAIN_SECONDS
+    return await _confirm_removal_operation(operation_id, deadline=deadline)
 
 
 async def _cancel_active_subscription(
@@ -440,7 +526,18 @@ async def _cancel_active_subscription(
     )
     if worker is not None:
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        waiter = asyncio.gather(worker, return_exceptions=True)
+        if deadline is None:
+            await waiter
+        else:
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await waiter
+            except TimeoutError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "knowledge_installation_busy"},
+                ) from exc
     if installation_mutation is not None:
         # Shielded on purpose: a running installation must finish rather than be
         # torn in half. Bounded on purpose too: if it outlives our budget we stop
@@ -490,6 +587,7 @@ async def _resolve_owned_subscription(
     package_id: int,
     claimed_pack_id: str,
     active_task: dict[str, Any] | None,
+    deadline: float | None = None,
 ) -> tuple[str, str]:
     if active_task is not None:
         resolved_pack_id = str(active_task.get("resolved_pack_id") or "")
@@ -502,7 +600,12 @@ async def _resolve_owned_subscription(
             return resolved_pack_id, resolved_remote_id
 
     try:
-        response = await _main_request("GET", "packs")
+        response = await _main_request(
+            "GET",
+            "packs",
+            timeout=_remaining_budget(deadline) if deadline is not None else None,
+            deadline=deadline,
+        )
     except _KnowledgeTaskError:
         _raise_unsubscribe_error("subscription_ownership_unverifiable")
     packs = tuple(
@@ -527,6 +630,7 @@ async def _resolve_owned_subscription(
             package_id=package_id,
             claimed_pack_id=claimed_pack_id,
             subscription=matches[0]["subscription"],
+            deadline=deadline,
         )
 
     legacy = next(
@@ -546,6 +650,7 @@ async def _resolve_owned_subscription(
         package_id=package_id,
         claimed_pack_id=claimed_pack_id,
         subscription=legacy["subscription"],
+        deadline=deadline,
     )
 
 
@@ -554,6 +659,7 @@ async def _revalidate_owned_market_subscription(
     package_id: int,
     claimed_pack_id: str,
     subscription: dict[str, Any],
+    deadline: float | None = None,
 ) -> tuple[str, str]:
     version = str(subscription.get("version") or "")
     channel = str(subscription.get("channel") or "")
@@ -561,15 +667,20 @@ async def _revalidate_owned_market_subscription(
     material_type = str(subscription.get("material_type") or "")
     artifact_sha256 = str(subscription.get("artifact_sha256") or "")
     try:
-        descriptor = await _fetch_version_descriptor(
-            KnowledgeSubscribeRequest(
-                package_id=package_id,
-                version=version,
-                channel=channel,
-                pack_id=claimed_pack_id,
-            )
+        descriptor_request = KnowledgeSubscribeRequest(
+            package_id=package_id,
+            version=version,
+            channel=channel,
+            pack_id=claimed_pack_id,
         )
-    except (ValueError, _KnowledgeTaskError):
+        if deadline is None:
+            descriptor = await _fetch_version_descriptor(descriptor_request)
+        else:
+            async with asyncio.timeout_at(deadline):
+                descriptor = await _fetch_version_descriptor(
+                    descriptor_request,
+                )
+    except (TimeoutError, ValueError, _KnowledgeTaskError):
         _raise_unsubscribe_error("subscription_ownership_unverifiable")
     if (
         descriptor.package_id != package_id
@@ -916,6 +1027,7 @@ async def _main_request(
     params: dict[str, Any] | None = None,
     json: dict[str, Any] | None = None,
     timeout: float | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     import config
 
@@ -934,23 +1046,41 @@ async def _main_request(
         if method == "POST"
         else KNOWLEDGE_GET_TIMEOUT_SECONDS
     )
+    if deadline is not None:
+        remaining = _remaining_budget(deadline)
+        if remaining <= 0:
+            raise _KnowledgeTaskError(
+                "main_server_timeout", "Main Server 请求超过总期限"
+            )
+        request_timeout = min(request_timeout, remaining)
     # httpx treats connect/read/write/pool independently, so a fixed connect
     # budget silently outlives a shorter overall timeout — with a deadline-derived
     # timeout the request could still spend 2s connecting after the budget was
     # already spent. Clamp it into whatever the caller actually has left.
     connect_timeout = min(_CONNECT_TIMEOUT_SECONDS, request_timeout)
-    try:
+    async def request_once():
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(request_timeout, connect=connect_timeout),
             trust_env=False,
         ) as client:
-            response = await client.request(
+            return await client.request(
                 method,
                 f"http://127.0.0.1:{port}/api/public-knowledge/{path}",
                 params=params,
                 json=json,
                 headers=headers,
             )
+
+    try:
+        if deadline is None:
+            response = await request_once()
+        else:
+            async with asyncio.timeout_at(deadline):
+                response = await request_once()
+    except TimeoutError as exc:
+        raise _KnowledgeTaskError(
+            "main_server_timeout", "Main Server 请求超过总期限"
+        ) from exc
     except httpx.RequestError as exc:
         raise _KnowledgeTaskError(
             "main_server_unavailable", "Main Server 不可用"
@@ -966,7 +1096,15 @@ async def _main_request(
             "main_server_rejected", "Main Server 拒绝了请求"
         ) from exc
     try:
-        payload = response.json()
+        if deadline is None:
+            payload = response.json()
+        else:
+            async with asyncio.timeout_at(deadline):
+                payload = await asyncio.to_thread(response.json)
+    except TimeoutError as exc:
+        raise _KnowledgeTaskError(
+            "main_server_timeout", "Main Server 响应解析超过总期限"
+        ) from exc
     except ValueError as exc:
         raise _KnowledgeTaskError(
             "main_server_invalid_response", "Main Server 返回了无效响应"
@@ -1045,19 +1183,33 @@ async def _report_subscription_best_effort(
         logger.warning("knowledge subscription report failed: {}", type(exc).__name__)
 
 
-async def _report_unsubscribe_best_effort(package_id: int) -> None:
+async def _report_unsubscribe_best_effort(
+    package_id: int,
+    *,
+    deadline: float,
+) -> bool:
     try:
-        token_data = await _ensure_valid_oauth_token()
-        if not token_data or not token_data.get("access_token"):
-            return
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.delete(
-                f"{MARKET_API_URL.rstrip('/')}/api/v1/me/knowledge-subscriptions/{package_id}",
-                headers={"Authorization": f"Bearer {token_data['access_token']}"},
+        async with asyncio.timeout_at(deadline):
+            token_data = await _ensure_valid_oauth_token()
+            if not token_data or not token_data.get("access_token"):
+                return False
+            remaining = _remaining_budget(deadline)
+            if remaining <= 0:
+                return False
+            timeout = httpx.Timeout(
+                min(10.0, remaining),
+                connect=min(_CONNECT_TIMEOUT_SECONDS, remaining),
             )
-            response.raise_for_status()
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.delete(
+                    f"{MARKET_API_URL.rstrip('/')}/api/v1/me/knowledge-subscriptions/{package_id}",
+                    headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                )
+                response.raise_for_status()
+        return True
     except Exception as exc:
         logger.warning("knowledge unsubscribe report failed: {}", type(exc).__name__)
+        return False
 
 
 def _verify_bridge_token(token: str) -> None:
