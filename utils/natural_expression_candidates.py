@@ -214,7 +214,22 @@ _TEMPLATE_RE = re.compile(
     # leading letter (or `/`) costs nothing: real HTML code containers are
     # `_html_raw_text_spans`' job, and this alternative only ever existed for
     # placeholder-shaped text.
-    r"</?[A-Za-z][^<>\r\n]{0,79}>|\[[A-Z][A-Z0-9_-]{1,63}\]"
+    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
+    # real tag carrying long class/style/data-* attributes busted that cap,
+    # so the whole tag failed to match and its attributes -- including
+    # data-key="..." payloads -- were mined and persisted. The cap never
+    # bought what it looked like it bought either: "a <b and c> d" matched
+    # under it just as well, because the leading-letter requirement, not
+    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
+    # of removing it is one line of speech between a tag-shaped opener and
+    # a later ">" -- over-protection, which this module accepts, against a
+    # leak, which it does not.
+    #
+    # Atomic for the same reason as the containers above: the run stops
+    # only at "<", ">" or a newline, so a character handed back can never
+    # let the ">" match, and an opener with no closer now fails in one
+    # pass instead of one per character.
+    r"</?[A-Za-z](?>[^<>\r\n]*)>|\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
 
 
@@ -1602,6 +1617,52 @@ def build_report(
     }
 
 
+def _clip_dominant_message(
+    analyzed: list[SourceMessage],
+) -> list[SourceMessage] | None:
+    """Halve the one message that dominates the window, or None if none does.
+
+    Found by POSITION, not assumed to be the newest. Both budgets clipped
+    only the newest and then evicted history, so an oversized reply sitting
+    anywhere else took the whole window down with it: three ordinary replies
+    sharing a phrase plus one 128 KiB second-newest reply left exactly ONE
+    message analyzed -- the evictions threw away the replies that make the
+    distinct-message threshold reachable, and then threw away the outlier
+    too -- and the panel reported not enough history for a window that had
+    plenty.
+
+    "Dominant" is measured against the rest rather than assumed, so a window
+    that is merely large as a whole still narrows by dropping messages,
+    which is the cheaper cut. Halving also terminates: a message stops being
+    dominant after enough halvings, and the caller falls back to evicting.
+    """
+    if len(analyzed) < 2:
+        return None
+    index = max(
+        range(len(analyzed)), key=lambda position: len(analyzed[position].content)
+    )
+    longest = analyzed[index]
+    others = sum(len(message.content) for message in analyzed) - len(
+        longest.content
+    )
+    if (
+        len(longest.content) <= others
+        or len(longest.content) <= _USER_REVIEW_MIN_TRUNCATED_CHARACTERS
+    ):
+        return None
+    return (
+        analyzed[:index]
+        + [
+            SourceMessage(
+                language=longest.language,
+                content=longest.content[: len(longest.content) // 2],
+                source_line=longest.source_line,
+            )
+        ]
+        + analyzed[index + 1 :]
+    )
+
+
 def build_user_review_report(
     messages: Sequence[SourceMessage],
     *,
@@ -1671,6 +1732,15 @@ def build_user_review_report(
         and sum(len(message.content) for message in analyzed)
         > USER_REVIEW_MAX_INPUT_CHARACTERS
     ):
+        # Clip a dominant message before evicting any. Evicting from the
+        # front first discarded the replies that carry the repeated phrase
+        # and then discarded the outlier anyway, so the window shrank to
+        # one message and the panel reported not enough history.
+        clipped = _clip_dominant_message(analyzed)
+        if clipped is not None:
+            analyzed = clipped
+            content_truncated = True
+            continue
         analyzed = analyzed[1:]
 
     # A lone survivor can still be over the budget if it was never the
@@ -1715,22 +1785,12 @@ def build_user_review_report(
             # a window that is merely large as a whole still narrows by
             # dropping messages, which is the cheaper cut.
             if len(analyzed) > 1:
-                newest = analyzed[-1]
-                preceding = sum(
-                    len(message.content) for message in analyzed[:-1]
-                )
-                if (
-                    len(newest.content) > preceding
-                    and len(newest.content)
-                    > _USER_REVIEW_MIN_TRUNCATED_CHARACTERS
-                ):
-                    analyzed = analyzed[:-1] + [
-                        SourceMessage(
-                            language=newest.language,
-                            content=newest.content[: len(newest.content) // 2],
-                            source_line=newest.source_line,
-                        )
-                    ]
+                # By POSITION, not newest-only: this path had the same
+                # blind spot the character budget did, and an outlier
+                # sitting anywhere but last took the history with it.
+                clipped = _clip_dominant_message(analyzed)
+                if clipped is not None:
+                    analyzed = clipped
                     content_truncated = True
                     continue
                 analyzed = analyzed[-(len(analyzed) // 2):]

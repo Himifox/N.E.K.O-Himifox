@@ -117,7 +117,22 @@ _PROTECTED_RE = re.compile(
     # this side alone -- the two paths are supposed to mask the same text,
     # and the divergence silently cost the effects record a legitimate
     # signature on one of the commonest shapes in this project's speech.
-    r"</?[A-Za-z][^<>\r\n]{0,79}>|"
+    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
+    # real tag carrying long class/style/data-* attributes busted that cap,
+    # so the whole tag failed to match and its attributes -- including
+    # data-key="..." payloads -- were mined and persisted. The cap never
+    # bought what it looked like it bought either: "a <b and c> d" matched
+    # under it just as well, because the leading-letter requirement, not
+    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
+    # of removing it is one line of speech between a tag-shaped opener and
+    # a later ">" -- over-protection, which this module accepts, against a
+    # leak, which it does not.
+    #
+    # Atomic for the same reason as the containers above: the run stops
+    # only at "<", ">" or a newline, so a character handed back can never
+    # let the ">" match, and an opener with no closer now fails in one
+    # pass instead of one per character.
+    r"</?[A-Za-z](?>[^<>\r\n]*)>|"
     r"\[[A-Z][A-Z0-9_-]{1,63}\]"
 )
 # How many times a reset re-cuts when a concurrent write lands after its

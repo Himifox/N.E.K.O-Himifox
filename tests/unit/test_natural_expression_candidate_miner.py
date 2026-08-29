@@ -2557,3 +2557,107 @@ def test_a_tab_cannot_pad_a_container_marker():
     assert _protects(
         "  - " + ticks + chr(10) + secret + chr(10) + "  - " + ticks, secret
     )
+
+
+def test_a_long_html_tag_still_protects_its_attributes():
+    """An 80-character cap on the attribute run made a real tag fail to match.
+
+    Long class/style/data-* attributes are ordinary, and busting the cap left
+    the WHOLE tag unrecognised -- so a data-key payload inside it was mined and
+    persisted, while its short twin was masked.
+
+    The cap never bought what it looked like it bought: "a <b and c> d" matched
+    under it just as well. What keeps this off "<3", ">_<" and "->" is the
+    leading-letter requirement, not the length. So the cost of removing it is
+    one line of speech between a tag-shaped opener and a later ">", which is
+    over-protection, against a leak.
+    """
+    secret = "secret helper phrase"
+    short_tag = '<div data-key="' + secret + '">hello</div>'
+    long_tag = (
+        '<div data-pad="' + "x" * 90 + '" data-key="' + secret + '">hello</div>'
+    )
+
+    assert _protects(short_tag, secret)
+    assert _protects(long_tag, secret), (
+        "a tag with long attributes was left unprotected and its payload mined"
+    )
+
+    # The duals, in the runaway direction. A tag-shaped opener is still
+    # required, and the run is still bounded to its own line.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "3 < 5 and 10 > 7 " + catchphrase + " " + catchphrase, catchphrase
+    )
+    assert not _protects(
+        "see <a href" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    ), "an unclosed tag opener ran past its line into the speech after it"
+
+
+def test_an_oversized_reply_anywhere_does_not_take_the_history_with_it():
+    """The outlier is found by POSITION, not assumed to be the newest.
+
+    Both budgets clipped only the newest and then evicted history, so an
+    oversized reply sitting anywhere else took the whole window down with it:
+    the evictions threw away the replies that make the distinct-message
+    threshold reachable, and then threw away the outlier too. The panel
+    reported not enough history for a window that had plenty.
+
+    The outlier sits SECOND-NEWEST here, so the newest-only clip above cannot
+    be what rescues it.
+    """
+    phrase = "我们一起去公园散步吧"
+    messages = [
+        candidate_core.SourceMessage("zh", "\u554a " + phrase + " \u5462", 1),
+        candidate_core.SourceMessage("zh", "\u55ef " + phrase + " \u5440", 2),
+        candidate_core.SourceMessage("zh", "\u597d " + phrase + " \u54e6", 3),
+        candidate_core.SourceMessage(
+            "zh",
+            "\u5c0f" * (candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS + 10),
+            4,
+        ),
+        candidate_core.SourceMessage("zh", "\u597d\u7684", 5),
+    ]
+
+    report = candidate_core.build_user_review_report(messages)
+    summary = report["summary"]
+
+    assert summary["analyzed_message_count"] == len(messages), (
+        "the window was narrowed to %d messages, so the replies carrying the "
+        "repeated phrase were evicted to make room for an outlier that was "
+        "then evicted too" % summary["analyzed_message_count"]
+    )
+    assert summary["content_truncated"] is True
+    # Candidates are n-grams OF the shared phrase, so the claim to assert is
+    # that evidence from all THREE ordinary replies survived -- that is what
+    # the eviction used to destroy, and what the distinct-message threshold
+    # needs.
+    from_three = [
+        candidate
+        for candidate in report["candidates"]
+        if candidate["message_count"] == 3
+        and str(candidate["phrase"]) in phrase
+    ]
+    assert from_three, (
+        "no candidate came from all three replies that shared the phrase, "
+        "so their evidence did not survive the narrowing"
+    )
+
+    # The dual, which is what stops this from being "always cut a body": a
+    # window that is merely large as a WHOLE has no dominant message, so it
+    # still narrows by dropping. Pinned by
+    # test_a_uniformly_large_window_narrows_without_cutting_a_body above.
+    uniform = [
+        candidate_core.SourceMessage(
+            "zh",
+            "\u5c0f" * (candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS // 3),
+            index,
+        )
+        for index in range(1, 6)
+    ]
+    assert candidate_core._clip_dominant_message(uniform) is None, (
+        "a uniformly large window was treated as having an outlier"
+    )
+    # And a single message is never 'dominant' -- the callers handle that case.
+    assert candidate_core._clip_dominant_message(uniform[:1]) is None
