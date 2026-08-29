@@ -2661,3 +2661,122 @@ def test_an_oversized_reply_anywhere_does_not_take_the_history_with_it():
     )
     # And a single message is never 'dominant' -- the callers handle that case.
     assert candidate_core._clip_dominant_message(uniform[:1]) is None
+
+
+def test_an_unmatched_link_target_does_not_poison_later_links():
+    """The fix for brackets inside a target must not outlive the target.
+
+    Carrying an "inside a target" depth through the scan raised it on a "(" that
+    never closed and never lowered it again, so every later "[" stopped counting
+    and a genuine link after it went unprotected. That is a LEAK, traded for the
+    over-protection the depth was added to stop -- the wrong direction, so the
+    scan is two passes now: parentheses first, then labels jumping over targets
+    that actually close.
+
+    The needle is not URL-shaped, so ``_url_spans`` cannot be what satisfies
+    these.
+    """
+    secret = "secret token value"
+
+    assert _protects("[docs](/api/[v1 then [real](" + secret + ")", secret), (
+        "a target that never closes left the real link after it unprotected"
+    )
+    assert _protects("[a](/x [b](/y) and [c](" + secret + ")", secret)
+    # An unclosed target at the very start, with the real link last.
+    assert _protects("[x](( [y](" + secret + ")", secret)
+
+    # And the over-protection fix it must not undo.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "[docs](/api/[v1) okay](" + catchphrase + ")", catchphrase
+    ), "a bracket inside a CLOSED target was counted as a label again"
+
+
+def test_a_bare_internationalized_address_is_protected():
+    """The mailto form was fixed first; a bare address is how one is written.
+
+    The bare-address rule is ASCII-only, so a fully internationalized address
+    matched nothing and its local part -- the identifying half -- was mined and
+    persisted. What makes the open alphabet safe here is the local@domain.tld
+    SHAPE, and the atom class stopping at whitespace and CJK punctuation, so a
+    match cannot run past the sentence it sits in.
+    """
+    local = "用户秘密"
+    address = local + "@例子.公司"
+
+    assert _protects("\u5199\u4fe1\u7ed9 " + address + " \u5427", local), (
+        "a bare internationalized address was mined"
+    )
+    # Bounded to its own sentence: speech after the CJK full stop stays minable,
+    # which is what stops this from being a runaway.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "\u5199\u4fe1\u7ed9" + address + "\u3002" + catchphrase + " " + catchphrase,
+        catchphrase,
+    ), "the address rule ran past the sentence it sits in"
+
+    # The duals. ASCII addresses still resolve, and ordinary CJK speech with no
+    # address is still minable.
+    assert _protects("write to ops.secret@example.com now", "ops.secret")
+    assert not _protects(
+        "\u597d\u5440 " + catchphrase + " " + catchphrase, catchphrase
+    )
+    # An "@" alone is not an address -- the domain needs a dotted tail.
+    assert not _protects(
+        "\u5c0f\u660e@\u516c\u56ed " + catchphrase + " " + catchphrase, catchphrase
+    )
+
+
+def test_two_comparably_heavy_replies_do_not_evict_the_history():
+    """"Longer than all the others combined" catches exactly one outlier.
+
+    Two comparably heavy replies evaded it, and the eviction that followed threw
+    away the ordinary replies carrying the repeated phrase -- the very defect the
+    single-outlier clip was added to stop. Dominance is measured against the
+    AVERAGE of the rest instead.
+    """
+    phrase = "我们一起去公园散步吧"
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    messages = [
+        candidate_core.SourceMessage("zh", "\u554a " + phrase + " \u5462", 1),
+        candidate_core.SourceMessage("zh", "\u55ef " + phrase + " \u5440", 2),
+        candidate_core.SourceMessage("zh", "\u597d " + phrase + " \u54e6", 3),
+        candidate_core.SourceMessage("zh", "\u5c0f" * budget, 4),
+        candidate_core.SourceMessage("zh", "\u5927" * budget, 5),
+    ]
+
+    report = candidate_core.build_user_review_report(messages)
+    summary = report["summary"]
+
+    assert summary["analyzed_message_count"] == len(messages), (
+        "two comparable heavies evicted the window down to %d messages"
+        % summary["analyzed_message_count"]
+    )
+    assert any(
+        candidate["message_count"] == 3 and str(candidate["phrase"]) in phrase
+        for candidate in report["candidates"]
+    ), "the evidence from the three ordinary replies did not survive"
+
+    # The ratio is what separates this from a uniformly large window, so pin it
+    # rather than only exercising it: a derived test that merely reads the
+    # constant would still pass if the constant changed.
+    assert candidate_core._USER_REVIEW_OUTLIER_RATIO == 2
+    uniform = [
+        candidate_core.SourceMessage("zh", "\u5c0f" * (budget // 3), index)
+        for index in range(1, 6)
+    ]
+    assert candidate_core._clip_dominant_message(uniform) is None, (
+        "a uniformly large window was treated as having an outlier, so every "
+        "body would be cut instead of the window narrowing"
+    )
+    # Exactly at the ratio is NOT dominant; just past it is. Four messages, so
+    # the average of the rest is the sum of the other three divided by three.
+    rest = 3 * 3000
+    at_ratio = [
+        candidate_core.SourceMessage("zh", "x" * 3000, index) for index in (1, 2, 3)
+    ] + [candidate_core.SourceMessage("zh", "x" * (2 * rest // 3), 4)]
+    assert candidate_core._clip_dominant_message(at_ratio) is None
+    past_ratio = at_ratio[:3] + [
+        candidate_core.SourceMessage("zh", "x" * (2 * rest // 3 + 1), 4)
+    ]
+    assert candidate_core._clip_dominant_message(past_ratio) is not None

@@ -59,6 +59,16 @@ USER_REVIEW_MAX_CANDIDATES = 200
 # occurrences, far inside any sane limit. Reaching the floor means the limit
 # was configured too small to analyse anything, which is worth surfacing.
 _USER_REVIEW_MIN_TRUNCATED_CHARACTERS = 512
+# How far above the AVERAGE OF THE REST a message has to sit before it is
+# worth cutting its body rather than evicting messages. "Longer than all the
+# others combined" was too strict: it catches exactly one outlier, so two
+# comparably heavy replies evaded it and the eviction that followed threw
+# away the ordinary replies carrying the repeated phrase -- the very defect
+# the single-outlier clip was added to stop. At a ratio of 1 a uniformly
+# large window would qualify and every body would be cut, which is the
+# behaviour ``test_a_uniformly_large_window_narrows_without_cutting_a_body``
+# exists to forbid; 2 is the smallest integer that separates the two.
+_USER_REVIEW_OUTLIER_RATIO = 2
 
 _LANGUAGE_ALIASES = {
     "en": "en",
@@ -145,6 +155,21 @@ _URL_RE = re.compile(
     # local part is the identifying half, so matching only from the domain
     # was worse than not matching at all.
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|"
+    # The same shape with an UNBOUNDED alphabet, because the rule above is
+    # ASCII-only and an internationalized address matched nothing at all --
+    # so "用户秘密@例子.公司" had its local part, the identifying half,
+    # mined and persisted. The mailto form was fixed first; a bare address
+    # is how one actually appears in a reply, and it needed the same
+    # treatment.
+    #
+    # What makes the open alphabet safe is the local@domain.tld SHAPE, and
+    # the atom class doing the work here: it stops at whitespace and at CJK
+    # punctuation, so a match cannot run past the sentence it sits in. In
+    # unspaced CJK it does take the surrounding run with it, which is
+    # over-protection of one sentence -- the accepted direction, against a
+    # payload persisted for 120 days.
+    r"(?<!" + _URL_ATOM + r")" + _URL_ATOM + r"+@" + _URL_ATOM
+    + r"+(?:\." + _URL_ATOM + r"+)+|"
     # An ASCII-only lookbehind. ``\w`` counts CJK as a word character, so a bare
     # host written straight after a hanzi never matched at all and its path
     # token was persisted verbatim -- and zh/zh-TW/ja/ko, half the languages
@@ -872,9 +897,36 @@ def _collect_link_targets(
     ignore: Sequence[tuple[int, int]],
     spans: list[tuple[int, int]],
 ) -> None:
-    """Append every balanced link target in one paragraph to ``spans``."""
+    """Append every balanced link target in one paragraph to ``spans``.
+
+    TWO passes. Parenthesis matching does not depend on links at all, while
+    label matching depends on where the targets are, so the parens go first
+    and the label scan then jumps over any target that actually closes.
+
+    Carrying an "inside a target" depth through a single pass instead let an
+    UNCLOSED target poison the rest of the paragraph: the depth went up and
+    never came down, so every later "[" stopped counting and a genuine link
+    after it went unprotected. That is a LEAK, traded for the
+    over-protection the depth was added to stop -- the wrong direction, and
+    the reason this is structured as two passes rather than patched.
+    """
+    # Pass one: balanced parentheses. Nothing here knows about links.
     open_parens: list[int] = []
     closer_of: dict[int, int] = {}
+    cursor = start
+    while cursor < limit:
+        character = text[cursor]
+        if character == chr(92):
+            cursor += 2
+            continue
+        if character == "(":
+            open_parens.append(cursor)
+        elif character == ")":
+            if open_parens:
+                closer_of[open_parens.pop()] = cursor + 1
+        cursor += 1
+
+    # Pass two: labels.
     openers: list[int] = []
     # A COUNT, not a paragraph-wide flag. As a flag, the first "[" anywhere
     # in the paragraph made every later "](" a link closer, so
@@ -884,15 +936,6 @@ def _collect_link_targets(
     # sitting there was silently never mined, on this path and on the
     # runtime one that shares it.
     open_labels = 0
-    # The "(" positions that open a link TARGET, and how many are open
-    # right now. Brackets inside a target are destination punctuation, not
-    # label markers: "[docs](/api/[v1) okay](...)" handed a label to the
-    # stray "](" after it, so a second link was accepted and ordinary
-    # speech in the parenthetical was protected and never mined. The
-    # accumulated spans cannot answer this -- they are appended below,
-    # after the scan -- so the depth is carried as the scan runs.
-    target_parens: set[int] = set()
-    target_depth = 0
     cursor = start
     while cursor < limit:
         character = text[cursor]
@@ -905,26 +948,11 @@ def _collect_link_targets(
             # okay](...)" hand a label to the stray closer after it, so the
             # parenthetical was protected and a repeated catchphrase in it
             # was never mined.
-            if not _starts_inside(cursor, ignore) and not target_depth:
+            if not _starts_inside(cursor, ignore):
                 open_labels += 1
-        elif character == "(":
-            if cursor in target_parens:
-                target_depth += 1
-            open_parens.append(cursor)
-        elif character == ")":
-            if open_parens:
-                opened = open_parens.pop()
-                closer_of[opened] = cursor + 1
-                if opened in target_parens and target_depth:
-                    target_depth -= 1
         elif (
             character == "]"
             and open_labels
-            # Inside a target for the same reason as the opener above: a
-            # "]" written in a destination is punctuation, and spending a
-            # real label on it left the genuine "](" after it opening
-            # nothing, so a real target went unprotected.
-            and not target_depth
             # BOTH sides skip displayed brackets, not just the opener. A "]"
             # shown inside a code span consuming a real label let the label
             # look already closed, so the genuine "](" after it opened
@@ -932,17 +960,24 @@ def _collect_link_targets(
             and not _starts_inside(cursor, ignore)
         ):
             # This "]" closes a label either way; whether it also opens a
-            # TARGET depends on the "(" right after it.
+            # TARGET depends on the "(" right after it AND on that "(" being
+            # closed. A link needs a LABEL, too: without the opening-bracket
+            # requirement any "](" started a target scan, so
+            # "好呀](我们一起去公园散步吧)" -- ordinary CJK punctuation, and no
+            # <a> element by any reader -- lost the whole parenthetical.
             open_labels -= 1
-            if not (cursor + 1 < limit and text[cursor + 1] == "("):
-                cursor += 1
-                continue
-            # A link needs a LABEL. Without the opening bracket requirement any
-            # "](" started a target scan, so "好呀](我们一起去公园散步吧)" --
-            # ordinary CJK punctuation, and no <a> element by any reader --
-            # lost the whole parenthetical.
-            openers.append(cursor)
-            target_parens.add(cursor + 1)
+            if cursor + 1 < limit and text[cursor + 1] == "(":
+                end = closer_of.get(cursor + 1)
+                if end is not None:
+                    openers.append(cursor)
+                    # The DESTINATION is not label text. "[docs](/api/[v1)"
+                    # put destination punctuation where a label would go, so
+                    # the stray "](" after it was accepted as a second link
+                    # and ordinary speech was protected. Skipping the target
+                    # whole is what stops that, and unlike a depth counter it
+                    # cannot outlive a target that never closes.
+                    cursor = end
+                    continue
         cursor += 1
     for opener in openers:
         end = closer_of.get(opener + 1)
@@ -1645,8 +1680,11 @@ def _clip_dominant_message(
     others = sum(len(message.content) for message in analyzed) - len(
         longest.content
     )
+    # Against the AVERAGE of the rest, not their sum. Integer arithmetic so
+    # the comparison cannot drift on a float.
     if (
-        len(longest.content) <= others
+        len(longest.content) * (len(analyzed) - 1)
+        <= _USER_REVIEW_OUTLIER_RATIO * others
         or len(longest.content) <= _USER_REVIEW_MIN_TRUNCATED_CHARACTERS
     ):
         return None
