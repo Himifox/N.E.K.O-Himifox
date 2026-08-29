@@ -2633,3 +2633,17 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 统一推送后新增的 3 条 review thread 由 follow-up 提交 `5bd13b100` 一并处理：取消尚未安装完成的 update 时先查询 durable registry，只有证明不存在旧安装才返回 preinstall success；Main 的 removal status GET 会恢复持久化为 pending 但丢失进程内 task 的同一 operation ID；index-policy 改为 registry-first，并且 indexer 每轮在选择 embedding work 前以 registry 为权威修正 SQLite chunk policy。相关 indexer、packs、Plugin/Main unsubscribe 集合为 `224 passed, 1 skipped`，Ruff、compileall 与 `git diff --check` 通过。
 
 关闭条件：18条有效conversation分别具备实现提交、精确反例和相邻宽回归后才回复并resolve；schema误报附上述1 passed证据单独关闭。最后再次使用GraphQL完整分页读取全部review threads，不能受100条限制影响。只有远端head包含全部实现、统一推送成功、CI与分页结果齐全后，才能把文首状态改为“第三十轮已实施”。
+
+### 第三十轮远端复审追加：16 条 conversation 的边界复核
+
+提交 `a6a6a9e44` 推送后，CodeRabbit 新增 16 条 conversation。逐项按当前实现、失败语义和第三十轮威胁模型复核后，14 条成立并由 `160e7b75e` 统一修复，2 条 Windows 路径放宽建议不成立：
+
+- `discussion_r3886449367` 与 `discussion_r3886449374` 建议允许父目录 junction、映射路径或 8.3 别名与最终路径字符串不一致。FA/FB 的安全边界明确要求 canonical artifact leaf 与 registry leaf 的已声明路径不得经父目录重定向逃出可信根；拒绝合法但非 canonical 的别名是保守可用性取舍，不是身份绕过。仅比较文件名或对已经由该路径打开的同一 handle 再做 file-ID 自证，无法证明父目录仍位于可信根，故不放宽。
+- removal operation registry 现在拒绝布尔时间戳；pending 最多 32 条，超过 24 小时的旧 pending 在下一次写入时转为带 `removal_operation_expired` 的明确 failed 终态，再按 terminal retention 管理。活跃 pending 不被静默删除，容量满时拒绝新增 operation。
+- routing revision 与 entries 在显式 SQLite read transaction 中读取；迟到 discard 只有仍拥有共享输出时才能清工具证据。
+- 所有改用 writer admission 的公共知识 mutation 将关闭状态统一映射为 `knowledge_mutation_stopping`；pack recovery-required 在设置与 resumed remove 中不再被 `ValueError` 分支误报为 not-found 或幂等成功；pending status 明确返回 `ok=false/removal_in_progress`。
+- retained-source cleanup 删除完有证据条目后复查所有 runtime entry；仍有无证据条目时返回 409、保留路径和 checkpoint，不再落盘 `cleaned`。storage migration 在 copying/preflight 失败且尚未发布时 best-effort 删除 transaction staging；进入 verifying/committing 或 rollback-required 后不销毁恢复证据。
+- Plugin 对明确的 Main 4xx `main_server_rejected` 直接返回 `subscription_removal_rejected`，只有 timeout、传输/5xx 与无效响应才查询同一 operation 的终态。
+- 测试 teardown 会取消并等待遗留 removal tasks，shutdown writer 测试用 `finally` 恢复 admission，迁移 SQLite fixture 在目录替换前显式关闭连接。
+
+精确回归通过 `259 passed, 8 skipped`；受影响文件 Ruff 与 compileall 通过，`git diff --check` 通过。上述 14 条成立 conversation 只有在远端 head 包含 `160e7b75e` 后才回复实现与测试证据并 resolve；两条不成立 conversation 回复威胁模型依据后 resolve。完成后仍须重新全量分页，因为审查机器人可在同一次 pending check 中继续新增线程。
