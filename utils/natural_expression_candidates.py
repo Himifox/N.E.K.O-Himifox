@@ -828,7 +828,14 @@ def _collect_link_targets(
     open_parens: list[int] = []
     closer_of: dict[int, int] = {}
     openers: list[int] = []
-    labelled = False
+    # A COUNT, not a paragraph-wide flag. As a flag, the first "[" anywhere
+    # in the paragraph made every later "](" a link closer, so
+    # "[LAUGHS] okay](please remember to rest)" protected the whole
+    # parenthetical -- the "]" after LAUGHS had already closed the only
+    # label, and no reader renders that as a link. A repeated catchphrase
+    # sitting there was silently never mined, on this path and on the
+    # runtime one that shares it.
+    open_labels = 0
     cursor = start
     while cursor < limit:
         character = text[cursor]
@@ -836,18 +843,19 @@ def _collect_link_targets(
             cursor += 2
             continue
         if character == "[":
-            labelled = True
+            open_labels += 1
         elif character == "(":
             open_parens.append(cursor)
         elif character == ")":
             if open_parens:
                 closer_of[open_parens.pop()] = cursor + 1
-        elif (
-            character == "]"
-            and labelled
-            and cursor + 1 < limit
-            and text[cursor + 1] == "("
-        ):
+        elif character == "]" and open_labels:
+            # This "]" closes a label either way; whether it also opens a
+            # TARGET depends on the "(" right after it.
+            open_labels -= 1
+            if not (cursor + 1 < limit and text[cursor + 1] == "("):
+                cursor += 1
+                continue
             # A link needs a LABEL. Without the opening bracket requirement any
             # "](" started a target scan, so "好呀](我们一起去公园散步吧)" --
             # ordinary CJK punctuation, and no <a> element by any reader --

@@ -2264,3 +2264,42 @@ def test_one_oversized_reply_does_not_hide_the_history_behind_it(monkeypatch):
         "no candidates survived, which is what the panel renders as "
         "insufficient history"
     )
+
+
+def test_a_link_closer_must_close_its_own_label():
+    """An emote marker earlier in the paragraph is not a link label.
+
+    The label check was a paragraph-wide flag, so the first "[" anywhere
+    made every later "](" a link closer. "[LAUGHS] okay](please remember to
+    rest)" therefore protected the whole parenthetical -- the "]" after
+    LAUGHS had already closed the only label, and no reader renders that as
+    a link. A repeated catchphrase sitting there was silently never mined,
+    here and on the runtime path that shares this scanner.
+    """
+    catchphrase = "please remember to rest"
+
+    def protects(text, needle):
+        at = text.find(needle)
+        assert at >= 0, needle
+        return any(
+            start <= at < end
+            for start, end in candidate_core._protected_spans(text)
+        )
+
+    assert not protects(
+        "[LAUGHS] okay](" + catchphrase + ")", catchphrase
+    ), "an emote marker made a stray closer look like a link"
+
+    # The dual, so the fix cannot pass by never protecting anything: a real
+    # link still masks its target.
+    hyphenated = catchphrase.replace(" ", "-")
+    assert protects(
+        "see [the docs](https://example.com/" + hyphenated + ")", hyphenated
+    ), "a genuine markdown target stopped being protected"
+
+    # Nesting still resolves to the outer label.
+    assert not protects(
+        "[a[b]](https://example.com/x) " + catchphrase, catchphrase
+    )
+    # And with no label at all nothing changes.
+    assert not protects("okay](" + catchphrase + ")", catchphrase)
