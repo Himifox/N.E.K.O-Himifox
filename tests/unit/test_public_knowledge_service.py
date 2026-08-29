@@ -73,6 +73,47 @@ def test_non_utf8_catalog_override_is_reported_as_invalid(tmp_path):
     assert service.get_status()["catalog_override_state"] == "invalid"
 
 
+def test_catalog_override_reader_rejects_oversize_valid_json(monkeypatch, tmp_path):
+    import knowledge.catalog_overrides as overrides
+
+    override_path = get_catalog_override_path(tmp_path / "knowledge.db")
+    override_path.write_text(
+        json.dumps(
+            {
+                "disabled": [
+                    {"source": "source:fixture", "title": "Disabled fixture"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert override_path.stat().st_size > 32
+    monkeypatch.setattr(overrides, "MAX_CATALOG_OVERRIDE_BYTES", 32)
+
+    with pytest.raises(CatalogOverrideError, match="unreadable or invalid"):
+        load_disabled_entries(override_path)
+
+
+def test_catalog_override_writer_rejects_oversize_before_publish(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.catalog_overrides as overrides
+
+    override_path = get_catalog_override_path(tmp_path / "knowledge.db")
+    monkeypatch.setattr(overrides, "MAX_CATALOG_OVERRIDE_BYTES", 32)
+
+    with pytest.raises(CatalogOverrideError, match="size limit"):
+        set_entry_disabled(
+            override_path,
+            source_tag="source:fixture",
+            title="Disabled fixture",
+            disabled=True,
+        )
+
+    assert not override_path.exists()
+
+
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     (

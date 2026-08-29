@@ -42,7 +42,7 @@ def begin_removal_operation(
     canonical_request = _canonical_request(request)
     path = _operations_path(knowledge_root)
     with mutation_lock(path):
-        payload = _load_operations(path)
+        payload = _load_operations_for_access(path)
         operations = payload["operations"]
         existing = operations.get(operation_id)
         if existing is not None:
@@ -86,7 +86,7 @@ def complete_removal_operation(
         raise ValueError("invalid knowledge removal operation status")
     path = _operations_path(knowledge_root)
     with mutation_lock(path):
-        payload = _load_operations(path)
+        payload = _load_operations_for_access(path)
         record = payload["operations"].get(operation_id)
         if record is None:
             raise KnowledgeRemovalOperationError(
@@ -112,7 +112,7 @@ def get_removal_operation(
     operation_id = validate_removal_operation_id(operation_id)
     path = _operations_path(knowledge_root)
     with mutation_lock(path):
-        record = _load_operations(path)["operations"].get(operation_id)
+        record = _load_operations_for_access(path)["operations"].get(operation_id)
         return dict(record) if record is not None else None
 
 
@@ -208,23 +208,37 @@ def _load_operations(path: Path) -> dict[str, Any]:
     return {"schema_version": 1, "operations": validated}
 
 
-def _write_operations(path: Path, payload: dict[str, Any]) -> None:
+def _load_operations_for_access(path: Path) -> dict[str, Any]:
+    """Load and durably expire stale pending records under the caller's lock."""
+    payload = _load_operations(path)
+    if _expire_stale_pending_operations(payload):
+        _write_operations(path, payload)
+    return payload
+
+
+def _expire_stale_pending_operations(payload: dict[str, Any]) -> bool:
     now = time.time()
-    operations = {
-        operation_id: (
-            {
+    changed = False
+    operations = payload["operations"]
+    for operation_id, record in tuple(operations.items()):
+        if (
+            record["status"] == "pending"
+            and now - float(record["updated_at"])
+            > PENDING_REMOVAL_OPERATION_TTL_SECONDS
+        ):
+            operations[operation_id] = {
                 **record,
                 "status": "failed",
                 "result": {"ok": False, "reason": "removal_operation_expired"},
                 "updated_at": now,
             }
-            if record["status"] == "pending"
-            and now - float(record["updated_at"])
-            > PENDING_REMOVAL_OPERATION_TTL_SECONDS
-            else record
-        )
-        for operation_id, record in payload["operations"].items()
-    }
+            changed = True
+    return changed
+
+
+def _write_operations(path: Path, payload: dict[str, Any]) -> None:
+    _expire_stale_pending_operations(payload)
+    operations = payload["operations"]
     pending_count = sum(
         record["status"] == "pending" for record in operations.values()
     )
@@ -250,6 +264,7 @@ def _write_operations(path: Path, payload: dict[str, Any]) -> None:
         for operation_id, record in operations.items()
         if record["status"] == "pending" or operation_id in retained_terminal
     }
+    payload["operations"] = retained
     canonical = json.dumps(
         {"schema_version": 1, "operations": retained},
         ensure_ascii=False,

@@ -624,6 +624,38 @@ async def test_pending_removal_status_resumes_the_same_operation_after_restart(
     assert calls == 1
 
 
+@pytest.mark.asyncio
+async def test_expired_pending_status_does_not_resume_removal(monkeypatch, tmp_path):
+    import knowledge.removal_operations as operations
+    import main_routers.public_knowledge_router as module
+
+    now = [100.0]
+    patch_module_clock(monkeypatch, operations, time=lambda: now[0])
+    operation_id = "remove-operation-expired-0001"
+    operations.begin_removal_operation(tmp_path, operation_id, _removal_request())
+    now[0] += operations.PENDING_REMOVAL_OPERATION_TTL_SECONDS + 1
+
+    async def fake_service():
+        return SimpleNamespace(knowledge_root=tmp_path)
+
+    async def unexpected_remove(*_args, **_kwargs):
+        pytest.fail("an expired removal operation must not be resumed")
+
+    monkeypatch.setattr(module, "_service_async", fake_service)
+    monkeypatch.setattr(module, "_remove_pack_once", unexpected_remove)
+
+    status = await module.get_public_knowledge_pack_removal_status(operation_id)
+
+    assert status == {
+        "ok": False,
+        "reason": "removal_operation_expired",
+        "operation_id": operation_id,
+        "operation_status": "failed",
+    }
+    assert operation_id not in module._pack_removal_tasks
+    assert operations.get_removal_operation(tmp_path, operation_id)["status"] == "failed"
+
+
 def test_entry_disable_contract_has_no_collection(monkeypatch, tmp_path):
     service = open_knowledge(tmp_path)
     KnowledgeStore(service.database_path()).upsert(

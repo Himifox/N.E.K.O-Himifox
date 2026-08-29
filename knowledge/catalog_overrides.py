@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from utils.file_utils import atomic_write_json
+from utils.file_utils import atomic_write_bytes
 
+from knowledge._strict_file import read_bounded_regular_file
 from knowledge._mutation_lock import mutation_lock
 from knowledge.models import normalize_knowledge_title
 
 
 EntryKey = tuple[str, str]
+MAX_CATALOG_OVERRIDE_BYTES = 32 * 1024 * 1024
 
 
 class CatalogOverrideError(ValueError):
@@ -25,10 +27,14 @@ def get_catalog_override_path(database_path: str | Path) -> Path:
 def load_disabled_entries(path: str | Path) -> frozenset[EntryKey]:
     override_path = Path(path)
     try:
-        payload = json.loads(override_path.read_text(encoding="utf-8"))
+        raw = read_bounded_regular_file(
+            override_path,
+            max_bytes=MAX_CATALOG_OVERRIDE_BYTES,
+        )
+        payload = json.loads(raw)
     except FileNotFoundError:
         return frozenset()
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise CatalogOverrideError("catalog override is unreadable or invalid") from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("disabled"), list):
         raise CatalogOverrideError("catalog override must contain a disabled list")
@@ -77,8 +83,15 @@ def set_entry_disabled(
                 for source, entry_title in sorted(entries)
             ]
         }
+        raw = json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        if len(raw) > MAX_CATALOG_OVERRIDE_BYTES:
+            raise CatalogOverrideError("catalog override exceeds its size limit")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(output_path, payload, ensure_ascii=False, indent=2)
+        atomic_write_bytes(output_path, raw)
         count = len(entries)
     return count
 
