@@ -2667,3 +2667,5 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - `discussion_r3886528857`：`catalog.override.json` 原先用 `Path.read_text()` 无界跟随读取。现在读取复用 strict regular-file/no-follow handle reader，采用固定 32 MiB 上限；写入在 atomic publish 前用同一上限检查 canonical UTF-8 bytes，避免生产出下一次无法读取的合法文件。超限、symlink/reparse、特殊文件、非 UTF-8 与损坏 JSON 均保持 `CatalogOverrideError` 失败关闭语义。
 
 实现提交 `77904dd0d` 加入“首次状态查询不恢复过期删除”、有效但超限 override 读取失败和 writer 发布前拒绝三个反例。精确回归 `76 passed`；加入 catalog override 的 lexical/vector/evaluator 主要消费者后扩大为 `155 passed`。Ruff、compileall 与 `git diff --check` 通过。该提交推送后与前 4 条一起回复并 resolve，随后再次对全部 review threads 完整分页。
+
+第三次分页新增 `discussion_r3886562997`。该评论关于诊断优先级的部分成立：`failed_exhausted` 仍是最高优先级；其后只要 `entries_missing_chunks > 0` 就返回 `backfill_incomplete`，不能被可重试 chunk 的 `retry_scheduled` 掩盖。提交 `5e8b5fa55` 增加两个计数同时非零的组合反例，rebuild 脚本文件通过 `34 passed`，Ruff、compileall 与 `git diff --check` 通过。
