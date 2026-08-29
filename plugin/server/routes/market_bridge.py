@@ -61,7 +61,6 @@ from plugin.settings import (
 )
 from knowledge.limits import (
     MAX_PACK_BYTES,
-    MAX_SUBSCRIPTION_ENVELOPE_BYTES,
 )
 from knowledge.timeouts import (
     KNOWLEDGE_GET_TIMEOUT_SECONDS,
@@ -128,12 +127,10 @@ _KNOWLEDGE_BRIDGE_PATHS = frozenset({
     "packs/index-policy",
     "packs/material-type",
     "packs/remove",
-    "subscriptions/apply",
     "diagnostics/recent",
 })
 _KNOWLEDGE_JSON_BODY_MAX_BYTES = 64 * 1024
 _KNOWLEDGE_PACK_ENVELOPE_MAX_BYTES = MAX_PACK_BYTES + 64 * 1024
-_KNOWLEDGE_SUBSCRIPTION_ENVELOPE_MAX_BYTES = MAX_SUBSCRIPTION_ENVELOPE_BYTES
 
 # GitHub Release download mirrors exposed by the local plugin-manager UI.
 # Keeping this allowlist server-side means the speed test never accepts an
@@ -270,8 +267,6 @@ async def public_knowledge_bridge(
 def _knowledge_body_limit(path: str) -> int:
     if path == "packs/import":
         return _KNOWLEDGE_PACK_ENVELOPE_MAX_BYTES
-    if path == "subscriptions/apply":
-        return _KNOWLEDGE_SUBSCRIPTION_ENVELOPE_MAX_BYTES
     return _KNOWLEDGE_JSON_BODY_MAX_BYTES
 
 

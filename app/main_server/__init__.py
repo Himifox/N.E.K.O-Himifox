@@ -622,7 +622,6 @@ app.add_middleware(
     InboundBodySizeLimitMiddleware,
     streamed_path_limits={
         "/api/public-knowledge/subscriptions/apply": MAX_SUBSCRIPTION_ENVELOPE_BYTES,
-        "/market/knowledge/subscriptions/apply": MAX_SUBSCRIPTION_ENVELOPE_BYTES,
     },
 )
 # Registered after the body guard so it is the outermost ASGI middleware and

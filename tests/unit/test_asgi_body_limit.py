@@ -24,7 +24,6 @@ from utils.asgi_body_limit import (
 
 KNOWLEDGE_SUBSCRIPTION_PATHS = (
     "/api/public-knowledge/subscriptions/apply",
-    "/market/knowledge/subscriptions/apply",
 )
 
 
@@ -197,7 +196,7 @@ def test_default_cap_is_16_mib():
     assert DEFAULT_MAX_INBOUND_BODY_BYTES == 16 * 1024 * 1024
 
 
-def test_main_server_guards_both_knowledge_subscription_paths():
+def test_main_server_guards_only_internal_knowledge_subscription_apply():
     from app.main_server import app
     from knowledge.limits import MAX_SUBSCRIPTION_ENVELOPE_BYTES
 

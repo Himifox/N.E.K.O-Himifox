@@ -88,6 +88,21 @@ def test_knowledge_bridge_rejects_arbitrary_proxy_paths(monkeypatch):
     assert captured == {}
 
 
+def test_browser_bridge_cannot_apply_trusted_market_subscription(monkeypatch):
+    captured = {}
+    client = _client(monkeypatch, captured)
+
+    response = client.post(
+        "/market/knowledge/subscriptions/apply",
+        params={"token": "fixture"},
+        content=b"must-not-be-read-or-forwarded",
+        headers={"content-type": "multipart/form-data; boundary=fixture"},
+    )
+
+    assert response.status_code == 404
+    assert captured == {}
+
+
 def test_knowledge_bridge_keeps_get_timeout_short(monkeypatch):
     from plugin.server.routes import market_bridge as module
 
