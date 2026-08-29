@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import random
 import sqlite3
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -24,6 +26,8 @@ from .store import KnowledgeStore
 
 _CARD_CACHE_LIMIT = 256
 _STATE_CACHE_LIMIT = 16
+_REFRESH_RETRY_INITIAL_SECONDS = 0.25
+_REFRESH_RETRY_MAX_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +86,12 @@ class RoutingSnapshot:
         if value not in terminal:
             terminal.append(value)
 
-    def find(self, user_text: str) -> RouteMatch | None:
+    def find(
+        self,
+        user_text: str,
+        *,
+        excluded_source_tags: frozenset[str] = frozenset(),
+    ) -> RouteMatch | None:
         normalized = normalize_search_text(user_text)
         if len(normalized) < 2:
             return None
@@ -94,10 +103,12 @@ class RoutingSnapshot:
             return None
         best: dict[tuple[str, str], RouteMatch] = {}
         for candidate in candidates:
+            if candidate.record.source_tag in excluded_source_tags:
+                continue
             previous = best.get(candidate.record.key)
             if previous is None or _match_sort_key(candidate) < _match_sort_key(previous):
                 best[candidate.record.key] = candidate
-        return min(best.values(), key=_match_sort_key)
+        return min(best.values(), key=_match_sort_key) if best else None
 
     def _scan(self, text: str) -> list[RouteMatch]:
         results: list[RouteMatch] = []
@@ -136,37 +147,56 @@ class KnowledgeRoutingState:
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
+        self._retry_at = 0.0
+        self._retry_delay = _REFRESH_RETRY_INITIAL_SECONDS
+        self._hidden_source_tags: set[str] = set()
 
-    def mark_database_dirty(self, database_path: str | Path) -> None:
+    def mark_database_dirty(
+        self,
+        database_path: str | Path,
+        *,
+        hidden_source_tags: Iterable[str] = (),
+    ) -> None:
         if Path(database_path).resolve() != self.config.database_path.resolve():
             return
         with self._lock:
             self._dirty = True
             self._generation += 1
             self._cards.clear()
+            self._hidden_source_tags.update(
+                str(source_tag) for source_tag in hidden_source_tags if source_tag
+            )
 
     def refresh(self) -> None:
         with self._refresh_lock:
-            while True:
+            with self._lock:
+                generation = self._generation
+                dirty = self._dirty
+            if not dirty and self._snapshot is not None:
+                return
+            records = _safe_load_records(self.config)
+            if records is None:
                 with self._lock:
-                    generation = self._generation
-                    dirty = self._dirty
-                if not dirty and self._snapshot is not None:
+                    if self._generation == generation:
+                        jitter = random.uniform(0.9, 1.1)
+                        self._retry_at = time.monotonic() + self._retry_delay * jitter
+                        self._retry_delay = min(
+                            self._retry_delay * 2,
+                            _REFRESH_RETRY_MAX_SECONDS,
+                        )
+                return
+            snapshot = RoutingSnapshot(records)
+            with self._lock:
+                # Validate generation before publication. A concurrent mutation
+                # makes this complete result stale; a later single-flight retry
+                # will load the newer generation without spinning here.
+                if self._generation != generation:
                     return
-                records = _safe_load_records(self.config)
-                snapshot = RoutingSnapshot(records or ())
-                with self._lock:
-                    self._snapshot = snapshot
-                    if self._generation != generation:
-                        continue
-                    # A load failure (unreadable/invalid catalog.override.json,
-                    # transient sqlite error) yields no records — publishing that
-                    # as clean would strand routing empty until an unrelated
-                    # mutation bumps the generation, because repairing the file
-                    # does not. Stay dirty so the next match() retries.
-                    if records is not None:
-                        self._dirty = False
-                    return
+                self._snapshot = snapshot
+                self._dirty = False
+                self._retry_at = 0.0
+                self._retry_delay = _REFRESH_RETRY_INITIAL_SECONDS
+                self._hidden_source_tags.clear()
 
     def refresh_in_background(self) -> None:
         with self._lock:
@@ -195,11 +225,23 @@ class KnowledgeRoutingState:
             refresh_running = (
                 self._refresh_thread is not None and self._refresh_thread.is_alive()
             )
-        if snapshot is None or (dirty and not refresh_running):
+            retry_ready = time.monotonic() >= self._retry_at
+            hidden_source_tags = frozenset(self._hidden_source_tags)
+        if snapshot is None:
             self.refresh()
             with self._lock:
                 snapshot = self._snapshot
-        return snapshot.find(user_text) if snapshot is not None else None
+                hidden_source_tags = frozenset(self._hidden_source_tags)
+        elif dirty and not refresh_running and retry_ready:
+            self.refresh_in_background()
+        return (
+            snapshot.find(
+                user_text,
+                excluded_source_tags=hidden_source_tags,
+            )
+            if snapshot is not None
+            else None
+        )
 
     def get_card(self, match: RouteMatch) -> KnowledgeEntry | None:
         record = match.record
@@ -316,8 +358,15 @@ def get_routing_state(config: RoutingConfig) -> KnowledgeRoutingState:
         return state
 
 
-def notify_database_changed(database_path: str | Path) -> None:
+def notify_database_changed(
+    database_path: str | Path,
+    *,
+    hidden_source_tags: Iterable[str] = (),
+) -> None:
     with _STATES_LOCK:
         states = tuple(_STATES.values())
     for state in states:
-        state.mark_database_dirty(database_path)
+        state.mark_database_dirty(
+            database_path,
+            hidden_source_tags=hidden_source_tags,
+        )

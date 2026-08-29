@@ -1530,23 +1530,15 @@ class KnowledgeStore:
 
     def load_routing_entries(self) -> tuple[int, tuple[KnowledgeEntry, ...]]:
         """Read the database revision and routeable cards in one transaction."""
-        try:
-            with self._connection() as connection:
-                revision_row = connection.execute(
-                    "SELECT value FROM metadata WHERE key = 'entries_revision'"
-                ).fetchone()
-                revision = int(revision_row["value"]) if revision_row else 0
-                entries: list[KnowledgeEntry] = []
-                for row in connection.execute(
-                    "SELECT rowid, * FROM entries ORDER BY rowid"
-                ).fetchall():
-                    try:
-                        entries.append(_entry_from_row(row))
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                return revision, tuple(entries)
-        except (KnowledgeStoreError, TypeError, ValueError):
-            return 0, ()
+        with self._connection() as connection:
+            revision_row = connection.execute(
+                "SELECT value FROM metadata WHERE key = 'entries_revision'"
+            ).fetchone()
+            revision = int(revision_row["value"]) if revision_row else 0
+            rows = connection.execute(
+                "SELECT rowid, * FROM entries ORDER BY rowid"
+            ).fetchall()
+            return revision, tuple(_entry_from_row(row) for row in rows)
 
     def integrity_ok(self) -> bool:
         try:

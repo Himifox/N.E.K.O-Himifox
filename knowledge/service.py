@@ -1123,7 +1123,10 @@ class KnowledgeService:
             title=title,
             disabled=disabled,
         )
-        notify_database_changed(database_path)
+        notify_database_changed(
+            database_path,
+            hidden_source_tags=(source_tag,) if disabled else (),
+        )
         # Management writes may remove a route, so publish the new snapshot
         # before returning rather than briefly serving a disabled card.
         if self._routing_state is not None:
@@ -1462,6 +1465,10 @@ class KnowledgeService:
             else:
                 removed_pack = True
         self._routing_state = None
+        notify_database_changed(
+            self.database_path(),
+            hidden_source_tags=(f"source:community.{pack_id}",),
+        )
         self.refresh_routing_index(background=True)
         return {
             "removed_pack": removed_pack,
@@ -1489,6 +1496,12 @@ class KnowledgeService:
             enabled=enabled,
         )
         self._routing_state = None
+        notify_database_changed(
+            self.database_path(),
+            hidden_source_tags=(f"source:community.{pack_id}",)
+            if not enabled
+            else (),
+        )
         self.refresh_routing_index(background=True)
 
     def set_pack_index_policy(

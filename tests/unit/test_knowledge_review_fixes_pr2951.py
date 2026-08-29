@@ -60,6 +60,7 @@ def test_routing_stays_dirty_when_override_load_fails(tmp_path):
 
     # Healthy load first: routing finds the term.
     state.refresh()
+    healthy_snapshot = state._snapshot
     assert state.match("聊聊永动机") is not None
 
     # Corrupt the override file and force a reload.
@@ -71,6 +72,8 @@ def test_routing_stays_dirty_when_override_load_fails(tmp_path):
     # The failed load must NOT have been cached as clean, otherwise repairing
     # the file would never take effect (repair does not bump the generation).
     assert state._dirty is True
+    assert state._snapshot is healthy_snapshot
+    assert state.match("聊聊永动机") is not None
 
     override.unlink()
     state.refresh()
@@ -100,6 +103,78 @@ def test_safe_load_records_distinguishes_failure_from_empty(tmp_path):
         assert _safe_load_records(config) is None
     finally:
         routing_module._load_records = original
+
+
+def test_routing_failure_backoff_keeps_last_good_without_retry_storm(
+    tmp_path,
+    monkeypatch,
+):
+    from knowledge import routing as routing_module
+    from knowledge.packs import validate_pack
+    from knowledge.retrieval import KNOWLEDGE_MATCH_POLICY
+    from knowledge.routing import KnowledgeRoutingState, RoutingConfig
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_pack("routed", "永动机")))
+    state = KnowledgeRoutingState(
+        RoutingConfig(
+            database_path=service.database_path(),
+            policy=KNOWLEDGE_MATCH_POLICY,
+        )
+    )
+    state.refresh()
+    calls = 0
+
+    def _failed(_config):
+        nonlocal calls
+        calls += 1
+        return None
+
+    monkeypatch.setattr(routing_module, "_safe_load_records", _failed)
+    state.mark_database_dirty(service.database_path())
+    state.refresh()
+
+    for _ in range(100):
+        assert state.match("永动机") is not None
+    assert calls == 1
+
+
+def test_visibility_tombstone_filters_last_good_after_failed_refresh(tmp_path):
+    from knowledge.packs import validate_pack
+    from knowledge.retrieval import KNOWLEDGE_MATCH_POLICY
+    from knowledge.routing import KnowledgeRoutingState, RoutingConfig
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_pack("routed", "永动机")))
+    database_path = service.database_path()
+    state = KnowledgeRoutingState(
+        RoutingConfig(database_path=database_path, policy=KNOWLEDGE_MATCH_POLICY)
+    )
+    state.refresh()
+    assert state.match("永动机") is not None
+
+    get_catalog_override_path(database_path).write_text("{broken", encoding="utf-8")
+    state.mark_database_dirty(
+        database_path,
+        hidden_source_tags=("source:community.routed",),
+    )
+    state.refresh()
+
+    assert state._dirty is True
+    assert state.match("永动机") is None
+
+
+def test_load_routing_entries_rejects_malformed_row_instead_of_skipping(tmp_path):
+    from knowledge.packs import validate_pack
+
+    service = open_knowledge(tmp_path)
+    service.install_pack(validate_pack(_pack("routed", "永动机")))
+    store = service._store()
+    with store._connection(writable=True) as connection:
+        connection.execute("UPDATE entries SET tags = '{broken'")
+
+    with pytest.raises((KnowledgeStoreError, ValueError, json.JSONDecodeError)):
+        store.load_routing_entries()
 
 
 # --- status: malformed tags must degrade, not report ready with zero counts ----
