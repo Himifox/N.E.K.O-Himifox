@@ -2647,3 +2647,14 @@ EA 将知识索引器启动拆成独立的、单实例强引用退避重试任�
 - 测试 teardown 会取消并等待遗留 removal tasks，shutdown writer 测试用 `finally` 恢复 admission，迁移 SQLite fixture 在目录替换前显式关闭连接。
 
 精确回归通过 `259 passed, 8 skipped`；统一推送前扩大的知识库、路由、迁移、shutdown、turn 与 Plugin 集合通过 `668 passed, 14 skipped`。受影响文件 Ruff 与 compileall 通过，`git diff --check` 通过。上述 14 条成立 conversation 只有在远端 head 包含 `160e7b75e` 后才回复实现与测试证据并 resolve；两条不成立 conversation 回复威胁模型依据后 resolve。完成后仍须重新全量分页，因为审查机器人可在同一次 pending check 中继续新增线程。
+
+### 第三十轮最终分页追评：4 个同步边界缺口
+
+远端 head `f8818d13d` 的全量 GraphQL 分页复核新增 4 条有效 conversation；它们是已实施单元的同步边界遗漏，不改变 EZ → FA → FB → FC → EX 的总体设计：
+
+- `discussion_r3886492693`：`_knowledge_query_candidates()` 在检索 deadline 之前处理用户文本，原实现对输入长度和候选数量无上限，并用 list membership 二次扫描。现在先把输入限制为 4096 字符，以 `set` 做常数时间去重，候选总数限制为 32；保留一个槽位给截断后的原始查询，使拆句优化不会吞掉基础检索表达。
+- `discussion_r3886492696`：社区来源展示元数据原先直接 `Path.read_text()` 读取 `packs.json`，绕过 FB 的 32 MiB、regular-file、no-follow trust path。现在它复用 `_load_registry()`；超限、link/reparse、非 UTF-8、损坏 Schema 均失败关闭为 Unknown，不发布不可信来源元数据。
+- `discussion_r3886492697`：Marketplace 等待 staged job 时，Main Server 的单次 timeout 与 unavailable 同属可重试观察故障。现在两者都只在既有 24 小时总 deadline 内继续轮询；4xx 拒绝、无效响应和稳定 job 终态仍立即失败，未扩大重试集合。
+- `discussion_r3886492699`：rebuild 的 chunk 计数为零不能证明所有 entry 已成功 backfill。只要 `entries_missing_chunks > 0`，完成状态现在明确为 `backfill_incomplete`、`complete=false`，因此 malformed/无法派生的 entry 不会被静默报告为成功。
+
+实现提交 `f4ec75a0f` 同时加入对应反例。四个受影响测试文件通过 `224 passed, 1 skipped`；受影响 Python 文件 Ruff、compileall 与 `git diff --check` 通过。关闭条件保持不变：该提交推送到远端后逐条回复实现与测试证据并 resolve，再对全部 review threads 完整分页，确认没有新未解决 conversation。
