@@ -298,6 +298,17 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
     # an identity nobody can name any more.
     known = {name for name in names if name}
     for name in list(names) + _legacy_root_file_owners(memory_dir, known):
+        # The DESTINATION, before anything is written to it.
+        # ensure_character_dir accepts an existing memory/<name> that is
+        # a link, and every shutil.move below then writes THROUGH it --
+        # so an orphan's authoritative database and its sidecars leave
+        # the memory root at startup. Refusing the source link was only
+        # half of it; this is the other end of the same move.
+        if not character_dir_is_within_memory_root(memory_dir, name):
+            _logger.warning(
+                "[Memory] 跳过符号链接的角色目录: %s", name,
+            )
+            continue
         char_dir = ensure_character_dir(memory_dir, name)
         for old_pattern, new_filename in _MIGRATION_MAP.items():
             old_filename = old_pattern.replace('{name}', name)

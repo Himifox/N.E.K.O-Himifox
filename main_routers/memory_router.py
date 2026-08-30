@@ -929,9 +929,20 @@ def _default_memory_dir_escapes_root(config_manager, name: str) -> bool:
     from memory import character_dir_is_within_memory_root
 
     try:
-        return not character_dir_is_within_memory_root(
+        if not character_dir_is_within_memory_root(
             config_manager.memory_dir, name
-        )
+        ):
+            return True
+        # And the DATABASE under it. A real memory/<name>/ directory
+        # passes containment while holding "time_indexed.db -> /outside",
+        # and the read-only path follows a file link exactly as it would
+        # a directory one. Resolved rather than islink-tested, so an
+        # intermediate link is caught the same way.
+        character_dir = os.path.join(str(config_manager.memory_dir), name)
+        database = os.path.join(character_dir, "time_indexed.db")
+        return os.path.normcase(
+            os.path.dirname(os.path.realpath(database))
+        ) != os.path.normcase(os.path.realpath(character_dir))
     except Exception:
         # Cannot resolve it, so cannot vouch for it. Refusing costs a
         # panel; waving it through is the direction that leaks, and this

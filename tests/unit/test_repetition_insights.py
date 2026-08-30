@@ -2006,3 +2006,108 @@ def test_time_store_carries_the_default_path_for_a_configured_character(tmp_path
         "_default_memory_dir_escapes_root must be rewritten rather than "
         "quietly changing meaning: %r" % (time_store,)
     )
+
+
+@pytest.mark.unit
+def test_a_symlinked_destination_directory_is_never_written_through(tmp_path):
+    """ensure_character_dir accepts an existing memory/<name> that is a link.
+
+    Every shutil.move below it then writes THROUGH the link, so an orphan's
+    authoritative database and its sidecars leave the memory root at startup.
+    Refusing a linked SOURCE was only half of the same move.
+    """
+    import os
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (memory_dir / "time_indexed_Ghost.db").write_bytes(b"GHOST")
+    try:
+        os.symlink(str(outside), str(memory_dir / "Ghost"), target_is_directory=True)
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    (memory_dir / "time_indexed_Real.db").write_bytes(b"REAL")
+
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
+
+    assert not (outside / "time_indexed.db").exists(), (
+        "the database was moved outside the memory root through a linked "
+        "destination directory"
+    )
+    assert (memory_dir / "time_indexed_Ghost.db").read_bytes() == b"GHOST"
+    # The dual: an ordinary discovered owner still migrates.
+    assert (memory_dir / "Real" / "time_indexed.db").read_bytes() == b"REAL"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_symlinked_default_database_is_refused(tmp_path):
+    """The directory can be real while the database under it is a link.
+
+    Containment on memory/<name> alone passes then, and the read-only
+    SQLAlchemy path follows a FILE link exactly as it would a directory one
+    -- so the panel could still render and export rows from an external
+    database.
+    """
+    import os
+
+    from main_routers import memory_router
+    from memory import anti_repeat_effects
+    from utils import config_manager, internal_http_client
+
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "Carol").mkdir(parents=True)
+    outside = tmp_path / "outside.db"
+    outside.write_bytes(b"EXTERNAL")
+    try:
+        os.symlink(str(outside), str(memory_dir / "Carol" / "time_indexed.db"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    response = SimpleNamespace(
+        status_code=200,
+        json=lambda: {
+            "success": True,
+            "schema_version": "natural-expression-candidates/v1",
+            "artifact_type": "user_review_candidates",
+            "candidates": [],
+        },
+    )
+    client = SimpleNamespace(post=AsyncMock(return_value=response))
+    effect_store = SimpleNamespace(
+        query_effects=MagicMock(return_value=_empty_effects())
+    )
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {"Carol": {}}}),
+        memory_dir=str(memory_dir),
+        get_character_data=lambda: (None,) * 6
+        + ({"Carol": os.path.join(str(memory_dir), "Carol", "time_indexed.db")},)
+        + (None, None),
+    )
+
+    with (
+        patch.object(config_manager, "get_config_manager", return_value=config),
+        patch.object(
+            internal_http_client,
+            "get_internal_http_client",
+            return_value=client,
+        ),
+        patch.object(
+            anti_repeat_effects,
+            "get_anti_repeat_effect_store",
+            return_value=effect_store,
+        ),
+    ):
+        refused = await memory_router.repetition_insights(
+            memory_router.RepetitionInsightsRequest(
+                character_name="Carol", language="en"
+            )
+        )
+
+    assert getattr(refused, "status_code", 200) == 404, (
+        "a linked default database was analysed"
+    )
+    assert client.post.await_count == 0, "the analysis ran before the refusal"

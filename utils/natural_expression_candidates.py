@@ -209,7 +209,7 @@ _URL_RE = re.compile(
     r"(?:(?::\d{1,5})(?:[/?#]" + _URL_TAIL + "*)?|[/?#]" + _URL_TAIL + "*)"
 )
 
-_TEMPLATE_RE = re.compile(
+_TEMPLATE_SOURCE = (
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
     # let the closer match -- the character handed back is by construction
@@ -361,10 +361,16 @@ _TEMPLATE_RE = re.compile(
 # cheap. Keyed on the comment closer alone, a reply holding only a
 # "{% raw %}" block took the pattern WITHOUT the block alternatives and the
 # body went unprotected -- the fix was there and unreachable.
+# ONE GATE PER CLOSER. "#}" must not select this pattern: the "{# #}"
+# pair and the comment-family pairs have separate closers, and a reply
+# holding a stray "#}" alongside unpaired "{% comment %}" openers then
+# paid for the comment alternative scanning to end of text at every one
+# of them. Measured at the input cap: 4.27s with the two gates merged,
+# 0.05s with them separate.
 _BLOCK_CLOSER_RE = re.compile(
     r"\{%[-+]?[ \t]*end(?:comment|raw|verbatim)[ \t]*[-+]?%\}"
 )
-_TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
+_TEMPLATE_SOURCE_WITHOUT_BLOCK = (
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
     # let the closer match -- the character handed back is by construction
@@ -484,6 +490,51 @@ _TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
     # everything else here, so this cannot reach past its own line.
     r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
+
+
+# The capped "{# ... #}" form, verbatim, as it appears in both sources.
+# The uncapped alternative is spliced in AHEAD of it when the closer is
+# actually present.
+_CAPPED_HASH_COMMENT = (
+    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
+)
+
+# A comment body is hidden by definition, so it is not reply prose
+# whatever its length -- and a CAP means a closer beyond it is missed,
+# the alternative fails, and the line fallback then masks only the
+# opener line, putting every later line of a long comment back into
+# play. Repeating "{#\na\nb\nc\nSECRET\n#}" was enough.
+_UNCAPPED_HASH_COMMENT = r"\{\#[\s\S]*?\#\}|"
+
+# Four patterns, compiled once each on first use, because the two
+# uncapped families have SEPARATE closers and each has to be gated on
+# its own. Sharing one gate made a stray "#}" enable the comment
+# alternative, and unpaired "{% comment %}" openers then each scanned to
+# end of text: 4.27s at the input cap against 0.05s.
+#
+# Both gates are cheap and exact enough: one regex search, and a literal
+# substring test. Being too generous only costs time; being too strict
+# would leave a body unprotected, which is why neither looks for a
+# matching PAIR.
+_TEMPLATE_PATTERNS: dict[tuple[bool, bool], "re.Pattern[str]"] = {}
+
+
+def _template_pattern(text: str) -> "re.Pattern[str]":
+    """The template pattern whose uncapped alternatives can pay off here."""
+    key = (bool(_BLOCK_CLOSER_RE.search(text)), "#}" in text)
+    pattern = _TEMPLATE_PATTERNS.get(key)
+    if pattern is None:
+        source = (
+            _TEMPLATE_SOURCE if key[0] else _TEMPLATE_SOURCE_WITHOUT_BLOCK
+        )
+        if key[1]:
+            source = source.replace(
+                _CAPPED_HASH_COMMENT,
+                _UNCAPPED_HASH_COMMENT + _CAPPED_HASH_COMMENT,
+                1,
+            )
+        pattern = _TEMPLATE_PATTERNS[key] = re.compile(source)
+    return pattern
 
 
 class CandidateMinerError(ValueError):
@@ -1073,8 +1124,19 @@ _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 #
 # BOTH stop at "<". A run that crosses one is a run that can scan to end
 # of text from every position in the document.
+# The BARE runs cross line breaks, because an HTML start tag may split
+# its attributes across lines and every parser reads it as one tag.
+# Rejecting the newline left "<code\n class=..>" unrecognised, so the
+# opener and the whole code body went unprotected while only the
+# closing tag was masked.
+#
+# The QUOTED runs stay line-bounded, and that is not an oversight. A
+# quoted value that could cross a newline can pair the closing quote of
+# one tag with the opening quote of the NEXT, which is the chaining that
+# made this quadratic before. The bare runs cannot chain because they
+# still stop at "<", so every run is bounded by the next tag either way.
 _HTML_ATTRIBUTE_RUN = (
-    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\"'\r\n])*|[^<>\r\n]*"
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\"'])*|[^<>]*"
 )
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
     rf"<(pre|code|script|style|textarea|template)\b(?:{_HTML_ATTRIBUTE_RUN})>",
@@ -1513,11 +1575,7 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     # characters; once the tag run became line-bounded instead it grew to a
     # whole line, and a "${...}" payload sitting after a tag-shaped opener
     # inside a code span stopped being matched at all.
-    template_pattern = (
-        _TEMPLATE_RE
-        if _BLOCK_CLOSER_RE.search(text)
-        else _TEMPLATE_RE_WITHOUT_BLOCK
-    )
+    template_pattern = _template_pattern(text)
     position = 0
     while True:
         match = template_pattern.search(text, position)

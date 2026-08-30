@@ -3739,3 +3739,88 @@ def test_the_attribute_run_cannot_chain_across_tags():
         "attribute run is backtracking across tag boundaries again"
         % (len(text), elapsed)
     )
+
+
+def test_a_jinja_comment_longer_than_the_line_budget_is_protected():
+    """A cap means a closer beyond it is MISSED, not that the body is safe.
+
+    The alternative then fails outright and the line fallback masks only the
+    opener line, so every later line of a long comment came back into play.
+    A comment body is hidden by definition -- it is not reply prose whatever
+    its length.
+    """
+    secret = "secret helper phrase"
+    nl = chr(10)
+    body = "{#" + nl + "a" + nl + "b" + nl + "c" + nl + secret + nl + "#}"
+
+    assert _protects(body, secret), (
+        "a comment body past the line budget was left minable"
+    )
+
+    # The duals: a short one still resolves, and an UNPAIRED opener still
+    # masks only its own line rather than running to the end of the reply.
+    assert _protects("{# " + secret + " #}", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "{# opener with no closer" + nl + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+
+
+def test_a_raw_text_opener_may_wrap_its_attributes():
+    """HTML start tags may split across lines and every parser reads them as one.
+
+    Rejecting the newline left the opener unrecognised, so the element was
+    never entered: only its closing tag got masked and the whole body was
+    mined.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+    nl = chr(10)
+
+    assert _protects(
+        "<code" + nl + " class=" + quote + "x" + quote + ">" + secret + "</code>",
+        secret,
+    ), "an opener with a wrapped attribute list was not recognised"
+
+    # The dual: text after a closed element is still minable, so the
+    # newline-crossing run has not become "protect the rest of the reply".
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "<code" + nl + " class=" + quote + "x" + quote + ">y</code> "
+        + catchphrase
+        + " "
+        + catchphrase,
+        catchphrase,
+    )
+
+
+def test_the_two_uncapped_families_are_gated_separately():
+    """Their closers are different, so one gate cannot stand for both.
+
+    Sharing one meant a stray "#}" selected the pattern carrying the
+    uncapped "{% comment %}" alternative as well, and unpaired comment
+    openers then each scanned to end of text -- 4.27s at the input cap
+    against 0.05s. The bound here is loose on purpose: it separates
+    milliseconds from seconds.
+    """
+    import time
+
+    from utils.natural_expression_candidates import (
+        USER_REVIEW_MAX_INPUT_CHARACTERS,
+    )
+
+    unit = "{% comment %} "
+    cap = USER_REVIEW_MAX_INPUT_CHARACTERS
+    text = (unit * (cap // len(unit) + 1))[:cap]
+    # One stray closer belonging to the OTHER family.
+    text = text[:-2] + "#}"
+
+    started = time.perf_counter()
+    candidate_core._protected_spans(text)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 1.0, (
+        "unpaired comment openers beside a stray '#}' took %.2fs -- the two "
+        "uncapped families are sharing a gate again" % elapsed
+    )
