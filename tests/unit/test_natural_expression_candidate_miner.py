@@ -3457,3 +3457,67 @@ def test_a_template_element_body_is_inert_and_protected():
     assert not _protects(
         "I used a template today. " + catchphrase + " " + catchphrase, catchphrase
     )
+
+
+def test_a_quoted_literal_may_escape_its_own_quote():
+    """The closer search must not resume inside a string.
+
+    The quoted run stopped at the backslash-quote, so the search for "}" carried
+    on inside the literal and ended at the first one -- leaving the rest of the
+    interpolation minable.
+
+    Deliberately NOT applied to the HTML tag alternative: a backslash is not an
+    escape character inside an attribute value, so teaching it one would make
+    the tag run past its real closer. That dual is asserted below.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+    slash = chr(92)
+
+    assert _protects(
+        "${" + quote + "a" + slash + quote + "} + " + secret + quote + "}", secret
+    ), "an escaped quote ended the literal and the closer search resumed inside it"
+    assert _protects("${'a" + slash + "'} + " + secret + "'}", secret)
+
+    # The duals: an ordinary interpolation is unchanged, speech after one stays
+    # minable, and a tag is NOT given escape semantics.
+    assert _protects("${ x + " + quote + secret + quote + "}", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "配置是 ${name}，" + catchphrase + " " + catchphrase, catchphrase
+    )
+    assert not _protects(
+        "<div data-x=" + quote + "a" + slash + quote + "> " + catchphrase + " "
+        + catchphrase,
+        catchphrase,
+    ), "the tag alternative was taught escapes it does not have"
+
+
+def test_jinja_whitespace_control_still_pairs_a_block():
+    """"{%- raw -%}" is the same block with whitespace control.
+
+    The delimiters were matched literally, so the hyphenated spelling paired
+    with nothing and the body stayed searchable.
+
+    The pre-check that decides which pattern runs had the same problem one layer
+    up, and a literal cannot fix it: "{%- endraw -%}" contains no
+    "{% endraw %}". It matches the closing KEYWORD instead, which is weaker in
+    the safe direction -- it can only send a draft to the fuller pattern, never
+    skip a block that could match.
+    """
+    secret = "secret helper phrase"
+
+    for name in ("comment", "raw", "verbatim"):
+        for opener, closer in (
+            ("{%- " + name + " -%}", "{%- end" + name + " -%}"),
+            ("{% " + name + " %}", "{% end" + name + " %}"),
+            ("{%-" + name + "-%}", "{%-end" + name + "-%}"),
+        ):
+            assert _protects(opener + " " + secret + " " + closer, secret), opener
+
+    # The dual: an unpaired hyphenated opener is still bounded to its own line.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "{%- raw -%} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    )

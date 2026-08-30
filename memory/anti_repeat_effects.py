@@ -123,13 +123,13 @@ _PROTECTED_RE = re.compile(
     # comment came back into play. A closer is still required, so an
     # unpaired opener still falls through to that fallback rather than
     # running away.
-    r"\{%[ \t]*comment[ \t]*%\}[\s\S]*?\{%[ \t]*endcomment[ \t]*%\}|"
+    r"\{%-?[ \t]*comment[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endcomment[ \t]*-?%\}|"
     # raw/verbatim are the same shape and the same argument: the body is
     # template SOURCE that the engine is being told not to touch, so it
     # is not reply prose either. Two independent delimiters left the
     # payload between them searchable.
-    r"\{%[ \t]*raw[ \t]*%\}[\s\S]*?\{%[ \t]*endraw[ \t]*%\}|"
-    r"\{%[ \t]*verbatim[ \t]*%\}[\s\S]*?\{%[ \t]*endverbatim[ \t]*%\}|"
+    r"\{%-?[ \t]*raw[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endraw[ \t]*-?%\}|"
+    r"\{%-?[ \t]*verbatim[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endverbatim[ \t]*-?%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -160,7 +160,14 @@ _PROTECTED_RE = re.compile(
     # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
     # interpolation was mined -- and it ended there BEFORE the line
     # fallback could run, so the fallback did not catch it.
-    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    # A quoted literal may ESCAPE its own quote. Without that, the run
+    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
+    # search resumed inside the string, ending at the first "}".
+    #
+    # Deliberately NOT applied to the HTML tag alternative: a backslash
+    # is not an escape character inside an attribute value, so teaching
+    # it one would make the tag run past its real closer.
+    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
     r"\$\{[^\r\n]*|"
     r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     r"<%[^\r\n]*|"

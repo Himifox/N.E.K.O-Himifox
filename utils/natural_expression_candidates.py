@@ -255,13 +255,13 @@ _TEMPLATE_RE = re.compile(
     # comment came back into play. A closer is still required, so an
     # unpaired opener still falls through to that fallback rather than
     # running away.
-    r"\{%[ \t]*comment[ \t]*%\}[\s\S]*?\{%[ \t]*endcomment[ \t]*%\}|"
+    r"\{%-?[ \t]*comment[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endcomment[ \t]*-?%\}|"
     # raw/verbatim are the same shape and the same argument: the body is
     # template SOURCE that the engine is being told not to touch, so it
     # is not reply prose either. Two independent delimiters left the
     # payload between them searchable.
-    r"\{%[ \t]*raw[ \t]*%\}[\s\S]*?\{%[ \t]*endraw[ \t]*%\}|"
-    r"\{%[ \t]*verbatim[ \t]*%\}[\s\S]*?\{%[ \t]*endverbatim[ \t]*%\}|"
+    r"\{%-?[ \t]*raw[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endraw[ \t]*-?%\}|"
+    r"\{%-?[ \t]*verbatim[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endverbatim[ \t]*-?%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -291,7 +291,14 @@ _TEMPLATE_RE = re.compile(
     # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
     # interpolation was mined -- and it ended there BEFORE the line
     # fallback could run, so the fallback did not catch it.
-    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    # A quoted literal may ESCAPE its own quote. Without that, the run
+    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
+    # search resumed inside the string, ending at the first "}".
+    #
+    # Deliberately NOT applied to the HTML tag alternative: a backslash
+    # is not an escape character inside an attribute value, so teaching
+    # it one would make the tag run past its real closer.
+    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
     r"\$\{[^\r\n]*|"
     r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     r"<%[^\r\n]*|"
@@ -342,15 +349,16 @@ _TEMPLATE_RE = re.compile(
 # the first opener consumes everything up to it, so the later ones fall
 # inside the span already taken. A real 55 KiB block comment costs 0.023s
 # either way.
-# Every paired block closer, because this decides which of the two patterns
-# runs. Keyed on the comment closer alone, a reply holding only a
-# "{% raw %}" block took the pattern WITHOUT the block alternatives and the
-# body went unprotected -- the fix was there and unreachable.
-_BLOCK_CLOSERS = (
-    "{% endcomment %}",
-    "{% endraw %}",
-    "{% endverbatim %}",
-)
+# The closing KEYWORDS, not the full delimiters, because this decides which
+# of the two patterns runs and a literal cannot see Jinja whitespace
+# control: "{%- endraw -%}" contains no "{% endraw %}". Matching the bare
+# word is weaker in the safe direction -- it can only send a draft to the
+# fuller pattern, never skip a block that could match.
+#
+# Keyed on the comment closer alone, a reply holding only a "{% raw %}"
+# block took the pattern WITHOUT the block alternatives and the body went
+# unprotected -- the fix was there and unreachable.
+_BLOCK_CLOSERS = ("endcomment", "endraw", "endverbatim")
 _TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
@@ -426,7 +434,14 @@ _TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
     # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
     # interpolation was mined -- and it ended there BEFORE the line
     # fallback could run, so the fallback did not catch it.
-    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    # A quoted literal may ESCAPE its own quote. Without that, the run
+    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
+    # search resumed inside the string, ending at the first "}".
+    #
+    # Deliberately NOT applied to the HTML tag alternative: a backslash
+    # is not an escape character inside an attribute value, so teaching
+    # it one would make the tag run past its real closer.
+    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
     r"\$\{[^\r\n]*|"
     r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     r"<%[^\r\n]*|"

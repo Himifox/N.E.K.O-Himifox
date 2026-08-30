@@ -211,6 +211,13 @@ def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
     panel can read is lost by leaving those alone.
     """
     owners: list[str] = []
+    # NOT compared case-insensitively, deliberately. A name differing from a
+    # configured one only by case is either the SAME directory (Windows, where
+    # the per-name loop above already migrates the file through the
+    # configured spelling, so skipping here changes nothing) or a genuinely
+    # DIFFERENT character (POSIX, where skipping would strand its history in
+    # the root forever). Measured both ways: the guard was a no-op on one
+    # platform and harmful on the other.
     try:
         entries = sorted(os.listdir(memory_dir))
     except OSError:
