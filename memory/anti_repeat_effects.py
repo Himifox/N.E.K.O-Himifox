@@ -117,7 +117,13 @@ _PROTECTED_RE = re.compile(
     # closer is required and the body is capped, so an unpaired
     # "{% comment %}" falls through to the line fallback rather than running
     # away.
-    r"\{%[ \t]*comment[ \t]*%\}[\s\S]{0,2000}?\{%[ \t]*endcomment[ \t]*%\}|"
+    # NO length budget on the body. A cap means a closer beyond it is
+    # missed, the whole alternative fails, and the line fallback then
+    # masks only the opener line -- so every later line of a long
+    # comment came back into play. A closer is still required, so an
+    # unpaired opener still falls through to that fallback rather than
+    # running away.
+    r"\{%[ \t]*comment[ \t]*%\}[\s\S]*?\{%[ \t]*endcomment[ \t]*%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -143,7 +149,12 @@ _PROTECTED_RE = re.compile(
     # reading and it is bounded to the line, so an unbalanced "${" cannot
     # swallow the rest of the reply; the balanced form is what keeps ordinary
     # "配置是 ${name}，好不好" speech after a template minable.
-    r"\$\{(?:[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    # A "}" inside a QUOTED literal is not the closer either, the same
+    # rule the tag alternative follows for ">". Without it
+    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
+    # interpolation was mined -- and it ended there BEFORE the line
+    # fallback could run, so the fallback did not catch it.
+    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
     r"\$\{[^\r\n]*|"
     r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     r"<%[^\r\n]*|"

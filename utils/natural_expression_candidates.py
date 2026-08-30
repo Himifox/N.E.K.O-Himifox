@@ -249,7 +249,13 @@ _TEMPLATE_RE = re.compile(
     # closer is required and the body is capped, so an unpaired
     # "{% comment %}" falls through to the line fallback rather than running
     # away.
-    r"\{%[ \t]*comment[ \t]*%\}[\s\S]{0,2000}?\{%[ \t]*endcomment[ \t]*%\}|"
+    # NO length budget on the body. A cap means a closer beyond it is
+    # missed, the whole alternative fails, and the line fallback then
+    # masks only the opener line -- so every later line of a long
+    # comment came back into play. A closer is still required, so an
+    # unpaired opener still falls through to that fallback rather than
+    # running away.
+    r"\{%[ \t]*comment[ \t]*%\}[\s\S]*?\{%[ \t]*endcomment[ \t]*%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -274,7 +280,139 @@ _TEMPLATE_RE = re.compile(
     # reading and it is bounded to the line, so an unbalanced "${" cannot
     # swallow the rest of the reply; the balanced form is what keeps ordinary
     # "配置是 ${name}，好不好" speech after a template minable.
-    r"\$\{(?:[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    # A "}" inside a QUOTED literal is not the closer either, the same
+    # rule the tag alternative follows for ">". Without it
+    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
+    # interpolation was mined -- and it ended there BEFORE the line
+    # fallback could run, so the fallback did not catch it.
+    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
+    r"\$\{[^\r\n]*|"
+    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
+    r"<%[^\r\n]*|"
+    # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
+    # by far the highest false-positive density in this project's character
+    # speech -- `>_<`, `<3`, `->`, `3 < 5`. Line-bounding stopped the tail of
+    # one emoticon pairing with the head of another on the NEXT line, but two
+    # emoticons on ONE line is the commoner way a model writes them, and
+    # `<3 you are so cute >_<` still lost the phrase between them. Requiring a
+    # leading letter (or `/`) costs nothing: real HTML code containers are
+    # `_html_raw_text_spans`' job, and this alternative only ever existed for
+    # placeholder-shaped text.
+    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
+    # real tag carrying long class/style/data-* attributes busted that cap,
+    # so the whole tag failed to match and its attributes -- including
+    # data-key="..." payloads -- were mined and persisted. The cap never
+    # bought what it looked like it bought either: "a <b and c> d" matched
+    # under it just as well, because the leading-letter requirement, not
+    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
+    # of removing it is one line of speech between a tag-shaped opener and
+    # a later ">" -- over-protection, which this module accepts, against a
+    # leak, which it does not.
+    #
+    # Atomic for the same reason as the containers above: the run stops
+    # only at "<", ">" or a newline, so a character handed back can never
+    # let the ">" match, and an opener with no closer now fails in one
+    # pass instead of one per character.
+    # The bracketed placeholder loses its length cap for exactly the reason
+    # the tag run above lost its own: a 65-character name failed the whole
+    # alternative, so nothing was protected and the identifier was mined,
+    # while its 64-character twin in the same sentence was masked.
+    # A ">" inside a QUOTED attribute value is not the closer. Ending there
+    # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
+    # outside the span and minable. The quoted runs are line-bounded like
+    # everything else here, so this cannot reach past its own line.
+    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
+)
+
+# The same pattern WITHOUT the block-comment alternative, and the closer
+# that decides between them.
+#
+# The block body is unbounded on purpose -- a cap means a closer beyond it
+# is missed and the comment's later lines come back into play. The cost of
+# an unbounded lazy body is that an opener with NO closer scans to end of
+# text, once per opener: measured 4.1s on a full-budget line of nothing but
+# openers. That case is decidable in one substring scan, because if the
+# closer appears nowhere then no opener can match; and when it DOES appear,
+# the first opener consumes everything up to it, so the later ones fall
+# inside the span already taken. A real 55 KiB block comment costs 0.023s
+# either way.
+_BLOCK_COMMENT_CLOSER = "{% endcomment %}"
+_TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
+    # The bodies are ATOMIC. Each is a tempered token that stops only at a
+    # newline or at its own closer, so giving a character back can never
+    # let the closer match -- the character handed back is by construction
+    # neither. Without that, an opener with no closer backtracked through
+    # the whole line one character at a time, and a reply full of unmatched
+    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
+    # on the live turn path, since the effects sidecar masks every draft.
+    # Still quadratic in the opener count -- the forward scan per opener
+    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
+    # would make it linear cannot be used: it stops finding a closer past
+    # its bound, which unmasks a long template body rather than merely
+    # costing time.
+    # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
+    # interpolation and ERB scriptlets are ordinary shapes, and a body that
+    # merely spanned a newline was left unprotected while its single-line twin
+    # was masked. The line budget is the point -- an unbounded newline-crossing
+    # match turns one stray delimiter in prose into a span that swallows the
+    # rest of the reply.
+    # The body forbids only the CLOSER, not every brace: a template body may
+    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
+    # of [^{}] made all three containers miss it and mine the payload. The
+    # tempered form keeps the same bound as before, since the closer is still
+    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
+    # because the two-character opener is still required.
+    # Each container gets a LINE fallback behind its exact form. An opener
+    # with no closer used to match nothing at all, so this only ever protects
+    # more, and never past the line the opener sits on. It is also what stops
+    # the scan going quadratic: with no closer on the line the first opener
+    # consumes it and the engine never retries at the ones behind it.
+    # Measured on a full-budget single line of openers: 30s to 0.04s.
+    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
+    r"\{\{[^\r\n]*|"
+    # A BLOCK comment hides its body by definition, and the two statement
+    # delimiters were protected independently while the text between them
+    # stayed searchable. It goes FIRST, so the pair wins over the two
+    # delimiters matching separately. Bounded like everything else here: the
+    # closer is required and the body is capped, so an unpaired
+    # "{% comment %}" falls through to the line fallback rather than running
+    # away.
+    # NO length budget on the body. A cap means a closer beyond it is
+    # missed, the whole alternative fails, and the line fallback then
+    # masks only the opener line -- so every later line of a long
+    # comment came back into play. A closer is still required, so an
+    # unpaired opener still falls through to that fallback rather than
+    # running away.
+    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
+    r"\{%[^\r\n]*|"
+    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
+    r"\{\#[^\r\n]*|"
+    # Jinja statement and comment blocks, on the same line budget: a
+    # ``{% set api_key = "..." %}`` carried its payload straight past the brace
+    # pattern, which only knew the expression form.
+    # TEMPERED, like the three brace containers above, and for the reason
+    # already written there: a body may legitimately hold the character
+    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
+    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
+    # alternative failed entirely and nothing else picked the payload up.
+    # The sibling "{% ... %}" holding the same inner brace was masked
+    # fine, which is what showed the class rather than the shape was
+    # deciding.
+    # The closer is a single "}", so a tempered body ends at the FIRST one --
+    # including one that belongs to the body itself. "${({ k: 1 }).k + TOKEN}"
+    # therefore masked only as far as the object literal and left the token
+    # minable. Two alternatives, tighter first: a body that BALANCES one
+    # level of nesting, then a fallback that masks to end of line when the
+    # braces cannot be balanced at all. The fallback is the conservative
+    # reading and it is bounded to the line, so an unbalanced "${" cannot
+    # swallow the rest of the reply; the balanced form is what keeps ordinary
+    # "配置是 ${name}，好不好" speech after a template minable.
+    # A "}" inside a QUOTED literal is not the closer either, the same
+    # rule the tag alternative follows for ">". Without it
+    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
+    # interpolation was mined -- and it ended there BEFORE the line
+    # fallback could run, so the fallback did not catch it.
+    r"\$\{(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
     r"\$\{[^\r\n]*|"
     r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     r"<%[^\r\n]*|"
@@ -1098,7 +1236,13 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # "[cfg\]]: /secret-helper-phrase" unrecognised as a definition at all,
     # so its destination stayed minable -- the same half-fix shape twice in
     # one pattern.
-    r"^[ \t]{0,3}\[(?:\\[^\r\n]|[^\]\r\n\\])*\]:[ \t]*"
+    # A definition may sit inside a blockquote or a list item, which is
+    # ordinary Markdown and which every reader resolves. The bare "^"
+    # anchor saw only the container marker, so "> [cfg]: /secret" was not
+    # a definition at all and its destination stayed minable. Same
+    # three-space padding rule as the containers themselves.
+    r"^(?:[ \t]{0,3}(?:>[ \t]?|[-+*][ \t]|\d{1,9}[.)][ \t]))*"
+    r"[ \t]{0,3}\[(?:\\[^\r\n]|[^\]\r\n\\])*\]:[ \t]*"
     # THREE forms, and the middle one is a fallback rather than a rule: when
     # the escape-aware form finds no LATER unescaped ">" it fails outright,
     # the whitespace-delimited form then stops at the first space, and the
@@ -1272,9 +1416,14 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     # characters; once the tag run became line-bounded instead it grew to a
     # whole line, and a "${...}" payload sitting after a tag-shaped opener
     # inside a code span stopped being matched at all.
+    template_pattern = (
+        _TEMPLATE_RE
+        if _BLOCK_COMMENT_CLOSER in text
+        else _TEMPLATE_RE_WITHOUT_BLOCK
+    )
     position = 0
     while True:
-        match = _TEMPLATE_RE.search(text, position)
+        match = template_pattern.search(text, position)
         if match is None:
             break
         if _starts_inside(match.start(), runtime):

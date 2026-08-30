@@ -3265,3 +3265,104 @@ def test_a_template_block_comment_hides_its_body():
         catchphrase,
     ), "an unpaired block comment ran past its own line"
     assert _protects("{% set token = '" + secret + "' %}", secret)
+
+
+def test_a_quoted_brace_does_not_close_an_interpolation():
+    """"${...}" ends on a single "}", including one inside a quoted literal.
+
+    The tag alternative already skips a ">" written inside quotes; the
+    interpolation did not skip a "}", so '${"}" + "SECRET"}' ended at the quoted
+    brace and the rest was mined. It ended there BEFORE the line fallback could
+    run, so the fallback did not catch it either.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+
+    assert _protects(
+        "${" + quote + "}" + quote + " + " + quote + secret + quote + "}", secret
+    ), "a quoted brace closed the interpolation"
+    assert _protects("${'}' + '" + secret + "'}", secret)
+
+    # The duals: an ordinary interpolation is unchanged, and speech after one on
+    # the same line is still minable.
+    assert _protects("${ x + " + quote + secret + quote + "}", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "\u914d\u7f6e\u662f ${name}\uff0c" + catchphrase + " " + catchphrase, catchphrase
+    )
+
+
+def test_a_block_comment_body_has_no_length_budget():
+    """A cap means a closer beyond it is missed and the body comes back.
+
+    With a 2000-character budget, a comment longer than that failed the block
+    alternative entirely; the line fallback then masked only the opener line, so
+    every later line was searchable again -- which is the opposite of what a
+    block comment is.
+    """
+    secret = "secret helper phrase"
+    long_body = "x" * 2100
+
+    assert _protects(
+        "{% comment %}" + chr(10) + long_body + chr(10) + secret + chr(10)
+        + "{% endcomment %}",
+        secret,
+    ), "a body past the old budget stopped being masked"
+
+    # The duals. A short one still works, and an UNPAIRED opener is still
+    # bounded to its own line rather than running away.
+    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "{% comment %} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+
+
+def test_an_unclosed_block_comment_is_decided_in_one_substring_scan():
+    """An unbounded lazy body scans to end of text once per opener.
+
+    Measured 4.1s on a full-budget line of nothing but openers. The case is
+    decidable in a single substring scan, because if the closer appears NOWHERE
+    then no opener can match -- and when it does appear, the first opener
+    consumes everything up to it, so the openers behind it are already inside
+    that span.
+
+    Loose budget on purpose: this guard is for the difference between
+    milliseconds and seconds, not a performance target.
+    """
+    import time
+
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    unit = "{% comment %} "
+    for label, draft in (
+        ("no closer", (unit * (budget // len(unit)))[:budget]),
+        (
+            "one closer at the end",
+            (unit * (budget // len(unit)))[: budget - 16] + "{% endcomment %}",
+        ),
+    ):
+        started = time.perf_counter()
+        candidate_core._protected_spans(draft)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 2.0, "%s took %.1fs" % (label, elapsed)
+
+
+def test_a_reference_definition_may_sit_inside_a_container():
+    """A definition nested in a blockquote or a list is ordinary Markdown.
+
+    The bare "^" anchor saw the container marker and nothing else, so
+    "> [cfg]: /secret" was not a definition at all and its destination stayed
+    minable -- while every reader resolves it.
+    """
+    target = "secret-helper-phrase"
+    tail = chr(10) + chr(10) + "ok"
+
+    for prefix in ("> ", ">", "- ", "1. ", "  > ", "> > "):
+        assert _protects("%s[cfg]: /%s%s" % (prefix, target, tail), target), prefix
+
+    # The duals: the unnested form still resolves, and bracketed speech behind a
+    # marker is still not a definition.
+    assert _protects("[cfg]: /" + target + tail, target)
+    catchphrase = "please remember to rest"
+    assert not _protects("> [" + catchphrase + "] " + catchphrase, catchphrase)
