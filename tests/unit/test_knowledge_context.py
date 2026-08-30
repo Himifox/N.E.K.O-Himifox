@@ -722,7 +722,15 @@ async def test_a_different_card_still_gets_through(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cooldown_expires(monkeypatch):
+async def test_dedup_lasts_the_whole_session_and_no_longer(monkeypatch):
+    """Suppression is bounded by the session, not by a wall clock.
+
+    There is deliberately no timer: a card delivered into a conversation stays
+    suppressed for as long as that conversation runs, however long that is, and
+    a rebuilt session starts clean. A timeout would do the wrong thing at both
+    ends — re-injecting mid-conversation, and carrying suppression across a
+    reset the user experiences as a fresh start.
+    """
     import main_logic.knowledge_context as knowledge_tool
 
     knowledge_tool.reset_public_knowledge_injection_state()
@@ -734,15 +742,28 @@ async def test_cooldown_expires(monkeypatch):
     monkeypatch.setattr(
         knowledge_tool, "build_automatic_public_knowledge_context", _context
     )
-    monkeypatch.setattr(knowledge_tool, "_INJECTION_COOLDOWN_SECONDS", 0.0)
+    assert not hasattr(knowledge_tool, "_INJECTION_COOLDOWN_SECONDS"), (
+        "a wall-clock window would reintroduce both failure directions"
+    )
 
     first = await knowledge_tool.build_public_knowledge_turn_context(
-        "聊聊永动机", session_key="lanlan"
+        "聊聊永动机", session_key="session-1"
     )
-    second = await knowledge_tool.build_public_knowledge_turn_context(
-        "再说说永动机", session_key="lanlan"
+    assert first.context
+
+    # Still the same session, arbitrarily later in the conversation.
+    for _ in range(5):
+        again = await knowledge_tool.build_public_knowledge_turn_context(
+            "再说说永动机", session_key="session-1"
+        )
+        assert again.context == ""
+
+    # Session teardown revokes the key; the next session mints a new one.
+    knowledge_tool.invalidate_public_knowledge_session("session-1")
+    after_reset = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="session-2"
     )
-    assert first.context and second.context
+    assert after_reset.context, "a rebuilt session must start with a clean slate"
 
 
 @pytest.mark.asyncio

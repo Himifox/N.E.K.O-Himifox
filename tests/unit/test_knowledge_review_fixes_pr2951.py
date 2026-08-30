@@ -220,7 +220,10 @@ def test_staged_pack_artifact_rejects_a_symlink(tmp_path):
     job_dir.mkdir()
     os.symlink(external, job_dir / PACK_ARTIFACT_NAME)
 
-    with pytest.raises(ValueError, match="not a regular file"):
+    # Match the refusal, not its wording: the reader has already been
+    # rewritten once (regular-file check -> reparse-point check) and pinning
+    # the exact sentence made this test fail on a strictly better guard.
+    with pytest.raises(ValueError, match=r"regular file|reparse"):
         _load_job_pack(job_dir)
 
 
@@ -322,7 +325,10 @@ def test_legacy_staged_pack_json_rejects_a_symlink(tmp_path):
     job_dir.mkdir()
     os.symlink(external, job_dir / LEGACY_PACK_ARTIFACT_NAME)
 
-    with pytest.raises(ValueError, match="not a regular file"):
+    # Match the refusal, not its wording: the reader has already been
+    # rewritten once (regular-file check -> reparse-point check) and pinning
+    # the exact sentence made this test fail on a strictly better guard.
+    with pytest.raises(ValueError, match=r"regular file|reparse"):
         _load_job_pack(job_dir)
 
 

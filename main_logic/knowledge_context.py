@@ -40,12 +40,18 @@ _AUTO_CONTEXT_LOCK = threading.Lock()
 _AUTO_CONTEXT_TASKS: dict[str, asyncio.Task[object]] = {}
 _AUTO_CONTEXT_TASK_STARTED: dict[str, float] = {}
 # Passive injection is meant to be occasional. Retrieval runs every turn, but a
-# card that was just delivered must not be delivered again a turn later — the
-# same topic keeps matching, and repeating the reference reads as a stutter.
+# card that was already delivered must not be delivered again — the same topic
+# keeps matching, and repeating the reference reads as a stutter.
+#
+# The lifetime of that memory is the session, not a wall clock. A session key is
+# minted per session and revoked on teardown (_rotate_public_knowledge_session),
+# so a card stays suppressed for as long as the conversation it was delivered
+# into is still running, and starts fresh the moment the session is rebuilt.
+# A timer on top of that would either re-inject mid-conversation or keep
+# suppressing across a reset, both of which contradict the session boundary.
 _RECENT_INJECTIONS: dict[
-    str, "OrderedDict[KnowledgeCardIdentity, float]"
+    str, "OrderedDict[KnowledgeCardIdentity, None]"
 ] = {}
-_INJECTION_COOLDOWN_SECONDS = 600.0
 _MAX_TRACKED_SESSIONS = 32
 _MAX_TRACKED_CARDS_PER_SESSION = 64
 _MAX_KNOWLEDGE_QUERY_CHARS = 4_096
@@ -184,19 +190,10 @@ def _start_automatic_context_task(
 
 
 def _cooldown_identities(session_key: str) -> frozenset[KnowledgeCardIdentity]:
-    now = time.monotonic()
+    """Cards already delivered into this session; empty once the session rotates."""
     with _AUTO_CONTEXT_LOCK:
         seen = _RECENT_INJECTIONS.get(session_key)
-        if seen is None:
-            return frozenset()
-        expired = [
-            identity
-            for identity, delivered_at in seen.items()
-            if now - delivered_at >= _INJECTION_COOLDOWN_SECONDS
-        ]
-        for identity in expired:
-            seen.pop(identity, None)
-        return frozenset(seen)
+        return frozenset(seen) if seen else frozenset()
 
 
 def _record_injections(
@@ -206,11 +203,11 @@ def _record_injections(
     identities = tuple(identity for identity in identities if identity.source_tag)
     if not identities:
         return
-    now = time.monotonic()
     with _AUTO_CONTEXT_LOCK:
         seen = _RECENT_INJECTIONS.setdefault(session_key, OrderedDict())
         for identity in identities:
-            seen[identity] = now
+            # Value is unused; the OrderedDict is the LRU that bounds the ledger.
+            seen[identity] = None
             seen.move_to_end(identity)
         while len(seen) > _MAX_TRACKED_CARDS_PER_SESSION:
             seen.popitem(last=False)
