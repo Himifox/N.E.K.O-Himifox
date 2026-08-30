@@ -454,7 +454,17 @@ _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?: {0,3}>[ \t]?)+")
 # Padded by SPACES only, for the same reason as the blockquote pattern
 # above: "\t- ```" is a tab-indented code line, and a tab counted as one
 # column made it a list item holding a fence.
-_LIST_MARKER_PREFIX_RE = re.compile(r" {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
+# ONE space after the marker, not the whole run -- the rule its twin
+# ``_LIST_MARKER_COLUMN_RE`` already states: the greedy form is right when a
+# fence opener follows and wrong when INDENTATION follows. A line that is
+# BOTH is the case that comment did not cover. Eating all five spaces of
+# "-     ```" measured the residual indent as zero, so it opened a fence
+# that never closes and silenced the rest of the reply -- where CommonMark
+# reads it as one line of indented code inside the item, which is what
+# ``_indented_code_spans`` says as well. With one space stripped the column
+# guard in ``_fenced_code_spans`` sees the remaining four and declines,
+# while a genuine "- ```" still opens.
+_LIST_MARKER_PREFIX_RE = re.compile(r" {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
 # The same markers, minus the leading padding and consuming only ONE space
 # after the marker. The greedy form above is right when a fence opener
 # follows and wrong when INDENTATION follows: "-     code" is a marker, its

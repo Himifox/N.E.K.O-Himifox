@@ -3004,3 +3004,59 @@ def test_a_displayed_parenthesis_closes_no_link_target():
     )
     # The control, which was already passing: the same link with no code span.
     assert _protects("[docs](/api/x" + tail + ") \u597d\u5440", tail)
+
+
+def test_a_list_marker_followed_by_indentation_opens_no_fence():
+    """The greedy trailing run is right after a marker and wrong after one.
+
+    "The greedy form above is right when a fence opener follows and wrong when
+    INDENTATION follows" is already written above _LIST_MARKER_COLUMN_RE. A line
+    that is BOTH -- a marker, then five spaces, then a fence run -- is the case
+    that comment did not cover: eating all five spaces measured the residual
+    indent as zero, so it opened a fence that never closes and silenced the rest
+    of the reply.
+    """
+    ticks = chr(96) * 3
+    phrase = "我们一起去公园散步吧"
+    tail = phrase + "\uff0c\u4eca\u5929\u5929\u6c14\u771f\u597d\u5440"
+
+    def candidates(body):
+        report = candidate_core.build_user_review_report(
+            [candidate_core.SourceMessage("zh", body, 1)] * 3,
+            message_count_threshold=1,
+            rules_by_language={},
+        )
+        return len(report["candidates"])
+
+    indented = "\u597d\u5440" + chr(10) + chr(10) + "-     " + ticks + chr(10) + tail
+    assert not candidate_core._fenced_code_spans(indented), (
+        "a marker followed by four more columns of indentation opened a fence"
+    )
+    assert candidate_core._indented_code_spans(indented), (
+        "and it is not being read as the indented code CommonMark says it is"
+    )
+    assert candidates(indented) > 20
+
+    # The duals, so this is not "list markers never open fences". A genuine
+    # "- ```" still opens, still closes when its pair is written bare, and its
+    # body is still masked.
+    single_space = "\u597d\u5440" + chr(10) + chr(10) + "- " + ticks + chr(10) + tail
+    assert candidate_core._fenced_code_spans(single_space)
+    assert candidates(single_space) == 0
+
+    closed = (
+        "\u597d\u5440" + chr(10) + chr(10) + "- " + ticks + chr(10) + "code" + chr(10)
+        + ticks + chr(10) + chr(10) + tail
+    )
+    assert candidates(closed) > 20, "a closed list fence stopped closing"
+
+    secret = "API_KEY = 'sk-live-x'"
+    body = "- " + ticks + chr(10) + secret + chr(10) + ticks + chr(10) + chr(10) + tail
+    report = candidate_core.build_user_review_report(
+        [candidate_core.SourceMessage("zh", body, 1)] * 3,
+        message_count_threshold=1,
+        rules_by_language={},
+    )
+    assert not any(
+        secret[:12] in str(candidate["phrase"]) for candidate in report["candidates"]
+    ), "the list fence stopped masking its own body"
