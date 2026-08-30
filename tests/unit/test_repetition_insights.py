@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -1893,6 +1894,13 @@ async def test_a_configured_character_with_a_linked_directory_is_refused(
         query_effects=MagicMock(return_value=_empty_effects())
     )
 
+    # The shape get_character_data really produces: a DEFAULT entry for
+    # every configured character. Supplying an empty store here is what let
+    # the first version of this guard pass while doing nothing at all.
+    default_store = {
+        "Carol": os.path.join(str(memory_dir), "Carol", "time_indexed.db")
+    }
+
     async def _ask(time_store):
         config = SimpleNamespace(
             aload_characters=AsyncMock(return_value={"猫娘": {"Carol": {}}}),
@@ -1921,7 +1929,7 @@ async def test_a_configured_character_with_a_linked_directory_is_refused(
             )
 
     client.post.reset_mock()
-    refused = await _ask({})
+    refused = await _ask(default_store)
     assert getattr(refused, "status_code", 200) == 404, (
         "a configured character whose directory is a link was analysed"
     )
@@ -1929,10 +1937,72 @@ async def test_a_configured_character_with_a_linked_directory_is_refused(
         "the analysis ran before the refusal"
     )
 
-    # The dual: registered explicitly, it is a choice rather than a leak.
+    # And with no entry at all, which is the same situation.
+    client.post.reset_mock()
+    assert getattr(await _ask({}), "status_code", 200) == 404
+
+    # The dual: pointed somewhere ELSE explicitly, it is a choice rather
+    # than a leak. A different path, not merely a present key.
     client.post.reset_mock()
     allowed = await _ask({"Carol": str(outside / "time_indexed.db")})
     assert getattr(allowed, "status_code", 200) != 404, (
         "an explicitly registered time_store path was refused"
     )
     assert client.post.await_count == 1
+
+
+@pytest.mark.unit
+def test_time_store_carries_the_default_path_for_a_configured_character(tmp_path):
+    """The premise the containment carve-out rests on.
+
+    ``_default_memory_dir_escapes_root`` treats a ``time_store`` entry as a
+    deliberate override only when it DIFFERS from the default path. That is
+    only correct because ``get_character_data`` auto-populates a default
+    entry for every configured character.
+
+    Treating mere MEMBERSHIP as the override -- the first version of this --
+    made the check return False for exactly the case it exists to catch, so
+    it never ran in production at all, while its own test passed because the
+    double supplied an empty store. The premise is pinned here rather than
+    assumed at the call site: if it ever stops holding, "present" becomes
+    meaningful again and the carve-out needs rewriting, not silently
+    changing meaning.
+    """
+    from utils.config_manager import ConfigManager
+
+    standard_root = tmp_path / "anchor-base"
+    with patch.object(
+        ConfigManager,
+        "_get_documents_directory",
+        return_value=tmp_path / "runtime-parent",
+    ), patch.object(
+        ConfigManager,
+        "_get_standard_data_directory_candidates",
+        return_value=[standard_root],
+    ):
+        manager = ConfigManager("N.E.K.O")
+    manager._get_standard_data_directory_candidates = lambda: [standard_root]
+
+    characters_path = Path(manager.config_dir) / "characters.json"
+    characters_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        characters = json.loads(characters_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        characters = {}
+    characters["猫娘"] = {"Carol": characters.get("猫娘", {}).get("Carol", {})}
+    characters_path.write_text(
+        json.dumps(characters, ensure_ascii=False), encoding="utf-8"
+    )
+    manager._characters_cache = None
+    manager._characters_cache_mtime = None
+
+    time_store = manager.get_character_data()[6]
+
+    assert time_store.get("Carol") == os.path.join(
+        str(manager.memory_dir), "Carol", "time_indexed.db"
+    ), (
+        "time_store no longer carries the DEFAULT path for a configured "
+        "character. 'Present in time_store' has become meaningful again, so "
+        "_default_memory_dir_escapes_root must be rewritten rather than "
+        "quietly changing meaning: %r" % (time_store,)
+    )

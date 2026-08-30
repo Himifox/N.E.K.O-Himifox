@@ -896,9 +896,20 @@ def _default_memory_dir_escapes_root(config_manager, name: str) -> bool:
     The sidecar stores are not reachable this way because they already
     ask ``_is_within_memory_root``, which resolves both sides with
     realpath. The read-only time index does not, because it has to honour
-    ``time_store`` -- where a character is deliberately pointed elsewhere.
-    So the same rule is asked here instead, and only about the DEFAULT
-    path: an explicitly registered one is a choice, not a leak.
+    ``time_store`` -- where a character can be deliberately pointed
+    elsewhere. So the same rule is asked here instead, and only about the
+    DEFAULT path: an explicitly registered one is a choice, not a leak.
+
+    MEMBERSHIP in ``time_store`` is not that choice. ``get_character_data``
+    builds it as ``{name: memory_dir/name/time_indexed.db}`` for every
+    configured character, so treating a present key as an override made
+    this return False for exactly the case it exists to catch -- the
+    check never ran outside its own test, which supplied an empty store.
+    What counts is the path being DIFFERENT from the default one.
+
+    Compared without resolving links, deliberately: realpath on a linked
+    default path lands on the far end, which then reads as "somewhere
+    else on purpose" and waves through precisely the case in hand.
     """
     try:
         time_store = config_manager.get_character_data()[6]
@@ -906,8 +917,15 @@ def _default_memory_dir_escapes_root(config_manager, name: str) -> bool:
         # Unreadable configuration is not evidence of a deliberate
         # override, so fall through to the containment check.
         time_store = {}
-    if isinstance(time_store, dict) and name in time_store:
-        return False
+    registered = time_store.get(name) if isinstance(time_store, dict) else None
+    if registered:
+        default = os.path.join(
+            str(config_manager.memory_dir), name, "time_indexed.db"
+        )
+        if os.path.normcase(os.path.abspath(str(registered))) != os.path.normcase(
+            os.path.abspath(default)
+        ):
+            return False
     from memory import character_dir_is_within_memory_root
 
     try:
