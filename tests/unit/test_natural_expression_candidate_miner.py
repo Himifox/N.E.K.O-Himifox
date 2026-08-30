@@ -3122,3 +3122,77 @@ def test_a_tab_indented_delimiter_joins_a_fence_but_cannot_open_an_endless_one()
         "an ordinary unclosed fence stopped protecting, which is not what this "
         "rule is allowed to change"
     )
+
+
+def test_a_template_body_may_hold_its_own_closing_brace():
+    """"${...}" ends at a single "}", including one belonging to its body.
+
+    The three "{{ }}"-style containers were tempered because a body may hold a
+    lone brace. "${...}" has the same problem and a harder shape, because its
+    closer IS that brace: "${({ k: 1 }).k + TOKEN}" masked only as far as the
+    object literal and left the token minable, then persisted.
+
+    Two alternatives, tighter first: a body balancing one level of nesting, and
+    a fallback masking to end of line when the braces cannot be balanced at all.
+    """
+    secret = "SECRET_TOKEN_VALUE"
+
+    assert _protects('${({ k: "ok" }).k + ' + secret + "}", secret), (
+        "the object literal's brace ended the container early"
+    )
+    assert not _persists('${({ k: "ok" }).k + ' + secret + "}", secret)
+    # Deeper than one level cannot be balanced by a regex, so the line fallback
+    # takes it -- the conservative reading, and still protected.
+    assert _protects("${ {{a}} + " + secret + "}", secret)
+
+    # The dual that keeps the fallback honest: ordinary speech AFTER a
+    # well-formed template on the same line is still minable, so this did not
+    # become "mask every line holding a dollar-brace".
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "\u914d\u7f6e\u662f ${name}\uff0c" + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+
+
+def test_an_opener_with_no_closer_is_bounded_to_its_own_line():
+    """Every container gets a line fallback, and none of them may exceed a line.
+
+    An opener with no closer used to match nothing at all, so the fallback only
+    ever protects MORE. What it must never do is reach the next line -- that is
+    the runaway shape this module refuses -- and it is also what keeps the scan
+    from going quadratic, since the first opener consumes the line and the
+    engine never retries at the ones behind it.
+    """
+    catchphrase = "please remember to rest"
+    for opener in ("${", "<%", "{{", "{%", "{#"):
+        draft = (
+            opener + " oops" + chr(10) + chr(10) + catchphrase + " " + catchphrase
+        )
+        assert not _protects(draft, catchphrase), (
+            "an unclosed %r reached past its own line" % opener
+        )
+        # And it does protect its own line, which is the point of the fallback.
+        assert _protects(opener + " SECRET_TOKEN_VALUE", "SECRET_TOKEN_VALUE"), opener
+
+
+def test_a_line_of_openers_does_not_take_quadratic_time():
+    """Without the line fallback each opener re-scans the rest of the line.
+
+    Measured at the accepted reply size, one line of nothing but openers took
+    around thirty seconds per container kind -- on the live turn path, since the
+    effects sidecar masks every draft. The budget here is deliberately loose:
+    this guard is for the difference between milliseconds and half a minute, not
+    for a performance target.
+    """
+    import time
+
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    for unit in ("${ ", "<% ", "{{ ", "{% ", "{# "):
+        draft = (unit * (budget // len(unit)))[:budget]
+        started = time.perf_counter()
+        candidate_core._protected_spans(draft)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 5.0, (
+            "%r openers on one line took %.1fs" % (unit, elapsed)
+        )
