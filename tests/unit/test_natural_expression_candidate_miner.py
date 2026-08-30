@@ -800,7 +800,13 @@ def test_report_can_bound_retained_occurrences():
 
 
 def test_user_review_narrows_window_when_character_budget_is_exceeded(monkeypatch):
-    """An oversized history narrows the window instead of failing the request."""
+    """An oversized history narrows the window instead of failing the request.
+
+    It narrows to the DISTINCT-message threshold and no further: below
+    that, every candidate is removed for want of occurrences and the panel
+    reports "not enough history" about a window that had it. This used to
+    assert two, which was the bug written down.
+    """
     monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_INPUT_CHARACTERS", 30)
     messages = [
         candidate_core.SourceMessage("en", "quiet lantern", source_line)
@@ -811,7 +817,7 @@ def test_user_review_narrows_window_when_character_budget_is_exceeded(monkeypatc
 
     summary = report["summary"]
     assert summary["assistant_message_count"] == 4
-    assert summary["analyzed_message_count"] == 2
+    assert summary["analyzed_message_count"] == 3
     assert summary["messages_truncated"] is True
 
 
@@ -3988,4 +3994,44 @@ def test_a_reference_destination_may_be_a_bare_fragment():
     catchphrase = "please remember to rest"
     assert not _protects(
         "# heading" + nl + nl + catchphrase + " " + catchphrase, catchphrase
+    )
+
+
+def test_three_oversized_replies_still_yield_their_shared_phrase(monkeypatch):
+    """Narrowing must not take the window below the sample a candidate needs.
+
+    Three uniformly large replies sharing a phrase: nothing dominates, so
+    nothing gets clipped, and eviction took the window to two. Every
+    candidate was then removed for want of occurrences in three distinct
+    messages, and the panel reported "not enough history" about a window
+    that had it in every single reply.
+
+    A shorter look at three messages can still find a phrase in all three.
+    Two whole messages cannot find it in three.
+    """
+    monkeypatch.setattr(candidate_core, "USER_REVIEW_MAX_INPUT_CHARACTERS", 300)
+    phrase = "quiet lantern by the window"
+    filler = "x" * 140
+    messages = [
+        candidate_core.SourceMessage(
+            "en", phrase + " " + filler, source_line
+        )
+        for source_line in range(1, 4)
+    ]
+
+    report = candidate_core.build_user_review_report(
+        messages, message_count_threshold=3, rules_by_language={}
+    )
+
+    summary = report["summary"]
+    assert summary["assistant_message_count"] == 3
+    assert summary["analyzed_message_count"] == 3, (
+        "the window narrowed below the distinct-message threshold, so the "
+        "phrase could not be found in three replies however often it appears"
+    )
+    # CONTENT, not messages: the whole point is that no message left.
+    assert summary["content_truncated"] is True
+    assert summary["messages_truncated"] is False
+    assert report["candidates"], (
+        "no candidate came back from three replies that all carry the phrase"
     )

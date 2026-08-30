@@ -2278,9 +2278,29 @@ def build_user_review_report(
         # them, and the panel reported not enough history.
         #
         # Order among the survivors is untouched: exactly one message
-        # leaves. When nothing is over its share the oldest goes, which is
-        # the behaviour a uniformly large window still gets -- narrowing
-        # rather than cutting bodies, as the sibling test pins.
+        # leaves. When nothing is over its share the oldest goes.
+        #
+        # Unless leaving would take the window below the number of
+        # DISTINCT messages a candidate needs. Three uniformly large
+        # replies sharing a phrase used to lose one and report "not
+        # enough history" for a window that had it -- nothing dominates,
+        # so nothing gets clipped, and eviction takes it to two. A
+        # SHORTER look at three messages can still find a phrase in all
+        # three; two whole messages cannot find it in three.
+        if len(analyzed) <= message_count_threshold:
+            share = USER_REVIEW_MAX_INPUT_CHARACTERS // len(analyzed)
+            analyzed = [
+                message
+                if len(message.content) <= share
+                else SourceMessage(
+                    language=message.language,
+                    content=message.content[:share],
+                    source_line=message.source_line,
+                )
+                for message in analyzed
+            ]
+            content_truncated = True
+            break
         share = USER_REVIEW_MAX_INPUT_CHARACTERS // len(analyzed)
         victim = next(
             (
