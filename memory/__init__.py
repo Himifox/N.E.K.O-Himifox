@@ -362,7 +362,11 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                 (
                     suffix
                     for suffix in _SQLITE_SIDECAR_SUFFIXES
-                    if os.path.exists(new_path + suffix)
+                    # lexists: a DANGLING link answers False to exists(),
+                    # so a broken -wal at the destination slipped past
+                    # this and the database moved in beside it -- the
+                    # very pairing the check exists to refuse.
+                    if os.path.lexists(new_path + suffix)
                 ),
                 None,
             )

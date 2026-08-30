@@ -2178,3 +2178,40 @@ def test_a_symlinked_effect_sidecar_is_never_read(tmp_path):
     assert store._existing_file_path("Dave") == os.path.join(
         str(memory_dir), "Dave", "anti_repeat_effects.json"
     )
+
+
+@pytest.mark.unit
+def test_a_dangling_destination_sidecar_also_stops_the_move(tmp_path):
+    """exists() answers False for a broken link, and it is still there.
+
+    So a dangling "time_indexed.db-wal" at the destination slipped past the
+    ambiguity check and the database moved in beside it -- exactly the
+    pairing that check exists to refuse, and a link SQLite would then follow
+    or replace.
+    """
+    import os
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "Carol").mkdir(parents=True)
+    (memory_dir / "time_indexed_Carol.db").write_bytes(b"CAROL")
+    try:
+        os.symlink(
+            str(tmp_path / "gone.db-wal"),
+            str(memory_dir / "Carol" / "time_indexed.db-wal"),
+        )
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    assert not os.path.exists(memory_dir / "Carol" / "time_indexed.db-wal"), (
+        "the fixture link is not dangling, so nothing here is tested"
+    )
+
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), ["Carol"])
+
+    assert not (memory_dir / "Carol" / "time_indexed.db").exists(), (
+        "the database was moved in beside a dangling sidecar link"
+    )
+    assert (memory_dir / "time_indexed_Carol.db").read_bytes() == b"CAROL", (
+        "the source database was not left intact"
+    )
