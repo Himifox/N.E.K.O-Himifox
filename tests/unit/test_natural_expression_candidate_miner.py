@@ -3366,3 +3366,65 @@ def test_a_reference_definition_may_sit_inside_a_container():
     assert _protects("[cfg]: /" + target + tail, target)
     catchphrase = "please remember to rest"
     assert not _protects("> [" + catchphrase + "] " + catchphrase, catchphrase)
+
+
+def test_a_reference_definition_title_is_protected_with_its_destination():
+    """The title is link metadata, and it is where readable text actually lives.
+
+    A destination is a path; the title is a sentence. So the title is the half
+    of a definition most likely to read as speech and be mined -- and the span
+    stopped at the destination. All three CommonMark delimiters count.
+    """
+    secret = "secret helper phrase"
+    tail = chr(10) + chr(10) + "ok"
+
+    for opener, closer in (('"', '"'), ("'", "'"), ("(", ")")):
+        draft = "[cfg]: /api/key " + opener + secret + closer + tail
+        assert _protects(draft, secret), (opener, closer)
+
+    # The duals. A definition with no title still protects exactly its
+    # destination, and ordinary speech after one is still minable -- the title
+    # group is optional, so a greedy read of it would swallow the next line.
+    assert _protects("[cfg]: /api/token" + tail, "/api/token")
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "[cfg]: /api/x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+    assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
+
+
+def test_paired_raw_and_verbatim_blocks_protect_their_bodies():
+    """Same shape and same argument as the comment block.
+
+    A raw/verbatim body is template SOURCE the engine is being told not to
+    touch, so it is not reply prose either. Handled as two independent
+    statement delimiters, the payload between them stayed searchable.
+
+    The reachability half matters as much as the pattern: the scan picks
+    between two compiled patterns on whether a block CLOSER appears, so a reply
+    holding only a raw block took the pattern without the block alternatives and
+    the fix was there but unreachable.
+    """
+    secret = "secret helper phrase"
+
+    for name in ("raw", "verbatim"):
+        draft = (
+            "{% " + name + " %} API_TOKEN = " + chr(34) + secret + chr(34)
+            + " {% end" + name + " %}"
+        )
+        assert _protects(draft, secret), name
+
+    # The comment block, which shares the pre-check, still works.
+    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret)
+
+    # The duals: an UNPAIRED opener stays bounded to its own line, and an
+    # ordinary statement is still masked on its own.
+    catchphrase = "please remember to rest"
+    for name in ("raw", "verbatim", "comment"):
+        assert not _protects(
+            "{% " + name + " %} x" + chr(10) + chr(10) + catchphrase + " "
+            + catchphrase,
+            catchphrase,
+        ), name
+    assert _protects("{% set token = '" + secret + "' %}", secret)

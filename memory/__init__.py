@@ -168,6 +168,38 @@ def _legacy_root_entry_owner(entry_name: str) -> str | None:
     return None
 
 
+def _decoded_owner_is_safe(owner: str) -> bool:
+    """Whether a decoded owner is a name this project would accept as one.
+
+    A legacy filename is not a validated identity -- it is whatever the old
+    layout happened to write -- and the decoded string goes straight into a
+    path. On Windows "Bob." and "Bob " both resolve to "Bob", so
+    "time_indexed_Bob..db" migrated an unrelated orphan INTO the real Bob's
+    directory as his time_indexed.db. Measured, on the platform this ships
+    on.
+
+    ``validate_character_name`` already carries those rules -- trailing dot,
+    "..", path separators, reserved device names -- and the trailing DOT is
+    the form that actually corrupts today: makedirs creates "Bob", the move
+    succeeds, and the orphan becomes the real Bob's time_indexed.db.
+
+    The equality check is defence in depth rather than the thing preventing
+    that. Validation STRIPS before it judges, so "Bob " passes as "Bob" --
+    but measured on this platform the trailing-SPACE form fails loudly
+    instead of mis-attaching: makedirs("Bob ") creates "Bob", while
+    shutil.move into "Bob \\..." raises FileNotFoundError, so the migration
+    logs and moves on. It is kept because accepting a decoded name that is
+    not the name on disk is a latent identity split, and because a
+    filesystem that resolves the two silently would turn it into the dot
+    case. Its contract is pinned directly rather than through an effect it
+    does not currently produce.
+    """
+    from utils.character_name import validate_character_name
+
+    result = validate_character_name(owner, allow_dots=True)
+    return result.ok and result.normalized == owner
+
+
 def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
     """Owners of flat legacy FILES still sitting in the memory root.
 
@@ -189,6 +221,11 @@ def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
         if not os.path.isfile(os.path.join(memory_dir, entry)):
             continue
         owner = _legacy_root_entry_owner(entry)
+        if owner is not None and not _decoded_owner_is_safe(owner):
+            _logger.warning(
+                "[Memory] 跳过不安全的旧文件名: %s", entry,
+            )
+            continue
         if owner and owner not in known:
             known.add(owner)
             owners.append(owner)
@@ -226,6 +263,7 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
             # WAL is stranded. Moving it last means a crash always leaves the
             # database still flat, and the whole step simply runs again.
             interrupted = False
+            moved_sidecars: list[str] = []
             for suffix in _SQLITE_SIDECAR_SUFFIXES:
                 sidecar = old_path + suffix
                 if not os.path.exists(sidecar) or os.path.exists(
@@ -239,7 +277,22 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                         f"[Memory] 迁移失败 {old_filename}{suffix}: {e}"
                     )
                     interrupted = True
+                    break
+                moved_sidecars.append(suffix)
             if interrupted:
+                # Put back what DID move. Keeping the database while one of
+                # its sidecars has already gone leaves a source that no
+                # longer carries its own WAL, so anything opening it before
+                # the retry reads a database missing committed rows.
+                # All-or-nothing is easier to reason about than an ordering
+                # argument about who opens what when.
+                for suffix in moved_sidecars:
+                    try:
+                        shutil.move(new_path + suffix, old_path + suffix)
+                    except Exception as e:
+                        _logger.warning(
+                            f"[Memory] 回滚失败 {old_filename}{suffix}: {e}"
+                        )
                 # Leave the database where it is, so the next run retries
                 # the whole set rather than stranding what did not move.
                 continue

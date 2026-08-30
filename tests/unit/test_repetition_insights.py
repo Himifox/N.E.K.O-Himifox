@@ -1495,3 +1495,94 @@ def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch)
     assert (root / "Carol" / "time_indexed.db-wal").read_text(
         encoding="utf-8"
     ) == "wal", "the retry clobbered the WAL that had already crossed"
+
+
+def test_a_decoded_owner_must_be_a_name_this_project_would_accept(tmp_path):
+    """A legacy filename is not a validated identity.
+
+    The decoded string goes straight into a path, and on Windows "Bob." and
+    "Bob " both resolve to "Bob" -- so "time_indexed_Bob..db" migrated an
+    unrelated orphan INTO the real Bob's directory as his time_indexed.db.
+    Measured on the platform this ships on, not reasoned about.
+
+    The equality check is what catches the whitespace form: validation STRIPS
+    before it judges, so "Bob " passes as "Bob" unless the result is required to
+    be the name that was decoded.
+    """
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "Bob").mkdir()
+    (memory_dir / "Bob" / "facts.json").write_text("REAL BOB", encoding="utf-8")
+    (memory_dir / "time_indexed_Bob..db").write_text("ORPHAN", encoding="utf-8")
+    (memory_dir / "time_indexed_Bob .db").write_text("ORPHAN", encoding="utf-8")
+    (memory_dir / "time_indexed_Alice.db").write_text("ALICE", encoding="utf-8")
+
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), ["Bob"])
+
+    assert not (memory_dir / "Bob" / "time_indexed.db").exists(), (
+        "an unrelated orphan was attached to a different character as its "
+        "own history"
+    )
+    assert (memory_dir / "time_indexed_Bob..db").exists()
+    assert (memory_dir / "time_indexed_Bob .db").exists()
+    # The dual, so this is not "refuse everything": a safe owner still migrates.
+    assert (memory_dir / "Alice" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "ALICE"
+
+    # The predicate's own contract, pinned directly. The trailing DOT is what
+    # corrupts today -- makedirs creates "Bob", the move succeeds -- and the
+    # validator catches it. The trailing SPACE currently fails loudly on this
+    # platform instead, so asserting it through an end-to-end effect would
+    # assert nothing; the rule "the decoded name must be usable as-is" is the
+    # thing worth holding, and it is what keeps a filesystem that resolves
+    # the two silently from turning the space form into the dot form.
+    assert not memory_pkg._decoded_owner_is_safe("Bob.")
+    assert not memory_pkg._decoded_owner_is_safe("Bob ")
+    assert not memory_pkg._decoded_owner_is_safe("CON")
+    assert not memory_pkg._decoded_owner_is_safe("../Bob")
+    assert memory_pkg._decoded_owner_is_safe("Bob")
+    assert memory_pkg._decoded_owner_is_safe("Bob.Smith"), (
+        "a legitimately dotted name stopped migrating"
+    )
+
+
+def test_a_partial_sidecar_move_is_rolled_back(tmp_path, monkeypatch):
+    """All-or-nothing beats an ordering argument about who opens what when.
+
+    Keeping the database while one of its sidecars has already gone leaves a
+    source that no longer carries its own WAL, so anything opening it before the
+    retry reads a database missing committed rows.
+    """
+    import shutil
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "time_indexed_Carol.db").write_text("db", encoding="utf-8")
+    (memory_dir / "time_indexed_Carol.db-wal").write_text("wal", encoding="utf-8")
+    (memory_dir / "time_indexed_Carol.db-shm").write_text("shm", encoding="utf-8")
+
+    real_move = shutil.move
+
+    def refuse_the_shm(source, target):
+        if str(source).endswith("-shm"):
+            raise OSError("disk full")
+        return real_move(source, target)
+
+    monkeypatch.setattr(memory_pkg.shutil, "move", refuse_the_shm)
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
+
+    assert (memory_dir / "time_indexed_Carol.db").exists()
+    assert (memory_dir / "time_indexed_Carol.db-wal").read_text(
+        encoding="utf-8"
+    ) == "wal", "the WAL that had already moved was not put back"
+
+    # And the retry, once the failure clears, completes the whole set.
+    monkeypatch.setattr(memory_pkg.shutil, "move", real_move)
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
+    for name in ("time_indexed.db", "time_indexed.db-wal", "time_indexed.db-shm"):
+        assert (memory_dir / "Carol" / name).exists(), name

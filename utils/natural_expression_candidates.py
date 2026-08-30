@@ -256,6 +256,12 @@ _TEMPLATE_RE = re.compile(
     # unpaired opener still falls through to that fallback rather than
     # running away.
     r"\{%[ \t]*comment[ \t]*%\}[\s\S]*?\{%[ \t]*endcomment[ \t]*%\}|"
+    # raw/verbatim are the same shape and the same argument: the body is
+    # template SOURCE that the engine is being told not to touch, so it
+    # is not reply prose either. Two independent delimiters left the
+    # payload between them searchable.
+    r"\{%[ \t]*raw[ \t]*%\}[\s\S]*?\{%[ \t]*endraw[ \t]*%\}|"
+    r"\{%[ \t]*verbatim[ \t]*%\}[\s\S]*?\{%[ \t]*endverbatim[ \t]*%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -336,7 +342,15 @@ _TEMPLATE_RE = re.compile(
 # the first opener consumes everything up to it, so the later ones fall
 # inside the span already taken. A real 55 KiB block comment costs 0.023s
 # either way.
-_BLOCK_COMMENT_CLOSER = "{% endcomment %}"
+# Every paired block closer, because this decides which of the two patterns
+# runs. Keyed on the comment closer alone, a reply holding only a
+# "{% raw %}" block took the pattern WITHOUT the block alternatives and the
+# body went unprotected -- the fix was there and unreachable.
+_BLOCK_CLOSERS = (
+    "{% endcomment %}",
+    "{% endraw %}",
+    "{% endverbatim %}",
+)
 _TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
@@ -1251,7 +1265,12 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # before the escape handling it had a full one. Keeping the old
     # truncating form behind the new one makes this monotone: never less
     # protected than it was.
-    r"(?P<target><(?:\\[^\r\n]|[^>\r\n\\])*>|<[^>\r\n]*>|[^ \t\r\n]+)",
+    r"(?P<target><(?:\\[^\r\n]|[^>\r\n\\])*>|<[^>\r\n]*>|[^ \t\r\n]+)"
+    # The optional TITLE is link metadata, not reply prose, and it is where
+    # a human-readable string actually lives -- so it is the half of a
+    # definition most likely to read as speech and be mined. CommonMark
+    # allows all three delimiters.
+    r"(?P<title>[ \t]+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^)\r\n]*\)))?",
     re.MULTILINE,
 )
 
@@ -1300,7 +1319,13 @@ def _reference_definition_spans(
             or _URL_RE.match(target)
         ):
             continue
-        spans.append((start, start + len(target)))
+        # Through the TITLE when there is one. Capturing it and then
+        # measuring only the destination protects exactly what was already
+        # protected.
+        end = start + len(target)
+        if match.group("title"):
+            end = match.end("title")
+        spans.append((start, end))
     return spans
 
 
@@ -1418,7 +1443,7 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     # inside a code span stopped being matched at all.
     template_pattern = (
         _TEMPLATE_RE
-        if _BLOCK_COMMENT_CLOSER in text
+        if any(closer in text for closer in _BLOCK_CLOSERS)
         else _TEMPLATE_RE_WITHOUT_BLOCK
     )
     position = 0
