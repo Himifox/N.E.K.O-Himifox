@@ -3990,3 +3990,70 @@ def test_transactional_entry_pattern_tracks_the_avatar_tool_store_naming():
         name = f".{tool_id}{suffix}"
         assert owner.fullmatch(name) is not None, "样本名和 store 的命名脱节"
         assert pattern.fullmatch(name) is None, suffix
+
+
+@pytest.mark.unit
+def test_a_restore_evicts_only_the_characters_it_reached(tmp_path, monkeypatch):
+    """A character whose directory was never touched still matches its cache.
+
+    Records are processed deepest-first and the loop stops at the first raise,
+    so a failure early on leaves later characters completely untouched. Evicting
+    those adopts an older state anyway: the sequence fence advances past a flush
+    that is still pending, and a reply already delivered never reaches disk.
+
+    The raising record itself must still count as reached -- its removal may
+    already have happened, which is why the lifecycle block sits in a finally at
+    all. Both halves are asserted here.
+    """
+    import memory.anti_repeat_effects as effects_module
+    from utils.cloudsave_runtime import operations as operations_module
+
+    reached = []
+
+    def _record_names(_config_manager, records):
+        reached.append(
+            [str(record["target"]) for record in records]
+        )
+        return (), ()
+
+    monkeypatch.setattr(
+        operations_module,
+        "_memory_character_names_from_backup_records",
+        _record_names,
+    )
+
+    deep = tmp_path / "memory" / "Deep"
+    shallow = tmp_path / "state.json"
+    deep.mkdir(parents=True)
+    (deep / "facts.json").write_text("[1]", encoding="utf-8")
+    shallow.write_text("{}", encoding="utf-8")
+
+    backup_records = [
+        {"target": deep, "backup": None, "is_dir": True},
+        {"target": shallow, "backup": None, "is_dir": False},
+    ]
+
+    # Deepest-first, so `deep` is processed and `shallow` never is.
+    def _boom(*_args, **_kwargs):
+        raise OSError("restore failed partway")
+
+    monkeypatch.setattr(operations_module.shutil, "rmtree", _boom)
+
+    with pytest.raises(OSError):
+        operations_module._restore_backup_records(
+            SimpleNamespace(memory_dir=str(tmp_path / "memory")),
+            backup_records,
+            evict_sidecar_caches=True,
+        )
+
+    assert reached, "the lifecycle block never ran, so this proves nothing"
+    seen = reached[-1]
+    assert str(deep) in seen, (
+        "the record that raised was skipped, but its removal may already have "
+        "happened -- that is the case the finally exists for"
+    )
+    assert str(shallow) not in seen, (
+        "a record the loop never reached was evicted anyway, which adopts an "
+        "older state for a file this call never touched"
+    )
+    assert effects_module is not None

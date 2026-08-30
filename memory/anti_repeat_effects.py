@@ -301,8 +301,22 @@ def build_repeat_signature(
 
     draft_normalized = unicodedata.normalize("NFKC", draft_text or "")
     full_draft_phrase = _normalized_phrase(draft_normalized)
+    # Mask the RAW draft, then normalize -- ``_normalized_phrase`` does the
+    # NFKC itself, so the order is free to be this way round and it has to
+    # be. NFKC maps U+FF40 into a backtick and U+FF5E into a tilde, and the
+    # miner treats neither as a delimiter ON PURPOSE: the fullwidth backtick
+    # is a kaomoji face part (the module records it firing on 49.8% of 20k
+    # code-free replies) and a fullwidth tilde run is a divider, not a fence,
+    # because an unclosed fence protects to end of text.
+    #
+    # Normalizing first re-armed both on the runtime path. Measured:
+    # "（｀・ω・´）" around a repeated phrase lost the signature, and a
+    # "～～～" divider line protected to the END of the reply -- while the
+    # ASCII spellings of both were signed correctly. Delegating the span set
+    # to the miner fixed WHICH text is protected; this fixes which text the
+    # miner is asked about.
     unprotected_draft_phrase = _normalized_phrase(
-        _without_protected_text(draft_normalized)
+        _without_protected_text(draft_text or "")
     )
     candidates: list[str] = []
     fallback = _safe_fragment(fallback_fragment)

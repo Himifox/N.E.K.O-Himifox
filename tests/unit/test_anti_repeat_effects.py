@@ -2446,3 +2446,53 @@ def test_a_newer_schema_version_is_never_overwritten(tmp_path):
         bucket["counters"]["detected"]
         for bucket in payload["daily_buckets"].values()
     ) == 1
+
+
+def test_the_draft_is_masked_before_it_is_normalized():
+    """NFKC re-arms two delimiters the miner disables on purpose.
+
+    It maps U+FF40 into a backtick and U+FF5E into a tilde. The miner treats
+    neither as a delimiter deliberately: the fullwidth backtick is a kaomoji
+    face part (recorded firing on 49.8% of 20k code-free replies) and a
+    fullwidth tilde run is a divider rather than a fence, because an unclosed
+    fence protects to end of text.
+
+    Normalizing before masking put both back on the runtime path -- and these
+    are not exotic shapes, they are how this project's characters punctuate.
+    Delegating the span set to the miner fixed WHICH text is protected; this is
+    about which text the miner is asked about.
+    """
+    phrase = "我们一起去公园散步吧"
+    kaomoji = "（｀・ω・´）"
+
+    decorated = kaomoji + phrase + "，你说好不好呀" + kaomoji
+    assert build_repeat_signature(decorated, [phrase], language="zh") is not None, (
+        "a fullwidth-backtick kaomoji masked the speech between two of them"
+    )
+
+    divider = (
+        "今天好开心呀" + chr(10) + "～～～" + chr(10)
+        + phrase + "，明天也要一起哦"
+    )
+    assert build_repeat_signature(divider, [phrase], language="zh") is not None, (
+        "a fullwidth tilde divider opened a fence and silenced the rest"
+    )
+
+    # The ASCII spellings always worked, which is what showed the normalization
+    # step rather than the phrase was deciding.
+    assert build_repeat_signature(
+        "(・ω・)" + phrase + "，好不好", [phrase], language="zh"
+    ) is not None
+
+    # The duals, so this cannot pass by never masking anything. A real fenced
+    # secret is still refused, and speech after a CLOSED fence is still signable.
+    ticks = chr(96) * 3
+    secret = "API_KEY = 'sk-live-x'"
+    assert build_repeat_signature(
+        ticks + chr(10) + secret + chr(10) + ticks, [secret], language="en"
+    ) is None, "a fenced secret became a persisted signature"
+    assert build_repeat_signature(
+        ticks + chr(10) + "code" + chr(10) + ticks + chr(10) + chr(10)
+        + "今天天气真好呀，" + phrase + "，你说好不好呢",
+        [phrase], language="zh",
+    ) is not None, "speech after a closed fence stopped being signable"

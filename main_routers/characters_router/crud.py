@@ -504,6 +504,14 @@ async def _rollback_character_operation(
     release_derived_task_claims: dict[str, tuple[str, ...]] | None = None,
     restored_live_character_names: tuple[str, ...] = (),
     reretired_absent_character_names: tuple[str, ...] = (),
+    # Every name this rollback might touch, whether or not the operation got
+    # far enough to retire it. SEPARATE from the two tuples above on
+    # purpose: those say what was actually retired and drive the lifecycle
+    # calls, and a caller has to be free to pass them empty -- which it does
+    # whenever the storage op raised before retiring anything. Scoping the
+    # fence to them made it inert on exactly that path: measured, the stale
+    # flush destroyed the restored history with the fence "held".
+    fenced_character_names: tuple[str, ...] = (),
     reason: str,
 ) -> str:
     rollback_errors: list[str] = []
@@ -524,7 +532,11 @@ async def _rollback_character_operation(
     # worse than the write it was installed to stop.
     fenced_names = tuple(
         dict.fromkeys(
-            (*restored_live_character_names, *reretired_absent_character_names)
+            (
+                *fenced_character_names,
+                *restored_live_character_names,
+                *reretired_absent_character_names,
+            )
         )
     )
     fence_character_runtime_writes(*fenced_names)
@@ -894,6 +906,7 @@ async def _rename_catgirl_serialized(old_name: str, new_name: str):
                     },
                     restored_live_character_names=retired_names,
                     reretired_absent_character_names=reretire_names,
+                    fenced_character_names=(old_name, new_name),
                     reason=f"角色重命名回滚（memory_server 重载失败）: {old_name} -> {new_name}",
                 )
                 logger.error(
@@ -938,6 +951,7 @@ async def _rename_catgirl_serialized(old_name: str, new_name: str):
                         },
                         restored_live_character_names=retired_names,
                         reretired_absent_character_names=reretire_names,
+                        fenced_character_names=(old_name, new_name),
                         reason=f"任务取消：角色重命名回滚 {old_name} -> {new_name}",
                     )
                 )
@@ -956,6 +970,7 @@ async def _rename_catgirl_serialized(old_name: str, new_name: str):
                         },
                         restored_live_character_names=retired_names,
                         reretired_absent_character_names=reretire_names,
+                        fenced_character_names=(old_name, new_name),
                         reason=f"维护模式：角色重命名回滚 {old_name} -> {new_name}",
                     )
                 )
@@ -979,6 +994,7 @@ async def _rename_catgirl_serialized(old_name: str, new_name: str):
                         },
                         restored_live_character_names=retired_names,
                         reretired_absent_character_names=reretire_names,
+                        fenced_character_names=(old_name, new_name),
                         reason=f"角色重命名回滚: {old_name} -> {new_name}",
                     )
                 )
@@ -1762,6 +1778,7 @@ async def _delete_catgirl_by_name_serialized(name: str):
                             name: (release_claim_token,),
                         },
                         restored_live_character_names=retired_names,
+                        fenced_character_names=(name,),
                         reason=f"任务取消：删除角色回滚 {name}",
                     )
                 )
@@ -1780,6 +1797,7 @@ async def _delete_catgirl_by_name_serialized(name: str):
                             name: (release_claim_token,),
                         },
                         restored_live_character_names=retired_names,
+                        fenced_character_names=(name,),
                         reason=f"维护模式：删除角色回滚 {name}",
                     )
                 )
@@ -1803,6 +1821,7 @@ async def _delete_catgirl_by_name_serialized(name: str):
                             name: (release_claim_token,),
                         },
                         restored_live_character_names=retired_names,
+                        fenced_character_names=(name,),
                         reason=f"删除角色回滚: {name}",
                     )
                 )

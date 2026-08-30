@@ -791,12 +791,24 @@ def _restore_backup_records(
     # Reaching it on the error path is also the safer arm on its own terms:
     # the disk has changed either way, so a cache left loaded is stale
     # whether the loop finished or not.
+    # Only the records this call actually REACHED. The loop stops at the
+    # first raise, and a character whose directory was never touched has a
+    # cache that is still correct for what is on disk -- evicting it adopts
+    # an older state, advances the sequence fence past the pending flush,
+    # and loses a reply that was already delivered. Measured: 2 decisions
+    # expected, 1 on disk, with _written_seq bumped by the eviction alone.
+    #
+    # The raising record itself counts as reached: its removal may already
+    # have happened, which is the whole reason this block moved into a
+    # finally.
+    processed: list[dict] = []
     try:
         for record in sorted(
             backup_records,
             key=lambda item: len(item["target"].parts),
             reverse=True,
         ):
+            processed.append(record)
             target_path = record["target"]
             if target_path.exists():
                 # Refreshed from disk: the recorded flag is from BACKUP
@@ -818,7 +830,7 @@ def _restore_backup_records(
     finally:
         if evict_sidecar_caches:
             restored, removed = _memory_character_names_from_backup_records(
-                config_manager, backup_records
+                config_manager, processed
             )
             evict_character_runtime_caches(*restored)
             retire_character_runtime_caches(*removed)

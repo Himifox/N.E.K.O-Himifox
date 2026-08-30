@@ -5938,8 +5938,10 @@ def test_a_late_source_write_does_not_leave_the_old_directory_behind(tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restored_names", [("Restored",), ()],
+                         ids=["retired-something", "retired-nothing"])
 async def test_a_stale_flush_cannot_overwrite_what_the_rollback_just_restored(
-    tmp_path,
+    tmp_path, restored_names,
 ):
     """Retirement does not cover the window the restore opens.
 
@@ -5953,6 +5955,11 @@ async def test_a_stale_flush_cannot_overwrite_what_the_rollback_just_restored(
     the detached path (``flush_staged_detached`` -> ``aflush_staged`` ->
     ``to_thread``) ends up, so the ordering is deterministic rather than racing
     a worker thread.
+
+    Both arms of the parametrization matter. "retired-nothing" is what
+    every caller passes when the storage op raised before retiring
+    anything -- the commonest way this rollback is reached -- and scoping
+    the fence to the lifecycle tuples made it inert on exactly that path.
     """
     import shutil
 
@@ -6024,7 +6031,8 @@ async def test_a_stale_flush_cannot_overwrite_what_the_rollback_just_restored(
                 cm,
                 characters_snapshot={"CAT": {"Restored": {}}},
                 memory_snapshot_records=[],
-                restored_live_character_names=("Restored",),
+                restored_live_character_names=restored_names,
+                fenced_character_names=("Restored",),
                 reason="restore then lifecycle",
             )
 
