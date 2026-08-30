@@ -743,6 +743,7 @@ def test_user_review_requires_three_distinct_assistant_messages():
     assert report["summary"] == {
         "assistant_message_count": 3,
         "analyzed_message_count": 3,
+        "analyzed_source_lines": [1, 2, 3],
         "messages_truncated": False,
         "content_truncated": False,
         "candidate_count": 1,
@@ -936,6 +937,7 @@ def test_user_review_caps_candidates_before_returning_them_to_the_browser(monkey
     assert report["summary"] == {
         "assistant_message_count": 0,
         "analyzed_message_count": 0,
+        "analyzed_source_lines": [],
         "messages_truncated": False,
         "content_truncated": False,
         "candidate_count": 3,

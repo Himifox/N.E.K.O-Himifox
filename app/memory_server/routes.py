@@ -146,14 +146,34 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
     parameters["assistant_message_limit"] = req.assistant_message_limit
     summary = dict(report["summary"])
     summary["source_available"] = history.source_available
-    # ``response_ids`` is positionally aligned with ``history.messages``. The
-    # report may have analyzed only a SUFFIX of them (the budget narrows the
-    # window newest-first), so slice to that suffix before deciding anything.
+    # ``response_ids`` is positionally aligned with ``history.messages``, and
+    # the source lines the miner reports are 1-based positions into that same
+    # list, so they pick out exactly the replies it analyzed.
+    #
+    # Taking the last N instead assumed the survivors were a contiguous
+    # suffix. They are not: the budget drops the oldest message that is over
+    # its fair share, which can be an interior one, so the ids were offset --
+    # a reply that was mined went unattributed while one that was dropped got
+    # credited. The count-based form stays as the fallback for a report that
+    # predates the field.
     aligned_ids = list(getattr(history, "response_ids", []))
     analyzed_count = int(
         summary.get("analyzed_message_count", summary["assistant_message_count"])
     )
-    window_ids = aligned_ids[-analyzed_count:] if analyzed_count > 0 else []
+    source_lines = summary.get("analyzed_source_lines")
+    if isinstance(source_lines, list) and source_lines:
+        window_ids = [
+            aligned_ids[position - 1]
+            for position in source_lines
+            if isinstance(position, int) and 1 <= position <= len(aligned_ids)
+        ]
+        # Partial alignment is not alignment. Anything short of one id per
+        # analyzed reply falls back to the day-scoped aggregate below, the
+        # same way a missing id already does.
+        if len(window_ids) != len(source_lines):
+            window_ids = []
+    else:
+        window_ids = aligned_ids[-analyzed_count:] if analyzed_count > 0 else []
     # Message scope is only honest when EVERY analyzed reply is linkable. A
     # partial set (legacy rows without the key mixed with newer ones, or ids
     # belonging to messages the budget dropped) would let the panel label an

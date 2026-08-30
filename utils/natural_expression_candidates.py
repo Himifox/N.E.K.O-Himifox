@@ -1978,6 +1978,19 @@ def build_user_review_report(
         "summary": {
             "assistant_message_count": len(messages),
             "analyzed_message_count": len(analyzed),
+            # WHICH replies survived, not just how many. The eviction drops
+            # the oldest message that is over its fair share, which can be an
+            # INTERIOR one, so the survivors are no longer a contiguous
+            # suffix -- and the caller that reconstructed them as "the last
+            # N" then attributed effectiveness to replies that were dropped
+            # while omitting ones that were mined.
+            #
+            # Source lines, because that is what a caller can align against:
+            # every clip rebuilds its message with the original line, so a
+            # body cut short still maps to the reply it came from.
+            "analyzed_source_lines": [
+                message.source_line for message in analyzed
+            ],
             # Two distinct mechanisms, reported separately: whole messages
             # dropped off the front (derivable from the two counts) versus one
             # oversized reply's BODY cut short (not derivable at all). Collapsing

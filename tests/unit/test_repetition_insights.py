@@ -98,6 +98,7 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
     assert result["summary"] == {
         "assistant_message_count": 3,
         "analyzed_message_count": 3,
+        "analyzed_source_lines": [1, 2, 3],
         "messages_truncated": False,
         "content_truncated": False,
         "candidate_count": 1,
@@ -1359,3 +1360,68 @@ async def test_a_padded_configured_key_is_served_not_confused_with_an_orphan(
         )
 
     effect_store.clear_effects.assert_called_once_with(padded)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_response_ids_follow_the_survivors_not_the_last_n(monkeypatch):
+    """The survivors stopped being a contiguous suffix, and the ids followed them.
+
+    The budget drops the oldest message that is over its FAIR SHARE, which can be
+    an interior one -- that is what keeps a short old reply from being thrown
+    away for a heavy new one. Reconstructing the window as "the last N ids" then
+    silently shifts every id: a reply that was mined goes unattributed while one
+    that was dropped gets credited, and the panel labels the wrong turns.
+
+    Two short replies, four budget-sized ones, one short: the victim is the
+    first heavy reply, at position 3, so the survivors are 1,2,4,5,6,7.
+    """
+    from app.memory_server import routes
+    from utils import natural_expression_candidates as candidate_core
+
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    phrase = "我们一起去公园散步吧"
+    fillers = "\u554a\u55ef\u597d\u5462\u5440\u54e6\u5427"
+    shapes = "SSHHHHS"
+    messages = [
+        (fillers[index % len(fillers)] + " " + phrase + " "
+         + fillers[(index + 1) % len(fillers)])
+        if shape == "S"
+        else ("\u5c0f" * budget)
+        for index, shape in enumerate(shapes)
+    ]
+    ids = ["id-%d" % (index + 1) for index in range(len(shapes))]
+
+    history = SimpleNamespace(
+        messages=messages,
+        source_available=True,
+        skipped_row_count=0,
+        response_ids=list(ids),
+    )
+    time_manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(return_value=history)
+    )
+
+    with patch.object(routes.runtime, "time_manager", time_manager):
+        result = await routes.repetition_insights(
+            "test_char",
+            routes.RepetitionInsightsRequest(
+                language="zh-CN", assistant_message_limit=25
+            ),
+        )
+
+    summary = result["summary"]
+    survivors = summary["analyzed_source_lines"]
+    assert summary["messages_truncated"] is True
+    assert survivors != list(range(1, len(shapes) + 1))[-len(survivors):], (
+        "the fixture no longer produces a non-contiguous window, so it cannot "
+        "tell the two reconstructions apart"
+    )
+
+    expected = [ids[position - 1] for position in survivors]
+    assert result["_anti_repeat_response_ids"] == expected, (
+        "the ids were reconstructed from the count instead of the survivors"
+    )
+    # Named explicitly, so a future change to the eviction cannot quietly make
+    # this test agree with the wrong answer.
+    assert expected == ["id-1", "id-2", "id-4", "id-5", "id-6", "id-7"]
