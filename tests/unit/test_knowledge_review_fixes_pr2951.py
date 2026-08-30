@@ -605,3 +605,57 @@ def test_oversized_metadata_is_refused_without_reading_it(tmp_path, monkeypatch)
 
     assert pack_jobs._read_json_result(path).state == "invalid"
     assert reads == [], "an oversized file must be refused before it is read"
+
+
+# --- model tool must not stall the reply --------------------------------------
+
+
+def test_model_tool_lookup_carries_a_deadline(monkeypatch):
+    """Every retrieval entry point needs a ceiling; this one had none.
+
+    A locked database, a mutation lock held by pack recovery, or busy embedding
+    work would otherwise make the tool call wait indefinitely — and since text
+    mode now has lookup too, that stalls the reply in both modes.
+    """
+    import asyncio
+
+    import main_logic.knowledge_context as knowledge_tool
+
+    seen: dict[str, object] = {}
+
+    async def _capture(arguments, *, language, deadline_monotonic=None):
+        seen["deadline"] = deadline_monotonic
+        return ""
+
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", _capture)
+
+    class _Registry:
+        def __init__(self):
+            self.tool = None
+
+        def register(self, definition, replace=False):
+            self.tool = definition
+
+    registry = _Registry()
+    knowledge_tool.register_public_knowledge_tool(
+        registry, language="zh", lookup_enabled=True
+    )
+    asyncio.run(registry.tool.handler({"query": "永动机"}))
+
+    assert seen["deadline"] is not None, "tool lookup ran with no deadline"
+
+
+def test_disconnected_upload_is_not_replayed_as_a_whole_body():
+    """A body cut short by a disconnect must not be handed over as complete."""
+    import asyncio
+    import io as _io
+
+    from utils.asgi_body_limit import InboundBodySizeLimitMiddleware
+
+    spool = _io.BytesIO(b"partial multipart prefix")
+    replay = InboundBodySizeLimitMiddleware._replay_receive(spool, disconnected=True)
+
+    first = asyncio.run(replay())
+    assert first["type"] == "http.disconnect", (
+        "a truncated body was replayed as if the request had completed"
+    )

@@ -500,11 +500,22 @@ def register_public_knowledge_tool(
         "required": ["query"],
     }
     async def _handle(arguments: dict) -> ToolHandlerOutcome:
+        from config.public_knowledge_settings import (
+            PUBLIC_KNOWLEDGE_EXPLICIT_LOOKUP_BUDGET_SECONDS,
+        )
+
+        # The model asked for this, same as the explicit host command, so it gets
+        # the same budget — and a budget it must have: without one a locked
+        # database or busy embedding runtime stalls the reply itself.
+        deadline = (
+            time.monotonic() + PUBLIC_KNOWLEDGE_EXPLICIT_LOOKUP_BUDGET_SECONDS
+        )
         output = await handle_public_knowledge_call(
             arguments
             if lookup_enabled
             else {**(arguments or {}), "mode": "sample"},
             language=language,
+            deadline_monotonic=deadline,
         )
         evidence = (
             frozenset({"knowledge_used"})

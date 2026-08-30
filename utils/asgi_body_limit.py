@@ -194,6 +194,13 @@ class InboundBodySizeLimitMiddleware:
             nonlocal finished
             if finished:
                 return {"type": "http.disconnect"}
+            if disconnected:
+                # The client went away before the body was complete, so what was
+                # spooled is a prefix. Replaying it would hand the application a
+                # truncated request that still parses as a whole one; the only
+                # honest thing left to report is the disconnect.
+                finished = True
+                return {"type": "http.disconnect"}
             chunk = await asyncio.to_thread(spool.read, 64 * 1024)
             if chunk:
                 more_body = len(chunk) == 64 * 1024
