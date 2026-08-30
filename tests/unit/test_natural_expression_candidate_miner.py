@@ -2213,6 +2213,42 @@ def test_a_reference_definition_may_omit_the_space_after_its_colon():
     assert candidate_core._runtime_protected_spans("[小八]:我们一起去吃饭吧！") == []
 
 
+def test_the_pre_narrowing_clip_is_what_saves_an_oversized_oldest_reply():
+    """The clip has to run BEFORE the window narrows, and this is where it shows.
+
+    With the oversized reply NEWEST, the fair-share eviction added later reaches
+    the same answer on its own, so a guard written there passes with the clip
+    deleted -- measured, it did. OLDEST is the position where the clip is the
+    only thing that keeps the window whole: without it the window narrows to 3
+    messages and no body is cut, with it all 4 survive.
+    """
+    phrase = "\u6211\u4eec\u4e00\u8d77\u53bb\u516c\u56ed\u6563\u6b65\u5427"
+    fillers = "\u554a\u55ef\u597d\u5462\u5440\u54e6"
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+
+    messages = [
+        candidate_core.SourceMessage("zh", "\u5c0f" * (2 * budget), 1)
+    ] + [
+        candidate_core.SourceMessage(
+            "zh", fillers[i] + " " + phrase + " " + fillers[i + 1], i + 2
+        )
+        for i in range(3)
+    ]
+
+    report = candidate_core.build_user_review_report(
+        messages, message_count_threshold=1, rules_by_language={}
+    )
+    summary = report["summary"]
+
+    assert summary["analyzed_message_count"] == 4, (
+        "the oversized oldest reply cost the window %d of its 4 messages"
+        % (4 - summary["analyzed_message_count"])
+    )
+    assert summary["content_truncated"] is True, (
+        "nothing was clipped, so the window can only have narrowed instead"
+    )
+
+
 def test_one_oversized_reply_does_not_hide_the_history_behind_it(monkeypatch):
     """A long latest reply must not make a full history look like one message.
 

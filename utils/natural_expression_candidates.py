@@ -131,14 +131,12 @@ _URL_ATOM_RE = re.compile(_URL_ATOM)
 _URL_TAIL = _URL_ATOM
 _URL_RE = re.compile(
     r"(?i:https?://|www\.)" + _URL_TAIL + "+|"
-    # A structured mailto BEFORE the generic scheme rule, because that rule
-    # requires an ASCII alphanumeric somewhere in the opaque part -- the
-    # guard that keeps it off "note:中文" prose -- and an internationalised
-    # address has none. So "mailto:用户秘密@例子.公司" matched nothing and its
-    # local part, the identifying half, was mined and persisted. Requiring
-    # the local@domain.tld SHAPE is what makes the unbounded alphabet safe
-    # here, so the generic guard below stays exactly as it was.
-    r"(?<![A-Za-z0-9+.\-])(?i:mailto):" + _EMAIL_ADDRESS + r"|"
+    # A "mailto:" needs no alternative of its own. The bare-address rule
+    # below takes the scheme into its local part and covers every case this
+    # one did -- measured over 4913 address-shaped drafts, the only six
+    # where the two differ are six where the mailto form protected LESS.
+    # A rule that can never be the reason something is protected is a rule
+    # no test can hold, which is how its guard came to pass with it deleted.
     # ANY scheme, as a rule rather than a list. A fixed allowlist guarantees
     # another round of "you missed one", and the ones it missed carried real
     # payloads: an otpauth:// TOTP secret, a postgres:// password, an

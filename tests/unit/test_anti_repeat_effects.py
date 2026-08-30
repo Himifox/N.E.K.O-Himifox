@@ -1846,6 +1846,40 @@ def test_pending_retirement_transfer_is_atomic_with_singleton_publication(
     )
 
 
+def test_a_fragment_carrying_a_protected_shape_is_refused():
+    """_PROTECTED_RE's only remaining reader, and nothing was holding it.
+
+    Before the sidecar delegated span masking to the miner, the parity rows
+    exercised this pattern because ``_without_protected_text`` built its span set
+    from it. Now they compare the miner against itself, and making
+    ``_PROTECTED_RE`` a never-matching pattern left the whole suite green --
+    while it is still the only gate deciding whether an evidence FRAGMENT may be
+    persisted for 120 days.
+
+    One row per alternative, so a single alternative going missing is caught
+    rather than averaged away.
+    """
+    ticks = chr(96) * 3
+    rows = {
+        "fenced": ticks + chr(10) + "token = 'abc'" + chr(10) + ticks,
+        "inline code": chr(96) + "token = 'abc'" + chr(96),
+        "handlebars": "{{ token }}",
+        "jinja statement": "{% set token = 'abc' %}",
+        "jinja comment": "{# token #}",
+        "shell interpolation": "${token}",
+        "erb": "<% token %>",
+        "tag": "<div class=secret>",
+        "placeholder": "[SECRET_TOKEN]",
+    }
+    for label, fragment in rows.items():
+        assert anti_repeat_effects._safe_fragment(fragment) == "", label
+
+    # The dual, so this cannot pass by refusing everything: ordinary speech and
+    # a bare word survive the same check.
+    assert anti_repeat_effects._safe_fragment("\u6211\u4eec\u4e00\u8d77\u53bb\u516c\u56ed\u6563\u6b65\u5427") != ""
+    assert anti_repeat_effects._safe_fragment("token") != ""
+
+
 _MASKING_PARITY_CASES = [
     ("emoticon pair", "I love it <3 you are so cute >_< really"),
     ("comparisons", "记住哦 3 < 5，我们一起去吃饭吧，10 > 7 呢"),
