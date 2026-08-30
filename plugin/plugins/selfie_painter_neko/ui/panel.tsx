@@ -69,6 +69,25 @@ type PageTurnState = {
   direction: "forward" | "backward"
 }
 
+const GENERATE_TIMEOUT_MS = 300_000
+
+function openExternalUrl(url: string): void {
+  if (!/^https?:\/\//i.test(url)) return
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      { type: "neko-hosted-surface-open-external", payload: { url } },
+      "*",
+    )
+    return
+  }
+  window.open(url, "_blank", "noopener,noreferrer")
+}
+
+function openPhoto(event: { preventDefault: () => void }, url?: string): void {
+  event.preventDefault()
+  if (url) openExternalUrl(url)
+}
+
 const STORYBOOK_STYLES = `
   :root {
     --story-ink: #1d2c43;
@@ -287,7 +306,11 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
     }
     setGenerating(true)
     try {
-      await props.api.call("selfie_generate_webui", { scene: scene.trim(), style })
+      await props.api.call(
+        "selfie_generate_webui",
+        { scene: scene.trim(), style },
+        { timeoutMs: GENERATE_TIMEOUT_MS },
+      )
       await props.api.refresh()
       toast.success(t("panel.messages.generated"))
     } catch (error) {
@@ -332,6 +355,7 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
                 href={image.public_url || "#"}
                 target="_blank"
                 rel="noreferrer"
+                onClick={(event) => openPhoto(event, image.public_url)}
               >
                 <span className="photo-mat">
                   <img
@@ -416,6 +440,7 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
                 href={image.public_url || "#"}
                 target="_blank"
                 rel="noreferrer"
+                onClick={(event) => openPhoto(event, image.public_url)}
               >
                 <span className="photo-mat">
                   <img

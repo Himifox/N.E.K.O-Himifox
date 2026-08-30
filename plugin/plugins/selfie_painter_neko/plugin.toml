@@ -9,7 +9,7 @@ keywords = [
     "photo",
     "画一张",
 ]
-version = "0.3.2"
+version = "0.3.3"
 id = "selfie_painter_neko"
 type = "plugin"
 entry = "plugin.plugins.selfie_painter_neko:SelfiePainterPlugin"
