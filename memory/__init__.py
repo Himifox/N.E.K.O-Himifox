@@ -350,6 +350,28 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                     old_filename + linked_sidecar,
                 )
                 continue
+            # A destination SIDECAR with no destination database is an
+            # ambiguous half-migration, and pairing our database with it
+            # is worse than leaving both alone: SQLite will replay a
+            # foreign WAL of the same page size into the database it
+            # finds beside it, so the stale rows REPLACE the real ones on
+            # first open. The per-suffix skip below quietly did exactly
+            # that -- it declined to move our sidecar and then moved the
+            # database anyway.
+            stray_destination = next(
+                (
+                    suffix
+                    for suffix in _SQLITE_SIDECAR_SUFFIXES
+                    if os.path.exists(new_path + suffix)
+                ),
+                None,
+            )
+            if stray_destination is not None:
+                _logger.warning(
+                    "[Memory] 目标已有旁文件，跳过: %s",
+                    name + "/" + new_filename + stray_destination,
+                )
+                continue
             # Sidecars FIRST, the database LAST. An uncheckpointed WAL holds
             # committed rows, so moving the database without it loses them,
             # and left in the root it is unreadable anyway -- SQLite looks

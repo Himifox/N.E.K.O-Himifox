@@ -209,6 +209,33 @@ _URL_RE = re.compile(
     r"(?:(?::\d{1,5})(?:[/?#]" + _URL_TAIL + "*)?|[/?#]" + _URL_TAIL + "*)"
 )
 
+# The BARE runs cross line breaks, because an HTML start tag may split
+# its attributes across lines and every parser reads it as one tag.
+# Rejecting the newline left "<code\n class=..>" unrecognised, so the
+# opener and the whole code body went unprotected while only the
+# closing tag was masked.
+#
+# The QUOTED runs stay line-bounded, and that is not an oversight. A
+# quoted value that could cross a newline can pair the closing quote of
+# one tag with the opening quote of the NEXT, which is the chaining that
+# made this quadratic before. The bare runs cannot chain because they
+# still stop at "<", so every run is bounded by the next tag either way.
+# The quoted runs are ATOMIC, which is what lets them cross line breaks.
+# A quoted attribute value may legitimately span lines and hold ">", and
+# refusing the newline made the quote-aware branch fail -- the loose
+# fallback then took the quoted ">" for the tag end, and the attribute's
+# own "</code>" closed the container before its body.
+#
+# Atomic is not cosmetic here. Once a run has matched to the next quote
+# it cannot give characters back, so the closing quote of one tag can
+# never re-pair with the opening quote of the NEXT -- the chaining that
+# made this scan quadratic, and the reason the runs were line-bounded
+# before. The bare branch still excludes both quotes, so a quote starts
+# exactly one thing.
+_HTML_ATTRIBUTE_RUN = (
+    r"(?:(?>\"[^\"]*\")|(?>'[^']*')|[^<>\"'])*|[^<>]*"
+)
+
 _TEMPLATE_SOURCE = (
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
@@ -334,7 +361,12 @@ _TEMPLATE_SOURCE = (
     # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
     # outside the span and minable. The quoted runs are line-bounded like
     # everything else here, so this cannot reach past its own line.
-    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
+    # The SAME attribute grammar as the raw-text opener, not a second
+    # copy of it. This one still rejected line breaks after that one was
+    # fixed, so "<div\n data-note=..>" left the whole opening tag
+    # searchable and its attribute value was mined -- metadata the reader
+    # never sees. The two had drifted precisely because they were two.
+    rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>|\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 
 # The same pattern WITHOUT the block-comment alternative, and the closer
@@ -361,15 +393,35 @@ _TEMPLATE_SOURCE = (
 # cheap. Keyed on the comment closer alone, a reply holding only a
 # "{% raw %}" block took the pattern WITHOUT the block alternatives and the
 # body went unprotected -- the fix was there and unreachable.
-# ONE GATE PER CLOSER. "#}" must not select this pattern: the "{# #}"
-# pair and the comment-family pairs have separate closers, and a reply
-# holding a stray "#}" alongside unpaired "{% comment %}" openers then
-# paid for the comment alternative scanning to end of text at every one
-# of them. Measured at the input cap: 4.27s with the two gates merged,
-# 0.05s with them separate.
-_BLOCK_CLOSER_RE = re.compile(
-    r"\{%[-+]?[ \t]*end(?:comment|raw|verbatim)[ \t]*[-+]?%\}"
-)
+# ONE GATE PER CLOSER, and the three block families have three different
+# closers. Sharing one meant a single valid "{% raw %}x{% endraw %}"
+# selected the pattern carrying the unbounded COMMENT alternative too,
+# after which every unpaired "{% comment %}" opener rescanned the rest of
+# the text for an "endcomment" that was never there. Reported at 112 KiB:
+# about 7s, and still quadratic. The "{# #}" pair has its own closer for
+# the same reason -- that one was 4.27s at the input cap.
+#
+# Coarse WITHIN a family, on purpose: a closer anywhere selects that
+# family, matched or not. Being too generous only costs time, while
+# being too strict leaves a body unprotected -- so no gate here looks
+# for a matching PAIR.
+_BLOCK_FAMILY_CLOSER_RES = {
+    name: re.compile(
+        r"\{%[-+]?[ \t]*end" + name + r"[ \t]*[-+]?%\}"
+    )
+    for name in ("comment", "raw", "verbatim")
+}
+
+# Each family's unbounded pair, spelled exactly as it appears in
+# _TEMPLATE_SOURCE so it can be lifted back out when its closer is
+# absent.
+_BLOCK_PAIR_ALTERNATIVES = {
+    name: (
+        r"\{%[-+]?[ \t]*" + name + r"[ \t]*[-+]?%\}[\s\S]*?"
+        r"\{%[-+]?[ \t]*end" + name + r"[ \t]*[-+]?%\}|"
+    )
+    for name in ("comment", "raw", "verbatim")
+}
 _TEMPLATE_SOURCE_WITHOUT_BLOCK = (
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
@@ -488,7 +540,12 @@ _TEMPLATE_SOURCE_WITHOUT_BLOCK = (
     # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
     # outside the span and minable. The quoted runs are line-bounded like
     # everything else here, so this cannot reach past its own line.
-    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
+    # The SAME attribute grammar as the raw-text opener, not a second
+    # copy of it. This one still rejected line breaks after that one was
+    # fixed, so "<div\n data-note=..>" left the whole opening tag
+    # searchable and its attribute value was mined -- metadata the reader
+    # never sees. The two had drifted precisely because they were two.
+    rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>|\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 
 
@@ -516,17 +573,28 @@ _UNCAPPED_HASH_COMMENT = r"\{\#[\s\S]*?\#\}|"
 # substring test. Being too generous only costs time; being too strict
 # would leave a body unprotected, which is why neither looks for a
 # matching PAIR.
-_TEMPLATE_PATTERNS: dict[tuple[bool, bool], "re.Pattern[str]"] = {}
+_TEMPLATE_PATTERNS: dict[tuple[tuple[str, ...], bool], "re.Pattern[str]"] = {}
 
 
 def _template_pattern(text: str) -> "re.Pattern[str]":
     """The template pattern whose uncapped alternatives can pay off here."""
-    key = (bool(_BLOCK_CLOSER_RE.search(text)), "#}" in text)
+    families = tuple(
+        name
+        for name, closer in _BLOCK_FAMILY_CLOSER_RES.items()
+        if closer.search(text)
+    )
+    key = (families, "#}" in text)
     pattern = _TEMPLATE_PATTERNS.get(key)
     if pattern is None:
-        source = (
-            _TEMPLATE_SOURCE if key[0] else _TEMPLATE_SOURCE_WITHOUT_BLOCK
-        )
+        if families:
+            source = _TEMPLATE_SOURCE
+            # Lift out the families whose closer is NOT here, so one
+            # closer cannot pay for the others.
+            for name, alternative in _BLOCK_PAIR_ALTERNATIVES.items():
+                if name not in families:
+                    source = source.replace(alternative, "", 1)
+        else:
+            source = _TEMPLATE_SOURCE_WITHOUT_BLOCK
         if key[1]:
             source = source.replace(
                 _CAPPED_HASH_COMMENT,
@@ -1124,32 +1192,6 @@ _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 #
 # BOTH stop at "<". A run that crosses one is a run that can scan to end
 # of text from every position in the document.
-# The BARE runs cross line breaks, because an HTML start tag may split
-# its attributes across lines and every parser reads it as one tag.
-# Rejecting the newline left "<code\n class=..>" unrecognised, so the
-# opener and the whole code body went unprotected while only the
-# closing tag was masked.
-#
-# The QUOTED runs stay line-bounded, and that is not an oversight. A
-# quoted value that could cross a newline can pair the closing quote of
-# one tag with the opening quote of the NEXT, which is the chaining that
-# made this quadratic before. The bare runs cannot chain because they
-# still stop at "<", so every run is bounded by the next tag either way.
-# The quoted runs are ATOMIC, which is what lets them cross line breaks.
-# A quoted attribute value may legitimately span lines and hold ">", and
-# refusing the newline made the quote-aware branch fail -- the loose
-# fallback then took the quoted ">" for the tag end, and the attribute's
-# own "</code>" closed the container before its body.
-#
-# Atomic is not cosmetic here. Once a run has matched to the next quote
-# it cannot give characters back, so the closing quote of one tag can
-# never re-pair with the opening quote of the NEXT -- the chaining that
-# made this scan quadratic, and the reason the runs were line-bounded
-# before. The bare branch still excludes both quotes, so a quote starts
-# exactly one thing.
-_HTML_ATTRIBUTE_RUN = (
-    r"(?:(?>\"[^\"]*\")|(?>'[^']*')|[^<>\"'])*|[^<>]*"
-)
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
     rf"<(pre|code|script|style|textarea|template)\b(?:{_HTML_ATTRIBUTE_RUN})>",
     re.IGNORECASE,
@@ -1467,8 +1509,11 @@ def _reference_definition_spans(
         if target.startswith("<"):
             if not target.endswith(">") or len(target) < 2:
                 continue
+        # A FRAGMENT is a destination too -- "[cfg]: #config" is a valid
+        # definition and the shape check rejected it, so the whole thing
+        # including its title stayed minable.
         elif not (
-            target.startswith(("/", "./", "../"))
+            target.startswith(("/", "./", "../", "#"))
             or _URL_RE.match(target)
         ):
             continue

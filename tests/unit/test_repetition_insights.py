@@ -1486,8 +1486,21 @@ def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch)
     assert (root / "Carol" / "time_indexed.db").exists()
     assert (root / "Carol" / "time_indexed.db-wal").exists()
 
-    # And the state a crash between the two moves now leaves is one the next
-    # run finishes: WAL already across, database still flat.
+    # And the state a crash between the two moves leaves -- WAL across,
+    # database still flat -- is NOT finished by the next run, which is a
+    # deliberate reversal of what this test used to assert.
+    #
+    # A destination sidecar with no destination database is ambiguous: it is
+    # either our own half-finished move, or a stale WAL left over from a
+    # database that no longer exists. Nothing on disk tells the two apart,
+    # and SQLite will replay a foreign WAL of the same page size into
+    # whatever database it finds beside it -- so finishing the move can
+    # silently REPLACE the rows of the very history this step exists to
+    # preserve.
+    #
+    # Between "recovers automatically, and sometimes corrupts" and "never
+    # corrupts, and needs a hand", the second is the one to keep: the
+    # database stays flat and intact, and the log says why.
     root = fresh()
     (root / "Carol").mkdir()
     real_move(
@@ -1495,10 +1508,15 @@ def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch)
         str(root / "Carol" / "time_indexed.db-wal"),
     )
     memory_pkg.migrate_to_character_dirs(str(root), [])
-    assert (root / "Carol" / "time_indexed.db").exists()
+    assert not (root / "Carol" / "time_indexed.db").exists(), (
+        "the database was paired with a WAL nothing proves belongs to it"
+    )
+    assert (root / "time_indexed_Carol.db").read_text(encoding="utf-8") == "db", (
+        "the source database was not left intact where it was"
+    )
     assert (root / "Carol" / "time_indexed.db-wal").read_text(
         encoding="utf-8"
-    ) == "wal", "the retry clobbered the WAL that had already crossed"
+    ) == "wal", "the sidecar that had already crossed was touched"
 
 def test_a_decoded_owner_must_be_a_name_this_project_would_accept(tmp_path):
     """A legacy filename is not a validated identity.

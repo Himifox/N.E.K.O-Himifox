@@ -3915,3 +3915,77 @@ def test_a_reference_title_may_continue_across_lines():
         + catchphrase,
         catchphrase,
     )
+
+
+def test_one_block_family_does_not_pay_for_another():
+    """The three families have three closers, so they need three gates.
+
+    Sharing one meant a single valid "{% raw %}x{% endraw %}" anywhere
+    selected the pattern carrying the unbounded COMMENT alternative too, and
+    every unpaired "{% comment %}" opener then rescanned the rest of the text
+    for an "endcomment" that was never there. Reported at 112 KiB: about 7
+    seconds, and still quadratic.
+
+    The bound is loose on purpose -- it separates milliseconds from seconds.
+    """
+    import time
+
+    from utils.natural_expression_candidates import (
+        USER_REVIEW_MAX_INPUT_CHARACTERS,
+    )
+
+    unit = "{% comment %} "
+    cap = USER_REVIEW_MAX_INPUT_CHARACTERS
+    text = (unit * (cap // len(unit) + 1))[:cap]
+    # One valid pair belonging to a DIFFERENT family.
+    text = text[:-32] + "{% raw %}x{% endraw %}"
+
+    started = time.perf_counter()
+    candidate_core._protected_spans(text)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 1.0, (
+        "unpaired comment openers beside a valid raw pair took %.2fs -- the "
+        "block families are sharing a gate again" % elapsed
+    )
+
+    # And each family still protects its own body, so the gate is not simply
+    # refusing everything.
+    secret = "secret helper phrase"
+    nl = chr(10)
+    for opener, closer in (
+        ("comment", "endcomment"),
+        ("raw", "endraw"),
+        ("verbatim", "endverbatim"),
+    ):
+        body = (
+            "{% " + opener + " %}" + nl * 4 + secret + nl + "{% " + closer + " %}"
+        )
+        assert _protects(body, secret), (
+            "a %s body past the line budget was left minable" % opener
+        )
+
+
+def test_a_reference_destination_may_be_a_bare_fragment():
+    """"[cfg]: #config" is a valid definition and the shape check refused it.
+
+    So the whole definition stayed minable, title included -- and the title
+    is the half most likely to read as speech.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+    nl = chr(10)
+
+    assert _protects(
+        "[cfg]: #config " + quote + secret + quote + nl + nl + "ok", secret
+    ), "a fragment destination was not recognised as one"
+
+    # The duals: a path destination still resolves, and ordinary speech that
+    # merely starts with a hash is not a definition.
+    assert _protects(
+        "[cfg]: /api/key " + quote + secret + quote + nl + nl + "ok", secret
+    )
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "# heading" + nl + nl + catchphrase + " " + catchphrase, catchphrase
+    )
