@@ -435,25 +435,29 @@ def read_jsonl(
 # still opens and closes. Without this the ``>`` prefix defeats the fence
 # match, only the delimiter lines end up protected by the inline-code pass,
 # and the code body between them leaks into candidates and the export.
-# Only SPACES pad the marker, at most three -- the rule
-# ``_strip_containers_by_column`` already states, which this parallel path
-# did not follow. A TAB matched here is worth FOUR columns, so "\t> ```"
-# was stripped to a bare fence and opened one; the column guard in
-# ``_fenced_code_spans`` runs on the body AFTER this strip, so it measured
-# zero indent and could not catch it. That fence never closes, and an
-# opener with no closer protects to end of text -- the whole rest of the
-# reply, silently unminable. It is indented CODE, and
-# ``_indented_code_spans`` already reads it as such.
-_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?: {0,3}>[ \t]?)+")
+# A TAB may pad the marker, and the ambiguity it creates is settled at the
+# END of the scan rather than here. "\t> ```" is four columns of indent, so
+# CommonMark calls it indented code -- but if a matching delimiter follows,
+# reading the pair as a quoted fence protects the body between them, which
+# refusing the marker outright did not: the body sits at a shallower indent,
+# so it was neither fence content nor indented code and an API key in it was
+# mined and persisted. Refusing also put a fence PAIR out of step whenever
+# only one side carried the tab, and the surviving delimiter then opened a
+# fence nothing could close.
+#
+# So the marker is honoured, and ``_fenced_code_spans`` instead DISCARDS an
+# unclosed fence whose opener was tab-indented. Whether a closer exists is
+# exactly the information that disambiguates the two readings, and it is not
+# available until the scan is over.
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
 # A list item is also a container: a fence written directly after its marker
 # ("- ```") never matched, so the block stayed unprotected whenever the inline
 # scanner did not happen to cover it — measured leaking for an unclosed list
 # fence, and for one whose closer sat in another paragraph. Stripped for fence
 # detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
 # the container that decides whether a closer belongs to this fence.
-# Padded by SPACES only, for the same reason as the blockquote pattern
-# above: "\t- ```" is a tab-indented code line, and a tab counted as one
-# column made it a list item holding a fence.
+# A tab may pad this marker too, settled the same way as the blockquote
+# pattern above.
 # ONE space after the marker, not the whole run -- the rule its twin
 # ``_LIST_MARKER_COLUMN_RE`` already states: the greedy form is right when a
 # fence opener follows and wrong when INDENTATION follows. A line that is
@@ -464,7 +468,7 @@ _BLOCKQUOTE_PREFIX_RE = re.compile(r"(?: {0,3}>[ \t]?)+")
 # ``_indented_code_spans`` says as well. With one space stripped the column
 # guard in ``_fenced_code_spans`` sees the remaining four and declines,
 # while a genuine "- ```" still opens.
-_LIST_MARKER_PREFIX_RE = re.compile(r" {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
+_LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
 # The same markers, minus the leading padding and consuming only ONE space
 # after the marker. The greedy form above is right when a fence opener
 # follows and wrong when INDENTATION follows: "-     code" is a marker, its
@@ -575,6 +579,10 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
     fence_char = ""
     fence_len = 0
     fence_depth = 0
+    # Whether the line that OPENED the current fence was itself indented far
+    # enough to be code. Measured on the raw line, before any container
+    # marker is stripped, because that is the reading being weighed against.
+    fence_opener_is_indented_code = False
     offset = 0
     for line in text.splitlines(keepends=True):
         body, depth = _split_blockquote_prefix(line)
@@ -616,6 +624,7 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     fence_char = marker[0]
                     fence_len = len(marker)
                     fence_depth = depth
+                    fence_opener_is_indented_code = _indent_columns(line) >= 4
             else:
                 closing = re.match(
                     rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
@@ -626,6 +635,7 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     # Depth-matched closer: an ordinary close.
                     spans.append((fence_start, offset + len(line)))
                     fence_start = None
+                    fence_opener_is_indented_code = False
                     fence_char = ""
                     fence_len = 0
                     fence_depth = 0
@@ -643,9 +653,15 @@ def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
                     fence_char = marker[0]
                     fence_len = len(marker)
                     fence_depth = depth
+                    fence_opener_is_indented_code = _indent_columns(line) >= 4
                 # depth > fence_depth: the marker is code content; ignore it.
         offset += len(line)
-    if fence_start is not None:
+    # An unclosed fence protects to end of text, which is the accepted cost of
+    # a real one. A TAB-INDENTED opener with no closer is not a real one: it
+    # is indented code that happens to be delimiter-shaped, and
+    # ``_indented_code_spans`` already covers that line. Honouring it here
+    # silenced the whole rest of the reply.
+    if fence_start is not None and not fence_opener_is_indented_code:
         spans.append((fence_start, len(text)))
     return spans
 

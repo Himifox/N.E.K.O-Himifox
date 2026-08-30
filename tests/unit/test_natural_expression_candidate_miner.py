@@ -3060,3 +3060,63 @@ def test_a_list_marker_followed_by_indentation_opens_no_fence():
     assert not any(
         secret[:12] in str(candidate["phrase"]) for candidate in report["candidates"]
     ), "the list fence stopped masking its own body"
+
+
+def test_a_tab_indented_delimiter_joins_a_fence_but_cannot_open_an_endless_one():
+    """Whether a closer exists is what disambiguates the two readings.
+
+    "\t> ```" is four columns of indent, so CommonMark calls it indented code --
+    but if a matching delimiter follows, reading the pair as a quoted fence
+    protects the body between them. Refusing the marker outright instead put a
+    fence PAIR out of step whenever only one side carried the tab, and the
+    surviving delimiter opened a fence nothing could close: the whole rest of
+    the reply went unminable.
+
+    So the marker is honoured and the ambiguity is settled at the END of the
+    scan: an unclosed fence whose opener was tab-indented is discarded, and
+    _indented_code_spans covers that line on its own.
+    """
+    ticks = chr(96) * 3
+    tab = chr(9)
+    phrase = "我们一起去公园散步吧"
+    tail = chr(10) + chr(10) + phrase + chr(10) + phrase
+
+    def runs_to_the_end(body):
+        spans = candidate_core._protected_spans(body)
+        return bool(spans) and max(end for _start, end in spans) >= len(body)
+
+    # One side tabbed: the pair still matches, so nothing runs away.
+    mixed = (
+        "> " + ticks + chr(10) + "> token = 'abc'" + chr(10) + tab + "> " + ticks
+        + tail
+    )
+    assert not runs_to_the_end(mixed), (
+        "a fence pair with a tab on one side went out of step and protected to "
+        "the end of the reply"
+    )
+    assert _protects(mixed, "token = 'abc'"), "and its body stopped being masked"
+
+    # Tabbed on BOTH sides: still a pair, still bounded, body still masked.
+    both = (
+        tab + "> " + ticks + chr(10) + tab + "> token = 'abc'" + chr(10)
+        + tab + "> " + ticks + tail
+    )
+    assert not runs_to_the_end(both)
+    assert _protects(both, "token = 'abc'")
+
+    # No closer at all: this is indented CODE, so it must not open a fence that
+    # swallows the reply -- the shape the earlier fix was written for.
+    for marker in ("> ", "- "):
+        lonely = tab + marker + ticks + tail
+        assert not runs_to_the_end(lonely), (
+            "a lone tab-indented %r delimiter still silenced the rest" % marker
+        )
+        # It is still protected as indented code, so this is not a leak.
+        assert _protects(tab + marker + "token = 'abc'" + tail, "token = 'abc'")
+
+    # The dual that keeps the discard honest: a SPACE-indented opener with no
+    # closer is a real unclosed fence, and those still protect to end of text.
+    assert runs_to_the_end("> " + ticks + tail), (
+        "an ordinary unclosed fence stopped protecting, which is not what this "
+        "rule is allowed to change"
+    )
