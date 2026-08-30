@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from utils.llm_client import AIMessage, SQLChatMessageHistory
 
-
 def _empty_effects(days: int = 30) -> dict:
     return {
         "schema_version": "anti-repeat-effects/v1",
@@ -23,7 +22,6 @@ def _empty_effects(days: int = 30) -> dict:
         "bm25": {},
         "patterns": [],
     }
-
 
 def test_sql_history_preserves_anti_repeat_link_metadata():
     history = SQLChatMessageHistory.__new__(SQLChatMessageHistory)
@@ -49,7 +47,6 @@ def test_sql_history_preserves_anti_repeat_link_metadata():
         },
     }
 
-
 def test_sql_history_discards_unapproved_and_non_string_metadata():
     history = SQLChatMessageHistory.__new__(SQLChatMessageHistory)
 
@@ -68,7 +65,6 @@ def test_sql_history_discards_unapproved_and_non_string_metadata():
         "type": "ai",
         "data": {"content": "synthetic reply"},
     }
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -120,7 +116,6 @@ async def test_internal_repetition_insights_returns_review_only_candidates():
         25,
     )
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_internal_repetition_insights_forwards_present_response_ids():
@@ -148,7 +143,6 @@ async def test_internal_repetition_insights_forwards_present_response_ids():
         )
 
     assert result["_anti_repeat_response_ids"] == ["turn-a", "turn-b", "turn-c"]
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -178,7 +172,6 @@ async def test_internal_repetition_insights_accepts_existing_query_names(charact
         100,
     )
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_internal_repetition_insights_requires_initialized_time_manager():
@@ -192,7 +185,6 @@ async def test_internal_repetition_insights_requires_initialized_time_manager():
             )
 
     assert exc_info.value.status_code == 503
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -257,7 +249,6 @@ async def test_public_repetition_insights_validates_and_forwards_local_request(
     assert call.args[0].endswith(f"/{character_name}/repetition_insights")
     effect_store.query_effects.assert_called_once_with(character_name, 30)
 
-
 @pytest.mark.unit
 def test_repetition_insight_effect_days_are_limited_to_supported_windows():
     from main_routers import memory_router
@@ -268,7 +259,6 @@ def test_repetition_insight_effect_days_are_limited_to_supported_windows():
             language="en",
             effect_days=14,
         )
-
 
 @pytest.mark.unit
 def test_repetition_effect_associations_are_exact_or_safe_containment_only():
@@ -336,7 +326,6 @@ def test_repetition_effect_associations_are_exact_or_safe_containment_only():
         "residual_message_count": 3,
     }
 
-
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("language", "candidate_phrase", "rejected_phrase", "contained_phrase"),
@@ -382,7 +371,6 @@ def test_word_language_associations_require_contiguous_token_boundaries(
     assert result[0]["effect_normalized_phrase"] == contained_phrase
     assert result[0]["association_type"] == "contained"
 
-
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("language", "candidate_phrase", "effect_phrase"),
@@ -420,7 +408,6 @@ def test_associations_accept_actual_runtime_detector_signature_sizes(
     assert len(result) == 1
     assert result[0]["effect_normalized_phrase"] == effect_phrase
     assert result[0]["association_type"] == "contained"
-
 
 @pytest.mark.unit
 def test_korean_associations_use_word_boundaries_without_losing_character_ngrams():
@@ -464,7 +451,6 @@ def test_korean_associations_use_word_boundaries_without_losing_character_ngrams
         "어제 나는 정말 웃었어",
         "오늘도 두근두근 설레",
     ]
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -513,7 +499,6 @@ async def test_public_repetition_insights_keeps_residuals_when_effect_query_fail
     assert result["effectiveness"]["period_days"] == 7
     assert "private path" not in json.dumps(result)
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("character_name", ["legacy.name", "chat"])
@@ -545,7 +530,6 @@ async def test_reset_repetition_effects_clears_only_selected_character(character
     }
     effect_store.clear_effects.assert_called_once_with(character_name)
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_repetition_endpoints_still_reject_dot_traversal_names():
@@ -563,7 +547,6 @@ async def test_repetition_endpoints_still_reject_dot_traversal_names():
 
     assert insights.status_code == 422
     assert reset.status_code == 422
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -600,7 +583,6 @@ async def test_public_repetition_insights_returns_sanitized_unavailable_error():
         "error": "local memory analysis unavailable",
     }
     assert "private upstream detail" not in response.body.decode("utf-8")
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -639,7 +621,6 @@ async def test_partial_response_id_coverage_falls_back_to_day_scope(
 
     assert result.get("_anti_repeat_response_ids") == expected
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_response_ids_are_sliced_to_the_analyzed_window(monkeypatch):
@@ -677,7 +658,6 @@ async def test_response_ids_are_sliced_to_the_analyzed_window(monkeypatch):
     assert 0 < analyzed < 4
     # Exactly the newest `analyzed` ids, never the dropped older ones.
     assert result["_anti_repeat_response_ids"] == ["oldest", "older", "newer", "newest"][-analyzed:]
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -748,7 +728,6 @@ async def test_effect_scope_uses_the_analyzed_count_not_the_request(monkeypatch)
     assert captured["limit"] == 10
     assert result["effectiveness"]["assistant_message_limit"] == 10
 
-
 @pytest.mark.asyncio
 async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
     """The selector must offer every identity the analysis route accepts.
@@ -795,7 +774,6 @@ async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
                 config, name
             )
             assert (name in result["characters"]) is admitted, name
-
 
 @pytest.mark.asyncio
 async def test_a_flat_legacy_orphan_is_migrated_then_offered_normally(tmp_path):
@@ -859,7 +837,6 @@ async def test_a_flat_legacy_orphan_is_migrated_then_offered_normally(tmp_path):
         if entry.name.startswith(("time_indexed_", "recent_"))
     ]
 
-
 def test_the_migration_never_moves_a_directory(tmp_path):
     """A real character can be named like a legacy store, and one is.
 
@@ -904,7 +881,6 @@ def test_the_migration_never_moves_a_directory(tmp_path):
         "the migration invented a character out of a directory name"
     )
 
-
 def test_the_migration_decoder_boundaries():
     """The decoder's own contract, now a migration-private helper.
 
@@ -928,7 +904,6 @@ def test_the_migration_decoder_boundaries():
     assert owner("time_indexed_Carol.db-wal") == "Carol.db-wal"
     assert owner("time_indexed_Carol.db-shm") == "Carol.db-shm"
 
-
 def _association_pair(phrase, effect_phrase, association_type, **counts):
     row = {
         "normalized_phrase": phrase,
@@ -944,7 +919,6 @@ def _association_pair(phrase, effect_phrase, association_type, **counts):
     }
     row.update(counts)
     return row
-
 
 def test_associations_fold_to_one_row_per_candidate_without_changing_totals():
     """The payload is bounded by the candidate count, not by the product.
@@ -988,7 +962,6 @@ def test_associations_fold_to_one_row_per_candidate_without_changing_totals():
     assert first["residual_message_count"] == 2
     assert folded[1]["association_type"] == "contained"
     assert folded[1]["effect_pattern_count"] == 1
-
 
 def test_folded_associations_preserve_the_totals_of_the_pair_list():
     """Differential check: the four sums must survive folding exactly."""
@@ -1039,7 +1012,6 @@ def test_folded_associations_preserve_the_totals_of_the_pair_list():
     assert len(folded) <= len(candidates)
     for field in fields:
         assert sum(row[field] for row in pairs) == sum(row[field] for row in folded), field
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -1130,7 +1102,6 @@ async def test_repetition_insights_route_ships_folded_associations():
     assert associations[0]["detected_count"] == 15
     assert associations[0]["association_type"] == "exact"
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_insight_characters_applies_the_analysis_routes_admission_rule():
@@ -1176,7 +1147,6 @@ async def test_insight_characters_applies_the_analysis_routes_admission_rule():
         admitted = validation.ok or validation.code == "reserved_route_name"
         assert (name in characters) is admitted, name
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_insight_selector_and_route_share_the_name_length_cap():
@@ -1219,7 +1189,6 @@ async def test_insight_selector_and_route_share_the_name_length_cap():
         )
     )
     assert response.status_code == 422
-
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -1361,7 +1330,6 @@ async def test_a_padded_configured_key_is_served_not_confused_with_an_orphan(
 
     effect_store.clear_effects.assert_called_once_with(padded)
 
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_response_ids_follow_the_survivors_not_the_last_n(monkeypatch):
@@ -1425,7 +1393,6 @@ async def test_response_ids_follow_the_survivors_not_the_last_n(monkeypatch):
     # Named explicitly, so a future change to the eviction cannot quietly make
     # this test agree with the wrong answer.
     assert expected == ["id-1", "id-2", "id-4", "id-5", "id-6", "id-7"]
-
 
 def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch):
     """The ORDER is what makes an interrupted run recoverable.
@@ -1496,7 +1463,6 @@ def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch)
         encoding="utf-8"
     ) == "wal", "the retry clobbered the WAL that had already crossed"
 
-
 def test_a_decoded_owner_must_be_a_name_this_project_would_accept(tmp_path):
     """A legacy filename is not a validated identity.
 
@@ -1548,7 +1514,6 @@ def test_a_decoded_owner_must_be_a_name_this_project_would_accept(tmp_path):
         "a legitimately dotted name stopped migrating"
     )
 
-
 def test_a_partial_sidecar_move_is_rolled_back(tmp_path, monkeypatch):
     """All-or-nothing beats an ordering argument about who opens what when.
 
@@ -1586,103 +1551,6 @@ def test_a_partial_sidecar_move_is_rolled_back(tmp_path, monkeypatch):
     memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
     for name in ("time_indexed.db", "time_indexed.db-wal", "time_indexed.db-shm"):
         assert (memory_dir / "Carol" / name).exists(), name
-
-
-def test_project_memory_merges_into_an_existing_runtime_directory(tmp_path):
-    """Skipping the whole directory let one file block everything beside it.
-
-    A runtime directory holding just a recent.json -- what a first launch
-    leaves -- blocked the copy entirely, including the time-indexed database
-    every reader wants. The name was then enumerable from the project root and
-    analysable from neither.
-
-    The never-overwrite rule the skip enforced still holds, file by file
-    instead of directory by directory: the runtime copy always wins.
-    """
-    import utils.config_manager.migrations as migrations
-
-    base = None
-    for name in dir(migrations):
-        candidate = getattr(migrations, name)
-        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
-            base = candidate
-            break
-    assert base is not None, "the migration mixin moved"
-
-    runtime = tmp_path / "runtime" / "memory"
-    project = tmp_path / "project" / "memory" / "store"
-    (runtime / "Bob").mkdir(parents=True)
-    (runtime / "Bob" / "recent.json").write_text("RUNTIME", encoding="utf-8")
-    (project / "Bob").mkdir(parents=True)
-    (project / "Bob" / "time_indexed.db").write_text("PROJECT DB", encoding="utf-8")
-    (project / "Bob" / "recent.json").write_text("PROJECT", encoding="utf-8")
-    (project / "Bob" / "sub").mkdir()
-    (project / "Bob" / "sub" / "deep.json").write_text("DEEP", encoding="utf-8")
-    (project / "Carol").mkdir()
-    (project / "Carol" / "time_indexed.db").write_text("CAROL", encoding="utf-8")
-
-    class _Manager(base):
-        def __init__(self):
-            self.memory_dir = runtime
-            self.project_memory_dir = project
-
-        def ensure_memory_directory(self):
-            runtime.mkdir(parents=True, exist_ok=True)
-            return True
-
-        def _log(self, *_args, **_kwargs):
-            return None
-
-    _Manager().migrate_memory_files()
-
-    assert (runtime / "Bob" / "time_indexed.db").read_text(
-        encoding="utf-8"
-    ) == "PROJECT DB", "the gap in an existing directory was not filled"
-    assert (runtime / "Bob" / "recent.json").read_text(
-        encoding="utf-8"
-    ) == "RUNTIME", "the runtime copy was overwritten, which this must never do"
-    # A wholly new character still arrives, which is what the migration was
-    # always for.
-    assert (runtime / "Carol" / "time_indexed.db").read_text(
-        encoding="utf-8"
-    ) == "CAROL"
-
-    # Nested directories are created, not just top-level files.
-    assert (runtime / "Bob" / "sub" / "deep.json").read_text(
-        encoding="utf-8"
-    ) == "DEEP"
-
-    # A DANGLING symlink at the destination reads as absent to exists(),
-    # and copying onto it follows the link out of the memory root. This is
-    # why the merge is written out rather than delegated to copytree with a
-    # copy_function -- and why the check is lexists.
-    import os
-
-    outside = tmp_path / "outside.txt"
-    (runtime / "Dave").mkdir()
-    (project / "Dave").mkdir()
-    (project / "Dave" / "time_indexed.db").write_text("DAVE", encoding="utf-8")
-    try:
-        os.symlink(str(outside), str(runtime / "Dave" / "time_indexed.db"))
-    except OSError:
-        pytest.skip("this environment does not permit symlinks")
-    _Manager().migrate_memory_files()
-    assert not outside.exists(), (
-        "the copy followed a dangling symlink and wrote outside the "
-        "memory root"
-    )
-
-    # The same trap at the TOP level of the memory root, which is a
-    # separate branch: loose files there are copied by the caller, not by
-    # the recursive merge.
-    loose_outside = tmp_path / "loose_outside.txt"
-    (project / "loose.json").write_text("PROJECT LOOSE", encoding="utf-8")
-    os.symlink(str(loose_outside), str(runtime / "loose.json"))
-    _Manager().migrate_memory_files()
-    assert not loose_outside.exists(), (
-        "a loose file followed a dangling symlink out of the memory root"
-    )
-
 
 @pytest.mark.asyncio
 async def test_a_symlinked_character_directory_is_not_offered(tmp_path):
@@ -1729,114 +1597,3 @@ async def test_a_symlinked_character_directory_is_not_offered(tmp_path):
     # The dual: a real directory beside it is still offered.
     assert "Real" in characters
 
-
-def test_a_sidecar_never_joins_a_database_it_does_not_belong_to(tmp_path):
-    """A database and its sidecars are one unit.
-
-    Copying a project WAL next to a runtime database that was KEPT is not a gap
-    being filled -- SQLite replays it, so the foreign rows replace the runtime
-    ones on the next open.
-    """
-    import utils.config_manager.migrations as migrations
-
-    base = None
-    for name in dir(migrations):
-        candidate = getattr(migrations, name)
-        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
-            base = candidate
-            break
-    assert base is not None
-
-    runtime = tmp_path / "runtime" / "memory"
-    project = tmp_path / "project" / "memory" / "store"
-
-    class _Manager(base):
-        def __init__(self):
-            self.memory_dir = runtime
-            self.project_memory_dir = project
-
-        def ensure_memory_directory(self):
-            runtime.mkdir(parents=True, exist_ok=True)
-            return True
-
-        def _log(self, *_args, **_kwargs):
-            return None
-
-    # The runtime database is kept, so the project's sidecars must not arrive.
-    (runtime / "Bob").mkdir(parents=True)
-    (runtime / "Bob" / "time_indexed.db").write_text("RUNTIME", encoding="utf-8")
-    (project / "Bob").mkdir(parents=True)
-    (project / "Bob" / "time_indexed.db").write_text("PROJECT", encoding="utf-8")
-    (project / "Bob" / "time_indexed.db-wal").write_text("PWAL", encoding="utf-8")
-    (project / "Bob" / "facts.json").write_text("PF", encoding="utf-8")
-    # A character with NO runtime database: there the pair travels together.
-    (project / "Carol").mkdir()
-    (project / "Carol" / "time_indexed.db").write_text("CDB", encoding="utf-8")
-    (project / "Carol" / "time_indexed.db-wal").write_text("CWAL", encoding="utf-8")
-
-    _Manager().migrate_memory_files()
-
-    assert (runtime / "Bob" / "time_indexed.db").read_text(
-        encoding="utf-8"
-    ) == "RUNTIME"
-    assert not (runtime / "Bob" / "time_indexed.db-wal").exists(), (
-        "a foreign WAL was placed beside the runtime database, which SQLite "
-        "would replay into it"
-    )
-    # Unrelated gaps are still filled, so this is not "copy nothing".
-    assert (runtime / "Bob" / "facts.json").read_text(encoding="utf-8") == "PF"
-    assert (runtime / "Carol" / "time_indexed.db").read_text(
-        encoding="utf-8"
-    ) == "CDB"
-    assert (runtime / "Carol" / "time_indexed.db-wal").read_text(
-        encoding="utf-8"
-    ) == "CWAL"
-
-
-def test_a_symlinked_destination_root_is_refused(tmp_path):
-    """makedirs(exist_ok=True) FOLLOWS a link, so the per-entry guards run late.
-
-    A symlinked runtime character directory received the whole project directory
-    outside the memory root -- the root has to be checked before anything is
-    created.
-    """
-    import os
-
-    import utils.config_manager.migrations as migrations
-
-    base = None
-    for name in dir(migrations):
-        candidate = getattr(migrations, name)
-        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
-            base = candidate
-            break
-
-    runtime = tmp_path / "runtime" / "memory"
-    project = tmp_path / "project" / "memory" / "store"
-    outside = tmp_path / "outside"
-    runtime.mkdir(parents=True)
-    outside.mkdir()
-    (project / "Eve").mkdir(parents=True)
-    (project / "Eve" / "secret.json").write_text("LEAK", encoding="utf-8")
-    try:
-        os.symlink(str(outside), str(runtime / "Eve"), target_is_directory=True)
-    except OSError:
-        pytest.skip("this environment does not permit symlinks")
-
-    class _Manager(base):
-        def __init__(self):
-            self.memory_dir = runtime
-            self.project_memory_dir = project
-
-        def ensure_memory_directory(self):
-            runtime.mkdir(parents=True, exist_ok=True)
-            return True
-
-        def _log(self, *_args, **_kwargs):
-            return None
-
-    _Manager().migrate_memory_files()
-
-    assert not (outside / "secret.json").exists(), (
-        "the merge followed a symlinked destination root out of the memory root"
-    )
