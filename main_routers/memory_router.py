@@ -342,15 +342,22 @@ def iter_recent_memory_files(base_dir: Path) -> list[str]:
 
     logical_names: set[str] = set()
 
+    # REAL entries only, on both branches. ``is_file()`` and ``is_dir()``
+    # follow links, and this list is what the insights selector and the
+    # memory browser both enumerate from -- so a link in the memory root
+    # was offered as a character and its target read from outside the root.
+    # Filtering only the caller's own directory scan left this path to
+    # re-admit it, by BOTH shapes: a linked directory and a linked
+    # recent_<name>.json.
     for flat_file in base_dir.glob('recent_*.json'):
-        if flat_file.is_file():
+        if flat_file.is_file() and not flat_file.is_symlink():
             logical_names.add(flat_file.name)
 
     for child in base_dir.iterdir():
-        if not child.is_dir():
+        if not child.is_dir() or child.is_symlink():
             continue
         recent_file = child / 'recent.json'
-        if recent_file.is_file():
+        if recent_file.is_file() and not recent_file.is_symlink():
             logical_names.add(build_recent_filename(child.name))
 
     return sorted(logical_names)

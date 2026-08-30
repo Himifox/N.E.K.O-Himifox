@@ -1597,3 +1597,56 @@ async def test_a_symlinked_character_directory_is_not_offered(tmp_path):
     # The dual: a real directory beside it is still offered.
     assert "Real" in characters
 
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_recent_file_listing_does_not_readmit_symlinks(tmp_path):
+    """Filtering only the directory scan left this path to let them back in.
+
+    ``iter_recent_memory_files`` is what the insights selector AND the memory
+    browser both enumerate from, and both of its branches follow links:
+    ``is_dir()`` on a linked character directory, and ``is_file()`` on a linked
+    ``recent_<name>.json``. Either shape put a name back in the selector whose
+    contents live outside the memory root.
+    """
+    import os
+
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = tmp_path / "memory"
+    outside = tmp_path / "elsewhere"
+    memory_dir.mkdir()
+    outside.mkdir()
+    (outside / "recent.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "flat.json").write_text("[]", encoding="utf-8")
+    try:
+        os.symlink(str(outside), str(memory_dir / "Ghost"), target_is_directory=True)
+        os.symlink(str(tmp_path / "flat.json"), str(memory_dir / "recent_Phantom.json"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    # Real entries of BOTH shapes, so this cannot pass by listing nothing.
+    (memory_dir / "Real").mkdir()
+    (memory_dir / "Real" / "recent.json").write_text("[]", encoding="utf-8")
+    (memory_dir / "recent_Legacy.json").write_text("[]", encoding="utf-8")
+
+    listing = memory_router.iter_recent_memory_files(memory_dir)
+    assert "recent_Ghost.json" not in listing
+    assert "recent_Phantom.json" not in listing
+    assert "recent_Real.json" in listing
+    assert "recent_Legacy.json" in listing
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        characters = (await memory_router.get_insight_characters())["characters"]
+
+    assert "Ghost" not in characters, "a linked directory came back via recent files"
+    assert "Phantom" not in characters, "a linked recent file named a character"
+    assert "Real" in characters
+    assert "Legacy" in characters
