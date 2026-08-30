@@ -1616,6 +1616,8 @@ def test_project_memory_merges_into_an_existing_runtime_directory(tmp_path):
     (project / "Bob").mkdir(parents=True)
     (project / "Bob" / "time_indexed.db").write_text("PROJECT DB", encoding="utf-8")
     (project / "Bob" / "recent.json").write_text("PROJECT", encoding="utf-8")
+    (project / "Bob" / "sub").mkdir()
+    (project / "Bob" / "sub" / "deep.json").write_text("DEEP", encoding="utf-8")
     (project / "Carol").mkdir()
     (project / "Carol" / "time_indexed.db").write_text("CAROL", encoding="utf-8")
 
@@ -1644,3 +1646,39 @@ def test_project_memory_merges_into_an_existing_runtime_directory(tmp_path):
     assert (runtime / "Carol" / "time_indexed.db").read_text(
         encoding="utf-8"
     ) == "CAROL"
+
+    # Nested directories are created, not just top-level files.
+    assert (runtime / "Bob" / "sub" / "deep.json").read_text(
+        encoding="utf-8"
+    ) == "DEEP"
+
+    # A DANGLING symlink at the destination reads as absent to exists(),
+    # and copying onto it follows the link out of the memory root. This is
+    # why the merge is written out rather than delegated to copytree with a
+    # copy_function -- and why the check is lexists.
+    import os
+
+    outside = tmp_path / "outside.txt"
+    (runtime / "Dave").mkdir()
+    (project / "Dave").mkdir()
+    (project / "Dave" / "time_indexed.db").write_text("DAVE", encoding="utf-8")
+    try:
+        os.symlink(str(outside), str(runtime / "Dave" / "time_indexed.db"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    _Manager().migrate_memory_files()
+    assert not outside.exists(), (
+        "the copy followed a dangling symlink and wrote outside the "
+        "memory root"
+    )
+
+    # The same trap at the TOP level of the memory root, which is a
+    # separate branch: loose files there are copied by the caller, not by
+    # the recursive merge.
+    loose_outside = tmp_path / "loose_outside.txt"
+    (project / "loose.json").write_text("PROJECT LOOSE", encoding="utf-8")
+    os.symlink(str(loose_outside), str(runtime / "loose.json"))
+    _Manager().migrate_memory_files()
+    assert not loose_outside.exists(), (
+        "a loose file followed a dangling symlink out of the memory root"
+    )

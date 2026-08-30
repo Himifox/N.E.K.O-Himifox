@@ -28,17 +28,48 @@ from pathlib import Path
 from config import CONFIG_FILES, DEFAULT_CONFIG_DATA
 
 
-def _copy_if_absent(source, destination):
-    """copy2, unless the destination already exists.
+def _merge_missing_entries(source_dir, destination_dir):
+    """Copy what is missing under ``source_dir``; touch nothing that exists.
 
-    ``copytree(dirs_exist_ok=True)`` overwrites by default, which is the one
-    thing this migration must never do -- the runtime copy is the live one.
+    Written out rather than delegated to ``copytree(dirs_exist_ok=True)``,
+    which cannot express this. Two reasons, both properties of copytree
+    rather than of how it was called:
+
+    - It ``copystat``s every destination directory when it finishes, so an
+      existing runtime directory took the PROJECT directory's permissions.
+      A copy_function can decline a file; it cannot decline that.
+    - A copy_function guarding on ``os.path.exists`` treats a DANGLING
+      symlink as absent, and copying onto it follows the link and writes
+      outside the memory root entirely. ``lexists`` is the one that sees a
+      broken link.
+
+    Symlinks are skipped on both sides rather than followed or recreated:
+    the project memory store ships no links, so anything link-shaped here
+    is either a mistake or an attempt to redirect the write.
     """
     import os
 
-    if os.path.exists(destination):
-        return destination
-    return shutil.copy2(source, destination)
+    os.makedirs(destination_dir, exist_ok=True)
+    for entry in os.scandir(source_dir):
+        destination = os.path.join(destination_dir, entry.name)
+        is_dir = entry.is_dir(follow_symlinks=False)
+        is_file = entry.is_file(follow_symlinks=False)
+        if not is_dir and not is_file:
+            continue
+        if os.path.lexists(destination):
+            # Descend only into a real directory on both sides. Anything
+            # else already exists and the runtime copy wins.
+            if (
+                is_dir
+                and os.path.isdir(destination)
+                and not os.path.islink(destination)
+            ):
+                _merge_missing_entries(entry.path, destination)
+            continue
+        if is_dir:
+            _merge_missing_entries(entry.path, destination)
+        else:
+            shutil.copy2(entry.path, destination)
 
 
 class MigrationsMixin:
@@ -204,10 +235,14 @@ class MigrationsMixin:
             for item in self.project_memory_dir.iterdir():
                 dest_path = self.memory_dir / item.name
 
+                if item.is_symlink():
+                    # Never followed. The project store ships no links.
+                    continue
                 if item.is_file():
-                    # A file that is already there is the runtime's own and
-                    # is never overwritten.
-                    if dest_path.exists():
+                    # lexists, not exists: a DANGLING symlink at the
+                    # destination reads as absent to exists(), and copying
+                    # onto it follows the link out of the memory root.
+                    if os.path.lexists(dest_path):
                         continue
                     shutil.copy2(item, dest_path)
                     print(f"Migrated memory file: {item.name}")
@@ -219,16 +254,11 @@ class MigrationsMixin:
                     # The name was then enumerable from the project root and
                     # analysable from neither.
                     #
-                    # dirs_exist_ok with a copy function that declines an
-                    # existing destination keeps the never-overwrite rule the
-                    # skip was there to enforce: the runtime copy always wins,
-                    # file by file instead of directory by directory.
-                    shutil.copytree(
-                        item,
-                        dest_path,
-                        dirs_exist_ok=True,
-                        copy_function=_copy_if_absent,
-                    )
+                    # The runtime copy still always wins, now file by file
+                    # instead of directory by directory -- and an existing
+                    # runtime DIRECTORY keeps its own permissions, which
+                    # copytree does not allow.
+                    _merge_missing_entries(str(item), str(dest_path))
                     print(f"Migrated memory directory: {item.name}")
         except Exception as e:
             print(f"Warning: Failed to migrate memory files: {e}", file=sys.stderr)
