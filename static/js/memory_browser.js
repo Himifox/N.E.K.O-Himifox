@@ -993,7 +993,15 @@
     // time-indexed history without the optional recent file, is analyzable but
     // has no button, so the identity list has to supply it.
     let repetitionInsightExtraCharacters = [];
-    let repetitionInsightCharactersRequested = false;
+    // IN FLIGHT, not "has ever succeeded". Latching a successful load for
+    // the life of the page meant a character created, renamed, restored or
+    // deleted while this window stayed open never reached the selector --
+    // permanently, since nothing cleared it. That is the ordinary case in
+    // the Electron multi-window flow, where the window that edits
+    // characters is not the window showing this panel.
+    let repetitionInsightCharactersInFlight = false;
+    // When the list last loaded. Zero means never.
+    let repetitionInsightCharactersLoadedAt = 0;
     // Retry a failed identity load, but rate-limit it: the loader runs on every
     // panel sync, so a dead endpoint would be re-hit on each character switch
     // and each analyze start/stop. A time window rather than an attempt count --
@@ -1001,6 +1009,11 @@
     // ~126ms apart, so a momentary blip at page load would give up permanently.
     let repetitionInsightCharacterThrottleUntil = 0;
     const REPETITION_INSIGHT_CHARACTER_THROTTLE_MS = 5000;
+    // How long a loaded list is trusted before the next panel sync
+    // refetches it. Short enough that an identity change shows up on the
+    // next look, long enough that repeated syncs do not each hit the
+    // endpoint.
+    const REPETITION_INSIGHT_CHARACTER_TTL_MS = 30000;
 
     // The panel analyses a CHARACTER; the editor opens a FILE. Those are the
     // same identity for anyone with a recent.json, and the panel piggybacked on
@@ -1038,9 +1051,17 @@
         // page, hiding every character in the settled root that has no
         // `recent.json` to fall back on.
         if (memoryStorageLimited) return;
-        if (repetitionInsightCharactersRequested) return;
+        if (repetitionInsightCharactersInFlight) return;
         if (Date.now() < repetitionInsightCharacterThrottleUntil) return;
-        repetitionInsightCharactersRequested = true;
+        // A bounded TTL rather than a permanent latch. Overlapping syncs
+        // still collapse into one request through the in-flight flag,
+        // and this is not a poll: the fetch only happens when something
+        // syncs the panel, which is the same action that would reveal a
+        // stale list.
+        if (repetitionInsightCharactersLoadedAt
+            && Date.now() - repetitionInsightCharactersLoadedAt
+                < REPETITION_INSIGHT_CHARACTER_TTL_MS) return;
+        repetitionInsightCharactersInFlight = true;
         let loaded = false;
         try {
             const response = await fetch('/api/memory/insight_characters');
@@ -1071,10 +1092,12 @@
             // idle tab, logging each failure. The throttle keeps a persistently
             // dead endpoint down to one request every few seconds rather than
             // one per sync.
-            if (!loaded) {
+            repetitionInsightCharactersInFlight = false;
+            if (loaded) {
+                repetitionInsightCharactersLoadedAt = Date.now();
+            } else {
                 repetitionInsightCharacterThrottleUntil = Date.now()
                     + REPETITION_INSIGHT_CHARACTER_THROTTLE_MS;
-                repetitionInsightCharactersRequested = false;
             }
         }
     }

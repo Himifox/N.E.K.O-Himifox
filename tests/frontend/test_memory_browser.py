@@ -5751,3 +5751,66 @@ def test_insight_identities_are_requested_only_after_storage_settles(
     assert timeline.index("bootstrap:done") < timeline.index("identities"), (
         f"the identity request preceded the settled root: {timeline}"
     )
+
+
+def test_the_insight_identity_list_does_not_latch_for_the_life_of_the_page(
+    mock_page: Page, running_server: str
+):
+    """A successful load used to latch, permanently.
+
+    Nothing cleared the flag, so a character created, renamed, restored or
+    deleted while this window stayed open never reached the selector until
+    the whole page was reloaded -- and in the Electron multi-window flow the
+    window that edits characters is not the window showing this panel.
+
+    A bounded TTL, not a poll: the refetch happens when something syncs the
+    panel, which is the same action that would reveal a stale list. So the
+    test opens the panel again after time has passed, rather than waiting
+    for a timer that does not exist.
+    """
+    requests = []
+
+    def handle_identities(route):
+        requests.append(len(requests) + 1)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            json={"characters": ["测试猫娘"] if len(requests) < 2 else ["新角色"]},
+        )
+
+    mock_page.clock.install()
+    mock_page.route("**/api/memory/insight_characters", handle_identities)
+    mock_page.goto(f"{running_server}/memory_browser")
+    mock_page.wait_for_function(
+        "() => document.getElementById('memory-insights-trigger') !== null"
+    )
+
+    deadline = time.monotonic() + 10.0
+    while not requests and time.monotonic() < deadline:
+        mock_page.wait_for_timeout(100)
+    assert requests, "the identity list was never requested at all"
+
+    # Opening the panel again straight away must NOT re-ask: the in-flight
+    # collapse and the TTL are still doing their job.
+    # force=True throughout: the panel is modal, so once it is open the
+    # trigger sits under its own overlay and an ordinary click waits for
+    # visibility that will never come. The handler is on the button.
+    mock_page.click("#memory-insights-trigger", force=True)
+    mock_page.wait_for_timeout(200)
+    assert len(requests) == 1, (
+        f"the panel re-asked inside the TTL: {len(requests)} requests"
+    )
+
+    # Past the TTL it must ask again, or an identity created in another
+    # window never appears here.
+    mock_page.clock.fast_forward("00:01:00")
+    mock_page.click("#memory-insights-trigger", force=True)
+    mock_page.click("#memory-insights-trigger", force=True)
+    deadline = time.monotonic() + 10.0
+    while len(requests) < 2 and time.monotonic() < deadline:
+        mock_page.wait_for_timeout(100)
+
+    assert len(requests) >= 2, (
+        "the identity list was latched for the life of the page: "
+        f"{len(requests)} request(s) after the TTL elapsed"
+    )
