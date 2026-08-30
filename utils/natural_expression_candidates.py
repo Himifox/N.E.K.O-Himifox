@@ -242,6 +242,14 @@ _TEMPLATE_RE = re.compile(
     # Measured on a full-budget single line of openers: 30s to 0.04s.
     r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
     r"\{\{[^\r\n]*|"
+    # A BLOCK comment hides its body by definition, and the two statement
+    # delimiters were protected independently while the text between them
+    # stayed searchable. It goes FIRST, so the pair wins over the two
+    # delimiters matching separately. Bounded like everything else here: the
+    # closer is required and the body is capped, so an unpaired
+    # "{% comment %}" falls through to the line fallback rather than running
+    # away.
+    r"\{%[ \t]*comment[ \t]*%\}[\s\S]{0,2000}?\{%[ \t]*endcomment[ \t]*%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -298,7 +306,11 @@ _TEMPLATE_RE = re.compile(
     # the tag run above lost its own: a 65-character name failed the whole
     # alternative, so nothing was protected and the identifier was mined,
     # while its 64-character twin in the same sentence was masked.
-    r"</?[A-Za-z](?>[^<>\r\n]*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
+    # A ">" inside a QUOTED attribute value is not the closer. Ending there
+    # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
+    # outside the span and minable. The quoted runs are line-bounded like
+    # everything else here, so this cannot reach past its own line.
+    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 
 
@@ -1082,7 +1094,11 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # capture at the escaped bracket and left the rest of the destination
     # minable. Escapes are consumed as a unit, so a trailing lone
     # backslash still cannot swallow the newline.
-    r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*"
+    # The LABEL honours escapes too. Fixing only the DESTINATION left
+    # "[cfg\]]: /secret-helper-phrase" unrecognised as a definition at all,
+    # so its destination stayed minable -- the same half-fix shape twice in
+    # one pattern.
+    r"^[ \t]{0,3}\[(?:\\[^\r\n]|[^\]\r\n\\])*\]:[ \t]*"
     # THREE forms, and the middle one is a fallback rather than a rule: when
     # the escape-aware form finds no LATER unescaped ">" it fails outright,
     # the whitespace-delimited form then stops at the first space, and the

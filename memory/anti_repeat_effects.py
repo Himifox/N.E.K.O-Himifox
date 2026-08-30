@@ -110,6 +110,14 @@ _PROTECTED_RE = re.compile(
     # Measured on a full-budget single line of openers: 30s to 0.04s.
     r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
     r"\{\{[^\r\n]*|"
+    # A BLOCK comment hides its body by definition, and the two statement
+    # delimiters were protected independently while the text between them
+    # stayed searchable. It goes FIRST, so the pair wins over the two
+    # delimiters matching separately. Bounded like everything else here: the
+    # closer is required and the body is capped, so an unpaired
+    # "{% comment %}" falls through to the line fallback rather than running
+    # away.
+    r"\{%[ \t]*comment[ \t]*%\}[\s\S]{0,2000}?\{%[ \t]*endcomment[ \t]*%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -160,7 +168,7 @@ _PROTECTED_RE = re.compile(
     # only at "<", ">" or a newline, so a character handed back can never
     # let the ">" match, and an opener with no closer now fails in one
     # pass instead of one per character.
-    r"</?[A-Za-z](?>[^<>\r\n]*)>|"
+    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|"
     r"\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 # How many times a reset re-cuts when a concurrent write lands after its

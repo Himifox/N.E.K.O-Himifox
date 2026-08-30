@@ -3196,3 +3196,72 @@ def test_a_line_of_openers_does_not_take_quadratic_time():
         assert elapsed < 5.0, (
             "%r openers on one line took %.1fs" % (unit, elapsed)
         )
+
+
+def test_a_quoted_attribute_value_may_hold_the_closing_delimiter():
+    """A ">" inside a quoted attribute is not where the tag ends.
+
+    Ending the span there left the rest of the tag outside it and minable.
+    """
+    secret = "secret helper phrase"
+
+    assert _protects('<div data-x="> ' + secret + '">', secret), (
+        "a quoted '>' ended the tag early"
+    )
+    assert _protects("<div data-x='> " + secret + "'>", secret)
+
+    # The duals: an ordinary tag is unchanged, and the quoted runs are
+    # line-bounded so nothing reaches past the line.
+    catchphrase = "please remember to rest"
+    assert _protects('<div data-x="' + secret + '">', secret)
+    assert not _protects("<div class=x> " + catchphrase + " " + catchphrase,
+                         catchphrase)
+    assert not _protects('<div a="> x' + chr(10) + chr(10) + catchphrase + " "
+                         + catchphrase, catchphrase)
+    # Still not a tag, which is what the leading-letter requirement is for.
+    assert not _protects("(>_<) " + catchphrase + " " + catchphrase, catchphrase)
+
+
+def test_a_reference_label_honours_escapes_too():
+    """Fixing only the DESTINATION left the same half-fix in the same pattern.
+
+    The label class stopped at a displayed "]", so "[cfg\\]]: /secret" was not
+    recognised as a definition at all and its destination stayed minable -- the
+    exact shape the destination alternative had already been fixed for.
+    """
+    target = "secret-helper-phrase"
+
+    assert _protects(
+        "[cfg" + chr(92) + "]]: /" + target + chr(10) + chr(10) + "ok", target
+    ), "an escaped bracket in the label hid the whole definition"
+    # The dual: a plain label still resolves, and bracketed speech still does
+    # not become a definition.
+    assert _protects("[cfg]: /" + target + chr(10) + chr(10) + "ok", target)
+    catchphrase = "please remember to rest"
+    assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
+
+
+def test_a_template_block_comment_hides_its_body():
+    """The two statement delimiters were masked, the text between them was not.
+
+    A block comment is hidden content by definition, so its body is exactly what
+    must not be mined.
+    """
+    secret = "secret helper phrase"
+
+    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret), (
+        "the block comment's body stayed searchable between its delimiters"
+    )
+    assert _protects(
+        "{% comment %}" + chr(10) + secret + chr(10) + "{% endcomment %}", secret
+    )
+
+    # The duals. An UNPAIRED opener falls through to the line fallback, so it is
+    # bounded to its own line rather than running away, and an ordinary
+    # statement is still masked on its own.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "{% comment %} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    ), "an unpaired block comment ran past its own line"
+    assert _protects("{% set token = '" + secret + "' %}", secret)
