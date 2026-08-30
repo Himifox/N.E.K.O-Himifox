@@ -49,12 +49,39 @@ def _merge_missing_entries(source_dir, destination_dir):
     """
     import os
 
-    os.makedirs(destination_dir, exist_ok=True)
-    for entry in os.scandir(source_dir):
+    # The destination ROOT, checked before anything is created. makedirs
+    # with exist_ok follows a symlink, so a link here would have been the
+    # target of every copy below and the per-entry guards run far too late
+    # to matter. Measured: a symlinked runtime character directory received
+    # the whole project directory outside the memory root.
+    if os.path.lexists(destination_dir):
+        if os.path.islink(destination_dir) or not os.path.isdir(
+            destination_dir
+        ):
+            return
+    else:
+        os.makedirs(destination_dir, exist_ok=True)
+
+    # A SQLite database and its sidecars are one unit. Copying a project
+    # WAL next to a runtime database that was kept is not a gap being
+    # filled -- SQLite replays it, so the foreign rows replace the runtime
+    # ones on the next open. Measured with two same-schema databases.
+    #
+    # So a sidecar is copied only when the database it belongs to was
+    # copied in this same pass, which needs two passes over the listing.
+    sidecar_suffixes = ("-wal", "-shm", "-journal")
+    entries = list(os.scandir(source_dir))
+    deferred = []
+    copied_databases = set()
+
+    for entry in entries:
         destination = os.path.join(destination_dir, entry.name)
         is_dir = entry.is_dir(follow_symlinks=False)
         is_file = entry.is_file(follow_symlinks=False)
         if not is_dir and not is_file:
+            continue
+        if is_file and entry.name.endswith(sidecar_suffixes):
+            deferred.append(entry)
             continue
         if os.path.lexists(destination):
             # Descend only into a real directory on both sides. Anything
@@ -70,6 +97,20 @@ def _merge_missing_entries(source_dir, destination_dir):
             _merge_missing_entries(entry.path, destination)
         else:
             shutil.copy2(entry.path, destination)
+            copied_databases.add(entry.name)
+
+    for entry in deferred:
+        for suffix in sidecar_suffixes:
+            if not entry.name.endswith(suffix):
+                continue
+            if entry.name[: -len(suffix)] not in copied_databases:
+                # Its database was already there and was kept, or is not
+                # here at all. Either way this sidecar is not its own.
+                break
+            destination = os.path.join(destination_dir, entry.name)
+            if not os.path.lexists(destination):
+                shutil.copy2(entry.path, destination)
+            break
 
 
 class MigrationsMixin:

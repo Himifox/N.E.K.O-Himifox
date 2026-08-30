@@ -1682,3 +1682,161 @@ def test_project_memory_merges_into_an_existing_runtime_directory(tmp_path):
     assert not loose_outside.exists(), (
         "a loose file followed a dangling symlink out of the memory root"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_symlinked_character_directory_is_not_offered(tmp_path):
+    """``Path.is_dir()`` follows links, so the root could name anything.
+
+    A symlink in the memory root was offered as a character and
+    ``character_memory_exists`` confirmed it, so the panel would read, render
+    and export assistant-shaped rows from whatever database it points at --
+    outside the memory root entirely.
+
+    Fixed in the enumeration rather than in the shared reader on purpose:
+    ``_resolve_expected_db_path`` honours ``time_store``, which exists so a
+    character CAN register a database outside memory_dir, and a blanket
+    containment check there would break it.
+    """
+    import os
+
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = tmp_path / "memory"
+    outside = tmp_path / "elsewhere"
+    memory_dir.mkdir()
+    outside.mkdir()
+    (outside / "time_indexed.db").write_bytes(b"")
+    (memory_dir / "Real").mkdir()
+    (memory_dir / "Real" / "time_indexed.db").write_bytes(b"")
+    try:
+        os.symlink(str(outside), str(memory_dir / "Ghost"), target_is_directory=True)
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        characters = (await memory_router.get_insight_characters())["characters"]
+
+    assert "Ghost" not in characters, (
+        "a symlink out of the memory root was offered as a character"
+    )
+    # The dual: a real directory beside it is still offered.
+    assert "Real" in characters
+
+
+def test_a_sidecar_never_joins_a_database_it_does_not_belong_to(tmp_path):
+    """A database and its sidecars are one unit.
+
+    Copying a project WAL next to a runtime database that was KEPT is not a gap
+    being filled -- SQLite replays it, so the foreign rows replace the runtime
+    ones on the next open.
+    """
+    import utils.config_manager.migrations as migrations
+
+    base = None
+    for name in dir(migrations):
+        candidate = getattr(migrations, name)
+        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
+            base = candidate
+            break
+    assert base is not None
+
+    runtime = tmp_path / "runtime" / "memory"
+    project = tmp_path / "project" / "memory" / "store"
+
+    class _Manager(base):
+        def __init__(self):
+            self.memory_dir = runtime
+            self.project_memory_dir = project
+
+        def ensure_memory_directory(self):
+            runtime.mkdir(parents=True, exist_ok=True)
+            return True
+
+        def _log(self, *_args, **_kwargs):
+            return None
+
+    # The runtime database is kept, so the project's sidecars must not arrive.
+    (runtime / "Bob").mkdir(parents=True)
+    (runtime / "Bob" / "time_indexed.db").write_text("RUNTIME", encoding="utf-8")
+    (project / "Bob").mkdir(parents=True)
+    (project / "Bob" / "time_indexed.db").write_text("PROJECT", encoding="utf-8")
+    (project / "Bob" / "time_indexed.db-wal").write_text("PWAL", encoding="utf-8")
+    (project / "Bob" / "facts.json").write_text("PF", encoding="utf-8")
+    # A character with NO runtime database: there the pair travels together.
+    (project / "Carol").mkdir()
+    (project / "Carol" / "time_indexed.db").write_text("CDB", encoding="utf-8")
+    (project / "Carol" / "time_indexed.db-wal").write_text("CWAL", encoding="utf-8")
+
+    _Manager().migrate_memory_files()
+
+    assert (runtime / "Bob" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "RUNTIME"
+    assert not (runtime / "Bob" / "time_indexed.db-wal").exists(), (
+        "a foreign WAL was placed beside the runtime database, which SQLite "
+        "would replay into it"
+    )
+    # Unrelated gaps are still filled, so this is not "copy nothing".
+    assert (runtime / "Bob" / "facts.json").read_text(encoding="utf-8") == "PF"
+    assert (runtime / "Carol" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "CDB"
+    assert (runtime / "Carol" / "time_indexed.db-wal").read_text(
+        encoding="utf-8"
+    ) == "CWAL"
+
+
+def test_a_symlinked_destination_root_is_refused(tmp_path):
+    """makedirs(exist_ok=True) FOLLOWS a link, so the per-entry guards run late.
+
+    A symlinked runtime character directory received the whole project directory
+    outside the memory root -- the root has to be checked before anything is
+    created.
+    """
+    import os
+
+    import utils.config_manager.migrations as migrations
+
+    base = None
+    for name in dir(migrations):
+        candidate = getattr(migrations, name)
+        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
+            base = candidate
+            break
+
+    runtime = tmp_path / "runtime" / "memory"
+    project = tmp_path / "project" / "memory" / "store"
+    outside = tmp_path / "outside"
+    runtime.mkdir(parents=True)
+    outside.mkdir()
+    (project / "Eve").mkdir(parents=True)
+    (project / "Eve" / "secret.json").write_text("LEAK", encoding="utf-8")
+    try:
+        os.symlink(str(outside), str(runtime / "Eve"), target_is_directory=True)
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    class _Manager(base):
+        def __init__(self):
+            self.memory_dir = runtime
+            self.project_memory_dir = project
+
+        def ensure_memory_directory(self):
+            runtime.mkdir(parents=True, exist_ok=True)
+            return True
+
+        def _log(self, *_args, **_kwargs):
+            return None
+
+    _Manager().migrate_memory_files()
+
+    assert not (outside / "secret.json").exists(), (
+        "the merge followed a symlinked destination root out of the memory root"
+    )

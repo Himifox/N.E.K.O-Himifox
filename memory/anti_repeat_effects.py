@@ -123,13 +123,13 @@ _PROTECTED_RE = re.compile(
     # comment came back into play. A closer is still required, so an
     # unpaired opener still falls through to that fallback rather than
     # running away.
-    r"\{%-?[ \t]*comment[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endcomment[ \t]*-?%\}|"
+    r"\{%[-+]?[ \t]*comment[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endcomment[ \t]*[-+]?%\}|"
     # raw/verbatim are the same shape and the same argument: the body is
     # template SOURCE that the engine is being told not to touch, so it
     # is not reply prose either. Two independent delimiters left the
     # payload between them searchable.
-    r"\{%-?[ \t]*raw[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endraw[ \t]*-?%\}|"
-    r"\{%-?[ \t]*verbatim[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endverbatim[ \t]*-?%\}|"
+    r"\{%[-+]?[ \t]*raw[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endraw[ \t]*[-+]?%\}|"
+    r"\{%[-+]?[ \t]*verbatim[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endverbatim[ \t]*[-+]?%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"

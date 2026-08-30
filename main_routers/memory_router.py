@@ -960,7 +960,20 @@ async def get_insight_characters():
         if not base_dir.exists():
             continue
         for child in base_dir.iterdir():
-            if child.is_dir():
+            # A REAL directory. ``Path.is_dir()`` follows links, so a
+            # symlink in the memory root was offered as a character and
+            # ``character_memory_exists`` confirmed it -- the panel would
+            # then read, render and export assistant-shaped rows from
+            # whatever database the link points at, outside the memory root
+            # entirely. Measured with a link to a sibling directory.
+            #
+            # Fixed HERE rather than in the shared reader on purpose:
+            # ``_resolve_expected_db_path`` honours ``time_store``, which
+            # exists so a character CAN register a database outside
+            # memory_dir, and a blanket containment check there would break
+            # that. What is new on this branch is enumerating the root and
+            # offering what it finds, so that is what learns to be careful.
+            if child.is_dir() and not child.is_symlink():
                 candidates.add(child.name)
             # No legacy decoding here. The flat layout was retired in
             # 2026-03 together with the startup migration that replaces it,

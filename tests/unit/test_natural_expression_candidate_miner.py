@@ -3521,3 +3521,52 @@ def test_jinja_whitespace_control_still_pairs_a_block():
         "{%- raw -%} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
         catchphrase,
     )
+
+
+def test_every_whitespace_control_spelling_pairs_a_block():
+    """Jinja has two modifiers, "-" and "+", and either may sit on either side."""
+    secret = "secret helper phrase"
+
+    for name in ("comment", "raw", "verbatim"):
+        for modifier in ("+", "-", ""):
+            opener = "{%" + modifier + " " + name + " " + modifier + "%}"
+            closer = "{%" + modifier + " end" + name + " " + modifier + "%}"
+            assert _protects(opener + " " + secret + " " + closer, secret), opener
+
+    # The dual: an unpaired opener is still bounded to its own line.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "{%+ raw +%} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+
+
+def test_the_block_precheck_needs_a_real_closing_tag():
+    """A reply that merely MENTIONS a closer keyword must not re-arm the scan.
+
+    The pre-check picks between two compiled patterns. Keyed on the bare word,
+    prose containing "endraw" selected the unbounded one, and every unmatched
+    opener then rescanned the rest of the text: measured 3.11s at 96 KiB with
+    the word present against 0.05s without, growing 4x per doubling.
+
+    A regex for the real closing TAG is exact AND still one linear pass, so this
+    is not a trade between the two.
+    """
+    import time
+
+    budget = candidate_core.USER_REVIEW_MAX_INPUT_CHARACTERS
+    tail = " the endraw keyword is mentioned here"
+    draft = ("{% comment %} " * 9000)[: budget - len(tail)] + tail
+
+    started = time.perf_counter()
+    candidate_core._protected_spans(draft)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0, "a mentioned keyword re-armed the scan (%.1fs)" % elapsed
+
+    # The dual, and the reason this cannot be fixed by dropping the pre-check:
+    # a REAL closer, in every modifier spelling, still selects the full pattern.
+    secret = "secret helper phrase"
+    for modifier in ("+", "-", ""):
+        opener = "{%" + modifier + " comment " + modifier + "%}"
+        closer = "{%" + modifier + " endcomment " + modifier + "%}"
+        assert _protects(opener * 10 + " " + secret + " " + closer, secret), modifier

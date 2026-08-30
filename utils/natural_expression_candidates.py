@@ -255,13 +255,13 @@ _TEMPLATE_RE = re.compile(
     # comment came back into play. A closer is still required, so an
     # unpaired opener still falls through to that fallback rather than
     # running away.
-    r"\{%-?[ \t]*comment[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endcomment[ \t]*-?%\}|"
+    r"\{%[-+]?[ \t]*comment[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endcomment[ \t]*[-+]?%\}|"
     # raw/verbatim are the same shape and the same argument: the body is
     # template SOURCE that the engine is being told not to touch, so it
     # is not reply prose either. Two independent delimiters left the
     # payload between them searchable.
-    r"\{%-?[ \t]*raw[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endraw[ \t]*-?%\}|"
-    r"\{%-?[ \t]*verbatim[ \t]*-?%\}[\s\S]*?\{%-?[ \t]*endverbatim[ \t]*-?%\}|"
+    r"\{%[-+]?[ \t]*raw[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endraw[ \t]*[-+]?%\}|"
+    r"\{%[-+]?[ \t]*verbatim[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endverbatim[ \t]*[-+]?%\}|"
     r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
     r"\{%[^\r\n]*|"
     r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
@@ -349,16 +349,21 @@ _TEMPLATE_RE = re.compile(
 # the first opener consumes everything up to it, so the later ones fall
 # inside the span already taken. A real 55 KiB block comment costs 0.023s
 # either way.
-# The closing KEYWORDS, not the full delimiters, because this decides which
-# of the two patterns runs and a literal cannot see Jinja whitespace
-# control: "{%- endraw -%}" contains no "{% endraw %}". Matching the bare
-# word is weaker in the safe direction -- it can only send a draft to the
-# fuller pattern, never skip a block that could match.
+# A real closing TAG, matched once, because this decides which of the two
+# patterns runs. A plain literal cannot see Jinja whitespace control --
+# "{%- endraw -%}" contains no "{% endraw %}" -- and the bare KEYWORD is
+# too generous the other way: a reply that merely MENTIONS "endraw" in
+# prose selected the unbounded pattern and every unmatched opener rescanned
+# the rest of the text. Measured at 96 KiB: 3.11s with the word present,
+# 0.05s without, growing 4x per doubling.
 #
-# Keyed on the comment closer alone, a reply holding only a "{% raw %}"
-# block took the pattern WITHOUT the block alternatives and the body went
-# unprotected -- the fix was there and unreachable.
-_BLOCK_CLOSERS = ("endcomment", "endraw", "endverbatim")
+# One regex search is still a single linear pass, so this is exact AND
+# cheap. Keyed on the comment closer alone, a reply holding only a
+# "{% raw %}" block took the pattern WITHOUT the block alternatives and the
+# body went unprotected -- the fix was there and unreachable.
+_BLOCK_CLOSER_RE = re.compile(
+    r"\{%[-+]?[ \t]*end(?:comment|raw|verbatim)[ \t]*[-+]?%\}"
+)
 _TEMPLATE_RE_WITHOUT_BLOCK = re.compile(
     # The bodies are ATOMIC. Each is a tempered token that stops only at a
     # newline or at its own closer, so giving a character back can never
@@ -1464,7 +1469,7 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     # inside a code span stopped being matched at all.
     template_pattern = (
         _TEMPLATE_RE
-        if any(closer in text for closer in _BLOCK_CLOSERS)
+        if _BLOCK_CLOSER_RE.search(text)
         else _TEMPLATE_RE_WITHOUT_BLOCK
     )
     position = 0
