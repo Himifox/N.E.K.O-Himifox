@@ -1425,3 +1425,73 @@ async def test_response_ids_follow_the_survivors_not_the_last_n(monkeypatch):
     # Named explicitly, so a future change to the eviction cannot quietly make
     # this test agree with the wrong answer.
     assert expected == ["id-1", "id-2", "id-4", "id-5", "id-6", "id-7"]
+
+
+def test_an_interrupted_database_migration_can_be_retried(tmp_path, monkeypatch):
+    """The ORDER is what makes an interrupted run recoverable.
+
+    An uncheckpointed WAL holds committed rows, so moving the database without
+    it loses them. Moving the database FIRST makes that unrecoverable: the
+    database is gone from the root afterwards, so the guard that starts the step
+    is false on every later run and the WAL is stranded for good.
+
+    Sidecars first and the database last means a crash always leaves the
+    database still flat, and the whole step simply runs again.
+    """
+    import shutil
+
+    import memory as memory_pkg
+
+    def fresh():
+        root = tmp_path / ("memory%d" % fresh.count)
+        fresh.count += 1
+        root.mkdir(parents=True)
+        (root / "time_indexed_Carol.db").write_text("db", encoding="utf-8")
+        (root / "time_indexed_Carol.db-wal").write_text("wal", encoding="utf-8")
+        return root
+
+    fresh.count = 0
+
+    # Ordinary: both move, nothing left behind.
+    root = fresh()
+    memory_pkg.migrate_to_character_dirs(str(root), [])
+    assert (root / "Carol" / "time_indexed.db").exists()
+    assert (root / "Carol" / "time_indexed.db-wal").read_text(
+        encoding="utf-8"
+    ) == "wal"
+    assert [entry.name for entry in root.iterdir()] == ["Carol"]
+
+    # A sidecar that cannot move leaves the DATABASE where it is, so the next
+    # run retries the whole set rather than stranding what did not move.
+    root = fresh()
+    real_move = shutil.move
+
+    def refuse_the_sidecar(source, target):
+        if str(source).endswith("-wal"):
+            raise OSError("disk full")
+        return real_move(source, target)
+
+    monkeypatch.setattr(memory_pkg.shutil, "move", refuse_the_sidecar)
+    memory_pkg.migrate_to_character_dirs(str(root), [])
+    assert (root / "time_indexed_Carol.db").exists(), (
+        "the database moved without its WAL, which strands the WAL for good"
+    )
+
+    monkeypatch.setattr(memory_pkg.shutil, "move", real_move)
+    memory_pkg.migrate_to_character_dirs(str(root), [])
+    assert (root / "Carol" / "time_indexed.db").exists()
+    assert (root / "Carol" / "time_indexed.db-wal").exists()
+
+    # And the state a crash between the two moves now leaves is one the next
+    # run finishes: WAL already across, database still flat.
+    root = fresh()
+    (root / "Carol").mkdir()
+    real_move(
+        str(root / "time_indexed_Carol.db-wal"),
+        str(root / "Carol" / "time_indexed.db-wal"),
+    )
+    memory_pkg.migrate_to_character_dirs(str(root), [])
+    assert (root / "Carol" / "time_indexed.db").exists()
+    assert (root / "Carol" / "time_indexed.db-wal").read_text(
+        encoding="utf-8"
+    ) == "wal", "the retry clobbered the WAL that had already crossed"

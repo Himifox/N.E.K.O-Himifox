@@ -212,24 +212,41 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
             old_filename = old_pattern.replace('{name}', name)
             old_path = os.path.join(memory_dir, old_filename)
             new_path = os.path.join(char_dir, new_filename)
-            if os.path.exists(old_path) and not os.path.exists(new_path):
-                try:
-                    shutil.move(old_path, new_path)
-                    _logger.info(f"[Memory] 迁移 {old_filename} → {name}/{new_filename}")
-                except Exception as e:
-                    _logger.warning(f"[Memory] 迁移失败 {old_filename}: {e}")
+            if not os.path.exists(old_path) or os.path.exists(new_path):
+                continue
+            # Sidecars FIRST, the database LAST. An uncheckpointed WAL holds
+            # committed rows, so moving the database without it loses them,
+            # and left in the root it is unreadable anyway -- SQLite looks
+            # for it beside the db.
+            #
+            # The ORDER is what makes an interrupted run recoverable. With
+            # the database moved first, a process that died before the WAL
+            # followed could never retry: the database is gone from the root
+            # by then, so the guard above is false on every later run and the
+            # WAL is stranded. Moving it last means a crash always leaves the
+            # database still flat, and the whole step simply runs again.
+            interrupted = False
+            for suffix in _SQLITE_SIDECAR_SUFFIXES:
+                sidecar = old_path + suffix
+                if not os.path.exists(sidecar) or os.path.exists(
+                    new_path + suffix
+                ):
                     continue
-                # The WAL travels with its database. An uncheckpointed one
-                # holds committed rows, and left in the root it is both
-                # unreadable -- SQLite looks for it beside the db -- and
-                # litter that the next cleanup has to reason about.
-                for suffix in _SQLITE_SIDECAR_SUFFIXES:
-                    sidecar = old_path + suffix
-                    if not os.path.exists(sidecar):
-                        continue
-                    try:
-                        shutil.move(sidecar, new_path + suffix)
-                    except Exception as e:
-                        _logger.warning(
-                            f"[Memory] 迁移失败 {old_filename}{suffix}: {e}"
-                        )
+                try:
+                    shutil.move(sidecar, new_path + suffix)
+                except Exception as e:
+                    _logger.warning(
+                        f"[Memory] 迁移失败 {old_filename}{suffix}: {e}"
+                    )
+                    interrupted = True
+            if interrupted:
+                # Leave the database where it is, so the next run retries
+                # the whole set rather than stranding what did not move.
+                continue
+            try:
+                shutil.move(old_path, new_path)
+                _logger.info(f"[Memory] 迁移 {old_filename} → {name}/{new_filename}")
+            except Exception as e:
+                _logger.warning(f"[Memory] 迁移失败 {old_filename}: {e}")
+
+
