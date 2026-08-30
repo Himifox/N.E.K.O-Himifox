@@ -5479,32 +5479,27 @@ def test_sidecar_isolation_does_not_touch_the_process_singletons(tmp_path):
 def test_every_selectable_legacy_root_file_is_also_migrated(tmp_path):
     """A name the panel offers has to have its history moved where readers look.
 
-    The selector decodes an owner out of a legacy root entry, so a memory
-    root holding only ``time_indexed_Carol.db`` offers "Carol". Every reader
-    then looks in ``memory/Carol/``, and the startup migration is what puts
-    it there. Its map was a second copy that had fallen three entries behind
-    the rename path's -- the dotted database and both archive files -- so
-    those characters were offered and then reported as having no history.
+    Every reader looks in ``memory/<name>/``, and the startup migration is
+    the only thing that puts a pre-layout file there. Its map was a second
+    copy that had fallen three entries behind the rename path's -- the
+    dotted database and both archive files -- so those characters kept a
+    history nothing could reach.
 
-    Driven off the SELECTOR's patterns, not the migration map, so a pattern
-    the panel can offer but the migration cannot move fails here. Each runs
-    in its own root because two of the patterns share a destination.
+    Driven off the DECODER's patterns rather than the migration map, so a
+    name the decoder recognises but the migration cannot move fails here.
+    Each runs in its own root because two of the patterns share a
+    destination. The unconfigured arm is the one that used to be skipped.
     """
     import memory as memory_pkg
-    from utils.character_memory import (
-        LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES,
+    from memory import (
         _LEGACY_ROOT_ENTRY_PATTERNS,
-        legacy_root_entry_owner,
+        _legacy_root_entry_owner as legacy_root_entry_owner,
     )
 
-    # The extra entries are directories with their own destination
-    # ("semantic_memory_legacy"), handled by the rename path rather than by
-    # this file-for-file migration.
-    file_patterns = [
-        pattern
-        for pattern in _LEGACY_ROOT_ENTRY_PATTERNS
-        if pattern not in LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES
-    ]
+    # Directories are not decoded at all -- see
+    # ``test_the_migration_never_moves_a_directory`` -- so the pattern
+    # table is already files only.
+    file_patterns = list(_LEGACY_ROOT_ENTRY_PATTERNS)
     assert file_patterns, "no selectable file patterns -- the test is inert"
 
     for index, pattern in enumerate(file_patterns):
@@ -5518,7 +5513,9 @@ def test_every_selectable_legacy_root_file_is_also_migrated(tmp_path):
             "not actually offerable, so the loop is testing the wrong thing"
         )
 
-        memory_pkg.migrate_to_character_dirs(str(root), ["Carol"])
+        # EMPTY names: an owner absent from characters.json is exactly the
+        # case the migration used to skip, leaving the file flat forever.
+        memory_pkg.migrate_to_character_dirs(str(root), [])
 
         target = memory_pkg._MIGRATION_MAP.get(pattern)
         assert target is not None, (

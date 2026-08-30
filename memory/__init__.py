@@ -121,11 +121,92 @@ from utils.character_memory import (  # noqa: E402
     LEGACY_CHARACTER_MEMORY_FILE_MAP as _MIGRATION_MAP,
 )
 
+# Longest suffix first, so "time_indexed_Carol.db" decodes to "Carol"
+# rather than to "Carol.db" via the extension-less pattern that also
+# matches it.
+_LEGACY_ROOT_ENTRY_PATTERNS = tuple(
+    sorted(
+        _MIGRATION_MAP,
+        key=lambda pattern: (
+            len(pattern.partition("{name}")[2]),
+            len(pattern.partition("{name}")[0]),
+        ),
+        reverse=True,
+    )
+)
+
+# SQLite writes these beside a database and they are transient. The
+# extension-less "time_indexed_{name}" pattern matches them, so
+# "time_indexed_Carol.db-wal" decodes to a character called
+# "Carol.db-wal" -- a name that would then get a directory of its own.
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _legacy_root_entry_owner(entry_name: str) -> str | None:
+    """Return the character a FLAT legacy memory FILE belongs to, if any.
+
+    Decoding a legacy filename is a MIGRATION concern and lives here for
+    that reason. It used to sit in ``utils.character_memory`` where the
+    panel selector called it on every request, which made a second layout
+    something the read path had to understand rather than something the
+    migration removes.
+    """
+    for pattern in _LEGACY_ROOT_ENTRY_PATTERNS:
+        prefix, _, suffix = pattern.partition("{name}")
+        if not entry_name.startswith(prefix) or not entry_name.endswith(suffix):
+            continue
+        end = len(entry_name) - len(suffix) if suffix else len(entry_name)
+        if end <= len(prefix):
+            # A bare prefix names nobody.
+            continue
+        owner = entry_name[len(prefix) : end]
+        # A leading dot or a path separator is never a character, and this
+        # name goes on to build paths.
+        if owner.startswith(".") or "/" in owner or chr(92) in owner:
+            continue
+        return owner
+    return None
+
+
+def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
+    """Owners of flat legacy FILES still sitting in the memory root.
+
+    Files only. A per-character directory and a legacy
+    ``semantic_memory_<name>/`` vector store are the same shape on disk,
+    so a character legitimately named "semantic_memory_Alice" would be
+    decoded to "Alice" and have its directory moved out from under it.
+    A vector store holds no assistant history either way, so nothing the
+    panel can read is lost by leaving those alone.
+    """
+    owners: list[str] = []
+    try:
+        entries = sorted(os.listdir(memory_dir))
+    except OSError:
+        return owners
+    for entry in entries:
+        if entry.endswith(_SQLITE_SIDECAR_SUFFIXES):
+            continue
+        if not os.path.isfile(os.path.join(memory_dir, entry)):
+            continue
+        owner = _legacy_root_entry_owner(entry)
+        if owner and owner not in known:
+            known.add(owner)
+            owners.append(owner)
+    return owners
+
 
 def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
     """One-time migration: move legacy memory_dir/{type}_{name}.ext into memory_dir/{name}/{type}.ext"""
     memory_dir = str(memory_dir)
-    for name in names:
+    # Configured names PLUS whatever the root still holds under a legacy
+    # filename. Migrating only the configured ones left an unconfigured
+    # owner flat forever -- and no reader understands that layout, so its
+    # history was on disk and unreachable. A character absent from
+    # characters.json is exactly the case nothing else was going to fix:
+    # delete and rename both handle the flat names, but neither runs for
+    # an identity nobody can name any more.
+    known = {name for name in names if name}
+    for name in list(names) + _legacy_root_file_owners(memory_dir, known):
         char_dir = ensure_character_dir(memory_dir, name)
         for old_pattern, new_filename in _MIGRATION_MAP.items():
             old_filename = old_pattern.replace('{name}', name)
@@ -137,3 +218,18 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                     _logger.info(f"[Memory] 迁移 {old_filename} → {name}/{new_filename}")
                 except Exception as e:
                     _logger.warning(f"[Memory] 迁移失败 {old_filename}: {e}")
+                    continue
+                # The WAL travels with its database. An uncheckpointed one
+                # holds committed rows, and left in the root it is both
+                # unreadable -- SQLite looks for it beside the db -- and
+                # litter that the next cleanup has to reason about.
+                for suffix in _SQLITE_SIDECAR_SUFFIXES:
+                    sidecar = old_path + suffix
+                    if not os.path.exists(sidecar):
+                        continue
+                    try:
+                        shutil.move(sidecar, new_path + suffix)
+                    except Exception as e:
+                        _logger.warning(
+                            f"[Memory] 迁移失败 {old_filename}{suffix}: {e}"
+                        )

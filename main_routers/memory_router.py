@@ -44,7 +44,6 @@ from utils.character_name import PROFILE_NAME_MAX_UNITS, validate_character_name
 from utils.character_memory import (
     character_memory_exists,
     iter_character_memory_roots,
-    legacy_root_entry_owner,
 )
 from utils.cloudsave_runtime import MaintenanceModeError, assert_cloudsave_writable
 from utils.language_utils import is_supported_language_code, normalize_language_code
@@ -963,27 +962,15 @@ async def get_insight_characters():
         for child in base_dir.iterdir():
             if child.is_dir():
                 candidates.add(child.name)
-            # A FLAT legacy entry names its owner, not a character: the root
-            # holds "semantic_memory_Alice/" and "time_indexed_Carol.db" from
-            # before the per-character layout. Reading the basename literally
-            # offered "semantic_memory_Alice" and never "Alice", and could not
-            # see "Carol" at all -- yet ``character_memory_exists`` accepts
-            # both owners, so the route served a name the panel hid.
-            #
-            # Not when the entry IS a configured character, though. A
-            # character legitimately named "semantic_memory_Alice" has a
-            # per-character directory of exactly the shape a legacy vector
-            # store has, and decoding it offered a phantom "Alice" that
-            # passed the existence filter -- the same directory satisfies
-            # it -- and then analysed to nothing, because the history is in
-            # memory/semantic_memory_Alice/ and the panel asked for
-            # memory/Alice/. Being a directory cannot tell the two layouts
-            # apart; being a configured character can.
-            if child.name in configured_names:
-                continue
-            owner = legacy_root_entry_owner(child.name)
-            if owner:
-                candidates.add(owner)
+            # No legacy decoding here. The flat layout was retired in
+            # 2026-03 together with the startup migration that replaces it,
+            # and that migration now covers unconfigured owners as well --
+            # so by the time this runs, a legacy root file has already
+            # become memory/<name>/ and the directory branch above sees it.
+            # Decoding here made the READ path carry a second layout, and
+            # got it wrong: "time_indexed_Carol.db-wal" decoded to a
+            # character named "Carol.db-wal", which the existence check then
+            # confirmed, so the panel offered it.
         for logical_name in iter_recent_memory_files(base_dir):
             candidate = extract_catgirl_name_from_recent_filename(logical_name)
             if candidate:

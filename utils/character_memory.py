@@ -263,49 +263,6 @@ LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES = (
 )
 
 
-# Longest suffix first, so "time_indexed_Carol.db" decodes to "Carol" rather
-# than to "Carol.db" via the extension-less pattern that also matches it.
-_LEGACY_ROOT_ENTRY_PATTERNS = tuple(
-    sorted(
-        tuple(LEGACY_CHARACTER_MEMORY_FILE_MAP) + LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES,
-        key=lambda pattern: (
-            len(pattern.partition("{name}")[2]),
-            len(pattern.partition("{name}")[0]),
-        ),
-        reverse=True,
-    )
-)
-
-
-def legacy_root_entry_owner(entry_name: str) -> str | None:
-    """Return the character a FLAT legacy memory entry belongs to, if any.
-
-    Before the per-character directory layout, memory lived at the root as
-    ``semantic_memory_<name>/``, ``time_indexed_<name>.db`` and friends. Code
-    that enumerates the root by taking each child's literal basename therefore
-    reads the storage name as if it were a character: it offers
-    ``semantic_memory_Alice`` and never offers ``Alice``, and it cannot see
-    ``Carol`` at all when her only artifact is a bare ``time_indexed_Carol.db``
-    file. ``character_memory_exists`` accepts both owners, so the two disagree.
-    """
-    for pattern in _LEGACY_ROOT_ENTRY_PATTERNS:
-        prefix, _, suffix = pattern.partition("{name}")
-        if not entry_name.startswith(prefix) or not entry_name.endswith(suffix):
-            continue
-        end = len(entry_name) - len(suffix) if suffix else len(entry_name)
-        if end <= len(prefix):
-            # A bare prefix names nobody.
-            continue
-        owner = entry_name[len(prefix) : end]
-        # "time_indexed_.db" matches the extension-less pattern too, with the
-        # extension itself as the name. A leading dot or a path separator is
-        # never a character, and this name goes on to build paths.
-        if owner.startswith(".") or "/" in owner or chr(92) in owner:
-            continue
-        return owner
-    return None
-
-
 MESSAGE_NAME_FIELDS = ("speaker", "author", "name", "character")
 
 

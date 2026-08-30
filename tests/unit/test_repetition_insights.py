@@ -798,85 +798,29 @@ async def test_insight_characters_lists_history_without_a_recent_file(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_configured_character_is_not_decoded_as_a_legacy_owner(
-    tmp_path,
-):
-    """A real character can be named like a legacy store, and one is.
+async def test_a_flat_legacy_orphan_is_migrated_then_offered_normally(tmp_path):
+    """The selector decodes nothing; the migration removes the shape instead.
 
-    "semantic_memory_Alice" is a legal character name, and its ordinary
-    per-character directory has exactly the shape a pre-layout vector store
-    has. Decoding it offered a phantom "Alice" that survived the existence
-    filter -- the same directory satisfies it -- and then analysed to
-    nothing, because the history is in memory/semantic_memory_Alice/ while
-    the panel asked for memory/Alice/.
+    A pre-layout install stored memory as ``<kind>_<name>`` at the root. The
+    selector used to decode an owner out of those names, which made the READ
+    path carry a second layout -- and got it wrong: "time_indexed_Carol.db-wal"
+    decoded to a character called "Carol.db-wal", which the existence check then
+    confirmed, so the panel offered it.
 
-    Being a directory cannot tell the two layouts apart; being configured
-    can. The dual below keeps the legacy case working, so the fix cannot
-    pass by refusing to decode anything.
+    The flat layout was retired in 2026-03 together with the startup migration
+    that replaces it. That migration now covers owners absent from
+    characters.json as well, so by the time the selector runs a legacy root file
+    has already become ``memory/<name>/`` and the ordinary directory branch sees
+    it.
     """
     from main_routers import memory_router
     from utils import config_manager
+    import memory as memory_pkg
 
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
-    (memory_dir / "semantic_memory_Alice").mkdir()
-
-    configured = SimpleNamespace(
-        aload_characters=AsyncMock(
-            return_value={"猫娘": {"semantic_memory_Alice": {}}}
-        ),
-        memory_dir=str(memory_dir),
-        project_memory_dir=str(tmp_path / "absent"),
-    )
-    with patch.object(
-        config_manager, "get_config_manager", return_value=configured
-    ):
-        characters = (await memory_router.get_insight_characters())["characters"]
-
-    assert "semantic_memory_Alice" in characters
-    assert "Alice" not in characters, (
-        "a configured character was decoded as a legacy owner, offering a "
-        "phantom name that analyses to nothing"
-    )
-
-    # The dual: with nobody configured under that name, the directory IS a
-    # legacy vector store and its owner still has to be offered.
-    unconfigured = SimpleNamespace(
-        aload_characters=AsyncMock(return_value={"猫娘": {}}),
-        memory_dir=str(memory_dir),
-        project_memory_dir=str(tmp_path / "absent"),
-    )
-    with patch.object(
-        config_manager, "get_config_manager", return_value=unconfigured
-    ):
-        characters = (await memory_router.get_insight_characters())["characters"]
-
-    assert "Alice" in characters, (
-        "the legacy owner stopped being offered -- the fix refused to "
-        "decode anything rather than just the configured case"
-    )
-
-
-@pytest.mark.asyncio
-async def test_insight_characters_decodes_flat_legacy_entries(tmp_path):
-    """A pre-layout install stores memory as ``<kind>_<name>`` at the root.
-
-    Reading each child's literal basename made the selector offer
-    ``semantic_memory_Alice`` and never ``Alice``, and it could not see ``Carol``
-    at all when her only artifact is a bare ``time_indexed_Carol.db`` FILE --
-    while ``character_memory_exists`` accepts both owners, so the analysis route
-    served a name the panel hid. That is the same anti-drift invariant the test
-    above states, in the direction that costs a user access to their own
-    character.
-    """
-    from main_routers import memory_router
-    from utils import config_manager
-    from utils.character_memory import character_memory_exists
-
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir(parents=True)
-    (memory_dir / "semantic_memory_Alice").mkdir()
     (memory_dir / "time_indexed_Carol.db").write_bytes(b"")
+    (memory_dir / "time_indexed_Carol.db-wal").write_bytes(b"")
     (memory_dir / "recent_Bob.json").write_text("[]", encoding="utf-8")
     (memory_dir / "Dave").mkdir()
 
@@ -885,48 +829,104 @@ async def test_insight_characters_decodes_flat_legacy_entries(tmp_path):
         memory_dir=str(memory_dir),
         project_memory_dir=str(tmp_path / "absent"),
     )
+
+    # BEFORE the migration this selector decodes nothing, so the flat
+    # time-indexed database names nobody. "Bob" IS listed, through a
+    # different and older path: the memory browser lists recent files by a
+    # logical "recent_<name>.json" name and reads both layouts, which is
+    # its own UI contract rather than legacy decoding in this route.
     with patch.object(config_manager, "get_config_manager", return_value=config):
-        result = await memory_router.get_insight_characters()
+        before = (await memory_router.get_insight_characters())["characters"]
+    assert "Carol" not in before, before
+    assert before == ["Bob", "Dave"], before
 
-    characters = result["characters"]
-    assert "Alice" in characters, "a Chroma-era owner was hidden behind its storage name"
-    assert "Carol" in characters, "a bare legacy .db file names an owner the panel dropped"
-    assert "Bob" in characters
-    assert "Dave" in characters
-    # The extension-less pattern also matches "time_indexed_Carol.db", so the
-    # longest suffix has to win or the owner decodes as "Carol.db".
-    assert "Carol.db" not in characters
+    # The startup migration, with NO configured names -- the case that used to
+    # leave these files flat forever.
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
 
-    # Same anti-drift invariant as above, now over the legacy shapes. Note
-    # "Carol.db" is deliberately NOT in this set: character_memory_exists
-    # accepts it, because the extension-less pattern formats to the same file,
-    # and by that reading infinitely many strings are "accepted". The selector
-    # offers the OWNER, not every string that happens to decode to an existing
-    # entry; the assertion above pins that choice.
     with patch.object(config_manager, "get_config_manager", return_value=config):
-        for name in ("Alice", "Carol", "Bob", "Dave", "Absent"):
-            assert (name in characters) is character_memory_exists(config, name), name
+        after = (await memory_router.get_insight_characters())["characters"]
+
+    assert "Carol" in after, "the migrated owner is not offered as a directory"
+    assert "Bob" in after
+    assert "Dave" in after
+    # The decoder's old mistakes cannot come back, because nothing decodes.
+    assert "Carol.db" not in after
+    assert "Carol.db-wal" not in after
+    # And nothing flat is left for anything to decode.
+    assert not [
+        entry for entry in memory_dir.iterdir()
+        if entry.name.startswith(("time_indexed_", "recent_"))
+    ]
 
 
-def test_legacy_root_entry_owner_boundaries():
-    """The decoder's own contract, which the panel test cannot reach.
+def test_the_migration_never_moves_a_directory(tmp_path):
+    """A real character can be named like a legacy store, and one is.
 
-    The router only consumes a truthy owner, so an empty decode is invisible
-    there -- but a pattern that matched its own bare prefix would hand every
-    caller an empty character name.
+    "semantic_memory_Alice" is a legal character name and its ordinary
+    per-character directory has exactly the shape a pre-layout vector store has.
+    Nothing on disk can tell the two apart, so the migration moves FILES only --
+    a vector store holds no assistant history either way, so nothing the panel
+    can read is lost by leaving those alone.
     """
-    from utils.character_memory import legacy_root_entry_owner
+    import memory as memory_pkg
 
-    assert legacy_root_entry_owner("semantic_memory_Alice") == "Alice"
-    assert legacy_root_entry_owner("time_indexed_Carol.db") == "Carol"
-    assert legacy_root_entry_owner("time_indexed_Carol") == "Carol"
-    assert legacy_root_entry_owner("recent_Bob.json") == "Bob"
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "semantic_memory_Alice").mkdir()
+    (memory_dir / "semantic_memory_Alice" / "facts.json").write_text(
+        "[1]", encoding="utf-8"
+    )
+
+    for configured in ([], ["semantic_memory_Alice"]):
+        memory_pkg.migrate_to_character_dirs(str(memory_dir), configured)
+        assert (
+            memory_dir / "semantic_memory_Alice" / "facts.json"
+        ).read_text(encoding="utf-8") == "[1]", configured
+        assert not (memory_dir / "Alice").exists(), (
+            "a directory was decoded as a legacy store and moved out from "
+            "under the character that owns it (configured=%r)" % (configured,)
+        )
+
+    # A directory named like a legacy FILE is the sharper case: the
+    # extension-less "time_indexed_{name}" pattern matches
+    # "time_indexed_Ghost", so without the file check discovery invents a
+    # character called Ghost and the move takes the whole directory as if
+    # it were her database.
+    ghost = memory_dir / "time_indexed_Ghost"
+    ghost.mkdir()
+    (ghost / "inner.txt").write_text("x", encoding="utf-8")
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
+    assert (ghost / "inner.txt").exists(), (
+        "a directory shaped like a legacy database was moved away"
+    )
+    assert not (memory_dir / "Ghost").exists(), (
+        "the migration invented a character out of a directory name"
+    )
+
+
+def test_the_migration_decoder_boundaries():
+    """The decoder's own contract, now a migration-private helper.
+
+    It decides which owners get a directory created for them, so a pattern that
+    matched its own bare prefix -- or a SQLite sidecar -- would materialise a
+    character out of nothing.
+    """
+    from memory import _legacy_root_entry_owner as owner
+
+    assert owner("time_indexed_Carol.db") == "Carol"
+    assert owner("time_indexed_Carol") == "Carol"
+    assert owner("recent_Bob.json") == "Bob"
     # A bare prefix names nobody.
-    assert legacy_root_entry_owner("semantic_memory_") is None
-    assert legacy_root_entry_owner("time_indexed_.db") is None
+    assert owner("semantic_memory_") is None
+    assert owner("time_indexed_.db") is None
     # Not a legacy shape at all.
-    assert legacy_root_entry_owner("Dave") is None
-    assert legacy_root_entry_owner("recent.json") is None
+    assert owner("Dave") is None
+    assert owner("recent.json") is None
+    # The extension-less pattern matches these, which is exactly why discovery
+    # skips them rather than trusting the decoder alone.
+    assert owner("time_indexed_Carol.db-wal") == "Carol.db-wal"
+    assert owner("time_indexed_Carol.db-shm") == "Carol.db-shm"
 
 
 def _association_pair(phrase, effect_phrase, association_type, **counts):
