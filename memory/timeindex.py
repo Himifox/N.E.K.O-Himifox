@@ -251,9 +251,18 @@ def _assistant_record_from_stored_message(
             continue
         text_value = block.get("text")
         if isinstance(text_value, str) and text_value.strip():
-            text_parts.append(text_value.strip())
-    joined = "\n".join(text_parts).strip()
-    if not joined:
+            # RAW, not stripped. The recorded length counts characters of
+            # the text as it was written -- ``len(full_text)`` before the
+            # note was appended (main_logic/core/proactive.py) -- so
+            # shortening the body first slides the boundary along by
+            # however much came off the front. Measured on a reply opening
+            # with two newlines: the slice reached two characters into the
+            # history-only note, which is exactly the text this rule exists
+            # to keep out. Whitespace-only blocks are still dropped; only
+            # the kept text is left intact.
+            text_parts.append(text_value)
+    joined = "\n".join(text_parts)
+    if not joined.strip():
         return None
     # The same visible-text boundary has to apply here. Block-list content is
     # not an edge case: cross_server persists every assistant turn as

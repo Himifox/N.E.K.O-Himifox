@@ -1585,3 +1585,56 @@ def test_a_database_without_the_history_table_reports_no_source(
     )
     assert populated.source_available is True
     assert populated.messages == ["hello there"]
+
+
+def test_the_visible_boundary_counts_raw_characters_in_a_block_list(
+    timeindex_module,
+):
+    """The recorded length counts the text as it was WRITTEN.
+
+    ``main_logic/core/proactive.py`` stores ``len(full_text)`` and then appends
+    the history-only note to that same string, so the boundary indexes the raw
+    concatenation. Stripping each block first shortened the body, which slid the
+    boundary along by however much came off the front -- and what it slid into
+    is the note the rule exists to keep out.
+
+    The string branch is the oracle here: both shapes carry the same text and
+    the same recorded length, so they have to produce the same answer.
+    """
+    import json
+
+    def record(content, visible=None):
+        kwargs = {}
+        if visible is not None:
+            kwargs["anti_repeat_visible_text_length"] = str(visible)
+        return json.dumps(
+            {"type": "ai", "data": {"content": content, "additional_kwargs": kwargs}}
+        )
+
+    def read(raw):
+        got = timeindex_module._assistant_record_from_stored_message(raw)
+        return got[0] if got else None
+
+    visible = chr(10) + chr(10) + "好呀好呀"
+    hidden = chr(10) + "[hidden note]"
+    body = visible + hidden
+
+    from_blocks = read(record([{"type": "text", "text": body}], len(visible)))
+    from_string = read(record(body, len(visible)))
+
+    assert from_blocks == "好呀好呀", from_blocks
+    assert from_blocks == from_string, (
+        "the two content shapes disagree, which is the drift this boundary was "
+        "shared to prevent"
+    )
+
+    # The duals, so this cannot pass by never slicing. Without leading
+    # whitespace nothing moved before or after; with no recorded length the
+    # body is still trimmed; and a whitespace-only block is still dropped.
+    plain = "好呀好呀"
+    assert read(record([{"type": "text", "text": plain + hidden}], len(plain))) == plain
+    assert read(record([{"type": "text", "text": "  好呀好呀  "}])) == "好呀好呀"
+    assert (
+        read(record([{"type": "text", "text": "   "}, {"type": "text", "text": "好呀好呀"}]))
+        == "好呀好呀"
+    )
