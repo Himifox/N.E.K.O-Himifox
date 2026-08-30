@@ -28,6 +28,19 @@ from pathlib import Path
 from config import CONFIG_FILES, DEFAULT_CONFIG_DATA
 
 
+def _copy_if_absent(source, destination):
+    """copy2, unless the destination already exists.
+
+    ``copytree(dirs_exist_ok=True)`` overwrites by default, which is the one
+    thing this migration must never do -- the runtime copy is the live one.
+    """
+    import os
+
+    if os.path.exists(destination):
+        return destination
+    return shutil.copy2(source, destination)
+
+
 class MigrationsMixin:
     """One-shot startup migrations into the runtime root."""
 
@@ -190,17 +203,32 @@ class MigrationsMixin:
         try:
             for item in self.project_memory_dir.iterdir():
                 dest_path = self.memory_dir / item.name
-                
-                # 如果目标已存在，跳过
-                if dest_path.exists():
-                    continue
-                
-                # 复制文件或目录
+
                 if item.is_file():
+                    # A file that is already there is the runtime's own and
+                    # is never overwritten.
+                    if dest_path.exists():
+                        continue
                     shutil.copy2(item, dest_path)
                     print(f"Migrated memory file: {item.name}")
                 elif item.is_dir():
-                    shutil.copytree(item, dest_path)
+                    # MERGE rather than skip. Skipping the whole directory
+                    # meant one file already present -- a recent.json from a
+                    # first launch, say -- blocked everything beside it,
+                    # including the time-indexed database every reader wants.
+                    # The name was then enumerable from the project root and
+                    # analysable from neither.
+                    #
+                    # dirs_exist_ok with a copy function that declines an
+                    # existing destination keeps the never-overwrite rule the
+                    # skip was there to enforce: the runtime copy always wins,
+                    # file by file instead of directory by directory.
+                    shutil.copytree(
+                        item,
+                        dest_path,
+                        dirs_exist_ok=True,
+                        copy_function=_copy_if_absent,
+                    )
                     print(f"Migrated memory directory: {item.name}")
         except Exception as e:
             print(f"Warning: Failed to migrate memory files: {e}", file=sys.stderr)

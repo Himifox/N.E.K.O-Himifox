@@ -3428,3 +3428,32 @@ def test_paired_raw_and_verbatim_blocks_protect_their_bodies():
             catchphrase,
         ), name
     assert _protects("{% set token = '" + secret + "' %}", secret)
+
+
+def test_a_template_element_body_is_inert_and_protected():
+    """``<template>`` contents are inert by definition.
+
+    The parser does not render them and nothing in a reply is speaking them, so
+    the body between the two tags is exactly what must not be mined. The generic
+    ``<...>`` pattern covered only the TAGS, which is worse than not handling it
+    because it looks handled.
+    """
+    secret = "secret helper phrase"
+
+    assert _protects("<template>" + secret + "</template>", secret)
+    # It NESTS -- a template may contain another -- so it keeps the depth
+    # counter rather than joining the non-nesting raw-text set.
+    assert _protects(
+        "<template><template>" + secret + "</template></template>", secret
+    )
+
+    # The duals: a CLOSED template releases the text after it, and the word
+    # "template" in prose is not a tag. The pattern requires the literal tag
+    # plus a word boundary, which is what makes the second one hold.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "<template>x</template> " + catchphrase + " " + catchphrase, catchphrase
+    )
+    assert not _protects(
+        "I used a template today. " + catchphrase + " " + catchphrase, catchphrase
+    )

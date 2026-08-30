@@ -1586,3 +1586,61 @@ def test_a_partial_sidecar_move_is_rolled_back(tmp_path, monkeypatch):
     memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
     for name in ("time_indexed.db", "time_indexed.db-wal", "time_indexed.db-shm"):
         assert (memory_dir / "Carol" / name).exists(), name
+
+
+def test_project_memory_merges_into_an_existing_runtime_directory(tmp_path):
+    """Skipping the whole directory let one file block everything beside it.
+
+    A runtime directory holding just a recent.json -- what a first launch
+    leaves -- blocked the copy entirely, including the time-indexed database
+    every reader wants. The name was then enumerable from the project root and
+    analysable from neither.
+
+    The never-overwrite rule the skip enforced still holds, file by file
+    instead of directory by directory: the runtime copy always wins.
+    """
+    import utils.config_manager.migrations as migrations
+
+    base = None
+    for name in dir(migrations):
+        candidate = getattr(migrations, name)
+        if isinstance(candidate, type) and hasattr(candidate, "migrate_memory_files"):
+            base = candidate
+            break
+    assert base is not None, "the migration mixin moved"
+
+    runtime = tmp_path / "runtime" / "memory"
+    project = tmp_path / "project" / "memory" / "store"
+    (runtime / "Bob").mkdir(parents=True)
+    (runtime / "Bob" / "recent.json").write_text("RUNTIME", encoding="utf-8")
+    (project / "Bob").mkdir(parents=True)
+    (project / "Bob" / "time_indexed.db").write_text("PROJECT DB", encoding="utf-8")
+    (project / "Bob" / "recent.json").write_text("PROJECT", encoding="utf-8")
+    (project / "Carol").mkdir()
+    (project / "Carol" / "time_indexed.db").write_text("CAROL", encoding="utf-8")
+
+    class _Manager(base):
+        def __init__(self):
+            self.memory_dir = runtime
+            self.project_memory_dir = project
+
+        def ensure_memory_directory(self):
+            runtime.mkdir(parents=True, exist_ok=True)
+            return True
+
+        def _log(self, *_args, **_kwargs):
+            return None
+
+    _Manager().migrate_memory_files()
+
+    assert (runtime / "Bob" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "PROJECT DB", "the gap in an existing directory was not filled"
+    assert (runtime / "Bob" / "recent.json").read_text(
+        encoding="utf-8"
+    ) == "RUNTIME", "the runtime copy was overwritten, which this must never do"
+    # A wholly new character still arrives, which is what the migration was
+    # always for.
+    assert (runtime / "Carol" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "CAROL"

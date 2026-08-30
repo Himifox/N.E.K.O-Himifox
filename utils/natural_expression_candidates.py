@@ -1008,7 +1008,13 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
 # form and for an unclosed fence. The pattern requires the literal ``<code`` /
 # ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
 # containing comparisons or words like "decode" is unaffected.
-_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea")
+# ``<template>`` belongs here too: its contents are INERT by definition -- the
+# parser does not render them and nothing in a reply is speaking them -- so a
+# body between the two tags is exactly what must not be mined. The generic
+# ``<...>`` pattern covered only the tags, which is worse than not handling it
+# because it looks handled. It NESTS (a template may contain another), so it
+# keeps the depth counter rather than joining the non-nesting set below.
+_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea", "template")
 # HTML RAW-TEXT elements: their content is text by definition, so a
 # start-tag-shaped string inside the body is a STRING, not a nested
 # element, and the first matching close tag ends them. Depth-counting them
@@ -1018,7 +1024,7 @@ _HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea")
 # nest, so they keep the counter.
 _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
-    r"<(pre|code|script|style|textarea)\b[^>]*>",
+    r"<(pre|code|script|style|textarea|template)\b[^>]*>",
     re.IGNORECASE,
 )
 
