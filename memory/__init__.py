@@ -225,7 +225,18 @@ def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
     for entry in entries:
         if entry.endswith(_SQLITE_SIDECAR_SUFFIXES):
             continue
-        if not os.path.isfile(os.path.join(memory_dir, entry)):
+        entry_path = os.path.join(memory_dir, entry)
+        # A LINK is never migrated. shutil.move recreates it at the
+        # destination, so memory/<name>/time_indexed.db becomes a link out
+        # of the memory root and every reader follows it from then on --
+        # the link is inside the character namespace at that point, which
+        # is worse than leaving it flat where nothing reads it.
+        if os.path.islink(entry_path):
+            _logger.warning(
+                "[Memory] 跳过符号链接的旧文件: %s", entry,
+            )
+            continue
+        if not os.path.isfile(entry_path):
             continue
         owner = _legacy_root_entry_owner(entry)
         if owner is not None and not _decoded_owner_is_safe(owner):

@@ -1044,7 +1044,12 @@ _HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea", "template")
 # nest, so they keep the counter.
 _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
-    r"<(pre|code|script|style|textarea|template)\b[^>]*>",
+    # The attribute run skips QUOTED values, the same rule the generic tag
+    # alternative already follows. Without it '<code data-x="> </code>">'
+    # ended its opener at the quoted ">", and the close-tag-shaped string
+    # inside the attribute then closed the container before its body -- so
+    # the real body was mined. Line-bounded, like everything here.
+    r"<(pre|code|script|style|textarea|template)\b(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*>",
     re.IGNORECASE,
 )
 
@@ -1296,7 +1301,11 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # a human-readable string actually lives -- so it is the half of a
     # definition most likely to read as speech and be mined. CommonMark
     # allows all three delimiters.
-    r"(?P<title>[ \t]+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^)\r\n]*\)))?",
+    # A title may ESCAPE its own delimiter, exactly as the interpolation
+    # bodies do -- CommonMark says so. Without it the run ended at the
+    # backslash-quote and the rest of the title stayed minable, which is
+    # the half of a definition most likely to read as speech.
+    r"(?P<title>[ \t]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^)\\\r\n])*\)))?",
     re.MULTILINE,
 )
 

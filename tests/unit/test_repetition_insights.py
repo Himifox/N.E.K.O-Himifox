@@ -1650,3 +1650,37 @@ async def test_the_recent_file_listing_does_not_readmit_symlinks(tmp_path):
     assert "Phantom" not in characters, "a linked recent file named a character"
     assert "Real" in characters
     assert "Legacy" in characters
+
+
+def test_a_symlinked_legacy_file_is_never_migrated(tmp_path):
+    """Moving a link puts it INSIDE the character namespace.
+
+    ``shutil.move`` recreates the link at the destination, so
+    ``memory/<name>/time_indexed.db`` becomes a link out of the memory root and
+    every reader follows it from then on. Left flat it is read by nothing, so
+    migrating it is strictly worse than not.
+    """
+    import os
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    outside = tmp_path / "outside.db"
+    outside.write_text("EXTERNAL", encoding="utf-8")
+    try:
+        os.symlink(str(outside), str(memory_dir / "time_indexed_Carol.db"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    (memory_dir / "time_indexed_Real.db").write_text("REAL", encoding="utf-8")
+
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), [])
+
+    assert (memory_dir / "time_indexed_Carol.db").is_symlink(), (
+        "the link was migrated into the character namespace"
+    )
+    assert not (memory_dir / "Carol").exists()
+    # The dual: a real legacy file still migrates, so this is not "refuse all".
+    assert (memory_dir / "Real" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "REAL"

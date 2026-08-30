@@ -3570,3 +3570,53 @@ def test_the_block_precheck_needs_a_real_closing_tag():
         opener = "{%" + modifier + " comment " + modifier + "%}"
         closer = "{%" + modifier + " endcomment " + modifier + "%}"
         assert _protects(opener * 10 + " " + secret + " " + closer, secret), modifier
+
+
+def test_a_raw_text_opener_skips_quoted_attribute_values():
+    """A close-tag-shaped string inside an attribute is a STRING.
+
+    The opener ended at the quoted ">", so the "</code>" written inside the
+    attribute closed the container before its body ever started -- and the real
+    body was mined. Same rule the generic tag alternative already followed.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+
+    assert _protects(
+        "<code data-x=" + quote + "> </code>" + quote + ">" + secret + "</code>",
+        secret,
+    ), "a quoted close tag ended the container early"
+
+    # The duals: an ordinary container still works, and a CLOSED one still
+    # releases the text after it -- the quoted run is line-bounded, so this
+    # cannot have become "protect everything after a <code>".
+    assert _protects("<code>" + secret + "</code>", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "<code>x</code> " + catchphrase + " " + catchphrase, catchphrase
+    )
+
+
+def test_a_reference_title_may_escape_its_own_delimiter():
+    """CommonMark allows it, and the title is the readable half of a definition."""
+    secret = "secret helper phrase"
+    quote = chr(34)
+    slash = chr(92)
+    tail = chr(10) + chr(10) + "ok"
+
+    assert _protects(
+        "[cfg]: /api/key " + quote + "a" + slash + quote + " " + secret + quote + tail,
+        secret,
+    )
+    assert _protects(
+        "[cfg]: /api/key (a" + slash + ") " + secret + ")" + tail, secret
+    )
+
+    # The duals: a plain title still resolves, and speech after a definition
+    # with no title is still minable.
+    assert _protects("[cfg]: /api/key " + quote + secret + quote + tail, secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "[cfg]: /api/x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
