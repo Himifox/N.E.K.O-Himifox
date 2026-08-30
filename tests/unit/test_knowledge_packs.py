@@ -245,7 +245,6 @@ def test_registry_rejects_invalid_declared_material_type(
     assert status["pack_registry_state"] == "invalid"
     assert status["entries"] == 1
     assert status["knowledge_entries"] == status["corpus_entries"] == 0
-    assert service.match_turn("Community Tarot") == []
     assert service.build_conversation_context("Community Tarot").hit_count == 0
     assert KnowledgeStore(database_path).count_by_source_tag(
         "source:community.community-tarot"

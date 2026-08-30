@@ -43,78 +43,6 @@ KNOWLEDGE_MATCH_POLICY = MatchPolicy(
 )
 
 
-@dataclass(slots=True)
-class _TrieNode:
-    children: dict[str, int] = field(default_factory=dict)
-    entries: list[tuple[object, int]] = field(default_factory=list)
-
-
-class KnowledgeMentionMatcher:
-    """Rebuildable multi-phrase matcher for complete conversational messages.
-
-    This is deliberately a database-derived dictionary, not a list of hand-written
-    sentence patterns.  Titles and verified aliases are scanned in one pass, so a
-    user never needs to quote a meme for local turn context to find it.
-    """
-
-    def __init__(
-        self,
-        entries: Iterable[object],
-        *,
-        policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
-    ) -> None:
-        self._policy = policy
-        self._nodes = [_TrieNode()]
-        self._entry_terms: dict[str, int] = {}
-        for entry in entries:
-            for term_kind, value in enumerate((entry.title, *entry.aliases)):
-                phrase = normalize_search_text(value)
-                minimum_length = (
-                    policy.title_min_length if term_kind == 0 else policy.alias_min_length
-                )
-                if len(phrase) >= minimum_length:
-                    self._insert(phrase, entry)
-            for value in entry.recognition_terms:
-                phrase = normalize_search_text(value)
-                if len(phrase) < policy.recognition_min_length:
-                    continue
-                self._insert(phrase, entry)
-
-    def _insert(self, phrase: str, entry: object) -> None:
-        node_index = 0
-        for character in phrase:
-            node = self._nodes[node_index]
-            node_index = node.children.setdefault(character, len(self._nodes))
-            if node_index == len(self._nodes):
-                self._nodes.append(_TrieNode())
-        terminal = self._nodes[node_index].entries
-        if not any(existing.content_hash == entry.content_hash for existing, _ in terminal):
-            terminal.append((entry, len(phrase)))
-
-    def find(self, text: str, *, limit: int) -> list[KnowledgeHit]:
-        if limit <= 0:
-            return []
-        best_by_id: dict[str, tuple[object, int]] = {}
-        for start_index in range(len(text)):
-            node_index = 0
-            for character in text[start_index:]:
-                next_index = self._nodes[node_index].children.get(character)
-                if next_index is None:
-                    break
-                node_index = next_index
-                for entry, length in self._nodes[node_index].entries:
-                    entry_key = entry.content_hash
-                    previous = best_by_id.get(entry_key)
-                    if previous is None or length > previous[1]:
-                        best_by_id[entry_key] = (entry, length)
-        hits = [
-            KnowledgeHit(entry=entry, score=float(length))
-            for entry, length in best_by_id.values()
-        ]
-        hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
-        return hits[:limit]
-
-
 class KnowledgeRetriever:
     """Retrieve compact, source-attributed candidates without prompt injection."""
 
@@ -203,41 +131,6 @@ class KnowledgeRetriever:
 
         return _rank_rows(rows_by_id.values(), query, query_text, disabled)[:limit]
 
-    def find_mentions(
-        self,
-        user_text: str,
-        *,
-        limit: int = 1,
-        policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
-    ) -> list[KnowledgeHit]:
-        """Find known phrases anywhere in a normal conversational sentence."""
-        normalized_text = normalize_search_text(user_text)
-        if len(normalized_text) < 2 or limit <= 0:
-            return []
-        matcher = _get_cached_mention_matcher(self.store, policy)
-        results = matcher.find(normalized_text, limit=max(limit * 2, limit))
-        best_by_id: dict[str, KnowledgeHit] = {}
-        for hit in results:
-            entry_key = hit.entry.content_hash
-            previous = best_by_id.get(entry_key)
-            if previous is None or hit.score > previous.score:
-                best_by_id[entry_key] = hit
-        return sorted(best_by_id.values(), key=lambda hit: (-hit.score, hit.entry.title))[:limit]
-
-    def match_turn(
-        self,
-        user_text: str,
-        *,
-        policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
-        limit: int = 1,
-    ) -> tuple[str, list[KnowledgeHit]]:
-        """Return explicit title, alias, or recognition-term matches."""
-        strong = self.find_mentions(user_text, limit=limit, policy=policy)
-        if strong:
-            return "strong", strong
-        return "none", []
-
-
 def _deadline_expired(deadline_monotonic: float | None) -> bool:
     return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
 
@@ -267,53 +160,6 @@ def _rank_rows(
         hits.append(KnowledgeHit(entry=entry, score=score))
     hits.sort(key=lambda hit: (-hit.score, hit.entry.title))
     return hits
-
-
-@dataclass(slots=True)
-class _CachedMentionMatcher:
-    revision: int
-    disabled: frozenset[tuple[str, str]]
-    matcher: KnowledgeMentionMatcher
-
-
-_MENTION_MATCHER_CACHE: dict[tuple[str, MatchPolicy], _CachedMentionMatcher] = {}
-
-
-def _get_cached_mention_matcher(
-    store: KnowledgeStore,
-    policy: MatchPolicy = KNOWLEDGE_MATCH_POLICY,
-) -> KnowledgeMentionMatcher:
-    """Refresh the per-database matcher only after a committed upsert batch."""
-    cache_key = (str(store.database_path.resolve()), policy)
-    revision = store.entries_revision()
-    try:
-        disabled = load_disabled_entries(get_catalog_override_path(store.database_path))
-    except CatalogOverrideError:
-        # Never reuse a matcher built from an override state that is no longer
-        # trustworthy. Do not cache this empty matcher so a repaired file takes
-        # effect on the next request.
-        return KnowledgeMentionMatcher((), policy=policy)
-    cached = _MENTION_MATCHER_CACHE.get(cache_key)
-    if cached is None or cached.revision != revision or cached.disabled != disabled:
-        cached = _CachedMentionMatcher(
-            revision=revision,
-            disabled=disabled,
-            matcher=KnowledgeMentionMatcher(
-                (
-                    entry
-                    for entry in store.list_active_entries()
-                    if entry_key(entry) not in disabled
-                    and (
-                        policy.allowed_source_tags is None
-                        or entry.source_tag in policy.allowed_source_tags
-                    )
-                    and not any(tag in entry.tags for tag in policy.excluded_entry_tags)
-                ),
-                policy=policy,
-            ),
-        )
-        _MENTION_MATCHER_CACHE[cache_key] = cached
-    return cached.matcher
 
 
 def _score(

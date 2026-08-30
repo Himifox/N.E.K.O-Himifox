@@ -1097,26 +1097,6 @@ class KnowledgeService:
             randrange=random.randrange,
         )
 
-    def match_turn(
-        self,
-        user_text: str,
-        *,
-        limit: int = 1,
-    ) -> list[KnowledgeTurnMatch]:
-        policy = self._effective_match_policy()
-        mode, hits = self._retriever().match_turn(
-            user_text,
-            policy=policy,
-            limit=limit,
-        )
-        return [
-            KnowledgeTurnMatch(
-                hit=hit,
-                match_mode=mode,
-            )
-            for hit in hits
-        ]
-
     def build_turn_context(
         self,
         user_text: str,

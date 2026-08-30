@@ -6,7 +6,6 @@ from pathlib import Path
 
 from .models import KnowledgeEntry, KnowledgeHit, UpsertResult
 from .retrieval import (
-    KnowledgeMentionMatcher,
     KnowledgeRetriever,
     MatchPolicy,
 )
@@ -50,7 +49,6 @@ def open_knowledge(knowledge_root: str | Path) -> KnowledgeService:
 __all__ = [
     "KnowledgeEntry",
     "KnowledgeHit",
-    "KnowledgeMentionMatcher",
     "KnowledgePack",
     "KnowledgePackSource",
     "KnowledgeRetriever",
