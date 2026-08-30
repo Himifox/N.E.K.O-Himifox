@@ -3824,3 +3824,94 @@ def test_the_two_uncapped_families_are_gated_separately():
         "unpaired comment openers beside a stray '#}' took %.2fs -- the two "
         "uncapped families are sharing a gate again" % elapsed
     )
+
+
+def test_a_quoted_attribute_value_may_span_lines():
+    """A quoted value may cross a line AND contain ">".
+
+    The quote-aware branch failed at the newline, so the loose fallback took
+    the quoted ">" for the tag end and the attribute's own "</code>" closed
+    the container before its body -- leaving the body mined.
+
+    The runs are atomic, which is what lets them cross a line safely: once a
+    run has reached its closing quote it cannot give characters back, so the
+    closing quote of one tag can never re-pair with the opening quote of the
+    next. That chaining is what made this scan quadratic before.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+    nl = chr(10)
+
+    assert _protects(
+        "<code data-x="
+        + quote
+        + "line"
+        + nl
+        + "> </code>"
+        + quote
+        + ">"
+        + secret
+        + "</code>",
+        secret,
+    ), "a quoted value spanning a line ended the opener early"
+
+    # The duals: the single-line form still resolves, and speech after a
+    # closed element is still minable.
+    assert _protects(
+        "<code data-x=" + quote + "> </code>" + quote + ">" + secret + "</code>",
+        secret,
+    )
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "<code>y</code> " + catchphrase + " " + catchphrase, catchphrase
+    )
+
+
+def test_a_reference_title_may_continue_across_lines():
+    """CommonMark allows it, and both halves are link metadata.
+
+    Rejecting the line ending protected the destination alone and emitted
+    the two halves of the title as separate candidates.
+
+    It ends at a BLANK line, because past that it is a paragraph -- and
+    protecting a paragraph is how a span swallows ordinary speech, which for
+    this module is the direction that deletes the catchphrases the feature
+    exists to surface.
+    """
+    quote = chr(34)
+    nl = chr(10)
+    first = "secret helper"
+    second = "phrase inside title"
+    text = (
+        "[cfg]: /api/key "
+        + quote
+        + first
+        + nl
+        + second
+        + quote
+        + nl
+        + nl
+        + "ok"
+    )
+
+    assert _protects(text, first), "the first line of the title was minable"
+    assert _protects(text, second), "the second line of the title was minable"
+
+    # The duals, both directions of the blank-line boundary.
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "[cfg]: /api/key" + nl + nl + catchphrase + " " + catchphrase + nl + nl + "ok",
+        catchphrase,
+    )
+    assert not _protects(
+        "[cfg]: /api/key "
+        + quote
+        + "a"
+        + quote
+        + nl
+        + nl
+        + catchphrase
+        + " "
+        + catchphrase,
+        catchphrase,
+    )

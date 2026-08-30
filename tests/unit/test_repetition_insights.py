@@ -2111,3 +2111,52 @@ async def test_a_symlinked_default_database_is_refused(tmp_path):
         "a linked default database was analysed"
     )
     assert client.post.await_count == 0, "the analysis ran before the refusal"
+
+
+@pytest.mark.unit
+def test_a_symlinked_effect_sidecar_is_never_read(tmp_path):
+    """The write path has enforced containment since it was written.
+
+    The read path asked nothing and simply joined the components, so a real
+    memory/<name>/ holding "anti_repeat_effects.json" as a LINK was followed
+    by open() -- and a link to another character's sidecar has the panel
+    render and associate one identity's private repeated phrases under
+    another's name.
+    """
+    import json as json_module
+    import os
+
+    from memory import anti_repeat_effects
+
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "Carol").mkdir(parents=True)
+    (memory_dir / "Dave").mkdir(parents=True)
+    private = {
+        "version": 1,
+        "phrases": {"dave only": {"count": 3}},
+    }
+    (memory_dir / "Dave" / "anti_repeat_effects.json").write_text(
+        json_module.dumps(private), encoding="utf-8"
+    )
+    try:
+        os.symlink(
+            str(memory_dir / "Dave" / "anti_repeat_effects.json"),
+            str(memory_dir / "Carol" / "anti_repeat_effects.json"),
+        )
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    with patch.object(
+        anti_repeat_effects,
+        "get_config_manager",
+        lambda: SimpleNamespace(memory_dir=str(memory_dir)),
+    ):
+        store = anti_repeat_effects.AntiRepeatEffectStore()
+
+    assert store._existing_file_path("Carol") is None, (
+        "a linked sidecar was offered to the reader"
+    )
+    # The dual: the character that really owns the file still reads it.
+    assert store._existing_file_path("Dave") == os.path.join(
+        str(memory_dir), "Dave", "anti_repeat_effects.json"
+    )

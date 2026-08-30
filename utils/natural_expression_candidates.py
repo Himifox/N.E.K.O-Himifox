@@ -1135,8 +1135,20 @@ _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
 # one tag with the opening quote of the NEXT, which is the chaining that
 # made this quadratic before. The bare runs cannot chain because they
 # still stop at "<", so every run is bounded by the next tag either way.
+# The quoted runs are ATOMIC, which is what lets them cross line breaks.
+# A quoted attribute value may legitimately span lines and hold ">", and
+# refusing the newline made the quote-aware branch fail -- the loose
+# fallback then took the quoted ">" for the tag end, and the attribute's
+# own "</code>" closed the container before its body.
+#
+# Atomic is not cosmetic here. Once a run has matched to the next quote
+# it cannot give characters back, so the closing quote of one tag can
+# never re-pair with the opening quote of the NEXT -- the chaining that
+# made this scan quadratic, and the reason the runs were line-bounded
+# before. The bare branch still excludes both quotes, so a quote starts
+# exactly one thing.
 _HTML_ATTRIBUTE_RUN = (
-    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\"'])*|[^<>]*"
+    r"(?:(?>\"[^\"]*\")|(?>'[^']*')|[^<>\"'])*|[^<>]*"
 )
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
     rf"<(pre|code|script|style|textarea|template)\b(?:{_HTML_ATTRIBUTE_RUN})>",
@@ -1401,7 +1413,17 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # destination alone, with the readable half minable one line down.
     # Exactly ONE line ending: after a blank line it is a paragraph, not
     # a title, and protecting that would run over ordinary speech.
-    r"(?P<title>(?:[ \t]+|[ \t]*(?:\r\n|\n|\r)[ \t]*)(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^)\\\r\n])*\)))?",
+    # A title may CONTINUE across lines -- CommonMark allows it, and
+    # rejecting the line ending protected the destination alone while
+    # leaving the rest of the title minable one line down. It ends at a
+    # BLANK line, because past that it is a paragraph and protecting a
+    # paragraph is how a span swallows ordinary speech.
+    #
+    # ATOMIC bodies, for the reason the attribute runs are atomic: once a
+    # body has run to its closer it cannot give characters back, so the
+    # closing delimiter of one title cannot re-pair with the opening one
+    # of the next definition and turn the scan quadratic.
+    r"(?P<title>(?:[ \t]+|[ \t]*(?:\r\n|\n|\r)[ \t]*)(?:\"(?>(?:\\.|(?!\r?\n[ \t]*\r?\n)[^\"\\])*)\"|'(?>(?:\\.|(?!\r?\n[ \t]*\r?\n)[^'\\])*)'|\((?>(?:\\.|(?!\r?\n[ \t]*\r?\n)[^)\\])*)\)))?",
     re.MULTILINE,
 )
 

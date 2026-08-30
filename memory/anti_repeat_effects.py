@@ -768,12 +768,40 @@ class AntiRepeatEffectStore:
         self._evict_generation: dict[str, int] = {}
         self._detached_flushes: set[asyncio.Task] = set()
 
-    def _existing_file_path(self, name: str) -> str:
-        return os.path.join(
-            str(self._config_manager.memory_dir),
-            name,
-            _SIDECAR_FILENAME,
-        )
+    def _existing_file_path(self, name: str) -> str | None:
+        """The sidecar to READ, or ``None`` when it is not ours to read.
+
+        ``_write_file_path`` has asked ``_is_within_memory_root`` since it
+        was written; this side asked nothing and simply joined the path.
+        So a historically unsafe name resolved outside its own directory
+        on the way IN as readily as on the way out.
+
+        And the FILE, not only its directory. A real ``memory/<name>/``
+        holding ``anti_repeat_effects.json`` as a link passes the
+        directory check, and ``open`` follows it -- so a link to another
+        character's sidecar has the panel render and associate one
+        identity's private repeated phrases under another's name.
+        Resolved rather than islink-tested, which catches an intermediate
+        link too.
+        """
+        from memory import _is_within_memory_root
+
+        memory_dir = str(self._config_manager.memory_dir)
+        character_dir = os.path.join(memory_dir, name)
+        if not _is_within_memory_root(memory_dir, name, character_dir):
+            return None
+        path = os.path.join(character_dir, _SIDECAR_FILENAME)
+        try:
+            resolved_parent = os.path.realpath(os.path.dirname(path))
+            resolved_dir = os.path.realpath(character_dir)
+        except OSError:
+            # Cannot resolve it, so cannot vouch for it.
+            return None
+        if os.path.normcase(resolved_parent) != os.path.normcase(resolved_dir):
+            return None
+        if os.path.islink(path):
+            return None
+        return path
 
     def _write_file_path(self, name: str) -> str | None:
         """Resolve the write target, or ``None`` for a retired identity.
@@ -917,6 +945,12 @@ class AntiRepeatEffectStore:
 
     def _read_payload_from_disk(self, name: str, now: float) -> dict[str, Any]:
         path = self._existing_file_path(name)
+        if path is None:
+            # Refused, not absent -- but the caller wants a payload
+            # either way, and an empty one is the same answer a first
+            # run gets. Nothing outside the character directory is
+            # allowed to become this identity's history.
+            return _default_payload(now)
         try:
             with open(path, encoding="utf-8") as handle:
                 raw = json.load(handle)
