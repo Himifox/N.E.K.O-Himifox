@@ -1684,3 +1684,44 @@ def test_a_symlinked_legacy_file_is_never_migrated(tmp_path):
     assert (memory_dir / "Real" / "time_indexed.db").read_text(
         encoding="utf-8"
     ) == "REAL"
+
+
+@pytest.mark.unit
+def test_a_symlinked_legacy_file_is_not_migrated_for_a_configured_name(tmp_path):
+    """Every name in ``names`` bypasses owner discovery.
+
+    The link check was added to ``_legacy_root_file_owners``, which only ever
+    sees names the root DISCOVERS. A character listed in characters.json goes
+    straight into the migration loop, so a linked ``time_indexed_Carol.db``
+    still satisfied ``exists()`` and was recreated as
+    ``memory/Carol/time_indexed.db`` -- inside the namespace, where the
+    read-only time-indexed reader follows it and the insights panel can render
+    and export rows from an arbitrary external database.
+    """
+    import os
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    outside = tmp_path / "outside.db"
+    outside.write_text("EXTERNAL", encoding="utf-8")
+    try:
+        os.symlink(str(outside), str(memory_dir / "time_indexed_Carol.db"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    (memory_dir / "time_indexed_Real.db").write_text("REAL", encoding="utf-8")
+
+    # CONFIGURED, unlike the discovery case: the name is handed in.
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), ["Carol", "Real"])
+
+    assert not (memory_dir / "Carol" / "time_indexed.db").exists(), (
+        "a configured character's link was migrated into the namespace"
+    )
+    assert (memory_dir / "time_indexed_Carol.db").is_symlink(), (
+        "the link was moved rather than left where nothing reads it"
+    )
+    # The dual: a real legacy file for a configured name still migrates.
+    assert (memory_dir / "Real" / "time_indexed.db").read_text(
+        encoding="utf-8"
+    ) == "REAL"

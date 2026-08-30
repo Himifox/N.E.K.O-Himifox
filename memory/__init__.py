@@ -269,6 +269,18 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
             new_path = os.path.join(char_dir, new_filename)
             if not os.path.exists(old_path) or os.path.exists(new_path):
                 continue
+            # Here too, not only during owner DISCOVERY. Every name in
+            # ``names`` bypasses _legacy_root_file_owners, so the link
+            # check added there did nothing for a configured character:
+            # a linked time_indexed_Carol.db still satisfied exists()
+            # and shutil.move recreated it as memory/Carol/time_indexed.db,
+            # inside the namespace, where every reader follows it.
+            if os.path.islink(old_path):
+                _logger.warning(
+                    "[Memory] 跳过符号链接的旧文件: %s",
+                    old_filename,
+                )
+                continue
             # Sidecars FIRST, the database LAST. An uncheckpointed WAL holds
             # committed rows, so moving the database without it loses them,
             # and left in the root it is unreadable anyway -- SQLite looks

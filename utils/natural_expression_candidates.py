@@ -1043,13 +1043,41 @@ _HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea", "template")
 # reply after it. `pre` and `code` are ordinary elements that really do
 # nest, so they keep the counter.
 _HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
+# The attribute run skips QUOTED values, the same rule the generic tag
+# alternative already follows. Without it '<code data-x="> </code>">'
+# ended its opener at the quoted ">", and the close-tag-shaped string
+# inside the attribute then closed the container before its body -- so
+# the real body was mined. Line-bounded, like everything here.
+#
+# ONE definition, shared by the opener below and by the per-tag pattern
+# the nesting scanner builds. They were written separately, and when the
+# quoted run was added here the nested one kept the old "[^>]*" -- so
+# '<code><code data-x="> </code>">inner</code> SECRET</code>' still ended
+# the outer span at the inner closer and mined the rest. Sharing the
+# string is what stops that happening a third time.
+# TWO forms, in order, and neither can backtrack across a tag boundary.
+#
+# The first pairs quotes: a quote can start ONLY the quoted branch,
+# because the bare branch excludes both quote characters. Letting a
+# quote match either branch was catastrophic -- the closing quote of one
+# tag could re-pair with the opening quote of the NEXT one, so a run
+# with no ">" chained across the whole text and the scan went quadratic.
+# Measured on 128 KiB of "<code data-x=\"a\" " (the input cap): 4.8s,
+# against 0.26s for the "[^>]*" this replaced and 0.02s now.
+#
+# The second is the fallback for an UNPAIRED quote -- '<code a="b>' is
+# malformed but still an opener to every parser, and without this the
+# first form fails and the element is not protected at all, which is the
+# leaking direction. It cannot handle a ">" inside quotes, which is why
+# it comes second rather than instead.
+#
+# BOTH stop at "<". A run that crosses one is a run that can scan to end
+# of text from every position in the document.
+_HTML_ATTRIBUTE_RUN = (
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\"'\r\n])*|[^<>\r\n]*"
+)
 _HTML_RAW_TEXT_OPEN_RE = re.compile(
-    # The attribute run skips QUOTED values, the same rule the generic tag
-    # alternative already follows. Without it '<code data-x="> </code>">'
-    # ended its opener at the quoted ">", and the close-tag-shaped string
-    # inside the attribute then closed the container before its body -- so
-    # the real body was mined. Line-bounded, like everything here.
-    r"<(pre|code|script|style|textarea|template)\b(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*>",
+    rf"<(pre|code|script|style|textarea|template)\b(?:{_HTML_ATTRIBUTE_RUN})>",
     re.IGNORECASE,
 )
 
@@ -1305,7 +1333,13 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # bodies do -- CommonMark says so. Without it the run ended at the
     # backslash-quote and the rest of the title stayed minable, which is
     # the half of a definition most likely to read as speech.
-    r"(?P<title>[ \t]+(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^)\\\r\n])*\)))?",
+    # And it may sit on the FOLLOWING line, which CommonMark permits and
+    # every reader resolves. Accepting only spaces and tabs left
+    # '[cfg]: /api/key\n  "secret helper phrase"' protecting the
+    # destination alone, with the readable half minable one line down.
+    # Exactly ONE line ending: after a blank line it is a paragraph, not
+    # a title, and protecting that would run over ordinary speech.
+    r"(?P<title>(?:[ \t]+|[ \t]*(?:\r\n|\n|\r)[ \t]*)(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|\((?:\\.|[^)\\\r\n])*\)))?",
     re.MULTILINE,
 )
 
@@ -1423,7 +1457,10 @@ def _html_raw_text_spans(
         if opening is None:
             return spans
         tag = opening.group(1).lower()
-        open_re = re.compile(rf"<{tag}\b[^>]*>", re.IGNORECASE)
+        # The SAME attribute run as the outer opener, not a second copy.
+        open_re = re.compile(
+            rf"<{tag}\b(?:{_HTML_ATTRIBUTE_RUN})>", re.IGNORECASE
+        )
         close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
         depth = 1
         cursor = opening.end()

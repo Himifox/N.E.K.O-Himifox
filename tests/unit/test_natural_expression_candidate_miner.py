@@ -3620,3 +3620,122 @@ def test_a_reference_title_may_escape_its_own_delimiter():
         "[cfg]: /api/x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
         catchphrase,
     )
+
+
+def test_a_nested_raw_text_opener_skips_quoted_attribute_values():
+    """The nesting scanner builds its own per-tag opener, and it kept the bug.
+
+    Fixing the shared opener left ``rf"<{tag}\\b[^>]*>"`` untouched, so a
+    NESTED element with a close-tag-shaped attribute still ended the outer
+    span at the inner element's real closer -- and everything after it in the
+    outer body was mined and could reach the effects sidecar. Both patterns
+    are built from one string now, which is what stops a third round of this.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+
+    assert _protects(
+        "<code><code data-x="
+        + quote
+        + "> </code>"
+        + quote
+        + ">inner</code> "
+        + secret
+        + "</code>",
+        secret,
+    ), "the nested opener ended the outer span at the inner closer"
+
+    # The duals: real nesting still ends where it should, and text after a
+    # fully closed outer element is still minable.
+    assert _protects("<code>a <code>b</code> " + secret + "</code>", secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "<code>a <code>b</code> c</code> " + catchphrase + " " + catchphrase,
+        catchphrase,
+    )
+
+
+def test_a_reference_title_may_sit_on_the_following_line():
+    """CommonMark allows it, and the title is the readable half of a definition.
+
+    Accepting only spaces and tabs before the title protected the destination
+    alone and left the quoted string one line down minable -- the half most
+    likely to read as speech, and the half that reaches the sidecar.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+    nl = chr(10)
+    tail = nl + nl + "ok"
+
+    assert _protects(
+        "[cfg]: /api/key" + nl + "  " + quote + secret + quote + tail, secret
+    ), "a title on the following line was left minable"
+    assert _protects(
+        "[cfg]: /api/key" + nl + "(" + secret + ")" + tail, secret
+    )
+
+    # The duals. A same-line title still resolves; and after a BLANK line it
+    # is a paragraph, not a title -- protecting that would run the span over
+    # ordinary speech, which is the direction that deletes catchphrases.
+    assert _protects("[cfg]: /api/key " + quote + secret + quote + tail, secret)
+    catchphrase = "please remember to rest"
+    assert not _protects(
+        "[cfg]: /api/key"
+        + nl
+        + nl
+        + catchphrase
+        + " "
+        + catchphrase
+        + nl
+        + nl
+        + "ok",
+        catchphrase,
+    )
+
+
+def test_an_opener_with_an_unpaired_quote_still_protects_its_body():
+    """Malformed, but every parser still reads it as an opener.
+
+    The quote-pairing form of the attribute run cannot match it -- there is no
+    closing quote on the line -- so without the loose fallback beside it the
+    element is not recognised at all and its body is mined. That is the
+    leaking direction, which is the one this module cannot accept.
+    """
+    secret = "secret helper phrase"
+    quote = chr(34)
+
+    assert _protects(
+        "<code a=" + quote + "b>" + secret + "</code>", secret
+    ), "an unpaired quote stopped the opener being recognised at all"
+
+
+def test_the_attribute_run_cannot_chain_across_tags():
+    """A quote must belong to exactly one branch of the run.
+
+    When a quote could match either the quoted branch or the bare one, the
+    closing quote of one tag re-paired with the opening quote of the NEXT,
+    so a run with no ">" chained across the document and the scan went
+    quadratic: 4.8s on 128 KiB against 0.26s for the pattern it replaced.
+    The bound here is deliberately loose -- it is separating 0.04s from
+    several seconds, not measuring anything.
+    """
+    import time
+
+    from utils.natural_expression_candidates import (
+        USER_REVIEW_MAX_INPUT_CHARACTERS,
+    )
+
+    quote = chr(34)
+    unit = "<code data-x=" + quote + "aaaa" + quote + " "
+    cap = USER_REVIEW_MAX_INPUT_CHARACTERS
+    text = (unit * (cap // len(unit) + 1))[:cap]
+
+    started = time.perf_counter()
+    candidate_core._protected_spans(text)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 2.0, (
+        "scanning %d characters of unclosed openers took %.2fs -- the "
+        "attribute run is backtracking across tag boundaries again"
+        % (len(text), elapsed)
+    )
