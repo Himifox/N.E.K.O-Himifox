@@ -659,3 +659,38 @@ def test_disconnected_upload_is_not_replayed_as_a_whole_body():
     assert first["type"] == "http.disconnect", (
         "a truncated body was replayed as if the request had completed"
     )
+
+
+@pytest.mark.parametrize(
+    "bad_arguments", [None, [], ["query"], "永动机", 0, {"query": "ok"}]
+)
+def test_model_tool_survives_malformed_arguments(monkeypatch, bad_arguments):
+    """A malformed tool payload must become an empty query, not a failed call.
+
+    The sample-only branch spreads the payload (`{**payload, "mode": ...}`),
+    which raises TypeError on a non-empty list or string — bypassing the
+    coercion handle_public_knowledge_call already does for itself.
+    """
+    import asyncio
+
+    import main_logic.knowledge_context as knowledge_tool
+
+    async def _capture(arguments, *, language, deadline_monotonic=None):
+        assert isinstance(arguments, dict)
+        return ""
+
+    monkeypatch.setattr(knowledge_tool, "handle_public_knowledge_call", _capture)
+
+    class _Registry:
+        def __init__(self):
+            self.tool = None
+
+        def register(self, definition, replace=False):
+            self.tool = definition
+
+    for lookup_enabled in (True, False):
+        registry = _Registry()
+        knowledge_tool.register_public_knowledge_tool(
+            registry, language="zh", lookup_enabled=lookup_enabled
+        )
+        asyncio.run(registry.tool.handler(bad_arguments))

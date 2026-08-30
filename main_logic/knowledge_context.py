@@ -510,10 +510,14 @@ def register_public_knowledge_tool(
         deadline = (
             time.monotonic() + PUBLIC_KNOWLEDGE_EXPLICIT_LOOKUP_BUDGET_SECONDS
         )
+        # handle_public_knowledge_call() already coerces a non-dict payload to
+        # {}, but the sample-only branch spreads the payload before it gets
+        # there — and ``{**["x"]}`` raises TypeError, turning a malformed tool
+        # argument into a failed call instead of an empty query. Normalize first
+        # so both branches hand it the same shape.
+        payload = arguments if isinstance(arguments, dict) else {}
         output = await handle_public_knowledge_call(
-            arguments
-            if lookup_enabled
-            else {**(arguments or {}), "mode": "sample"},
+            payload if lookup_enabled else {**payload, "mode": "sample"},
             language=language,
             deadline_monotonic=deadline,
         )
