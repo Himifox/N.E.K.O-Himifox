@@ -1,0 +1,76 @@
+[plugin]
+name = "plugin.name"
+description = "plugin.description"
+short_description = "plugin.short_description"
+keywords = [
+    "自拍",
+    "拍照",
+    "selfie",
+    "photo",
+    "画一张",
+]
+version = "0.3.2"
+id = "selfie_painter_neko"
+type = "plugin"
+entry = "plugin.plugins.selfie_painter_neko:SelfiePainterPlugin"
+
+[plugin.author]
+name = "Himifox"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.store]
+enabled = false
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "NEKO 自拍画家"
+entry = "ui/panel.tsx"
+context = "dashboard"
+permissions = [
+    "state:read",
+    "action:call",
+]
+
+[[plugin.ui.guide]]
+id = "quickstart"
+title = "配置自拍插件"
+entry = "docs/quickstart.md"
+permissions = [
+    "state:read",
+]
+
+[plugin_runtime]
+enabled = true
+auto_start = true
+
+[selfie_painter]
+api_format = "dashscope"
+base_url = "https://dashscope.aliyuncs.com/api/v1"
+api_key = ""
+model = "qwen-image-2.0"
+size = "1024x1024"
+timeout_seconds = 180
+character_prompt = "1girl, cat ears, expressive eyes"
+prompt_suffix = "best quality, detailed, clean composition"
+negative_prompt = "lowres, blurry, bad anatomy, bad hands, extra fingers, watermark, text"
+default_style = "photo"
+reference_source = "active_character"
+reference_image_path = ""
+reference_strength = 0.65
+public_base_url = ""
+jpeg_quality = 92
+max_saved_images = 30
+max_image_bytes = 20971520
+guidance_scale = 5.0
+num_inference_steps = 28
+seed = -1
