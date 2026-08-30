@@ -2841,3 +2841,130 @@ def test_short_old_replies_are_not_evicted_for_heavy_new_ones():
         uniform, message_count_threshold=1, rules_by_language={}
     )
     assert report["summary"]["messages_truncated"] is True
+
+
+def _persists(text, needle):
+    """True when the needle survives into a signature the sidecar would store."""
+    from memory.anti_repeat_effects import build_repeat_signature
+
+    return build_repeat_signature(text, [needle], language="en") is not None
+
+
+def test_a_discarded_template_match_does_not_hide_what_it_covered():
+    """finditer skips past matches this layer throws away.
+
+    A tag-shaped opener inside inline code makes _TEMPLATE_RE match from there
+    to the next ">" anywhere on the line. _protected_spans discards that match
+    because it starts inside a runtime span -- but finditer has already advanced
+    past everything it covered, so a "${...}" payload sitting in that window was
+    never matched by any alternative.
+
+    Harmless while the tag run was capped at 80 characters. Removing the cap
+    turned the skip window into a whole line, which is what made it reachable.
+    """
+    secret = "zzsecretzz"
+    pad = "x" * 82
+    draft = (
+        "note " + chr(96) + "if a<b then" + chr(96) + " " + pad
+        + " the token is ${" + secret + "} and 3>2 ok"
+    )
+
+    assert _protects(draft, secret), (
+        "the template payload after a discarded match was left unprotected"
+    )
+    assert not _persists(draft, secret), "and it reached the 120-day sidecar"
+
+    # The control that isolates the cause: the same draft with nothing
+    # tag-shaped inside the code span.
+    assert _protects(draft.replace("a<b then", "ab then"), secret)
+
+
+def test_an_escaped_closer_never_leaves_the_destination_with_no_span_at_all():
+    """The escape handling must be monotone: never less protected than before.
+
+    Consuming "\\>" as a unit makes the angle form need a LATER unescaped ">".
+    With none, the alternative fails outright, the whitespace-delimited form
+    stops at the first space, and the shape check rejects that fragment for
+    having no ">" -- so the destination got NO span, where the old truncating
+    pattern gave it a full one. The old form stays behind the new one.
+    """
+    secret = "zzsecretzz"
+    draft = (
+        "[cfg]: <../my notes/" + secret + chr(92) + ">" + chr(10)
+        + "thanks for listening today"
+    )
+
+    assert _protects(draft, secret), (
+        "an escaped closer with nothing after it lost the whole destination"
+    )
+    assert not _persists(draft, secret)
+
+    # Still better than the old form where a later closer exists, which is the
+    # improvement this must not give back.
+    assert _protects(
+        "[cfg]: <../a" + chr(92) + "> " + secret + ">" + chr(10) + chr(10) + "ok",
+        secret,
+    )
+
+
+def test_the_remaining_container_bodies_stop_only_at_their_own_closer():
+    """A body may legitimately hold the character its class excluded.
+
+    "${...}" excluded "{" and "<%...%>" excluded "%", neither of which is the
+    container's closer, so a body holding one made the alternative fail entirely
+    and nothing else picked the payload up. The three brace containers were
+    already tempered for exactly this reason.
+    """
+    secret = "zzsecretzz"
+    holding_a_brace = 'the config is ${ {"key": "' + secret + '"} } yes'
+    holding_a_percent = "the config is <% rate = 50% key = " + secret + " %> yes"
+
+    for draft in (holding_a_brace, holding_a_percent):
+        assert _protects(draft, secret), draft
+        assert not _persists(draft, secret), draft
+
+    # Controls: the same drafts without the inner character were always fine,
+    # and the tempered sibling holding the identical brace always was too. They
+    # are what show the body CLASS rather than the payload shape was deciding.
+    assert _protects('the config is ${ "' + secret + '" } yes', secret)
+    assert _protects("the config is <% key = " + secret + " %> yes", secret)
+    assert _protects(
+        'the config is {% set c = {"k": "' + secret + '"} %} yes', secret
+    )
+
+
+def test_a_bracketed_placeholder_has_no_length_cap_either():
+    """The same cap, in the same regex literal, as the one removed from the tag run.
+
+    A 65-character name failed the whole alternative, so nothing was protected
+    and the identifier was mined -- while its 64-character twin in the same
+    sentence was masked. One character of length was the only difference.
+    """
+    name = "GITHUB_PERSONAL_ACCESS_TOKEN_FOR_PROD_DEPLOY_PIPELINE_ROTATION_2"
+    assert len(name) == 64, "the fixture has to sit exactly on the old cap"
+
+    for candidate in (name, name + "X"):
+        draft = "the config key is [" + candidate + "] and you must set it"
+        assert _protects(draft, candidate), len(candidate)
+
+    # A single letter in brackets is still not a placeholder, so this did not
+    # become "any bracketed capital".
+    catchphrase = "please remember to rest"
+    assert not _protects("[A] " + catchphrase + " " + catchphrase, catchphrase)
+
+
+def test_a_displayed_parenthesis_closes_no_link_target():
+    """The rule both bracket arms follow was never applied to the parentheses.
+
+    A ")" shown inside a code span closed the target early, so the rest of the
+    destination was mined -- while the identical link without the code span was
+    fully protected.
+    """
+    tail = "/keys/secret-token-value"
+    draft = "[docs](/api/" + chr(96) + ")" + chr(96) + tail + ") \u597d\u5440"
+
+    assert _protects(draft, tail), (
+        "a displayed ')' closed the target and mined the rest of it"
+    )
+    # The control, which was already passing: the same link with no code span.
+    assert _protects("[docs](/api/x" + tail + ") \u597d\u5440", tail)

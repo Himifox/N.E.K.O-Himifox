@@ -106,6 +106,22 @@ _URL_STOP = (
     r"\uff3b-\uff40\uff5b-\uff65"
 )
 _URL_ATOM = r"[^\s<>()" + _URL_STOP + r"]"
+# An address is not a URL tail. ``_URL_ATOM`` admits "@" and ".", so the two
+# internationalized address branches below -- written with it -- let the
+# local part, the domain and every label compete for the same characters:
+# "a@a@a@a..." went quadratic, 0.73s at 16 KB against an accepted reply size
+# of 128 KiB, and on the live turn path since the effects sidecar masks
+# every draft. Without those branches the same input is linear, so this is
+# their cost and theirs to pay.
+#
+# The local part keeps "." -- it is the identifying half and matching only
+# part of it is worse than not matching at all -- but excludes "@", and is
+# ATOMIC: it stops at the first "@", and a character handed back is by
+# construction not one, so backtracking into it can never help. Each domain
+# LABEL excludes both, which is what makes the dotted tail unambiguous.
+_EMAIL_LOCAL = r"(?>[^\s<>()@" + _URL_STOP + r"]+)"
+_EMAIL_LABEL = r"(?>[^\s<>()@." + _URL_STOP + r"]+)"
+_EMAIL_ADDRESS = _EMAIL_LOCAL + r"@" + _EMAIL_LABEL + r"(?:\." + _EMAIL_LABEL + r")+"
 _URL_ATOM_RE = re.compile(_URL_ATOM)
 # Parentheses are NOT in the pattern. A path nests them to any depth
 # (``/f(g(x))``), and one level encoded here stopped at the inner ``(``,
@@ -122,8 +138,7 @@ _URL_RE = re.compile(
     # local part, the identifying half, was mined and persisted. Requiring
     # the local@domain.tld SHAPE is what makes the unbounded alphabet safe
     # here, so the generic guard below stays exactly as it was.
-    r"(?<![A-Za-z0-9+.\-])(?i:mailto):"
-    + _URL_ATOM + "+@" + _URL_ATOM + r"+(?:\." + _URL_ATOM + "+)+|"
+    r"(?<![A-Za-z0-9+.\-])(?i:mailto):" + _EMAIL_ADDRESS + r"|"
     # ANY scheme, as a rule rather than a list. A fixed allowlist guarantees
     # another round of "you missed one", and the ones it missed carried real
     # payloads: an otpauth:// TOTP secret, a postgres:// password, an
@@ -168,8 +183,7 @@ _URL_RE = re.compile(
     # unspaced CJK it does take the surrounding run with it, which is
     # over-protection of one sentence -- the accepted direction, against a
     # payload persisted for 120 days.
-    r"(?<!" + _URL_ATOM + r")" + _URL_ATOM + r"+@" + _URL_ATOM
-    + r"+(?:\." + _URL_ATOM + r"+)+|"
+    r"(?<!" + _URL_ATOM + r")" + _EMAIL_ADDRESS + r"|"
     # An ASCII-only lookbehind. ``\w`` counts CJK as a word character, so a bare
     # host written straight after a hanzi never matched at all and its path
     # token was persisted verbatim -- and zh/zh-TW/ja/ko, half the languages
@@ -228,8 +242,16 @@ _TEMPLATE_RE = re.compile(
     # Jinja statement and comment blocks, on the same line budget: a
     # ``{% set api_key = "..." %}`` carried its payload straight past the brace
     # pattern, which only knew the expression form.
-    r"\$\{(?>[^{}\r\n]*)(?:\r?\n(?>[^{}\r\n]*)){0,3}\}|"
-    r"<%(?>[^%\r\n]*)(?:\r?\n(?>[^%\r\n]*)){0,3}%>|"
+    # TEMPERED, like the three brace containers above, and for the reason
+    # already written there: a body may legitimately hold the character
+    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
+    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
+    # alternative failed entirely and nothing else picked the payload up.
+    # The sibling "{% ... %}" holding the same inner brace was masked
+    # fine, which is what showed the class rather than the shape was
+    # deciding.
+    r"\$\{(?>(?:(?!\})[^\r\n])*)(?:\r?\n(?>(?:(?!\})[^\r\n])*)){0,3}\}|"
+    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
     # by far the highest false-positive density in this project's character
     # speech -- `>_<`, `<3`, `->`, `3 < 5`. Line-bounding stopped the tail of
@@ -254,7 +276,11 @@ _TEMPLATE_RE = re.compile(
     # only at "<", ">" or a newline, so a character handed back can never
     # let the ">" match, and an opener with no closer now fails in one
     # pass instead of one per character.
-    r"</?[A-Za-z](?>[^<>\r\n]*)>|\[[A-Z][A-Z0-9_-]{1,63}\]"
+    # The bracketed placeholder loses its length cap for exactly the reason
+    # the tag run above lost its own: a 65-character name failed the whole
+    # alternative, so nothing was protected and the identifier was mined,
+    # while its 64-character twin in the same sentence was masked.
+    r"</?[A-Za-z](?>[^<>\r\n]*)>|\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 
 
@@ -911,6 +937,11 @@ def _collect_link_targets(
     the reason this is structured as two passes rather than patched.
     """
     # Pass one: balanced parentheses. Nothing here knows about links.
+    #
+    # A DISPLAYED parenthesis opens and closes nothing, the same rule both
+    # bracket arms below already follow. Without it a ")" shown inside a code
+    # span closed the target early: "[docs](/api/`)`/keys/secret)" protected
+    # only as far as the quoted ")" and mined the rest of the destination.
     open_parens: list[int] = []
     closer_of: dict[int, int] = {}
     cursor = start
@@ -919,9 +950,9 @@ def _collect_link_targets(
         if character == chr(92):
             cursor += 2
             continue
-        if character == "(":
+        if character == "(" and not _starts_inside(cursor, ignore):
             open_parens.append(cursor)
-        elif character == ")":
+        elif character == ")" and not _starts_inside(cursor, ignore):
             if open_parens:
                 closer_of[open_parens.pop()] = cursor + 1
         cursor += 1
@@ -1008,7 +1039,15 @@ _REFERENCE_DEFINITION_RE = re.compile(
     # minable. Escapes are consumed as a unit, so a trailing lone
     # backslash still cannot swallow the newline.
     r"^[ \t]{0,3}\[[^\]\r\n]*\]:[ \t]*"
-    r"(?P<target><(?:\\[^\r\n]|[^>\r\n\\])*>|[^ \t\r\n]+)",
+    # THREE forms, and the middle one is a fallback rather than a rule: when
+    # the escape-aware form finds no LATER unescaped ">" it fails outright,
+    # the whitespace-delimited form then stops at the first space, and the
+    # shape check rejects that fragment for having no ">" -- so
+    # "[cfg]: <../my notes/SECRET\>" ended up with no span at all, where
+    # before the escape handling it had a full one. Keeping the old
+    # truncating form behind the new one makes this monotone: never less
+    # protected than it was.
+    r"(?P<target><(?:\\[^\r\n]|[^>\r\n\\])*>|<[^>\r\n]*>|[^ \t\r\n]+)",
     re.MULTILINE,
 )
 
@@ -1166,11 +1205,31 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     # A template delimiter DISPLAYED as code opens nothing. This pattern is
     # independent of the scanners above, so an opener sitting in one code span
     # paired with a closer in another and erased the prose between them.
-    spans.extend(
-        match.span()
-        for match in _TEMPLATE_RE.finditer(text)
-        if not _starts_inside(match.start(), runtime)
-    )
+    # Resume just after a DISCARDED opener, not after the whole match.
+    # ``finditer`` skips to the end of every match it yields, including the
+    # ones dropped here, so everything such a match covered was never
+    # offered to the other alternatives. That window used to be at most 80
+    # characters; once the tag run became line-bounded instead it grew to a
+    # whole line, and a "${...}" payload sitting after a tag-shaped opener
+    # inside a code span stopped being matched at all.
+    position = 0
+    while True:
+        match = _TEMPLATE_RE.search(text, position)
+        if match is None:
+            break
+        if _starts_inside(match.start(), runtime):
+            # Resume past the whole SPAN that discarded it, not one
+            # character on. Every match starting inside that span would be
+            # discarded too, and retrying each offset in a long code block
+            # is what turns this loop quadratic.
+            index = (
+                bisect.bisect_right(runtime, match.start(), key=lambda s: s[0])
+                - 1
+            )
+            position = max(match.start() + 1, runtime[index][1])
+            continue
+        spans.append(match.span())
+        position = match.end()
     return _merge_spans(spans)
 
 

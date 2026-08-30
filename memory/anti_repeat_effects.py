@@ -109,8 +109,16 @@ _PROTECTED_RE = re.compile(
     # ``_runtime_protected_spans``, so a fragment check built on the runtime
     # spans alone would let these through and the payload would reach the
     # 120-day sidecar.
-    r"\$\{(?>[^{}\r\n]*)(?:\r?\n(?>[^{}\r\n]*)){0,3}\}|"
-    r"<%(?>[^%\r\n]*)(?:\r?\n(?>[^%\r\n]*)){0,3}%>|"
+    # TEMPERED, like the three brace containers above, and for the reason
+    # already written there: a body may legitimately hold the character
+    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
+    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
+    # alternative failed entirely and nothing else picked the payload up.
+    # The sibling "{% ... %}" holding the same inner brace was masked
+    # fine, which is what showed the class rather than the shape was
+    # deciding.
+    r"\$\{(?>(?:(?!\})[^\r\n])*)(?:\r?\n(?>(?:(?!\})[^\r\n])*)){0,3}\}|"
+    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
     # Must LOOK LIKE A TAG, exactly as the miner requires. Left loose here it
     # paired the "<" of "<3" with the ">" of ">_<" and masked the speech
     # between them, so a signature the miner happily reported was dropped by
@@ -133,7 +141,7 @@ _PROTECTED_RE = re.compile(
     # let the ">" match, and an opener with no closer now fails in one
     # pass instead of one per character.
     r"</?[A-Za-z](?>[^<>\r\n]*)>|"
-    r"\[[A-Z][A-Z0-9_-]{1,63}\]"
+    r"\[[A-Z](?>[A-Z0-9_-]+)\]"
 )
 # How many times a reset re-cuts when a concurrent write lands after its
 # flush. Each retry needs a racing writer to win again, so a small bound is
