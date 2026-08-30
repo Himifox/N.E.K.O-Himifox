@@ -12,6 +12,26 @@ from pydantic import ValidationError
 
 from utils.llm_client import AIMessage, SQLChatMessageHistory
 
+# The insights route asks where memory lives before it will analyse a
+# CONFIGURED character: that branch skips the existence check, so a linked
+# memory/<name> would otherwise be followed straight out of the root by
+# the read-only lookup. These doubles predate the route reading the
+# storage layout at all, because the configured branch never reached it.
+#
+# Never touched on disk: a default path is a direct child by
+# construction, and none of these tests are about the layout.
+_ANY_CONTAINED_MEMORY_ROOT = str(
+    Path(tempfile.gettempdir()) / "neko-test-memory-root"
+)
+
+
+def _storage_aware(namespace):
+    """Give a config-manager double the storage attributes the route reads."""
+    namespace.memory_dir = _ANY_CONTAINED_MEMORY_ROOT
+    namespace.get_character_data = lambda: (None,) * 6 + ({},) + (None, None)
+    return namespace
+
+
 def _empty_effects(days: int = 30) -> dict:
     return {
         "schema_version": "anti-repeat-effects/v1",
@@ -210,8 +230,12 @@ async def test_public_repetition_insights_validates_and_forwards_local_request(
     effect_store = SimpleNamespace(
         query_effects=MagicMock(return_value=_empty_effects())
     )
-    config = SimpleNamespace(
-        aload_characters=AsyncMock(return_value={"猫娘": {character_name: {}}})
+    config = _storage_aware(
+        SimpleNamespace(
+            aload_characters=AsyncMock(
+                return_value={"猫娘": {character_name: {}}}
+            )
+        )
     )
 
     with (
@@ -467,7 +491,9 @@ async def test_public_repetition_insights_keeps_residuals_when_effect_query_fail
             )
         )
     )
-    config = SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    config = _storage_aware(
+        SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    )
     effect_store = SimpleNamespace(
         query_effects=MagicMock(side_effect=OSError("private path"))
     )
@@ -507,7 +533,9 @@ async def test_reset_repetition_effects_clears_only_selected_character(character
     from memory import anti_repeat_effects
     from utils import config_manager
 
-    config = SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    config = _storage_aware(
+        SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    )
     effect_store = SimpleNamespace(clear_effects=MagicMock())
 
     with (
@@ -557,8 +585,12 @@ async def test_public_repetition_insights_returns_sanitized_unavailable_error():
     client = SimpleNamespace(
         post=AsyncMock(side_effect=RuntimeError("private upstream detail"))
     )
-    config = SimpleNamespace(
-        aload_characters=AsyncMock(return_value={"猫娘": {"test_char": {}}})
+    config = _storage_aware(
+        SimpleNamespace(
+            aload_characters=AsyncMock(
+                return_value={"猫娘": {"test_char": {}}}
+            )
+        )
     )
 
     with (
@@ -716,7 +748,9 @@ async def test_effect_scope_uses_the_analyzed_count_not_the_request(monkeypatch)
     )
     monkeypatch.setattr(
         "utils.config_manager.get_config_manager",
-        lambda: SimpleNamespace(aload_characters=AsyncMock(return_value={"猫娘": {}})),
+        lambda: _storage_aware(
+            SimpleNamespace(aload_characters=AsyncMock(return_value={"猫娘": {}}))
+        ),
     )
 
     result = await memory_router.repetition_insights(
@@ -1066,7 +1100,9 @@ async def test_repetition_insights_route_ships_folded_associations():
             )
         )
     )
-    config = SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    config = _storage_aware(
+        SimpleNamespace(aload_characters=AsyncMock(return_value={}))
+    )
     effect_store = SimpleNamespace(
         query_effects=MagicMock(
             return_value={"source_available": True, "patterns": patterns}
@@ -1725,3 +1761,178 @@ def test_a_symlinked_legacy_file_is_not_migrated_for_a_configured_name(tmp_path)
     assert (memory_dir / "Real" / "time_indexed.db").read_text(
         encoding="utf-8"
     ) == "REAL"
+
+
+@pytest.mark.unit
+def test_a_symlinked_sidecar_is_never_migrated(tmp_path):
+    """shutil.move recreates a link at the destination, sidecars included.
+
+    The database itself is refused when it is a link, but a linked -wal, -shm
+    or -journal beside an ordinary database went straight through and
+    installed itself as memory/<name>/time_indexed.db-wal. Every later SQLite
+    open then follows it out of the namespace -- to read AND to write.
+
+    The whole entry is refused rather than that one sidecar: moving the
+    database without its WAL is exactly the split state the move ORDER exists
+    to avoid.
+    """
+    import os
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    outside = tmp_path / "outside.db-wal"
+    outside.write_bytes(b"EXTERNAL")
+    (memory_dir / "time_indexed_Carol.db").write_bytes(b"CAROL")
+    try:
+        os.symlink(str(outside), str(memory_dir / "time_indexed_Carol.db-wal"))
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+    (memory_dir / "time_indexed_Real.db").write_bytes(b"REAL")
+    (memory_dir / "time_indexed_Real.db-wal").write_bytes(b"REALWAL")
+
+    memory_pkg.migrate_to_character_dirs(str(memory_dir), ["Carol", "Real"])
+
+    assert not (memory_dir / "Carol" / "time_indexed.db-wal").exists(), (
+        "a linked sidecar was installed inside the character namespace"
+    )
+    assert not (memory_dir / "Carol" / "time_indexed.db").exists(), (
+        "the database moved without its linked sidecar, which is the split "
+        "state the ordering exists to prevent"
+    )
+    assert (memory_dir / "time_indexed_Carol.db").read_bytes() == b"CAROL"
+    # The dual: an ordinary database with an ordinary sidecar still migrates.
+    assert (memory_dir / "Real" / "time_indexed.db").read_bytes() == b"REAL"
+    assert (memory_dir / "Real" / "time_indexed.db-wal").read_bytes() == b"REALWAL"
+
+
+@pytest.mark.unit
+def test_a_failed_database_move_puts_its_sidecars_back(tmp_path):
+    """Unlike a crash, this returns and startup carries on.
+
+    So the runtime looks in the character directory and finds sidecars with
+    no database, while the authoritative one sits stranded in the root -- and
+    a writable open then creates a fresh database beside a WAL that does not
+    belong to it. The sidecar-failure branch already rolled back; the
+    database-failure branch simply never did.
+    """
+    import shutil
+
+    import memory as memory_pkg
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "time_indexed_Carol.db").write_bytes(b"CAROL")
+    (memory_dir / "time_indexed_Carol.db-wal").write_bytes(b"WAL")
+
+    real_move = shutil.move
+
+    def _the_database_will_not_move(source, destination, *args, **kwargs):
+        if str(source).endswith("time_indexed_Carol.db"):
+            raise OSError(13, "The process cannot access the file")
+        return real_move(source, destination, *args, **kwargs)
+
+    with patch.object(memory_pkg.shutil, "move", _the_database_will_not_move):
+        memory_pkg.migrate_to_character_dirs(str(memory_dir), ["Carol"])
+
+    assert (memory_dir / "time_indexed_Carol.db").read_bytes() == b"CAROL"
+    assert (memory_dir / "time_indexed_Carol.db-wal").read_bytes() == b"WAL", (
+        "the sidecar was left in the character directory with no database "
+        "beside it"
+    )
+    assert not (memory_dir / "Carol" / "time_indexed.db-wal").exists(), (
+        "a sidecar stayed migrated while its database did not"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_configured_character_with_a_linked_directory_is_refused(
+    tmp_path,
+):
+    """The configured branch skips the only filesystem check there was.
+
+    Configured names are added to the selector before directory enumeration,
+    so the symlink filter there never sees them. The read-only lookup then
+    builds memory_dir/<name>/time_indexed.db and follows the link, and the
+    panel renders and exports assistant-shaped rows from a database outside
+    the memory root. The sidecar STORES are not reachable this way because
+    they already ask the same containment question.
+
+    An explicitly registered time_store path is the deliberate case and stays
+    permitted -- that is what the field is for.
+    """
+    import os
+
+    from main_routers import memory_router
+    from memory import anti_repeat_effects
+    from utils import config_manager, internal_http_client
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "time_indexed.db").write_bytes(b"EXTERNAL")
+    try:
+        os.symlink(str(outside), str(memory_dir / "Carol"), target_is_directory=True)
+    except OSError:
+        pytest.skip("this environment does not permit symlinks")
+
+    response = SimpleNamespace(
+        status_code=200,
+        json=lambda: {
+            "success": True,
+            "schema_version": "natural-expression-candidates/v1",
+            "artifact_type": "user_review_candidates",
+            "candidates": [],
+        },
+    )
+    client = SimpleNamespace(post=AsyncMock(return_value=response))
+    effect_store = SimpleNamespace(
+        query_effects=MagicMock(return_value=_empty_effects())
+    )
+
+    async def _ask(time_store):
+        config = SimpleNamespace(
+            aload_characters=AsyncMock(return_value={"猫娘": {"Carol": {}}}),
+            memory_dir=str(memory_dir),
+            get_character_data=lambda: (None,) * 6 + (time_store,) + (None, None),
+        )
+        with (
+            patch.object(
+                config_manager, "get_config_manager", return_value=config
+            ),
+            patch.object(
+                internal_http_client,
+                "get_internal_http_client",
+                return_value=client,
+            ),
+            patch.object(
+                anti_repeat_effects,
+                "get_anti_repeat_effect_store",
+                return_value=effect_store,
+            ),
+        ):
+            return await memory_router.repetition_insights(
+                memory_router.RepetitionInsightsRequest(
+                    character_name="Carol", language="en"
+                )
+            )
+
+    client.post.reset_mock()
+    refused = await _ask({})
+    assert getattr(refused, "status_code", 200) == 404, (
+        "a configured character whose directory is a link was analysed"
+    )
+    assert client.post.await_count == 0, (
+        "the analysis ran before the refusal"
+    )
+
+    # The dual: registered explicitly, it is a choice rather than a leak.
+    client.post.reset_mock()
+    allowed = await _ask({"Carol": str(outside / "time_indexed.db")})
+    assert getattr(allowed, "status_code", 200) != 404, (
+        "an explicitly registered time_store path was refused"
+    )
+    assert client.post.await_count == 1

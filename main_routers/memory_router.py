@@ -626,6 +626,13 @@ async def repetition_insights(request: RepetitionInsightsRequest):
             )
         if configured_key is not None:
             character_name = configured_key
+        if _default_memory_dir_escapes_root(config_manager, character_name):
+            # Reported as absent rather than as a link: what is on the
+            # far end is not this panel's to describe either.
+            return JSONResponse(
+                {"success": False, "error": "character not found"},
+                status_code=404,
+            )
 
         response = await get_internal_http_client().post(
             "http://127.0.0.1:"
@@ -874,6 +881,44 @@ def _recent_browser_conflict_response(
         },
         status_code=409,
     )
+
+
+def _default_memory_dir_escapes_root(config_manager, name: str) -> bool:
+    """Whether this character's DEFAULT directory resolves outside the root.
+
+    A CONFIGURED character skips the existence check entirely, so the
+    symlink filter in the selector never sees it -- configured names are
+    added before directory enumeration. The read-only lookup then builds
+    memory_dir/<name>/time_indexed.db and follows the link, and the panel
+    renders and exports assistant-shaped rows from a database outside the
+    memory root.
+
+    The sidecar stores are not reachable this way because they already
+    ask ``_is_within_memory_root``, which resolves both sides with
+    realpath. The read-only time index does not, because it has to honour
+    ``time_store`` -- where a character is deliberately pointed elsewhere.
+    So the same rule is asked here instead, and only about the DEFAULT
+    path: an explicitly registered one is a choice, not a leak.
+    """
+    try:
+        time_store = config_manager.get_character_data()[6]
+    except Exception:
+        # Unreadable configuration is not evidence of a deliberate
+        # override, so fall through to the containment check.
+        time_store = {}
+    if isinstance(time_store, dict) and name in time_store:
+        return False
+    from memory import character_dir_is_within_memory_root
+
+    try:
+        return not character_dir_is_within_memory_root(
+            config_manager.memory_dir, name
+        )
+    except Exception:
+        # Cannot resolve it, so cannot vouch for it. Refusing costs a
+        # panel; waving it through is the direction that leaks, and this
+        # module treats that as the only unacceptable one.
+        return True
 
 
 def _configured_character_key(configured, character_name: str) -> str | None:

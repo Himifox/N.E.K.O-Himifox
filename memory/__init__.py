@@ -61,6 +61,19 @@ from .reflection import ReflectionEngine
 _logger = logging.getLogger(__name__)
 
 
+def character_dir_is_within_memory_root(memory_dir: str, name: str) -> bool:
+    """Whether ``memory_dir/name`` really resolves to a child of the root.
+
+    The public name for the rule the sidecar stores already apply before
+    resolving a write. Read paths need it too, and reaching for the
+    private one from outside this package would have made the rule a
+    convention rather than a contract.
+    """
+    return _is_within_memory_root(
+        str(memory_dir), name, os.path.join(str(memory_dir), name)
+    )
+
+
 def _is_within_memory_root(memory_dir: str, name: str, character_dir: str) -> bool:
     """Whether character_dir is a DIRECT child of the memory root.
 
@@ -250,6 +263,29 @@ def _legacy_root_file_owners(memory_dir: str, known: set) -> list:
     return owners
 
 
+def _roll_back_sidecars(
+    old_path: str, new_path: str, moved_sidecars: list[str], old_filename: str
+) -> None:
+    """Put back sidecars that moved before their database could follow.
+
+    Keeping the database while one of its sidecars has already gone
+    leaves a source that no longer carries its own WAL, so anything
+    opening it before the retry reads a database missing committed rows.
+    All-or-nothing is easier to reason about than an ordering argument
+    about who opens what when.
+
+    A function rather than two copies because it has to happen on BOTH
+    failures, and only one of them had it.
+    """
+    for suffix in moved_sidecars:
+        try:
+            shutil.move(new_path + suffix, old_path + suffix)
+        except Exception as e:
+            _logger.warning(
+                f"[Memory] 回滚失败 {old_filename}{suffix}: {e}"
+            )
+
+
 def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
     """One-time migration: move legacy memory_dir/{type}_{name}.ext into memory_dir/{name}/{type}.ext"""
     memory_dir = str(memory_dir)
@@ -281,6 +317,28 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                     old_filename,
                 )
                 continue
+            # The SIDECARS too, and before any of them moves. shutil.move
+            # recreates a link at the destination just the same, so a
+            # linked -wal beside an ordinary database installs itself as
+            # memory/<name>/time_indexed.db-wal and every later SQLite
+            # open follows it out of the namespace -- to read AND to
+            # write. Checked up front rather than per sidecar: refusing
+            # one of them halfway is the split state the ordering below
+            # exists to avoid.
+            linked_sidecar = next(
+                (
+                    suffix
+                    for suffix in _SQLITE_SIDECAR_SUFFIXES
+                    if os.path.islink(old_path + suffix)
+                ),
+                None,
+            )
+            if linked_sidecar is not None:
+                _logger.warning(
+                    "[Memory] 跳过符号链接的旧文件: %s",
+                    old_filename + linked_sidecar,
+                )
+                continue
             # Sidecars FIRST, the database LAST. An uncheckpointed WAL holds
             # committed rows, so moving the database without it loses them,
             # and left in the root it is unreadable anyway -- SQLite looks
@@ -310,19 +368,9 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                     break
                 moved_sidecars.append(suffix)
             if interrupted:
-                # Put back what DID move. Keeping the database while one of
-                # its sidecars has already gone leaves a source that no
-                # longer carries its own WAL, so anything opening it before
-                # the retry reads a database missing committed rows.
-                # All-or-nothing is easier to reason about than an ordering
-                # argument about who opens what when.
-                for suffix in moved_sidecars:
-                    try:
-                        shutil.move(new_path + suffix, old_path + suffix)
-                    except Exception as e:
-                        _logger.warning(
-                            f"[Memory] 回滚失败 {old_filename}{suffix}: {e}"
-                        )
+                _roll_back_sidecars(
+                    old_path, new_path, moved_sidecars, old_filename
+                )
                 # Leave the database where it is, so the next run retries
                 # the whole set rather than stranding what did not move.
                 continue
@@ -331,5 +379,15 @@ def migrate_to_character_dirs(memory_dir: str, names: list[str]) -> None:
                 _logger.info(f"[Memory] 迁移 {old_filename} → {name}/{new_filename}")
             except Exception as e:
                 _logger.warning(f"[Memory] 迁移失败 {old_filename}: {e}")
+                # And put the sidecars BACK. Unlike a crash this returns
+                # and startup carries on, so the runtime would look in the
+                # character directory and find sidecars with no database,
+                # while the authoritative one sits stranded in the root. A
+                # writable open then creates a fresh database beside them.
+                # The sidecar branch above already rolled back; this one
+                # simply never did.
+                _roll_back_sidecars(
+                    old_path, new_path, moved_sidecars, old_filename
+                )
 
 
