@@ -9,7 +9,7 @@ keywords = [
     "photo",
     "画一张",
 ]
-version = "0.3.3"
+version = "0.4.0"
 id = "selfie_painter_neko"
 type = "plugin"
 entry = "plugin.plugins.selfie_painter_neko:SelfiePainterPlugin"
@@ -26,7 +26,8 @@ default_locale = "zh-CN"
 locales_dir = "i18n"
 
 [plugin.store]
-enabled = false
+enabled = true
+backend = "sqlite"
 
 [plugin.ui]
 enabled = true
@@ -74,3 +75,6 @@ max_image_bytes = 20971520
 guidance_scale = 5.0
 num_inference_steps = 28
 seed = -1
+context_enabled = true
+diary_enabled = true
+diary_max_events = 100

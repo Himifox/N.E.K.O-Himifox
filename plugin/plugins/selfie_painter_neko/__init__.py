@@ -17,6 +17,7 @@ from plugin.sdk.plugin import (
     ui,
 )
 
+from .diary import SelfieDiary, continuity_hint, select_recent_visual_context
 from .service import SelfiePainterConfig, SelfiePainterError, SelfiePainterService
 
 
@@ -31,6 +32,8 @@ class SelfiePainterPlugin(NekoPluginBase):
         self.logger = self.enable_file_logging(log_level="INFO")
         self._service: SelfiePainterService | None = None
         self._generation_lock = asyncio.Lock()
+        self._pending_count = 0
+        self._diary: SelfieDiary | None = None
 
     @lifecycle(id="startup")
     async def startup(self, **_: Any):
@@ -52,11 +55,17 @@ class SelfiePainterPlugin(NekoPluginBase):
             settings=settings,
             logger=self.logger,
         )
+        self._diary = SelfieDiary(
+            store=self.store,
+            logger=self.logger,
+            max_events=settings.diary_max_events,
+        )
         self._service.prepare_static_directory()
 
     @lifecycle(id="shutdown")
     async def shutdown(self, **_: Any):
         self._service = None
+        self._diary = None
         return Ok({"status": "shutdown"})
 
     @llm_tool(
@@ -114,8 +123,30 @@ class SelfiePainterPlugin(NekoPluginBase):
         service = self._service
         if service is None:
             raise SelfiePainterError(self.i18n.t("errors.not_ready", default="自拍插件尚未启动。"))
-        async with self._generation_lock:
-            result = await service.generate(scene=scene, style=style)
+        self._pending_count = getattr(self, "_pending_count", 0) + 1
+        try:
+            async with self._generation_lock:
+                generate_with_context = getattr(service, "generate_with_context", None)
+                if not callable(generate_with_context):
+                    result = await service.generate(scene=scene, style=style)
+                else:
+                    active_character = await service.active_character()
+                    active_name = active_character[0]
+                    diary_events = await self._load_diary_events(active_name, limit=3)
+                    recent_context = ""
+                    if service.settings.context_enabled:
+                        recent_context = await self._recent_context(active_name, scene)
+                    result = await generate_with_context(
+                        scene=scene,
+                        style=style,
+                        active_character=active_character,
+                        recent_context=recent_context,
+                        continuity=continuity_hint(diary_events, current_scene=scene),
+                    )
+                    if service.settings.diary_enabled:
+                        await self._append_diary_event(result=result, scene=scene)
+        finally:
+            self._pending_count = max(0, getattr(self, "_pending_count", 1) - 1)
         caption = self.i18n.t("messages.ready", default="拍好啦！")
         self.push_message(
             visibility=["chat"],
@@ -139,12 +170,67 @@ class SelfiePainterPlugin(NekoPluginBase):
         )
         return result
 
+    async def _recent_context(self, character_name: str, scene: str) -> str:
+        bus = getattr(self, "bus", None)
+        memory = getattr(bus, "memory", None)
+        get_memory = getattr(memory, "get", None)
+        if not callable(get_memory):
+            return ""
+        try:
+            snapshot = await get_memory(bucket_id=character_name or "default", limit=20, timeout=3.0)
+            value = snapshot.value if hasattr(snapshot, "value") else snapshot
+            return select_recent_visual_context(
+                value or [],
+                character_name=character_name,
+                current_scene=scene,
+            )
+        except Exception as error:
+            self.logger.warning("Recent selfie context unavailable: %s", error)
+            return ""
+
+    async def _load_diary_events(self, character_name: str, *, limit: int) -> list[dict[str, Any]]:
+        diary = getattr(self, "_diary", None)
+        if diary is None:
+            return []
+        try:
+            return await diary.list_events(character_name, limit=limit)
+        except Exception as error:
+            self.logger.warning("Selfie diary read failed: %s", error)
+            return []
+
+    async def _append_diary_event(self, *, result: Any, scene: str) -> None:
+        diary = getattr(self, "_diary", None)
+        if diary is None:
+            return
+        try:
+            await diary.append_success(
+                character_name=str(getattr(result, "character_name", "") or ""),
+                scene=scene,
+                style=str(getattr(result, "style", "") or ""),
+                filename=str(getattr(result, "filename", "") or ""),
+            )
+        except Exception as error:
+            self.logger.warning("Selfie diary write failed: %s", error)
+
     @ui.context(id="dashboard", title=tr("panel.title", default="NEKO Selfie Painter"))
     async def get_dashboard_context(self) -> dict[str, Any]:
         service = self._service
         if service is None:
-            return {"ready": False, "configured": False, "recent_images": []}
+            return {
+                "ready": False,
+                "configured": False,
+                "recent_images": [],
+                "diary_enabled": False,
+                "diary_events": [],
+                "pending_count": getattr(self, "_pending_count", 0),
+            }
         settings = service.settings
+        active_name, _ = await service.active_character()
+        diary_events = await self._load_diary_events(active_name, limit=30) if settings.diary_enabled else []
+        for event in diary_events:
+            filename = str(event.get("filename") or "")
+            if filename and service.has_generated_image(filename):
+                event["photo_url"] = service.public_image_url(filename)
         return {
             "ready": True,
             "configured": bool(settings.base_url and settings.model and service.has_api_key()),
@@ -161,8 +247,13 @@ class SelfiePainterPlugin(NekoPluginBase):
                 "reference_source": settings.reference_source,
                 "reference_image_path": settings.reference_image_path,
                 "public_base_url": settings.public_base_url,
+                "context_enabled": settings.context_enabled,
+                "diary_enabled": settings.diary_enabled,
             },
             "recent_images": service.recent_images(limit=6),
+            "diary_enabled": settings.diary_enabled,
+            "diary_events": diary_events,
+            "pending_count": getattr(self, "_pending_count", 0),
         }
 
     @ui.action(
@@ -248,6 +339,9 @@ class SelfiePainterPlugin(NekoPluginBase):
             "public_base_url",
         }
         updates = {key: str(kwargs.get(key) or "").strip() for key in allowed if key in kwargs}
+        for key in ("context_enabled", "diary_enabled"):
+            if key in kwargs:
+                updates[key] = bool(kwargs[key])
         api_key = str(kwargs.get("api_key") or "").strip()
         if api_key:
             updates["api_key"] = api_key

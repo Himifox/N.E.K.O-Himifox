@@ -52,6 +52,9 @@ class SelfiePainterConfig:
     guidance_scale: float
     num_inference_steps: int
     seed: int
+    context_enabled: bool = True
+    diary_enabled: bool = True
+    diary_max_events: int = 100
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> SelfiePainterConfig:
@@ -88,6 +91,9 @@ class SelfiePainterConfig:
             guidance_scale=_bounded_float(raw.get("guidance_scale"), 5.0, 0.0, 30.0),
             num_inference_steps=_bounded_int(raw.get("num_inference_steps"), 28, 1, 150),
             seed=_bounded_int(raw.get("seed"), -1, -1, 2_147_483_647),
+            context_enabled=_as_bool(raw.get("context_enabled"), True),
+            diary_enabled=_as_bool(raw.get("diary_enabled"), True),
+            diary_max_events=_bounded_int(raw.get("diary_max_events"), 100, 1, 500),
         )
 
 
@@ -97,6 +103,7 @@ class GeneratedSelfie:
     public_url: str
     preview_url: str
     style: str
+    character_name: str = ""
 
 
 class SelfiePainterService:
@@ -145,9 +152,29 @@ class SelfiePainterService:
             )
         return recent
 
+    def has_generated_image(self, filename: str) -> bool:
+        return bool(filename) and Path(filename).name == filename and (self.generated_dir / filename).is_file()
+
+    def public_image_url(self, filename: str) -> str:
+        return self._public_url(filename) if self.has_generated_image(filename) else ""
+
     async def generate(self, *, scene: str, style: str) -> GeneratedSelfie:
+        return await self.generate_with_context(scene=scene, style=style)
+
+    async def active_character(self) -> tuple[str, str]:
+        return await self._active_character()
+
+    async def generate_with_context(
+        self,
+        *,
+        scene: str,
+        style: str,
+        active_character: tuple[str, str] | None = None,
+        recent_context: str = "",
+        continuity: str = "",
+    ) -> GeneratedSelfie:
         self._validate_required_config()
-        active_name, active_reference = await self._active_character()
+        active_name, active_reference = active_character or await self._active_character()
         selected_style = style.strip().lower() if isinstance(style, str) else ""
         if selected_style not in _STYLE_PROMPTS:
             selected_style = self.settings.default_style
@@ -156,6 +183,8 @@ class SelfiePainterService:
             scene=_clean_prompt_part(scene),
             style=selected_style,
             active_name=active_name,
+            recent_context=_clean_prompt_part(recent_context, limit=900),
+            continuity=_clean_prompt_part(continuity, limit=320),
         )
         reference = await self._reference_image(active_reference)
         api_key = self._api_key()
@@ -176,6 +205,7 @@ class SelfiePainterService:
             public_url=self._public_url(filename),
             preview_url=self._public_url(preview_filename),
             style=selected_style,
+            character_name=active_name,
         )
 
     def _validate_required_config(self) -> None:
@@ -208,13 +238,25 @@ class SelfiePainterService:
             return base_url
         return f"{base_url}/{suffix.lstrip('/')}"
 
-    def _build_prompt(self, *, scene: str, style: str, active_name: str) -> str:
+    def _build_prompt(
+        self,
+        *,
+        scene: str,
+        style: str,
+        active_name: str,
+        recent_context: str = "",
+        continuity: str = "",
+    ) -> str:
         parts = [self.settings.character_prompt]
         if active_name:
             parts.append(f"character name: {active_name}")
         parts.append(_STYLE_PROMPTS[style])
         if scene:
-            parts.append(scene)
+            parts.append(f"Current request (highest priority): {scene}")
+        if recent_context:
+            parts.append(recent_context)
+        if continuity:
+            parts.append(continuity)
         parts.append(self.settings.prompt_suffix)
         return ", ".join(part for part in parts if part)
 
@@ -582,6 +624,20 @@ def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
 
 __all__ = [
