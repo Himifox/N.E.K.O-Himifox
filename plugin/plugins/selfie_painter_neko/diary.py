@@ -10,6 +10,19 @@ from typing import Any
 _STORE_KEY = "selfie_diary_v1"
 _DEFAULT_CHARACTER = "__default__"
 _MAX_CONTEXT_ITEMS = 3
+_SENSITIVE_MARKERS = (
+    "http://",
+    "https://",
+    "www.",
+    "api_key",
+    "api key",
+    "apikey",
+    "token",
+    "password",
+    "密码",
+    "密钥",
+    "令牌",
+)
 _VISUAL_TERMS = (
     "穿",
     "衣",
@@ -44,7 +57,8 @@ _VISUAL_TERMS = (
     "早晨",
     "灯光",
     "坐",
-    "站",
+    "站着",
+    "站在",
     "躺",
     "回头",
     "比心",
@@ -108,7 +122,11 @@ def select_recent_visual_context(
         event_character = _clean_text(payload.get("lanlan"), limit=100)
         if character_name and event_character and event_character != character_name:
             continue
-        content = _clean_text(payload.get("content"), limit=240)
+        raw_content = str(payload.get("content") or "")
+        lowered_raw = raw_content.casefold()
+        if "```" in raw_content or any(marker in lowered_raw for marker in _SENSITIVE_MARKERS):
+            continue
+        content = _clean_text(raw_content, limit=240)
         if not content or content == scene or content in seen:
             continue
         lowered = content.casefold()

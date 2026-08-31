@@ -132,7 +132,11 @@ class SelfiePainterPlugin(NekoPluginBase):
                 else:
                     active_character = await service.active_character()
                     active_name = active_character[0]
-                    diary_events = await self._load_diary_events(active_name, limit=3)
+                    diary_events = (
+                        await self._load_diary_events(active_name, limit=3)
+                        if service.settings.diary_enabled
+                        else []
+                    )
                     recent_context = ""
                     if service.settings.context_enabled:
                         recent_context = await self._recent_context(active_name, scene)
@@ -226,7 +230,7 @@ class SelfiePainterPlugin(NekoPluginBase):
             }
         settings = service.settings
         active_name, _ = await service.active_character()
-        diary_events = await self._load_diary_events(active_name, limit=30) if settings.diary_enabled else []
+        diary_events = await self._load_diary_events(active_name, limit=30)
         for event in diary_events:
             filename = str(event.get("filename") or "")
             if filename and service.has_generated_image(filename):
