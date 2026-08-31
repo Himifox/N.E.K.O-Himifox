@@ -33,6 +33,8 @@ type SelfieConfig = {
   reference_source?: string
   reference_image_path?: string
   public_base_url?: string
+  context_enabled?: boolean
+  diary_enabled?: boolean
 }
 
 type RecentImage = {
@@ -204,10 +206,10 @@ const STORYBOOK_STYLES = `
 `
 
 const defaultConfig = {
-  api_format: "openai",
-  base_url: "",
+  api_format: "dashscope",
+  base_url: "https://dashscope.aliyuncs.com/api/v1",
   api_key: "",
-  model: "gpt-image-2",
+  model: "qwen-image-2.0",
   size: "1024x1024",
   character_prompt: "",
   prompt_suffix: "",
@@ -216,6 +218,8 @@ const defaultConfig = {
   reference_source: "none",
   reference_image_path: "",
   public_base_url: "",
+  context_enabled: true,
+  diary_enabled: true,
 }
 
 function actionById(actions: HostedAction[], id: string): HostedAction | undefined {
@@ -246,6 +250,7 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
   ].slice(0, 3)
   const saveAction = actionById(actions || [], "selfie_save_config")
   const generateAction = actionById(actions || [], "selfie_generate_webui")
+  const clearDiaryAction = actionById(actions || [], "selfie_clear_diary")
   const configForm = useForm(defaultConfig)
   const [scene, setScene] = useState("")
   const [style, setStyle] = useState(String(config.default_style || "standard"))
@@ -268,6 +273,8 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
       reference_source: String(config.reference_source || "none"),
       reference_image_path: String(config.reference_image_path || ""),
       public_base_url: String(config.public_base_url || ""),
+      context_enabled: config.context_enabled !== false,
+      diary_enabled: config.diary_enabled !== false,
     })
     setStyle(String(config.default_style || "standard"))
   }, [
@@ -282,6 +289,8 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
     config.reference_source,
     config.reference_image_path,
     config.public_base_url,
+    config.context_enabled,
+    config.diary_enabled,
   ])
 
   async function saveConfig() {
@@ -317,6 +326,22 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
       setGenerating(false)
+    }
+  }
+
+  async function clearDiary() {
+    if (!clearDiaryAction) {
+      toast.error(t("panel.errors.actionUnavailable"))
+      return
+    }
+    if (!window.confirm(t("panel.diary.clearConfirm"))) return
+    try {
+      await props.api.call("selfie_clear_diary", {})
+      setBookPage(0)
+      await props.api.refresh()
+      toast.success(t("panel.messages.diaryCleared"))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -548,9 +573,20 @@ export default function SelfiePainterPanel(props: PluginSurfaceProps<DashboardSt
     <Stack>
       <Card title={t("panel.diary.settingsTitle")}>
         <Stack>
-          <Alert tone="info">{t("panel.diary.settingsComing")}</Alert>
-          <Switch checked={false} disabled label={t("panel.diary.autoRecord")} />
-          <Switch checked={false} disabled label={t("panel.diary.autoPhoto")} />
+          <Alert tone="info">{t("panel.diary.privacyNotice")}</Alert>
+          <Switch
+            checked={Boolean(configForm.values.context_enabled)}
+            label={t("panel.diary.autoRecord")}
+            onChange={(value) => configForm.setField("context_enabled", Boolean(value))}
+          />
+          <Switch
+            checked={Boolean(configForm.values.diary_enabled)}
+            label={t("panel.diary.autoPhoto")}
+            onChange={(value) => configForm.setField("diary_enabled", Boolean(value))}
+          />
+          <Button disabled={!clearDiaryAction || !events.length} onClick={clearDiary}>
+            {t("panel.diary.clear")}
+          </Button>
         </Stack>
       </Card>
 

@@ -293,6 +293,47 @@ class SelfiePainterPlugin(NekoPluginBase):
             return Err(SdkError(str(error)))
 
     @ui.action(
+        label=tr("actions.clearDiary.label", default="Clear diary"),
+        tone="danger",
+        group="diary",
+        order=30,
+        confirm=tr(
+            "actions.clearDiary.confirm",
+            default="Clear the current character's selfie diary?",
+        ),
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="selfie_clear_diary",
+        name=tr("entries.clearDiary.name", default="Clear selfie diary"),
+        description=tr(
+            "entries.clearDiary.description",
+            default="Delete the current character's private selfie diary.",
+        ),
+        input_schema={"type": "object", "properties": {}},
+    )
+    async def clear_diary(self, **_: Any):
+        service = self._service
+        diary = getattr(self, "_diary", None)
+        if service is None or diary is None:
+            return Err(SdkError(self.i18n.t("errors.not_ready", default="自拍插件尚未启动。")))
+        try:
+            active_name, _ = await service.active_character()
+            removed = await diary.clear_character(active_name)
+            return Ok(
+                {
+                    "message": self.i18n.t(
+                        "messages.diaryCleared",
+                        default="当前角色的自拍日记已清空。",
+                    ),
+                    "removed": removed,
+                }
+            )
+        except Exception as error:
+            self.logger.exception("Failed to clear selfie diary")
+            return Err(SdkError(str(error)))
+
+    @ui.action(
         label=tr("actions.saveConfig.label", default="Save config"),
         tone="success",
         group="config",
@@ -321,6 +362,8 @@ class SelfiePainterPlugin(NekoPluginBase):
                 "reference_source": {"type": "string", "enum": ["none", "active_character", "file"]},
                 "reference_image_path": {"type": "string"},
                 "public_base_url": {"type": "string"},
+                "context_enabled": {"type": "boolean"},
+                "diary_enabled": {"type": "boolean"},
             },
         },
     )
@@ -338,7 +381,9 @@ class SelfiePainterPlugin(NekoPluginBase):
             "reference_image_path",
             "public_base_url",
         }
-        updates = {key: str(kwargs.get(key) or "").strip() for key in allowed if key in kwargs}
+        updates: dict[str, Any] = {
+            key: str(kwargs.get(key) or "").strip() for key in allowed if key in kwargs
+        }
         for key in ("context_enabled", "diary_enabled"):
             if key in kwargs:
                 updates[key] = bool(kwargs[key])
