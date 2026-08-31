@@ -1152,6 +1152,33 @@ def build_report(
     }
 
 
+def _truncate_each(
+    analyzed: list["SourceMessage"], max_length_of
+) -> list["SourceMessage"]:
+    """Shorten every message to its own limit, keeping all of them.
+
+    The move both budgets make once the window is down to the number of
+    distinct messages a candidate needs: a SHORTER look at three replies can
+    still find a phrase in all three, while two whole replies cannot find it
+    in three. One implementation, because the two budgets had already drifted
+    -- the character path floored and the occurrence path halved the window.
+    """
+    shortened: list[SourceMessage] = []
+    for message in analyzed:
+        limit = max_length_of(message)
+        if len(message.content) <= limit:
+            shortened.append(message)
+            continue
+        shortened.append(
+            SourceMessage(
+                language=message.language,
+                content=message.content[:limit],
+                source_line=message.source_line,
+            )
+        )
+    return shortened
+
+
 def _clip_dominant_message(
     analyzed: list[SourceMessage],
 ) -> list[SourceMessage] | None:
@@ -1299,16 +1326,7 @@ def build_user_review_report(
         # three; two whole messages cannot find it in three.
         if len(analyzed) <= message_count_threshold:
             share = USER_REVIEW_MAX_INPUT_CHARACTERS // len(analyzed)
-            analyzed = [
-                message
-                if len(message.content) <= share
-                else SourceMessage(
-                    language=message.language,
-                    content=message.content[:share],
-                    source_line=message.source_line,
-                )
-                for message in analyzed
-            ]
+            analyzed = _truncate_each(analyzed, lambda message: share)
             content_truncated = True
             break
         share = USER_REVIEW_MAX_INPUT_CHARACTERS // len(analyzed)
@@ -1370,6 +1388,41 @@ def build_user_review_report(
                 clipped = _clip_dominant_message(analyzed)
                 if clipped is not None:
                     analyzed = clipped
+                    content_truncated = True
+                    continue
+                # Nothing dominates, so nothing was clipped. Halving the
+                # WINDOW here is what the character budget already refuses
+                # to do: three uniformly occurrence-heavy replies sharing a
+                # phrase went to one, and the panel reported "not enough
+                # history" for a window in which every single message
+                # carried the phrase. This budget binds long before the
+                # character one -- an uninterrupted CJK reply busts it at
+                # about 20k characters, a sixth of the advertised limit --
+                # so it is the path that actually reaches this case.
+                #
+                # Halve the BODIES instead, and keep every message. The
+                # floor is the same one the character budget uses, for the
+                # same reason, through the same helper.
+                #
+                # The floor YIELDS rather than fails. Once every message is
+                # down to the minimum useful length and the window still
+                # busts the budget, keeping the sample would mean returning
+                # a 422 -- and the panel can only render that as "try
+                # again", which never helps. Narrowing below the threshold
+                # is a degraded answer; refusing is no answer, and the
+                # browser's minimum-sample check exists to render exactly
+                # this degraded case honestly.
+                if len(analyzed) <= message_count_threshold and any(
+                    len(message.content) > _USER_REVIEW_MIN_TRUNCATED_CHARACTERS
+                    for message in analyzed
+                ):
+                    analyzed = _truncate_each(
+                        analyzed,
+                        lambda message: max(
+                            _USER_REVIEW_MIN_TRUNCATED_CHARACTERS,
+                            len(message.content) // 2,
+                        ),
+                    )
                     content_truncated = True
                     continue
                 analyzed = analyzed[-(len(analyzed) // 2):]

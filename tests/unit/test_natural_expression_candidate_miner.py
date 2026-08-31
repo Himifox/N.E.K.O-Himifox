@@ -859,12 +859,18 @@ def test_user_review_rejects_invalid_distinct_message_threshold():
 
 
 def test_narrowed_window_can_fall_below_the_distinct_message_threshold(monkeypatch):
-    """A narrowed window can make the 3-message threshold unsatisfiable.
+    """A narrowed window can still make the 3-message threshold unsatisfiable.
 
     The browser bases its minimum-sample check on `analyzed_message_count` for
     exactly this case: with fewer analyzed replies than the threshold no
     candidate can qualify, so "no candidates found" would misreport an
     impossible evaluation as a genuine absence.
+
+    Narrowing now tries to hold the sample at the threshold first, shortening
+    bodies instead of dropping replies. This case is what remains once that is
+    exhausted -- every message already at the minimum useful length and the
+    window still over budget -- and the floor yields rather than returning a
+    422 the panel can only render as "try again".
     """
     # One such reply mines to 145 occurrences, so a 200 budget admits
     # exactly one message and the window narrows all the way down.
@@ -2883,3 +2889,57 @@ def test_the_detector_runs_in_linear_time():
         candidate_core.contains_code_shape(text)
         elapsed = time.perf_counter() - started
         assert elapsed < 2.0, "%.2fs on %r" % (elapsed, text[:24])
+
+
+def test_the_occurrence_budget_keeps_the_minimum_sample():
+    """Three uniformly heavy replies must not narrow to one.
+
+    The character budget already floors at ``message_count_threshold``; the
+    occurrence budget halved the WINDOW instead, and this is the path that
+    actually binds -- an uninterrupted CJK reply busts the occurrence budget
+    at roughly 20k characters, a sixth of the advertised character limit.
+
+    So three replies that each carry the phrase collapsed to one, and the
+    panel reported "not enough history" for a window in which every single
+    message had it. Measured before the fix: analyzed_message_count 1, zero
+    candidates.
+    """
+    phrase = "公园散步"
+    messages = [
+        candidate_core.SourceMessage(
+            language="zh",
+            content=("今天天气真好呀" * 1200) + phrase,
+            source_line=index + 1,
+        )
+        for index in range(3)
+    ]
+
+    report = candidate_core.build_user_review_report(
+        messages, message_count_threshold=3
+    )
+
+    assert report["summary"]["analyzed_message_count"] == 3
+    assert report["candidates"], "a phrase in all three replies found nothing"
+    # Every surviving candidate really does span the three messages, so this
+    # cannot pass by loosening the threshold instead of keeping the sample.
+    assert all(
+        candidate["message_count"] == 3 for candidate in report["candidates"]
+    )
+
+
+def test_both_budgets_floor_through_one_helper():
+    """The two paths drifted precisely because they were two.
+
+    The character budget truncated every message and kept them; the
+    occurrence budget sliced the list. A second spelling of "shorten
+    everything, keep the count" is a second thing to forget to fix.
+    """
+    import inspect
+
+    source = inspect.getsource(candidate_core.build_user_review_report)
+    assert source.count("_truncate_each(") == 2, (
+        "a budget stopped using the shared floor helper"
+    )
+    assert "analyzed[-(len(analyzed) // 2):]" in source, (
+        "window halving is still the fallback ABOVE the floor, not below it"
+    )
