@@ -2252,6 +2252,15 @@ def test_a_malformed_history_row_is_skipped_not_fatal(tmp_path):
         "select count(*) from t where " + _ASSISTANT_ROW_FILTER
     ).fetchone() == (1,)
 
+    # And the SHAPE, which is unusual to assert and is the point here: no
+    # query I could construct on this SQLite build evaluates the AND form
+    # eagerly, so behaviour cannot pin the choice. Reverting to
+    # "json_valid(x) AND json_extract(x, ...)" is invisible to every
+    # assertion above while reinstating a form SQLite does not promise to
+    # short-circuit.
+    assert "CASE WHEN" in _ASSISTANT_ROW_FILTER
+    assert " AND json_extract" not in _ASSISTANT_ROW_FILTER
+
 
 def test_a_legacy_vector_store_is_not_offered_as_a_character(tmp_path):
     """``semantic_memory_Alice/`` confirms itself, so a name is not enough.
@@ -2293,6 +2302,48 @@ def test_the_vector_store_rule_needs_an_owner_not_just_the_prefix(tmp_path):
     # Ordinary names are never touched by the rule, nor is a bare prefix.
     assert not is_legacy_vector_store_dir(tmp_path, "Alice")
     assert not is_legacy_vector_store_dir(tmp_path, "semantic_memory_")
+
+    # A name LONGER than the prefix but not carrying it. Dropping the prefix
+    # check reads its tail as an owner, and a character really called that
+    # tail then makes an unrelated name look like a vector store. "Alice"
+    # alone could never catch that: it is shorter than the prefix, so the
+    # strip yields an empty owner and the rule declines either way.
+    prefix_length = len("semantic_memory_")
+    impostor = "TheCharacterCalledZoe"
+    assert len(impostor) > prefix_length
+    (tmp_path / impostor[prefix_length:]).mkdir()
+    assert not is_legacy_vector_store_dir(tmp_path, impostor)
+
+
+@pytest.mark.asyncio
+async def test_the_directory_door_excludes_a_vector_store_on_its_own(tmp_path):
+    """Door 1, with door 2 unable to help.
+
+    Both existing tests went through ``iter_recent_memory_files``. A vector
+    store holding no ``recent.json`` is invisible to that door, so only the
+    selector's own directory branch can reject it -- and removing that branch
+    left every test green.
+    """
+    from main_routers import memory_router
+    from utils import config_manager
+
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "Alice").mkdir(parents=True)
+    (memory_dir / "Alice" / "time_indexed.db").write_bytes(b"")
+    # No recent.json anywhere in it: door 2 cannot see this at all.
+    (memory_dir / "semantic_memory_Alice").mkdir()
+    (memory_dir / "semantic_memory_Alice" / "index.faiss").write_bytes(b"x")
+
+    config = SimpleNamespace(
+        aload_characters=AsyncMock(return_value={"猫娘": {}}),
+        memory_dir=str(memory_dir),
+        project_memory_dir=str(tmp_path / "absent"),
+    )
+    with patch.object(config_manager, "get_config_manager", return_value=config):
+        result = await memory_router.get_insight_characters()
+
+    assert "Alice" in result["characters"]
+    assert "semantic_memory_Alice" not in result["characters"]
 
 
 def test_the_vector_store_cannot_come_back_through_the_recent_file_door(tmp_path):
@@ -2390,13 +2441,24 @@ async def test_an_unreadable_fence_does_not_fail_the_analysis(monkeypatch):
         raise OSError("root state unavailable")
 
     monkeypatch.setattr(fence, "is_write_fence_active", _boom)
-    monkeypatch.setattr(routes.runtime, "time_manager", None, raising=False)
-
-    # time_manager is None, so this reaches the EARLIER 503 -- proving the
-    # fence check neither raised nor short-circuited ahead of it.
-    with pytest.raises(HTTPException) as excinfo:
-        await routes.repetition_insights(
-            "Neko", routes.RepetitionInsightsRequest(language="zh-CN")
+    # time_manager PRESENT, so the analysis really runs. Leaving it None made
+    # this pass on the earlier "not fully initialized" 503, which a mutation
+    # that treats an unreadable fence as active returns too -- the assertion
+    # could not tell the two apart.
+    manager = SimpleNamespace(
+        aretrieve_latest_assistant_texts=AsyncMock(
+            return_value=SimpleNamespace(
+                messages=[],
+                source_available=True,
+                response_ids=[],
+                skipped_row_count=0,
+            )
         )
-    assert excinfo.value.status_code == 503
-    assert "not fully initialized" in str(excinfo.value.detail)
+    )
+    monkeypatch.setattr(routes.runtime, "time_manager", manager, raising=False)
+
+    report = await routes.repetition_insights(
+        "Neko", routes.RepetitionInsightsRequest(language="zh-CN")
+    )
+    assert report is not None
+    manager.aretrieve_latest_assistant_texts.assert_awaited()
