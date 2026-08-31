@@ -94,8 +94,23 @@ _LATEST_ASSISTANT_MIN_SCAN_BUDGET = 2_000
 # statement could walk an unbounded stretch of history looking for them; the
 # key query still pages a fixed number of rows and still advances the cursor
 # from the window's last row, whether or not anything in it survives.
+# CASE, not "json_valid(...) AND json_extract(...)".
+#
+# The AND form was reported as raising "malformed JSON" on a damaged legacy
+# row, failing the whole insights request with a 503 instead of counting it in
+# ``skipped_row_count`` and carrying on. It does NOT reproduce: measured on
+# SQLite 3.49.1 across eight query shapes -- plain WHERE, WHERE with ORDER BY
+# and LIMIT, a rowid IN list, an indexed range, the extract in the SELECT list,
+# through a view, inside an OR, and an aggregate -- every one short-circuits.
+#
+# Taken anyway, because short-circuit evaluation of AND is not something SQLite
+# promises: it is free to reorder the terms of a WHERE clause, and a plan we
+# did not think to construct is not a plan that cannot happen. A CASE is
+# correct by construction at no cost, which is a better trade than being right
+# about the eight plans we tried.
 _ASSISTANT_ROW_FILTER = (
-    "json_valid(message) AND json_extract(message, '$.type') = 'ai'"
+    "CASE WHEN json_valid(message)"
+    " THEN json_extract(message, '$.type') END = 'ai'"
 )
 # At most this many rowids per body query. SQLite's bound-parameter ceiling is
 # 999 on builds before 3.32, and ``batch_size`` is a caller argument.

@@ -2215,3 +2215,81 @@ def test_a_dangling_destination_sidecar_also_stops_the_move(tmp_path):
     assert (memory_dir / "time_indexed_Carol.db").read_bytes() == b"CAROL", (
         "the source database was not left intact"
     )
+
+
+def test_a_malformed_history_row_is_skipped_not_fatal(tmp_path):
+    """One damaged row must cost that row, not the whole request.
+
+    The row filter used to read ``json_valid(x) AND json_extract(x, ...)``.
+    Short-circuit evaluation of AND is not something SQLite promises -- it may
+    reorder the terms of a WHERE clause -- so a plan that evaluates the extract
+    first would raise "malformed JSON" and take a 503 with it.
+    """
+    import sqlite3
+
+    from memory.timeindex import _ASSISTANT_ROW_FILTER
+
+    con = sqlite3.connect(":memory:")
+    con.execute("create table t(id integer primary key, message text)")
+    con.executemany(
+        "insert into t(message) values(?)",
+        [
+            ('{"type": "ai", "data": {"content": "hi"}}',),
+            ("not json at all",),
+            ("{broken",),
+            ('{"type": "human"}',),
+        ],
+    )
+
+    rows = con.execute(
+        "select id from t where " + _ASSISTANT_ROW_FILTER + " order by id"
+    ).fetchall()
+    assert rows == [(1,)]
+
+    # The filter must not merely be total -- it must still select. A mutation
+    # that makes it match nothing would pass the "does not raise" half alone.
+    assert con.execute(
+        "select count(*) from t where " + _ASSISTANT_ROW_FILTER
+    ).fetchone() == (1,)
+
+
+def test_a_legacy_vector_store_is_not_offered_as_a_character(tmp_path):
+    """``semantic_memory_Alice/`` confirms itself, so a name is not enough.
+
+    ``character_memory_exists("semantic_memory_Alice")`` returns True because
+    that very directory is one of the paths it checks for a character of that
+    name. The selector offered it, and analysing it read
+    ``memory/semantic_memory_Alice/time_indexed.db`` -- a vector store, not
+    Alice's history -- so the panel reported no history for a character who
+    has plenty.
+    """
+    from utils.character_memory import is_legacy_vector_store_dir
+
+    (tmp_path / "Alice").mkdir()
+    (tmp_path / "Alice" / "time_indexed.db").write_bytes(b"")
+    (tmp_path / "semantic_memory_Alice").mkdir()
+    assert is_legacy_vector_store_dir(tmp_path, "semantic_memory_Alice")
+
+    # The legacy FLAT owner counts as an owner too -- her files have not been
+    # migrated into a directory yet, and her vector store is still hers.
+    (tmp_path / "recent_Bob.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "semantic_memory_Bob").mkdir()
+    assert is_legacy_vector_store_dir(tmp_path, "semantic_memory_Bob")
+
+
+def test_the_vector_store_rule_needs_an_owner_not_just_the_prefix(tmp_path):
+    """A character really called "semantic_memory_x" must not be hidden.
+
+    Excluding on the prefix alone is the defect that a prefix-based exemption
+    already caused once elsewhere: a legal name starting with the marker was
+    treated as infrastructure and silently dropped. The owner has to exist.
+    """
+    from utils.character_memory import is_legacy_vector_store_dir
+
+    (tmp_path / "semantic_memory_Nobody").mkdir()
+    (tmp_path / "semantic_memory_Nobody" / "time_indexed.db").write_bytes(b"")
+    assert not is_legacy_vector_store_dir(tmp_path, "semantic_memory_Nobody")
+
+    # Ordinary names are never touched by the rule, nor is a bare prefix.
+    assert not is_legacy_vector_store_dir(tmp_path, "Alice")
+    assert not is_legacy_vector_store_dir(tmp_path, "semantic_memory_")

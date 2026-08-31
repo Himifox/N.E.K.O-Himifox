@@ -262,7 +262,6 @@ LEGACY_CHARACTER_MEMORY_EXTRA_ENTRIES = (
     "semantic_memory_{name}",
 )
 
-
 MESSAGE_NAME_FIELDS = ("speaker", "author", "name", "character")
 
 
@@ -270,6 +269,39 @@ MESSAGE_NAME_FIELDS = ("speaker", "author", "name", "character")
 # Reuse one transaction lock for those cooperating mutation paths so their
 # load -> mutate -> save snapshots cannot overtake each other.
 character_config_mutation_lock = asyncio.Lock()
+
+
+def is_legacy_vector_store_dir(root: Path, name: str) -> bool:
+    """Whether ``root/name`` is another character's vector store, not a name.
+
+    ``character_memory_exists("semantic_memory_Alice")`` is True, because that
+    very directory is one of the paths it checks for a character of that name
+    -- it confirms itself. Anything enumerating a memory root and offering
+    what it finds therefore offered a bogus identity, and analysing it read
+    ``memory/semantic_memory_Alice/time_indexed.db`` rather than Alice's,
+    reporting no history for a character who has plenty.
+
+    OWNERSHIP, not the prefix alone. "semantic_memory_x" is a legal character
+    name, and excluding on the prefix would hide a real character who happens
+    to be called that -- the same defect as a prefix-based exemption hiding a
+    real character from deletion. The owner has to actually exist for this to
+    be a vector store rather than a name.
+    """
+    prefix = "semantic_memory_"
+    if not name.startswith(prefix):
+        return False
+    owner = name[len(prefix):]
+    if not owner:
+        return False
+    try:
+        if (root / owner).is_dir():
+            return True
+        return any(
+            (root / pattern.format(name=owner)).exists()
+            for pattern in LEGACY_CHARACTER_MEMORY_FILE_MAP
+        )
+    except OSError:
+        return False
 
 
 def iter_character_memory_roots(config_manager) -> list[Path]:

@@ -1132,10 +1132,19 @@ def test_the_unanswered_proactive_signal_skips_code_too(tmp_path):
 
 
 def test_ordinary_speech_still_reaches_all_three_entry_points(tmp_path):
-    """The dual: the skip must not swallow a character's normal punctuation."""
+    """The dual: the skip must not swallow a character's normal punctuation.
+
+    All three, because the skip is one shared predicate: a kaomoji that only
+    the two cheap-to-write entry points were checked against would leave the
+    third free to disagree with them.
+    """
     s = _build_store(tmp_path)
     speech = LONG_TIGER + "（｀・ω・´）～～～ >_< 1/2"
-    s.record_output("Neko", speech, is_proactive=True, now=1000.0)
+    for i in range(4):
+        s.record_output("Neko", speech, is_proactive=True, now=1000.0 + i)
     with s._get_lock("Neko"):
         assert s._load_unlocked("Neko") != []
     assert s.score_draft("Neko", speech, now=1000.0)[0] > 0
+    assert s.score_unanswered_proactive_draft(
+        "Neko", speech, silence_since=900.0, now=1010.0
+    ).triggered

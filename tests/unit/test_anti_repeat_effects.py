@@ -2534,8 +2534,8 @@ def test_the_draft_is_masked_before_it_is_normalized():
         "(・ω・)" + phrase + "，好不好", [phrase], language="zh"
     ) is not None
 
-    # The duals, so this cannot pass by never masking anything. A real fenced
-    # secret is still refused, and speech after a CLOSED fence is still signable.
+    # The duals, so this cannot pass by never masking anything: a reply
+    # carrying a fence does not sign, whether or not that fence is closed.
     ticks = chr(96) * 3
     secret = "API_KEY = 'sk-live-x'"
     assert build_repeat_signature(

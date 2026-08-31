@@ -42,6 +42,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 from utils.character_name import PROFILE_NAME_MAX_UNITS, validate_character_name
 from utils.character_memory import (
+    is_legacy_vector_store_dir,
     character_memory_exists,
     iter_character_memory_roots,
 )
@@ -1054,7 +1055,30 @@ async def get_insight_characters():
             # memory_dir, and a blanket containment check there would break
             # that. What is new on this branch is enumerating the root and
             # offering what it finds, so that is what learns to be careful.
-            if child.is_dir() and not child.is_symlink():
+            #
+            # And a REAL character directory, not merely a namesake. A legacy
+            # "semantic_memory_Alice/" vector store is one of the paths
+            # ``character_memory_exists`` checks for a character of that
+            # name, so it confirms itself: the selector offered
+            # "semantic_memory_Alice", and analysing it read
+            # memory/semantic_memory_Alice/time_indexed.db rather than
+            # Alice's, reporting no history for a character that has plenty.
+            #
+            # Configured characters keep their own path below and are not
+            # subject to this -- an empty configured character is still hers.
+            #
+            # And not another character's vector store. A legacy
+            # "semantic_memory_Alice/" is one of the paths
+            # ``character_memory_exists`` checks for a character of that
+            # name, so it confirms itself: the selector offered
+            # "semantic_memory_Alice", and analysing it read that vector
+            # store rather than Alice's history. Only the ENUMERATING side
+            # can tell the difference, because only it can see the owner.
+            if (
+                child.is_dir()
+                and not child.is_symlink()
+                and not is_legacy_vector_store_dir(base_dir, child.name)
+            ):
                 candidates.add(child.name)
             # No legacy decoding here. The flat layout was retired in
             # 2026-03 together with the startup migration that replaces it,
