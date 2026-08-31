@@ -357,6 +357,14 @@ def iter_recent_memory_files(base_dir: Path) -> list[str]:
     for child in base_dir.iterdir():
         if not child.is_dir() or child.is_symlink():
             continue
+        # And not another character's vector store. This is the SECOND door
+        # into the same candidate set: filtering only the selector's own
+        # directory scan left "semantic_memory_Alice/recent.json" to come
+        # back through here as "recent_semantic_memory_Alice.json" -- the
+        # exact re-admission the symlink note above already warns about, one
+        # shape later.
+        if is_legacy_vector_store_dir(base_dir, child.name):
+            continue
         recent_file = child / 'recent.json'
         if recent_file.is_file() and not recent_file.is_symlink():
             logical_names.add(build_recent_filename(child.name))

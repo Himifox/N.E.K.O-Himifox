@@ -2293,3 +2293,59 @@ def test_the_vector_store_rule_needs_an_owner_not_just_the_prefix(tmp_path):
     # Ordinary names are never touched by the rule, nor is a bare prefix.
     assert not is_legacy_vector_store_dir(tmp_path, "Alice")
     assert not is_legacy_vector_store_dir(tmp_path, "semantic_memory_")
+
+
+def test_the_vector_store_cannot_come_back_through_the_recent_file_door(tmp_path):
+    """Two doors lead into the candidate set, and only one was shut.
+
+    ``iter_recent_memory_files`` builds a logical ``recent_<name>.json`` from
+    every directory holding a ``recent.json``, so
+    ``semantic_memory_Alice/recent.json`` re-entered as
+    ``recent_semantic_memory_Alice.json`` after the directory scan had already
+    rejected it. That function's own comment warns about exactly this
+    re-admission for the symlink case.
+    """
+    from main_routers.memory_router import (
+        extract_catgirl_name_from_recent_filename,
+        iter_recent_memory_files,
+    )
+
+    (tmp_path / "Alice").mkdir()
+    (tmp_path / "Alice" / "recent.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "semantic_memory_Alice").mkdir()
+    (tmp_path / "semantic_memory_Alice" / "recent.json").write_text(
+        "[]", encoding="utf-8"
+    )
+
+    names = {
+        name
+        for name in (
+            extract_catgirl_name_from_recent_filename(logical)
+            for logical in iter_recent_memory_files(tmp_path)
+        )
+        if name
+    }
+    assert "Alice" in names, "the real owner must still come through this door"
+    assert "semantic_memory_Alice" not in names
+
+
+def test_an_unowned_vector_store_name_still_comes_through(tmp_path):
+    """The ownership rule applies at this door too, not a prefix ban."""
+    from main_routers.memory_router import (
+        extract_catgirl_name_from_recent_filename,
+        iter_recent_memory_files,
+    )
+
+    (tmp_path / "semantic_memory_Nobody").mkdir()
+    (tmp_path / "semantic_memory_Nobody" / "recent.json").write_text(
+        "[]", encoding="utf-8"
+    )
+    names = {
+        name
+        for name in (
+            extract_catgirl_name_from_recent_filename(logical)
+            for logical in iter_recent_memory_files(tmp_path)
+        )
+        if name
+    }
+    assert "semantic_memory_Nobody" in names
