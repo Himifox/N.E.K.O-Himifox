@@ -95,15 +95,28 @@ def test_build_repeat_signature_rejects_fragments_tokenized_from_protected_spans
     )
 
 
-def test_build_repeat_signature_keeps_same_fragment_when_it_also_appears_in_prose():
-    signature = build_repeat_signature(
+def test_a_fragment_in_prose_does_not_survive_its_own_code_spelling():
+    """The draft holds the term twice, in code and in prose. It signs neither.
+
+    This used to assert the prose copy still signed, which needed the span
+    layer to know exactly where the code span ended. An opener now discards
+    the whole draft, so the prose copy goes with it -- the accepted cost.
+    """
+    assert build_repeat_signature(
         "run `secret_code()` then discuss secret_code in prose",
         ["secret_code"],
         language="en",
-    )
+    ) is None
 
+    # The dual: without the code spelling the same prose still signs, so this
+    # cannot pass by never signing anything.
+    signature = build_repeat_signature(
+        "we should discuss secret phrase in prose, and discuss it again",
+        ["secret phrase"],
+        language="en",
+    )
     assert signature is not None
-    assert signature.normalized_phrase == "secret_code"
+    assert signature.normalized_phrase == "secret phrase"
 
 
 @pytest.mark.parametrize(
@@ -1134,17 +1147,13 @@ def test_a_wrapped_template_body_never_reaches_the_sidecar(label, draft):
     ) is None, label
 
 
-def test_speech_around_stray_delimiters_still_yields_a_signature():
-    """The template guard must not swallow ordinary character speech.
+def test_a_stray_template_opener_costs_the_whole_draft():
+    """Distance from the closer no longer buys anything, because nothing looks.
 
-    The bounded form is what keeps this true: an unbounded newline-crossing
-    match would treat the stray opener and the far-away closer as one container
-    and protect everything between them, so no signature could ever be built
-    for the catchphrase sitting in the middle.
+    The line budget this once pinned existed so a stray "${" could not protect
+    to end of text. There is no span to bound now: the opener alone discards
+    the draft however far away its closer sits.
     """
-    # Four newlines apart: past the budget. At three the stray pair is
-    # indistinguishable from a real template block and is deliberately
-    # protected; what this pins is that the blast radius STOPS growing.
     draft = (
         "那个 ${" + chr(10)
         + "A呢" + chr(10)
@@ -1153,8 +1162,11 @@ def test_speech_around_stray_delimiters_still_yields_a_signature():
         + "最后那个括号 }"
     )
 
-    signature = build_repeat_signature(draft, ["我们一起去吃饭吧"], language="zh-CN")
+    assert build_repeat_signature(draft, ["我们一起去吃饭吧"], language="zh-CN") is None
 
+    # The dual: the same speech without the delimiter still signs.
+    clean = draft.replace("那个 ${", "那个").replace("最后那个括号 }", "最后那个括号")
+    signature = build_repeat_signature(clean, ["我们一起去吃饭吧"], language="zh-CN")
     assert signature is not None
     assert signature.phrase == "我们一起去吃饭吧"
 
@@ -1947,15 +1959,13 @@ def test_the_miner_and_the_sidecar_mask_the_same_text(label, text):
     assert normalise(mined) == normalise(masked), label
 
 
-def test_a_container_opener_inside_code_does_not_cost_the_signature():
-    """The user-visible half of the nested-span divergence.
+def test_a_container_opener_anywhere_costs_the_signature():
+    """A stray opener beside real speech now drops the whole draft.
 
-    The parity test above compares the sidecar against the miner, and once
-    the sidecar asks the miner for its spans that comparison can only agree.
-    This one asserts the BEHAVIOUR instead, so the fix still has something
-    it can fail: a decision whose evidence sits after a stray template
-    opener used to land unattributed, and a signature is what the panel
-    counts.
+    This once pinned the opposite: the sidecar and the miner had drifted, and
+    evidence sitting after a stray opener landed unattributed. Both sides ask
+    one detector now, so there is no drift left to catch -- what is asserted
+    instead is the decision itself, which is what the panel counts.
     """
     drafts = (
         "看看 https://example.com/a${x 我们一起去吃饭吧 } 好不好",
@@ -1963,11 +1973,17 @@ def test_a_container_opener_inside_code_does_not_cost_the_signature():
         "<code>{{</code> 我们一起去吃饭吧 }} 好不好",
     )
     for draft in drafts:
-        signature = build_repeat_signature(
+        assert build_repeat_signature(
             draft, ["我们一起去吃饭吧"], language="zh",
-        )
-        assert signature is not None, draft
-        assert signature.phrase == "我们一起去吃饭吧", draft
+        ) is None, draft
+
+    # The dual, and the half that still has something to fail: the same
+    # catchphrase with no opener anywhere still signs.
+    signature = build_repeat_signature(
+        "看看那边的猫咪 我们一起去吃饭吧 好不好", ["我们一起去吃饭吧"], language="zh",
+    )
+    assert signature is not None
+    assert signature.phrase == "我们一起去吃饭吧"
 
     # The dual, and the direction that would matter if it broke: a payload
     # genuinely inside a container is still refused.
@@ -2525,8 +2541,10 @@ def test_the_draft_is_masked_before_it_is_normalized():
     assert build_repeat_signature(
         ticks + chr(10) + secret + chr(10) + ticks, [secret], language="en"
     ) is None, "a fenced secret became a persisted signature"
+    # Speech after a CLOSED fence goes too. Locating that closer is exactly
+    # the work the detector gave up, and the reply carries a fence either way.
     assert build_repeat_signature(
         ticks + chr(10) + "code" + chr(10) + ticks + chr(10) + chr(10)
         + "今天天气真好呀，" + phrase + "，你说好不好呢",
         [phrase], language="zh",
-    ) is not None, "speech after a closed fence stopped being signable"
+    ) is None, "a fenced reply must not sign, closed or not"

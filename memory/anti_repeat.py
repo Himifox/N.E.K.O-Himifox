@@ -93,6 +93,7 @@ from config import (
 from utils.config_manager import get_config_manager
 from utils.file_utils import atomic_write_json
 from utils.logger_config import get_module_logger
+from utils.natural_expression_candidates import contains_code_shape
 
 logger = get_module_logger(__name__, "Memory")
 
@@ -121,6 +122,25 @@ class UnansweredProactiveRepeatSignal:
     considered_count: int = 0
     best_similarity: float = 0.0
     repeated_terms: tuple[str, ...] = ()
+
+
+def _skip_for_code(text: str) -> bool:
+    """Whether anti-repeat should ignore this text entirely.
+
+    A draft carrying code or markup is neither scored nor ingested. The three
+    entry points share this one predicate because they have to agree: scoring
+    a draft the corpus never saw, or ingesting one that is never scored, is a
+    corpus that disagrees with itself.
+
+    Skipping the GATE, not merely the report, is a product decision resting on
+    code being rare in a character's speech. Measured before taking it: 0 of
+    9597 strings in the shipped anti-repeat corpora and 0 of 2470 stored
+    assistant replies carry any code shape. The cost when the assumption does
+    hold is that a repeated phrase which always travels with a backtick is
+    never caught -- the fixed-habit blind spot this feature already has for
+    non-proactive turns, now slightly wider.
+    """
+    return contains_code_shape(text or "")
 
 
 def _resolve_name(name: Optional[str]) -> Optional[str]:
@@ -571,6 +591,11 @@ class AntiRepeatCorpus:
         """
         if not text or not text.strip():
             return None
+        # Not ingested either, not only unscored: a corpus holding code that
+        # scoring can never match would raise DF for those terms and dilute
+        # every real phrase's IDF.
+        if _skip_for_code(text):
+            return None
         name = _resolve_name(name)
         ngrams = _ngrams(text)
         min_tokens = (
@@ -768,6 +793,8 @@ class AntiRepeatCorpus:
         """
         if not draft_text or not draft_text.strip():
             return 0.0, {}
+        if _skip_for_code(draft_text):
+            return 0.0, {}
         name = _resolve_name(name)
         draft_ngrams = _ngrams(draft_text)
         if len(draft_ngrams) < ANTI_REPEAT_MIN_DRAFT_TOKENS:
@@ -805,6 +832,7 @@ class AntiRepeatCorpus:
             or not draft_text.strip()
             or window <= 0
             or min_matches <= 0
+            or _skip_for_code(draft_text)
         ):
             return UnansweredProactiveRepeatSignal()
 

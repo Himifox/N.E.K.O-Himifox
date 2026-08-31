@@ -33,6 +33,7 @@ from utils.logger_config import get_module_logger
 from utils.natural_expression_candidates import (
     _protected_spans,
     _URL_RE,
+    contains_code_shape,
     normalize_language,
 )
 
@@ -72,129 +73,6 @@ _VALID_OUTCOMES = _BLOCKED_OUTCOMES | {
     "regen_guard_passed",
     "abandoned_user_interaction",
 }
-# A yes/no question about ONE fragment: does it hold anything protected at
-# all. Span MASKING is not this pattern's job -- ``_without_protected_text``
-# asks the miner, because rebuilding the union here is what let the two
-# drift. The shapes below still have to match the miner's, since a fragment
-# this misses is a fragment that reaches the sidecar.
-_PROTECTED_RE = re.compile(
-    # The bodies are ATOMIC. Each is a tempered token that stops only at a
-    # newline or at its own closer, so giving a character back can never
-    # let the closer match -- the character handed back is by construction
-    # neither. Without that, an opener with no closer backtracked through
-    # the whole line one character at a time, and a reply full of unmatched
-    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
-    # on the live turn path, since the effects sidecar masks every draft.
-    # Still quadratic in the opener count -- the forward scan per opener
-    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
-    # would make it linear cannot be used: it stops finding a closer past
-    # its bound, which unmasks a long template body rather than merely
-    # costing time.
-    r"```[\s\S]*?```|`[^`\r\n]+`|"
-    # Same bounded multiline containers as the miner's `_TEMPLATE_RE`, and for
-    # the same reason: a template body that merely wrapped was left searchable
-    # here, so evidence taken from inside it could reach the sidecar even though
-    # its single-line twin was rejected. `<...>` stays line-bounded AND
-    # tag-shaped -- see the miner for the speech it swallows otherwise.
-    # The body forbids only the CLOSER, not every brace: a template body may
-    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
-    # of [^{}] made all three containers miss it and mine the payload. The
-    # tempered form keeps the same bound as before, since the closer is still
-    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
-    # because the two-character opener is still required.
-    # Each container gets a LINE fallback behind its exact form. An opener
-    # with no closer used to match nothing at all, so this only ever protects
-    # more, and never past the line the opener sits on. It is also what stops
-    # the scan going quadratic: with no closer on the line the first opener
-    # consumes it and the engine never retries at the ones behind it.
-    # Measured on a full-budget single line of openers: 30s to 0.04s.
-    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
-    r"\{\{[^\r\n]*|"
-    # A BLOCK comment hides its body by definition, and the two statement
-    # delimiters were protected independently while the text between them
-    # stayed searchable. It goes FIRST, so the pair wins over the two
-    # delimiters matching separately. Bounded like everything else here: the
-    # closer is required and the body is capped, so an unpaired
-    # "{% comment %}" falls through to the line fallback rather than running
-    # away.
-    # NO length budget on the body. A cap means a closer beyond it is
-    # missed, the whole alternative fails, and the line fallback then
-    # masks only the opener line -- so every later line of a long
-    # comment came back into play. A closer is still required, so an
-    # unpaired opener still falls through to that fallback rather than
-    # running away.
-    r"\{%[-+]?[ \t]*comment[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endcomment[ \t]*[-+]?%\}|"
-    # raw/verbatim are the same shape and the same argument: the body is
-    # template SOURCE that the engine is being told not to touch, so it
-    # is not reply prose either. Two independent delimiters left the
-    # payload between them searchable.
-    r"\{%[-+]?[ \t]*raw[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endraw[ \t]*[-+]?%\}|"
-    r"\{%[-+]?[ \t]*verbatim[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endverbatim[ \t]*[-+]?%\}|"
-    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
-    r"\{%[^\r\n]*|"
-    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
-    r"\{\#[^\r\n]*|"
-    # The SAME two alternatives as the miner. ``_TEMPLATE_RE`` is not in
-    # ``_runtime_protected_spans``, so a fragment check built on the runtime
-    # spans alone would let these through and the payload would reach the
-    # 120-day sidecar.
-    # TEMPERED, like the three brace containers above, and for the reason
-    # already written there: a body may legitimately hold the character
-    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
-    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
-    # alternative failed entirely and nothing else picked the payload up.
-    # The sibling "{% ... %}" holding the same inner brace was masked
-    # fine, which is what showed the class rather than the shape was
-    # deciding.
-    # The closer is a single "}", so a tempered body ends at the FIRST one --
-    # including one that belongs to the body itself. "${({ k: 1 }).k + TOKEN}"
-    # therefore masked only as far as the object literal and left the token
-    # minable. Two alternatives, tighter first: a body that BALANCES one
-    # level of nesting, then a fallback that masks to end of line when the
-    # braces cannot be balanced at all. The fallback is the conservative
-    # reading and it is bounded to the line, so an unbalanced "${" cannot
-    # swallow the rest of the reply; the balanced form is what keeps ordinary
-    # "配置是 ${name}，好不好" speech after a template minable.
-    # A "}" inside a QUOTED literal is not the closer either, the same
-    # rule the tag alternative follows for ">". Without it
-    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
-    # interpolation was mined -- and it ended there BEFORE the line
-    # fallback could run, so the fallback did not catch it.
-    # A quoted literal may ESCAPE its own quote. Without that, the run
-    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
-    # search resumed inside the string, ending at the first "}".
-    #
-    # Deliberately NOT applied to the HTML tag alternative: a backslash
-    # is not an escape character inside an attribute value, so teaching
-    # it one would make the tag run past its real closer.
-    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
-    r"\$\{[^\r\n]*|"
-    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
-    r"<%[^\r\n]*|"
-    # Must LOOK LIKE A TAG, exactly as the miner requires. Left loose here it
-    # paired the "<" of "<3" with the ">" of ">_<" and masked the speech
-    # between them, so a signature the miner happily reported was dropped by
-    # this side alone -- the two paths are supposed to mask the same text,
-    # and the divergence silently cost the effects record a legitimate
-    # signature on one of the commonest shapes in this project's speech.
-    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
-    # real tag carrying long class/style/data-* attributes busted that cap,
-    # so the whole tag failed to match and its attributes -- including
-    # data-key="..." payloads -- were mined and persisted. The cap never
-    # bought what it looked like it bought either: "a <b and c> d" matched
-    # under it just as well, because the leading-letter requirement, not
-    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
-    # of removing it is one line of speech between a tag-shaped opener and
-    # a later ">" -- over-protection, which this module accepts, against a
-    # leak, which it does not.
-    #
-    # Atomic for the same reason as the containers above: the run stops
-    # only at "<", ">" or a newline, so a character handed back can never
-    # let the ">" match, and an opener with no closer now fails in one
-    # pass instead of one per character.
-    r"</?[A-Za-z](?>(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^<>\r\n])*)>|"
-    r"\[[A-Z](?>[A-Z0-9_-]+)\]"
-)
 # How many times a reset re-cuts when a concurrent write lands after its
 # flush. Each retry needs a racing writer to win again, so a small bound is
 # enough; exhausting it reports failure rather than claiming a cut that the
@@ -237,9 +115,21 @@ def _linguistic_core(value: str) -> str:
 
 
 def _safe_fragment(value: str) -> str:
-    fragment = unicodedata.normalize("NFKC", value or "")
-    if _URL_RE.search(fragment) or _PROTECTED_RE.search(fragment):
+    # The MINER's detector, on the RAW fragment. Two things went wrong while
+    # this asked its own local pattern instead:
+    #
+    # ``_PROTECTED_RE`` was line-bounded where the miner was not, and this
+    # checked BEFORE collapsing whitespace, so a tag whose attributes wrapped
+    # was protected by the miner and waved through here -- its attribute
+    # payload became a signature and reached the sidecar.
+    #
+    # And NFKC first re-armed what the miner deliberately leaves alone: U+FF40
+    # maps to a backtick and U+FF5E to a tilde, so a kaomoji face part read as
+    # a code delimiter. Asking about the raw text is what keeps the two sides
+    # answering the same question about the same characters.
+    if contains_code_shape(value or ""):
         return ""
+    fragment = unicodedata.normalize("NFKC", value or "")
     fragment = re.sub(r"\s+", " ", fragment).strip(_EDGE_PUNCTUATION)
     if not fragment:
         return ""
@@ -251,26 +141,16 @@ def _safe_fragment(value: str) -> str:
 def _without_protected_text(value: str) -> str:
     """Blank out every span the MINER protects, by asking the miner.
 
-    Rebuilding the union here is what let the two drift. The miner filters
-    its template matches through ``_starts_inside``; this side did not, so a
-    match that STARTED inside a runtime span and ENDED past it advanced the
-    cursor to its end and swallowed the speech in between. Measured on
-    21951 synthetic drafts: 185 where this side masked more than the miner,
-    and on those the signature was lost and the decision landed
-    unattributed.
+    Kept as a loop over spans, not shortened to "" -- ``_protected_spans``
+    answers whole-segment today, and a caller that hard-codes that shape
+    would have to be found again if it ever stops being true.
 
-    Adding that one filter here is NOT enough, and the reason is why this
-    delegates instead. ``_PROTECTED_RE`` carries two alternatives
-    ``_TEMPLATE_RE`` does not -- the fenced and inline code forms, which the
-    miner covers with scanners rather than this regex -- so when one of them
-    fires, ``finditer`` resumes at a different offset than the miner's sweep
-    and the two find different matches downstream.
-
-    The direction of the old divergence was one-way: 0 of those 21951
-    drafts had the miner masking something this side did not, so nothing was
-    ever over-persisted. ``_PROTECTED_RE`` stays for ``_safe_fragment``,
-    which asks a yes/no question about one fragment rather than building a
-    span set.
+    Rebuilding the union here is what let the two drift, back when both sides
+    ran their own patterns: measured on 21951 synthetic drafts, 185 where
+    this side masked more than the miner, and on those the signature was lost
+    and the decision landed unattributed. Nothing was ever over-persisted --
+    the divergence was one-way -- but the fix was to stop having two answers,
+    not to reconcile them.
     """
     spans = list(_protected_spans(value))
     spans.sort()

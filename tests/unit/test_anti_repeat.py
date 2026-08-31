@@ -1061,3 +1061,81 @@ def test_evicting_a_live_corpus_identity_does_not_retire_it(tmp_path):
     assert "Neko" not in corpus._retired
     corpus.record_output("Neko", LONG_TIGER, now=1_700_000_001.0)
     assert (tmp_path / "Neko" / "anti_repeat_corpus.json").exists()
+
+
+# ── code-bearing drafts are outside anti-repeat entirely ──────
+#
+# A product decision, not a leak fix: code is rare enough in a character's
+# speech to be worth skipping the GATE for, not merely the report. Measured
+# before it was taken -- 0 of 9597 strings in the shipped corpora and 0 of 2470
+# stored assistant replies carry any code shape.
+
+
+def _tiger_with(marker: str) -> str:
+    """The corpus's own long draft, carrying one code opener.
+
+    On its OWN line: a reference definition is a leading construct, so
+    "[cfg]: /srv/token" appended mid-line is not one and must not fire.
+    """
+    return LONG_TIGER + chr(10) + marker
+
+
+CODE_MARKERS = (
+    "`x`",
+    "```",
+    "<div>",
+    "<!--",
+    "{{ a }}",
+    "${ a }",
+    "https://example.com/a",
+    "[cfg]: /srv/token",
+)
+
+
+@pytest.mark.parametrize("marker", CODE_MARKERS)
+def test_a_code_bearing_draft_is_never_ingested(tmp_path, marker):
+    s = _build_store(tmp_path)
+    s.record_output("Neko", _tiger_with(marker), is_proactive=True, now=1000.0)
+    with s._get_lock("Neko"):
+        assert s._load_unlocked("Neko") == []
+
+
+@pytest.mark.parametrize("marker", CODE_MARKERS)
+def test_a_code_bearing_draft_is_never_scored(tmp_path, marker):
+    """Scored against a corpus that HAS the same text, so a 0 means the skip.
+
+    Ingesting the clean spelling first is what stops this passing merely
+    because the corpus is empty.
+    """
+    s = _build_store(tmp_path)
+    s.record_output("Neko", LONG_TIGER, is_proactive=True, now=1000.0)
+    assert s.score_draft("Neko", LONG_TIGER, now=1000.0)[0] > 0
+    assert s.score_draft("Neko", _tiger_with(marker), now=1000.0) == (0.0, {})
+
+
+def test_the_unanswered_proactive_signal_skips_code_too(tmp_path):
+    """The third entry point. All three agree or the corpus contradicts itself."""
+    s = _build_store(tmp_path)
+    for i in range(4):
+        s.record_output("Neko", LONG_TIGER, is_proactive=True, now=1000.0 + i)
+
+    clean = s.score_unanswered_proactive_draft(
+        "Neko", LONG_TIGER, silence_since=900.0, now=1010.0
+    )
+    assert clean.triggered, "the control must fire, or the skip proves nothing"
+
+    fenced = s.score_unanswered_proactive_draft(
+        "Neko", _tiger_with("`x`"), silence_since=900.0, now=1010.0
+    )
+    assert not fenced.triggered
+    assert fenced.match_count == 0
+
+
+def test_ordinary_speech_still_reaches_all_three_entry_points(tmp_path):
+    """The dual: the skip must not swallow a character's normal punctuation."""
+    s = _build_store(tmp_path)
+    speech = LONG_TIGER + "（｀・ω・´）～～～ >_< 1/2"
+    s.record_output("Neko", speech, is_proactive=True, now=1000.0)
+    with s._get_lock("Neko"):
+        assert s._load_unlocked("Neko") != []
+    assert s.score_draft("Neko", speech, now=1000.0)[0] > 0

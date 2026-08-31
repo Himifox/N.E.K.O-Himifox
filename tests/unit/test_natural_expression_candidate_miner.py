@@ -291,44 +291,8 @@ def test_korean_word_candidates_stop_at_the_occurrence_cap(monkeypatch):
     assert generated == 4
 
 
-def test_code_urls_and_template_noise_are_protected():
-    text = (
-        "`hidden phrase` https://example.test/hidden-phrase\n"
-        "intranet.example/private-path\n"
-        "```text\nhidden phrase\n```\n"
-        "{{hidden phrase}} <HIDDEN_PHRASE>\n"
-        "visible phrase"
-    )
-    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
-
-    report = miner.build_report(
-        messages,
-        input_record_count=3,
-        config=_config(),
-        rules_by_language={},
-    )
-
-    normalized = {candidate["normalized_phrase"] for candidate in report["candidates"]}
-    assert "visible phrase" in normalized
-    assert "hidden phrase" not in normalized
-    assert all("intranet" not in phrase for phrase in normalized)
-    assert all("example" not in phrase for phrase in normalized)
 
 
-def test_indented_markdown_code_is_protected():
-    text = "visible phrase\n\n    secret_key = value"
-    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
-
-    report = miner.build_report(
-        messages,
-        input_record_count=3,
-        config=_config(),
-        rules_by_language={},
-    )
-
-    normalized = {candidate["normalized_phrase"] for candidate in report["candidates"]}
-    assert "visible phrase" in normalized
-    assert all("secret_key" not in phrase for phrase in normalized)
 
 
 def test_threshold_filters_below_minimum_occurrence_count():
@@ -409,45 +373,6 @@ def test_partially_covered_candidate_is_annotated_but_not_excluded():
     assert candidate["occurrence_count"] == 4
 
 
-def test_coverage_work_is_cached_across_candidates(monkeypatch):
-    text = "quiet lantern silver morning"
-    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
-    rules = {"en": [{"id": "EN_CACHE", "find": r"\bquiet lantern\b"}]}
-    original_compile = candidate_core.re.compile
-    original_protected_spans = candidate_core._runtime_protected_spans
-    calls = {"compile": 0, "finditer": 0, "protected": 0}
-
-    class CountingPattern:
-        def __init__(self, pattern):
-            self.pattern = pattern
-
-        def finditer(self, text):
-            calls["finditer"] += 1
-            return self.pattern.finditer(text)
-
-    def counting_compile(pattern, flags=0):
-        calls["compile"] += 1
-        return CountingPattern(original_compile(pattern, flags))
-
-    def counting_protected_spans(text):
-        calls["protected"] += 1
-        return original_protected_spans(text)
-
-    monkeypatch.setattr(candidate_core.re, "compile", counting_compile)
-    monkeypatch.setattr(
-        candidate_core, "_runtime_protected_spans", counting_protected_spans
-    )
-
-    report = miner.build_report(
-        messages,
-        input_record_count=3,
-        config=_config(word_ngram_min=2, word_ngram_max=2),
-        rules_by_language=rules,
-    )
-
-    assert len(report["candidates"]) == 3
-    # Candidate extraction scans each source message; coverage adds one shared scan.
-    assert calls == {"compile": 1, "finditer": 1, "protected": 4}
 
 
 def test_word_coverage_uses_original_sentence_delimiters():
@@ -526,34 +451,6 @@ def test_coverage_does_not_normalize_original_runtime_text():
     assert _candidate(report, "aguantó el aliento")["covered_by_rule_ids"] == []
 
 
-def test_coverage_preserves_protected_suffixes_in_original_text():
-    text = "A beat of silence passed `token`"
-    messages = [miner.SourceMessage("en", text, index) for index in range(1, 4)]
-    rules = {
-        "en": [
-            {
-                "id": "EN_023",
-                "find": (
-                    r"\b(?:[Aa]\s+)?(?:beat|moment)\s+of\s+silence\s+"
-                    r"(?:passed|hung|stretched|fell|followed|settled)"
-                    r"(?=\s*[.,;:!?]|\s*$)"
-                ),
-            }
-        ]
-    }
-
-    report = miner.build_report(
-        messages,
-        input_record_count=3,
-        config=_config(
-            word_ngram_min=5,
-            word_ngram_max=5,
-            exclude_covered=True,
-        ),
-        rules_by_language=rules,
-    )
-
-    assert _candidate(report, "a beat of silence passed")["covered_by_rule_ids"] == []
 
 
 def test_coverage_reads_the_real_curated_rule_table():
@@ -992,32 +889,6 @@ def _blockquoted(*lines: str) -> str:
     return "\n".join("> " + line for line in lines)
 
 
-def test_blockquoted_fenced_code_stays_protected():
-    """A fence quoted inside a reply must protect its body, not just its rails.
-
-    Stripping only whitespace left the `>` prefix in place, so the opening fence
-    never matched. The inline-code pass then protected just the two delimiter
-    lines and every identifier in between became an exportable candidate.
-    """
-    text = _blockquoted(
-        "```python",
-        "secret_token_helper = compute_secret_token_helper()",
-        "secret_token_helper = compute_secret_token_helper()",
-        "```",
-    )
-    messages = [
-        candidate_core.SourceMessage("en", text, source_line)
-        for source_line in range(1, 4)
-    ]
-
-    assert candidate_core._fenced_code_spans(text) == [(0, len(text))]
-    report = candidate_core.build_report(
-        messages,
-        input_record_count=3,
-        config=candidate_core.MiningConfig(),
-        rules_by_language={},
-    )
-    assert report["candidates"] == []
 
 
 def test_nested_and_unclosed_blockquoted_fences_stay_protected():
@@ -1069,31 +940,6 @@ def test_ordinary_quoted_prose_is_still_mined():
     )
 
 
-def test_only_blockquote_markers_count_as_a_quote_prefix():
-    """The prefix must be `>` and nothing else.
-
-    Widening it to any leading run of characters would make a mid-line fence
-    look like an opening fence, swallowing the surrounding prose into a
-    protected span and silently dropping real candidates.
-    """
-    text = "we always say the exact same thing and then ```code``` follows"
-    messages = [
-        candidate_core.SourceMessage("en", text, source_line)
-        for source_line in range(1, 4)
-    ]
-
-    assert candidate_core._strip_blockquote_prefix(text) == text
-    assert candidate_core._fenced_code_spans(text) == []
-    report = candidate_core.build_report(
-        messages,
-        input_record_count=3,
-        config=candidate_core.MiningConfig(),
-        rules_by_language={},
-    )
-    assert any(
-        candidate["phrase"] == "exact same thing"
-        for candidate in report["candidates"]
-    )
 
 
 def _mined(text: str) -> list[str]:
@@ -1110,29 +956,6 @@ def _mined(text: str) -> list[str]:
     return [candidate["phrase"] for candidate in report["candidates"]]
 
 
-def test_blockquoted_indented_code_stays_protected():
-    """The blockquote container is not part of a code block's indentation.
-
-    `>     code` measured zero indent columns, so a quoted indented block was
-    mined as prose while the unquoted form was protected.
-    """
-    quoted = "\n".join(
-        [
-            "> text before",
-            ">",
-            ">     secret_token_helper = compute()",
-            ">",
-            "> text after",
-        ]
-    )
-    nested = "\n".join([">> a b c d", ">>", ">>     secret_token_helper = compute()"])
-
-    for text in (quoted, nested):
-        assert not [
-            phrase for phrase in _mined(text) if "secret" in phrase or "helper" in phrase
-        ], text
-    # Prose around the block is still mined; the fix must not swallow the quote.
-    assert "text before" in _mined(quoted)
 
 
 def test_html_code_elements_protect_their_contents():
@@ -1199,14 +1022,6 @@ def test_script_and_style_bodies_are_protected():
         ], text
 
 
-def test_raw_text_containers_do_not_cross_match():
-    """The closing tag is a backreference, so `<pre>` cannot close a `<code>`."""
-    text = "<pre>alpha</pre> we always say the exact same thing <code>beta</code>"
-
-    spans = candidate_core._protected_spans(text)
-
-    assert len(spans) == 2
-    assert any("always" in phrase for phrase in _mined(text))
 
 
 def test_a_single_oversized_reply_is_truncated_to_the_character_budget():
@@ -1228,35 +1043,6 @@ def test_a_single_oversized_reply_is_truncated_to_the_character_budget():
     assert summary["content_truncated"] is True
 
 
-def test_a_quote_marker_inside_an_unquoted_fence_does_not_close_it():
-    """CommonMark: a fence opened at depth 0 is not closed by a deeper line.
-
-    Stripping the blockquote prefix unconditionally made "> ```" close a fence
-    opened outside any quote, exposing the rest of the block — strictly worse
-    than before blockquote handling existed. This is the regression that shipped
-    because the blockquote tests only covered fully-quoted fences.
-    """
-    from memory.anti_repeat_effects import build_repeat_signature
-
-    text = (
-        "hello there\n```\nAPI_TOKEN = 'zqxjleak'\n> ```\n"
-        "DB_PASSWORD = 'zqxjleak2'\n"
-    )
-
-    spans = candidate_core._protected_spans(text)
-    unprotected = "".join(
-        char
-        for index, char in enumerate(text)
-        if not any(start <= index < end for start, end in spans)
-    )
-
-    assert "DB_PASSWORD" not in unprotected
-    assert "API_TOKEN" not in unprotected
-    assert unprotected.strip() == "hello there"
-    assert build_repeat_signature(text, ["DB_PASSWORD"], language="en") is None
-    assert not [
-        phrase for phrase in _mined(text) if "PASSWORD" in phrase or "TOKEN" in phrase
-    ]
 
 
 def test_an_unquoted_marker_does_not_close_a_quoted_fence():
@@ -1279,16 +1065,6 @@ def test_an_unquoted_marker_does_not_close_a_quoted_fence():
     assert build_repeat_signature(text, ["DB_PASSWORD"], language="en") is None
 
 
-def test_an_equal_depth_marker_closes_the_fence_it_opened():
-    """Depth-matched closers still work, at depth 0 and nested."""
-    for text in (
-        _lines("```", "API_TOKEN = 'zqxjleak'", "```", "we always say the same thing"),
-        _lines("> ```", "> API_TOKEN = 'zqxjleak'", "> ```", "> we always say the same thing"),
-        _lines(">> ```", ">> API_TOKEN = 'zqxjleak'", ">> ```", ">> we always say the same thing"),
-    ):
-        unprotected = _unprotected(text)
-        assert "API_TOKEN" not in unprotected, text
-        assert "we always say the same thing" in unprotected, text
 
 
 def _lines(*rows: str, eol: str = "\n") -> str:
@@ -1304,131 +1080,12 @@ def _unprotected(text: str) -> str:
     )
 
 
-# Fence x blockquote-depth matrix. Written as a table because every regression in
-# this helper so far came from testing SOME shapes and assuming the rest: a quote
-# marker inside an unquoted fence, an unquoted marker after a quoted one, and a
-# depth-matched marker arriving after that. `mined` lists the fragments that MUST
-# still be analyzable, so the table pins over-protection as well as leaks.
-_FENCE_MATRIX = [
-    ("open0 closed at 0", ["```", "SECRET=1", "```", "tail"], ["tail"]),
-    ("open1 closed at 1", ["> ```", "> SECRET=1", "> ```", "> tail"], ["tail"]),
-    ("open2 closed at 2", [">> ```", ">> SECRET=1", ">> ```", ">> tail"], ["tail"]),
-    ("open0, deeper marker is content", ["```", "SECRET=1", "> ```", "SECRET=2"], []),
-    ("open1, shallower marker reopens", ["> ```", "> SECRET=1", "```", "SECRET=2"], []),
-    (
-        "open1, shallower then depth-matched marker",
-        ["> ```", "> SECRET=1", "```", "SECRET=2", "> ```", "SECRET=3"],
-        [],
-    ),
-    (
-        "open1, shallower then closed at 0",
-        ["> ```", "> SECRET=1", "```", "SECRET=2", "```", "tail"],
-        ["tail"],
-    ),
-    (
-        "open2, shallower then closed at 1",
-        [">> ```", ">> SECRET=1", "> ```", "> SECRET=2", "> ```", "tail"],
-        ["tail"],
-    ),
-    ("open0 unclosed", ["```", "SECRET=1"], []),
-    ("open1 unclosed", ["> ```", "> SECRET=1"], []),
-    ("open1, deeper marker is content", ["> ```", "> SECRET=1", ">> ```", "> SECRET=2"], []),
-    ("tilde fence", ["~~~", "SECRET=1", "~~~", "tail"], ["tail"]),
-    ("longer closer closes", ["```", "SECRET=1", "`````", "tail"], ["tail"]),
-    ("shorter closer is content", ["`````", "SECRET=1", "```", "SECRET=2"], []),
-    ("no fence at all", ["SAFE=1", "SAFE=2"], ["SAFE=1", "SAFE=2"]),
-    # A list item is a container too: a fence written straight after its marker
-    # was invisible to the parser, and stayed unprotected wherever the inline
-    # scanner did not happen to cover it.
-    # Continuation lines are INDENTED under the marker, which is the only
-    # legal form. Re-marking every line ("- SECRET=1") is not a list fence at
-    # all, and treating a re-marked line as a closer is the bug the
-    # list-marker-as-content cases below pin down.
-    ("bullet list fence", ["- ```", "  SECRET=1", "  ```", "tail"], ["tail"]),
-    (
-        "numbered list fence",
-        ["1. ```", "   SECRET=1", "   ```", "tail"],
-        ["tail"],
-    ),
-    ("list fence, unclosed", ["- ```", "  SECRET=1"], []),
-    (
-        "list fence, blank line inside",
-        ["- ```", "  a=1", "", "  SECRET=1", "  ```"],
-        [],
-    ),
-    ("bullet prose is not a fence", ["- SAFE=1 here", "- SAFE=1 here"], ["SAFE=1"]),
-]
 
 
-@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
-@pytest.mark.parametrize(
-    "label, rows, must_remain_visible",
-    _FENCE_MATRIX,
-    ids=[row[0] for row in _FENCE_MATRIX],
-)
-def test_fence_blockquote_depth_matrix(label, rows, must_remain_visible, eol):
-    """Line endings are a matrix dimension: persisted replies carry whatever the
-    model emitted, and an LF-only assumption silently changes the verdict."""
-    text = _lines(*rows, eol=eol)
-
-    unprotected = _unprotected(text)
-
-    assert "SECRET" not in unprotected, label
-    for fragment in must_remain_visible:
-        assert fragment in unprotected, label
 
 
-# Inline code span matrix. `secret_visible` is the EXPECTED outcome, so the
-# table pins both directions: a real code span must be protected, and text that
-# is genuinely prose per CommonMark must stay mineable.
-_INLINE_CODE_MATRIX = [
-    ("single-line span", "she said `SECRET=1` again", False),
-    ("multi-line span", "she said `a =\nSECRET=1` again", False),
-    ("multi-line double backtick", "she said ``a =\nSECRET=1`` again", False),
-    ("unterminated on one line", "she said `SECRET=1", False),
-    # No closing delimiter: the backtick is literal text, so the following
-    # lines really are prose and must not be swallowed.
-    ("unterminated across lines", "she said `a =\nSECRET=1\nmore prose", True),
-    # A code span cannot cross a blank line, so this is prose too.
-    ("run interrupted by a blank line", "she said `a =\n\nSECRET=1 is prose", True),
-    # A delimiter AFTER a blank line is a different paragraph and must not
-    # be treated as this run's closer -- otherwise the search swallows the
-    # prose in between. Pins the over-reach direction.
-    (
-        "closer only after a blank line",
-        "she said `a =\n\nSECRET=1 is prose and `x` here",
-        True,
-    ),
-    ("two spans on one line", "`a` prose here `SECRET=1`", False),
-    ("backticks inside a fence", "```\n`SECRET=1`\n```\ntail", False),
-]
 
 
-@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
-@pytest.mark.parametrize(
-    "label, text, secret_visible",
-    _INLINE_CODE_MATRIX,
-    ids=[row[0] for row in _INLINE_CODE_MATRIX],
-)
-def test_inline_code_span_matrix(label, text, secret_visible, eol):
-    """Line endings are a matrix dimension.
-
-    An LF-only blank-line pattern skips a CRLF blank line, so the paragraph runs
-    to end of text and a later delimiter is mistaken for the closer, swallowing
-    prose that should have produced candidates.
-
-    The fullwidth grave accent is NOT a second dimension here: it is a kaomoji
-    face part, so pairing on it deleted speech far more often than it caught
-    code. See ``_SPEECH_ELONGATION_CASES``.
-    """
-    from memory.anti_repeat_effects import build_repeat_signature
-
-    text = text.replace("\n", eol)
-    unprotected = _unprotected(text)
-
-    assert ("SECRET" in unprotected) is secret_visible, label
-    signature = build_repeat_signature(text, ["SECRET"], language="en")
-    assert (signature is not None) is secret_visible, label
 
 
 def test_inline_code_protection_still_leaves_prose_minable():
@@ -1437,41 +1094,8 @@ def test_inline_code_protection_still_leaves_prose_minable():
     assert "always" in _unprotected(text)
 
 
-# Raw-text HTML containers. Nesting is the dimension the single non-greedy
-# pattern could not express: it stopped at the FIRST closing tag and leaked the
-# rest of the outer element.
-_HTML_CONTAINER_MATRIX = [
-    ("plain code element", "<code>SECRET=1</code> tail", ["tail"]),
-    ("nested same tag", "<code>a <code>b</code> SECRET=1</code> tail", ["tail"]),
-    ("nested pre", "<pre>a <pre>b</pre> SECRET=1</pre> tail", ["tail"]),
-    (
-        "triple nesting",
-        "<code>1<code>2<code>3</code>4</code> SECRET=1</code> tail",
-        ["tail"],
-    ),
-    (
-        "two sibling containers",
-        "<code>SECRET=1</code> mid <code>SECRET=2</code> tail",
-        ["mid", "tail"],
-    ),
-    ("unterminated container", "she said <code>SECRET=1", []),
-    ("script body", "<script>SECRET=1</script> tail", ["tail"]),
-    ("style body", "<style>.SECRET=1{}</style> tail", ["tail"]),
-    ("prose with a comparison", "we always say a < b and b > c", ["always"]),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _HTML_CONTAINER_MATRIX,
-    ids=[row[0] for row in _HTML_CONTAINER_MATRIX],
-)
-def test_html_raw_text_container_matrix(label, text, must_remain_visible):
-    unprotected = _unprotected(text)
-
-    assert "SECRET" not in unprotected, label
-    for fragment in must_remain_visible:
-        assert fragment in unprotected, label
 
 
 # Fullwidth punctuation that a CJK IME produces is SPEECH, not code. Treating
@@ -1583,67 +1207,12 @@ def test_wrapped_template_bodies_are_protected(label, text):
     assert "secret helper phrase" not in _unprotected(text), label
 
 
-_TEMPLATE_OVER_PROTECTION_CASES = [
-    ("paired emoticons", "嘿嘿 >_<\n我们一起去吃饭吧\n晚安晚安 >_<", "我们一起去吃饭吧"),
-    ("heart then arrow", "そうだね <3\nまた一緒に散歩しようね\n気分 ->", "また一緒に散歩しようね"),
-    # Where the line is drawn, stated explicitly: a stray opener and a stray
-    # closer THREE newlines apart are indistinguishable from a real template
-    # block, so the budget protects both. Past the budget the blast radius stops
-    # growing, which is the property this row exists to pin -- an unbounded
-    # pattern swallowed 99.7% of a 200-line reply.
-    ("stray brace past the budget", "那个 ${\nA呢\n我们一起去吃饭吧\nB呢\n最后那个括号 }", "我们一起去吃饭吧"),
-    ("comparison operators", "记住哦 3 < 5\n我们一起去吃饭吧\n然后 10 > 7", "我们一起去吃饭吧"),
-    # Line-bounding alone did not cover the commoner one-line spelling, which
-    # is why the alternative now has to look like a tag.
-    ("emoticons on one line", "I love it <3 you are so cute >_<", "you are so cute"),
-    ("comparisons on one line", "记住哦 3 < 5，我们一起去吃饭吧，10 > 7 呢", "我们一起去吃饭吧"),
-    ("arrow pair", "心情 <- 超好，我们一起去吃饭吧 ->", "我们一起去吃饭吧"),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _TEMPLATE_OVER_PROTECTION_CASES,
-    ids=[row[0] for row in _TEMPLATE_OVER_PROTECTION_CASES],
-)
-def test_stray_delimiters_in_speech_do_not_swallow_catchphrases(
-    label, text, must_remain_visible
-):
-    assert must_remain_visible in _unprotected(text), label
 
 
-# Containers alternate. One blockquote pass followed by one list pass only found
-# an opener in the orders it happened to be written in, so a fence inside
-# `- > ...` was invisible while `> - ...` worked.
-_NESTED_CONTAINER_CASES = [
-    ("list then quote", ["- > ~~~python", "  > SECRET=1", "  > ~~~", "tail"]),
-    ("quote then list", ["> - ~~~python", ">   SECRET=1", ">   ~~~", "tail"]),
-    ("list then quote, unclosed", ["- > ~~~python", "  > SECRET=1"]),
-    ("two quote levels", ["- > > ~~~", "  > > SECRET=1", "  > > ~~~", "tail"]),
-    ("ordered then quote", ["1. > ~~~", "   > SECRET=1", "   > ~~~", "tail"]),
-    # Needs more than one strip: list, quote, list, quote. A single pass finds
-    # the opener only for the shallowest nesting.
-    (
-        "alternating twice",
-        ["- > - > ~~~", "  >   > SECRET=1", "  >   > ~~~", "tail"],
-    ),
-]
 
 
-@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
-@pytest.mark.parametrize(
-    "label, rows",
-    _NESTED_CONTAINER_CASES,
-    ids=[row[0] for row in _NESTED_CONTAINER_CASES],
-)
-def test_fences_nested_in_alternating_containers_are_protected(label, rows, eol):
-    unprotected = _unprotected(_lines(*rows, eol=eol))
-    assert "SECRET" not in unprotected, label
-    if rows[-1] == "tail":
-        # The fence must also CLOSE. Getting the container depth wrong hides
-        # the secret too -- by never closing and swallowing the rest of the
-        # reply -- so the leak assertion alone cannot tell the two apart.
-        assert "tail" in unprotected, label
 
 
 _NESTED_CONTAINER_SPEECH = [
@@ -1686,108 +1255,20 @@ def test_a_longer_run_inside_a_code_span_is_content(label, text):
     assert "SECRET_TOKEN" not in _unprotected(text), label
 
 
-_CLOSER_SPEECH_CASES = [
-    ("stray single", "好呀我们一起去吧 ` 真开心", "我们一起去吧"),
-    ("paired", "好呀`一起去吧`真开心", "真开心"),
-    # `我们` is a legitimate span here and is protected, before and after --
-    # what must survive is the prose outside it.
-    ("two strays", "好呀`我们`一起去吧", "一起去吧"),
-    ("english apostrophe-ish", "it's a `great day out there friend", "it's a "),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _CLOSER_SPEECH_CASES,
-    ids=[row[0] for row in _CLOSER_SPEECH_CASES],
-)
-def test_the_exact_run_rule_does_not_swallow_speech(label, text, must_remain_visible):
-    assert must_remain_visible in _unprotected(text), label
 
 
-# Three container/target shapes that reached the report AND the persisted
-# signature: a Markdown link's relative target, a wrapped HTML comment, and an
-# indented code block nested in a list (alone or with a blockquote).
-_UNPROTECTED_CONTAINER_CASES = [
-    ("relative link target", "see [endpoint](/api/SECRET_TOKEN) here"),
-    ("link target with title", 'see [x](/api/SECRET_TOKEN "t") here'),
-    ("wrapped html comment", "<!--\nSECRET_TOKEN should never render\n-->"),
-    ("comment inside prose", "hello <!--\nSECRET_TOKEN\n--> bye"),
-    ("unterminated comment", "hello <!--\nSECRET_TOKEN"),
-    ("list then quote, indented", "- >     SECRET_TOKEN = 1\n- >     more = 2"),
-    ("quote then list, indented", "> -     SECRET_TOKEN = 1"),
-    ("list, indented", "-     SECRET_TOKEN = 1"),
-    ("ordered list, indented", "1.     SECRET_TOKEN = 1"),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text",
-    _UNPROTECTED_CONTAINER_CASES,
-    ids=[row[0] for row in _UNPROTECTED_CONTAINER_CASES],
-)
-def test_link_targets_comments_and_nested_indents_are_protected(label, text):
-    unprotected = _unprotected(text)
-    assert "SECRET_TOKEN" not in unprotected, label
-    if text.endswith(" bye"):
-        # The container must also END. Treating it as unterminated hides the
-        # secret too -- by swallowing the rest of the reply -- so the leak
-        # assertion alone cannot tell a closing scanner from a runaway one.
-        assert "bye" in unprotected, label
 
 
-_CONTAINER_SPEECH_CASES = [
-    # Only the link TARGET is protected; the text is prose a character may
-    # legitimately repeat, and a bare path in prose stays minable on purpose --
-    # protecting every `/foo/bar` would eat dates.
-    ("link text is prose", "[我们一起去吃饭吧](/x) 好不好", "我们一起去吃饭吧"),
-    ("bare path", "今天是 2024/01/02 我们一起去吃饭吧", "我们一起去吃饭吧"),
-    # An unbalanced "](" protects NOTHING. Running to end of text would be the
-    # over-protection this module keeps having to undo.
-    (
-        "unbalanced link open",
-        "看 [x](/api/f( 然后" + chr(10) + "我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-    ("bare bracket then paren", "数组 a[0](1) 然后 我们一起去吃饭吧", "我们一起去吃饭吧"),
-    ("bulleted speech", "- 今天也辛苦了呢\n- 我们一起去吃饭吧", "我们一起去吃饭吧"),
-    ("padded bullet", "-   我们一起去吃饭吧", "我们一起去吃饭吧"),
-    ("quoted bullet", "> - 我们一起去吃饭吧", "我们一起去吃饭吧"),
-    ("comparison", "记住 3 < 5\n我们一起去吃饭吧", "我们一起去吃饭吧"),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _CONTAINER_SPEECH_CASES,
-    ids=[row[0] for row in _CONTAINER_SPEECH_CASES],
-)
-def test_the_new_containers_do_not_swallow_speech(label, text, must_remain_visible):
-    assert must_remain_visible in _unprotected(text), label
 
 
-# An HTML opener that is DISPLAYED as code, or that sits inside a comment body,
-# opens nothing. Both scanners run to a closer that may be far away, so honouring
-# such an opener ran the container past the code block and ate the prose after
-# it. Over-protection is the worse direction here: it deletes the catchphrases
-# the feature exists to surface.
-_DISPLAYED_OPENER_CASES = [
-    ("comment opener in a fence", "```\n<!-- showing this\n```\n我们一起去吃饭吧"),
-    ("code tag in a fence", "```\n<code>example\n```\n我们一起去吃饭吧"),
-    ("script tag in a fence", "```\n<script>x=1\n```\n我们一起去吃饭吧"),
-    ("opener in an inline span", "看这个 `<!--` 符号\n我们一起去吃饭吧"),
-    ("tag inside a comment", "hello <!-- <code> --> 我们一起去吃饭吧"),
-    ("tag inside a wrapped comment", "hello <!--\n<code>\n--> 我们一起去吃饭吧"),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text",
-    _DISPLAYED_OPENER_CASES,
-    ids=[row[0] for row in _DISPLAYED_OPENER_CASES],
-)
-def test_a_displayed_html_opener_opens_nothing(label, text):
-    assert "我们一起去吃饭吧" in _unprotected(text), label
 
 
 _REAL_CONTAINER_CASES = [
@@ -1881,77 +1362,12 @@ def test_urls_are_protected_through_their_tail(label, text):
     assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
 
 
-_URL_OVER_PROTECTION_CASES = [
-    ("cjk sentence after url", "请看https://a.com。我们一起去吃饭吧！", "我们一起去吃饭吧"),
-    ("cjk comma after bare host", "看这个吧h.io/a，我们一起去吃饭吧", "我们一起去吃饭吧"),
-    # An UNBALANCED "(" must extend nothing. This one is kept even though
-    # ordinary over-protection is accepted here: a scan that runs to the end
-    # of the text is the eats-the-whole-reply class, not the loses-a-phrase
-    # class.
-    (
-        "unbalanced paren after a url",
-        "请看https://a.com/x(然后我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-    # A group whose body hits a stop character is prose, not a path segment.
-    (
-        "cjk punctuation inside the group",
-        "请看https://a.com/x(然后。)我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-    # An "@" without a DOTTED domain is not an address, so the token itself
-    # has to stay visible -- asserting only that the sentence around it
-    # survives passes either way, since the span would cover just "a@b".
-    ("at sign without a domain", "看看这个 a@b 好不好呀我们一起去吃饭吧", "a@b"),
-    (
-        "whitespace inside the group",
-        "请看https://a.com/x(然后 空格)我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _URL_OVER_PROTECTION_CASES,
-    ids=[row[0] for row in _URL_OVER_PROTECTION_CASES],
-)
-def test_a_url_does_not_swallow_the_sentence_after_it(
-    label, text, must_remain_visible
-):
-    assert must_remain_visible in _unprotected(text), label
 
 
-# The two block scanners have to agree about what an indent IS, and about where
-# a code block may START. Both directions are pinned: speech that merely looks
-# indented stays minable, and a code block behind a container prefix does not.
-_BLOCK_OVER_PROTECTION_CASES = [
-    # CommonMark: an indented code block cannot INTERRUPT a paragraph.
-    ("indented continuation", "今天天气真好呀\n    我们一起去吃饭吧\n", "我们一起去吃饭吧"),
-    ("nested list item", "- plan\n    - 一起去玩吧好不好", "一起去玩吧好不好"),
-    # ...but a quote prefix REPEATED from the line above only continues that
-    # line's paragraph, so this is a lazy continuation and not code.
-    (
-        "quoted lazy continuation",
-        "> 今天天气真好呀\n>     我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-    # A tab is four columns, so this "```" is code CONTENT of an indented block,
-    # not a fence opener -- and an opener with no closer eats the whole reply.
-    ("tab before a fence", "你好呀\n\n\t```\n我们一起去吃饭吧！", "我们一起去吃饭吧"),
-    # A backtick fence may not carry a backtick in its info string, so this line
-    # is a paragraph rather than an unclosed fence.
-    ("backtick in info string", "```a`\n我们一起去吃饭吧！", "我们一起去吃饭吧"),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _BLOCK_OVER_PROTECTION_CASES,
-    ids=[row[0] for row in _BLOCK_OVER_PROTECTION_CASES],
-)
-def test_indented_speech_is_not_a_code_block(label, text, must_remain_visible):
-    assert must_remain_visible in _unprotected(text), label
 
 
 _BLOCK_LEAK_CASES = [
@@ -1987,47 +1403,8 @@ def test_block_code_behind_a_container_prefix_is_protected(label, text):
     assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
 
 
-# A container opener or closer that is DISPLAYED as code opens and closes
-# nothing. Both halves matter: honouring an opener runs the container past the
-# code block and eats the speech after it, honouring a closer ends the
-# container early and leaks the body it was meant to cover.
-_DISPLAYED_DELIMITER_OVER_CASES = [
-    # These two carry a real label earlier in the paragraph, so the bracket
-    # requirement does not save them -- only the ignore list does.
-    (
-        "link opener in a code span",
-        "看这个 [标签] 好呀`](`我们一起去吃饭吧)！",
-        "我们一起去吃饭吧",
-    ),
-    (
-        "link opener in a fence",
-        "看这个 [标签] 好呀\n```\n](\n```\n我们一起去吃饭吧)！",
-        "我们一起去吃饭吧",
-    ),
-    # No opening bracket, so there is no link label and nothing to target.
-    ("paren after a bare bracket", "好呀](我们一起去吃饭吧)", "我们一起去吃饭吧"),
-    (
-        "template delimiters in code spans",
-        "Use `{{` repeated helper phrase `}}` in templates",
-        "repeated helper phrase",
-    ),
-    # The dual of a displayed CLOSER: a displayed nested opener must not
-    # deepen the count either, or the element runs past its real closer.
-    (
-        "nested opener displayed as code",
-        "<code>a `<code>` x</code> 我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _DISPLAYED_DELIMITER_OVER_CASES,
-    ids=[row[0] for row in _DISPLAYED_DELIMITER_OVER_CASES],
-)
-def test_a_displayed_delimiter_opens_nothing(label, text, must_remain_visible):
-    assert must_remain_visible in _unprotected(text), label
 
 
 _DISPLAYED_CLOSER_CASES = [
@@ -2049,21 +1426,6 @@ def test_a_displayed_closer_closes_nothing(label, text):
     assert build_repeat_signature(text, ["SECRET_TOKEN"], language="en") is None, label
 
 
-def test_malformed_link_targets_scan_in_linear_time():
-    """A persisted reply is accepted up to 128 KiB, and this ran once per opener.
-
-    Rescanning the paragraph tail for every failed ``](`` made 16 KiB take
-    seconds, so a reply of the maximum size kept the analysis thread busy long
-    past the router's own timeout while holding a shared worker. The bound
-    below is two orders of magnitude looser than the one-pass scanner needs;
-    it exists to fail loudly if the quadratic shape comes back.
-    """
-    import time
-
-    text = "](" * 64_000
-    started = time.perf_counter()
-    candidate_core._markdown_link_target_spans(text)
-    assert time.perf_counter() - started < 2.0
 
 
 def test_url_paren_extension_scans_in_linear_time():
@@ -2162,38 +1524,8 @@ def test_a_bracketed_speaker_beat_is_not_a_reference_definition():
     ) == []
 
 
-# A raw-text element's content is TEXT, so a start-tag-shaped string inside it
-# is a string, not a nested element. Depth-counting those ran the span past the
-# real closer and out to end of text -- the one over-protection shape this
-# module refuses, because it eats the rest of the reply rather than one phrase.
-_RAW_TEXT_NO_NESTING_CASES = [
-    (
-        "script holding its own tag as a string",
-        '<script>const marker = "<script>";</script> 我们一起去吃饭吧',
-        "我们一起去吃饭吧",
-    ),
-    (
-        "across a blank line",
-        '<style>a { content: "<style>"; }</style>\n\n我们一起去吃饭吧',
-        "我们一起去吃饭吧",
-    ),
-    (
-        "textarea",
-        "<textarea>a <textarea> b</textarea> 我们一起去吃饭吧",
-        "我们一起去吃饭吧",
-    ),
-]
 
 
-@pytest.mark.parametrize(
-    "label, text, must_remain_visible",
-    _RAW_TEXT_NO_NESTING_CASES,
-    ids=[row[0] for row in _RAW_TEXT_NO_NESTING_CASES],
-)
-def test_a_raw_text_element_ends_at_its_first_closer(
-    label, text, must_remain_visible
-):
-    assert must_remain_visible in _unprotected(text), label
 
 
 def test_pre_and_code_still_count_nesting():
@@ -2310,63 +1642,6 @@ def test_one_oversized_reply_does_not_hide_the_history_behind_it(monkeypatch):
     )
 
 
-def test_a_link_closer_must_close_its_own_label():
-    """An emote marker earlier in the paragraph is not a link label.
-
-    The label check was a paragraph-wide flag, so the first "[" anywhere
-    made every later "](" a link closer. "[LAUGHS] okay](please remember to
-    rest)" therefore protected the whole parenthetical -- the "]" after
-    LAUGHS had already closed the only label, and no reader renders that as
-    a link. A repeated catchphrase sitting there was silently never mined,
-    here and on the runtime path that shares this scanner.
-    """
-    catchphrase = "please remember to rest"
-
-    def protects(text, needle):
-        at = text.find(needle)
-        assert at >= 0, needle
-        return any(
-            start <= at < end
-            for start, end in candidate_core._protected_spans(text)
-        )
-
-    assert not protects(
-        "[LAUGHS] okay](" + catchphrase + ")", catchphrase
-    ), "an emote marker made a stray closer look like a link"
-
-    # The dual, so the fix cannot pass by never protecting anything: a real
-    # link still masks its target.
-    hyphenated = catchphrase.replace(" ", "-")
-    assert protects(
-        "see [the docs](https://example.com/" + hyphenated + ")", hyphenated
-    ), "a genuine markdown target stopped being protected"
-
-    # Nesting still resolves to the outer label.
-    assert not protects(
-        "[a[b]](https://example.com/x) " + catchphrase, catchphrase
-    )
-    # And with no label at all nothing changes.
-    assert not protects("okay](" + catchphrase + ")", catchphrase)
-
-    # A DISPLAYED bracket opens nothing either. Counting it handed a label
-    # to the stray closer after it, which is the same defect one layer down:
-    # the opener acceptance already skipped ignored spans, the counter did
-    # not.
-    assert not protects(
-        "`[LAUGHS` okay](" + catchphrase + ")", catchphrase
-    ), "a bracket shown inside a code span was counted as a link label"
-
-    # The mirror: a "]" shown inside a code span must not CONSUME a real
-    # label either, or the genuine "](" after it opens nothing and a real
-    # target goes unprotected. Fixing only the opener side left this.
-    # The target must NOT be URL-shaped, or _url_spans protects it whatever
-    # the link machinery decides and the assertion proves nothing -- which
-    # is how the first version of this case passed with the guard removed.
-    secret = "secret token value"
-    assert protects(
-        "see [the `]` docs](" + secret + ")",
-        secret,
-    ), "a displayed closing bracket consumed the label of a real link"
 
 
 def test_an_occurrence_heavy_reply_does_not_hide_the_history_behind_it():
@@ -2455,52 +1730,6 @@ def _protects(text, needle):
     )
 
 
-def test_an_angle_bracketed_reference_destination_may_hold_spaces():
-    """The <...> form of a reference destination is delimited, not whitespace-split.
-
-    The capture stopped at the first space, so "[cfg]: <../secret helper
-    phrase>" yielded "<../secret"; the destination-shape check then rejected
-    that fragment for having no closing ">", and the whole destination stayed
-    minable -- persisted to the effects sidecar for 120 days by a module whose
-    promise is that it never persists one.
-
-    The needle is deliberately not URL-shaped: a URL-shaped one is protected by
-    ``_url_spans`` whatever this pattern decides, which is how an earlier guard
-    on this file passed with its fix removed.
-    """
-    secret = "secret helper phrase"
-    catchphrase = "please remember to rest"
-
-    assert _protects(
-        "[cfg]: <../" + secret + ">" + chr(10) + chr(10) + "ordinary speech",
-        secret,
-    ), "an angle-bracketed destination was cut at its first space and left minable"
-
-    # A backslash-escaped ">" does not close it either -- the same
-    # truncation one level down, cutting the capture at the escaped
-    # bracket and leaving the rest of the destination minable.
-    assert _protects(
-        "[cfg]: <../a" + chr(92) + "> " + secret + ">" + chr(10) + chr(10) + "ok",
-        secret,
-    ), "an escaped closing bracket truncated the destination"
-
-    # Escapes are consumed as a UNIT, so neither a trailing lone backslash
-    # nor an unclosed "<" may run past the line into speech -- the
-    # runaway direction this module refuses.
-    catchphrase_pair = catchphrase + " " + catchphrase
-    assert not _protects(
-        "[cfg]: <../a" + chr(92) + chr(10) + chr(10) + catchphrase_pair,
-        catchphrase,
-    )
-    assert not _protects(
-        "[cfg]: <../a b c" + chr(10) + chr(10) + catchphrase_pair, catchphrase,
-    )
-
-    # The duals, so this cannot pass by protecting everything shaped like a
-    # bracket: the plain form still works, and bracketed SPEECH does not
-    # become a definition.
-    assert _protects("[cfg]: /api/" + secret.replace(" ", "-") + chr(10), "api")
-    assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
 
 
 def test_an_internationalised_mailto_is_protected():
@@ -2534,73 +1763,8 @@ def test_an_internationalised_mailto_is_protected():
     assert _protects("write to mailto:ops@example.com now", "ops@example.com")
 
 
-def test_a_bracket_inside_a_link_target_is_not_a_label():
-    """Destination punctuation must not hand a label to the stray closer after it.
-
-    "[docs](/api/[v1) okay](...)" put a "[" where the scan read a label opener,
-    so the "](" following it was accepted as a second link and the ordinary
-    speech in its parenthetical was protected -- silently never mined, here and
-    on the runtime path that shares this scanner.
-
-    The accumulated spans cannot answer this: a paragraph's targets are
-    appended only after its scan loop ends, so the depth is carried as it runs.
-    """
-    catchphrase = "please remember to rest"
-
-    assert not _protects(
-        "[docs](/api/[v1) okay](" + catchphrase + ")", catchphrase
-    ), "a bracket inside a link target was counted as a label opener"
-
-    # The duals. A non-URL needle throughout, so ``_url_spans`` cannot be what
-    # satisfies them.
-    secret = "secret token value"
-    assert _protects("see [docs](" + secret + ") ok", secret)
-    assert _protects("[a](/x) and [b](" + secret + ")", secret)
-    assert _protects("[a](/f(g)/" + secret + ") ok", secret)
-    assert _protects(
-        "[docs](/api/[v1) then [b](" + secret + ")", secret
-    ), "the link after a bracket-holding target stopped being protected"
 
 
-def test_a_tab_cannot_pad_a_container_marker():
-    """A tab is four columns, so a line it indents is CODE, not a quoted fence.
-
-    Both prefix patterns allowed three padding CHARACTERS, and a tab matched
-    there is worth four columns. So "\t> ```" was stripped to a bare fence and
-    opened one. The column guard in ``_fenced_code_spans`` runs on the body
-    AFTER that strip, so it measured zero indent and could not catch it -- and
-    a fence that never closes protects to end of text, silencing the whole rest
-    of the reply. ``_strip_containers_by_column`` already settled this rule for
-    the sibling path; these two patterns never followed it.
-    """
-    catchphrase = "please remember to rest"
-    ticks = chr(96) * 3
-    tab = chr(9)
-
-    for marker in ("> ", "- "):
-        text = tab + marker + ticks + chr(10) + chr(10) + catchphrase + " " + catchphrase
-        assert not _protects(text, catchphrase), (
-            "a tab-padded %r opened a fence that silenced the rest of the reply"
-            % marker
-        )
-
-    # The dual in both directions. The tab-indented line is still CODE, just by
-    # the indented-code scanner...
-    secret = "secret token value"
-    for marker in ("> ", "- "):
-        assert _protects(
-            "text" + chr(10) + chr(10) + tab + marker + secret + chr(10), secret
-        ), "a tab-indented %r line stopped being protected at all" % marker
-
-    # ...and a SPACE-padded container fence still opens, which is the whole
-    # reason these patterns strip a prefix before fence detection.
-    assert _protects(
-        "  > " + ticks + chr(10) + "  > " + secret + chr(10) + "  > " + ticks,
-        secret,
-    )
-    assert _protects(
-        "  - " + ticks + chr(10) + secret + chr(10) + "  - " + ticks, secret
-    )
 
 
 def test_a_long_html_tag_still_protects_its_attributes():
@@ -2707,68 +1871,8 @@ def test_an_oversized_reply_anywhere_does_not_take_the_history_with_it():
     assert candidate_core._clip_dominant_message(uniform[:1]) is None
 
 
-def test_an_unmatched_link_target_does_not_poison_later_links():
-    """The fix for brackets inside a target must not outlive the target.
-
-    Carrying an "inside a target" depth through the scan raised it on a "(" that
-    never closed and never lowered it again, so every later "[" stopped counting
-    and a genuine link after it went unprotected. That is a LEAK, traded for the
-    over-protection the depth was added to stop -- the wrong direction, so the
-    scan is two passes now: parentheses first, then labels jumping over targets
-    that actually close.
-
-    The needle is not URL-shaped, so ``_url_spans`` cannot be what satisfies
-    these.
-    """
-    secret = "secret token value"
-
-    assert _protects("[docs](/api/[v1 then [real](" + secret + ")", secret), (
-        "a target that never closes left the real link after it unprotected"
-    )
-    assert _protects("[a](/x [b](/y) and [c](" + secret + ")", secret)
-    # An unclosed target at the very start, with the real link last.
-    assert _protects("[x](( [y](" + secret + ")", secret)
-
-    # And the over-protection fix it must not undo.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "[docs](/api/[v1) okay](" + catchphrase + ")", catchphrase
-    ), "a bracket inside a CLOSED target was counted as a label again"
 
 
-def test_a_bare_internationalized_address_is_protected():
-    """The mailto form was fixed first; a bare address is how one is written.
-
-    The bare-address rule is ASCII-only, so a fully internationalized address
-    matched nothing and its local part -- the identifying half -- was mined and
-    persisted. What makes the open alphabet safe here is the local@domain.tld
-    SHAPE, and the atom class stopping at whitespace and CJK punctuation, so a
-    match cannot run past the sentence it sits in.
-    """
-    local = "用户秘密"
-    address = local + "@例子.公司"
-
-    assert _protects("\u5199\u4fe1\u7ed9 " + address + " \u5427", local), (
-        "a bare internationalized address was mined"
-    )
-    # Bounded to its own sentence: speech after the CJK full stop stays minable,
-    # which is what stops this from being a runaway.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "\u5199\u4fe1\u7ed9" + address + "\u3002" + catchphrase + " " + catchphrase,
-        catchphrase,
-    ), "the address rule ran past the sentence it sits in"
-
-    # The duals. ASCII addresses still resolve, and ordinary CJK speech with no
-    # address is still minable.
-    assert _protects("write to ops.secret@example.com now", "ops.secret")
-    assert not _protects(
-        "\u597d\u5440 " + catchphrase + " " + catchphrase, catchphrase
-    )
-    # An "@" alone is not an address -- the domain needs a dotted tail.
-    assert not _protects(
-        "\u5c0f\u660e@\u516c\u56ed " + catchphrase + " " + catchphrase, catchphrase
-    )
 
 
 def test_two_comparably_heavy_replies_do_not_evict_the_history():
@@ -3014,172 +2118,12 @@ def test_a_displayed_parenthesis_closes_no_link_target():
     assert _protects("[docs](/api/x" + tail + ") \u597d\u5440", tail)
 
 
-def test_a_list_marker_followed_by_indentation_opens_no_fence():
-    """The greedy trailing run is right after a marker and wrong after one.
-
-    "The greedy form above is right when a fence opener follows and wrong when
-    INDENTATION follows" is already written above _LIST_MARKER_COLUMN_RE. A line
-    that is BOTH -- a marker, then five spaces, then a fence run -- is the case
-    that comment did not cover: eating all five spaces measured the residual
-    indent as zero, so it opened a fence that never closes and silenced the rest
-    of the reply.
-    """
-    ticks = chr(96) * 3
-    phrase = "我们一起去公园散步吧"
-    tail = phrase + "\uff0c\u4eca\u5929\u5929\u6c14\u771f\u597d\u5440"
-
-    def candidates(body):
-        report = candidate_core.build_user_review_report(
-            [candidate_core.SourceMessage("zh", body, 1)] * 3,
-            message_count_threshold=1,
-            rules_by_language={},
-        )
-        return len(report["candidates"])
-
-    indented = "\u597d\u5440" + chr(10) + chr(10) + "-     " + ticks + chr(10) + tail
-    assert not candidate_core._fenced_code_spans(indented), (
-        "a marker followed by four more columns of indentation opened a fence"
-    )
-    assert candidate_core._indented_code_spans(indented), (
-        "and it is not being read as the indented code CommonMark says it is"
-    )
-    assert candidates(indented) > 20
-
-    # The duals, so this is not "list markers never open fences". A genuine
-    # "- ```" still opens, still closes when its pair is written bare, and its
-    # body is still masked.
-    single_space = "\u597d\u5440" + chr(10) + chr(10) + "- " + ticks + chr(10) + tail
-    assert candidate_core._fenced_code_spans(single_space)
-    assert candidates(single_space) == 0
-
-    closed = (
-        "\u597d\u5440" + chr(10) + chr(10) + "- " + ticks + chr(10) + "code" + chr(10)
-        + ticks + chr(10) + chr(10) + tail
-    )
-    assert candidates(closed) > 20, "a closed list fence stopped closing"
-
-    secret = "API_KEY = 'sk-live-x'"
-    body = "- " + ticks + chr(10) + secret + chr(10) + ticks + chr(10) + chr(10) + tail
-    report = candidate_core.build_user_review_report(
-        [candidate_core.SourceMessage("zh", body, 1)] * 3,
-        message_count_threshold=1,
-        rules_by_language={},
-    )
-    assert not any(
-        secret[:12] in str(candidate["phrase"]) for candidate in report["candidates"]
-    ), "the list fence stopped masking its own body"
 
 
-def test_a_tab_indented_delimiter_joins_a_fence_but_cannot_open_an_endless_one():
-    """Whether a closer exists is what disambiguates the two readings.
-
-    "\t> ```" is four columns of indent, so CommonMark calls it indented code --
-    but if a matching delimiter follows, reading the pair as a quoted fence
-    protects the body between them. Refusing the marker outright instead put a
-    fence PAIR out of step whenever only one side carried the tab, and the
-    surviving delimiter opened a fence nothing could close: the whole rest of
-    the reply went unminable.
-
-    So the marker is honoured and the ambiguity is settled at the END of the
-    scan: an unclosed fence whose opener was tab-indented is discarded, and
-    _indented_code_spans covers that line on its own.
-    """
-    ticks = chr(96) * 3
-    tab = chr(9)
-    phrase = "我们一起去公园散步吧"
-    tail = chr(10) + chr(10) + phrase + chr(10) + phrase
-
-    def runs_to_the_end(body):
-        spans = candidate_core._protected_spans(body)
-        return bool(spans) and max(end for _start, end in spans) >= len(body)
-
-    # One side tabbed: the pair still matches, so nothing runs away.
-    mixed = (
-        "> " + ticks + chr(10) + "> token = 'abc'" + chr(10) + tab + "> " + ticks
-        + tail
-    )
-    assert not runs_to_the_end(mixed), (
-        "a fence pair with a tab on one side went out of step and protected to "
-        "the end of the reply"
-    )
-    assert _protects(mixed, "token = 'abc'"), "and its body stopped being masked"
-
-    # Tabbed on BOTH sides: still a pair, still bounded, body still masked.
-    both = (
-        tab + "> " + ticks + chr(10) + tab + "> token = 'abc'" + chr(10)
-        + tab + "> " + ticks + tail
-    )
-    assert not runs_to_the_end(both)
-    assert _protects(both, "token = 'abc'")
-
-    # No closer at all: this is indented CODE, so it must not open a fence that
-    # swallows the reply -- the shape the earlier fix was written for.
-    for marker in ("> ", "- "):
-        lonely = tab + marker + ticks + tail
-        assert not runs_to_the_end(lonely), (
-            "a lone tab-indented %r delimiter still silenced the rest" % marker
-        )
-        # It is still protected as indented code, so this is not a leak.
-        assert _protects(tab + marker + "token = 'abc'" + tail, "token = 'abc'")
-
-    # The dual that keeps the discard honest: a SPACE-indented opener with no
-    # closer is a real unclosed fence, and those still protect to end of text.
-    assert runs_to_the_end("> " + ticks + tail), (
-        "an ordinary unclosed fence stopped protecting, which is not what this "
-        "rule is allowed to change"
-    )
 
 
-def test_a_template_body_may_hold_its_own_closing_brace():
-    """"${...}" ends at a single "}", including one belonging to its body.
-
-    The three "{{ }}"-style containers were tempered because a body may hold a
-    lone brace. "${...}" has the same problem and a harder shape, because its
-    closer IS that brace: "${({ k: 1 }).k + TOKEN}" masked only as far as the
-    object literal and left the token minable, then persisted.
-
-    Two alternatives, tighter first: a body balancing one level of nesting, and
-    a fallback masking to end of line when the braces cannot be balanced at all.
-    """
-    secret = "SECRET_TOKEN_VALUE"
-
-    assert _protects('${({ k: "ok" }).k + ' + secret + "}", secret), (
-        "the object literal's brace ended the container early"
-    )
-    assert not _persists('${({ k: "ok" }).k + ' + secret + "}", secret)
-    # Deeper than one level cannot be balanced by a regex, so the line fallback
-    # takes it -- the conservative reading, and still protected.
-    assert _protects("${ {{a}} + " + secret + "}", secret)
-
-    # The dual that keeps the fallback honest: ordinary speech AFTER a
-    # well-formed template on the same line is still minable, so this did not
-    # become "mask every line holding a dollar-brace".
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "\u914d\u7f6e\u662f ${name}\uff0c" + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
-def test_an_opener_with_no_closer_is_bounded_to_its_own_line():
-    """Every container gets a line fallback, and none of them may exceed a line.
-
-    An opener with no closer used to match nothing at all, so the fallback only
-    ever protects MORE. What it must never do is reach the next line -- that is
-    the runaway shape this module refuses -- and it is also what keeps the scan
-    from going quadratic, since the first opener consumes the line and the
-    engine never retries at the ones behind it.
-    """
-    catchphrase = "please remember to rest"
-    for opener in ("${", "<%", "{{", "{%", "{#"):
-        draft = (
-            opener + " oops" + chr(10) + chr(10) + catchphrase + " " + catchphrase
-        )
-        assert not _protects(draft, catchphrase), (
-            "an unclosed %r reached past its own line" % opener
-        )
-        # And it does protect its own line, which is the point of the fallback.
-        assert _protects(opener + " SECRET_TOKEN_VALUE", "SECRET_TOKEN_VALUE"), opener
 
 
 def test_a_line_of_openers_does_not_take_quadratic_time():
@@ -3204,28 +2148,6 @@ def test_a_line_of_openers_does_not_take_quadratic_time():
         )
 
 
-def test_a_quoted_attribute_value_may_hold_the_closing_delimiter():
-    """A ">" inside a quoted attribute is not where the tag ends.
-
-    Ending the span there left the rest of the tag outside it and minable.
-    """
-    secret = "secret helper phrase"
-
-    assert _protects('<div data-x="> ' + secret + '">', secret), (
-        "a quoted '>' ended the tag early"
-    )
-    assert _protects("<div data-x='> " + secret + "'>", secret)
-
-    # The duals: an ordinary tag is unchanged, and the quoted runs are
-    # line-bounded so nothing reaches past the line.
-    catchphrase = "please remember to rest"
-    assert _protects('<div data-x="' + secret + '">', secret)
-    assert not _protects("<div class=x> " + catchphrase + " " + catchphrase,
-                         catchphrase)
-    assert not _protects('<div a="> x' + chr(10) + chr(10) + catchphrase + " "
-                         + catchphrase, catchphrase)
-    # Still not a tag, which is what the leading-letter requirement is for.
-    assert not _protects("(>_<) " + catchphrase + " " + catchphrase, catchphrase)
 
 
 def test_a_reference_label_honours_escapes_too():
@@ -3247,82 +2169,10 @@ def test_a_reference_label_honours_escapes_too():
     assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
 
 
-def test_a_template_block_comment_hides_its_body():
-    """The two statement delimiters were masked, the text between them was not.
-
-    A block comment is hidden content by definition, so its body is exactly what
-    must not be mined.
-    """
-    secret = "secret helper phrase"
-
-    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret), (
-        "the block comment's body stayed searchable between its delimiters"
-    )
-    assert _protects(
-        "{% comment %}" + chr(10) + secret + chr(10) + "{% endcomment %}", secret
-    )
-
-    # The duals. An UNPAIRED opener falls through to the line fallback, so it is
-    # bounded to its own line rather than running away, and an ordinary
-    # statement is still masked on its own.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "{% comment %} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    ), "an unpaired block comment ran past its own line"
-    assert _protects("{% set token = '" + secret + "' %}", secret)
 
 
-def test_a_quoted_brace_does_not_close_an_interpolation():
-    """"${...}" ends on a single "}", including one inside a quoted literal.
-
-    The tag alternative already skips a ">" written inside quotes; the
-    interpolation did not skip a "}", so '${"}" + "SECRET"}' ended at the quoted
-    brace and the rest was mined. It ended there BEFORE the line fallback could
-    run, so the fallback did not catch it either.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-
-    assert _protects(
-        "${" + quote + "}" + quote + " + " + quote + secret + quote + "}", secret
-    ), "a quoted brace closed the interpolation"
-    assert _protects("${'}' + '" + secret + "'}", secret)
-
-    # The duals: an ordinary interpolation is unchanged, and speech after one on
-    # the same line is still minable.
-    assert _protects("${ x + " + quote + secret + quote + "}", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "\u914d\u7f6e\u662f ${name}\uff0c" + catchphrase + " " + catchphrase, catchphrase
-    )
 
 
-def test_a_block_comment_body_has_no_length_budget():
-    """A cap means a closer beyond it is missed and the body comes back.
-
-    With a 2000-character budget, a comment longer than that failed the block
-    alternative entirely; the line fallback then masked only the opener line, so
-    every later line was searchable again -- which is the opposite of what a
-    block comment is.
-    """
-    secret = "secret helper phrase"
-    long_body = "x" * 2100
-
-    assert _protects(
-        "{% comment %}" + chr(10) + long_body + chr(10) + secret + chr(10)
-        + "{% endcomment %}",
-        secret,
-    ), "a body past the old budget stopped being masked"
-
-    # The duals. A short one still works, and an UNPAIRED opener is still
-    # bounded to its own line rather than running away.
-    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "{% comment %} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
 def test_an_unclosed_block_comment_is_decided_in_one_substring_scan():
@@ -3374,177 +2224,16 @@ def test_a_reference_definition_may_sit_inside_a_container():
     assert not _protects("> [" + catchphrase + "] " + catchphrase, catchphrase)
 
 
-def test_a_reference_definition_title_is_protected_with_its_destination():
-    """The title is link metadata, and it is where readable text actually lives.
-
-    A destination is a path; the title is a sentence. So the title is the half
-    of a definition most likely to read as speech and be mined -- and the span
-    stopped at the destination. All three CommonMark delimiters count.
-    """
-    secret = "secret helper phrase"
-    tail = chr(10) + chr(10) + "ok"
-
-    for opener, closer in (('"', '"'), ("'", "'"), ("(", ")")):
-        draft = "[cfg]: /api/key " + opener + secret + closer + tail
-        assert _protects(draft, secret), (opener, closer)
-
-    # The duals. A definition with no title still protects exactly its
-    # destination, and ordinary speech after one is still minable -- the title
-    # group is optional, so a greedy read of it would swallow the next line.
-    assert _protects("[cfg]: /api/token" + tail, "/api/token")
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "[cfg]: /api/x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
-    assert not _protects("[" + catchphrase + "] " + catchphrase, catchphrase)
 
 
-def test_paired_raw_and_verbatim_blocks_protect_their_bodies():
-    """Same shape and same argument as the comment block.
-
-    A raw/verbatim body is template SOURCE the engine is being told not to
-    touch, so it is not reply prose either. Handled as two independent
-    statement delimiters, the payload between them stayed searchable.
-
-    The reachability half matters as much as the pattern: the scan picks
-    between two compiled patterns on whether a block CLOSER appears, so a reply
-    holding only a raw block took the pattern without the block alternatives and
-    the fix was there but unreachable.
-    """
-    secret = "secret helper phrase"
-
-    for name in ("raw", "verbatim"):
-        draft = (
-            "{% " + name + " %} API_TOKEN = " + chr(34) + secret + chr(34)
-            + " {% end" + name + " %}"
-        )
-        assert _protects(draft, secret), name
-
-    # The comment block, which shares the pre-check, still works.
-    assert _protects("{% comment %} " + secret + " {% endcomment %}", secret)
-
-    # The duals: an UNPAIRED opener stays bounded to its own line, and an
-    # ordinary statement is still masked on its own.
-    catchphrase = "please remember to rest"
-    for name in ("raw", "verbatim", "comment"):
-        assert not _protects(
-            "{% " + name + " %} x" + chr(10) + chr(10) + catchphrase + " "
-            + catchphrase,
-            catchphrase,
-        ), name
-    assert _protects("{% set token = '" + secret + "' %}", secret)
 
 
-def test_a_template_element_body_is_inert_and_protected():
-    """``<template>`` contents are inert by definition.
-
-    The parser does not render them and nothing in a reply is speaking them, so
-    the body between the two tags is exactly what must not be mined. The generic
-    ``<...>`` pattern covered only the TAGS, which is worse than not handling it
-    because it looks handled.
-    """
-    secret = "secret helper phrase"
-
-    assert _protects("<template>" + secret + "</template>", secret)
-    # It NESTS -- a template may contain another -- so it keeps the depth
-    # counter rather than joining the non-nesting raw-text set.
-    assert _protects(
-        "<template><template>" + secret + "</template></template>", secret
-    )
-
-    # The duals: a CLOSED template releases the text after it, and the word
-    # "template" in prose is not a tag. The pattern requires the literal tag
-    # plus a word boundary, which is what makes the second one hold.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "<template>x</template> " + catchphrase + " " + catchphrase, catchphrase
-    )
-    assert not _protects(
-        "I used a template today. " + catchphrase + " " + catchphrase, catchphrase
-    )
 
 
-def test_a_quoted_literal_may_escape_its_own_quote():
-    """The closer search must not resume inside a string.
-
-    The quoted run stopped at the backslash-quote, so the search for "}" carried
-    on inside the literal and ended at the first one -- leaving the rest of the
-    interpolation minable.
-
-    Deliberately NOT applied to the HTML tag alternative: a backslash is not an
-    escape character inside an attribute value, so teaching it one would make
-    the tag run past its real closer. That dual is asserted below.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-    slash = chr(92)
-
-    assert _protects(
-        "${" + quote + "a" + slash + quote + "} + " + secret + quote + "}", secret
-    ), "an escaped quote ended the literal and the closer search resumed inside it"
-    assert _protects("${'a" + slash + "'} + " + secret + "'}", secret)
-
-    # The duals: an ordinary interpolation is unchanged, speech after one stays
-    # minable, and a tag is NOT given escape semantics.
-    assert _protects("${ x + " + quote + secret + quote + "}", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "配置是 ${name}，" + catchphrase + " " + catchphrase, catchphrase
-    )
-    assert not _protects(
-        "<div data-x=" + quote + "a" + slash + quote + "> " + catchphrase + " "
-        + catchphrase,
-        catchphrase,
-    ), "the tag alternative was taught escapes it does not have"
 
 
-def test_jinja_whitespace_control_still_pairs_a_block():
-    """"{%- raw -%}" is the same block with whitespace control.
-
-    The delimiters were matched literally, so the hyphenated spelling paired
-    with nothing and the body stayed searchable.
-
-    The pre-check that decides which pattern runs had the same problem one layer
-    up, and a literal cannot fix it: "{%- endraw -%}" contains no
-    "{% endraw %}". It matches the closing KEYWORD instead, which is weaker in
-    the safe direction -- it can only send a draft to the fuller pattern, never
-    skip a block that could match.
-    """
-    secret = "secret helper phrase"
-
-    for name in ("comment", "raw", "verbatim"):
-        for opener, closer in (
-            ("{%- " + name + " -%}", "{%- end" + name + " -%}"),
-            ("{% " + name + " %}", "{% end" + name + " %}"),
-            ("{%-" + name + "-%}", "{%-end" + name + "-%}"),
-        ):
-            assert _protects(opener + " " + secret + " " + closer, secret), opener
-
-    # The dual: an unpaired hyphenated opener is still bounded to its own line.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "{%- raw -%} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
-def test_every_whitespace_control_spelling_pairs_a_block():
-    """Jinja has two modifiers, "-" and "+", and either may sit on either side."""
-    secret = "secret helper phrase"
-
-    for name in ("comment", "raw", "verbatim"):
-        for modifier in ("+", "-", ""):
-            opener = "{%" + modifier + " " + name + " " + modifier + "%}"
-            closer = "{%" + modifier + " end" + name + " " + modifier + "%}"
-            assert _protects(opener + " " + secret + " " + closer, secret), opener
-
-    # The dual: an unpaired opener is still bounded to its own line.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "{%+ raw +%} x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
 def test_the_block_precheck_needs_a_real_closing_tag():
@@ -3578,125 +2267,12 @@ def test_the_block_precheck_needs_a_real_closing_tag():
         assert _protects(opener * 10 + " " + secret + " " + closer, secret), modifier
 
 
-def test_a_raw_text_opener_skips_quoted_attribute_values():
-    """A close-tag-shaped string inside an attribute is a STRING.
-
-    The opener ended at the quoted ">", so the "</code>" written inside the
-    attribute closed the container before its body ever started -- and the real
-    body was mined. Same rule the generic tag alternative already followed.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-
-    assert _protects(
-        "<code data-x=" + quote + "> </code>" + quote + ">" + secret + "</code>",
-        secret,
-    ), "a quoted close tag ended the container early"
-
-    # The duals: an ordinary container still works, and a CLOSED one still
-    # releases the text after it -- the quoted run is line-bounded, so this
-    # cannot have become "protect everything after a <code>".
-    assert _protects("<code>" + secret + "</code>", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "<code>x</code> " + catchphrase + " " + catchphrase, catchphrase
-    )
 
 
-def test_a_reference_title_may_escape_its_own_delimiter():
-    """CommonMark allows it, and the title is the readable half of a definition."""
-    secret = "secret helper phrase"
-    quote = chr(34)
-    slash = chr(92)
-    tail = chr(10) + chr(10) + "ok"
-
-    assert _protects(
-        "[cfg]: /api/key " + quote + "a" + slash + quote + " " + secret + quote + tail,
-        secret,
-    )
-    assert _protects(
-        "[cfg]: /api/key (a" + slash + ") " + secret + ")" + tail, secret
-    )
-
-    # The duals: a plain title still resolves, and speech after a definition
-    # with no title is still minable.
-    assert _protects("[cfg]: /api/key " + quote + secret + quote + tail, secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "[cfg]: /api/x" + chr(10) + chr(10) + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
-def test_a_nested_raw_text_opener_skips_quoted_attribute_values():
-    """The nesting scanner builds its own per-tag opener, and it kept the bug.
-
-    Fixing the shared opener left ``rf"<{tag}\\b[^>]*>"`` untouched, so a
-    NESTED element with a close-tag-shaped attribute still ended the outer
-    span at the inner element's real closer -- and everything after it in the
-    outer body was mined and could reach the effects sidecar. Both patterns
-    are built from one string now, which is what stops a third round of this.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-
-    assert _protects(
-        "<code><code data-x="
-        + quote
-        + "> </code>"
-        + quote
-        + ">inner</code> "
-        + secret
-        + "</code>",
-        secret,
-    ), "the nested opener ended the outer span at the inner closer"
-
-    # The duals: real nesting still ends where it should, and text after a
-    # fully closed outer element is still minable.
-    assert _protects("<code>a <code>b</code> " + secret + "</code>", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "<code>a <code>b</code> c</code> " + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
-def test_a_reference_title_may_sit_on_the_following_line():
-    """CommonMark allows it, and the title is the readable half of a definition.
-
-    Accepting only spaces and tabs before the title protected the destination
-    alone and left the quoted string one line down minable -- the half most
-    likely to read as speech, and the half that reaches the sidecar.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-    nl = chr(10)
-    tail = nl + nl + "ok"
-
-    assert _protects(
-        "[cfg]: /api/key" + nl + "  " + quote + secret + quote + tail, secret
-    ), "a title on the following line was left minable"
-    assert _protects(
-        "[cfg]: /api/key" + nl + "(" + secret + ")" + tail, secret
-    )
-
-    # The duals. A same-line title still resolves; and after a BLANK line it
-    # is a paragraph, not a title -- protecting that would run the span over
-    # ordinary speech, which is the direction that deletes catchphrases.
-    assert _protects("[cfg]: /api/key " + quote + secret + quote + tail, secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "[cfg]: /api/key"
-        + nl
-        + nl
-        + catchphrase
-        + " "
-        + catchphrase
-        + nl
-        + nl
-        + "ok",
-        catchphrase,
-    )
 
 
 def test_an_opener_with_an_unpaired_quote_still_protects_its_body():
@@ -3747,58 +2323,8 @@ def test_the_attribute_run_cannot_chain_across_tags():
     )
 
 
-def test_a_jinja_comment_longer_than_the_line_budget_is_protected():
-    """A cap means a closer beyond it is MISSED, not that the body is safe.
-
-    The alternative then fails outright and the line fallback masks only the
-    opener line, so every later line of a long comment came back into play.
-    A comment body is hidden by definition -- it is not reply prose whatever
-    its length.
-    """
-    secret = "secret helper phrase"
-    nl = chr(10)
-    body = "{#" + nl + "a" + nl + "b" + nl + "c" + nl + secret + nl + "#}"
-
-    assert _protects(body, secret), (
-        "a comment body past the line budget was left minable"
-    )
-
-    # The duals: a short one still resolves, and an UNPAIRED opener still
-    # masks only its own line rather than running to the end of the reply.
-    assert _protects("{# " + secret + " #}", secret)
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "{# opener with no closer" + nl + catchphrase + " " + catchphrase,
-        catchphrase,
-    )
 
 
-def test_a_raw_text_opener_may_wrap_its_attributes():
-    """HTML start tags may split across lines and every parser reads them as one.
-
-    Rejecting the newline left the opener unrecognised, so the element was
-    never entered: only its closing tag got masked and the whole body was
-    mined.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-    nl = chr(10)
-
-    assert _protects(
-        "<code" + nl + " class=" + quote + "x" + quote + ">" + secret + "</code>",
-        secret,
-    ), "an opener with a wrapped attribute list was not recognised"
-
-    # The dual: text after a closed element is still minable, so the
-    # newline-crossing run has not become "protect the rest of the reply".
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "<code" + nl + " class=" + quote + "x" + quote + ">y</code> "
-        + catchphrase
-        + " "
-        + catchphrase,
-        catchphrase,
-    )
 
 
 def test_the_two_uncapped_families_are_gated_separately():
@@ -3832,95 +2358,8 @@ def test_the_two_uncapped_families_are_gated_separately():
     )
 
 
-def test_a_quoted_attribute_value_may_span_lines():
-    """A quoted value may cross a line AND contain ">".
-
-    The quote-aware branch failed at the newline, so the loose fallback took
-    the quoted ">" for the tag end and the attribute's own "</code>" closed
-    the container before its body -- leaving the body mined.
-
-    The runs are atomic, which is what lets them cross a line safely: once a
-    run has reached its closing quote it cannot give characters back, so the
-    closing quote of one tag can never re-pair with the opening quote of the
-    next. That chaining is what made this scan quadratic before.
-    """
-    secret = "secret helper phrase"
-    quote = chr(34)
-    nl = chr(10)
-
-    assert _protects(
-        "<code data-x="
-        + quote
-        + "line"
-        + nl
-        + "> </code>"
-        + quote
-        + ">"
-        + secret
-        + "</code>",
-        secret,
-    ), "a quoted value spanning a line ended the opener early"
-
-    # The duals: the single-line form still resolves, and speech after a
-    # closed element is still minable.
-    assert _protects(
-        "<code data-x=" + quote + "> </code>" + quote + ">" + secret + "</code>",
-        secret,
-    )
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "<code>y</code> " + catchphrase + " " + catchphrase, catchphrase
-    )
 
 
-def test_a_reference_title_may_continue_across_lines():
-    """CommonMark allows it, and both halves are link metadata.
-
-    Rejecting the line ending protected the destination alone and emitted
-    the two halves of the title as separate candidates.
-
-    It ends at a BLANK line, because past that it is a paragraph -- and
-    protecting a paragraph is how a span swallows ordinary speech, which for
-    this module is the direction that deletes the catchphrases the feature
-    exists to surface.
-    """
-    quote = chr(34)
-    nl = chr(10)
-    first = "secret helper"
-    second = "phrase inside title"
-    text = (
-        "[cfg]: /api/key "
-        + quote
-        + first
-        + nl
-        + second
-        + quote
-        + nl
-        + nl
-        + "ok"
-    )
-
-    assert _protects(text, first), "the first line of the title was minable"
-    assert _protects(text, second), "the second line of the title was minable"
-
-    # The duals, both directions of the blank-line boundary.
-    catchphrase = "please remember to rest"
-    assert not _protects(
-        "[cfg]: /api/key" + nl + nl + catchphrase + " " + catchphrase + nl + nl + "ok",
-        catchphrase,
-    )
-    assert not _protects(
-        "[cfg]: /api/key "
-        + quote
-        + "a"
-        + quote
-        + nl
-        + nl
-        + catchphrase
-        + " "
-        + catchphrase,
-        catchphrase,
-    )
 
 
 def test_one_block_family_does_not_pay_for_another():
@@ -4035,3 +2474,412 @@ def test_three_oversized_replies_still_yield_their_shared_phrase(monkeypatch):
     assert report["candidates"], (
         "no candidate came back from three replies that all carry the phrase"
     )
+
+
+# ---------------------------------------------------------------------------
+# The opener detector.
+#
+# Eight span scanners used to compute exactly WHERE protected text ended, so
+# the prose around it stayed minable. Keeping a catchphrase is not worth that:
+# an opener now discards the whole reply, and the tests that pinned those
+# boundaries are gone with the machinery they described.
+#
+# Their INPUTS are not gone. The table below was lifted mechanically out of
+# those deleted tests: every string literal in them that the old span layer
+# protected. It is the leak-direction coverage they provided, carried across
+# without depending on anyone's judgement about which ones mattered.
+# ---------------------------------------------------------------------------
+
+_SHAPES_THE_SPAN_LAYER_PROTECTED = (
+    '`hidden phrase` https://example.test/hidden-phrase\nintranet.example/private-path\n```text\nhidden phrase\n```\n{{hidden phrase}} <HIDDEN_PHRASE>\nvisible phrase',
+    'visible phrase\n\n    secret_key = value',
+    'One long reply must narrow, not dead-end the panel.\n\n    Halving the window floors at one message. Rethrowing there turned every\n    selection containing that reply into a 422 the panel can only render as\n    "please try again", and retrying never helps -- the same reply is still\n    the newest one. The body is halved instead.\n    ',
+    'we always say the exact same thing and then ```code``` follows',
+    '`<pre>` / `<code>` mark code as explicitly as a Markdown fence does.\n\n    The generic `<...>` template pattern protected only the TAGS, leaving the\n    code between them mineable and exportable.\n    ',
+    '`<script>` / `<style>` are raw-text elements; their bodies are code.',
+    '<pre>alpha</pre> we always say the exact same thing <code>beta</code>',
+    'Dropping whole messages floors at one, so the last one must be trimmed.\n\n    Otherwise a reply larger than the advertised limit is mined in full and the\n    report claims a budget it never enforced.\n    ',
+    'CommonMark: a fence opened at depth 0 is not closed by a deeper line.\n\n    Stripping the blockquote prefix unconditionally made "> ```" close a fence\n    opened outside any quote, exposing the rest of the block — strictly worse\n    than before blockquote handling existed. This is the regression that shipped\n    because the blockquote tests only covered fully-quoted fences.\n    ',
+    "hello there\n```\nAPI_TOKEN = 'zqxjleak'\n> ```\nDB_PASSWORD = 'zqxjleak2'\n",
+    '``[label]: /path`` puts a destination where the inline form hides it.\n\n    The inline scanner only knows ``](``, so the reference form was mined and\n    persisted.\n    ',
+    'morning\n\n[cfg]: /srv/lanlan/keys/SECRET_TOKEN\n',
+    'Reverse anchor: the same path in prose has to stay minable.\n\n    Without this, widening ``_URL_RE`` until every bare ``/path`` is protected\n    would satisfy the test above -- a far larger change that would eat every\n    slash in ordinary speech.\n    ',
+    'Markdown allows `[cfg]:/api/token`; requiring a space left it minable.',
+    'morning\n\n[cfg]:/api/SECRET_TOKEN\n',
+    'No outlier means dropping messages, which is the cheaper cut.\n\n    Clipping the newest whenever the budget is exceeded would shave a reply\n    that is no larger than its neighbours, losing its content for nothing --\n    the window is over budget as a whole, not because of one reply. The\n    outlier test is what keeps those two cases apart.\n    ',
+    'True when ``needle`` sits inside a protected span of ``text``.',
+    '"Longer than all the others combined" catches exactly one outlier.\n\n    Two comparably heavy replies evaded it, and the eviction that followed threw\n    away the ordinary replies carrying the repeated phrase -- the very defect the\n    single-outlier clip was added to stop. Dominance is measured against the\n    AVERAGE of the rest instead.\n    ',
+    'Fixing only the DESTINATION left the same half-fix in the same pattern.\n\n    The label class stopped at a displayed "]", so "[cfg\\]]: /secret" was not\n    recognised as a definition at all and its destination stayed minable -- the\n    exact shape the destination alternative had already been fixed for.\n    ',
+    '"${...}" ends on a single "}", including one inside a quoted literal.\n\n    The tag alternative already skips a ">" written inside quotes; the\n    interpolation did not skip a "}", so \'${"}" + "SECRET"}\' ended at the quoted\n    brace and the rest was mined. It ended there BEFORE the line fallback could\n    run, so the fallback did not catch it either.\n    ',
+    '{% comment %} ',
+    '``<template>`` contents are inert by definition.\n\n    The parser does not render them and nothing in a reply is speaking them, so\n    the body between the two tags is exactly what must not be mined. The generic\n    ``<...>`` pattern covered only the TAGS, which is worse than not handling it\n    because it looks handled.\n    ',
+    'CommonMark allows it, and the title is the readable half of a definition.\n\n    Accepting only spaces and tabs before the title protected the destination\n    alone and left the quoted string one line down minable -- the half most\n    likely to read as speech, and the half that reaches the sidecar.\n    ',
+    'Malformed, but every parser still reads it as an opener.\n\n    The quote-pairing form of the attribute run cannot match it -- there is no\n    closing quote on the line -- so without the loose fallback beside it the\n    element is not recognised at all and its body is mined. That is the\n    leaking direction, which is the one this module cannot accept.\n    ',
+    'HTML start tags may split across lines and every parser reads them as one.\n\n    Rejecting the newline left the opener unrecognised, so the element was\n    never entered: only its closing tag got masked and the whole body was\n    mined.\n    ',
+    'Their closers are different, so one gate cannot stand for both.\n\n    Sharing one meant a stray "#}" selected the pattern carrying the\n    uncapped "{% comment %}" alternative as well, and unpaired comment\n    openers then each scanned to end of text -- 4.27s at the input cap\n    against 0.05s. The bound here is loose on purpose: it separates\n    milliseconds from seconds.\n    ',
+    '"[cfg]: #config" is a valid definition and the shape check refused it.\n\n    So the whole definition stayed minable, title included -- and the title\n    is the half most likely to read as speech.\n    ',
+    'synthetic.jsonl',
+    'override.jsonl',
+    'first.json',
+    'second.json',
+    'bad.jsonl',
+    'input.jsonl',
+    'review.json',
+    '```python',
+    '```',
+    'she said <code>secret token helper</code> again and again',
+    '<pre><code>secret_token_helper = compute()</code></pre>',
+    'she said <CODE>secret token helper</CODE> again and again',
+    'she said <code>secret_token_helper = compute()',
+    'she said <pre>secret_token_helper = compute()',
+    '<code>aaa</code> middle text <code>secret_token_helper',
+    '<script>secret_token_helper = compute()</script>',
+    '<style>.secret_token_helper{color:red}</style>',
+    '<script>secret_token_helper = compute()',
+    '> ```',
+    'she said `SECRET=1` again',
+    'she said `a =\nSECRET=1` again',
+    'she said ``a =\nSECRET=1`` again',
+    'she said `SECRET=1',
+    'she said `a =\nSECRET=1\nmore prose',
+    'she said `a =\n\nSECRET=1 is prose',
+    'she said `a =\n\nSECRET=1 is prose and `x` here',
+    '`a` prose here `SECRET=1`',
+    '```\n`SECRET=1`\n```\ntail',
+    '<code>SECRET=1</code> tail',
+    '<code>a <code>b</code> SECRET=1</code> tail',
+    '<pre>a <pre>b</pre> SECRET=1</pre> tail',
+    '<code>1<code>2<code>3</code>4</code> SECRET=1</code> tail',
+    '<code>SECRET=1</code> mid <code>SECRET=2</code> tail',
+    'she said <code>SECRET=1',
+    '<script>SECRET=1</script> tail',
+    '<style>.SECRET=1{}</style> tail',
+    'a `SECRET=1` b',
+    '```\nSECRET=1\n```\ntail',
+    '~~~\nSECRET=1\n~~~\ntail',
+    '｀｀｀\nSECRET=1\n｀｀｀\ntail',
+    '```\n- ```\nDB_PASSWORD = hunter2\n```\ntail',
+    '~~~\n- ~~~\nDB_PASSWORD = hunter2\n~~~\ntail',
+    '~~~\n1. ~~~\nDB_PASSWORD = hunter2\n~~~\ntail',
+    '~~~\n> - ~~~\nDB_PASSWORD = hunter2\n~~~\ntail',
+    '｀｀｀\n- ｀｀｀\nDB_PASSWORD = hunter2\n｀｀｀\ntail',
+    '{{\nsecret helper phrase\n}}',
+    '${\nsecret helper phrase\n}',
+    '<%\nsecret helper phrase\n%>',
+    "{{ secret helper phrase\n | default('x') }}",
+    '{{\nalpha\nsecret helper phrase\n}}',
+    '${\nalpha\nsecret helper phrase\n}',
+    '<%\nalpha\nsecret helper phrase\n%>',
+    '{{\r\nsecret helper phrase\r\n}}',
+    '{%\nsecret helper phrase\n%}',
+    '{#\nsecret helper phrase\n#}',
+    '{{ {"k": "secret helper phrase"} }}',
+    '{% set c = {"k": "secret helper phrase"} %}',
+    '{# {"k": "secret helper phrase"} #}',
+    '那个 ${\nA呢\n我们一起去吃饭吧\nB呢\n最后那个括号 }',
+    'run this `echo ```a`` export SECRET_TOKEN` ok',
+    'reply `code ``inner`` SECRET_TOKEN` done',
+    'reply ``code ```x``` SECRET_TOKEN`` done',
+    '你好 `代码 x\n继续 ```y`` SECRET_TOKEN\n` 完毕',
+    '好呀我们一起去吧 ` 真开心',
+    '好呀`一起去吧`真开心',
+    '好呀`我们`一起去吧',
+    "it's a `great day out there friend",
+    'see [endpoint](/api/SECRET_TOKEN) here',
+    'see [x](/api/SECRET_TOKEN "t") here',
+    '<!--\nSECRET_TOKEN should never render\n-->',
+    'hello <!--\nSECRET_TOKEN\n--> bye',
+    'hello <!--\nSECRET_TOKEN',
+    '- >     SECRET_TOKEN = 1\n- >     more = 2',
+    '> -     SECRET_TOKEN = 1',
+    '-     SECRET_TOKEN = 1',
+    '1.     SECRET_TOKEN = 1',
+    '[我们一起去吃饭吧](/x) 好不好',
+    '数组 a[0](1) 然后 我们一起去吃饭吧',
+    '```\n<!-- showing this\n```\n我们一起去吃饭吧',
+    '```\n<code>example\n```\n我们一起去吃饭吧',
+    '```\n<script>x=1\n```\n我们一起去吃饭吧',
+    '看这个 `<!--` 符号\n我们一起去吃饭吧',
+    'hello <!-- <code> --> 我们一起去吃饭吧',
+    'hello <!--\n<code>\n--> 我们一起去吃饭吧',
+    'see [x](/api/f(1)/SECRET_TOKEN) here',
+    'see [x](/api/secret(SECRET_TOKEN)) here',
+    'see [x](/api/f(g(SECRET_TOKEN))) here',
+    'see [x](/a(b(c(SECRET_TOKEN)))) here',
+    'see [x](/api/SECRET_TOKEN\\)more) here',
+    'see [x](/api/\\(SECRET_TOKEN) here',
+    '<!--\nSECRET_TOKEN\n-->',
+    '<code>SECRET_TOKEN</code>',
+    '<code>a <code>b</code> SECRET_TOKEN</code>',
+    'see https://example.com/(SECRET_TOKEN) here',
+    'see https://example.com/a(SECRET_TOKEN)/b here',
+    'see https://example.com/f(g(SECRET_TOKEN)) here',
+    'see https://example.com/a(b(c(SECRET_TOKEN))) here',
+    'see https://example.com/f(g)/SECRET_TOKEN here',
+    'see https://example.com/f(g)/h(i(SECRET_TOKEN)) here',
+    'see example.com/f(g(SECRET_TOKEN)) here',
+    '看这个吧h.io/SECRET_TOKEN，很好玩哦',
+    'ネコはneko.jp/SECRET_TOKEN',
+    'see Example.com/SECRET_TOKEN here',
+    'see Example.COM/SECRET_TOKEN here',
+    'see EXAMPLE.COM/SECRET_TOKEN here',
+    'see example.xn--p1ai/SECRET_TOKEN here',
+    'see xn--fiqs8s.xn--fiqz9s/SECRET_TOKEN here',
+    'see EXAMPLE.XN--P1AI/SECRET_TOKEN here',
+    'see Example.CoM/SECRET_TOKEN here',
+    'see example.Com/SECRET_TOKEN here',
+    'see example.com?token=SECRET_TOKEN here',
+    'see example.com#SECRET_TOKEN here',
+    'see localhost:8080?q=SECRET_TOKEN here',
+    '<textarea>SECRET_TOKEN</textarea>',
+    '<textarea rows=2>SECRET_TOKEN',
+    'see HTTP://Example.TEST/SECRET_TOKEN here',
+    'see WWW.Example.TEST/SECRET_TOKEN here',
+    'see LOCALHOST:8080/SECRET_TOKEN here',
+    'see localhost:8080/SECRET_TOKEN here',
+    'write to mailto:SECRET_TOKEN@example.com now',
+    'write to SECRET_TOKEN@example.com now',
+    '请联系SECRET_TOKEN@example.com啊',
+    'see tel:+1555SECRET_TOKEN now',
+    'see data:text/plain,SECRET_TOKEN now',
+    'see file:///c/SECRET_TOKEN now',
+    'see ftp://host/SECRET_TOKEN now',
+    '请看https://a.com。我们一起去吃饭吧！',
+    '看这个吧h.io/a，我们一起去吃饭吧',
+    '请看https://a.com/x(然后我们一起去吃饭吧',
+    '请看https://a.com/x(然后。)我们一起去吃饭吧',
+    '请看https://a.com/x(然后 空格)我们一起去吃饭吧',
+    '你好呀\n\n\t```\n我们一起去吃饭吧！',
+    '```a`\n我们一起去吃饭吧！',
+    'see this:\n\n\t- SECRET_TOKEN here\n',
+    'see this:\n\n\t>SECRET_TOKEN here',
+    'sure\n-     SECRET_TOKEN = 1\ndone',
+    'sure\n>     SECRET_TOKEN = 1\ndone',
+    'see this:\n\n  \t1. SECRET_TOKEN here',
+    '- - ~~~\nSECRET_TOKEN\n~~~',
+    '- 2) ~~~\nSECRET_TOKEN\n~~~',
+    '```a`\n```\nSECRET_TOKEN',
+    '看这个 [标签] 好呀`](`我们一起去吃饭吧)！',
+    '看这个 [标签] 好呀\n```\n](\n```\n我们一起去吃饭吧)！',
+    'Use `{{` repeated helper phrase `}}` in templates',
+    '<code>a `<code>` x</code> 我们一起去吃饭吧',
+    '<!-- alpha `-->` SECRET_TOKEN here -->',
+    '<code>alpha `</code>` SECRET_TOKEN here </code>',
+    '<code>\n```\n</code>\n```\nSECRET_TOKEN here</code>',
+    'a.com(',
+    'scan otpauth://totp/N?secret=SECRET_TOKEN now',
+    'db is postgres://neko:SECRET_TOKEN@dbhost/app ok',
+    'grab magnet:?xt=urn:btih:SECRET_TOKEN now',
+    'open file:///C:/Users/me/SECRET_TOKEN here',
+    'odd zq7+x-.foo:SECRET_TOKEN here',
+    '<script>const marker = "<script>";</script> 我们一起去吃饭吧',
+    '<style>a { content: "<style>"; }</style>\n\n我们一起去吃饭吧',
+    '<textarea>a <textarea> b</textarea> 我们一起去吃饭吧',
+    'write to mailto:ops@example.com now',
+    'ops@example.com',
+    '">hello</div>',
+    'write to ops.secret@example.com now',
+    'ops.secret',
+    '${',
+    '<%',
+    '{{',
+    '{%',
+    '{#',
+    '${ ',
+    '<% ',
+    '{{ ',
+    '{% ',
+    '{# ',
+    '{% raw %}x{% endraw %}',
+    '>> ```python',
+    '>> ```',
+    '>     secret_token_helper = compute()',
+    '>>     secret_token_helper = compute()',
+    '~~~',
+    '`````',
+    '- ```',
+    '  ```',
+    '1. ```',
+    '   ```',
+    '- > ~~~python',
+    '  > ~~~',
+    '> - ~~~python',
+    '>   ~~~',
+    '- > > ~~~',
+    '  > > ~~~',
+    '1. > ~~~',
+    '   > ~~~',
+    '- > - > ~~~',
+    '  >   > ~~~',
+    '<script>SECRET_TOKEN</script>',
+    '<script>SECRET_TOKEN',
+    'the config is ${ {"key": "',
+    'the config is <% rate = 50% key = ',
+    ' {% endcomment %}',
+    '{% endcomment %}',
+    '[cfg]: /api/token',
+    '</template>',
+    '</template></template>',
+    '</code>',
+    'see [the docs](https://example.com/',
+    '[a[b]](https://example.com/x) ',
+    'see [the `]` docs](',
+    '[cfg]: /api/',
+    '[a](/x) and [b](',
+    '[docs](/api/[v1) then [b](',
+    '[a](/x [b](/y) and [c](',
+    ' the token is ${',
+    'the config is ${ "',
+    'the config is <% key = ',
+    'the config is {% set c = {"k": "',
+    '${({ k: "ok" }).k + ',
+    '${ {{a}} + ',
+    "{% set token = '",
+    "${'}' + '",
+    '[cfg]: /',
+    '<template>',
+    '<template><template>',
+    '<code>',
+    '<code>a <code>b</code> ',
+    '[LAUGHS] okay](',
+    '`[LAUGHS` okay](',
+    '[docs](/api/[v1) okay](',
+    ' {% end',
+    '>inner</code> ',
+    '配置是 ${name}，',
+    '<div class=x> ',
+    '{% comment %}',
+    '${ x + ',
+    '[cfg]: /api/key ',
+    '<template>x</template> ',
+    "${'a",
+    '{%- ',
+    '{%- end',
+    '{% end',
+    '{%-',
+    '{%-end',
+    '<code>x</code> ',
+    '<code>a <code>b</code> c</code> ',
+    '<code>y</code> ',
+    '> </code>',
+    '[cfg]: /api/key (a',
+    '[cfg]: /api/key',
+    '{# opener with no closer',
+    '>y</code> ',
+    '{% comment %} x',
+    '[cfg]: /api/x',
+    '{%- raw -%} x',
+    '{%+ raw +%} x',
+    '<code><code data-x=',
+    '[cfg]: #config ',
+)
+
+
+def test_every_shape_the_span_layer_protected_still_fires():
+    """No shape the eight scanners caught may fall through the detector.
+
+    A failure here is a leak: text the old implementation kept out of the
+    report AND out of the effects sidecar would now reach both.
+    """
+    missed = [
+        shape
+        for shape in _SHAPES_THE_SPAN_LAYER_PROTECTED
+        if not candidate_core.contains_code_shape(shape)
+    ]
+    assert missed == [], "%d shape(s) lost protection: %r" % (len(missed), missed[:5])
+
+
+# Ordinary speech that must NOT cost a reply its analysis. Seeded from the
+# shapes actually measured in this project's stored replies: the bracketed
+# timestamp prefix every row carries, kaomoji whose face parts NFKC maps onto
+# code delimiters, and the emoticons the tag rule's leading-letter requirement
+# exists to survive.
+_SPEECH_THAT_MUST_STAY_ANALYSABLE = (
+    "喵～今天也要加油哦",
+    "（｀・ω・´）",
+    "（*/ω＼*）",
+    "～～～",
+    "唔……好困",
+    "<3",
+    ">_<",
+    "->",
+    "a -> b",
+    "3 < 5 且 5 > 3",
+    "1/2 和 and/or",
+    "2026/08/27",
+    "第 1/2 章",
+    "{^_^}",
+    "笑死w",
+    "※注意",
+    "♪～",
+    "[20260612 Fri 22:28] 今天也辛苦了呢",
+    "[小八]:我们一起去吃饭吧！今天也辛苦了呢！",
+    "[^1]: 我今天真的很开心呢",
+    "[旁白] 她转过身",
+)
+
+
+@pytest.mark.parametrize("speech", _SPEECH_THAT_MUST_STAY_ANALYSABLE)
+def test_ordinary_speech_does_not_fire(speech):
+    """Over-protection is accepted, but not at the cost of ordinary speech.
+
+    Each of these fires SOME opener-shaped rule naively read -- a fullwidth
+    backtick, a tilde run, an angle bracket, a bracketed label followed by a
+    colon. Measured on the real corpus, letting any of them through drops
+    between 12% and 100% of replies.
+    """
+    assert candidate_core.contains_code_shape(speech) is False
+
+
+def test_protection_is_all_or_nothing():
+    """There is no partial span left to get the boundary of wrong."""
+    clean = "今天天气真好呀，我们一起去公园散步吧"
+    assert candidate_core._protected_spans(clean) == []
+    dirty = clean + " `code` " + clean
+    assert candidate_core._protected_spans(dirty) == [(0, len(dirty))]
+    # The persistence path answers identically. These once differed: the
+    # template placeholders were layered on for the report only, so a
+    # "${...}" payload stayed out of the panel and still reached the sidecar.
+    assert candidate_core._runtime_protected_spans(dirty) == [(0, len(dirty))]
+
+
+def test_the_reported_shapes_that_motivated_the_rewrite_fire():
+    """The three review findings the boundary-free rule closes by construction.
+
+    Named individually so a regression points at the report it came from
+    rather than at a table row.
+    """
+    # A raw-text whitelist of six tags did not include <noscript>.
+    assert candidate_core.contains_code_shape("<noscript>secret helper phrase</noscript>")
+    # A relative destination need not start with "/", "./", "../" or "#".
+    assert candidate_core.contains_code_shape('[cfg]: api/key "secret helper phrase"')
+    # A tag whose attributes wrap was protected by the miner and waved
+    # through by the sidecar's own line-bounded copy of the rule.
+    assert candidate_core.contains_code_shape('<div\n data-note="secret helper phrase">')
+
+
+def test_the_detector_runs_in_linear_time():
+    """The inputs that made the span layer quadratic.
+
+    Each of these was a reported stall: a full-budget line of openers with no
+    closer (30s), one closer arming three block families (7s at 112 KiB), a
+    "{# #}" pair at the input cap (4.27s), and repeated "](" (seconds at
+    16 KiB). Nothing looks for a closer any more, so all of them are one
+    scan. The budget is loose on purpose -- it is here to catch a return to
+    quadratic, not to measure the machine.
+    """
+    import time
+
+    pathological = (
+        "{{ " * 40000,
+        "{% comment %}" * 20000 + "{% endcomment %}",
+        "{#" * 40000 + "#}",
+        "](" * 40000,
+        "<a " * 40000,
+        "`" * 2 + "x" * 80000,
+    )
+    for text in pathological:
+        started = time.perf_counter()
+        candidate_core.contains_code_shape(text)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 2.0, "%.2fs on %r" % (elapsed, text[:24])

@@ -122,7 +122,6 @@ _URL_ATOM = r"[^\s<>()" + _URL_STOP + r"]"
 _EMAIL_LOCAL = r"(?>[^\s<>()@" + _URL_STOP + r"]+)"
 _EMAIL_LABEL = r"(?>[^\s<>()@." + _URL_STOP + r"]+)"
 _EMAIL_ADDRESS = _EMAIL_LOCAL + r"@" + _EMAIL_LABEL + r"(?:\." + _EMAIL_LABEL + r")+"
-_URL_ATOM_RE = re.compile(_URL_ATOM)
 # Parentheses are NOT in the pattern. A path nests them to any depth
 # (``/f(g(x))``), and one level encoded here stopped at the inner ``(``,
 # leaving the rest of the path minable -- and minable means persisted to the
@@ -236,373 +235,14 @@ _HTML_ATTRIBUTE_RUN = (
     r"(?:(?>\"[^\"]*\")|(?>'[^']*')|[^<>\"'])*|[^<>]*"
 )
 
-_TEMPLATE_SOURCE = (
-    # The bodies are ATOMIC. Each is a tempered token that stops only at a
-    # newline or at its own closer, so giving a character back can never
-    # let the closer match -- the character handed back is by construction
-    # neither. Without that, an opener with no closer backtracked through
-    # the whole line one character at a time, and a reply full of unmatched
-    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
-    # on the live turn path, since the effects sidecar masks every draft.
-    # Still quadratic in the opener count -- the forward scan per opener
-    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
-    # would make it linear cannot be used: it stops finding a closer past
-    # its bound, which unmasks a long template body rather than merely
-    # costing time.
-    # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
-    # interpolation and ERB scriptlets are ordinary shapes, and a body that
-    # merely spanned a newline was left unprotected while its single-line twin
-    # was masked. The line budget is the point -- an unbounded newline-crossing
-    # match turns one stray delimiter in prose into a span that swallows the
-    # rest of the reply.
-    # The body forbids only the CLOSER, not every brace: a template body may
-    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
-    # of [^{}] made all three containers miss it and mine the payload. The
-    # tempered form keeps the same bound as before, since the closer is still
-    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
-    # because the two-character opener is still required.
-    # Each container gets a LINE fallback behind its exact form. An opener
-    # with no closer used to match nothing at all, so this only ever protects
-    # more, and never past the line the opener sits on. It is also what stops
-    # the scan going quadratic: with no closer on the line the first opener
-    # consumes it and the engine never retries at the ones behind it.
-    # Measured on a full-budget single line of openers: 30s to 0.04s.
-    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
-    r"\{\{[^\r\n]*|"
-    # A BLOCK comment hides its body by definition, and the two statement
-    # delimiters were protected independently while the text between them
-    # stayed searchable. It goes FIRST, so the pair wins over the two
-    # delimiters matching separately. Bounded like everything else here: the
-    # closer is required and the body is capped, so an unpaired
-    # "{% comment %}" falls through to the line fallback rather than running
-    # away.
-    # NO length budget on the body. A cap means a closer beyond it is
-    # missed, the whole alternative fails, and the line fallback then
-    # masks only the opener line -- so every later line of a long
-    # comment came back into play. A closer is still required, so an
-    # unpaired opener still falls through to that fallback rather than
-    # running away.
-    r"\{%[-+]?[ \t]*comment[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endcomment[ \t]*[-+]?%\}|"
-    # raw/verbatim are the same shape and the same argument: the body is
-    # template SOURCE that the engine is being told not to touch, so it
-    # is not reply prose either. Two independent delimiters left the
-    # payload between them searchable.
-    r"\{%[-+]?[ \t]*raw[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endraw[ \t]*[-+]?%\}|"
-    r"\{%[-+]?[ \t]*verbatim[ \t]*[-+]?%\}[\s\S]*?\{%[-+]?[ \t]*endverbatim[ \t]*[-+]?%\}|"
-    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
-    r"\{%[^\r\n]*|"
-    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
-    r"\{\#[^\r\n]*|"
-    # Jinja statement and comment blocks, on the same line budget: a
-    # ``{% set api_key = "..." %}`` carried its payload straight past the brace
-    # pattern, which only knew the expression form.
-    # TEMPERED, like the three brace containers above, and for the reason
-    # already written there: a body may legitimately hold the character
-    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
-    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
-    # alternative failed entirely and nothing else picked the payload up.
-    # The sibling "{% ... %}" holding the same inner brace was masked
-    # fine, which is what showed the class rather than the shape was
-    # deciding.
-    # The closer is a single "}", so a tempered body ends at the FIRST one --
-    # including one that belongs to the body itself. "${({ k: 1 }).k + TOKEN}"
-    # therefore masked only as far as the object literal and left the token
-    # minable. Two alternatives, tighter first: a body that BALANCES one
-    # level of nesting, then a fallback that masks to end of line when the
-    # braces cannot be balanced at all. The fallback is the conservative
-    # reading and it is bounded to the line, so an unbalanced "${" cannot
-    # swallow the rest of the reply; the balanced form is what keeps ordinary
-    # "配置是 ${name}，好不好" speech after a template minable.
-    # A "}" inside a QUOTED literal is not the closer either, the same
-    # rule the tag alternative follows for ">". Without it
-    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
-    # interpolation was mined -- and it ended there BEFORE the line
-    # fallback could run, so the fallback did not catch it.
-    # A quoted literal may ESCAPE its own quote. Without that, the run
-    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
-    # search resumed inside the string, ending at the first "}".
-    #
-    # Deliberately NOT applied to the HTML tag alternative: a backslash
-    # is not an escape character inside an attribute value, so teaching
-    # it one would make the tag run past its real closer.
-    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
-    r"\$\{[^\r\n]*|"
-    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
-    r"<%[^\r\n]*|"
-    # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
-    # by far the highest false-positive density in this project's character
-    # speech -- `>_<`, `<3`, `->`, `3 < 5`. Line-bounding stopped the tail of
-    # one emoticon pairing with the head of another on the NEXT line, but two
-    # emoticons on ONE line is the commoner way a model writes them, and
-    # `<3 you are so cute >_<` still lost the phrase between them. Requiring a
-    # leading letter (or `/`) costs nothing: real HTML code containers are
-    # `_html_raw_text_spans`' job, and this alternative only ever existed for
-    # placeholder-shaped text.
-    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
-    # real tag carrying long class/style/data-* attributes busted that cap,
-    # so the whole tag failed to match and its attributes -- including
-    # data-key="..." payloads -- were mined and persisted. The cap never
-    # bought what it looked like it bought either: "a <b and c> d" matched
-    # under it just as well, because the leading-letter requirement, not
-    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
-    # of removing it is one line of speech between a tag-shaped opener and
-    # a later ">" -- over-protection, which this module accepts, against a
-    # leak, which it does not.
-    #
-    # Atomic for the same reason as the containers above: the run stops
-    # only at "<", ">" or a newline, so a character handed back can never
-    # let the ">" match, and an opener with no closer now fails in one
-    # pass instead of one per character.
-    # The bracketed placeholder loses its length cap for exactly the reason
-    # the tag run above lost its own: a 65-character name failed the whole
-    # alternative, so nothing was protected and the identifier was mined,
-    # while its 64-character twin in the same sentence was masked.
-    # A ">" inside a QUOTED attribute value is not the closer. Ending there
-    # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
-    # outside the span and minable. The quoted runs are line-bounded like
-    # everything else here, so this cannot reach past its own line.
-    # The SAME attribute grammar as the raw-text opener, not a second
-    # copy of it. This one still rejected line breaks after that one was
-    # fixed, so "<div\n data-note=..>" left the whole opening tag
-    # searchable and its attribute value was mined -- metadata the reader
-    # never sees. The two had drifted precisely because they were two.
-    rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>|\[[A-Z](?>[A-Z0-9_-]+)\]"
-)
-
-# The same pattern WITHOUT the block-comment alternative, and the closer
-# that decides between them.
-#
-# The block body is unbounded on purpose -- a cap means a closer beyond it
-# is missed and the comment's later lines come back into play. The cost of
-# an unbounded lazy body is that an opener with NO closer scans to end of
-# text, once per opener: measured 4.1s on a full-budget line of nothing but
-# openers. That case is decidable in one substring scan, because if the
-# closer appears nowhere then no opener can match; and when it DOES appear,
-# the first opener consumes everything up to it, so the later ones fall
-# inside the span already taken. A real 55 KiB block comment costs 0.023s
-# either way.
-# A real closing TAG, matched once, because this decides which of the two
-# patterns runs. A plain literal cannot see Jinja whitespace control --
-# "{%- endraw -%}" contains no "{% endraw %}" -- and the bare KEYWORD is
-# too generous the other way: a reply that merely MENTIONS "endraw" in
-# prose selected the unbounded pattern and every unmatched opener rescanned
-# the rest of the text. Measured at 96 KiB: 3.11s with the word present,
-# 0.05s without, growing 4x per doubling.
-#
-# One regex search is still a single linear pass, so this is exact AND
-# cheap. Keyed on the comment closer alone, a reply holding only a
-# "{% raw %}" block took the pattern WITHOUT the block alternatives and the
-# body went unprotected -- the fix was there and unreachable.
-# ONE GATE PER CLOSER, and the three block families have three different
-# closers. Sharing one meant a single valid "{% raw %}x{% endraw %}"
-# selected the pattern carrying the unbounded COMMENT alternative too,
-# after which every unpaired "{% comment %}" opener rescanned the rest of
-# the text for an "endcomment" that was never there. Reported at 112 KiB:
-# about 7s, and still quadratic. The "{# #}" pair has its own closer for
-# the same reason -- that one was 4.27s at the input cap.
-#
-# Coarse WITHIN a family, on purpose: a closer anywhere selects that
-# family, matched or not. Being too generous only costs time, while
-# being too strict leaves a body unprotected -- so no gate here looks
-# for a matching PAIR.
-_BLOCK_FAMILY_CLOSER_RES = {
-    name: re.compile(
-        r"\{%[-+]?[ \t]*end" + name + r"[ \t]*[-+]?%\}"
-    )
-    for name in ("comment", "raw", "verbatim")
-}
-
-# Each family's unbounded pair, spelled exactly as it appears in
-# _TEMPLATE_SOURCE so it can be lifted back out when its closer is
-# absent.
-_BLOCK_PAIR_ALTERNATIVES = {
-    name: (
-        r"\{%[-+]?[ \t]*" + name + r"[ \t]*[-+]?%\}[\s\S]*?"
-        r"\{%[-+]?[ \t]*end" + name + r"[ \t]*[-+]?%\}|"
-    )
-    for name in ("comment", "raw", "verbatim")
-}
-_TEMPLATE_SOURCE_WITHOUT_BLOCK = (
-    # The bodies are ATOMIC. Each is a tempered token that stops only at a
-    # newline or at its own closer, so giving a character back can never
-    # let the closer match -- the character handed back is by construction
-    # neither. Without that, an opener with no closer backtracked through
-    # the whole line one character at a time, and a reply full of unmatched
-    # openers paid it once per opener: 2.6s at 3000 characters of "{{ ",
-    # on the live turn path, since the effects sidecar masks every draft.
-    # Still quadratic in the opener count -- the forward scan per opener
-    # remains -- but 2.5x cheaper, and the bounded-lookahead form that
-    # would make it linear cannot be used: it stops finding a closer past
-    # its bound, which unmasks a long template body rather than merely
-    # costing time.
-    # Delimited containers may wrap: multiline Jinja/Handlebars, shell and JS
-    # interpolation and ERB scriptlets are ordinary shapes, and a body that
-    # merely spanned a newline was left unprotected while its single-line twin
-    # was masked. The line budget is the point -- an unbounded newline-crossing
-    # match turns one stray delimiter in prose into a span that swallows the
-    # rest of the reply.
-    # The body forbids only the CLOSER, not every brace: a template body may
-    # legitimately hold one -- {% set config = {"token": "..."} %} -- and a class
-    # of [^{}] made all three containers miss it and mine the payload. The
-    # tempered form keeps the same bound as before, since the closer is still
-    # required and the line budget is unchanged; kaomoji like {^_^} cannot match
-    # because the two-character opener is still required.
-    # Each container gets a LINE fallback behind its exact form. An opener
-    # with no closer used to match nothing at all, so this only ever protects
-    # more, and never past the line the opener sits on. It is also what stops
-    # the scan going quadratic: with no closer on the line the first opener
-    # consumes it and the engine never retries at the ones behind it.
-    # Measured on a full-budget single line of openers: 30s to 0.04s.
-    r"\{\{(?>(?:(?!\}\})[^\r\n])*)(?:\r?\n(?>(?:(?!\}\})[^\r\n])*)){0,3}\}\}|"
-    r"\{\{[^\r\n]*|"
-    # A BLOCK comment hides its body by definition, and the two statement
-    # delimiters were protected independently while the text between them
-    # stayed searchable. It goes FIRST, so the pair wins over the two
-    # delimiters matching separately. Bounded like everything else here: the
-    # closer is required and the body is capped, so an unpaired
-    # "{% comment %}" falls through to the line fallback rather than running
-    # away.
-    # NO length budget on the body. A cap means a closer beyond it is
-    # missed, the whole alternative fails, and the line fallback then
-    # masks only the opener line -- so every later line of a long
-    # comment came back into play. A closer is still required, so an
-    # unpaired opener still falls through to that fallback rather than
-    # running away.
-    r"\{%(?>(?:(?!%\})[^\r\n])*)(?:\r?\n(?>(?:(?!%\})[^\r\n])*)){0,3}%\}|"
-    r"\{%[^\r\n]*|"
-    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
-    r"\{\#[^\r\n]*|"
-    # Jinja statement and comment blocks, on the same line budget: a
-    # ``{% set api_key = "..." %}`` carried its payload straight past the brace
-    # pattern, which only knew the expression form.
-    # TEMPERED, like the three brace containers above, and for the reason
-    # already written there: a body may legitimately hold the character
-    # its class excluded. "${ {"k": "SECRET"} }" stopped at the inner "{"
-    # and "<% rate = 50% ... %>" at the inner "%", so in both cases the
-    # alternative failed entirely and nothing else picked the payload up.
-    # The sibling "{% ... %}" holding the same inner brace was masked
-    # fine, which is what showed the class rather than the shape was
-    # deciding.
-    # The closer is a single "}", so a tempered body ends at the FIRST one --
-    # including one that belongs to the body itself. "${({ k: 1 }).k + TOKEN}"
-    # therefore masked only as far as the object literal and left the token
-    # minable. Two alternatives, tighter first: a body that BALANCES one
-    # level of nesting, then a fallback that masks to end of line when the
-    # braces cannot be balanced at all. The fallback is the conservative
-    # reading and it is bounded to the line, so an unbalanced "${" cannot
-    # swallow the rest of the reply; the balanced form is what keeps ordinary
-    # "配置是 ${name}，好不好" speech after a template minable.
-    # A "}" inside a QUOTED literal is not the closer either, the same
-    # rule the tag alternative follows for ">". Without it
-    # '${"}" + "SECRET"}' ended at the quoted brace and the rest of the
-    # interpolation was mined -- and it ended there BEFORE the line
-    # fallback could run, so the fallback did not catch it.
-    # A quoted literal may ESCAPE its own quote. Without that, the run
-    # ended at the backslash-quote in ${"a\"} + TOKEN"} and the closer
-    # search resumed inside the string, ending at the first "}".
-    #
-    # Deliberately NOT applied to the HTML tag alternative: a backslash
-    # is not an escape character inside an attribute value, so teaching
-    # it one would make the tag run past its real closer.
-    r"\$\{(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*(?:\r?\n(?:\"(?:\\.|[^\"\\\r\n])*\"|'(?:\\.|[^'\\\r\n])*'|[^{}\r\n]|\{[^{}\r\n]*\})*){0,3}\}|"
-    r"\$\{[^\r\n]*|"
-    r"<%(?>(?:(?!%>)[^\r\n])*)(?:\r?\n(?>(?:(?!%>)[^\r\n])*)){0,3}%>|"
-    r"<%[^\r\n]*|"
-    # `<...>` must LOOK LIKE A TAG, and stays strictly line-bounded. It carries
-    # by far the highest false-positive density in this project's character
-    # speech -- `>_<`, `<3`, `->`, `3 < 5`. Line-bounding stopped the tail of
-    # one emoticon pairing with the head of another on the NEXT line, but two
-    # emoticons on ONE line is the commoner way a model writes them, and
-    # `<3 you are so cute >_<` still lost the phrase between them. Requiring a
-    # leading letter (or `/`) costs nothing: real HTML code containers are
-    # `_html_raw_text_spans`' job, and this alternative only ever existed for
-    # placeholder-shaped text.
-    # The attribute run is LINE-BOUNDED, not capped at 80 characters. A
-    # real tag carrying long class/style/data-* attributes busted that cap,
-    # so the whole tag failed to match and its attributes -- including
-    # data-key="..." payloads -- were mined and persisted. The cap never
-    # bought what it looked like it bought either: "a <b and c> d" matched
-    # under it just as well, because the leading-letter requirement, not
-    # the length, is what keeps this off "<3", ">_<" and "->". So the cost
-    # of removing it is one line of speech between a tag-shaped opener and
-    # a later ">" -- over-protection, which this module accepts, against a
-    # leak, which it does not.
-    #
-    # Atomic for the same reason as the containers above: the run stops
-    # only at "<", ">" or a newline, so a character handed back can never
-    # let the ">" match, and an opener with no closer now fails in one
-    # pass instead of one per character.
-    # The bracketed placeholder loses its length cap for exactly the reason
-    # the tag run above lost its own: a 65-character name failed the whole
-    # alternative, so nothing was protected and the identifier was mined,
-    # while its 64-character twin in the same sentence was masked.
-    # A ">" inside a QUOTED attribute value is not the closer. Ending there
-    # left the rest of the tag -- '<div data-x="> secret helper phrase">' --
-    # outside the span and minable. The quoted runs are line-bounded like
-    # everything else here, so this cannot reach past its own line.
-    # The SAME attribute grammar as the raw-text opener, not a second
-    # copy of it. This one still rejected line breaks after that one was
-    # fixed, so "<div\n data-note=..>" left the whole opening tag
-    # searchable and its attribute value was mined -- metadata the reader
-    # never sees. The two had drifted precisely because they were two.
-    rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>|\[[A-Z](?>[A-Z0-9_-]+)\]"
-)
 
 
-# The capped "{# ... #}" form, verbatim, as it appears in both sources.
-# The uncapped alternative is spliced in AHEAD of it when the closer is
-# actually present.
-_CAPPED_HASH_COMMENT = (
-    r"\{\#(?>(?:(?!\#\})[^\r\n])*)(?:\r?\n(?>(?:(?!\#\})[^\r\n])*)){0,3}\#\}|"
-)
-
-# A comment body is hidden by definition, so it is not reply prose
-# whatever its length -- and a CAP means a closer beyond it is missed,
-# the alternative fails, and the line fallback then masks only the
-# opener line, putting every later line of a long comment back into
-# play. Repeating "{#\na\nb\nc\nSECRET\n#}" was enough.
-_UNCAPPED_HASH_COMMENT = r"\{\#[\s\S]*?\#\}|"
-
-# Four patterns, compiled once each on first use, because the two
-# uncapped families have SEPARATE closers and each has to be gated on
-# its own. Sharing one gate made a stray "#}" enable the comment
-# alternative, and unpaired "{% comment %}" openers then each scanned to
-# end of text: 4.27s at the input cap against 0.05s.
-#
-# Both gates are cheap and exact enough: one regex search, and a literal
-# substring test. Being too generous only costs time; being too strict
-# would leave a body unprotected, which is why neither looks for a
-# matching PAIR.
-_TEMPLATE_PATTERNS: dict[tuple[tuple[str, ...], bool], "re.Pattern[str]"] = {}
 
 
-def _template_pattern(text: str) -> "re.Pattern[str]":
-    """The template pattern whose uncapped alternatives can pay off here."""
-    families = tuple(
-        name
-        for name, closer in _BLOCK_FAMILY_CLOSER_RES.items()
-        if closer.search(text)
-    )
-    key = (families, "#}" in text)
-    pattern = _TEMPLATE_PATTERNS.get(key)
-    if pattern is None:
-        if families:
-            source = _TEMPLATE_SOURCE
-            # Lift out the families whose closer is NOT here, so one
-            # closer cannot pay for the others.
-            for name, alternative in _BLOCK_PAIR_ALTERNATIVES.items():
-                if name not in families:
-                    source = source.replace(alternative, "", 1)
-        else:
-            source = _TEMPLATE_SOURCE_WITHOUT_BLOCK
-        if key[1]:
-            source = source.replace(
-                _CAPPED_HASH_COMMENT,
-                _UNCAPPED_HASH_COMMENT + _CAPPED_HASH_COMMENT,
-                1,
-            )
-        pattern = _TEMPLATE_PATTERNS[key] = re.compile(source)
-    return pattern
+
+
+
+
 
 
 class CandidateMinerError(ValueError):
@@ -753,45 +393,6 @@ def read_jsonl(
     return messages, record_count
 
 
-# Markdown blockquote containers: ``>`` optionally followed by one space, and
-# nestable. Stripped before fence detection so a fence quoted inside a reply
-# still opens and closes. Without this the ``>`` prefix defeats the fence
-# match, only the delimiter lines end up protected by the inline-code pass,
-# and the code body between them leaks into candidates and the export.
-# A TAB may pad the marker, and the ambiguity it creates is settled at the
-# END of the scan rather than here. "\t> ```" is four columns of indent, so
-# CommonMark calls it indented code -- but if a matching delimiter follows,
-# reading the pair as a quoted fence protects the body between them, which
-# refusing the marker outright did not: the body sits at a shallower indent,
-# so it was neither fence content nor indented code and an API key in it was
-# mined and persisted. Refusing also put a fence PAIR out of step whenever
-# only one side carried the tab, and the surviving delimiter then opened a
-# fence nothing could close.
-#
-# So the marker is honoured, and ``_fenced_code_spans`` instead DISCARDS an
-# unclosed fence whose opener was tab-indented. Whether a closer exists is
-# exactly the information that disambiguates the two readings, and it is not
-# available until the scan is over.
-_BLOCKQUOTE_PREFIX_RE = re.compile(r"(?:[ \t]{0,3}>[ \t]?)+")
-# A list item is also a container: a fence written directly after its marker
-# ("- ```") never matched, so the block stayed unprotected whenever the inline
-# scanner did not happen to cover it — measured leaking for an unclosed list
-# fence, and for one whose closer sat in another paragraph. Stripped for fence
-# detection only; the closing rule still keys on BLOCKQUOTE depth, since that is
-# the container that decides whether a closer belongs to this fence.
-# A tab may pad this marker too, settled the same way as the blockquote
-# pattern above.
-# ONE space after the marker, not the whole run -- the rule its twin
-# ``_LIST_MARKER_COLUMN_RE`` already states: the greedy form is right when a
-# fence opener follows and wrong when INDENTATION follows. A line that is
-# BOTH is the case that comment did not cover. Eating all five spaces of
-# "-     ```" measured the residual indent as zero, so it opened a fence
-# that never closes and silenced the rest of the reply -- where CommonMark
-# reads it as one line of indented code inside the item, which is what
-# ``_indented_code_spans`` says as well. With one space stripped the column
-# guard in ``_fenced_code_spans`` sees the remaining four and declines,
-# while a genuine "- ```" still opens.
-_LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
 # The same markers, minus the leading padding and consuming only ONE space
 # after the marker. The greedy form above is right when a fence opener
 # follows and wrong when INDENTATION follows: "-     code" is a marker, its
@@ -801,21 +402,10 @@ _LIST_MARKER_PREFIX_RE = re.compile(r"[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]")
 # four of them; see ``_strip_containers_by_column``.
 _LIST_MARKER_COLUMN_RE = re.compile(r"(?:[-+*]|\d{1,9}[.)])[ \t]")
 _BLOCKQUOTE_COLUMN_RE = re.compile(r">[ \t]?")
-# The tick characters a fence may be built from, as opposed to the tilde
-# forms: only these carry the CommonMark info-string restriction.
-_FENCE_TICKS = "`｀"
 
 
-def _strip_blockquote_prefix(line: str) -> str:
-    return _split_blockquote_prefix(line)[0]
 
 
-def _split_blockquote_prefix(line: str) -> tuple[str, int]:
-    """Return the line without its blockquote markers, plus the depth stripped."""
-    match = _BLOCKQUOTE_PREFIX_RE.match(line)
-    if not match:
-        return line, 0
-    return line[match.end() :], match.group(0).count(">")
 
 
 def _indent_columns(body: str) -> int:
@@ -865,238 +455,16 @@ def _strip_containers_by_column(body: str) -> tuple[str, bool, int]:
         body = rest[marker.end() :]
 
 
-def _fence_open(stripped: str) -> re.Match[str] | None:
-    """Match a fence opener, rejecting a backtick fence with a backtick info string.
-
-    CommonMark forbids a backtick anywhere in the info string of a backtick
-    fence, so a line reading three backticks, a letter and a fourth backtick is
-    a paragraph. Reading it as an opener paired it with the NEXT fence line,
-    which put every later delimiter one out of step: the real code block went
-    unprotected, and in the other direction the paragraph it actually is got
-    protected through to the end of the text.
-    """
-    match = _FENCE_OPEN_RE.match(stripped)
-    if match is None:
-        return None
-    marker = match.group(1)
-    if marker[0] in _FENCE_TICKS and marker[0] in stripped[match.end() :]:
-        return None
-    return match
 
 
-def _fenced_code_spans(text: str) -> list[tuple[int, int]]:
-    """Return Markdown fenced-code spans, including an unclosed final fence.
-
-    Blockquote depth participates. A closer must sit at exactly the depth the
-    fence opened at: a DEEPER marker is code content, while a SHALLOWER one means
-    the blockquote ended -- which implicitly ends the inner fence -- and opens a
-    new outer fence, so the region stays contiguously protected.
-
-    Deliberate simplification: a shallower NON-marker line does not end the
-    fence, so such a block over-protects rather than under-protects. That is the
-    right direction to fail for a guard whose job is keeping code out of the
-    report, the export and the persisted signature.
-    """
-    spans: list[tuple[int, int]] = []
-    fence_start: int | None = None
-    fence_char = ""
-    fence_len = 0
-    fence_depth = 0
-    # Whether the line that OPENED the current fence was itself indented far
-    # enough to be code. Measured on the raw line, before any container
-    # marker is stripped, because that is the reading being weighed against.
-    fence_opener_is_indented_code = False
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        body, depth = _split_blockquote_prefix(line)
-        if fence_start is None:
-            # Only an OPENING fence may sit behind a container marker.
-            # Stripping on every line let a content line that happens to read
-            # "- ```" be rewritten into a bare run and close the active fence,
-            # exposing the rest of the block.
-            #
-            # Containers alternate -- "- > ```", "> - ```", "- > > ```" -- so
-            # one blockquote pass followed by one list pass finds the opener
-            # only for the orders it happens to be written in. Loop instead,
-            # accumulating depth, so the closer at the same nesting matches.
-            #
-            # The loop has to continue while EITHER container consumed
-            # something. Breaking when no blockquote followed the list marker
-            # stripped exactly one marker, so "- - ```" never opened and the
-            # block leaked, while the single-marker form protected fine.
-            while True:
-                list_marker = _LIST_MARKER_PREFIX_RE.match(body)
-                rest = body if list_marker is None else body[list_marker.end() :]
-                inner_body, inner_depth = _split_blockquote_prefix(rest)
-                if list_marker is None and inner_depth == 0:
-                    break
-                body = inner_body
-                depth += inner_depth
-        stripped = body.lstrip(" \t")
-        # COLUMNS, not characters. ``_indented_code_spans`` expands a tab to
-        # four and this counted it as one, so a tab-indented fence line passed
-        # the opener test here while being code CONTENT there -- and an opener
-        # with no closer protects to end of text, so the disagreement cost the
-        # whole remainder of the reply.
-        if _indent_columns(body) <= 3:
-            if fence_start is None:
-                opening = _fence_open(stripped)
-                if opening:
-                    marker = opening.group(1)
-                    fence_start = offset
-                    fence_char = marker[0]
-                    fence_len = len(marker)
-                    fence_depth = depth
-                    fence_opener_is_indented_code = _indent_columns(line) >= 4
-            else:
-                closing = re.match(
-                    rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*(?:\r?\n)?\Z",
-                    stripped,
-                )
-                reopening = _fence_open(stripped)
-                if closing and depth == fence_depth:
-                    # Depth-matched closer: an ordinary close.
-                    spans.append((fence_start, offset + len(line)))
-                    fence_start = None
-                    fence_opener_is_indented_code = False
-                    fence_char = ""
-                    fence_len = 0
-                    fence_depth = 0
-                elif reopening and depth < fence_depth:
-                    # Leaving the blockquote implicitly ends the inner fence, and
-                    # this shallower marker opens a NEW outer fence. Ending the
-                    # old span here and starting a new one at the same offset
-                    # keeps the region contiguously protected. Merely IGNORING
-                    # the line left the inner fence open, so a later
-                    # depth-matched marker closed it and exposed everything from
-                    # that point on.
-                    spans.append((fence_start, offset))
-                    marker = reopening.group(1)
-                    fence_start = offset
-                    fence_char = marker[0]
-                    fence_len = len(marker)
-                    fence_depth = depth
-                    fence_opener_is_indented_code = _indent_columns(line) >= 4
-                # depth > fence_depth: the marker is code content; ignore it.
-        offset += len(line)
-    # An unclosed fence protects to end of text, which is the accepted cost of
-    # a real one. A TAB-INDENTED opener with no closer is not a real one: it
-    # is indented code that happens to be delimiter-shaped, and
-    # ``_indented_code_spans`` already covers that line. Honouring it here
-    # silenced the whole rest of the reply.
-    if fence_start is not None and not fence_opener_is_indented_code:
-        spans.append((fence_start, len(text)))
-    return spans
 
 
-# CRLF too: persisted replies are whatever the model emitted, and an LF-only
-# pattern silently skips a CRLF blank line — the paragraph then runs to the end
-# of the text and a later backtick gets mistaken for this run's closer, which
-# swallows real prose and drops the candidates it should have produced.
-# Fence and inline-code delimiters, including the FULLWIDTH forms a CJK IME
-# produces (U+FF40 GRAVE ACCENT, U+FF5E TILDE). Markdown proper only knows the
-# ASCII ones, so by spec this text is prose -- but the guard's job is keeping
-# code out of the report, the export and the persisted signature, and a reply
-# whose code fence was typed in Chinese input mode still contains code.
-# Mixed delimiters cannot pair: the fence tracks the exact opening character
-# and the inline scanner matches the exact opening run.
-# INLINE code delimiters are the ASCII backtick ONLY. Markdown has no tilde
-# inline code (``~~~`` is a FENCE delimiter), and BOTH fullwidth marks are
-# ordinary punctuation in this project's character speech:
-#   U+FF5E TILDE is the commonest elongation mark -- "そうですね～また明日ね～"
-#     lost "また明日ね" and "好呀～我们一起去吧～" lost "我们一起去吧".
-#   U+FF40 GRAVE ACCENT is a kaomoji face part -- （｀・ω・´）, (*･ω｀*),
-#     ヾ(｀Д´)ノ -- so it turns up in MATCHED PAIRS across a sentence even
-#     more reliably than the tilde did. Measured over 20k code-free replies
-#     it fired on 49.8% of them; dropping it takes protected characters from
-#     16.0% to 7.5% and whole-catchphrase loss from 19.8% to 9.0%. A ｀...｀
-#     pair and a kaomoji pair are structurally identical, so there is no
-#     tiebreaker worth keeping -- demanding code-ish content in the body was
-#     measured at 0.24pp.
-# Fences keep ｀｀｀ and ~~~: a run of three at the START OF A LINE is not
-# something either mark produces mid-word. ～～～ does not survive that
-# argument -- a line of fullwidth tildes is a decorative section divider in
-# casual zh/ja chat, and since an unclosed fence protects to end of text,
-# one such line deleted the whole rest of the reply.
-_CODE_DELIMITERS = "`"
-_FENCE_OPEN_RE = re.compile(r"(`{3,}|~{3,}|｀{3,})")
 
 
-_BLANK_LINE_RE = re.compile(r"\r?\n[ \t]*\r?\n")
 
 
-def _paragraph_end(text: str, start: int) -> int:
-    """Offset of the blank line that ends the paragraph containing ``start``."""
-    match = _BLANK_LINE_RE.search(text, start)
-    return match.start() if match else len(text)
 
 
-def _inline_code_spans(
-    text: str,
-    block_spans: Sequence[tuple[int, int]],
-) -> list[tuple[int, int]]:
-    """Return backtick code spans outside block code.
-
-    A code span may cross newlines but not a blank line — CommonMark keeps it
-    inside one paragraph — so the closing delimiter is searched to the end of
-    the paragraph. Stopping at the end of the LINE protected only the first line
-    of a multi-line span and left the rest mineable, right through to a
-    persisted signature.
-
-    An unmatched run still falls back to protecting the rest of its own line
-    rather than the paragraph: without a closer the backtick is literal text per
-    CommonMark, so the following lines really are prose and swallowing them
-    would drop real candidates.
-    """
-    spans: list[tuple[int, int]] = []
-    index = 0
-    block_index = 0
-    while index < len(text):
-        while block_index < len(block_spans) and block_spans[block_index][1] <= index:
-            block_index += 1
-        if (
-            block_index < len(block_spans)
-            and block_spans[block_index][0] <= index < block_spans[block_index][1]
-        ):
-            index = block_spans[block_index][1]
-            continue
-        delimiter_char = text[index]
-        if delimiter_char not in _CODE_DELIMITERS:
-            index += 1
-            continue
-
-        run_end = index + 1
-        while run_end < len(text) and text[run_end] == delimiter_char:
-            run_end += 1
-        delimiter = text[index:run_end]
-        newline = text.find("\n", run_end)
-        line_end = len(text) if newline < 0 else newline
-        # The closer must be a run of EXACTLY the opening length; a longer run
-        # is content. `find` accepted the opening-length PREFIX of a longer
-        # run, so a span ended mid-run and, once a second shorter run paired
-        # up with the leftovers, the body after it was mined as prose. Harmless
-        # while the search was bounded to one line -- the leftovers re-opened
-        # and the coverage merged -- but this file now searches to the end of
-        # the paragraph, which turned it into a real leak that also reaches the
-        # persisted signature.
-        limit = _paragraph_end(text, run_end)
-        closing = -1
-        cursor = run_end
-        while cursor < limit:
-            if text[cursor] != delimiter_char:
-                cursor += 1
-                continue
-            candidate_end = cursor
-            while candidate_end < limit and text[candidate_end] == delimiter_char:
-                candidate_end += 1
-            if candidate_end - cursor == len(delimiter):
-                closing = cursor
-                break
-            cursor = candidate_end
-        end = line_end if closing < 0 else closing + len(delimiter)
-        spans.append((index, end))
-        index = max(end, run_end)
-    return spans
 
 
 def _indented_code_spans(text: str) -> list[tuple[int, int]]:
@@ -1132,274 +500,16 @@ def _indented_code_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-# ``<pre>`` / ``<code>`` mark code as explicitly as a Markdown fence does, and
-# ``<script>`` / ``<style>`` are raw-text elements whose bodies are code by
-# definition. The close tag is a backreference so containers cannot cross-match.
-# The generic ``<...>`` template pattern only covers the TAGS, which protected
-# the delimiters while leaving the code between them mineable — worse than not
-# handling it, because it looks handled.
-#
-# An UNMATCHED opening container protects through the end of the text, exactly
-# as ``_fenced_code_spans`` treats an unclosed final fence. A reply truncated
-# mid-code-block otherwise leaks its body all the way into a persisted
-# ``RepeatSignature`` — measured: ``build_repeat_signature`` returned the code
-# identifier verbatim for an unclosed ``<code>`` and ``None`` for the closed
-# form and for an unclosed fence. The pattern requires the literal ``<code`` /
-# ``<pre`` tag plus a word boundary, not a bare ``<``, so ordinary prose
-# containing comparisons or words like "decode" is unaffected.
-# ``<template>`` belongs here too: its contents are INERT by definition -- the
-# parser does not render them and nothing in a reply is speaking them -- so a
-# body between the two tags is exactly what must not be mined. The generic
-# ``<...>`` pattern covered only the tags, which is worse than not handling it
-# because it looks handled. It NESTS (a template may contain another), so it
-# keeps the depth counter rather than joining the non-nesting set below.
-_HTML_RAW_TEXT_TAGS = ("pre", "code", "script", "style", "textarea", "template")
-# HTML RAW-TEXT elements: their content is text by definition, so a
-# start-tag-shaped string inside the body is a STRING, not a nested
-# element, and the first matching close tag ends them. Depth-counting them
-# ran the span past the real closer -- `<script>const m = "<script>";
-# </script>` then protected to END OF TEXT, across a blank line, eating the
-# reply after it. `pre` and `code` are ordinary elements that really do
-# nest, so they keep the counter.
-_HTML_NON_NESTING_TAGS = frozenset({"script", "style", "textarea"})
-# The attribute run skips QUOTED values, the same rule the generic tag
-# alternative already follows. Without it '<code data-x="> </code>">'
-# ended its opener at the quoted ">", and the close-tag-shaped string
-# inside the attribute then closed the container before its body -- so
-# the real body was mined. Line-bounded, like everything here.
-#
-# ONE definition, shared by the opener below and by the per-tag pattern
-# the nesting scanner builds. They were written separately, and when the
-# quoted run was added here the nested one kept the old "[^>]*" -- so
-# '<code><code data-x="> </code>">inner</code> SECRET</code>' still ended
-# the outer span at the inner closer and mined the rest. Sharing the
-# string is what stops that happening a third time.
-# TWO forms, in order, and neither can backtrack across a tag boundary.
-#
-# The first pairs quotes: a quote can start ONLY the quoted branch,
-# because the bare branch excludes both quote characters. Letting a
-# quote match either branch was catastrophic -- the closing quote of one
-# tag could re-pair with the opening quote of the NEXT one, so a run
-# with no ">" chained across the whole text and the scan went quadratic.
-# Measured on 128 KiB of "<code data-x=\"a\" " (the input cap): 4.8s,
-# against 0.26s for the "[^>]*" this replaced and 0.02s now.
-#
-# The second is the fallback for an UNPAIRED quote -- '<code a="b>' is
-# malformed but still an opener to every parser, and without this the
-# first form fails and the element is not protected at all, which is the
-# leaking direction. It cannot handle a ">" inside quotes, which is why
-# it comes second rather than instead.
-#
-# BOTH stop at "<". A run that crosses one is a run that can scan to end
-# of text from every position in the document.
-_HTML_RAW_TEXT_OPEN_RE = re.compile(
-    rf"<(pre|code|script|style|textarea|template)\b(?:{_HTML_ATTRIBUTE_RUN})>",
-    re.IGNORECASE,
-)
 
 
-def _url_spans(text: str) -> list[tuple[int, int]]:
-    """Return URL spans, extended through balanced parentheses to any depth.
-
-    A path nests parentheses -- ``/f(g(x))`` -- and encoding ONE level in the
-    pattern simply stopped at the inner ``(``, leaving the rest of the path
-    minable and, because this feeds ``build_repeat_signature``, persistable.
-    Same reason ``_markdown_link_target_spans`` is a scanner and not a pattern.
-
-    An UNBALANCED ``(`` extends nothing. Running to the end of the paragraph is
-    exactly how a URL in speech came to swallow the sentence after it, and a
-    group whose body hits a stop character is not part of the URL either.
-    """
-    matches = list(_URL_RE.finditer(text))
-    if not matches:
-        return []
-    tail_end = _url_tail_ends(text)
-    return [(match.start(), tail_end[match.end()]) for match in matches]
 
 
-def _url_tail_ends(text: str) -> list[int]:
-    """For every offset, where a URL tail starting there ends.
-
-    Two linear passes, because walking forward from each match was O(n^2): a
-    failed opener scanned to the stop character and the next match started one
-    token later and scanned the same tail again. Measured on ``"a.com(" * n``
-    before this: 25 s at 48 KB, 99 s at 96 KB, against a 128 KB accepted reply.
-
-    Pass one pairs parentheses on a stack; a stop character clears the stack,
-    because a parenthetical holding whitespace or CJK punctuation is prose, not
-    a path segment. Pass two resolves each opener to the end of its whole chain
-    of groups and trailing atoms, right to left, so every answer it needs is
-    already computed.
-    """
-    length = len(text)
-    closer_of: dict[int, int] = {}
-    stack: list[int] = []
-    for index, character in enumerate(text):
-        if character == "(":
-            stack.append(index)
-        elif character == ")":
-            if stack:
-                closer_of[stack.pop()] = index + 1
-        elif not _URL_ATOM_RE.match(text, index):
-            stack.clear()
-
-    atom_run_end = [length] * (length + 1)
-    for index in range(length - 1, -1, -1):
-        atom_run_end[index] = (
-            atom_run_end[index + 1] if _URL_ATOM_RE.match(text, index) else index
-        )
-
-    tail_end = list(range(length + 1))
-    for index in range(length - 1, -1, -1):
-        closed = closer_of.get(index)
-        if closed is not None:
-            tail_end[index] = tail_end[atom_run_end[closed]]
-    return tail_end
 
 
-def _paragraph_bounds(text: str, start: int) -> tuple[int, int]:
-    """Return the end of the paragraph at ``start`` and the start of the next."""
-    match = _BLANK_LINE_RE.search(text, start)
-    if match is None:
-        return len(text), len(text) + 1
-    return match.start(), match.end()
 
 
-def _markdown_link_target_spans(
-    text: str, ignore: Sequence[tuple[int, int]] = ()
-) -> list[tuple[int, int]]:
-    """Return the TARGET half of Markdown links -- ``](`` through its close.
-
-    Never the link text: that is prose a character may legitimately repeat.
-    A bare path in prose stays minable too -- this scanner's job is link
-    TARGETS, and a general path rule is a separate one nobody has asked for.
-    Not for the reason once recorded here ("would eat dates and fractions"):
-    an anchored rule sees neither, because in ``2026/08/27``, ``1/2`` and
-    ``and/or`` the slash follows an alphanumeric and the anchor rejects it.
-    Measured collateral is only the emote forms ``/shrug`` and ``/me``.
-
-    A scanner rather than a pattern because targets nest parentheses to any
-    depth (``/api/f(g(x))``), and a regex that allows one level simply fails
-    to match deeper ones -- leaving the target mined as if there were no rule.
-    An unbalanced ``](`` protects NOTHING: running to end of text would be the
-    over-protection this module keeps having to undo.
-
-    ONE pass per paragraph, matching every ``(`` to its closer on a stack.
-    Rescanning the paragraph tail for each failed opener was quadratic: 16 KiB
-    of repeated ``](`` took seconds, and a persisted reply may be 128 KiB --
-    long enough for the analysis thread to outlive the router's own timeout
-    and hold a shared worker while it does.
-    """
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    while cursor <= len(text):
-        limit, next_paragraph = _paragraph_bounds(text, cursor)
-        _collect_link_targets(text, cursor, limit, ignore, spans)
-        cursor = next_paragraph
-    return spans
 
 
-def _collect_link_targets(
-    text: str,
-    start: int,
-    limit: int,
-    ignore: Sequence[tuple[int, int]],
-    spans: list[tuple[int, int]],
-) -> None:
-    """Append every balanced link target in one paragraph to ``spans``.
-
-    TWO passes. Parenthesis matching does not depend on links at all, while
-    label matching depends on where the targets are, so the parens go first
-    and the label scan then jumps over any target that actually closes.
-
-    Carrying an "inside a target" depth through a single pass instead let an
-    UNCLOSED target poison the rest of the paragraph: the depth went up and
-    never came down, so every later "[" stopped counting and a genuine link
-    after it went unprotected. That is a LEAK, traded for the
-    over-protection the depth was added to stop -- the wrong direction, and
-    the reason this is structured as two passes rather than patched.
-    """
-    # Pass one: balanced parentheses. Nothing here knows about links.
-    #
-    # A DISPLAYED parenthesis opens and closes nothing, the same rule both
-    # bracket arms below already follow. Without it a ")" shown inside a code
-    # span closed the target early: "[docs](/api/`)`/keys/secret)" protected
-    # only as far as the quoted ")" and mined the rest of the destination.
-    open_parens: list[int] = []
-    closer_of: dict[int, int] = {}
-    cursor = start
-    while cursor < limit:
-        character = text[cursor]
-        if character == chr(92):
-            cursor += 2
-            continue
-        if character == "(" and not _starts_inside(cursor, ignore):
-            open_parens.append(cursor)
-        elif character == ")" and not _starts_inside(cursor, ignore):
-            if open_parens:
-                closer_of[open_parens.pop()] = cursor + 1
-        cursor += 1
-
-    # Pass two: labels.
-    openers: list[int] = []
-    # A COUNT, not a paragraph-wide flag. As a flag, the first "[" anywhere
-    # in the paragraph made every later "](" a link closer, so
-    # "[LAUGHS] okay](please remember to rest)" protected the whole
-    # parenthetical -- the "]" after LAUGHS had already closed the only
-    # label, and no reader renders that as a link. A repeated catchphrase
-    # sitting there was silently never mined, on this path and on the
-    # runtime one that shares it.
-    open_labels = 0
-    cursor = start
-    while cursor < limit:
-        character = text[cursor]
-        if character == chr(92):
-            cursor += 2
-            continue
-        if character == "[":
-            # A DISPLAYED bracket opens nothing -- the same rule the opener
-            # acceptance below already follows. Counting it let "`[LAUGHS`
-            # okay](...)" hand a label to the stray closer after it, so the
-            # parenthetical was protected and a repeated catchphrase in it
-            # was never mined.
-            if not _starts_inside(cursor, ignore):
-                open_labels += 1
-        elif (
-            character == "]"
-            and open_labels
-            # BOTH sides skip displayed brackets, not just the opener. A "]"
-            # shown inside a code span consuming a real label let the label
-            # look already closed, so the genuine "](" after it opened
-            # nothing and a real target went unprotected.
-            and not _starts_inside(cursor, ignore)
-        ):
-            # This "]" closes a label either way; whether it also opens a
-            # TARGET depends on the "(" right after it AND on that "(" being
-            # closed. A link needs a LABEL, too: without the opening-bracket
-            # requirement any "](" started a target scan, so
-            # "好呀](我们一起去公园散步吧)" -- ordinary CJK punctuation, and no
-            # <a> element by any reader -- lost the whole parenthetical.
-            open_labels -= 1
-            if cursor + 1 < limit and text[cursor + 1] == "(":
-                end = closer_of.get(cursor + 1)
-                if end is not None:
-                    openers.append(cursor)
-                    # The DESTINATION is not label text. "[docs](/api/[v1)"
-                    # put destination punctuation where a label would go, so
-                    # the stray "](" after it was accepted as a second link
-                    # and ordinary speech was protected. Skipping the target
-                    # whole is what stops that, and unlike a depth counter it
-                    # cannot outlive a target that never closes.
-                    cursor = end
-                    continue
-        cursor += 1
-    for opener in openers:
-        end = closer_of.get(opener + 1)
-        # A DISPLAYED opener opens nothing, the same rule the two HTML scanners
-        # already follow: "](", shown inside a code span, still ran its
-        # close-paren search out of the code block and into the speech after it.
-        if end is not None and not _starts_inside(opener, ignore):
-            spans.append((opener, end))
 
 
 # ``[label]: destination`` at line start, the reference form of a link. The
@@ -1470,238 +580,138 @@ _REFERENCE_DEFINITION_RE = re.compile(
 )
 
 
-def _starts_inside(position: int, spans: Sequence[tuple[int, int]]) -> bool:
-    """True when ``position`` sits inside one of ``spans``.
 
-    ``spans`` must be sorted and non-overlapping -- every caller passes the
-    output of ``_merge_spans``. Binary search rather than a scan because the
-    container scanners call this once per candidate opener AND closer, so a
-    linear probe is quadratic in exactly the input that motivates it: a long
-    reply with many delimiters and few real containers.
+
+def _is_definition_target(target: str) -> bool:
+    """Whether a reference definition's destination LOOKS like a destination.
+
+    One copy, because the opener detector asks the same question the span
+    scanner does and two spellings of it would drift the way every other
+    duplicated shape rule in this module has.
     """
-    index = bisect.bisect_right(spans, position, key=lambda span: span[0]) - 1
-    return index >= 0 and spans[index][0] <= position < spans[index][1]
+    if target.startswith("<"):
+        return target.endswith(">") and len(target) >= 2
+    # A FRAGMENT is a destination too -- "[cfg]: #config" is a valid
+    # definition and the shape check rejected it, so the whole thing
+    # including its title stayed minable.
+    if target.startswith(("/", "./", "../", "#")) or _URL_RE.match(target):
+        return True
+    # An ordinary RELATIVE destination -- "[cfg]: api/key" -- is valid
+    # CommonMark that the prefix list above rejected, so its title was mined
+    # and persisted.
+    #
+    # Requiring a path separator AND plain ASCII is what keeps this off a
+    # script beat. CJK runs without spaces, so "[小八]:我们一起去吃饭吧" has a
+    # whitespace-free "destination" too; accepting those swallowed every line
+    # of dialogue written in script form, which is a shape a character really
+    # produces. A CJK run holding a slash is still speech, not a path.
+    return "/" in target and target.isascii()
 
 
-def _reference_definition_spans(
-    text: str, ignore: Sequence[tuple[int, int]] = ()
-) -> list[tuple[int, int]]:
-    """Return the DESTINATION half of a Markdown reference definition.
-
-    ``[label]: /srv/keys/token`` puts a path where the inline form puts it
-    behind ``](``, so the inline scanner never saw it and the destination was
-    mined -- and persisted. Same rule as that scanner: the label half is prose
-    a character may repeat, only the destination is protected.
-
-    The destination has to LOOK like one, or an ordinary line of speech that
-    happens to start with a bracketed name -- a script beat, a footnote-ish
-    aside -- would be protected to end of line. It qualifies when it is a
-    closed angle-bracket pair, or starts with ``/``, ``./`` or ``../``, or the
-    module's own ``_URL_RE`` matches it from offset zero. No new list: the
-    URL rule is reused rather than restated.
-    """
-    spans: list[tuple[int, int]] = []
-    for match in _REFERENCE_DEFINITION_RE.finditer(text):
-        start = match.start("target")
-        if _starts_inside(match.start(), ignore):
-            continue
-        target = match.group("target")
-        if target.startswith("<"):
-            if not target.endswith(">") or len(target) < 2:
-                continue
-        # A FRAGMENT is a destination too -- "[cfg]: #config" is a valid
-        # definition and the shape check rejected it, so the whole thing
-        # including its title stayed minable.
-        elif not (
-            target.startswith(("/", "./", "../", "#"))
-            or _URL_RE.match(target)
-        ):
-            continue
-        # Through the TITLE when there is one. Capturing it and then
-        # measuring only the destination protects exactly what was already
-        # protected.
-        end = start + len(target)
-        if match.group("title"):
-            end = match.end("title")
-        spans.append((start, end))
-    return spans
 
 
-def _html_comment_spans(
-    text: str, ignore: Sequence[tuple[int, int]] = ()
-) -> list[tuple[int, int]]:
-    """Return ``<!-- ... -->`` spans, including ones that wrap.
-
-    A single-line comment was masked only incidentally, by the generic
-    ``<...>`` template alternative; the moment it wrapped, that alternative
-    stopped matching and the body was mined -- and it reached the persisted
-    signature too. No line budget is needed here, unlike the brace and ERB
-    containers: ``<!--`` and ``-->`` are four and three characters, so a
-    stray opener in speech is not a realistic accident. An unterminated
-    comment runs to end of text, matching the other containers.
-    """
-    spans: list[tuple[int, int]] = []
-    position = 0
-    while True:
-        start = text.find("<!--", position)
-        if start < 0:
-            return spans
-        if _starts_inside(start, ignore):
-            # Being DISPLAYED as code, not opening anything. Honouring it ran
-            # the container past the code block and ate the prose after it --
-            # over-protection, which for this module is the worse direction:
-            # it deletes the catchphrases the feature exists to surface.
-            position = start + 4
-            continue
-        closing = text.find("-->", start + 4)
-        while closing >= 0 and _starts_inside(closing, ignore):
-            # A displayed CLOSER closes nothing either. Only the opener was
-            # checked, so "<!-- a `-->` SECRET -->" ended the comment at the
-            # quoted arrow and left the real body minable -- and persisted.
-            closing = text.find("-->", closing + 3)
-        end = len(text) if closing < 0 else closing + 3
-        spans.append((start, end))
-        position = end
 
 
-def _html_raw_text_spans(
-    text: str, ignore: Sequence[tuple[int, int]] = ()
-) -> list[tuple[int, int]]:
-    """Return raw-text element spans, counting NESTED same-tag opens.
 
-    A non-greedy regex stopped at the FIRST closing tag, so
-    ``<code>a <code>b</code> SECRET</code>`` ended its span early and leaked the
-    rest of the outer element. Depth counting is why this is a scanner rather
-    than one pattern.
-    """
-    spans: list[tuple[int, int]] = []
-    position = 0
-    while True:
-        opening = _HTML_RAW_TEXT_OPEN_RE.search(text, position)
-        while opening is not None and _starts_inside(opening.start(), ignore):
-            # Displayed as code, or sitting inside an HTML COMMENT -- either
-            # way it opens nothing. A tag in a comment body was read as an
-            # unterminated container and protected to end of text.
-            opening = _HTML_RAW_TEXT_OPEN_RE.search(text, opening.end())
-        if opening is None:
-            return spans
-        tag = opening.group(1).lower()
-        # The SAME attribute run as the outer opener, not a second copy.
-        open_re = re.compile(
-            rf"<{tag}\b(?:{_HTML_ATTRIBUTE_RUN})>", re.IGNORECASE
+
+# Every OPENER this module knows, and nothing that looks for a closer.
+#
+# The span scanners exist to find where protected text ENDS, so that the prose
+# around it stays minable. That requirement is what forced depth counting,
+# paired forms, line budgets and per-family closer gates into this module, and
+# every one of those is a boundary a reviewer can ask a new question about --
+# which is how the same class of finding kept coming back under a different
+# shape.
+#
+# The product decision is that an opener alone discards the WHOLE reply:
+# losing a catchphrase costs nothing, and both consumers of this module are
+# review-only (the insights panel and the effects sidecar's attribution
+# label), so over-protection cannot weaken the anti-repeat gate itself -- it
+# only means the panel shows fewer phrases.
+#
+# So this asks one question -- is there an opener anywhere -- in one linear
+# pass, with no closer search anywhere in it. Adding a newly reported shape is
+# one entry here, and cannot move a boundary, because there are no boundaries.
+#
+# The shapes are the ones the scanners already recognised, reusing their
+# constants rather than restating them:
+#   * an ASCII backtick, which covers both the inline span and the ``` fence
+#   * tilde and FULLWIDTH fences at three or more -- a lone U+FF40 is a
+#     kaomoji face part (measured firing on 49.8% of 20k code-free replies)
+#     and a lone "~" is a spoken drawl, so neither may trigger alone
+#   * the template openers, without their paired or line-fallback forms
+#   * a tag-shaped "<...>", keeping the leading-letter requirement that is
+#     what holds this off "<3", ">_<" and "->"
+_CODE_OPENER_RE = re.compile(
+    "|".join(
+        (
+            r"`",
+            r"~{3,}",
+            r"｀{3,}",
+            r"<!--",
+            r"\{\{",
+            r"\$\{",
+            r"\{%",
+            r"\{\#",
+            r"<%",
+            r"<\?",
+            r"\]\(",
+            rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>",
+            r"\[[A-Z](?>[A-Z0-9_-]+)\]",
         )
-        close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
-        depth = 1
-        cursor = opening.end()
-        end = len(text)
-        while depth:
-            next_close = close_re.search(text, cursor)
-            while next_close is not None and _starts_inside(
-                next_close.start(), ignore
-            ):
-                # Displayed closers close nothing; see _html_comment_spans.
-                next_close = close_re.search(text, next_close.end())
-            if next_close is None:
-                # Unterminated: protect through the end of the text, the same
-                # way an unclosed fence behaves.
-                end = len(text)
-                break
-            next_open = (
-                None
-                if tag in _HTML_NON_NESTING_TAGS
-                else open_re.search(text, cursor)
-            )
-            while next_open is not None and _starts_inside(
-                next_open.start(), ignore
-            ):
-                # ...and the dual: a displayed nested opener must not deepen
-                # the count, or the element runs past its real closer.
-                next_open = open_re.search(text, next_open.end())
-            if next_open is not None and next_open.start() < next_close.start():
-                depth += 1
-                cursor = next_open.end()
-                continue
-            depth -= 1
-            cursor = next_close.end()
-            end = cursor
-        spans.append((opening.start(), end))
-        position = max(end, opening.end())
+    )
+)
+
+
+def contains_code_shape(text: str) -> bool:
+    """Whether a reply carries any code or markup opener at all.
+
+    Best effort and deliberately coarse: a false positive drops one reply from
+    a review panel, while a false negative persists text the user never saw.
+    """
+    if not text:
+        return False
+    if _CODE_OPENER_RE.search(text):
+        return True
+    if _URL_RE.search(text):
+        return True
+    # Line-oriented and already a single pass, so it is reused whole rather
+    # than restated as a pattern -- the "cannot interrupt a paragraph" rule is
+    # what keeps centred ASCII art and aligned lyrics out of it.
+    if _indented_code_spans(text):
+        return True
+    # EVERY definition, not the first: a leading one whose destination fails
+    # the shape test must not hide a later one that passes.
+    return any(
+        _is_definition_target(match.group("target"))
+        for match in _REFERENCE_DEFINITION_RE.finditer(text)
+    )
 
 
 def _protected_spans(text: str) -> list[tuple[int, int]]:
-    """Return merged spans for code, URLs, and obvious template placeholders."""
-    runtime = _runtime_protected_spans(text)
-    spans = list(runtime)
-    # A template delimiter DISPLAYED as code opens nothing. This pattern is
-    # independent of the scanners above, so an opener sitting in one code span
-    # paired with a closer in another and erased the prose between them.
-    # Resume just after a DISCARDED opener, not after the whole match.
-    # ``finditer`` skips to the end of every match it yields, including the
-    # ones dropped here, so everything such a match covered was never
-    # offered to the other alternatives. That window used to be at most 80
-    # characters; once the tag run became line-bounded instead it grew to a
-    # whole line, and a "${...}" payload sitting after a tag-shaped opener
-    # inside a code span stopped being matched at all.
-    template_pattern = _template_pattern(text)
-    position = 0
-    while True:
-        match = template_pattern.search(text, position)
-        if match is None:
-            break
-        if _starts_inside(match.start(), runtime):
-            # Resume past the whole SPAN that discarded it, not one
-            # character on. Every match starting inside that span would be
-            # discarded too, and retrying each offset in a long code block
-            # is what turns this loop quadratic.
-            index = (
-                bisect.bisect_right(runtime, match.start(), key=lambda s: s[0])
-                - 1
-            )
-            position = max(match.start() + 1, runtime[index][1])
-            continue
-        spans.append(match.span())
-        position = match.end()
-    return _merge_spans(spans)
+    """The whole reply, or none of it -- an opener discards the segment.
+
+    Both this and ``_runtime_protected_spans`` used to merge the output of
+    eight independent scanners, each of which had to locate a CLOSER so the
+    prose around a protected region stayed minable. Keeping a catchphrase is
+    not worth that: see ``contains_code_shape`` for why an opener alone is now
+    allowed to drop the whole thing, and what it bought.
+
+    The two remain distinct functions because their CALLERS differ in what
+    they do with the answer, not in the answer itself.
+    """
+    return [(0, len(text))] if contains_code_shape(text) else []
 
 
 def _runtime_protected_spans(text: str) -> list[tuple[int, int]]:
-    """Return fenced, indented, inline-code, URL and HTML-container spans.
+    """Same answer as ``_protected_spans``, on the persistence path.
 
-    Shared with ``build_repeat_signature``, so anything missing here can be
-    persisted to the effects sidecar, not merely mined into a report.
+    These two once differed: the template placeholders were layered on in
+    ``_protected_spans`` alone, so a ``${...}`` payload was kept out of the
+    REPORT while still reaching the effects sidecar. One detector answers both
+    now, which is the asymmetry gone rather than merely documented.
     """
-    fenced = _fenced_code_spans(text)
-    block_code = _merge_spans(fenced + _indented_code_spans(text))
-    spans = block_code + _inline_code_spans(text, block_code)
-    # An HTML opener that is itself displayed as code opens nothing, and the
-    # two scanners below run to a closer that may be far away -- so honouring
-    # such an opener ran the container past the code block and ate the prose
-    # after it. The bounded regexes need no such guard.
-    code_spans = _merge_spans(spans)
-    spans.extend(_url_spans(text))
-    spans.extend(_markdown_link_target_spans(text, code_spans))
-    spans.extend(_reference_definition_spans(text, code_spans))
-    # Comments first: a tag inside a comment BODY is not a container either,
-    # so the raw-text scanner has to see the comment spans as well.
-    comment_spans = _html_comment_spans(text, code_spans)
-    spans.extend(comment_spans)
-    spans.extend(
-        _html_raw_text_spans(text, _merge_spans(code_spans + comment_spans))
-    )
-    return _merge_spans(spans)
-
-
-def _merge_spans(spans: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    if not spans:
-        return []
-
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(spans):
-        if not merged or start > merged[-1][1]:
-            merged.append((start, end))
-        elif end > merged[-1][1]:
-            merged[-1] = (merged[-1][0], end)
-    return merged
+    return _protected_spans(text)
 
 
 def _unprotected_segments(text: str) -> Iterator[tuple[str, int]]:
