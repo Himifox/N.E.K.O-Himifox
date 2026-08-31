@@ -1939,7 +1939,7 @@
         "repetitionInsightsReduction": "평균 반복 감소율 (비교 가능한 재작성 {{count}}회)",
         "repetitionInsightsIncrease": "평균 반복 증가율 (비교 가능한 재작성 {{count}}회)",
         "repetitionInsightsVisibleCount": "최종 잔여 표현 {{total}}개 중 {{visible}}개 표시",
-        "repetitionInsightsScopeTrimmed": "답변이 길어서 로컬 분석 한도에 들어간 것은 최근 {{analyzed}}개(전체 {{total}}개 중)뿐입니다.",
+        "repetitionInsightsScopeTrimmed": "답변이 길어서 로컬 분석 한도에 들어간 것은 전체 {{total}}개 중 {{analyzed}}개뿐입니다.",
         "repetitionInsightsReplyClipped": "너무 긴 답변이 하나 있어 앞부분만 확인했습니다.",
         "repetitionInsightsNoFilterMatches": "현재 필터와 일치하는 최종 잔여 표현이 없습니다.",
         "repetitionInsightsResidualEffect": "이전 처리: 감지 {{detected}} · 재작성 통과 {{passed}}",

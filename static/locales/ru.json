@@ -1939,7 +1939,7 @@
         "repetitionInsightsReduction": "Среднее снижение повторяемости ({{count}} сопоставимых переформулировок)",
         "repetitionInsightsIncrease": "Средний рост повторяемости ({{count}} сопоставимых переформулировок)",
         "repetitionInsightsVisibleCount": "Показано {{visible}} из {{total}} итоговых повторов",
-        "repetitionInsightsScopeTrimmed": "Ответы оказались длинными, поэтому в лимит локального анализа поместились только последние {{analyzed}} из {{total}}.",
+        "repetitionInsightsScopeTrimmed": "Ответы оказались длинными, поэтому в лимит локального анализа поместились только {{analyzed}} из {{total}}.",
         "repetitionInsightsReplyClipped": "Один ответ оказался слишком длинным — проверено только его начало.",
         "repetitionInsightsNoFilterMatches": "Нет итоговых повторов, соответствующих текущим фильтрам.",
         "repetitionInsightsResidualEffect": "История обработки: обнаружено {{detected}} · проверку прошли {{passed}}",

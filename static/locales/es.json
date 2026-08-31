@@ -1939,7 +1939,7 @@
         "repetitionInsightsReduction": "Reducción media de repeticiones ({{count}} reescrituras comparables)",
         "repetitionInsightsIncrease": "Aumento medio de repeticiones ({{count}} reescrituras comparables)",
         "repetitionInsightsVisibleCount": "Mostrando {{visible}} de {{total}} residuos finales",
-        "repetitionInsightsScopeTrimmed": "Estas respuestas eran largas, así que solo las {{analyzed}} más recientes de {{total}} caben en el límite de análisis local.",
+        "repetitionInsightsScopeTrimmed": "Estas respuestas eran largas, así que solo {{analyzed}} de {{total}} caben en el límite de análisis local.",
         "repetitionInsightsReplyClipped": "Una respuesta era demasiado larga; solo se revisó su comienzo.",
         "repetitionInsightsNoFilterMatches": "Ningún residuo final coincide con los filtros actuales.",
         "repetitionInsightsResidualEffect": "Historial: detectado {{detected}} · reescrituras aprobadas {{passed}}",

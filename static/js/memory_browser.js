@@ -1410,11 +1410,16 @@
         if (summary.messages_truncated === true) {
             // The local budget narrowed the window instead of failing; say so,
             // otherwise the counts silently describe fewer replies than asked for.
+            //
+            // Not "the LATEST n": the fair-share eviction drops the oldest
+            // message that is itself over budget, which can be an interior
+            // one, so four replies can analyze source lines [1, 3, 4]. The
+            // count is honest; the ordering claim was not.
             const trimmed = document.createElement('p');
             trimmed.className = 'memory-insights-scope-note';
             trimmed.textContent = translate(
                 'memory.repetitionInsightsScopeTrimmed',
-                'These replies were long, so only the latest {{analyzed}} of {{total}} fit the local analysis budget.',
+                'These replies were long, so only {{analyzed}} of {{total}} fit the local analysis budget.',
                 {
                     analyzed: Number(summary.analyzed_message_count || 0),
                     total: Number(summary.assistant_message_count || 0)
