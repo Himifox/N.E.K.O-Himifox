@@ -2943,3 +2943,32 @@ def test_both_budgets_floor_through_one_helper():
     assert "analyzed[-(len(analyzed) // 2):]" in source, (
         "window halving is still the fallback ABOVE the floor, not below it"
     )
+
+
+_DOTLESS_ADDRESSES_THAT_FIRE = (
+    "contact user@localhost secret helper phrase",
+    "邮箱是 user@localhost 哦",
+    "ping admin@intranet then",
+)
+
+# The CJK spelling is deliberately NOT covered: "我@他一下" is how people say
+# they will @ someone, so reading "用户@内网" as an address swallows that whole
+# class of reply. Third time in this module a shape that is markup in English
+# is ordinary speech in Chinese.
+_AT_SIGNS_THAT_ARE_SPEECH = (
+    "我@他一下",
+    "用户@内网 好不好",
+    "喵@喵",
+    "看看 @小八 你好",
+)
+
+
+@pytest.mark.parametrize("text", _DOTLESS_ADDRESSES_THAT_FIRE)
+def test_a_dotless_local_address_is_protected(text):
+    """The URL rule requires a dot, so "user@localhost" reached the sidecar."""
+    assert candidate_core.contains_code_shape(text) is True
+
+
+@pytest.mark.parametrize("text", _AT_SIGNS_THAT_ARE_SPEECH)
+def test_an_at_sign_in_speech_is_not_an_address(text):
+    assert candidate_core.contains_code_shape(text) is False

@@ -658,6 +658,17 @@ _CODE_OPENER_RE = re.compile(
             r"\]\(",
             rf"</?[A-Za-z](?>(?:{_HTML_ATTRIBUTE_RUN}))>",
             r"\[[A-Z](?>[A-Z0-9_-]+)\]",
+            # A DOTLESS local address -- "user@localhost". The URL rule wants
+            # a dot in the domain, so these reached the report and the
+            # sidecar intact.
+            #
+            # ASCII on both sides, deliberately. The CJK spelling was
+            # reported alongside it, and it is not safe to take: "我@他一下"
+            # is how people say they will @ someone, so a rule that reads
+            # "用户@内网" as an address swallows that whole class of reply --
+            # the third time in this module that a shape which looks like
+            # markup in English is ordinary speech in Chinese.
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9](?>[A-Za-z0-9-]*)",
         )
     )
 )
