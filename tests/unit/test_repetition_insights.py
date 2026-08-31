@@ -2349,3 +2349,54 @@ def test_an_unowned_vector_store_name_still_comes_through(tmp_path):
         if name
     }
     assert "semantic_memory_Nobody" in names
+
+
+@pytest.mark.asyncio
+async def test_insight_reads_are_refused_while_a_cloud_apply_runs(monkeypatch):
+    """Read-only is not harmless during an import.
+
+    The overwrite releases this character's SQLite handles and replaces
+    ``memory/<name>/`` wholesale. A read arriving in that window reopens the
+    database and CACHES the engine, and on Windows a pooled handle is enough
+    to make the replacement fail. Nothing on this path took the writability
+    assertion, because nothing on it writes.
+    """
+    from app.memory_server import routes
+    from utils.cloudsave_runtime import fence
+
+    monkeypatch.setattr(routes.runtime, "time_manager", object(), raising=False)
+    monkeypatch.setattr(fence, "is_write_fence_active", lambda cm: True)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await routes.repetition_insights(
+            "Neko", routes.RepetitionInsightsRequest(language="zh-CN")
+        )
+    assert excinfo.value.status_code == 503
+    assert "restored" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_fence_does_not_fail_the_analysis(monkeypatch):
+    """The dual: a fence we cannot read must not become a new failure mode.
+
+    Without this the guard turns any root-state read error into a 503 on a
+    path that used to work, which is a worse trade than the narrow window it
+    closes.
+    """
+    from app.memory_server import routes
+    from utils.cloudsave_runtime import fence
+
+    def _boom(_cm):
+        raise OSError("root state unavailable")
+
+    monkeypatch.setattr(fence, "is_write_fence_active", _boom)
+    monkeypatch.setattr(routes.runtime, "time_manager", None, raising=False)
+
+    # time_manager is None, so this reaches the EARLIER 503 -- proving the
+    # fence check neither raised nor short-circuited ahead of it.
+    with pytest.raises(HTTPException) as excinfo:
+        await routes.repetition_insights(
+            "Neko", routes.RepetitionInsightsRequest(language="zh-CN")
+        )
+    assert excinfo.value.status_code == 503
+    assert "not fully initialized" in str(excinfo.value.detail)

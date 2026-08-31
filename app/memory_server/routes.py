@@ -115,6 +115,32 @@ async def repetition_insights(lanlan_name: str, req: RepetitionInsightsRequest):
             detail="memory_server not fully initialized",
         )
 
+    # Read-only is not the same as harmless while a cloud apply is running.
+    #
+    # The overwrite/import releases this character's SQLite handles and then
+    # replaces memory/<name>/ wholesale. A read arriving in that window --
+    # from a second browser tab or the Electron subtitle window -- opens the
+    # database again and CACHES the engine, and on Windows a pooled handle is
+    # enough to make the replacement fail. Nothing on this path takes the
+    # writability assertion, because nothing on it writes.
+    #
+    # 503 rather than a stale answer: the fence is short, and the panel
+    # already renders "unavailable" for this status.
+    from utils.cloudsave_runtime.fence import is_write_fence_active
+    from utils.config_manager import get_config_manager
+
+    try:
+        fenced = is_write_fence_active(get_config_manager())
+    except Exception:
+        # A fence we cannot read is not a reason to fail an analysis; the
+        # window is narrow and the pre-existing behaviour is to proceed.
+        fenced = False
+    if fenced:
+        raise HTTPException(
+            status_code=503,
+            detail="memory is being restored; try again shortly",
+        )
+
     try:
         language = normalize_language(req.language)
         history = await runtime.time_manager.aretrieve_latest_assistant_texts(
