@@ -2548,3 +2548,76 @@ def test_the_draft_is_masked_before_it_is_normalized():
         + "今天天气真好呀，" + phrase + "，你说好不好呢",
         [phrase], language="zh",
     ) is None, "a fenced reply must not sign, closed or not"
+
+
+def test_a_fenced_write_drops_its_staged_record_from_the_cache(tmp_path):
+    """A write refused by the RENAME fence must invalidate, or two mix.
+
+    Fencing the sequence alone left the refused record in ``_cache``. A writer
+    that stages after the target cache is reactivated but before the rename
+    fence comes off lands in the refusal branch; once the fence lifted, the
+    next legitimate decision snapshotted that cache and persisted the previous
+    owner's record under the renamed-TO identity.
+    """
+    from utils.character_memory import (
+        fence_character_runtime_writes,
+        unfence_character_runtime_writes,
+    )
+
+    store = _store(tmp_path)
+    staged = store.stage_decision(
+        "Previous",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+
+    fence_character_runtime_writes("Previous")
+    try:
+        store._flush_snapshot(*staged)
+    finally:
+        unfence_character_runtime_writes("Previous")
+
+    assert "Previous" not in store._cache, (
+        "the refused record stayed staged and would be republished"
+    )
+
+
+def test_retirement_refusal_keeps_accumulating_in_memory(tmp_path):
+    """The dual, and the reason the invalidation is narrowed to the fence.
+
+    Retirement refuses the WRITE, but the records are still this character's
+    own -- the panel answers for a retired name from the cache. Popping on
+    every refusal, not just the lifecycle fence, emptied that.
+    """
+    store = _store(tmp_path)
+    staged = store.stage_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("bm25",),
+            action="block",
+            outcome="blocked_initial",
+        ),
+        now=1_700_000_000.0,
+    )
+    store.retire_character("Neko")
+    store._flush_snapshot(*staged)
+
+    store.record_decision(
+        "Neko",
+        AntiRepeatDecision(
+            source="proactive",
+            reasons=("literal_similarity",),
+            action="regenerate",
+            outcome="regen_guard_passed",
+        ),
+        now=1_700_000_001.0,
+    )
+    assert store.query_effects("Neko", 30, now=1_700_000_001.0)["totals"][
+        "detected"
+    ] == 1

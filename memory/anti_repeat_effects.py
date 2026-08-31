@@ -1017,6 +1017,42 @@ class AntiRepeatEffectStore:
                         # snapshots do not retry into a removed identity, and
                         # drop this one rather than recreating the directory.
                         self._written_seq[name] = seq
+                        # And DROP the staged mutation, not just the write.
+                        #
+                        # Fencing the sequence alone left the refused record
+                        # sitting in ``_cache``. A writer that stages after the
+                        # target cache is reactivated but before the rename
+                        # fence comes off lands here; once the fence lifts, the
+                        # next legitimate decision snapshots that cache and
+                        # persists the previous owner's record under the
+                        # renamed-TO identity. The refusal has to invalidate,
+                        # or a rename silently mixes two characters' effects.
+                        #
+                        # Not ``_evict_unlocked``: that needs the data lock as
+                        # well, and every other caller takes the data lock
+                        # BEFORE the write lock. Reaching for it here -- inside
+                        # the write lock -- is the inversion. These are the
+                        # same dict operation ``_evict_unlocked`` uses for the
+                        # cache, and it is atomic on its own.
+                        #
+                        # ONLY when the LIFECYCLE FENCE is what refused, which
+                        # is the case where the record belongs to the identity
+                        # being renamed AWAY. The other refusals -- retirement,
+                        # a missing directory -- are still this character's own
+                        # records, and a retired character deliberately keeps
+                        # accumulating them in memory so the panel can still
+                        # answer for it. Popping on every refusal emptied that.
+                        #
+                        # And ONLY the cache. Raising ``_staged_seq`` the way a
+                        # full eviction does fences the writes that come AFTER
+                        # this one, so a name that becomes live again recorded
+                        # nothing.
+                        from utils.character_memory import (
+                            is_character_write_fenced,
+                        )
+
+                        if is_character_write_fenced(name):
+                            self._cache.pop(name, None)
                         logger.debug(
                             "[AntiRepeatEffects] skip save for removed character %s",
                             name,
