@@ -212,6 +212,15 @@
         } catch (_) { /* best-effort playback awareness */ }
     }
 
+    function reportMusicPlaybackFailureIfNeeded(playbackContext, failureReason, deferFailureUi) {
+        if (!playbackContext || playbackContext.lastReportedState === 'error') return;
+        if (
+            deferFailureUi
+            && !['playing', 'paused'].includes(playbackContext.lastReportedState)
+        ) return;
+        reportMusicPlaybackState('error', null, playbackContext, failureReason);
+    }
+
     function getOwnedMusicPlaybackReportContext(player, state) {
         const context = player && player._musicPlaybackReportContext;
         const audio = player && player.audio;
@@ -1615,8 +1624,11 @@
 
     // --- 更新 React 聊天窗口音乐卡片 ---
     const updateMusicCard = (state, track) => {
+        if (!musicCardMessageId) return;
+        musicCardState = state;
+
         const host = window.reactChatWindowHost;
-        if (!host || typeof host.updateMessage !== 'function' || !musicCardMessageId) return;
+        if (!host || typeof host.updateMessage !== 'function') return;
 
         let prefix = '❓';
         let text = musicT('music.unknownState', 'Unknown state');
@@ -1638,7 +1650,6 @@
                 thumbnailUrl: getMusicCoverUrl(track?.cover)
             }]
         });
-        musicCardState = state;
     };
 
     // --- 状态追踪：用于 5 秒去重 与 进度条清理 ---
@@ -2250,8 +2261,12 @@
             }
             clearManagedListeners();
         }
-        // 手动关闭时更新卡片状态为"已结束"，必须在清空 musicCardMessageId 之前
-        if (fullTeardown && musicCardMessageId) {
+        // 完整销毁只结束非终态卡片；播放失败必须保留 error，不能被延迟销毁改写。
+        if (
+            fullTeardown
+            && musicCardMessageId
+            && !['error', 'ended'].includes(musicCardState)
+        ) {
             updateMusicCard('ended', currentPlayingTrack);
         }
         currentPlayingTrack = null;
@@ -2676,10 +2691,16 @@
 
                         // 仍处于首轮媒体加载、并且后面确有候选时，当前错误只驱动
                         // 内部回退。候选一旦就绪，后续流错误仍必须正常反馈给用户。
-                        if (
+                        const deferFailureUi = (
                             !reportContext.mediaReady
                             && shouldDeferCandidateFailureUi(reportContext, 'media_error')
-                        ) return;
+                        );
+                        reportMusicPlaybackFailureIfNeeded(
+                            reportContext,
+                            'media_error',
+                            deferFailureUi
+                        );
+                        if (deferFailureUi) return;
                         if (reportContext.failureUiHandled) return;
                         reportContext.failureUiHandled = true;
 
@@ -2689,8 +2710,6 @@
                         showErrorToast('music.playError', errorDetail);
                         updatePlayBtnState(false);
                         setMusicBarVisualState(musicBar, 'error');
-                        reportMusicPlaybackState('error', null, reportContext, 'media_error');
-
                         if (autoDestroyTimer) clearTimeout(autoDestroyTimer);
                         autoDestroyTimer = setTimeout(() => {
                             if (localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent) {
@@ -3005,6 +3024,11 @@
             if (!mediaResult.ok) {
                 localPlayer._loadError = true;
                 const deferFailureUi = shouldDeferCandidateFailureUi(playbackOptions, mediaResult.reason);
+                reportMusicPlaybackFailureIfNeeded(
+                    playbackReportContext,
+                    mediaResult.reason,
+                    deferFailureUi
+                );
                 if (!playbackReportContext.failureUiHandled && !deferFailureUi) {
                     playbackReportContext.failureUiHandled = true;
                     if (mediaResult.reason === 'track_too_long') {
@@ -3013,12 +3037,6 @@
                         showErrorToast('music.loadTimeout', 'Music loading timed out');
                     }
                     setMusicBarVisualState(musicBar, 'error');
-                    reportMusicPlaybackState(
-                        'error',
-                        null,
-                        playbackReportContext,
-                        mediaResult.reason
-                    );
                     updateMusicCard('error', currentPlayingTrack);
                     emitBarState();
                 }
@@ -3037,12 +3055,7 @@
         } catch (err) {
             if (currentToken !== latestMusicRequestToken) return musicPlayResult(false, 'superseded');
             console.error('[Music UI] 播放器处理异常:', err);
-            reportMusicPlaybackState(
-                'error',
-                null,
-                playbackReportContext,
-                'player_error'
-            );
+            reportMusicPlaybackFailureIfNeeded(playbackReportContext, 'player_error', false);
             updateMusicCard('error', currentPlayingTrack);
             destroyMusicPlayer(true, false, true);
             showErrorToast('music.playError', 'Music playback failed to load');

@@ -250,6 +250,9 @@ def test_music_candidate_fallback_preserves_and_finalizes_only_the_matching_card
     destroy_source = source.split("const destroyMusicPlayer = (", 1)[1].split(
         "const getMusicPlayerInstance", 1
     )[0]
+    update_card_source = source.split("const updateMusicCard = (state, track) => {", 1)[1].split(
+        "// --- 状态追踪", 1
+    )[0]
 
     assert "String(options.source || 'music') + ':' + String(options.cardScopeId)" in scoped_card_source
     assert "requestedScopeKey !== musicCardScopeKey" in scoped_card_source
@@ -258,6 +261,13 @@ def test_music_candidate_fallback_preserves_and_finalizes_only_the_matching_card
     assert "musicCardScopeKey = ''" in scoped_card_source
     assert "preserveMusicCard = false" in destroy_source
     assert "if (!preserveMusicCard || fullTeardown)" in destroy_source
+    assert "!['error', 'ended'].includes(musicCardState)" in destroy_source
+    assert destroy_source.index("!['error', 'ended'].includes(musicCardState)") < destroy_source.index(
+        "updateMusicCard('ended', currentPlayingTrack)"
+    )
+    assert update_card_source.index("musicCardState = state;") < update_card_source.index(
+        "const host = window.reactChatWindowHost;"
+    )
     assert "shouldDeferCandidateFailureUi(playbackOptions, result.reason)" in source
     assert "window.finalizeMusicCandidateCardFailure = finalizeScopedMusicCardFailure" in source
 
@@ -363,9 +373,34 @@ def test_music_player_reports_confirmed_state_to_backend():
     assert "reportMusicPlaybackState('playing', null, reportContext)" in player_source
     assert "reportMusicPlaybackState('ended', null, reportContext)" in player_source
     assert (
-        "reportMusicPlaybackState('error', null, reportContext, 'media_error')"
+        "function reportMusicPlaybackFailureIfNeeded(playbackContext, failureReason, deferFailureUi)"
         in player_source
     )
+    failure_helper = player_source.split(
+        "function reportMusicPlaybackFailureIfNeeded", 1
+    )[1].split("function getOwnedMusicPlaybackReportContext", 1)[0]
+    assert "playbackContext.lastReportedState === 'error'" in failure_helper
+    assert "!['playing', 'paused'].includes(playbackContext.lastReportedState)" in failure_helper
+    assert "reportMusicPlaybackState('error', null, playbackContext, failureReason)" in failure_helper
+    media_failure_source = player_source.split(
+        "const mediaResult = await mediaReadyPromise;", 1
+    )[1].split("playbackReportContext.mediaReady = true;", 1)[0]
+    media_report = media_failure_source.index("reportMusicPlaybackFailureIfNeeded(")
+    media_ui_gate = media_failure_source.index(
+        "if (!playbackReportContext.failureUiHandled && !deferFailureUi)"
+    )
+    assert media_report < media_ui_gate
+    assert "reportMusicPlaybackState(" not in media_failure_source
+
+    error_handler = player_source.split(
+        "boundPlayer.on('error', (err) => {", 1
+    )[1].split("// 进度条与播放按钮点击", 1)[0]
+    delayed_error_handler = error_handler.split("setTimeout(() => {", 1)[1]
+    error_report = delayed_error_handler.index("reportMusicPlaybackFailureIfNeeded(")
+    deferred_return = delayed_error_handler.index("if (deferFailureUi) return;")
+    error_ui_gate = delayed_error_handler.index("if (reportContext.failureUiHandled) return;")
+    assert error_report < deferred_return < error_ui_gate
+    assert "reportMusicPlaybackState(" not in delayed_error_handler
     assert "mediaResult.reason" in player_source
     assert "'player_error'" in player_source
     assert "localPlayer === boundPlayer && boundPlayer._latestToken === tokenAtEvent" in player_source

@@ -2969,8 +2969,8 @@ body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
   position: fixed;
   --compact-export-surface-width: var(--compact-surface-resize-width, var(--desktop-compact-surface-width, var(--compact-surface-width, 430px)));
   --compact-export-surface-center-inline-position: calc(
-    var(--desktop-compact-surface-left, var(--compact-surface-left, 50vw)) +
-      (var(--compact-export-surface-width) / 2)
+    var(--desktop-compact-surface-left, var(--compact-surface-left, 50vw))
+      + (var(--compact-export-surface-width) / 2)
   );
   --compact-export-layout-inline-size: 100vw;
   --compact-export-history-edge-gutter: 12px;
@@ -3003,10 +3003,10 @@ body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
   --compact-export-link-row-reserve-inline-size: 48px;
   /* 170px card + bubble chrome + row reserve + 44px shadow gutters. */
   --compact-export-link-history-min-inline-size: calc(
-    var(--compact-export-link-card-min-inline-size) +
-      var(--compact-export-link-bubble-chrome-inline-size) +
-      var(--compact-export-link-row-reserve-inline-size) +
-      var(--compact-export-history-shadow-gutter-left) + var(--compact-export-history-shadow-gutter-right)
+    var(--compact-export-link-card-min-inline-size)
+      + var(--compact-export-link-bubble-chrome-inline-size)
+      + var(--compact-export-link-row-reserve-inline-size)
+      + var(--compact-export-history-shadow-gutter-left) + var(--compact-export-history-shadow-gutter-right)
   );
   --compact-export-history-inline-size: min(
     calc(var(--compact-export-surface-width) * var(--compact-export-history-width-ratio)),
@@ -3017,9 +3017,9 @@ body.electron-chat-window.subtitle-web-host .compact-chat-surface-shell {
     calc((var(--compact-export-history-active-inline-size) / 2) + var(--compact-export-history-edge-gutter)),
     var(--compact-export-surface-center-inline-position),
     calc(
-      var(--compact-export-layout-inline-size) -
-        (var(--compact-export-history-active-inline-size) / 2) -
-        var(--compact-export-history-edge-gutter)
+      var(--compact-export-layout-inline-size)
+        - (var(--compact-export-history-active-inline-size) / 2)
+        - var(--compact-export-history-edge-gutter)
     )
   );
   --compact-export-history-bubble-max-ratio: 86%;
@@ -3475,8 +3475,8 @@ body.electron-chat-window.subtitle-web-host .compact-export-history-anchor {
   width: calc(100% - var(--compact-export-link-row-reserve-inline-size));
   min-width: min(
     calc(
-      var(--compact-export-link-card-min-inline-size) +
-        var(--compact-export-link-bubble-chrome-inline-size)
+      var(--compact-export-link-card-min-inline-size)
+        + var(--compact-export-link-bubble-chrome-inline-size)
     ),
     calc(100% - var(--compact-export-link-row-reserve-inline-size))
   );
