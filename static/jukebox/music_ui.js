@@ -3403,6 +3403,7 @@
     // 推荐频率限流：最近是否刚派发过 proactive 推荐
     window.isMusicRecommendRateLimited = isMusicRecommendRateLimited;
     window.markProactiveMusicRecommended = markProactiveMusicRecommended;
+    window.finalizeMusicCandidateCardFailure = finalizeScopedMusicCardFailure;
 
     // 派发就绪事件，通知提前加载的插件可以开始注册域名了
     window.dispatchEvent(new CustomEvent('music-ui-ready'));
