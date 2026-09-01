@@ -1923,6 +1923,21 @@
         return String(options.source || 'music') + ':' + String(options.cardScopeId).slice(0, 160);
     };
 
+    const finalizeScopedMusicCardFailure = (track, playbackOptions) => {
+        const requestedScopeKey = getMusicCardScopeKey(playbackOptions);
+        if (
+            !musicCardMessageId
+            || !requestedScopeKey
+            || requestedScopeKey !== musicCardScopeKey
+        ) return false;
+
+        updateMusicCard('error', track);
+        musicCardMessageId = null;
+        musicCardScopeKey = '';
+        musicCardState = '';
+        return true;
+    };
+
     const getCandidateMediaReadyTimeoutMs = (playbackOptions) => {
         const options = playbackOptions || {};
         if (options.hasNextCandidate !== true) return MUSIC_MEDIA_LOAD_TIMEOUT_MS;
@@ -2138,7 +2153,12 @@
     };
 
 
-    const destroyMusicPlayer = (removeDOM = true, fullTeardown = false, updateToken = false) => {
+    const destroyMusicPlayer = (
+        removeDOM = true,
+        fullTeardown = false,
+        updateToken = false,
+        preserveMusicCard = false
+    ) => {
         // 播放器销毁即结束当前曲目生命周期，清起播时间戳，避免残留到下一首
         playbackStartedAt = 0;
         const destroyedPlaybackId = getCurrentMusicPlaybackId();
@@ -2235,9 +2255,11 @@
             updateMusicCard('ended', currentPlayingTrack);
         }
         currentPlayingTrack = null;
-        musicCardMessageId = null;
-        musicCardScopeKey = '';
-        musicCardState = '';
+        if (!preserveMusicCard || fullTeardown) {
+            musicCardMessageId = null;
+            musicCardScopeKey = '';
+            musicCardState = '';
+        }
 
         // 跨窗口协调：通知其他窗口本地音乐已停
         stopMusicHeartbeat();
@@ -3090,6 +3112,7 @@
             console.warn('[Music UI] 不支持直接播放 HLS 音频流:', trackInfo.url);
             if (!shouldDeferCandidateFailureUi(playbackOptions, 'unsupported_stream')) {
                 showErrorToast('music.playError', 'This audio stream is not supported');
+                finalizeScopedMusicCardFailure(trackInfo, playbackOptions);
             }
             releasePending();
             return musicPlayResult(false, 'unsupported_stream', true);
@@ -3101,6 +3124,9 @@
                 var domain = extractHostname(trackInfo.url) || musicT('music.unknownSource', 'Unknown source');
                 var msg = musicT('music.unsafeSource', 'Blocked unsafe audio source: {{domain}}', { domain: domain });
                 window.showStatusToast(msg, 5000);
+            }
+            if (!shouldDeferCandidateFailureUi(playbackOptions, 'unsafe_url')) {
+                finalizeScopedMusicCardFailure(trackInfo, playbackOptions);
             }
             releasePending();
             return musicPlayResult(false, 'unsafe_url', true);
@@ -3202,7 +3228,12 @@
             await loadAPlayerLibrary();
             const result = await executePlay(trackInfo, currentToken, shouldAutoPlay, playbackOptions);
             if (!result.ok && currentToken === latestMusicRequestToken) {
-                destroyMusicPlayer(true, false, true);
+                destroyMusicPlayer(
+                    true,
+                    false,
+                    true,
+                    shouldDeferCandidateFailureUi(playbackOptions, result.reason)
+                );
             }
             if (result.ok && shouldAutoPlay) showNowPlayingToast(trackInfo.name);
             return result;
