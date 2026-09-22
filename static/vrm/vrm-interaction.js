@@ -130,6 +130,8 @@ class VRMInteraction {
         this._movementKeyUpHandler = null;
         this._movementBlurHandler = null;
         this._movementClickHandler = null;
+        // 只有先在普通模式下点击命中人物，才允许 F 进入目标选点模式。
+        this._movementArmed = false;
     }
 
 
@@ -673,6 +675,7 @@ class VRMInteraction {
         this._movementKeyDownHandler = (e) => {
             if (this._isEditableTarget(e.target)) return;
             if (String(e.key || '').toLowerCase() !== 'f') return;
+            if (!this._movementArmed) return;
             if (this.checkLocked() || isYuiGuideDragLocked()) return;
             this.targetMode = true;
             canvas.style.cursor = 'crosshair';
@@ -686,6 +689,7 @@ class VRMInteraction {
         this._movementBlurHandler = () => {
             // 失焦只退出选点模式；已确认的目标仍继续执行。
             this.targetMode = false;
+            this._movementArmed = false;
         };
         window.addEventListener('keydown', this._movementKeyDownHandler);
         window.addEventListener('keyup', this._movementKeyUpHandler);
@@ -721,6 +725,8 @@ class VRMInteraction {
                 if (!this._hitTestModel(e.clientX, e.clientY)) {
                     return; // 未命中模型，不拦截事件
                 }
+                // 普通模式下命中人物后才解锁 F + 左键选点，避免其他页面区域误触发。
+                this._movementArmed = true;
                 // 普通拖拽接管模型时，取消尚未完成的自动移动；目标模式下的左键选点已在上方返回。
                 if (this.isMoving) void this._finishMovement({ cancel: true });
                 this.isDragging = true;
@@ -1153,6 +1159,7 @@ class VRMInteraction {
             this._movementBlurHandler = null;
         }
         this.targetMode = false;
+        this._movementArmed = false;
         if (this.isMoving || this._movementAction) void this._finishMovement({ cancel: true });
 
         if (!this.manager.renderer) return;
