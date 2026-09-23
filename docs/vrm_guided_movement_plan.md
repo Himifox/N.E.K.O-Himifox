@@ -34,7 +34,7 @@
 - `F` 按下进入目标模式，画布左键一次选定屏幕平面目标；松开 `F` 不会取消已确认的移动。
 - 目标由相机反投影并经过现有可见边界限制，移动在 `update(delta)` 中按帧推进，抵达后吸附到目标并保存位置。
 - 移动中再次使用 `F` + 左键会替换目标；普通左键命中模型后拖拽会接管并取消自动移动。
-- 移动开始尝试播放 `world-walk.vrma`，移动结束停止该动作并交还 `NekoMotion` 待机所有权；锁定、清理和模型销毁路径会释放动作占用。
+- 移动开始尝试播放 `world-walk.vrma.gz`，移动结束停止该动作并交还 `NekoMotion` 待机所有权；锁定、清理和模型销毁路径会释放动作占用。
 - 当前实现已接入 `world-walk-start → world-walk → world-walk-stop-small` 的基础状态机；动作加载或骨骼不兼容时仍回退到纯位移。转向动作和两个目标模型的兼容性仍需实测。
 
 ## 状态机
@@ -91,17 +91,17 @@ movementFacing   // 是否由移动方向驱动身体朝向
 
 已导入 `static/vrm/animation/` 的 Hanami/Overte 移动资源：
 
-- `world-walk-start.vrma`
-- `world-walk.vrma`
-- `world-walk-slow.vrma`
-- `world-walk-stop.vrma`
-- `world-walk-stop-small.vrma`
-- `world-turn-left.vrma`
-- `world-turn-right.vrma`
-- `world-jog.vrma`
-- `world-jog-back.vrma`
-- `world-run.vrma`
-- `world-run-back.vrma`
+- `world-walk-start.vrma.gz`
+- `world-walk.vrma.gz`
+- `world-walk-slow.vrma.gz`
+- `world-walk-stop.vrma.gz`
+- `world-walk-stop-small.vrma.gz`
+- `world-turn-left.vrma.gz`
+- `world-turn-right.vrma.gz`
+- `world-jog.vrma.gz`
+- `world-jog-back.vrma.gz`
+- `world-run.vrma.gz`
+- `world-run-back.vrma.gz`
 
 来源和许可记录在 [HANAMI_VRMA_NOTICE.md](../static/vrm/animation/HANAMI_VRMA_NOTICE.md)。这些动作保持在移动域，不加入普通聊天动作候选。Hanami 的目录说明 `world-` 域包含起步、步行、停止和转向动作；动作文件为 VRMA humanoid clip，模型无须专门绑定即可尝试播放，但仍必须对两个目标模型实测。
 

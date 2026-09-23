@@ -1,5 +1,9 @@
 # NOTICE — émotes VRMA de Hanami / Hanami VRMA emotes
 
+N.E.K.O. packaging note: the 11 imported `world-*.vrma` files are distributed
+as losslessly gzip-compressed `world-*.vrma.gz` files. The source filenames in
+the attribution below are retained; decompression restores the original bytes.
+
 Les fichiers `.vrma` de ce dossier sont des **œuvres dérivées** : chacun est la
 conversion (retargeting sur le squelette humanoïde VRM 1.0, découpage,
 ré-échantillonnage à 30 fps) d'une animation d'origine tierce. Les mentions

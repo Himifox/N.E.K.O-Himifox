@@ -377,8 +377,8 @@ class VRMInteraction {
         while (diff < -Math.PI) diff += Math.PI * 2;
         if (Math.abs(diff) < 0.02) return;
         const path = diff < 0
-            ? '/static/vrm/animation/world-turn-left.vrma'
-            : '/static/vrm/animation/world-turn-right.vrma';
+            ? '/static/vrm/animation/world-turn-left.vrma.gz'
+            : '/static/vrm/animation/world-turn-right.vrma.gz';
         try {
             const played = await this.manager.playVRMAAnimation(path, {
                 loop: false,
@@ -481,7 +481,7 @@ class VRMInteraction {
             if (token !== this.movementToken || !this.isMoving) return;
             // 桌宠场景不使用 world-walk-start：该过渡 clip 的首尾姿态与待机
             // crossfade 会造成起步瞬间的根节点拉动。直接从无根位移的循环走路开始。
-            await this._playMovementClip(token, '/static/vrm/animation/world-walk.vrma', 'walk', {
+            await this._playMovementClip(token, '/static/vrm/animation/world-walk.vrma.gz', 'walk', {
                 loop: true,
                 immediate: true,
                 fallbackSeconds: 1
