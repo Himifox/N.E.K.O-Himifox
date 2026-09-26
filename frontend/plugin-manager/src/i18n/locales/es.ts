@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * Paquete de idioma español
  */
 export default {
+  modelApi: modelApiMessages['es'],
+  modelBindings: modelBindingsMessages['es'],
+  development: {
+    guidePurpose: "Esta interfaz no desarrolla plugins por ti con un solo clic. Ayuda a empaquetar código existente en plugins importables con un clic y a continuar su desarrollo.",
+    navTitle: "Plugins en desarrollo",
+    guideButton: "Guía de uso",
+    guideTitle: "Empieza a desarrollar tu plugin",
+    guideIntro: "Vincula tu carpeta de código para desarrollar, depurar y empaquetar plugins sin clonar el repositorio principal de N.E.K.O.",
+    guideLoadTitle: "Carga el código fuente",
+    guideLoadBody: "Activa el modo de desarrollo, elige una carpeta con plugin.toml, valídala y cárgala. Las rutas introducidas en el navegador pertenecen al equipo del servidor.",
+    guideReloadTitle: "Edita y recarga",
+    guideReloadBody: "Guarda los cambios en tu editor y pulsa Recargar. La lista de puntos de entrada mostrará las descripciones actualizadas. Tras reiniciar la aplicación, inicia manualmente los plugins de desarrollo.",
+    guideBuildTitle: "Empaqueta y comparte",
+    guideBuildBody: "Genera un paquete .neko-plugin incluso con el plugin detenido. Impórtalo y verifícalo en otro entorno antes de compartirlo.",
+    guideData: "Eliminar la asociación detiene el plugin y borra su registro, conservando el código y los datos de ejecución. Desactivar el modo de desarrollo detiene los plugins, pero conserva las asociaciones.",
+    guideReopen: "Puedes volver a abrir esta guía desde el botón Guía de uso en la parte superior derecha.",
+    guideDismiss: "Entendido",
+    sourcePlaceholder: "Elige una carpeta de plugin que contenga plugin.toml",
+    previewHint: "Valida la carpeta para revisar los datos del plugin antes de cargarlo.",
+    title: "Modo de desarrollo",
+    load: "Cargar plugin sin empaquetar",
+    hint: "Carga el código fuente que has desarrollado para empaquetar e importar el plugin o seguir desarrollándolo.",
+    badge: "En desarrollo",
+    entry: "Punto de entrada",
+    openSource: "Abrir carpeta del código",
+    start: "Iniciar",
+    stop: "Detener",
+    reload: "Recargar",
+    logs: "Registros",
+    build: "Crear paquete",
+    rebind: "Cambiar carpeta",
+    remove: "Eliminar vínculo",
+    pathHint: "Introduce una carpeta de código de la máquina que ejecuta el backend de N.E.K.O. No se admite subir carpetas desde el navegador.",
+    path: "Carpeta del código",
+    choose: "Elegir carpeta",
+    valid: "Validación completada",
+    validate: "Validar",
+    failed: "Error en la operación",
+    built: "Paquete creado. Las pruebas funcionales y la revisión del mercado se realizan por separado.",
+    removeHint: "¿Detener el plugin y eliminar el vínculo? Se conservarán el código y los datos de ejecución.",
+  },
   common: {
     loading: 'Cargando...',
     refresh: 'Actualizar',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: '¿Cambiar {plugin} al origen de Market?',
       overrideBuiltinBody: 'La versión integrada activa {current} se sustituirá por la versión {target} de Market. Los datos y la configuración del plugin permanecerán en el almacenamiento persistente.',
       overrideBuiltinConfirm: 'Cambiar a Market',
+      manualTakeoverTitle: '¿Permitir que N.E.K.O gestione {plugin}?',
+      manualTakeoverBody: 'El directorio de este plugin se mantiene manualmente. Al continuar, la versión {current} se sustituirá por {target}; tras completarse, N.E.K.O podrá actualizar o desinstalar este plugin de usuario.',
+      manualTakeoverConfirm: 'Sustituir y gestionar',
+      manualTakeoverCancelled: 'Se canceló la sustitución del plugin manual.',
+      manualTakeoverSucceeded: 'Ahora N.E.K.O gestiona {plugin}.',
       reinstallTitle: '¿Reinstalar {plugin}?',
       reinstallBody: 'La versión {current} se sustituirá de nuevo por la versión {target}. Si el plugin está en ejecución, se reiniciará brevemente.',
       reinstallConfirm: 'Reinstalar plugin',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: 'Este paquete contiene un plugin instalado. Actualiza sus plugins uno por uno.',
       blockedDirectoryConflict: 'La carpeta de destino pertenece a otro plugin y no se modificó.',
       blockedLegacyPlugin: 'Todavía hay una versión anterior de este plugin instalada. Desinstala {plugin} antes de continuar.',
+      blockedOwnershipUnknown: 'No se pudo verificar quién es propietario de la carpeta del plugin. Restaura el registro del origen de instalación antes de reintentarlo.',
+      blockedInstallSourceReadOnly: 'El registro del origen de instalación no está disponible o es de solo lectura. Restáuralo antes de reintentarlo.',
       rollbackCompleted: 'La actualización falló y se restauró la versión anterior.',
       rollbackIncomplete: 'La actualización falló y la reversión quedó incompleta. Comprueba el estado del plugin antes de continuar.',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: 'Líneas devueltas',
     connected: 'Conectado',
     disconnected: 'Desconectado',
-    connectionFailed: 'Error de conexión al flujo de registros'
+    connectionFailed: 'Error de conexión al flujo de registros',
+    exportLog: 'Exportar archivo de registros',
+    openLogDirectory: 'Abrir directorio de registros',
+    exportSuccess: 'Registro exportado con éxito',
+    exportFailed: 'Error al exportar el registro',
+    openDirectoryFailed: 'Error al abrir el directorio',
+    noLogFileToExport: 'No hay archivo de registro para exportar'
   },
   runs: {
     title: 'Ejecuciones',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: 'Cancelación solicitada'
   },
   status: {
+    sourceMissing: 'Directorio de código no disponible',
     running: 'En ejecución',
     stopped: 'Detenido',
     crashed: 'Con fallos',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: 'Recurso solicitado no encontrado',
     internalServerError: 'Error interno del servidor',
     serviceUnavailable: 'Servicio no disponible',
-    networkError: 'Error de red. Comprueba tu conexión.'
+    networkError: 'Error de red. Comprueba tu conexión.',
+    requestTimeout: 'La solicitud agotó el tiempo de espera. Inténtalo de nuevo.',
+    pluginLifecycleTimeout: 'El inicio o reinicio del plugin agotó el tiempo de espera. Revisa los registros del plugin.'
   },
   welcome: {
     about: {

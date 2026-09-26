@@ -127,6 +127,7 @@ from utils.ssl_env_diagnostics import probe_ssl_environment, write_ssl_diagnosti
 from utils.asyncio_executor import configure_default_executor  # noqa: E402
 from utils.asgi_body_limit import InboundBodySizeLimitMiddleware  # noqa: E402
 from knowledge.limits import MAX_SUBSCRIPTION_ENVELOPE_BYTES  # noqa: E402
+from utils.avatar_tool_store import AVATAR_TOOL_MAX_MULTIPART_BODY_BYTES  # noqa: E402
 from utils.host_origin_guard import HostOriginGuardMiddleware  # noqa: E402
 
 _main_log_level = getattr(
@@ -533,6 +534,7 @@ _MAIN_LIMITED_MODE_ALLOWED_PAGE_PATHS = {
     "/live2d_parameter_editor",
     "/soccer_demo",
     "/badminton_demo",
+    "/drawing_guess_demo",
     "/live2d_emotion_manager",
     "/vrm_emotion_manager",
     "/mmd_emotion_manager",
@@ -613,13 +615,31 @@ async def main_storage_limited_mode_guard(request: Request, call_next):
     )
 
 
-# 全局入站 body 体积守门（issue #1586）：在 router 的 request.json()/form()
-# 解析之前，按 Content-Length 拒收超大「非 multipart」请求体，跨所有 router
-# 统一生效，与各 router 的业务校验（如 validate_chat_payload）正交。multipart
-# 文件上传（模型/音乐/角色卡等）一律放行，交给各上传 router 自带的流式分块守门。
-# add_middleware 后注册即处于最外层，最先执行——解析前拒收，不浪费后续处理。
+def _avatar_tool_multipart_preflight(scope):
+    from main_routers.system_router._shared import (
+        _is_loopback_request,
+        _validate_local_mutation_request,
+    )
+
+    request = Request(scope)
+    if not _is_loopback_request(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden: local access only"},
+        )
+    return _validate_local_mutation_request(request)
+
+
+# 全局非 multipart 请求继续沿用 16 MiB Content-Length 守门。自定义道具
+# POST/PUT 另外在 FastAPI 解析 multipart 前完成本地访问、CSRF/origin 和聚合
+# 体积校验；receive 计数同时覆盖缺失或不可信的 Content-Length。公共知识
+# 订阅 apply 端点按精确路径先读入有界 spool、校验实际字节数后再回放给下游。
 app.add_middleware(
     InboundBodySizeLimitMiddleware,
+    multipart_path_prefix="/api/avatar-tools",
+    multipart_methods=("POST", "PUT"),
+    max_multipart_body_bytes=AVATAR_TOOL_MAX_MULTIPART_BODY_BYTES,
+    multipart_preflight=_avatar_tool_multipart_preflight,
     streamed_path_limits={
         "/api/public-knowledge/subscriptions/apply": MAX_SUBSCRIPTION_ENVELOPE_BYTES,
     },
@@ -651,6 +671,7 @@ from .web_app import (  # noqa: F401
     config_router,
     cookies_login_router,
     debug_router,
+    drawing_guess_router,
     galgame_router,
     game_router,
     get_card_drop_active_character,

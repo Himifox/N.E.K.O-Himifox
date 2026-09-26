@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * 日本語言語パック
  */
 export default {
+  modelApi: modelApiMessages['ja'],
+  modelBindings: modelBindingsMessages['ja'],
+  development: {
+    guidePurpose: "この画面はワンクリックでプラグインを開発するものではありません。既存のソースをインポート可能なプラグインにワンクリックでパッケージ化し、継続して開発するための画面です。",
+    navTitle: "開発プラグイン",
+    guideButton: "使い方",
+    guideTitle: "プラグイン開発を始める",
+    guideIntro: "N.E.K.O 本体のリポジトリを clone せず、自分のソースフォルダーを関連付けて開発・デバッグ・パッケージ化できます。",
+    guideLoadTitle: "ソースフォルダーを読み込む",
+    guideLoadBody: "開発モードを有効にし、plugin.toml を含むフォルダーを選択して検証後に読み込みます。ブラウザーで入力するパスはバックエンドが動くマシンのものです。",
+    guideReloadTitle: "編集して再読み込み",
+    guideReloadBody: "自分のエディターで変更を保存し、再読み込みをクリックします。エントリー一覧に更新後の説明が表示されます。アプリ再起動後は手動で起動してください。",
+    guideBuildTitle: "パッケージ化して共有",
+    guideBuildBody: "停止中でも .neko-plugin パッケージを作成できます。別の環境にインポートして動作を確認してから共有してください。",
+    guideData: "関連付けを解除するとプラグインを停止して登録を削除しますが、ソースと実行データは保持します。開発モードを無効にすると停止しますが、関連付けは保持します。",
+    guideReopen: "閉じた後もページ右上の「使い方」からいつでも確認できます。",
+    guideDismiss: "わかりました",
+    sourcePlaceholder: "plugin.toml を含むプラグインフォルダーを選択",
+    previewHint: "検証するとプラグイン情報が表示されます。内容を確認してから読み込めます。",
+    title: "開発モード",
+    load: "未パッケージのプラグインを読み込む",
+    hint: "開発したソースを読み込み、パッケージ化してプラグインをインポートするか、そのまま開発を続けられます。",
+    badge: "開発中",
+    entry: "エントリーポイント",
+    openSource: "ソースフォルダーを開く",
+    start: "起動",
+    stop: "停止",
+    reload: "再読み込み",
+    logs: "ログ",
+    build: "パッケージ作成",
+    rebind: "フォルダーを変更",
+    remove: "関連付けを解除",
+    pathHint: "N.E.K.O バックエンドが動作するコンピューター上のソースディレクトリを入力してください。ブラウザーのフォルダーアップロードは使用できません。",
+    path: "ソースディレクトリ",
+    choose: "フォルダーを選択",
+    valid: "検証済み",
+    validate: "検証",
+    failed: "操作に失敗しました",
+    built: "パッケージを作成しました。機能テストとマーケット審査は別途必要です。",
+    removeHint: "プラグインを停止して関連付けを解除しますか？ソースと実行データは保持されます。",
+  },
   common: {
     loading: '読み込み中...',
     refresh: '更新',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: '{plugin} を Market ソースに切り替えますか？',
       overrideBuiltinBody: '現在の内蔵バージョン {current} を Market バージョン {target} に置き換えます。プラグインのデータと設定は永続ストレージに保持されます。',
       overrideBuiltinConfirm: 'Market に切り替える',
+      manualTakeoverTitle: '{plugin} を N.E.K.O の管理対象にしますか？',
+      manualTakeoverBody: 'このプラグインディレクトリは現在手動で管理されています。続行するとバージョン {current} を {target} に置き換え、成功後は N.E.K.O がこのユーザープラグインの更新とアンインストールを管理します。',
+      manualTakeoverConfirm: '置き換えて管理する',
+      manualTakeoverCancelled: '手動管理プラグインの置き換えをキャンセルしました。',
+      manualTakeoverSucceeded: '{plugin} は N.E.K.O の管理対象になりました。',
       reinstallTitle: '{plugin} を再インストールしますか？',
       reinstallBody: 'バージョン {current} をバージョン {target} でもう一度置き換えます。実行中のプラグインは一時的に再起動します。',
       reinstallConfirm: 'プラグインを再インストール',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: 'このバンドルにはインストール済みのプラグインが含まれます。プラグインを1つずつアップグレードしてください。',
       blockedDirectoryConflict: '対象ディレクトリは別のプラグインに属するため、変更しませんでした。',
       blockedLegacyPlugin: 'このプラグインの以前のバージョンがまだインストールされています。続行する前に {plugin} をアンインストールしてください。',
+      blockedOwnershipUnknown: '既存のプラグインディレクトリの所有元を確認できません。インストール元の記録を復元してから再試行してください。',
+      blockedInstallSourceReadOnly: 'インストール元の記録を利用できないか、読み取り専用です。記録を復元してから再試行してください。',
       rollbackCompleted: 'アップグレードに失敗したため、以前のバージョンを復元しました。',
       rollbackIncomplete: 'アップグレードに失敗し、ロールバックも完了できませんでした。続行する前にプラグインの状態を確認してください。',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: '返却行数',
     connected: '接続済み',
     disconnected: '未接続',
-    connectionFailed: 'ログストリームの接続に失敗しました'
+    connectionFailed: 'ログストリームの接続に失敗しました',
+    exportLog: 'ログアーカイブをエクスポート',
+    openLogDirectory: 'ログディレクトリを開く',
+    exportSuccess: 'ログのエクスポートに成功しました',
+    exportFailed: 'ログのエクスポートに失敗しました',
+    openDirectoryFailed: 'ディレクトリを開けませんでした',
+    noLogFileToExport: 'エクスポートするログファイルがありません'
   },
   runs: {
     title: '実行履歴',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: 'キャンセルリクエストを送信しました'
   },
   status: {
+    sourceMissing: 'ソースディレクトリを利用できません',
     running: '実行中',
     stopped: '停止',
     crashed: 'クラッシュ',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: '要求されたリソースが見つかりません',
     internalServerError: 'サーバー内部エラー',
     serviceUnavailable: 'サービスが利用できません',
-    networkError: 'ネットワークエラー。接続を確認してください。'
+    networkError: 'ネットワークエラー。接続を確認してください。',
+    requestTimeout: 'リクエストがタイムアウトしました。もう一度お試しください。',
+    pluginLifecycleTimeout: 'プラグインの起動または再起動がタイムアウトしました。プラグインログを確認してください。'
   },
   welcome: {
     about: {

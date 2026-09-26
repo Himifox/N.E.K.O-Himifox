@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * 中文语言包
  */
 export default {
+  modelApi: modelApiMessages['zh-CN'],
+  modelBindings: modelBindingsMessages['zh-CN'],
+  development: {
+    guidePurpose: "此界面不提供一键式插件开发，而是帮助开发者将已有源码一键打包为可导入的插件，并支持持续开发。",
+    navTitle: "开发插件",
+    guideButton: "使用说明",
+    guideTitle: "开始开发你的插件",
+    guideIntro: "无需 clone N.E.K.O 主仓库：关联自己的源码文件夹，即可开发、调试并打包分发。",
+    guideLoadTitle: "加载源码目录",
+    guideLoadBody: "开启开发模式，选择包含 plugin.toml 的文件夹，校验后加载。网页端输入的路径属于运行后端的机器。",
+    guideReloadTitle: "修改后手动重载",
+    guideReloadBody: "用自己的编辑器修改并保存，再点击「重载」。入口列表显示更新后的说明；应用重启后需要手动启动开发插件。",
+    guideBuildTitle: "打包并分享",
+    guideBuildBody: "点击「打包」生成 .neko-plugin 安装包，停止状态也能打包。请在另一套环境导入并验证后再分发。",
+    guideData: "「移除关联」会停止插件并解除登记，保留源码和运行数据。关闭开发模式也会停止插件，但保留目录关联。",
+    guideReopen: "关闭后，可随时点击页面右上方的「使用说明」再次查看。",
+    guideDismiss: "知道了",
+    sourcePlaceholder: "选择包含 plugin.toml 的插件文件夹",
+    previewHint: "校验后将在这里显示插件信息，确认无误后即可加载。",
+    title: "开发模式",
+    load: "加载未打包插件",
+    hint: "开发完成后加载源码，可以打包并导入插件，也可以继续开发。",
+    badge: "开发中",
+    entry: "入口",
+    openSource: "打开源码目录",
+    start: "启动",
+    stop: "停止",
+    reload: "重载",
+    logs: "日志",
+    build: "打包",
+    rebind: "重新选择目录",
+    remove: "移除关联",
+    pathHint: "请输入运行 N.E.K.O 后端的机器上的源码目录。浏览器上传文件夹不用于原地开发。",
+    path: "源码目录",
+    choose: "选择文件夹",
+    valid: "校验通过",
+    validate: "校验",
+    failed: "操作失败",
+    built: "安装包已生成；功能测试和市场审核需另行完成。",
+    removeHint: "停止插件并移除关联？源码和运行数据会保留。",
+  },
   common: {
     loading: '加载中...',
     refresh: '刷新',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: '将 {plugin} 切换为 Market 来源？',
       overrideBuiltinBody: '当前内置版本 {current} 将由 Market 版本 {target} 替换。插件数据与配置仍保留在持久化存储中。',
       overrideBuiltinConfirm: '切换到 Market',
+      manualTakeoverTitle: '让 N.E.K.O 接管 {plugin}？',
+      manualTakeoverBody: '目标插件目录目前由你手动维护。继续后将以版本 {target} 替换当前版本 {current}；成功后该用户插件由 N.E.K.O 管理，之后可以由 N.E.K.O 更新或卸载。',
+      manualTakeoverConfirm: '替换并接管',
+      manualTakeoverCancelled: '已取消替换手动维护的插件。',
+      manualTakeoverSucceeded: '{plugin} 已由 N.E.K.O 接管。',
       reinstallTitle: '重新安装 {plugin}？',
       reinstallBody: '版本 {current} 将再次替换为版本 {target}。正在运行的插件会短暂重启。',
       reinstallConfirm: '重新安装插件',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: '此整合包包含已安装的插件，请逐个升级其中的插件。',
       blockedDirectoryConflict: '目标目录属于另一个插件，未进行任何更改。',
       blockedLegacyPlugin: '仍安装着此插件的旧版本。请先卸载 {plugin} 再继续。',
+      blockedOwnershipUnknown: '无法确认现有插件目录的所有权。请先恢复对应的安装源记录，再重试。',
+      blockedInstallSourceReadOnly: '安装源记录不可用或处于只读状态。请先恢复安装源记录，再重试。',
       rollbackCompleted: '升级失败，已恢复之前的版本。',
       rollbackIncomplete: '升级失败且回滚未完整完成，请检查插件状态后再继续。',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: '返回行数',
     connected: '已连接',
     disconnected: '未连接',
-    connectionFailed: '日志流连接失败'
+    connectionFailed: '日志流连接失败',
+    exportLog: '导出日志压缩包',
+    openLogDirectory: '打开日志目录',
+    exportSuccess: '日志导出成功',
+    exportFailed: '日志导出失败',
+    openDirectoryFailed: '打开目录失败',
+    noLogFileToExport: '没有可导出的日志文件'
   },
   runs: {
     title: '运行记录',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: '已发送取消请求'
   },
   status: {
+    sourceMissing: '源码目录不可用',
     running: '运行中',
     stopped: '已停止',
     crashed: '已崩溃',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: '请求的资源不存在',
     internalServerError: '服务器内部错误',
     serviceUnavailable: '服务不可用',
-    networkError: '网络错误，请检查网络连接'
+    networkError: '网络错误，请检查网络连接',
+    requestTimeout: '请求超时，请稍后重试',
+    pluginLifecycleTimeout: '插件启动或重载超时，请查看插件日志'
   },
   welcome: {
     about: {

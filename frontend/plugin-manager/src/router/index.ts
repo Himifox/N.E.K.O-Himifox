@@ -35,6 +35,14 @@ const routes: RouteRecordRaw[] = [
         }
       },
       {
+        path: 'model-api',
+        name: 'ModelApi',
+        component: () => import('@/views/ModelApi.vue'),
+        meta: {
+          titleKey: 'modelApi.title'
+        }
+      },
+      {
         path: 'market',
         name: 'MarketBrowse',
         component: () => import('@/views/MarketBrowse.vue'),
@@ -84,6 +92,14 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/AdapterUI.vue'),
         meta: {
           titleKey: 'nav.adapterUI'
+        }
+      },
+      {
+        path: 'development',
+        name: 'Development',
+        component: () => import('@/views/Development.vue'),
+        meta: {
+          titleKey: 'development.title'
         }
       },
       {

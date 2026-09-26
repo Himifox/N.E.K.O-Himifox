@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * English language pack
  */
 export default {
+  modelApi: modelApiMessages['en-US'],
+  modelBindings: modelBindingsMessages['en-US'],
+  development: {
+    guidePurpose: "This interface does not develop plugins for you in one click. It helps developers package existing source code into importable plugins with one click and continue development.",
+    navTitle: "Development plugins",
+    guideButton: "Usage guide",
+    guideTitle: "Start developing your plugin",
+    guideIntro: "Link your own source folder to develop, debug and package plugins without cloning the N.E.K.O main repository.",
+    guideLoadTitle: "Load a source folder",
+    guideLoadBody: "Enable developer mode, choose a folder containing plugin.toml, validate it, then load. Paths entered in a browser refer to the backend machine.",
+    guideReloadTitle: "Edit and reload",
+    guideReloadBody: "Save changes in your editor, then click Reload. The entry list shows updated descriptions. After restarting the app, start development plugins manually.",
+    guideBuildTitle: "Package and share",
+    guideBuildBody: "Build a .neko-plugin package, even while the plugin is stopped. Import and verify it in another environment before sharing.",
+    guideData: "Remove association stops the plugin and removes its registration, keeping source files and runtime data. Disabling developer mode stops plugins but keeps folder associations.",
+    guideReopen: "You can reopen this guide anytime using Usage guide at the top right of this page.",
+    guideDismiss: "Got it",
+    sourcePlaceholder: "Choose a plugin folder containing plugin.toml",
+    previewHint: "Validate the folder to preview the plugin details before loading.",
+    title: "Developer mode",
+    load: "Load unpacked plugin",
+    hint: "Load your plugin source after development, then package and import the plugin or continue developing.",
+    badge: "Development",
+    entry: "Entry point",
+    openSource: "Open source folder",
+    start: "Start",
+    stop: "Stop",
+    reload: "Reload",
+    logs: "Logs",
+    build: "Build package",
+    rebind: "Change folder",
+    remove: "Remove association",
+    pathHint: "Enter a source directory on the machine running the N.E.K.O backend. Browser folder uploads are not supported.",
+    path: "Source directory",
+    choose: "Choose folder",
+    valid: "Validation passed",
+    validate: "Validate",
+    failed: "Operation failed",
+    built: "Package built. Functional testing and market review are separate.",
+    removeHint: "Stop this plugin and remove its association? Source files and runtime data will be kept.",
+  },
   common: {
     loading: 'Loading...',
     refresh: 'Refresh',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: 'Switch {plugin} to the Market source?',
       overrideBuiltinBody: 'The active built-in version {current} will be replaced by Market version {target}. Plugin data and configuration remain in persistent storage.',
       overrideBuiltinConfirm: 'Switch to Market',
+      manualTakeoverTitle: 'Let N.E.K.O manage {plugin}?',
+      manualTakeoverBody: 'This plugin directory is maintained manually. Continuing replaces version {current} with {target}; after success, N.E.K.O will manage this user plugin and may uninstall or update it later.',
+      manualTakeoverConfirm: 'Replace and manage',
+      manualTakeoverCancelled: 'Manual plugin replacement cancelled.',
+      manualTakeoverSucceeded: '{plugin} is now managed by N.E.K.O.',
       reinstallTitle: 'Reinstall {plugin}?',
       reinstallBody: 'Version {current} will be replaced with version {target} again. A running plugin will restart briefly.',
       reinstallConfirm: 'Reinstall plugin',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: 'This bundle contains an installed plugin. Upgrade its plugins one at a time.',
       blockedDirectoryConflict: 'The destination directory belongs to another plugin and was not changed.',
       blockedLegacyPlugin: 'An earlier version of this plugin is still installed. Uninstall {plugin} before continuing.',
+      blockedOwnershipUnknown: 'N.E.K.O could not verify who owns the existing plugin directory. Restore its install-source record before trying again.',
+      blockedInstallSourceReadOnly: 'The install-source record is unavailable or read-only. Restore it before trying again.',
       rollbackCompleted: 'The upgrade failed and the previous version was restored.',
       rollbackIncomplete: 'The upgrade failed and rollback was incomplete. Check the plugin state before continuing.',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: 'Returned Lines',
     connected: 'Connected',
     disconnected: 'Disconnected',
-    connectionFailed: 'Log stream connection failed'
+    connectionFailed: 'Log stream connection failed',
+    exportLog: 'Export Logs Archive',
+    openLogDirectory: 'Open Log Directory',
+    exportSuccess: 'Log exported successfully',
+    exportFailed: 'Failed to export log',
+    openDirectoryFailed: 'Failed to open directory',
+    noLogFileToExport: 'No log file to export'
   },
   runs: {
     title: 'Runs',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: 'Cancel requested'
   },
   status: {
+    sourceMissing: 'Source directory unavailable',
     running: 'Running',
     stopped: 'Stopped',
     crashed: 'Crashed',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: 'Requested resource not found',
     internalServerError: 'Internal server error',
     serviceUnavailable: 'Service unavailable',
-    networkError: 'Network error. Please check your connection.'
+    networkError: 'Network error. Please check your connection.',
+    requestTimeout: 'The request timed out. Please try again.',
+    pluginLifecycleTimeout: 'Plugin startup or restart timed out. Please check the plugin logs.'
   },
   welcome: {
     about: {

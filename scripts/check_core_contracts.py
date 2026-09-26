@@ -141,6 +141,8 @@ FACADE_MODULE_ALIAS = "_core_facade"
 OWNER_SUBMODULES = {
     "_shared",
     "callback_render",
+    "game_speech_audio_cache",
+    "multimodal_turn",
     "notices",
 }
 MIXIN_SUPPORT_CLASSES = {
@@ -149,6 +151,16 @@ MIXIN_SUPPORT_CLASSES = {
         "_AudioDurationQueue",
         "_HotSwapAudioFrame",
         "_HotSwapAudioBuffer",
+        "_VoiceInputPipelineFailure",
+        # One-use transport handoff metadata owned by the microphone bridge.
+        "_VoiceActivationHandoff",
+    },
+    "tts_runtime": {
+        # Private control-flow signal for the game-speech preload batch. It has
+        # to be a distinct type from asyncio.CancelledError so that absorbing a
+        # supersede/teardown does not also swallow a real task cancellation, and
+        # it lives next to its only raiser and catcher.
+        "_GameSpeechPreloadCancelled",
     },
 }
 PATCH_CALL_NAMES = {"setattr", "patch", "delattr"}
@@ -3299,8 +3311,11 @@ def run(root: Path) -> list[Violation]:
                 "resume",
                 "abort",
                 "wait_transcript_idle",
+                "has_pending_transcript_delivery",
                 "set_speaker_verifier_factory",
                 "request_speaker_candidate_rejection",
+                "invalidate_protected_prefix",
+                "transport_connect_deadline",
                 "start",
                 "submit",
             }

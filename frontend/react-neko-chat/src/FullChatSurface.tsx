@@ -27,12 +27,13 @@ import { useFocusGlow } from './useFocusGlow';
 import AvatarToolItemManager, { type AvatarToolManagerAnchorRect } from './AvatarToolItemManager';
 import AvatarToolVisuals from './avatar-tools/presentation';
 import { useAvatarToolRuntime } from './avatar-tools/runtime';
+import { useLocalAvatarToolCatalog } from './avatar-tools/useLocalAvatarToolCatalog';
 import {
-  AVAILABLE_FULL_AVATAR_TOOLS,
+  getAvatarToolItemLabel,
   persistActiveAvatarToolIds,
   readPersistedActiveAvatarToolIds,
   resolveAvatarToolMenuIconVisual,
-  sanitizeAvatarToolIds,
+  sanitizeAvatarToolSlots,
   withAvatarToolAssetVersion,
   type AvatarToolId,
   type AvatarToolItem,
@@ -387,10 +388,8 @@ function getCompactMessagePreview(messages: ChatMessage[]): CompactMessagePrevie
 
 type ToolIconItem = AvatarToolItem;
 
-const toolIconItems = AVAILABLE_FULL_AVATAR_TOOLS;
-
 function getToolItemLabel(item: ToolIconItem): string {
-  return i18n(item.labelKey, item.labelFallback);
+  return getAvatarToolItemLabel(item);
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -486,6 +485,8 @@ export default function FullChatSurface({
   _avatarToolDeactivationKey,
 }: ChatWindowProps) {
   useCompactToolWheelAudioPreload();
+  const localAvatarToolCatalog = useLocalAvatarToolCatalog();
+  const toolIconItems = localAvatarToolCatalog.registry.items;
 
   const [draft, setDraft] = useState('');
   const [catDraft, setCatDraft] = useState('');
@@ -578,6 +579,7 @@ export default function FullChatSurface({
     getToolLabel: getToolItemLabel,
     avatarName: assistantName,
     onDeactivate: () => setToolMenuOpen(false),
+    registry: localAvatarToolCatalog.registry,
   });
   const activeAvatarToolId = avatarToolRuntime.activeToolId;
   const activeToolItem = avatarToolRuntime.activeTool;
@@ -589,10 +591,10 @@ export default function FullChatSurface({
     return activeAvatarToolIds
       .map(toolId => availableById.get(toolId))
       .filter((item): item is AvatarToolItem => !!item);
-  }, [activeAvatarToolIds]);
+  }, [activeAvatarToolIds, toolIconItems]);
 
   const handleAvatarToolManagerSave = useCallback((toolIds: AvatarToolId[]) => {
-    const nextToolIds = sanitizeAvatarToolIds(toolIds);
+    const nextToolIds = sanitizeAvatarToolSlots(toolIds);
     setActiveAvatarToolIds(nextToolIds);
     persistActiveAvatarToolIds(nextToolIds);
     setAvatarToolManagerOpen(false);
@@ -600,7 +602,12 @@ export default function FullChatSurface({
     if (activeAvatarToolId && !nextToolIds.includes(activeAvatarToolId as AvatarToolId)) {
       clearAvatarTool();
     }
-  }, [activeAvatarToolId, clearAvatarTool]);
+  }, [activeAvatarToolId, clearAvatarTool, localAvatarToolCatalog.registry]);
+
+  useEffect(() => {
+    if (!avatarToolManagerOpen) return;
+    localAvatarToolCatalog.refresh().catch(() => undefined);
+  }, [avatarToolManagerOpen, localAvatarToolCatalog.refresh]);
 
   useEffect(() => {
     if (!activeAvatarToolId) return;
@@ -2263,7 +2270,7 @@ export default function FullChatSurface({
     }
   }
 
-  function submitDraft() {
+  function submitDraft(submitMethod: ComposerSubmitPayload['submitMethod'] = 'button') {
     if (composerInteractionsDisabled) return;
     if (submittingRef.current) return;
     const text = visibleDraft.trim();
@@ -2271,7 +2278,7 @@ export default function FullChatSurface({
     closeCompactInputToolFan();
     submittingRef.current = true;
     try {
-      onComposerSubmit?.({ text });
+      onComposerSubmit?.({ text, submitMethod });
       if (catLocalTextOnly) {
         setCatDraft('');
       } else {
@@ -3175,6 +3182,8 @@ export default function FullChatSurface({
           setAvatarToolManagerOpen(false);
           setAvatarToolManagerAnchorRect(null);
         }}
+        catalogAuthoritativeLoaded={localAvatarToolCatalog.authoritativeLoaded}
+        catalogRefreshFailed={localAvatarToolCatalog.refreshFailed}
       />
       <section
         className={`chat-window ${surfaceModeClassName}`}
@@ -3229,7 +3238,7 @@ export default function FullChatSurface({
           ) : null}
           <form className="composer" onSubmit={(event) => {
             event.preventDefault();
-            submitDraft();
+            submitDraft('button');
           }}>
             {isCompactSurface ? (
               <div
@@ -3307,7 +3316,7 @@ export default function FullChatSurface({
                           if (event.nativeEvent.isComposing) return;
                           if (event.key === 'Enter' && !event.shiftKey) {
                             event.preventDefault();
-                            submitDraft();
+                            submitDraft('enter');
                           }
                         }}
                       />
@@ -3396,7 +3405,7 @@ export default function FullChatSurface({
                   if (event.nativeEvent.isComposing) return;
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
-                    submitDraft();
+                    submitDraft('enter');
                   }
                 }}
               />

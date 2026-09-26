@@ -227,6 +227,10 @@ class _VoiceTurnAdapter:
         self._evaluation_tail_duration_us = 0
         self._confirmation_tail: list[_AudioItem] = []
         self._confirmation_tail_duration_us = 0
+        # Queue capacity has its own wake-up event.  Retained evaluation and
+        # confirmation audio needs a separate one so admission waiters do not
+        # mistake a dequeue for complete capacity.
+        self._tail_capacity_changed = asyncio.Event()
         self._continuation_timeout_seconds = continuation_timeout_seconds
         self._max_endpoint_wait_seconds = max_endpoint_wait_seconds
         self._candidate_complete_confirmation_seconds = (
@@ -269,6 +273,38 @@ class _VoiceTurnAdapter:
         self._commit_dispatched: set[_Identity] = set()
         self._successor_audio_fence: tuple[_Identity, int, _Identity] | None = None
         self._smart_turn_pin_count = 0
+
+    def _audio_capacity_available(
+        self,
+        duration_us: int,
+        *,
+        identity: _Identity | None = None,
+        detector_identity: DetectorIngressIdentity | None = None,
+    ) -> bool:
+        """Apply the same queue/tail/identity budget used by ``push_audio``."""
+
+        if not self._queue.can_accept_audio(duration_us):
+            return False
+        pending = self._pending_complete_confirmation
+        retains_for_confirmation = (
+            pending is not None
+            and identity is not None
+            and detector_identity is not None
+            and pending.identity == identity
+            and pending.detector_identity is not None
+            and detector_identity.detector_epoch
+            == pending.detector_identity.detector_epoch
+            and detector_identity.sequence_no > pending.detector_identity.sequence_no
+        )
+        if self._evaluation_task is None and not retains_for_confirmation:
+            return True
+        return (
+            self._evaluation_tail_duration_us
+            + self._confirmation_tail_duration_us
+            + self._queue.audio_duration_us
+            + duration_us
+            <= self._evaluation_tail_capacity_us
+        )
 
     async def start(self) -> None:
         if self._closed:
@@ -361,23 +397,10 @@ class _VoiceTurnAdapter:
         self._ensure_running()
         samples = len(pcm16) // 2
         duration_us = (samples * 1_000_000 + sample_rate_hz - 1) // sample_rate_hz
-        pending = self._pending_complete_confirmation
-        retains_for_confirmation = (
-            pending is not None
-            and pending.identity == (generation, buffer_epoch, utterance_id)
-            and pending.detector_identity is not None
-            and detector_identity is not None
-            and detector_identity.detector_epoch
-            == pending.detector_identity.detector_epoch
-            and detector_identity.sequence_no > pending.detector_identity.sequence_no
-        )
-        if (
-            (self._evaluation_task is not None or retains_for_confirmation)
-            and self._evaluation_tail_duration_us
-            + self._confirmation_tail_duration_us
-            + self._queue.audio_duration_us
-            + duration_us
-            > self._evaluation_tail_capacity_us
+        if not self._audio_capacity_available(
+            duration_us,
+            identity=(generation, buffer_epoch, utterance_id),
+            detector_identity=detector_identity,
         ):
             # Surface the shared duration budget at ingress so DetectorRuntime
             # can use its existing whole-candidate backpressure recovery. Once
@@ -720,6 +743,7 @@ class _VoiceTurnAdapter:
         evaluation_tail = tuple(self._evaluation_tail)
         self._evaluation_tail.clear()
         self._evaluation_tail_duration_us = 0
+        self._tail_capacity_changed.set()
         reevaluate = self._reevaluation_requested
         reevaluation_reason = self._reevaluation_reason or item.reason
         self._reevaluation_requested = False
@@ -907,6 +931,7 @@ class _VoiceTurnAdapter:
         items = tuple(self._confirmation_tail)
         self._confirmation_tail.clear()
         self._confirmation_tail_duration_us = 0
+        self._tail_capacity_changed.set()
         return items
 
     def _complete_observed_candidate(
@@ -953,6 +978,7 @@ class _VoiceTurnAdapter:
         self._latest_detector_identity = None
         self._evaluation_tail.clear()
         self._evaluation_tail_duration_us = 0
+        self._tail_capacity_changed.set()
         self._clear_confirmation_audio()
         self._successor_audio_fence = None
         self._smart_turn_audio_evidence.discard()
@@ -1364,12 +1390,13 @@ class SmartTurnReadiness(Enum):
 class SmartTurnLease:
     token: VoiceTurnToken
     _runtime: "DetectorRuntime"
+    _lease_id: int
     _released: bool = False
 
     async def release(self) -> None:
         if self._released:
             return
-        await self._runtime.release_endpointing(self.token)
+        await self._runtime.release_endpointing(self.token, self._lease_id)
         self._released = True
 
 
@@ -1428,6 +1455,7 @@ class DetectorRuntime:
         self._load_attempted = False
         self._available = True
         self._closed = False
+        self._close_task: asyncio.Task[None] | None = None
         self._rnnoise_onset_probability = rnnoise_onset_probability
         self._resource_optimization_enabled = bool(resource_optimization_enabled)
         self._throttle_policy = throttle_policy or VoiceThrottlePolicy(
@@ -1451,9 +1479,15 @@ class DetectorRuntime:
         self._failure_watch_task: asyncio.Task[None] | None = None
         self._smart_turn_readiness = SmartTurnReadiness.UNLOADED
         self._smart_turn_token: VoiceTurnToken | None = None
+        self._smart_turn_generation_sequence = 0
+        self._smart_turn_generation: int | None = None
+        self._smart_turn_lease_sequence = 0
+        self._smart_turn_lease_ids: set[int] = set()
         self._prepare_task: asyncio.Task[bool] | None = None
         self._prepare_token: VoiceTurnToken | None = None
         self._prepare_epoch: int | None = None
+        self._prepare_waiters: dict[asyncio.Task[bool], int] = {}
+        self._prepare_generations: dict[asyncio.Task[bool], int] = {}
         self._overflow_reset_task: asyncio.Task[None] | None = None
         self._detector_epoch = 0
         self._sequence_no = 0
@@ -1823,7 +1857,7 @@ class DetectorRuntime:
                     self._smart_turn_token == token
                     and self._smart_turn_readiness is SmartTurnReadiness.READY
                 ):
-                    return SmartTurnLease(token, self)
+                    return self._acquire_endpointing_lease_locked(token)
                 if self._smart_turn_token is not None:
                     return None
                 if (
@@ -1831,11 +1865,18 @@ class DetectorRuntime:
                     and self._prepare_task is None
                 ):
                     adapter.pin_smart_turn()
+                    self._smart_turn_generation_sequence += 1
+                    self._smart_turn_generation = (
+                        self._smart_turn_generation_sequence
+                    )
                     self._smart_turn_token = token
-                    return SmartTurnLease(token, self)
+                    return self._acquire_endpointing_lease_locked(token)
                 if self._prepare_task is not None:
                     if self._prepare_token == token:
                         prepare_task = self._prepare_task
+                        self._prepare_waiters[prepare_task] = (
+                            self._prepare_waiters.get(prepare_task, 0) + 1
+                        )
                     elif self._prepare_token is not None:
                         return None
                     else:
@@ -1850,24 +1891,76 @@ class DetectorRuntime:
                     self._prepare_token = token
                     self._prepare_epoch = self._detector_epoch
                     adapter.pin_smart_turn()
+                    self._smart_turn_generation_sequence += 1
+                    prepare_generation = self._smart_turn_generation_sequence
                     prepare_task = asyncio.create_task(
                         self._prepare_endpointing_task(
                             adapter,
                             coordinator,
                             token,
                             self._detector_epoch,
+                            prepare_generation,
                         ),
                         name="detector-runtime-smart-turn-prepare",
                     )
                     self._prepare_task = prepare_task
+                    self._prepare_waiters[prepare_task] = 1
+                    self._prepare_generations[prepare_task] = prepare_generation
             if stale_task is None:
                 break
             await asyncio.gather(stale_task, return_exceptions=True)
-        if prepare_task is None or not await asyncio.shield(prepare_task):
+        if prepare_task is None:
             return None
-        if self.endpointing_ready(token):
-            return SmartTurnLease(token, self)
-        return None
+        prepared = False
+        try:
+            prepared = await asyncio.shield(prepare_task)
+        finally:
+            lease = await self._finish_prepare_waiter(
+                prepare_task,
+                token,
+                acquire=prepared,
+            )
+        return lease
+
+    def _acquire_endpointing_lease_locked(
+        self,
+        token: VoiceTurnToken,
+    ) -> SmartTurnLease:
+        self._smart_turn_lease_sequence += 1
+        lease_id = self._smart_turn_lease_sequence
+        self._smart_turn_lease_ids.add(lease_id)
+        return SmartTurnLease(token, self, lease_id)
+
+    async def _finish_prepare_waiter(
+        self,
+        prepare_task: asyncio.Task[bool],
+        token: VoiceTurnToken,
+        *,
+        acquire: bool,
+    ) -> SmartTurnLease | None:
+        async with self._lock:
+            waiter_count = self._prepare_waiters.get(prepare_task, 0)
+            prepare_generation = self._prepare_generations.get(prepare_task)
+            if waiter_count <= 1:
+                self._prepare_waiters.pop(prepare_task, None)
+                self._prepare_generations.pop(prepare_task, None)
+            else:
+                self._prepare_waiters[prepare_task] = waiter_count - 1
+            if acquire and self.endpointing_ready(token):
+                return self._acquire_endpointing_lease_locked(token)
+            if (
+                self._prepare_waiters.get(prepare_task, 0) == 0
+                and not self._smart_turn_lease_ids
+                and self._smart_turn_token == token
+                and self._smart_turn_generation == prepare_generation
+            ):
+                self._smart_turn_token = None
+                self._smart_turn_generation = None
+                self._smart_turn_readiness = SmartTurnReadiness.UNLOADED
+                adapter = self._semantic_adapter
+                if adapter is not None:
+                    adapter.unpin_smart_turn()
+            return None
 
     async def _prepare_endpointing_task(
         self,
@@ -1875,6 +1968,7 @@ class DetectorRuntime:
         coordinator: TurnCoordinator,
         token: VoiceTurnToken,
         detector_epoch: int,
+        prepare_generation: int,
     ) -> bool:
         loaded = False
         prepare_error: BaseException | None = None
@@ -1886,10 +1980,11 @@ class DetectorRuntime:
             prepare_error = exc
         prepared = False
         async with self._lock:
-            owns_prepare = self._prepare_task is asyncio.current_task()
+            current_task = asyncio.current_task()
+            owns_prepare = self._prepare_task is current_task
             if owns_prepare:
                 self._prepare_task = None
-            valid = bool(
+            valid_state = bool(
                 owns_prepare
                 and not self._closed
                 and not adapter.failed
@@ -1897,19 +1992,28 @@ class DetectorRuntime:
                 and self._prepare_epoch == detector_epoch
                 and self._detector_epoch == detector_epoch
             )
+            has_waiters = bool(
+                current_task is not None
+                and self._prepare_waiters.get(current_task, 0) > 0
+            )
             if owns_prepare:
                 # Only the registered single-flight owner may clear these; a
                 # detached task must not clobber a successor's fields.
                 self._prepare_token = None
                 self._prepare_epoch = None
-            if valid and loaded and prepare_error is None:
+            if valid_state and has_waiters and loaded and prepare_error is None:
                 self._smart_turn_token = token
+                self._smart_turn_generation = prepare_generation
                 self._smart_turn_readiness = SmartTurnReadiness.READY
                 prepared = True
             else:
                 adapter.unpin_smart_turn()
-            if valid and not prepared:
-                self._smart_turn_readiness = SmartTurnReadiness.FAILED
+            if valid_state and not prepared:
+                self._smart_turn_readiness = (
+                    SmartTurnReadiness.FAILED
+                    if has_waiters
+                    else SmartTurnReadiness.UNLOADED
+                )
         if isinstance(prepare_error, asyncio.CancelledError):
             raise prepare_error
         return prepared
@@ -1934,13 +2038,21 @@ class DetectorRuntime:
             and self._smart_turn_token == token
         )
 
-    async def release_endpointing(self, token: VoiceTurnToken) -> None:
+    async def release_endpointing(
+        self,
+        token: VoiceTurnToken,
+        lease_id: int,
+    ) -> None:
         async with self._lock:
-            if self._smart_turn_token != token and self._prepare_token != token:
+            if lease_id not in self._smart_turn_lease_ids:
+                return
+            self._smart_turn_lease_ids.remove(lease_id)
+            if self._smart_turn_lease_ids:
+                return
+            if self._smart_turn_token != token:
                 return
             self._smart_turn_token = None
-            self._prepare_token = None
-            self._prepare_epoch = None
+            self._smart_turn_generation = None
             self._smart_turn_readiness = SmartTurnReadiness.UNLOADED
             adapter = self._semantic_adapter
             if adapter is not None:
@@ -1952,6 +2064,8 @@ class DetectorRuntime:
             if self._smart_turn_token != token and self._prepare_token != token:
                 return
             self._smart_turn_token = None
+            self._smart_turn_generation = None
+            self._smart_turn_lease_ids.clear()
             self._prepare_token = None
             self._prepare_epoch = None
             self._detector_epoch += 1
@@ -2262,6 +2376,115 @@ class DetectorRuntime:
                 self._throttle_policy.reset_candidate_activity()
             return successor_present
 
+    async def wait_audio_capacity(
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate_hz: int,
+        deadline: float,
+        ingress_token: VoiceIngressToken | None = None,
+    ) -> bool:
+        """Wait for the complete queue/evaluation-tail admission budget."""
+        if not isinstance(pcm16, bytes) or len(pcm16) % 2:
+            raise ValueError("DetectorRuntime requires complete PCM16 bytes")
+        if sample_rate_hz <= 0:
+            raise ValueError("DetectorRuntime sample rate must be positive")
+        adapter = self._semantic_adapter
+        epoch = self._detector_epoch
+        if self._closed or adapter is None or adapter.failed:
+            return False
+        if not pcm16:
+            return True
+        duration_us = (len(pcm16) // 2 * 1_000_000 + sample_rate_hz - 1) // sample_rate_hz
+        candidate_identity = None
+        detector_identity = None
+        if ingress_token is not None:
+            candidate_identity = (
+                self._semantic_generation,
+                0,
+                self._semantic_turn_id,
+            )
+            detector_identity = DetectorIngressIdentity(
+                ingress_token=ingress_token,
+                detector_epoch=self._detector_epoch,
+                sequence_no=self._sequence_no + 1,
+            )
+        capacity_check = getattr(adapter, "_audio_capacity_available", None)
+        if (
+            self._semantic_adapter is not adapter
+            or self._detector_epoch != epoch
+        ):
+            return False
+        if capacity_check is not None and capacity_check(
+            duration_us,
+            identity=candidate_identity,
+            detector_identity=detector_identity,
+        ):
+            return True
+        # Queue dequeue and retained evaluation/confirmation tails are
+        # independent capacity changes.  Waiting only on the queue can wake
+        # while a tail still occupies the shared budget and turn temporary
+        # backpressure into a session-failing overflow.
+        loop = asyncio.get_running_loop()
+        tail_changed = getattr(adapter, "_tail_capacity_changed", None)
+        while loop.time() < deadline:
+            if (
+                self._closed
+                or adapter.failed
+                or self._semantic_adapter is not adapter
+                or self._detector_epoch != epoch
+            ):
+                return False
+            complete_capacity = (
+                adapter._queue.can_accept_audio(duration_us)
+                if capacity_check is None
+                else capacity_check(
+                    duration_us,
+                    identity=candidate_identity,
+                    detector_identity=detector_identity,
+                )
+            )
+            if complete_capacity:
+                return True
+            # If the queue already has room, its wait method would complete
+            # immediately and spin while a retained tail is still full.  In
+            # that case wait only for the tail event.
+            queue_wait = None
+            if not adapter._queue.can_accept_audio(duration_us):
+                queue_wait = asyncio.create_task(
+                    adapter._queue.wait_audio_capacity(duration_us, deadline)
+                )
+            tail_wait = (
+                asyncio.create_task(tail_changed.wait())
+                if tail_changed is not None
+                else None
+            )
+            waiters = set()
+            if queue_wait is not None:
+                waiters.add(queue_wait)
+            if tail_wait is not None:
+                waiters.add(tail_wait)
+            if not waiters:
+                return False
+            try:
+                await asyncio.wait(
+                    waiters,
+                    timeout=max(0.0, deadline - loop.time()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for waiter in waiters:
+                    if not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(*waiters, return_exceptions=True)
+            if tail_wait is not None and tail_wait.done() and tail_changed is not None:
+                tail_changed.clear()
+            if self._closed or adapter.failed or self._semantic_adapter is not adapter:
+                return False
+            if self._detector_epoch != epoch:
+                return False
+        return False
+
     async def submit_audio(
         self,
         pcm16: bytes,
@@ -2459,6 +2682,9 @@ class DetectorRuntime:
                         self._smart_turn_readiness = SmartTurnReadiness.FAILED
 
     async def reset(self) -> None:
+        capacity_queue = getattr(self._semantic_adapter, "_queue", None)
+        if capacity_queue is not None:
+            capacity_queue.invalidate_capacity_waiters()
         overflow_reset_task = self._overflow_reset_task
         if (
             overflow_reset_task is not None
@@ -2489,6 +2715,8 @@ class DetectorRuntime:
                 self._speech_active = False
                 self._prepare_token = None
                 self._prepare_epoch = None
+                self._smart_turn_generation = None
+                self._smart_turn_lease_ids.clear()
                 self._smart_turn_readiness = SmartTurnReadiness.UNLOADED
                 if self._semantic_adapter is not None and self._semantic_started:
                     if self._smart_turn_token is not None:
@@ -2615,6 +2843,16 @@ class DetectorRuntime:
             await callback()
 
     async def close(self) -> None:
+        close_task = self._close_task
+        if close_task is None:
+            close_task = asyncio.create_task(
+                self._close_impl(),
+                name="detector-runtime-close",
+            )
+            self._close_task = close_task
+        await asyncio.shield(close_task)
+
+    async def _close_impl(self) -> None:
         adapter: _VoiceTurnAdapter | None = None
         vad = None
         prepare_task: asyncio.Task[bool] | None = None
@@ -2626,6 +2864,9 @@ class DetectorRuntime:
                     return
                 self._closed = True
                 self._detector_epoch += 1
+                capacity_queue = getattr(self._semantic_adapter, "_queue", None)
+                if capacity_queue is not None:
+                    capacity_queue.invalidate_capacity_waiters()
                 self._reset_speaker_shadow_identity()
                 speaker_shadow = self._speaker_shadow
                 self._candidate_generation = 0
@@ -2644,6 +2885,8 @@ class DetectorRuntime:
                 if self._semantic_adapter is not None:
                     overflow_reset_task = self._overflow_reset_task
                     self._smart_turn_token = None
+                    self._smart_turn_generation = None
+                    self._smart_turn_lease_ids.clear()
                     self._prepare_token = None
                     self._prepare_epoch = None
                     prepare_task, self._prepare_task = self._prepare_task, None

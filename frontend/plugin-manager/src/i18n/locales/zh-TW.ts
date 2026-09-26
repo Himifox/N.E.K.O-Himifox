@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * 繁體中文語言包
  */
 export default {
+  modelApi: modelApiMessages['zh-TW'],
+  modelBindings: modelBindingsMessages['zh-TW'],
+  development: {
+    guidePurpose: "此介面不提供一鍵式外掛開發，而是協助開發者將既有原始碼一鍵打包為可匯入的外掛，並支援持續開發。",
+    navTitle: "開發外掛",
+    guideButton: "使用說明",
+    guideTitle: "開始開發你的外掛",
+    guideIntro: "無需 clone N.E.K.O 主儲存庫：關聯自己的原始碼資料夾，即可開發、除錯並打包分享。",
+    guideLoadTitle: "載入原始碼目錄",
+    guideLoadBody: "開啟開發模式，選擇包含 plugin.toml 的資料夾，驗證後載入。網頁端輸入的路徑屬於執行後端的機器。",
+    guideReloadTitle: "修改後手動重新載入",
+    guideReloadBody: "使用自己的編輯器修改並儲存，再點擊「重新載入」。入口清單會顯示更新後的說明；應用程式重啟後需手動啟動開發外掛。",
+    guideBuildTitle: "打包並分享",
+    guideBuildBody: "點擊「打包」產生 .neko-plugin 安裝套件，停止狀態也能打包。請在另一套環境匯入並驗證後再分享。",
+    guideData: "「移除關聯」會停止外掛並解除登記，保留原始碼與執行資料。關閉開發模式也會停止外掛，但保留目錄關聯。",
+    guideReopen: "關閉後，可隨時點擊頁面右上方的「使用說明」再次查看。",
+    guideDismiss: "知道了",
+    sourcePlaceholder: "選擇包含 plugin.toml 的外掛資料夾",
+    previewHint: "驗證後將在這裡顯示外掛資訊，確認無誤後即可載入。",
+    title: "開發模式",
+    load: "載入未封裝外掛",
+    hint: "開發完成後載入原始碼，可以打包並匯入外掛，也可以繼續開發。",
+    badge: "開發中",
+    entry: "進入點",
+    openSource: "開啟原始碼目錄",
+    start: "啟動",
+    stop: "停止",
+    reload: "重新載入",
+    logs: "日誌",
+    build: "封裝",
+    rebind: "重新選擇目錄",
+    remove: "移除關聯",
+    pathHint: "請輸入執行 N.E.K.O 後端的電腦上的原始碼目錄。瀏覽器上傳資料夾不適用於原地開發。",
+    path: "原始碼目錄",
+    choose: "選擇資料夾",
+    valid: "驗證通過",
+    validate: "驗證",
+    failed: "操作失敗",
+    built: "安裝包已產生；功能測試與市集審核需另行完成。",
+    removeHint: "停止外掛並移除關聯？原始碼和執行資料會保留。",
+  },
   common: {
     loading: '載入中...',
     refresh: '重新整理',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: '將 {plugin} 切換為 Market 來源？',
       overrideBuiltinBody: '目前內建版本 {current} 將由 Market 版本 {target} 取代。外掛資料與設定仍保留在持久化儲存中。',
       overrideBuiltinConfirm: '切換到 Market',
+      manualTakeoverTitle: '讓 N.E.K.O 接管 {plugin}？',
+      manualTakeoverBody: '目標外掛目錄目前由你手動維護。繼續後將以版本 {target} 取代目前版本 {current}；成功後此使用者外掛由 N.E.K.O 管理，之後可由 N.E.K.O 更新或解除安裝。',
+      manualTakeoverConfirm: '取代並接管',
+      manualTakeoverCancelled: '已取消取代手動維護的外掛。',
+      manualTakeoverSucceeded: '{plugin} 已由 N.E.K.O 接管。',
       reinstallTitle: '重新安裝 {plugin}？',
       reinstallBody: '版本 {current} 將再次替換為版本 {target}。正在執行的外掛會短暫重新啟動。',
       reinstallConfirm: '重新安裝外掛',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: '此整合包包含已安裝的外掛，請逐一升級其中的外掛。',
       blockedDirectoryConflict: '目標目錄屬於另一個外掛，未進行任何變更。',
       blockedLegacyPlugin: '仍安裝著此前版本的外掛。請先解除安裝 {plugin} 再繼續。',
+      blockedOwnershipUnknown: '無法確認現有外掛目錄的所有權。請先還原對應的安裝來源記錄，再重試。',
+      blockedInstallSourceReadOnly: '安裝來源記錄無法使用或處於唯讀狀態。請先還原安裝來源記錄，再重試。',
       rollbackCompleted: '升級失敗，已回復先前的版本。',
       rollbackIncomplete: '升級失敗且回復未完整完成，請先檢查外掛狀態再繼續。',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: '返回行數',
     connected: '已連線',
     disconnected: '未連線',
-    connectionFailed: '日誌串流連線失敗'
+    connectionFailed: '日誌串流連線失敗',
+    exportLog: '匯出日誌壓縮包',
+    openLogDirectory: '開啟日誌目錄',
+    exportSuccess: '日誌匯出成功',
+    exportFailed: '日誌匯出失敗',
+    openDirectoryFailed: '開啟目錄失敗',
+    noLogFileToExport: '沒有可匯出的日誌檔案'
   },
   runs: {
     title: '執行記錄',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: '已傳送取消請求'
   },
   status: {
+    sourceMissing: '原始碼目錄無法使用',
     running: '執行中',
     stopped: '已停止',
     crashed: '已崩潰',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: '請求的資源不存在',
     internalServerError: '伺服器內部錯誤',
     serviceUnavailable: '服務不可用',
-    networkError: '網路錯誤，請檢查網路連線'
+    networkError: '網路錯誤，請檢查網路連線',
+    requestTimeout: '請求逾時，請稍後重試',
+    pluginLifecycleTimeout: '外掛啟動或重載逾時，請查看外掛日誌'
   },
   welcome: {
     about: {

@@ -29,10 +29,12 @@
       <template v-if="adapters.length > 0">
         <div class="nav-divider" />
         <span class="nav-group-label">{{ $t('nav.adapters') }}</span>
+        <!-- id 要编码：插件 id 不保证 URL 安全，`#` / `?` / `/` 会让下面这条路由匹配不上
+             或被拆成 hash/query，点进去就是空白页。-->
         <router-link
           v-for="adapter in adapters"
           :key="adapter.id"
-          :to="`/adapter/${adapter.id}/ui`"
+          :to="`/adapter/${encodeURIComponent(adapter.id)}/ui`"
           custom
           v-slot="{ isActive, navigate }"
         >
@@ -57,7 +59,7 @@ import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { usePluginStore } from '@/stores/plugin'
-import { Odometer, Box, VideoPlay, Monitor, Link, Collection } from '@element-plus/icons-vue'
+import { Odometer, Box, VideoPlay, Monitor, Link, Collection, Connection, Tools } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -69,8 +71,10 @@ const navItems = computed(() => [
   { path: '/', icon: Odometer, label: t('nav.dashboard'), guideId: 'sidebar-dashboard' },
   { path: '/plugins', icon: Box, label: t('nav.plugins'), guideId: 'sidebar-plugins' },
   { path: '/knowledge', icon: Collection, label: t('nav.knowledge'), guideId: 'sidebar-knowledge' },
+  { path: '/model-api', icon: Connection, label: t('modelApi.title') },
   { path: '/runs', icon: VideoPlay, label: t('nav.runs'), guideId: 'sidebar-runs' },
   { path: '/logs/_server', icon: Monitor, label: t('nav.serverLogs'), guideId: 'sidebar-server-logs' },
+  { path: '/development', icon: Tools, label: t('development.navTitle'), guideId: 'sidebar-development' },
 ])
 
 function isRouteActive(path: string): boolean {

@@ -82,10 +82,17 @@ MIGRATED_RUNTIME_ENTRY_NAMES = (
     "card_faces",
     "jukebox",
     "knowledge",
+    "avatar_tools",
 )
 
 _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-_MIGRATION_TRANSACTION_DIR = ".storage-migration-transactions"
+# Every migrated file is staged under ``<target>/<this>/<txid>/stage/`` before
+# it is published, so both segments add to each staged path. Windows without
+# long-path support fails at 260 characters, and a deep model or avatar-tool
+# file that fits at its final location must still fit while staged: keep the
+# prefix short (see ``_TRANSACTION_ID_PATH_CHARS``).
+_MIGRATION_TRANSACTION_DIR = ".smtx"
+_TRANSACTION_ID_PATH_CHARS = 12
 
 
 class StorageMigrationError(RuntimeError):
@@ -431,7 +438,9 @@ def _verify_knowledge_database(knowledge_root: Path) -> None:
 
 
 def _transaction_path(target_root: Path, txid: str) -> Path:
-    return target_root / _MIGRATION_TRANSACTION_DIR / txid
+    # Only one migration runs per target at a time, so a txid prefix is enough
+    # to keep an interrupted transaction apart from the next one.
+    return target_root / _MIGRATION_TRANSACTION_DIR / txid[:_TRANSACTION_ID_PATH_CHARS]
 
 
 def _rollback_interrupted_publish(

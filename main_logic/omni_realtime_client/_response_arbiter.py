@@ -12,10 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
-import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterator
+
+from utils.logger_config import get_module_logger
 
 from ._protocol_capabilities import (
     ID_BEARING_RESPONSE_CONTENT_EVENT_TYPES,
@@ -23,12 +24,19 @@ from ._protocol_capabilities import (
     STRICT_REALTIME_PROTOCOL_CAPABILITIES,
     _response_id_text,
 )
+from ._wire_trace import ARBITER_TRACE_PREFIX, trace_json, trace_now
 
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
 AbortTransport = Callable[[str], Awaitable[None]]
 OnStuckRelease = Callable[[str, "str | None"], Awaitable[None]]
-logger = logging.getLogger(__name__)
+# Bound to the Main service like the sibling modules. A bare __name__ logger is
+# not under N.E.K.O.Main, so it never reached the Main file handler and landed
+# in whatever handler owned root instead.
+logger = get_module_logger(__name__, "Main")
+# Distinct content-start rejections remembered for de-duplicating the decision
+# trace; see ``_trace_content``.
+_TRACE_CONTENT_KEY_LIMIT = 256
 
 # Server-initiated response ids are remembered so their terminal events are
 # never credited to an owner whose own ``response.created`` carried no id,
@@ -80,6 +88,23 @@ _WAIT_MARGIN_REPORT_FRACTION = 0.5
 # so an unbounded host callback would stall every later dispatch; short
 # because the work it fronts is local bookkeeping plus one frontend send.
 _STUCK_RELEASE_NOTIFY_TIMEOUT = 2.0
+
+
+class ResponseAdmissionRejected(RuntimeError):
+    """This request lost its admission window **before anything was sent**.
+
+    The promise is narrow on purpose: not one byte of this request reached the
+    provider, so the caller may safely re-submit an equivalent request in a
+    degraded form. It is NOT raised once an item has been committed to the
+    transport -- the compensating ``conversation.item.delete`` is fire-and-
+    forget (the provider confirms asynchronously with ``conversation.item.deleted``
+    and may instead answer with an error), so a committed item may well survive
+    and a re-submit would duplicate the user's turn against stale visual
+    context. Those paths keep raising a plain ``RuntimeError``, which callers
+    treat as "this turn is over".
+
+    Subclasses ``RuntimeError`` so existing broad handlers keep working.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +177,7 @@ class _QueuedResponse:
     source: str = field(compare=False)
     events_before_response: tuple[dict[str, Any], ...] = field(compare=False)
     response_event: dict[str, Any] = field(compare=False)
+    event_sender: SendEvent | None = field(compare=False)
     ack_expected: bool = field(compare=False)
     expected_item_id: str | None = field(compare=False)
     expected_item_role: str | None = field(compare=False)
@@ -160,6 +186,14 @@ class _QueuedResponse:
     response_done_timeout: float = field(compare=False)
     cancel_timeout: float = field(compare=False)
     ticket: ResponseTicket = field(compare=False)
+    admission_check: Callable[[], bool] | None = field(default=None, compare=False)
+    # 提交前的最后一次就地改写机会。admission_check 只能答"发不发"，而有些判据
+    # （比如视觉所有权）的正确处置是"降级这条 item 再发"，不是整条拒——拒是**提交
+    # 之后**才发生的，要付一次未经确认的补偿删除。回调在 _worker_send 之前、
+    # admission 复查之后逐事件调用，就地改 event。
+    pre_commit: Callable[[dict[str, Any]], None] | None = field(
+        default=None, compare=False
+    )
     item_ack: asyncio.Future[None] | None = field(default=None, compare=False)
     terminal: asyncio.Future[None] | None = field(default=None, compare=False)
     terminal_error: BaseException | None = field(default=None, compare=False)
@@ -169,6 +203,17 @@ class _QueuedResponse:
     completed: asyncio.Future[None] | None = field(default=None, compare=False)
     bypass_count: int = field(default=0, compare=False)
     response_send_started: bool = field(default=False, compare=False)
+    item_driven: bool = field(default=False, compare=False)
+    submitted_item_event_ids: list[str] = field(default_factory=list, compare=False)
+    # Once the first pre-response event enters the transport send, the item is
+    # committed to the provider. Admission invalidation after that point must
+    # finish (or cancel) the same response lifecycle rather than orphaning the
+    # persisted conversation item by suppressing response.create.
+    item_committed: bool = field(default=False, compare=False)
+    # Client-assigned item ids that have completed their transport write. This
+    # is narrower than ``events_before_response``: a later prefix event may
+    # still be unsent when admission is invalidated.
+    committed_item_ids: list[str] = field(default_factory=list, compare=False)
     # Evidence this request collected for itself, so both the terminal path
     # and the started-timeout path judge an adoption from the same facts.
     adoption: _AdoptionEvidence = field(
@@ -199,6 +244,12 @@ class RealtimeResponseArbiter:
     ``response.created`` arrives.
     """
 
+    # Class-level default so an instance built without __init__ (a test
+    # double) reads the decision trace as off.
+    _trace = False
+    _trace_tag: str | None = None
+    _trace_generation: Callable[[], Any] | None = None
+
     def __init__(
         self,
         send_event: SendEvent,
@@ -207,8 +258,24 @@ class RealtimeResponseArbiter:
         fail_open: bool = False,
         on_stuck_release: OnStuckRelease | None = None,
         protocol_capabilities: RealtimeProtocolCapabilities | None = None,
+        trace: bool = False,
+        trace_tag: str | None = None,
+        trace_generation: Callable[[], Any] | None = None,
     ) -> None:
         self._send_event = send_event
+        # Structural decision trace (NEKO_REALTIME_WIRE_TRACE), injected by the
+        # construction site like ``fail_open`` so this module reads no
+        # configuration. Every trace call is guarded by this flag, so the
+        # default path builds no trace record at all.
+        self._trace = trace
+        # The wire trace's client tag and a reader for the transport's live
+        # connection generation, stamped on every decision record so it keys
+        # to the same connection as the wire records.
+        self._trace_tag = trace_tag
+        self._trace_generation = trace_generation
+        # First-occurrence keys for content-start rejections, which would
+        # otherwise repeat once per streaming delta.
+        self._trace_content_keys: set[tuple[Any, ...]] = set()
         self._abort_transport = abort_transport
         # Escalation policy. The default tears the transport down, which is
         # what every release so far has shipped. Injected by the
@@ -301,6 +368,221 @@ class RealtimeResponseArbiter:
         self._idle = asyncio.Event()
         self._idle.set()
 
+    # -- decision trace ---------------------------------------------------
+    # Every helper below is reached only from inside an ``if self._trace:``
+    # guard, reads state without changing it, and swallows its own errors.
+
+    def _trace_decision(self, decision: str, fields: dict[str, Any]) -> None:
+        """Emit one ``[arbiter-trace]`` record; tracing never raises."""
+
+        try:
+            record: dict[str, Any] = {"t": trace_now(), "decision": decision}
+            if self._trace_tag is not None:
+                record["cid"] = self._trace_tag
+            generation_of = self._trace_generation
+            if generation_of is not None:
+                try:
+                    record["gen"] = generation_of()
+                except Exception:
+                    # The generation is optional context; a transport that cannot
+                    # report it must not cost the rest of the record.
+                    pass
+            record.update(fields)
+            logger.info("%s%s", ARBITER_TRACE_PREFIX, trace_json(record))
+        except Exception:
+            return
+
+    @staticmethod
+    def _trace_owner_fields(owner: _QueuedResponse | None) -> dict[str, Any]:
+        if owner is None:
+            return {"owner_source": None, "owner_response_id": None}
+        return {
+            "owner_source": owner.source,
+            "owner_response_id": owner.response_id,
+            "owner_started": owner.ticket.started.done(),
+        }
+
+    def _trace_item_created(
+        self,
+        event: Any,
+        current: _QueuedResponse | None,
+        outcome: str,
+    ) -> None:
+        try:
+            item = event.get("item") if isinstance(event, dict) else None
+            if not isinstance(item, dict):
+                item = {}
+            self._trace_decision(
+                "item_created",
+                {
+                    "outcome": outcome,
+                    "matched": outcome == "matched",
+                    "source": current.source if current is not None else None,
+                    "expected_item_id": (
+                        current.expected_item_id if current is not None else None
+                    ),
+                    "received_item_id": item.get("id"),
+                    "received_role": item.get("role"),
+                },
+            )
+        except Exception:
+            return
+
+    def _trace_created(
+        self,
+        event: Any,
+        owner: _QueuedResponse | None,
+        outcome: str,
+    ) -> None:
+        try:
+            fields: dict[str, Any] = {
+                "outcome": outcome,
+                "response.id": self._event_response_id(event),
+            }
+            fields.update(self._trace_owner_fields(owner))
+            self._trace_decision("created", fields)
+        except Exception:
+            return
+
+    def _trace_content_rejection(
+        self, owner: _QueuedResponse | None
+    ) -> tuple[str, str | None]:
+        """Name the first clause of ``notify_response_content``'s refusal.
+
+        Evaluated in the same order as that condition, from plain reads only:
+        the two window checks there clear expired deadlines as a side effect,
+        so this reads the deadline fields they leave behind instead of calling
+        them again.
+        """
+
+        if owner is None:
+            return (
+                "rejected_no_owner",
+                "current_pre_create" if self._current is not None else "idle",
+            )
+        if self._current is not owner:
+            return "rejected_no_owner", "owner_not_current"
+        if owner.ticket.started.done():
+            return "ignored_other", "owner_already_started"
+        if not owner.response_send_started:
+            return "rejected_not_sent", None
+        if owner.interrupted:
+            return "ignored_other", "owner_interrupted"
+        if owner.server_vad_won_during_response_send:
+            return "ignored_other", "server_vad_won_during_send"
+        if self._server_vad_response_pending:
+            return "ignored_other", "server_vad_pending"
+        if self._retired_created_deadline is not None:
+            return "ignored_other", "retired_created_window"
+        return "ignored_other", "idless_server_response_live"
+
+    def _trace_content(self, event: Any, outcome: str, reason: str | None) -> None:
+        """Record a content-start decision, once per distinct refusal.
+
+        A refusal repeats for every delta of a stream, so only its first
+        occurrence per (outcome, reason, type, response id, owner) is logged.
+        An acceptance happens at most once per owner and is always logged.
+        """
+
+        try:
+            owner = self._response_owner
+            event_type = event.get("type") if isinstance(event, dict) else None
+            response_id = self._content_event_response_id(event)
+            if outcome != "accepted":
+                key = (outcome, reason, event_type, response_id, id(owner))
+                if key in self._trace_content_keys:
+                    return
+                if len(self._trace_content_keys) >= _TRACE_CONTENT_KEY_LIMIT:
+                    self._trace_content_keys.clear()
+                self._trace_content_keys.add(key)
+            fields: dict[str, Any] = {
+                "outcome": outcome,
+                "reason": reason,
+                "event_type": event_type,
+                "response_id": response_id,
+                "call_id": event.get("call_id") if isinstance(event, dict) else None,
+                "route": self._protocol_capabilities.route_key,
+            }
+            fields.update(self._trace_owner_fields(owner))
+            self._trace_decision("content", fields)
+        except Exception:
+            return
+
+    def _trace_terminal(
+        self,
+        event: Any,
+        owner: _QueuedResponse | None,
+        outcome: str,
+        owner_was_unannounced: bool,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            payload = event if isinstance(event, dict) else {}
+            response = payload.get("response")
+            fields: dict[str, Any] = {
+                "outcome": outcome,
+                "event_type": payload.get("type"),
+                "response_id": self._content_event_response_id(payload),
+                "response.id": self._event_response_id(payload),
+                "status": (
+                    response.get("status") if isinstance(response, dict) else None
+                ),
+                "owner_was_unannounced": owner_was_unannounced,
+                "server_response_ids": len(self._server_response_ids),
+            }
+            fields.update(self._trace_owner_fields(owner))
+            if extra:
+                fields.update(extra)
+            self._trace_decision("terminal", fields)
+        except Exception:
+            return
+
+    def _trace_error(
+        self,
+        event_id: str | None,
+        target: _QueuedResponse | None,
+        outcome: str,
+    ) -> None:
+        try:
+            fields: dict[str, Any] = {
+                "outcome": outcome,
+                "event_id": event_id,
+                "target_source": target.source if target is not None else None,
+                "target_response_id": (
+                    target.response_id if target is not None else None
+                ),
+            }
+            fields.update(self._trace_owner_fields(self._response_owner))
+            self._trace_decision("error", fields)
+        except Exception:
+            return
+
+    def _trace_escalation(
+        self,
+        reason: str,
+        observed: _QueuedResponse | None,
+        outcome: str,
+        blocker: str | None = None,
+    ) -> None:
+        try:
+            fields: dict[str, Any] = {
+                "outcome": outcome,
+                "reason": reason,
+                "blocker": blocker,
+                "fail_open": self._fail_open,
+                "observed_source": observed.source if observed is not None else None,
+                "observed_response_id": (
+                    observed.response_id if observed is not None else None
+                ),
+                "current_source": (
+                    self._current.source if self._current is not None else None
+                ),
+            }
+            fields.update(self._trace_owner_fields(self._response_owner))
+            self._trace_decision("escalate", fields)
+        except Exception:
+            return
+
     @property
     def current_source(self) -> str | None:
         return self._current.source if self._current is not None else None
@@ -321,6 +603,7 @@ class RealtimeResponseArbiter:
         source: str,
         events_before_response: tuple[dict[str, Any], ...] = (),
         response_event: dict[str, Any] | None = None,
+        event_sender: SendEvent | None = None,
         ack_expected: bool = False,
         expected_item_id: str | None = None,
         expected_item_role: str | None = None,
@@ -329,6 +612,8 @@ class RealtimeResponseArbiter:
         response_started_timeout: float = 5.0,
         response_done_timeout: float = _DEFAULT_RESPONSE_DONE_TIMEOUT,
         cancel_timeout: float = 3.0,
+        admission_check: Callable[[], bool] | None = None,
+        pre_commit: Callable[[dict[str, Any]], None] | None = None,
     ) -> ResponseTicket:
         loop = asyncio.get_running_loop()
         ticket = ResponseTicket(
@@ -340,6 +625,11 @@ class RealtimeResponseArbiter:
             future.add_done_callback(_retrieve_exception)
         if not self._connection_available:
             self._fail_ticket(ticket, ConnectionError("realtime connection is unavailable"))
+            if self._trace:
+                self._trace_decision(
+                    "enqueue",
+                    {"source": source, "outcome": "rejected_connection_unavailable"},
+                )
             return ticket
         create_event = dict(response_event or {"type": "response.create"})
         create_event.setdefault("type", "response.create")
@@ -372,6 +662,7 @@ class RealtimeResponseArbiter:
             source=source,
             events_before_response=events_before_response,
             response_event=create_event,
+            event_sender=event_sender,
             ack_expected=ack_expected,
             expected_item_id=expected_item_id,
             expected_item_role=expected_item_role,
@@ -380,11 +671,33 @@ class RealtimeResponseArbiter:
             response_done_timeout=response_done_timeout,
             cancel_timeout=cancel_timeout,
             ticket=ticket,
+            admission_check=admission_check,
+            pre_commit=pre_commit,
             event_ids=frozenset(ids),
             completed=loop.create_future(),
         )
         self._queued_by_ticket[id(ticket)] = queued
         await self._queue.put(queued)
+        if self._trace:
+            self._trace_decision(
+                "enqueue",
+                {
+                    "source": source,
+                    "outcome": "queued",
+                    "priority": priority,
+                    "ack_expected": ack_expected,
+                    "expected_item_id": expected_item_id,
+                    "pre_event_types": [
+                        pending.get("type") for pending in events_before_response
+                    ],
+                    "create_event_id": create_event.get("event_id"),
+                    "queue_depth": self._queue.qsize(),
+                    "current_source": (
+                        self._current.source if self._current is not None else None
+                    ),
+                    **self._trace_owner_fields(self._response_owner),
+                },
+            )
         self._ensure_worker()
         return ticket
 
@@ -425,12 +738,26 @@ class RealtimeResponseArbiter:
         current.interrupted = True
         current.interrupt_event.set()
         if not current.ticket.sent.done():
-            self._wake_current_with_error(
-                current,
-                RuntimeError("response dispatch interrupted before response.create"),
+            admission_rejected = bool(
+                current.admission_check is not None
+                and not current.admission_check()
             )
+            if current.item_committed and admission_rejected:
+                if current.item_ack is not None and not current.item_ack.done():
+                    # Wake the worker so it can issue the compensating item
+                    # delete. Ordinary barge-in must retain the committed user
+                    # item in provider history and follows the error wake-up
+                    # below instead.
+                    current.item_ack.set_result(None)
+            else:
+                self._wake_current_with_error(
+                    current,
+                    RuntimeError(
+                        "response dispatch interrupted before response.create"
+                    ),
+                )
         else:
-            await self._send_event({"type": "response.cancel"})
+            await self._send_queued_event(current, {"type": "response.cancel"})
         assert current.completed is not None
         try:
             # The barge-in bound. Every user interruption of a speaking turn
@@ -476,7 +803,7 @@ class RealtimeResponseArbiter:
             and not ticket.sent.cancelled()
             and ticket.sent.exception() is None
         ):
-            await self._send_event({"type": "response.cancel"})
+            await self._send_queued_event(queued, {"type": "response.cancel"})
         if not wait:
             return True
         assert queued.completed is not None
@@ -527,19 +854,33 @@ class RealtimeResponseArbiter:
         self._item_created_serial += 1
         current = self._current
         if current is None:
+            if self._trace:
+                self._trace_item_created(event, current, "no_current")
             return
         if current.item_ack is None or current.item_ack.done():
+            if self._trace:
+                self._trace_item_created(event, current, "ack_not_pending")
             return
         item = event.get("item")
         if not isinstance(item, dict):
+            if self._trace:
+                self._trace_item_created(event, current, "no_item")
             return
         if current.expected_item_id is None:
+            if self._trace:
+                self._trace_item_created(event, current, "no_expected_item_id")
             return
         if item.get("id") != current.expected_item_id:
+            if self._trace:
+                self._trace_item_created(event, current, "item_id_mismatch")
             return
         if current.expected_item_role and item.get("role") != current.expected_item_role:
+            if self._trace:
+                self._trace_item_created(event, current, "role_mismatch")
             return
         current.item_ack.set_result(None)
+        if self._trace:
+            self._trace_item_created(event, current, "matched")
 
     @staticmethod
     def _event_response_id(event: dict[str, Any] | None) -> str | None:
@@ -733,6 +1074,15 @@ class RealtimeResponseArbiter:
             queued.source,
             "already terminated" if terminal_status is not None else "still live",
         )
+        if self._trace:
+            self._trace_decision(
+                "adopt",
+                {
+                    "source": queued.source,
+                    "response.id": response_id,
+                    "terminal_status": terminal_status,
+                },
+            )
 
     def _cancel_stale_release_timer(self) -> None:
         handle, self._stale_release_handle = self._stale_release_handle, None
@@ -868,6 +1218,8 @@ class RealtimeResponseArbiter:
         self._idle.clear()
         retired_created_live = self._retired_created_window_live()
         if retired_created_live and self._server_vad_response_pending:
+            if self._trace:
+                self._trace_created(event, owner, "ambiguous_retired_and_vad")
             raise RuntimeError(
                 "ambiguous response.created while retired and server-VAD "
                 "gates overlap"
@@ -884,6 +1236,8 @@ class RealtimeResponseArbiter:
                 "ignored late response.created %s from a retired owner",
                 response_id or "<idless>",
             )
+            if self._trace:
+                self._trace_created(event, owner, "retired_owner_ignored")
             self._release_lane_if_clear()
             return False
         if self._server_vad_response_pending:
@@ -898,6 +1252,8 @@ class RealtimeResponseArbiter:
             # announcement the arbiter positively knows is the provider's own
             # automatic response, so it is the last thing a queued request
             # should be allowed to claim.
+            if self._trace:
+                self._trace_created(event, owner, "server_vad_response")
             return True
         if self.response_created_confirms_started_owner(event):
             # A capability-approved route may deliver real content before its
@@ -910,6 +1266,8 @@ class RealtimeResponseArbiter:
                 "late response.created confirmed content-started owner (%s)",
                 owner.source,
             )
+            if self._trace:
+                self._trace_created(event, owner, "confirms_content_started_owner")
             return False
         if owner is not None and not owner.ticket.started.done():
             # The first response.created after the owner's response.create is
@@ -919,6 +1277,8 @@ class RealtimeResponseArbiter:
             owner.response_id = response_id
             self._remember_seen_response_id(owner.response_id)
             owner.ticket.started.set_result(None)
+            if self._trace:
+                self._trace_created(event, owner, "owner_claimed")
             return True
         # This created event cannot be credited to a waiting owner (the owner
         # already started, or no owner is pending), so it announces a
@@ -937,6 +1297,8 @@ class RealtimeResponseArbiter:
         # here decides that; ``_adoptable_id_for`` does, against evidence the
         # dispatching request captured for itself.
         self._note_unowned_announcement(response_id)
+        if self._trace:
+            self._trace_created(event, owner, "server_response")
         return True
 
     def response_created_confirms_started_owner(
@@ -967,9 +1329,15 @@ class RealtimeResponseArbiter:
 
         if (
             not self._protocol_capabilities.accepts_id_bearing_content_start
+            or (
+                not self._protocol_capabilities.function_call_ids_match_terminal
+                and str(event.get("type") or "").startswith("response.function_call_arguments.")
+            )
             or str(event.get("type") or "")
             not in ID_BEARING_RESPONSE_CONTENT_EVENT_TYPES
         ):
+            if self._trace:
+                self._trace_content(event, "ignored_other", "not_eligible")
             return False
         owner = self._response_owner
         if (
@@ -983,6 +1351,8 @@ class RealtimeResponseArbiter:
             or self._retired_created_window_live()
             or self._idless_server_response_live()
         ):
+            if self._trace:
+                self._trace_content(event, *self._trace_content_rejection(owner))
             return False
         response_id = self._content_event_response_id(event)
         if (
@@ -990,8 +1360,19 @@ class RealtimeResponseArbiter:
             or response_id in self._seen_response_ids
             or response_id in self._server_response_ids
         ):
+            if self._trace:
+                if response_id is None:
+                    self._trace_content(event, "ignored_other", "no_response_id")
+                elif response_id in self._seen_response_ids:
+                    self._trace_content(event, "rejected_seen", None)
+                else:
+                    self._trace_content(event, "rejected_server_id", None)
             return False
 
+        if self._trace:
+            # Logged before the owner takes the id, so the record carries the
+            # owner's response id as it stood when this content arrived.
+            self._trace_content(event, "accepted", None)
         owner.response_id = response_id
         self._remember_seen_response_id(response_id)
         owner.ticket.started.set_result(None)
@@ -1101,6 +1482,10 @@ class RealtimeResponseArbiter:
             # the tracked orphan without completing the owner or opening its
             # lane; the owner's matching terminal remains authoritative.
             self._release_lane_if_clear()
+            if self._trace:
+                self._trace_terminal(
+                    event, owner, "idless_orphan", owner_was_unannounced
+                )
             return False
         response = (event or {}).get("response")
         response_status = (
@@ -1114,6 +1499,8 @@ class RealtimeResponseArbiter:
             and response_status not in {"completed", "success", "succeeded"}
             else None
         )
+        # Names the claim the owner branch below makes, if any, for the trace.
+        trace_claim: str | None = None
         if owner is not None and response_id is not None:
             if not owner.ticket.started.done():
                 # The owner has not seen its response.created yet. On a
@@ -1153,7 +1540,26 @@ class RealtimeResponseArbiter:
                     # has not done it yet. Remember the outcome so the started
                     # timeout can still claim it once nothing has answered.
                     self._adoptable_terminal_status = response_status or "completed"
-                if never_announced:
+                cancelled_adoption = bool(
+                    owner.interrupted
+                    and response_status in {"canceled", "cancelled"}
+                    and owner.ticket.sent.done()
+                    and not owner.ticket.sent.cancelled()
+                    and owner.ticket.sent.exception() is None
+                    and self._adoptable_id_for(owner) == response_id
+                )
+                if cancelled_adoption:
+                    # A provider that answers the conversation item directly
+                    # can announce before the item-ack barrier installs the
+                    # owner. Once this exact request has sent response.create,
+                    # a barge-in has targeted it, and the sole adoptable
+                    # response acknowledges that cancellation, waiting for the
+                    # longer missing-created timeout is no longer ambiguous.
+                    # Claim it now so cancel_current's shorter terminal bound
+                    # does not tear down a healthy connection first.
+                    self._adopt_announcement(owner, response_id)
+                    trace_claim = "cancelled_adoption"
+                elif never_announced:
                     # Attribution is one act, not two: the id and the
                     # announcement both belong to the owner now. Resolving
                     # only the terminal would leave the fall-through below to
@@ -1169,6 +1575,7 @@ class RealtimeResponseArbiter:
                         response_id,
                         owner.source,
                     )
+                    trace_claim = "claimed_never_announced"
                     # Deliberately no ``return``: this IS the owner's terminal,
                     # so it must reach the resolution below. Returning here
                     # would leave the lifecycle waiter unresolved and the
@@ -1183,6 +1590,19 @@ class RealtimeResponseArbiter:
                         # already-terminal turn for a live id-less response.
                         self._cancel_stale_release_timer()
                         self._server_response_active = False
+                    if self._trace:
+                        self._trace_terminal(
+                            event,
+                            owner,
+                            "server_response",
+                            owner_was_unannounced,
+                            {
+                                "adoptable_recorded": bool(
+                                    response_id == self._adoptable_announcement
+                                    and self._adoptable_terminal_status is not None
+                                ),
+                            },
+                        )
                     return False
             if owner.response_id is not None:
                 if response_id != owner.response_id:
@@ -1191,12 +1611,20 @@ class RealtimeResponseArbiter:
                     # would let a queued response.create collide with it, so
                     # treat the mismatched terminal as an orphan.
                     self._server_response_ids.pop(response_id, None)
+                    if self._trace:
+                        self._trace_terminal(
+                            event, owner, "orphan_mismatch", owner_was_unannounced
+                        )
                     return False
             elif response_id in self._server_response_ids:
                 # The owner's response.created carried no id, but this
                 # terminal matches a known server-initiated response, so it
                 # cannot be the owner's own terminal.
                 del self._server_response_ids[response_id]
+                if self._trace:
+                    self._trace_terminal(
+                        event, owner, "server_response", owner_was_unannounced
+                    )
                 return False
         elif response_id is not None:
             # No owner: a server-initiated response reached its terminal
@@ -1236,6 +1664,24 @@ class RealtimeResponseArbiter:
         # server-initiated response is still live, so a queued
         # response.create cannot overlap with one whose terminal is pending.
         self._release_lane_if_clear()
+        if self._trace:
+            if owner is not None:
+                terminal_outcome = trace_claim or "resolved"
+            elif (
+                response_id is not None
+                and response_id == self._adoptable_announcement
+                and self._adoptable_terminal_status is not None
+            ):
+                terminal_outcome = "adoptable_recorded"
+            else:
+                terminal_outcome = "no_owner_release"
+            self._trace_terminal(
+                event,
+                owner,
+                terminal_outcome,
+                owner_was_unannounced,
+                {"terminal_error": terminal_error is not None},
+            )
         return True
 
     def notify_error(self, event_id: str | None, message: str) -> None:
@@ -1253,19 +1699,31 @@ class RealtimeResponseArbiter:
         ):
             target = owner
         if target is None:
+            if self._trace:
+                self._trace_error(event_id, target, "no_target")
             return
         exc = RuntimeError(message)
         if target.item_ack is not None and not target.item_ack.done():
             target.item_ack.set_exception(exc)
+            if self._trace:
+                self._trace_error(event_id, target, "item_ack_failed")
             return
         if not target.ticket.started.done():
             if self._is_late_pre_response_error(target, event_id):
                 self._fail_owner_with_live_response(target, exc)
+                if self._trace:
+                    self._trace_error(event_id, target, "late_pre_response_error")
                 return
             target.ticket.started.set_exception(exc)
+            if self._trace:
+                self._trace_error(event_id, target, "started_failed")
             return
         if target.terminal is not None and not target.terminal.done():
             target.terminal.set_exception(exc)
+            if self._trace:
+                self._trace_error(event_id, target, "terminal_failed")
+        elif self._trace:
+            self._trace_error(event_id, target, "no_pending_future")
 
     @staticmethod
     def _is_late_pre_response_error(
@@ -1280,6 +1738,12 @@ class RealtimeResponseArbiter:
         create, so the lane must not reopen on it.
         """
 
+        # Count actual send attempts, including the in-flight write, rather
+        # than planned siblings. Rejecting the only submitted trigger leaves
+        # no other item-generated response to cancel. Once another item has
+        # entered send, its possibly-live response must still be preserved.
+        if target.item_driven and target.submitted_item_event_ids == [event_id]:
+            return False
         if (
             not target.response_send_started
             and not target.ticket.sent.done()
@@ -1309,7 +1773,10 @@ class RealtimeResponseArbiter:
         target.interrupted = True
         target.interrupt_event.set()
         task = asyncio.create_task(
-            self._send_cancel_best_effort(self._connection_generation)
+            self._send_cancel_best_effort(
+                self._connection_generation,
+                target.event_sender,
+            )
         )
         target.cancel_send_task = task
         self._cancel_send_tasks.add(task)
@@ -1321,13 +1788,17 @@ class RealtimeResponseArbiter:
 
         task.add_done_callback(_finished)
 
-    async def _send_cancel_best_effort(self, generation: int) -> None:
+    async def _send_cancel_best_effort(
+        self,
+        generation: int,
+        event_sender: SendEvent | None = None,
+    ) -> None:
         if generation != self._connection_generation:
             # The connection this cancel was aimed at is gone; sending now
             # would cancel an unrelated response on its replacement.
             return
         try:
-            await self._send_event({"type": "response.cancel"})
+            await (event_sender or self._send_event)({"type": "response.cancel"})
         except Exception as exc:
             # Delivery is best-effort: if the cancel cannot reach the server,
             # the owner's started/terminal timeout still fail-closes the lane.
@@ -1357,6 +1828,16 @@ class RealtimeResponseArbiter:
         *,
         fail_current_tickets: bool,
     ) -> None:
+        if self._trace:
+            self._trace_decision(
+                "connection",
+                {
+                    "outcome": "lost",
+                    "reason": str(reason)[:200],
+                    "queue_depth": self._queue.qsize(),
+                    **self._trace_owner_fields(self._response_owner),
+                },
+            )
         self._connection_available = False
         self._connection_generation += 1
         self._cancel_pending_cancel_sends()
@@ -1391,9 +1872,21 @@ class RealtimeResponseArbiter:
         self._fail_queued(exc)
 
     def reset_connection_state(self) -> None:
+        if self._trace:
+            self._trace_decision(
+                "connection",
+                {
+                    "outcome": "reset",
+                    "queue_depth": self._queue.qsize(),
+                    **self._trace_owner_fields(self._response_owner),
+                },
+            )
         # Defensive: a cancel send spawned against a previous connection must
         # never fire into the replacement one.
         self._cancel_pending_cancel_sends()
+        retired_worker = self._retire_connection_owners(
+            "realtime connection replaced"
+        )
         self._connection_available = True
         self._dispatch_allowed.set()
         self._server_response_ids.clear()
@@ -1409,10 +1902,53 @@ class RealtimeResponseArbiter:
         self._server_vad_response_pending = False
         self._cancel_server_vad_pending_timer()
         self._cancel_stale_release_timer()
-        if self._current is None and self._response_owner is None:
-            self._server_response_active = False
-            self._idle.set()
-        self._ensure_worker()
+        self._server_response_active = False
+        self._idle.set()
+        if retired_worker is None:
+            self._ensure_worker()
+        else:
+            self._worker = asyncio.create_task(
+                self._restart_after_retired_worker(retired_worker),
+                name="realtime-response-arbiter",
+            )
+
+    def _retire_connection_owners(self, reason: str) -> asyncio.Task[None] | None:
+        """Fail only the active predecessor work before reopening a connection."""
+
+        owner = self._response_owner
+        current = self._current
+        if owner is None and current is None:
+            return None
+        exc = ConnectionError(reason)
+        seen: set[int] = set()
+        for target in (owner, current):
+            if target is None or id(target) in seen:
+                continue
+            seen.add(id(target))
+            target.interrupted = True
+            target.interrupt_event.set()
+            self._wake_current_with_error(target, exc)
+            if target.terminal is not None and not target.terminal.done():
+                target.terminal.set_exception(exc)
+            self._fail_ticket(target.ticket, exc)
+        if owner is not None:
+            self._detach_response_owner(owner)
+        if self._current is current:
+            self._current = None
+
+        worker, self._worker = self._worker, None
+        if worker is None or worker.done():
+            return None
+        worker.cancel()
+        return worker
+
+    async def _restart_after_retired_worker(
+        self,
+        retired_worker: asyncio.Task[None],
+    ) -> None:
+        await asyncio.gather(retired_worker, return_exceptions=True)
+        if self._connection_available:
+            await self._run()
 
     @staticmethod
     def _fail_ticket(ticket: ResponseTicket, exc: Exception) -> None:
@@ -1479,6 +2015,8 @@ class RealtimeResponseArbiter:
                     observed.source,
                     reason,
                 )
+                if self._trace:
+                    self._trace_escalation(reason, observed, "skipped_duplicate")
                 return
             if (
                 observed is not self._current
@@ -1490,6 +2028,8 @@ class RealtimeResponseArbiter:
                     observed.source,
                     reason,
                 )
+                if self._trace:
+                    self._trace_escalation(reason, observed, "skipped_stale")
                 return
             if (
                 observed.terminal is not None
@@ -1522,6 +2062,10 @@ class RealtimeResponseArbiter:
                     observed.source,
                     reason,
                 )
+                if self._trace:
+                    self._trace_escalation(
+                        reason, observed, "skipped_terminal_arrived"
+                    )
                 return
             observed.escalated = True
 
@@ -1529,6 +2073,8 @@ class RealtimeResponseArbiter:
             transport_write_failed=transport_write_failed
         )
         if self._fail_open and blocker is None:
+            if self._trace:
+                self._trace_escalation(reason, observed, "fail_open_release")
             await self._release_stuck_lifecycle(reason, observed=observed)
             return
         if self._fail_open:
@@ -1537,6 +2083,8 @@ class RealtimeResponseArbiter:
                 "failing closed despite the escape hatch",
                 blocker,
             )
+        if self._trace:
+            self._trace_escalation(reason, observed, "fail_closed", blocker)
         await self._tear_down_transport(reason)
 
     def _cannot_keep_the_connection(
@@ -1631,7 +2179,18 @@ class RealtimeResponseArbiter:
                     100.0 * elapsed / timeout,
                 )
 
-    async def _worker_send(self, event: dict[str, Any]) -> None:
+    async def _send_queued_event(
+        self,
+        queued: _QueuedResponse,
+        event: dict[str, Any],
+    ) -> None:
+        await (queued.event_sender or self._send_event)(event)
+
+    async def _worker_send(
+        self,
+        queued: _QueuedResponse,
+        event: dict[str, Any],
+    ) -> None:
         """Send from the queue consumer, flagged for the duration of the write.
 
         Only the worker's sends qualify: a caller-task send that blocks hurts
@@ -1642,7 +2201,7 @@ class RealtimeResponseArbiter:
 
         self._worker_send_in_flight = True
         try:
-            await self._send_event(event)
+            await self._send_queued_event(queued, event)
         finally:
             self._worker_send_in_flight = False
 
@@ -1905,6 +2464,16 @@ class RealtimeResponseArbiter:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
             if not done:
+                if self._trace:
+                    self._trace_decision(
+                        "timeout",
+                        {
+                            "kind": "lane_idle_wait",
+                            "source": queued.source,
+                            "timeout_s": queued.response_done_timeout,
+                            **self._trace_owner_fields(self._response_owner),
+                        },
+                    )
                 await self._escalate(
                     "realtime response idle wait timed out", observed=queued
                 )
@@ -1914,6 +2483,28 @@ class RealtimeResponseArbiter:
                 if not waiter.done():
                     waiter.cancel()
             await asyncio.gather(*waiters, return_exceptions=True)
+
+    async def _delete_committed_item(self, queued: _QueuedResponse) -> None:
+        """Remove every pre-response item invalidated after transport commit."""
+
+        if not self._connection_available:
+            return
+        item_ids = list(queued.committed_item_ids)
+        if (
+            queued.expected_item_id
+            and queued.expected_item_id not in item_ids
+            and queued.item_committed
+            and not item_ids
+        ):
+            item_ids.append(queued.expected_item_id)
+        for item_id in item_ids:
+            await self._worker_send(
+                queued,
+                {
+                    "type": "conversation.item.delete",
+                    "item_id": item_id,
+                },
+            )
 
     async def _process(self, queued: _QueuedResponse) -> None:
         self._current = queued
@@ -1928,6 +2519,23 @@ class RealtimeResponseArbiter:
         item_acked = not queued.ack_expected
         queued.item_acked = item_acked
         requeued = False
+        item_driven = bool(
+            self._protocol_capabilities.responds_to_conversation_items
+            and queued.events_before_response
+            and all(
+                event.get("type") == "conversation.item.create"
+                and isinstance(event.get("item"), dict)
+                and (
+                    event["item"].get("type") == "function_call_output"
+                    or (
+                        event["item"].get("type") == "message"
+                        and event["item"].get("role") == "user"
+                    )
+                )
+                for event in queued.events_before_response
+            )
+        )
+        queued.item_driven = item_driven
 
         try:
             await self._wait_for_dispatch_or_interrupt(queued)
@@ -1943,8 +2551,25 @@ class RealtimeResponseArbiter:
                 raise RuntimeError("response dispatch interrupted")
             if not self._connection_available:
                 raise ConnectionError("realtime connection is unavailable")
+            if (
+                queued.admission_check is not None
+                and not queued.admission_check()
+            ):
+                raise ResponseAdmissionRejected(
+                    "response dispatch admission rejected"
+                )
             self._idle.clear()
-            if queued.ack_expected:
+            if self._trace:
+                self._trace_decision(
+                    "dispatch",
+                    {
+                        "phase": "lane_acquired",
+                        "source": queued.source,
+                        "ack_expected": queued.ack_expected,
+                        "queue_depth": self._queue.qsize(),
+                    },
+                )
+            if queued.ack_expected and not item_driven:
                 queued.item_ack = loop.create_future()
             # The causation claims arm HERE, immediately before the first
             # pre-response event goes out: nothing earlier can have been caused
@@ -1954,34 +2579,165 @@ class RealtimeResponseArbiter:
                 self._adoptable_serial, self._item_created_serial
             )
             for event in queued.events_before_response:
-                if queued.interrupted:
+                if item_driven:
+                    # Do not turn a rejected first item into a new trigger by
+                    # sending its siblings. Nor may a finished first response
+                    # count as success for a batch not yet fully submitted.
+                    # An early terminal detached ownership; sending more now
+                    # would start unowned work. Report partial dispatch instead.
+                    if queued.ticket.started.done() and not queued.ticket.started.cancelled():
+                        item_error = queued.ticket.started.exception()
+                        if item_error is not None:
+                            raise item_error
+                    if queued.terminal is not None and queued.terminal.done():
+                        raise RuntimeError("item-driven batch terminated before all items were submitted")
+                admission_rejected = bool(
+                    queued.admission_check is not None
+                    and not queued.admission_check()
+                )
+                if queued.interrupted or admission_rejected:
+                    if queued.item_committed and admission_rejected:
+                        await self._delete_committed_item(queued)
+                    # 这里**不能**抛 ResponseAdmissionRejected：上面那次补偿删除
+                    # 是 fire-and-forget，provider 异步确认、也可能改回一个 error，
+                    # 于是这条已提交的 item 完全可能还留在会话历史里。此时让调用方
+                    # 降级重投就会变成重复的用户回合，还配着过期的视觉上下文。
                     raise RuntimeError("response dispatch interrupted")
-                await self._worker_send(event)
+                if queued.pre_commit is not None:
+                    # 提交前的最后一刻，让调用方按自己的判据就地降级这条 event。
+                    # 位置在 admission 复查之后、_worker_send 之前：arbiter 在
+                    # enqueue 与这里之间还有等活跃响应、等发送信号量等多段等待，
+                    # 调用方在 enqueue 前做的检查覆盖不到那段窗口。
+                    queued.pre_commit(event)
+                queued.item_committed = True
+                if item_driven and queued.terminal is None:
+                    # This route starts generation on item submission and does
+                    # not acknowledge the item. Own the lifecycle before the
+                    # write so even a synchronous response cannot be orphaned.
+                    # Install once for the whole batch: replacing the future
+                    # on a sibling item loses an early terminal, and reverting
+                    # batches to response.create duplicates generation.
+                    queued.terminal = loop.create_future()
+                    self._response_owner = queued
+                    queued.response_send_started = True
+                # main(#2837) 起 _worker_send 按 ticket 路由（queued.event_sender），
+                # 多一个 queued 形参；本轮的提交记账仍留在调用点两侧。
+                if item_driven:
+                    queued.submitted_item_event_ids.append(str(event["event_id"]))
+                await self._worker_send(queued, event)
+                item = event.get("item")
+                item_id = item.get("id") if isinstance(item, dict) else None
+                if (
+                    isinstance(item_id, str)
+                    and item_id
+                    and item_id not in queued.committed_item_ids
+                ):
+                    queued.committed_item_ids.append(item_id)
+            if self._trace and queued.events_before_response:
+                self._trace_decision(
+                    "dispatch",
+                    {
+                        "phase": "item_sent",
+                        "source": queued.source,
+                        "event_types": [
+                            sent.get("type") for sent in queued.events_before_response
+                        ],
+                        "item_ids": list(queued.committed_item_ids),
+                        "expected_item_id": queued.expected_item_id,
+                    },
+                )
+
+            admission_rejected = bool(
+                queued.admission_check is not None
+                and not queued.admission_check()
+            )
+            if queued.item_committed and admission_rejected:
+                # 同上：补偿删除未经确认，不承诺「provider 侧不留痕迹」。
+                await self._delete_committed_item(queued)
+                raise RuntimeError("response dispatch interrupted")
 
             if queued.item_ack is not None:
-                try:
-                    # The one bound that was not instrumented, which made
-                    # "no wait spent half its allowance" a claim nothing could
-                    # back for it. It is also the bound I once mis-reported as
-                    # over budget from outside the arbiter, so leaving it
-                    # unmeasured from inside was the worst possible gap.
-                    with self._report_wait_margin(
-                        "conversation item ack", queued.item_ack_timeout
-                    ):
-                        await asyncio.wait_for(
-                            asyncio.shield(queued.item_ack), queued.item_ack_timeout
-                        )
-                    item_acked = True
-                    queued.item_acked = True
-                except asyncio.TimeoutError:
+                if queued.item_committed and queued.interrupted:
                     item_acked = False
                     queued.item_acked = False
-                    queued.item_ack.cancel()
+                    if self._trace:
+                        self._trace_decision(
+                            "dispatch",
+                            {
+                                "phase": "item_ack",
+                                "source": queued.source,
+                                "result": "skipped_interrupted",
+                                "expected_item_id": queued.expected_item_id,
+                            },
+                        )
+                else:
+                    ack_wait_started = loop.time() if self._trace else 0.0
+                    try:
+                        # The one bound that was not instrumented, which made
+                        # "no wait spent half its allowance" a claim nothing could
+                        # back for it. It is also the bound I once mis-reported as
+                        # over budget from outside the arbiter, so leaving it
+                        # unmeasured from inside was the worst possible gap.
+                        with self._report_wait_margin(
+                            "conversation item ack", queued.item_ack_timeout
+                        ):
+                            await asyncio.wait_for(
+                                asyncio.shield(queued.item_ack),
+                                queued.item_ack_timeout,
+                            )
+                        item_acked = True
+                        queued.item_acked = True
+                        if self._trace:
+                            self._trace_decision(
+                                "dispatch",
+                                {
+                                    "phase": "item_ack",
+                                    "source": queued.source,
+                                    "result": "matched",
+                                    "waited_ms": round(
+                                        (loop.time() - ack_wait_started) * 1000
+                                    ),
+                                    "expected_item_id": queued.expected_item_id,
+                                },
+                            )
+                    except asyncio.TimeoutError:
+                        item_acked = False
+                        queued.item_acked = False
+                        queued.item_ack.cancel()
+                        if self._trace:
+                            self._trace_decision(
+                                "dispatch",
+                                {
+                                    "phase": "item_ack",
+                                    "source": queued.source,
+                                    "result": "timeout",
+                                    "waited_ms": round(
+                                        (loop.time() - ack_wait_started) * 1000
+                                    ),
+                                    "expected_item_id": queued.expected_item_id,
+                                },
+                            )
 
+            admission_rejected = bool(
+                queued.admission_check is not None
+                and not queued.admission_check()
+            )
+            if queued.item_committed and admission_rejected:
+                # 同上：补偿删除未经确认，不承诺「provider 侧不留痕迹」。
+                await self._delete_committed_item(queued)
+                raise RuntimeError("response dispatch interrupted")
             if queued.interrupted:
                 raise RuntimeError("response dispatch interrupted")
             if not self._connection_available:
                 raise ConnectionError("realtime connection is unavailable")
+            if (
+                queued.admission_check is not None
+                and not queued.item_committed
+                and not queued.admission_check()
+            ):
+                raise ResponseAdmissionRejected(
+                    "response dispatch admission rejected"
+                )
             if queued.ticket.started.done():
                 if queued.ticket.started.cancelled():
                     raise RuntimeError(
@@ -1990,18 +2746,32 @@ class RealtimeResponseArbiter:
                 pre_response_error = queued.ticket.started.exception()
                 if pre_response_error is not None:
                     raise pre_response_error
-            if self._response_owner is not None:
+            if self._response_owner is not None and self._response_owner is not queued:
                 raise RuntimeError("response owner is already assigned")
-            queued.terminal = loop.create_future()
-            self._response_owner = queued
-            queued.response_send_started = True
+            if not item_driven:
+                queued.terminal = loop.create_future()
+                self._response_owner = queued
+                queued.response_send_started = True
             try:
-                await self._worker_send(queued.response_event)
+                if not item_driven:
+                    await self._worker_send(queued, queued.response_event)
             except Exception:
                 self._detach_response_owner(queued)
                 if not queued.terminal.done():
                     queued.terminal.cancel()
                 raise
+            if self._trace:
+                self._trace_decision(
+                    "dispatch",
+                    {
+                        "phase": "item_response_sent" if item_driven else "response_create_sent",
+                        "source": queued.source,
+                        "create_event_id": queued.response_event.get("event_id"),
+                        "item_acked": item_acked,
+                        "started_during_send": queued.ticket.started.done(),
+                        "owner_response_id": queued.response_id,
+                    },
+                )
             if queued.server_vad_won_during_response_send:
                 # The possibly-live explicit create is now indistinguishable
                 # from a server response. Detach its ticket without cancelling
@@ -2033,7 +2803,10 @@ class RealtimeResponseArbiter:
                 cancel_write_failed = False
                 try:
                     try:
-                        await self._worker_send({"type": "response.cancel"})
+                        await self._worker_send(
+                            queued,
+                            {"type": "response.cancel"},
+                        )
                     except Exception:
                         cancel_write_failed = True
                         raise
@@ -2046,6 +2819,16 @@ class RealtimeResponseArbiter:
                 except Exception:
                     if not queued.terminal.done():
                         queued.terminal.cancel()
+                    if self._trace:
+                        self._trace_decision(
+                            "timeout",
+                            {
+                                "kind": "interrupted_cancel",
+                                "source": queued.source,
+                                "owner_response_id": queued.response_id,
+                                "cancel_write_failed": cancel_write_failed,
+                            },
+                        )
                     await self._escalate(
                         "interrupted response could not reach a terminal state",
                         observed=queued,
@@ -2076,6 +2859,17 @@ class RealtimeResponseArbiter:
                 # rejected or announced, and either resolves ``started``
                 # instead of timing out.
                 adopted_id = self._adoptable_id_for(queued)
+                if self._trace:
+                    self._trace_decision(
+                        "timeout",
+                        {
+                            "kind": "response_started",
+                            "source": queued.source,
+                            "owner_response_id": queued.response_id,
+                            "adopted_response_id": adopted_id,
+                            "timeout_s": queued.response_started_timeout,
+                        },
+                    )
                 if adopted_id is not None:
                     self._adopt_announcement(queued, adopted_id)
                 else:
@@ -2088,6 +2882,17 @@ class RealtimeResponseArbiter:
                         asyncio.shield(queued.terminal), queued.response_done_timeout
                     )
             except asyncio.TimeoutError as done_timeout:
+                if self._trace:
+                    self._trace_decision(
+                        "timeout",
+                        {
+                            "kind": "response_done",
+                            "source": queued.source,
+                            "owner_response_id": queued.response_id,
+                            "timeout_s": queued.response_done_timeout,
+                            "server_response_ids": len(self._server_response_ids),
+                        },
+                    )
                 await self._cancel_after_timeout(queued, done_timeout)
 
             if queued.interrupted:
@@ -2095,6 +2900,16 @@ class RealtimeResponseArbiter:
             if queued.terminal_error is not None:
                 raise queued.terminal_error
 
+            if self._trace:
+                self._trace_decision(
+                    "dispatch",
+                    {
+                        "phase": "completed",
+                        "source": queued.source,
+                        "owner_response_id": queued.response_id,
+                        "item_acked": item_acked,
+                    },
+                )
             result = ResponseDispatchResult(
                 item_acknowledged=item_acked,
                 context_persistence_uncertain=not item_acked,
@@ -2103,6 +2918,17 @@ class RealtimeResponseArbiter:
                 queued.ticket.done.set_result(result)
         except Exception as exc:
             self._fail_ticket(queued.ticket, exc)
+            if self._trace:
+                self._trace_decision(
+                    "dispatch",
+                    {
+                        "phase": "failed",
+                        "source": queued.source,
+                        "owner_response_id": queued.response_id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:200],
+                    },
+                )
         finally:
             if self._current is queued:
                 self._current = None
@@ -2157,7 +2983,7 @@ class RealtimeResponseArbiter:
         cancel_write_failed = False
         try:
             try:
-                await self._worker_send({"type": "response.cancel"})
+                await self._worker_send(queued, {"type": "response.cancel"})
             except Exception:
                 # ``_worker_send``'s finally has already lowered the in-flight
                 # flag, so without remembering this the escalation below would
@@ -2172,6 +2998,16 @@ class RealtimeResponseArbiter:
         except Exception:
             if queued.terminal is not None and not queued.terminal.done():
                 queued.terminal.cancel()
+            if self._trace:
+                self._trace_decision(
+                    "timeout",
+                    {
+                        "kind": "cancel_grace",
+                        "source": queued.source,
+                        "owner_response_id": queued.response_id,
+                        "cancel_write_failed": cancel_write_failed,
+                    },
+                )
             await self._escalate(
                 "response lifecycle could not reach a terminal state",
                 observed=queued,

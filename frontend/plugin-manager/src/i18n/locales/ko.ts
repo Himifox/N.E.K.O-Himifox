@@ -1,7 +1,51 @@
+import { modelApiMessages } from '../model-api'
+import { modelBindingsMessages } from '../model-bindings'
+
 /**
  * 한국어 언어 팩
  */
 export default {
+  modelApi: modelApiMessages['ko'],
+  modelBindings: modelBindingsMessages['ko'],
+  development: {
+    guidePurpose: "이 화면은 클릭 한 번으로 플러그인을 개발해 주는 기능이 아닙니다. 기존 소스를 가져올 수 있는 플러그인으로 한 번에 패키징하고 개발을 계속할 수 있도록 돕습니다.",
+    navTitle: "개발 플러그인",
+    guideButton: "사용 안내",
+    guideTitle: "플러그인 개발 시작하기",
+    guideIntro: "N.E.K.O 본체 저장소를 clone하지 않고 소스 폴더를 연결해 개발, 디버깅, 패키징할 수 있습니다.",
+    guideLoadTitle: "소스 폴더 불러오기",
+    guideLoadBody: "개발 모드를 켜고 plugin.toml이 있는 폴더를 선택한 후 검증하고 불러오세요. 브라우저에서 입력하는 경로는 백엔드가 실행되는 컴퓨터의 경로입니다.",
+    guideReloadTitle: "수정 후 다시 불러오기",
+    guideReloadBody: "편집기에서 변경 사항을 저장하고 다시 불러오기를 누르세요. 진입점 목록에 수정된 설명이 표시됩니다. 앱을 재시작한 후에는 개발 플러그인을 수동으로 시작해야 합니다.",
+    guideBuildTitle: "패키징 및 공유",
+    guideBuildBody: "플러그인이 중지된 상태에서도 .neko-plugin 패키지를 만들 수 있습니다. 다른 환경에서 가져와 검증한 후 공유하세요.",
+    guideData: "연결 해제는 플러그인을 중지하고 등록을 제거하지만 소스와 실행 데이터는 유지합니다. 개발 모드를 끄면 플러그인은 중지되고 폴더 연결은 유지됩니다.",
+    guideReopen: "닫은 후에도 페이지 오른쪽 위의 사용 안내 버튼으로 다시 볼 수 있습니다.",
+    guideDismiss: "확인",
+    sourcePlaceholder: "plugin.toml이 있는 플러그인 폴더 선택",
+    previewHint: "검증하면 플러그인 정보가 표시됩니다. 내용을 확인한 후 불러오세요.",
+    title: "개발 모드",
+    load: "압축하지 않은 플러그인 로드",
+    hint: "개발한 소스를 불러온 후 패키징하여 플러그인을 가져오거나 개발을 계속할 수 있습니다.",
+    badge: "개발 중",
+    entry: "진입점",
+    openSource: "소스 폴더 열기",
+    start: "시작",
+    stop: "중지",
+    reload: "다시 로드",
+    logs: "로그",
+    build: "패키지 만들기",
+    rebind: "폴더 변경",
+    remove: "연결 해제",
+    pathHint: "N.E.K.O 백엔드가 실행되는 컴퓨터의 소스 폴더를 입력하세요. 브라우저 폴더 업로드는 지원되지 않습니다.",
+    path: "소스 폴더",
+    choose: "폴더 선택",
+    valid: "검증 통과",
+    validate: "검증",
+    failed: "작업 실패",
+    built: "패키지가 생성되었습니다. 기능 테스트와 마켓 심사는 별도로 필요합니다.",
+    removeHint: "플러그인을 중지하고 연결을 해제할까요? 소스와 실행 데이터는 유지됩니다.",
+  },
   common: {
     loading: '로딩 중...',
     refresh: '새로고침',
@@ -512,6 +556,11 @@ export default {
       overrideBuiltinTitle: '{plugin}을(를) Market 소스로 전환할까요?',
       overrideBuiltinBody: '현재 내장 버전 {current}이(가) Market 버전 {target}(으)로 교체됩니다. 플러그인 데이터와 설정은 영구 저장소에 유지됩니다.',
       overrideBuiltinConfirm: 'Market으로 전환',
+      manualTakeoverTitle: 'N.E.K.O가 {plugin}을(를) 관리하도록 할까요?',
+      manualTakeoverBody: '이 플러그인 디렉터리는 현재 수동으로 관리됩니다. 계속하면 버전 {current}을(를) {target}(으)로 교체하며, 성공 후 N.E.K.O가 이 사용자 플러그인의 업데이트와 제거를 관리합니다.',
+      manualTakeoverConfirm: '교체하고 관리',
+      manualTakeoverCancelled: '수동 관리 플러그인 교체를 취소했습니다.',
+      manualTakeoverSucceeded: '{plugin}이(가) 이제 N.E.K.O에서 관리됩니다.',
       reinstallTitle: '{plugin}을(를) 다시 설치할까요?',
       reinstallBody: '버전 {current}을(를) 버전 {target}(으)로 다시 교체합니다. 실행 중인 플러그인은 잠시 재시작됩니다.',
       reinstallConfirm: '플러그인 다시 설치',
@@ -525,6 +574,8 @@ export default {
       blockedBundleConflict: '이 번들에는 이미 설치된 플러그인이 있습니다. 플러그인을 하나씩 업그레이드하세요.',
       blockedDirectoryConflict: '대상 디렉터리가 다른 플러그인에 속하므로 변경하지 않았습니다.',
       blockedLegacyPlugin: '이 플러그인의 이전 버전이 아직 설치되어 있습니다. 계속하기 전에 {plugin}을(를) 제거하세요.',
+      blockedOwnershipUnknown: '기존 플러그인 디렉터리의 소유권을 확인할 수 없습니다. 설치 원본 기록을 복구한 후 다시 시도하세요.',
+      blockedInstallSourceReadOnly: '설치 원본 기록을 사용할 수 없거나 읽기 전용입니다. 기록을 복구한 후 다시 시도하세요.',
       rollbackCompleted: '업그레이드에 실패하여 이전 버전을 복원했습니다.',
       rollbackIncomplete: '업그레이드에 실패했고 롤백도 완료되지 않았습니다. 계속하기 전에 플러그인 상태를 확인하세요.',
       error: {
@@ -666,7 +717,13 @@ export default {
     returnedLines: '반환된 줄 수',
     connected: '연결됨',
     disconnected: '연결 안 됨',
-    connectionFailed: '로그 스트림 연결에 실패했습니다'
+    connectionFailed: '로그 스트림 연결에 실패했습니다',
+    exportLog: '로그 아카이브 내보내기',
+    openLogDirectory: '로그 디렉터리 열기',
+    exportSuccess: '로그를 성공적으로 내보냈습니다',
+    exportFailed: '로그 내보내기에 실패했습니다',
+    openDirectoryFailed: '디렉터리를 열지 못했습니다',
+    noLogFileToExport: '내보낼 로그 파일이 없습니다'
   },
   runs: {
     title: '실행 기록',
@@ -694,6 +751,7 @@ export default {
     cancelSuccess: '취소 요청을 전송했습니다'
   },
   status: {
+    sourceMissing: '소스 폴더를 사용할 수 없음',
     running: '실행 중',
     stopped: '정지됨',
     crashed: '충돌',
@@ -742,7 +800,9 @@ export default {
     resourceNotFound: '요청한 리소스를 찾을 수 없습니다',
     internalServerError: '서버 내부 오류',
     serviceUnavailable: '서비스를 사용할 수 없습니다',
-    networkError: '네트워크 오류. 연결을 확인하세요.'
+    networkError: '네트워크 오류. 연결을 확인하세요.',
+    requestTimeout: '요청 시간이 초과되었습니다. 다시 시도하세요.',
+    pluginLifecycleTimeout: '플러그인 시작 또는 재시작 시간이 초과되었습니다. 플러그인 로그를 확인하세요.'
   },
   welcome: {
     about: {

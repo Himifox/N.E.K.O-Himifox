@@ -3,6 +3,7 @@
  */
 import { del, get, post } from './index'
 import type { AxiosRequestConfig } from 'axios'
+import { PLUGIN_LIFECYCLE_TIMEOUT, PLUGIN_RELOAD_ALL_TIMEOUT } from '@/utils/constants'
 import type {
   PluginMeta,
   PluginStatusData,
@@ -53,7 +54,10 @@ export function refreshPluginsRegistry(config?: AxiosRequestConfig & { preserveM
   failed: Array<{ plugin_id: string; config_path: string; error: string }>
   scanned_count: number
 }> {
-  return post('/plugins/refresh', undefined, config)
+  return post('/plugins/refresh', undefined, {
+    ...config,
+    headers: { ...config?.headers, 'X-Neko-Development': '1' },
+  })
 }
 
 /**
@@ -77,7 +81,10 @@ export function getPluginHealth(pluginId: string): Promise<PluginHealth> {
  */
 export function startPlugin(pluginId: string): Promise<{ success: boolean; plugin_id: string; message: string }> {
   const safeId = encodeURIComponent(pluginId)
-  return post(`/plugin/${safeId}/start`)
+  return post(`/plugin/${safeId}/start`, undefined, {
+    timeout: PLUGIN_LIFECYCLE_TIMEOUT,
+    timeoutErrorMessageKey: 'messages.pluginLifecycleTimeout',
+  })
 }
 
 /**
@@ -93,11 +100,14 @@ export function stopPlugin(pluginId: string): Promise<{ success: boolean; plugin
  */
 export function reloadPlugin(pluginId: string): Promise<{ success: boolean; plugin_id: string; message: string }> {
   const safeId = encodeURIComponent(pluginId)
-  return post(`/plugin/${safeId}/reload`)
+  return post(`/plugin/${safeId}/reload`, undefined, {
+    timeout: PLUGIN_LIFECYCLE_TIMEOUT,
+    timeoutErrorMessageKey: 'messages.pluginLifecycleTimeout',
+  })
 }
 
 /**
- * 重载所有插件（批量 API，后端并行处理）
+ * 重载所有插件（批量 API，后端按依赖顺序启动）
  */
 export function reloadAllPlugins(): Promise<{
   success: boolean
@@ -106,7 +116,10 @@ export function reloadAllPlugins(): Promise<{
   skipped: string[]
   message: string
 }> {
-  return post('/plugins/reload')
+  return post('/plugins/reload', undefined, {
+    timeout: PLUGIN_RELOAD_ALL_TIMEOUT,
+    headers: { 'X-Neko-Development': '1' },
+  })
 }
 
 /**
