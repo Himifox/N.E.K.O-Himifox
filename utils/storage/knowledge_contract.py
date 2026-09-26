@@ -13,6 +13,7 @@ import hashlib
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -102,11 +103,25 @@ def knowledge_root_barrier(
     with _BARRIERS_LOCK:
         thread_lock = _BARRIERS.setdefault(key, threading.RLock())
     lock_path = _root_lock_path(key)
-    with thread_lock:
+    # One deadline for both halves: callers map a timeout to a retryable
+    # "busy", which only works if a same-process holder (a migration copying a
+    # large knowledge/ tree) cannot make the in-process wait unbounded.
+    budget = max(float(timeout), 0.0)
+    deadline = time.monotonic() + budget
+    acquired = (
+        thread_lock.acquire(blocking=True, timeout=budget)
+        if budget > 0
+        else thread_lock.acquire(blocking=False)
+    )
+    if not acquired:
+        raise TimeoutError("knowledge root barrier is held by another thread")
+    try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with portalocker.Lock(
             lock_path,
             mode="a",
-            timeout=max(float(timeout), 0.0),
+            timeout=max(deadline - time.monotonic(), 0.0),
         ):
             yield
+    finally:
+        thread_lock.release()

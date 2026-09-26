@@ -835,10 +835,20 @@ async def _run_shutdown_step(
                 "%s observed caller cancellation; waiting for its real terminal state",
                 what,
             )
+        except Exception:
+            # The step itself failed; the task is done, so the loop exits and
+            # the result is reported below without losing a pending cancel.
+            pass
     try:
         task.result()
     except asyncio.CancelledError:
         logger.warning("%s cancelled itself during shutdown", what)
+    except Exception as exc:
+        # Absorbed here, not re-raised: a caller cancellation this step already
+        # uncancelled lives only in ``pending_cancellation``, and raising would
+        # drop it -- on_shutdown would then return normally. It also keeps a
+        # failing step from skipping the other steps sharing its try block.
+        logger.warning("%s failed during shutdown: %s", what, exc)
     return pending_cancellation
 
 
@@ -1634,10 +1644,18 @@ async def on_shutdown():
 
                 async def _upload_cloudsave() -> None:
                     nonlocal remote_upload_result
-                    remote_upload_result = await _run_cloudsave_manager_action(
-                        "upload_existing_snapshot",
-                        **upload_action_kwargs,
-                    )
+                    try:
+                        remote_upload_result = await _run_cloudsave_manager_action(
+                            "upload_existing_snapshot",
+                            **upload_action_kwargs,
+                        )
+                    except CloudsaveDeadlineExceeded:
+                        # _run_shutdown_step absorbs step failures, so the
+                        # budget-specific message has to be logged here.
+                        logger.warning(
+                            "Steam Auto-Cloud shutdown staged snapshot upload exceeded 5.0s budget; source launch may leave Steam remote snapshot unchanged"
+                        )
+                        raise
 
                 shutdown_cancellation = await _run_shutdown_step(
                     _upload_cloudsave,
@@ -1651,10 +1669,6 @@ async def on_shutdown():
                 logger.info(
                     "Steam Auto-Cloud shutdown staged snapshot upload: %s",
                     remote_upload_result,
-                )
-            except CloudsaveDeadlineExceeded:
-                logger.warning(
-                    "Steam Auto-Cloud shutdown staged snapshot upload exceeded 5.0s budget; source launch may leave Steam remote snapshot unchanged"
                 )
             except Exception as e:
                 logger.warning(

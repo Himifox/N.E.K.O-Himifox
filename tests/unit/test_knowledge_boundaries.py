@@ -238,8 +238,14 @@ def test_frontend_rejects_oversized_pack_before_reading_and_has_i18n():
 
     assert "MAX_KNOWLEDGE_PACK_FILE_BYTES = 10 * 1024 * 1024" in api_source
     assert view_source.index(size_guard) < view_source.index("await file.text()")
-    for locale in (root / "frontend/plugin-manager/src/i18n/locales").glob("*.ts"):
-        assert "importTooLarge:" in locale.read_text(encoding="utf-8")
+    # Knowledge Manager copy is kept out of the entry bundle in its own module,
+    # one block per locale; every locale bundle must have a matching block.
+    locales = tuple((root / "frontend/plugin-manager/src/i18n/locales").glob("*.ts"))
+    knowledge_messages = (
+        root / "frontend/plugin-manager/src/i18n/knowledge.ts"
+    ).read_text(encoding="utf-8")
+    assert locales
+    assert knowledge_messages.count("importTooLarge:") == len(locales)
 
 
 def test_newer_pack_registry_is_not_overwritten(tmp_path):

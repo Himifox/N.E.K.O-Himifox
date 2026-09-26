@@ -20,6 +20,7 @@ import os
 import shutil
 import sqlite3
 import stat
+import tempfile
 import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -410,10 +411,20 @@ def _verify_knowledge_database(knowledge_root: Path) -> None:
     database_path = knowledge_root / "knowledge.db"
     if not database_path.is_file():
         return
-    uri = f"{database_path.resolve().as_uri()}?mode=ro"
     connection: sqlite3.Connection | None = None
+    # Verify a throwaway copy, never the tree being migrated. Opening a WAL
+    # database -- every KnowledgeStore writer switches it to WAL -- creates
+    # -wal/-shm sidecars that a read-only connection cannot remove on close, so
+    # checking in place changed the directory whose manifest proves the copy.
+    scratch = tempfile.TemporaryDirectory(prefix="neko-knowledge-verify-")
     try:
-        connection = sqlite3.connect(uri, uri=True)
+        scratch_path = Path(scratch.name) / database_path.name
+        shutil.copy2(database_path, scratch_path)
+        for suffix in ("-wal", "-shm"):
+            sidecar = database_path.with_name(database_path.name + suffix)
+            if sidecar.is_file():
+                shutil.copy2(sidecar, scratch_path.with_name(scratch_path.name + suffix))
+        connection = sqlite3.connect(scratch_path)
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         quick_check_result = (
             str(quick_check[0]) if quick_check and quick_check[0] is not None else ""
@@ -434,6 +445,7 @@ def _verify_knowledge_database(knowledge_root: Path) -> None:
     finally:
         if connection is not None:
             connection.close()
+        scratch.cleanup()
 
 
 def _transaction_path(target_root: Path, txid: str) -> Path:

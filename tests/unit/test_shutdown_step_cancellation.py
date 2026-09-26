@@ -52,6 +52,41 @@ async def test_shutdown_step_defers_cancellation_and_lets_later_steps_run() -> N
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_failing_step_keeps_the_caller_cancellation_it_absorbed() -> None:
+    """A step that raises after absorbing a caller cancel must still return it.
+
+    Re-raising the step's exception dropped the cancellation the helper had
+    already uncancelled, so on_shutdown returned normally instead of honouring
+    the caller's cancel once every cleanup had run.
+    """
+    from app.main_server import _run_shutdown_step
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def failing_step() -> None:
+        entered.set()
+        await release.wait()
+        raise RuntimeError("cleanup failed")
+
+    async def shutdown_like() -> asyncio.CancelledError | None:
+        return await _run_shutdown_step(
+            failing_step,
+            what="failing",
+            deadline_monotonic=time.monotonic() + 1.0,
+        )
+
+    task = asyncio.create_task(shutdown_like())
+    await entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    pending = await task
+    assert isinstance(pending, asyncio.CancelledError)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_shutdown_step_keeps_the_first_cancellation() -> None:
     from app.main_server import _run_shutdown_step
 

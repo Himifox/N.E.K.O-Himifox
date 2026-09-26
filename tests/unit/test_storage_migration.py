@@ -61,10 +61,16 @@ def _make_anchor_root_config_manager(tmp_path: Path):
     return config_manager
 
 
-def _write_knowledge_tree(root: Path, *, marker: str = "source") -> None:
+def _write_knowledge_tree(
+    root: Path, *, marker: str = "source", wal: bool = False
+) -> None:
     knowledge_root = root / "knowledge"
     knowledge_root.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(knowledge_root / "knowledge.db")) as connection:
+        if wal:
+            # KnowledgeStore opens every writable connection in WAL mode, so a
+            # production database carries WAL in its header.
+            connection.execute("PRAGMA journal_mode=WAL")
         with connection:
             connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             connection.execute("INSERT INTO metadata VALUES ('schema_version', '7')")
@@ -283,6 +289,35 @@ def test_storage_migration_copies_complete_knowledge_tree_with_digest_proof(tmp_
     assert (
         target_root / "knowledge" / ".staging" / "remove-intent.json"
     ).is_file()
+
+
+def test_storage_migration_verifies_a_wal_knowledge_database_without_touching_it(
+    tmp_path,
+):
+    """Read-only verification of a WAL database leaves -wal/-shm behind.
+
+    Those sidecars land in the directory whose manifest was already taken, so
+    verifying in place made every production (WAL) knowledge migration fail
+    its digest proof.
+    """
+    config_manager = _make_config_manager(tmp_path)
+    source_root = config_manager.app_docs_dir
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    _write_knowledge_tree(source_root, wal=True)
+    source_files = sorted(p.name for p in (source_root / "knowledge").iterdir())
+
+    create_pending_storage_migration(
+        config_manager,
+        source_root=source_root,
+        target_root=target_root,
+        selection_source="recommended",
+    )
+    result = run_pending_storage_migration(config_manager)
+
+    assert result["completed"] is True, result.get("error_code")
+    proof = result["payload"]["copied_entries"]["knowledge"]
+    assert proof["source_manifest"] == proof["target_manifest"]
+    assert sorted(p.name for p in (source_root / "knowledge").iterdir()) == source_files
 
 
 @pytest.mark.unit

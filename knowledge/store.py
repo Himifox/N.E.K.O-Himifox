@@ -1307,6 +1307,11 @@ class KnowledgeStore:
             return self.chunks_revision(), ()
         try:
             with self._connection() as connection:
+                # Revision and rows in one read snapshot, as load_routing_entries
+                # does: a batch committed between two autocommit SELECTs pairs an
+                # old revision with new rows, and the later revision check then
+                # drops semantic results until the next reload.
+                connection.execute("BEGIN")
                 revision_row = connection.execute(
                     "SELECT value FROM metadata WHERE key='chunks_revision'"
                 ).fetchone()
@@ -1351,6 +1356,11 @@ class KnowledgeStore:
         limit = max(int(limit), 1)
         try:
             with self._connection() as connection:
+                # Revision and rows in one read snapshot, as load_routing_entries
+                # does: a batch committed between two autocommit SELECTs pairs an
+                # old revision with new rows, and the later revision check then
+                # drops semantic results until the next reload.
+                connection.execute("BEGIN")
                 revision_row = connection.execute(
                     "SELECT value FROM metadata WHERE key='chunks_revision'"
                 ).fetchone()
