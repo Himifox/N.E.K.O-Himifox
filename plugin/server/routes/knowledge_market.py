@@ -474,7 +474,7 @@ def _transfer_removal_to_drain(package_id: int, operation_id: str) -> None:
     if current is None or _unsubscribe_settlements.get(package_id) is not current:
         return
     drain = asyncio.create_task(
-        _drain_removal_operation(operation_id),
+        _drain_removal_operation(package_id, operation_id),
         name=f"market-knowledge-remove-drain-{package_id}",
     )
     _unsubscribe_settlements[package_id] = drain
@@ -484,9 +484,26 @@ def _transfer_removal_to_drain(package_id: int, operation_id: str) -> None:
     )
 
 
-async def _drain_removal_operation(operation_id: str) -> dict[str, Any]:
-    deadline = asyncio.get_running_loop().time() + _UNSUBSCRIBE_DRAIN_SECONDS
-    return await _confirm_removal_operation(operation_id, deadline=deadline)
+async def _drain_removal_operation(
+    package_id: int,
+    operation_id: str,
+) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _UNSUBSCRIBE_DRAIN_SECONDS
+    result = await _confirm_removal_operation(operation_id, deadline=deadline)
+    if (
+        result.get("ok") is True
+        and str(result.get("operation_status") or "") == "committed"
+    ):
+        # The synchronous path reports after a committed removal; a removal
+        # that only commits here must report too. Once the pack is gone from
+        # packs.json, a later unsubscribe can no longer resolve it, so this is
+        # the only chance to tell the Marketplace.
+        await _report_unsubscribe_best_effort(
+            package_id,
+            deadline=loop.time() + _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS,
+        )
+    return result
 
 
 async def _cancel_active_subscription(

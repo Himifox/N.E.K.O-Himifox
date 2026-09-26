@@ -1801,10 +1801,17 @@ async def test_uncertain_remove_transfers_guard_to_same_operation_drain(monkeypa
             "operation_status": "pending",
         }
 
+    reported: list[int] = []
+
+    async def fake_report(package_id, *, deadline):
+        reported.append(package_id)
+        return True
+
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
     monkeypatch.setattr(module, "_cancel_active_subscription", no_active)
     monkeypatch.setattr(module, "_resolve_owned_subscription", owned)
     monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module, "_report_unsubscribe_best_effort", fake_report)
     monkeypatch.setattr(module, "_UNSUBSCRIBE_TOTAL_BUDGET_SECONDS", 0.04)
     monkeypatch.setattr(module, "_UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS", 0.005)
     monkeypatch.setattr(module, "_REMOVAL_STATUS_POLL_SECONDS", 0.001)
@@ -1821,9 +1828,12 @@ async def test_uncertain_remove_transfers_guard_to_same_operation_drain(monkeypa
     assert excinfo.value.detail["code"] == "removal_pending"
     assert 7 in module._unsubscribing_package_ids
     assert posts and all(item == posts[0] for item in queried)
+    assert reported == []
     drain = module._unsubscribe_settlements[7]
     committed.set()
     await asyncio.wait_for(asyncio.shield(drain), timeout=0.3)
     await asyncio.sleep(0)
     assert 7 not in module._unsubscribing_package_ids
     assert posts == [posts[0]]
+    # A removal that only commits during the drain still unsubscribes remotely.
+    assert reported == [7]

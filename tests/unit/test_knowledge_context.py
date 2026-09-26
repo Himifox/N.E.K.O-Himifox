@@ -93,6 +93,33 @@ def test_knowledge_query_candidates_bound_work_and_deduplicate():
     )
 
 
+@pytest.mark.asyncio
+async def test_tool_lookup_caps_the_primary_query(monkeypatch, tmp_path):
+    import main_logic.knowledge_context as knowledge_tool
+
+    captured = {}
+
+    class _Service:
+        async def asearch(self, query, **kwargs):
+            captured["query"] = query
+            return []
+
+    monkeypatch.setattr(
+        knowledge_tool,
+        "get_config_manager",
+        lambda: SimpleNamespace(knowledge_dir=tmp_path),
+    )
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: _Service())
+    monkeypatch.setattr(knowledge_tool, "_render_entries", lambda _s, _e: "")
+
+    await knowledge_tool.handle_public_knowledge_call(
+        {"query": "x" * 5_000_000, "mode": "lookup"},
+        language="zh",
+    )
+
+    assert len(captured["query"]) == knowledge_tool._MAX_KNOWLEDGE_QUERY_CHARS
+
+
 def test_compound_explicit_lookup_is_not_a_pure_tool_owner_candidate():
     import main_logic.knowledge_context as knowledge_tool
 

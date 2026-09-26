@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from pathlib import Path
@@ -185,10 +186,8 @@ def _load_operations(path: Path) -> dict[str, Any]:
             or status not in _STATUSES
             or (status == "pending" and result is not None)
             or (status != "pending" and not isinstance(result, dict))
-            or isinstance(value.get("created_at"), bool)
-            or not isinstance(value.get("created_at"), (int, float))
-            or isinstance(value.get("updated_at"), bool)
-            or not isinstance(value.get("updated_at"), (int, float))
+            or not _is_finite_timestamp(value.get("created_at"))
+            or not _is_finite_timestamp(value.get("updated_at"))
             or isinstance(value.get("attempts"), bool)
             or not isinstance(value.get("attempts"), int)
             or int(value["attempts"]) < 1
@@ -206,6 +205,17 @@ def _load_operations(path: Path) -> dict[str, Any]:
             "updated_at": float(value["updated_at"]),
         }
     return {"schema_version": 1, "operations": validated}
+
+
+def _is_finite_timestamp(value: object) -> bool:
+    # json.loads accepts NaN/Infinity, but _write_operations refuses them
+    # (allow_nan=False), and a NaN updated_at never expires. Reject on load so
+    # the record is reported as an invalid registry instead of breaking writes.
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+    )
 
 
 def _load_operations_for_access(path: Path) -> dict[str, Any]:

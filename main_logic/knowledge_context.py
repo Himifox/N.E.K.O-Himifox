@@ -251,7 +251,10 @@ async def handle_public_knowledge_call(
     del language
     started_at = time.perf_counter()
     args = arguments if isinstance(arguments, dict) else {}
-    query = str(args.get("query") or "").strip()
+    # Same ingress cap as the lexical candidates: the primary query also reaches
+    # SQLite and the embedding text builder, which run before any deadline can
+    # interrupt them.
+    query = str(args.get("query") or "").strip()[:_MAX_KNOWLEDGE_QUERY_CHARS]
     if not query:
         return "No public knowledge query was provided."
     mode = str(args.get("mode") or "lookup").strip().lower()
@@ -585,7 +588,7 @@ async def build_automatic_public_knowledge_context(
         time.monotonic() + PUBLIC_KNOWLEDGE_AUTO_CONTEXT_BUDGET_SECONDS
     )
     return await service.abuild_conversation_context(
-        user_text,
+        user_text.strip()[:_MAX_KNOWLEDGE_QUERY_CHARS],
         lexical_queries=_knowledge_query_candidates(user_text),
         limit=PUBLIC_KNOWLEDGE_AUTO_CONTEXT_MAX_HITS,
         deadline_monotonic=deadline,

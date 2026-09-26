@@ -69,6 +69,33 @@ def test_removal_operation_registry_rejects_bool_timestamps(tmp_path):
         get_removal_operation(tmp_path, operation_id)
 
 
+@pytest.mark.parametrize("field", ["created_at", "updated_at"])
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_removal_operation_registry_rejects_non_finite_timestamps(
+    tmp_path, field, constant
+):
+    from knowledge.removal_operations import (
+        KnowledgeRemovalOperationError,
+        begin_removal_operation,
+        get_removal_operation,
+    )
+
+    operation_id = "remove-operation-nan-time-0001"
+    begin_removal_operation(tmp_path, operation_id, _removal_request())
+    path = tmp_path / "pack-remove-operations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["operations"][operation_id][field] = float(constant.lower().replace("infinity", "inf"))
+    # json.dumps writes the bare NaN/Infinity constants that json.loads accepts.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert constant in path.read_text(encoding="utf-8")
+
+    with pytest.raises(
+        KnowledgeRemovalOperationError,
+        match="knowledge_removal_operation_registry_invalid",
+    ):
+        get_removal_operation(tmp_path, operation_id)
+
+
 def test_removal_operation_registry_bounds_pending_records(monkeypatch, tmp_path):
     import knowledge.removal_operations as operations
 
@@ -500,6 +527,56 @@ def test_generic_remove_cannot_delete_a_subscribed_pack(monkeypatch, tmp_path):
         "ok": False,
         "reason": "subscription_identity_mismatch",
     }
+    assert service.list_packs()[0]["pack_id"] == "market-fixture"
+
+
+def test_mismatched_removal_does_not_cancel_the_packs_active_job(
+    monkeypatch, tmp_path
+):
+    import knowledge.pack_jobs as pack_jobs
+
+    payload = _pack()
+    service = open_knowledge(tmp_path)
+    service.install_pack(
+        validate_pack(payload),
+        subscription={
+            "provider": "plugin-market",
+            "provider_package_id": "7",
+            "remote_id": "knowledge/market-fixture",
+            "version": "1.0.0",
+            "channel": "stable",
+            "artifact_sha256": hashlib.sha256(
+                canonical_pack_bytes(payload)
+            ).hexdigest(),
+            "material_type": "knowledge",
+            "index_manifest_sha256": "",
+            "vectors_sha256": "",
+            "trust": "trusted_market",
+        },
+    )
+    cancelled = []
+    monkeypatch.setattr(
+        pack_jobs,
+        "list_pack_jobs",
+        lambda _root: [
+            {"job_id": "update-job", "pack_id": "market-fixture", "state": "staged"}
+        ],
+    )
+    monkeypatch.setattr(
+        pack_jobs,
+        "cancel_pack_job",
+        lambda _root, job_id: cancelled.append(job_id) or True,
+    )
+
+    with pytest.raises(PermissionError, match="identity does not match"):
+        service.cancel_and_remove_pack(
+            "market-fixture",
+            expected_provider="plugin-market",
+            expected_provider_package_id="8",
+            expected_remote_id="knowledge/market-fixture",
+        )
+
+    assert cancelled == []
     assert service.list_packs()[0]["pack_id"] == "market-fixture"
 
 

@@ -1466,6 +1466,37 @@ class KnowledgeService:
                 raise PermissionError(
                     "knowledge subscription removal requires provider identity"
                 )
+            identity_mismatch = False
+            if expected_provider and installed is not None:
+                subscription = installed_subscription
+                provider_matches = (
+                    isinstance(subscription, dict)
+                    and str(subscription.get("provider") or "")
+                    == expected_provider
+                )
+                stored_package_id = (
+                    str(subscription.get("provider_package_id") or "")
+                    if isinstance(subscription, dict)
+                    else ""
+                )
+                identity_matches = (
+                    stored_package_id == expected_provider_package_id
+                    if stored_package_id
+                    else bool(expected_remote_id)
+                    and isinstance(subscription, dict)
+                    and str(subscription.get("remote_id") or "")
+                    == expected_remote_id
+                )
+                identity_mismatch = not provider_matches or not identity_matches
+            # A subscribed pack's active job is its own import or update, so a
+            # request that fails the identity check must not touch it. A local
+            # pack with the same name is different: the job for that id is the
+            # requester's own install, which it may still cancel, while the
+            # local pack itself is preserved by the refusal below.
+            if identity_mismatch and isinstance(installed_subscription, dict):
+                raise PermissionError(
+                    "knowledge pack subscription identity does not match"
+                )
             cancelled_jobs = 0
             for job in list_pack_jobs(self.knowledge_root):
                 if (
@@ -1476,31 +1507,10 @@ class KnowledgeService:
                         self.knowledge_root,
                         str(job.get("job_id") or ""),
                     ))
-            if expected_provider:
-                if installed is not None:
-                    subscription = installed_subscription
-                    provider_matches = (
-                        isinstance(subscription, dict)
-                        and str(subscription.get("provider") or "")
-                        == expected_provider
-                    )
-                    stored_package_id = (
-                        str(subscription.get("provider_package_id") or "")
-                        if isinstance(subscription, dict)
-                        else ""
-                    )
-                    identity_matches = (
-                        stored_package_id == expected_provider_package_id
-                        if stored_package_id
-                        else bool(expected_remote_id)
-                        and isinstance(subscription, dict)
-                        and str(subscription.get("remote_id") or "")
-                        == expected_remote_id
-                    )
-                    if not provider_matches or not identity_matches:
-                        raise PermissionError(
-                            "knowledge pack subscription identity does not match"
-                        )
+            if identity_mismatch:
+                raise PermissionError(
+                    "knowledge pack subscription identity does not match"
+                )
             try:
                 removed = remove_pack(self.database_path(), pack_id)
             except ValueError:

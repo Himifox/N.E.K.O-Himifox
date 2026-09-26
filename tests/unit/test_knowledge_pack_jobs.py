@@ -855,6 +855,29 @@ def test_activation_rechecks_staged_artifact_capacity_identity(tmp_path):
     assert service.list_packs() == ()
 
 
+def test_activation_refuses_an_untrusted_live_root(monkeypatch, tmp_path):
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    job_dir = tmp_path / ".staging" / str(job["job_id"])
+    prepared = _prepare_job(job_dir)
+    assert prepared["state"] == "verifying_index"
+    # Stands in for an ancestor swapped for a junction after staging; the job
+    # directory itself still revalidates.
+    monkeypatch.setattr(pack_jobs, "trusted_live_root", lambda _root: None)
+
+    activated = pack_jobs._activate_job(
+        service,
+        job_dir,
+        prepared,
+        mode="bm25",
+    )
+
+    assert activated == {"state": "degraded", "reason": "knowledge_root_untrusted"}
+    assert service.list_packs() == ()
+
+
 @pytest.mark.parametrize("field", ("created_at", "updated_at"))
 @pytest.mark.parametrize("value", ("not-a-time", -1, 1.5, True))
 def test_invalid_job_timestamps_are_quarantined(tmp_path, field, value):

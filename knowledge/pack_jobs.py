@@ -1709,6 +1709,13 @@ def _activate_job(
         safe_job_dir = _revalidated_job_dir(safe_job_dir)
         if safe_job_dir is None:
             return {"state": DEGRADED_STATE, "reason": "registry_path_invalid"}
+        # Activation writes knowledge.db / packs.json directly instead of going
+        # through KnowledgeService.install_pack, so it needs the same live-root
+        # refusal every other live mutation applies. The job directory check
+        # above cannot catch a redirected ancestor: job and root would both
+        # resolve into the same redirected tree.
+        if trusted_live_root(service.knowledge_root) is None:
+            return {"state": DEGRADED_STATE, "reason": "knowledge_root_untrusted"}
         return _activate_job_validated(service, safe_job_dir, state, mode=mode)
 
 
