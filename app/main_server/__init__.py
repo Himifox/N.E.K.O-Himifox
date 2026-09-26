@@ -1649,6 +1649,12 @@ async def on_shutdown():
                             "upload_existing_snapshot",
                             **upload_action_kwargs,
                         )
+                        # Logged here, not after the step: a failed upload is
+                        # absorbed by _run_shutdown_step and has no result.
+                        logger.info(
+                            "Steam Auto-Cloud shutdown staged snapshot upload: %s",
+                            remote_upload_result,
+                        )
                     except CloudsaveDeadlineExceeded:
                         # _run_shutdown_step absorbs step failures, so the
                         # budget-specific message has to be logged here.
@@ -1665,10 +1671,6 @@ async def on_shutdown():
                         time.monotonic() + 5.0,
                     ),
                     pending_cancellation=shutdown_cancellation,
-                )
-                logger.info(
-                    "Steam Auto-Cloud shutdown staged snapshot upload: %s",
-                    remote_upload_result,
                 )
             except Exception as e:
                 logger.warning(
