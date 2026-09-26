@@ -1837,3 +1837,26 @@ async def test_uncertain_remove_transfers_guard_to_same_operation_drain(monkeypa
     assert posts == [posts[0]]
     # A removal that only commits during the drain still unsubscribes remotely.
     assert reported == [7]
+
+
+def test_every_market_http_client_ignores_environment_proxies():
+    """Market calls carry the user's Bearer token; none may route through HTTP(S)_PROXY."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(module))
+    clients = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "AsyncClient"
+    ]
+    assert clients
+    for client in clients:
+        trust_env = next(
+            (kw.value for kw in client.keywords if kw.arg == "trust_env"), None
+        )
+        assert isinstance(trust_env, ast.Constant) and trust_env.value is False, (
+            f"AsyncClient at line {client.lineno} reads environment proxies"
+        )

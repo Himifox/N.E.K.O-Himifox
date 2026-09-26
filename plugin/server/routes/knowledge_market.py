@@ -1201,7 +1201,7 @@ async def _report_subscription_best_effort(
         token_data = await _ensure_valid_oauth_token()
         if not token_data or not token_data.get("access_token"):
             return
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             response = await client.post(
                 f"{MARKET_API_URL.rstrip('/')}/api/v1/me/knowledge-subscriptions",
                 headers={"Authorization": f"Bearer {token_data['access_token']}"},
@@ -1236,7 +1236,7 @@ async def _report_unsubscribe_best_effort(
                 min(10.0, remaining),
                 connect=min(_CONNECT_TIMEOUT_SECONDS, remaining),
             )
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.delete(
                     f"{MARKET_API_URL.rstrip('/')}/api/v1/me/knowledge-subscriptions/{package_id}",
                     headers={"Authorization": f"Bearer {token_data['access_token']}"},
