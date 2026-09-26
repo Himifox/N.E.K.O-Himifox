@@ -369,6 +369,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
+import { registerKnowledgeMessages } from '@/i18n/knowledge'
 import { aggregateVectorState, knowledgePackVectorCounts, KnowledgeApiError, MAX_KNOWLEDGE_PACK_FILE_BYTES, knowledgeApi, packVectorState, removeManagedPack, type KnowledgeStatus, type KnowledgeEntrySummary, type KnowledgePackSummary, type KnowledgePackJob, type KnowledgeVectorState } from '@/api/knowledge'
 import { getMarketUrl } from '@/api/market'
 import { useMarketAuth } from '@/composables/useMarketAuth'
@@ -402,6 +403,7 @@ const pendingImportJobs = new Map<string, number>()
 const packJobs = ref<KnowledgePackJob[]>([])
 const discardingJobId = ref('')
 
+registerKnowledgeMessages()
 const { t } = useI18n()
 const {
   marketAuth,
