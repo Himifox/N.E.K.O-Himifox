@@ -3,65 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
 import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-import portalocker
+# The barrier is shared with root migration, so it lives in the storage layer;
+# re-exported here for the knowledge writers and routers that already use it.
+from utils.storage.knowledge_contract import knowledge_root_barrier
 
 
 _T = TypeVar("_T")
 _STATE_LOCK = threading.Lock()
 _ADMISSION_OPEN = True
 _WRITERS: set[asyncio.Task[object]] = set()
-_BARRIERS: dict[str, threading.RLock] = {}
-ROOT_BARRIER_TIMEOUT_SECONDS = 30.0
 
 
 class KnowledgeMutationAdmissionClosed(RuntimeError):
     """Raised when a writer races with the shutdown admission barrier."""
-
-
-def _canonical_root_key(knowledge_root: str | Path) -> str:
-    root = Path(knowledge_root).expanduser().resolve(strict=False)
-    return os.path.normcase(os.path.abspath(str(root)))
-
-
-def _root_lock_path(knowledge_root: str | Path) -> Path:
-    root = Path(_canonical_root_key(knowledge_root))
-    root_id = hashlib.sha256(str(root).encode("utf-8")).hexdigest()
-    return root.parent / "state" / "knowledge-root-locks" / f"{root_id}.lock"
-
-
-@contextmanager
-def knowledge_root_barrier(
-    knowledge_root: str | Path,
-    *,
-    timeout: float = ROOT_BARRIER_TIMEOUT_SECONDS,
-) -> Iterator[None]:
-    """Hold the stable lock that serializes writers with root migration.
-
-    The lock lives beside, rather than inside, ``knowledge/`` so moving or
-    replacing the knowledge directory cannot silently replace the lock.
-    """
-
-    key = _canonical_root_key(knowledge_root)
-    with _STATE_LOCK:
-        thread_lock = _BARRIERS.setdefault(key, threading.RLock())
-    lock_path = _root_lock_path(key)
-    with thread_lock:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with portalocker.Lock(
-            lock_path,
-            mode="a",
-            timeout=max(float(timeout), 0.0),
-        ):
-            yield
 
 
 def _run_under_root_barrier(

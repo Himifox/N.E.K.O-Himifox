@@ -20,9 +20,16 @@ from knowledge.filters import folded_exact_surface
 from knowledge.catalog_overrides import entry_key
 
 from .models import KnowledgeEntry, UpsertResult, normalize_knowledge_title
+# Schema markers and their errors are part of the on-disk contract that root
+# migration also enforces, so they are defined in the storage layer.
+from utils.storage.knowledge_contract import (  # noqa: F401
+    KNOWLEDGE_SCHEMA_VERSION as SCHEMA_VERSION,
+    KnowledgeSchemaTooNewError,
+    KnowledgeStoreError,
+    assert_supported_schema,
+)
 
 
-SCHEMA_VERSION = 7
 MAX_EMBEDDING_ATTEMPTS = 8
 EMBEDDING_POLICIES = frozenset(("local", "prebuilt_only"))
 _INITIALIZED_DATABASES: dict[str, tuple[int, int] | None] = {}
@@ -35,54 +42,6 @@ def _compare_folded_surfaces(left: str, right: str) -> int:
     left_key = folded_exact_surface(left)
     right_key = folded_exact_surface(right)
     return (left_key > right_key) - (left_key < right_key)
-
-
-class KnowledgeStoreError(RuntimeError):
-    pass
-
-
-class KnowledgeSchemaTooNewError(KnowledgeStoreError):
-    def __init__(self, detected_version: int) -> None:
-        self.detected_version = int(detected_version)
-        self.supported_version = SCHEMA_VERSION
-        super().__init__(
-            "knowledge database schema is newer than this application supports"
-        )
-
-
-def assert_supported_schema(connection: sqlite3.Connection) -> None:
-    """Apply the production schema-marker contract without modifying SQLite."""
-    user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-    metadata_table = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
-    ).fetchone()
-    metadata_version: int | None = None
-    if metadata_table is not None:
-        row = connection.execute(
-            "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()
-        if row is not None:
-            raw = str(row[0])
-            if not raw.isdecimal() or str(int(raw)) != raw or int(raw) <= 0:
-                raise KnowledgeStoreError(
-                    "knowledge database schema version is invalid"
-                )
-            metadata_version = int(raw)
-
-    detected_versions = tuple(
-        version
-        for version in (user_version, metadata_version)
-        if version not in (None, 0)
-    )
-    too_new = tuple(
-        version for version in detected_versions if version > SCHEMA_VERSION
-    )
-    if too_new:
-        raise KnowledgeSchemaTooNewError(max(too_new))
-    if len(set(detected_versions)) > 1:
-        raise KnowledgeStoreError("knowledge database schema markers disagree")
-    if user_version and metadata_version is None:
-        raise KnowledgeStoreError("knowledge database schema metadata is missing")
 
 
 class KnowledgeStore:

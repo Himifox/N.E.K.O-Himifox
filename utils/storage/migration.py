@@ -26,10 +26,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from knowledge.mutation_runtime import knowledge_root_barrier
-from knowledge.store import assert_supported_schema
 from utils.file_utils import atomic_write_json, read_json
 from utils.logger_config import get_module_logger
+from .knowledge_contract import assert_supported_schema, knowledge_root_barrier
 from .policy import (
     POLICY_SELECTION_SOURCE_RECOVERED,
     compute_anchor_root,
