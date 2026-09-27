@@ -13,6 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from utils.screen_comment_guard import (
+    ScreenCommentChainFilter,
+    project_screen_history,
+    screen_guard_enabled,
+)
+
 from ._shared import (
     LLMStreamChunk,
     List,
@@ -50,7 +56,48 @@ from config.prompts.prompts_tool import (
 )
 
 
+class _DialogTextFilter(ToolLeakFilter):
+    """Filter at the tool-loop boundary, before both emission and persistence."""
+
+    def __init__(self, *, screen_guard_enabled, **kwargs):
+        super().__init__(**kwargs)
+        self.screen_guard_enabled = screen_guard_enabled
+        self._screen = ScreenCommentChainFilter(enabled=screen_guard_enabled)
+
+    def _screen_feed(self, text):
+        was_blocked = self._screen.blocked
+        visible = self._screen.feed(text)
+        if self._screen.blocked and not was_blocked:
+            logger.warning("OmniOfflineClient: suppressed chained screen-source narration")
+        return visible
+
+    def feed(self, chunk):
+        visible, event = super().feed(chunk)
+        return self._screen_feed(visible), event
+
+    def finalize(self):
+        visible, event = super().finalize()
+        return self._screen_feed(visible) + self._screen.finalize(), event
+
+    def reset(self):
+        super().reset()
+        self._screen.reset()
+
+
 class _ToolingMixin:
+    def _dialog_messages_for_provider(self, messages, *, guard_enabled=None):
+        """Quarantine a malformed assistant suffix in the request view only.
+
+        Keep original messages, user inputs, tools, images and system/memory
+        context unchanged. A request to quote/analyze history gets the originals.
+        Applied to every provider iteration, including tool finalization/retry.
+        """
+        projected = project_screen_history(messages, guard_enabled=guard_enabled)
+        if projected is not messages:
+            changed = sum(new is not old for new, old in zip(projected, messages))
+            logger.info("OmniOfflineClient: screen-chain request view repaired %d assistant message(s)", changed)
+        return projected
+
     def set_tools(self, tool_definitions: Optional[List[ToolDefinition]]) -> None:
         """Replace the active tool list. Takes effect on the next
         ``stream_text`` / ``prompt_ephemeral`` call. Pass ``None`` or
@@ -650,7 +697,8 @@ class _ToolingMixin:
             tool.name for tool in getattr(self, "_tool_definitions", [])
             if getattr(tool, "name", None)
         }
-        leak_filter = ToolLeakFilter(tool_names=tool_names)
+        guard_enabled = overrides.pop("_screen_guard_enabled", screen_guard_enabled(messages))
+        leak_filter = _DialogTextFilter(tool_names=tool_names, screen_guard_enabled=guard_enabled)
         provider = getattr(self, "base_url", None) or getattr(self, "model", None)
 
         def _finalize_filter_chunk():
@@ -673,6 +721,14 @@ class _ToolingMixin:
                 _tool_frames_turn_id=tool_frames_turn_id,
                 **overrides,
             ):
+                if getattr(chunk, "tool_round_persisted", False):
+                    # Flush before the caller resets its final-segment buffer.
+                    # Native loops already flush at the tool boundary, but the
+                    # sentinel contract must also hold for alternate streams.
+                    tail = _finalize_filter_chunk()
+                    if tail is not None:
+                        yield tail
+                    leak_filter.reset()
                 if getattr(chunk, "_tool_leak_filtered", False):
                     yield chunk
                     continue
@@ -722,6 +778,9 @@ class _ToolingMixin:
         results to ``messages``, and re-invokes — up to
         ``self.max_tool_iterations`` total LLM calls."""
         tool_leak_filter = overrides.pop("_tool_leak_filter", None)
+        history_guard_enabled = getattr(
+            tool_leak_filter, "screen_guard_enabled", screen_guard_enabled(messages),
+        )
         tool_leak_provider = overrides.pop("_tool_leak_provider", None)
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
@@ -754,7 +813,8 @@ class _ToolingMixin:
             streamed_reasoning_buffer = ""
             # 上一轮注入的工具图，本轮才谈得上"送到了"。
             tool_frames_published = False
-            async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
+            request_messages = self._dialog_messages_for_provider(messages, guard_enabled=history_guard_enabled)
+            async for chunk in self.llm.astream(request_messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
                 if not tool_frames_published:
                     # 任何一个 chunk 都算数，不必等有内容的那个：astream 是惰性
                     # 的，请求要到第一次 __anext__ 才真正发出，能拿到 chunk 就
@@ -944,7 +1004,8 @@ class _ToolingMixin:
         # finally 才换回占位符），所以它也是一个真投递点，同样要抄送。漏掉它
         # 的话，"模型看到了但插件读不到"恰好发生在工具轮打满的那些回合上。
         tool_frames_published = False
-        async for chunk in self.llm.astream(messages, **final_overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
+        request_messages = self._dialog_messages_for_provider(messages, guard_enabled=history_guard_enabled)
+        async for chunk in self.llm.astream(request_messages, **final_overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
             if not tool_frames_published:
                 tool_frames_published = True
                 self._publish_pending_tool_frames(

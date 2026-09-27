@@ -526,6 +526,9 @@ class _LifecycleMixin:
                     # direction 也可能让模型决定调用工具（比如 "讲一下今天天气"）。
                     async for chunk in self._astream_visible_with_tools(
                         messages_to_send,
+                        # A notification mentioning "summarize/analyze" is not
+                        # the user asking us to quote a broken historic reply.
+                        _screen_guard_enabled=True,
                         # 与 stream_text 同：跨 attempt 存活，由下面的 finally
                         # 统一释放。
                         _tool_image_slots=_turn_tool_image_slots,
