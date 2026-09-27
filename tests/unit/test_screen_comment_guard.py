@@ -87,7 +87,7 @@ def test_analysis_of_current_subject_does_not_exempt_history_replay(user_text):
     assert screen_guard_enabled([{"role": "user", "content": user_text}])
 
 
-@pytest.mark.parametrize("user_text", ["请复述刚才的原话", "Please quote the previous response", "屏幕搭话是什么意思？", "分析刚才的内容"])
+@pytest.mark.parametrize("user_text", ["请复述刚才的原话", "Please quote the previous response", "屏幕搭话是什么意思？", "分析刚才的回答"])
 def test_explicit_reference_requests_keep_originals(user_text):
     messages = [{"role": "assistant", "content": chain()}, {"role": "user", "content": user_text}]
     assert not screen_guard_enabled(messages)

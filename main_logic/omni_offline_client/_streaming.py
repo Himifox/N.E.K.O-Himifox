@@ -1416,6 +1416,12 @@ class _StreamingMixin:
                             # any part of that tool-call turn a second time.
                             assistant_message = ""
                             summary_prefix_for_history = ""
+                            # Early exits (notably cancellation during a tool)
+                            # skip the normal boundary reset. Retire the summary
+                            # too: its tail already belongs to tool-call history,
+                            # not to a new final answer or a cancelled TTS task.
+                            summary_state = 'idle'
+                            summary_tail_buffer = ""
                             prefix_buffer = ""
                             prefix_checked = True
 

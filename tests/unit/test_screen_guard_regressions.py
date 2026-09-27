@@ -35,6 +35,14 @@ def assert_at_every_split(text, expected):
     "Translate the menu on this screen.",
     "Describe the current screen image.",
     "屏幕画面上那些标签是什么？",
+    "帮我分析刚才那波团战",
+    "总结上一局的战术",
+    "翻译刚才那张截图里的菜单",
+    "分析刚才的内容",
+    "分析历史战役的战术",
+    "Analyze the previous battle.",
+    "Summarize the earlier game.",
+    "Translate the original menu on this screen.",
 ])
 def test_current_screen_and_translation_requests_do_not_exempt_history(user_text):
     history = [{"role": "assistant", "content": "好的。" + CHAIN},
@@ -49,6 +57,13 @@ def test_current_screen_and_translation_requests_do_not_exempt_history(user_text
     "请分别复述刚才的两段原话。",
     "请翻译上一条回答。",
     "Please quote the previous response.",
+    "分析刚才的回答",
+    "总结之前的聊天记录",
+    "请引用你说过的话",
+    "翻译你上一条回复的原文",
+    "Please analyze your answer.",
+    "Summarize our chat history.",
+    "Translate the original response.",
 ])
 def test_explicit_history_reference_is_not_mistaken_for_a_stop_request(user_text):
     history = [{"role": "assistant", "content": CHAIN},

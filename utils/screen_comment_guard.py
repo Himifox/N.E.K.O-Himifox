@@ -30,9 +30,13 @@ _MARKER = regex.compile(
 )
 _THINK_TAG = regex.compile(r"</?think(?:ing)?[ \t]{0,8}>", regex.IGNORECASE)
 _ACTION = re.compile(r"复述|引用|翻译|回顾|重复|重说|再说|总结|分析|\b(?:repeat|quote|recap|translate|summari\w*|analy[sz]\w*)\b", re.I)
-_HISTORY = re.compile(
-    r"刚才|之前|以前|先前|前面|上面|上次|上一|历史|原话|原文|你(?:说过|说的|的回答)"
-    r"|\b(?:previous|earlier|history|original|last\s+(?:answer|response|reply|message)|your\s+(?:answer|response|reply))\b", re.I,
+# A temporal subject (previous battle, earlier screenshot) is not permission
+# to replay assistant history. Require a conversational object, not time alone.
+_CHAT_REFERENCE = re.compile(
+    r"原话|(?:聊天|对话)(?:历史|记录)|你(?:说过|说的|的(?:回答|回复|发言))"
+    r"|(?:刚才|之前|以前|先前|前面|上面|上次|上一|前一)(?:条|段|句)?(?:的)?(?:回答|回复|发言|消息|原文)"
+    r"|\b(?:(?:previous|earlier|original|last|your)\s+(?:answers?|responses?|repl(?:y|ies)|messages?)"
+    r"|(?:chat|conversation)\s+(?:history|transcript))\b", re.I,
 )
 _NEGATIVE = re.compile(
     r"不要|不许|禁止|停止|无需|不用|不再|(?:^|\s)(?:请)?(?:你)?别"
@@ -45,7 +49,7 @@ def requests_history_reference(text: str) -> bool:
     for clause in re.split(r"[。！？.!?;；\n,，]", text):
         if _NEGATIVE.search(clause):
             continue
-        if _ACTION.search(clause) and _HISTORY.search(clause):
+        if _ACTION.search(clause) and _CHAT_REFERENCE.search(clause):
             return True
         # Discussing a *label* is different from asking about the current view.
         if re.search(_LABEL, clause, re.I) and re.search(

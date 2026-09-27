@@ -300,3 +300,93 @@ async def test_cancel_at_tool_sentinel_discards_unchecked_prefix(client):
     persisted = next(message for message in client._conversation_history
                      if isinstance(message, dict) and message.get("tool_calls"))
     assert persisted["content"] == pretool
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_text", [
+    "帮我分析刚才那波团战", "总结上一局的战术", "翻译刚才那张截图里的菜单",
+    "Analyze the previous battle.",
+])
+async def test_temporal_subject_keeps_request_output_and_history_guarded(client, user_text):
+    original = ANSWER + FIRST + SECOND
+    old = AIMessage(content=original)
+    client._conversation_history.append(old)
+    payloads = []
+
+    async def astream(messages, **kwargs):
+        payloads.append(deepcopy(messages))
+        async for chunk in chunks(original, 1):
+            yield chunk
+        yield LLMStreamChunk(content="", finish_reason="stop")
+
+    client.llm = SimpleNamespace(astream=astream, max_completion_tokens=3000)
+    await client.stream_text(user_text, thinking_on=False)
+    assert payloads[0][1].content == ANSWER
+    assert old.content == original
+    assert visible(client) == ANSWER + FIRST
+    assert client._conversation_history[-1].content == ANSWER + FIRST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("slack", [0, 10000])
+@pytest.mark.parametrize("prefix_size", [0, 32])
+async def test_tool_summary_state_ends_at_persistence_boundary(client, monkeypatch, cancel, slack, prefix_size):
+    client._prefix_buffer_size = prefix_size
+    client.master_name = "user"
+    client.max_response_length = 6
+    client.max_response_rerolls = 0
+    client.enable_long_response_summary = True
+    client._tool_definitions = [ToolDefinition(name="lookup", description="lookup")]
+    client._summarize_tail_for_tts = AsyncMock(return_value="这是摘要结果。")
+    monkeypatch.setattr("main_logic.omni_offline_client._streaming._SUMMARY_LATE_FINISH_SLACK", slack)
+    monkeypatch.setattr("main_logic.omni_offline_client._streaming._is_gibberish_response", lambda text: False)
+    pretool = (
+        "第一句介绍查询计划。后面还有需要说明的内容，花园的树木正在随风摇动。"
+        "远处的小桥旁停着自行车，河面倒映着夜晚的灯光。"
+    )
+    calls = 0
+    boundary = None
+
+    async def astream(messages, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield LLMStreamChunk(content=pretool)
+            yield LLMStreamChunk(content="", finish_reason="tool_calls", tool_call_deltas=[{
+                "index": 0, "id": "c1", "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }])
+        else:
+            # No sentence boundary: do not trigger a second summary cutover
+            # under the turn-wide length budget; isolate pre-tool state here.
+            yield LLMStreamChunk(content="好", finish_reason="stop")
+
+    async def handler(call):
+        nonlocal boundary
+        # Prove cutover actually happened; a short reply cannot exercise this bug.
+        assert any(c.kwargs.get("tts_enabled") is False for c in client.on_text_delta.call_args_list)
+        boundary = len(client.on_text_delta.call_args_list)
+        if cancel:
+            assert client._cancel_response_generation()
+        return ToolResult(call_id=call.call_id, name=call.name, output="ok")
+
+    client.llm = SimpleNamespace(astream=astream, max_completion_tokens=3000)
+    client.on_tool_call = handler
+    await client.stream_text("帮我查一下", thinking_on=False)
+    assert boundary is not None
+    client._summarize_tail_for_tts.assert_not_awaited()
+    persisted = [m for m in client._conversation_history if isinstance(m, dict) and m.get("tool_calls")]
+    assert len(persisted) == 1
+    assert persisted[0]["content"] == pretool
+    final_messages = [m.content for m in client._conversation_history if isinstance(m, AIMessage)]
+    after_tool = client.on_text_delta.call_args_list[boundary:]
+    if cancel:
+        assert calls == 1
+        assert after_tool == []
+        assert final_messages == []
+    else:
+        assert calls == 2
+        assert any(c.kwargs.get("ui_enabled") is False and c.kwargs.get("tts_enabled") is True
+                   for c in after_tool)
+        assert final_messages == ["好"]
