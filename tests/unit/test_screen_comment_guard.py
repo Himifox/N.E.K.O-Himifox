@@ -31,12 +31,13 @@ def filtered(chunks, *, enabled=True):
 
 
 @pytest.mark.parametrize("label", ["屏幕搭话 ", "屏幕搭话：", "屏幕画面/", "/屏幕画面 ", "／屏幕内容／", "screen comment ", "screen observation/"])
-def test_chain_is_removed_at_every_split(label):
+def test_continuation_is_removed_at_every_split(label):
     text = chain(label)
     assert screen_chain_start(text) == len(PREFIX)
+    expected = PREFIX + label + PARTS[0]
     for split in range(len(text) + 1):
-        assert filtered([text[:split], text[split:]]) == PREFIX
-    assert filtered(list(text)) == PREFIX
+        assert filtered([text[:split], text[split:]]) == expected
+    assert filtered(list(text)) == expected
 
 
 @pytest.mark.parametrize("text", [
@@ -64,7 +65,7 @@ def test_single_candidate_is_not_lost_on_finalize_and_reset():
     text = "屏幕搭话 " + PARTS[0]
     assert guard.feed(text) + guard.finalize() == text
     guard.reset()
-    assert guard.feed(chain()) + guard.finalize() == PREFIX
+    assert guard.feed(chain()) + guard.finalize() == PREFIX + "屏幕搭话 " + PARTS[0]
     guard.reset()
     assert guard.feed(PREFIX) + guard.finalize() == PREFIX
 
@@ -165,8 +166,9 @@ async def test_output_history_and_provider_request_are_guarded(monkeypatch, entr
         client.on_proactive_done.assert_awaited_once_with(True)
     assert payloads[0][1].content == PREFIX
     assert old.content == chain(), "original history must remain recoverable"
-    assert "".join(call.args[0] for call in client.on_text_delta.call_args_list) == PREFIX
-    assert client._conversation_history[-1].content == PREFIX
+    expected = PREFIX + "屏幕搭话 " + PARTS[0]
+    assert "".join(call.args[0] for call in client.on_text_delta.call_args_list) == expected
+    assert client._conversation_history[-1].content == expected
 
 
 @pytest.mark.asyncio
@@ -200,9 +202,10 @@ async def test_tool_round_and_forced_final_answer_share_the_guard():
     client.on_tool_call = handler
     messages = [{"role": "assistant", "content": chain()}, {"role": "user", "content": "查一下"}]
     chunks = [chunk async for chunk in client._astream_visible_with_tools(messages)]
-    assert "".join(chunk.content for chunk in chunks) == PREFIX + "查询结束。"
+    expected = PREFIX + "屏幕搭话 " + PARTS[0]
+    assert "".join(chunk.content for chunk in chunks) == expected + "查询结束。"
     assert len(payloads) == 2
     assert all(payload[0]["content"] == PREFIX for payload in payloads)
     assert messages[0]["content"] == chain()
     pretool = next(message for message in messages if message.get("tool_calls"))
-    assert pretool["content"] == PREFIX
+    assert pretool["content"] == expected

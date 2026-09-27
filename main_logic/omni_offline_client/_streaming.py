@@ -15,6 +15,8 @@
 
 from typing import Sequence
 
+from utils.screen_comment_guard import screen_guard_enabled
+
 from main_logic.proactive_delivery import (
     TURN_ATTACHED_IMAGE_MAX_TOTAL_BYTES,
     fit_images_to_turn_budget,
@@ -31,7 +33,6 @@ from ._shared import (
     HumanMessage,
     Optional,
     SystemMessage,
-    ThinkingStreamStripper,
     _PROACTIVE_SCREENSHOT_TTL_SECONDS,
     _SENTENCE_END_CHARS,
     _SUMMARY_GIBBERISH_RECHECK_TOKENS,
@@ -888,6 +889,11 @@ class _StreamingMixin:
             user_message = HumanMessage(content=_user_text_with_prefix)
 
         self._conversation_history.append(user_message)
+        # Freeze the real user's intent for the entire turn, including retries
+        # and rerolls. Tool images later append synthetic user-role messages.
+        _turn_screen_guard_enabled = screen_guard_enabled([
+            {"role": "user", "content": _user_text},
+        ])
         # 本次调用自己的「已提交」标记。调用方不能用全局 history 长度判断：并发的
         # 另一条文本请求或收尾中的响应同样会追加，长度增长并不代表**这一轮**进去了。
         if callable(on_turn_committed):
@@ -1097,14 +1103,17 @@ class _StreamingMixin:
                         # Gate on the SAME condition as _focus_stream_overrides
                         # (just ``thinking_on`` — vision turns now reason too).
                         from config.providers import leaks_thinking_in_content
-                        think_stripper = (
-                            ThinkingStreamStripper()
-                            if thinking_on and leaks_thinking_in_content(self.model)
-                            else None
+                        # Strip before the screen guard and tool persistence,
+                        # not after: a screen chain inside leaked reasoning
+                        # must never consume its closing tag or the answer.
+                        _focus_overrides["_strip_thinking"] = (
+                            thinking_on and leaks_thinking_in_content(self.model)
                         )
+                        _focus_overrides["_screen_guard_enabled"] = _turn_screen_guard_enabled
                         # 工具图上总线时带上本轮的 turn_id，和这一轮的用户帧
                         # 归到同一个回合下；普通文本轮没有 turn_id，那里就是 None。
                         _focus_overrides["_tool_frames_turn_id"] = turn_id
+                        tool_round_persisted = False
                         async for chunk in self._astream_visible_with_tools(
                             self._conversation_history,
                             _tool_image_slots=_turn_tool_image_slots,
@@ -1145,66 +1154,16 @@ class _StreamingMixin:
                             if hasattr(chunk, 'response_metadata') and chunk.response_metadata:
                                 if 'token_usage' in chunk.response_metadata or 'usage' in chunk.response_metadata:
                                     logger.debug(f"🔍 [Meta] {chunk.response_metadata}")
-                            # tool 轮 sentinel：``_astream_*_with_tools`` 已把
-                            # pre-tool 文本 + tool_calls + tool result inline
-                            # 写进 history。重置 final-segment buffer 防止
-                            # 之后 append 的 AIMessage 把同一段 pre-tool 文本
-                            # 第二次写进 history。``_total`` 不重置——重复检测
-                            # / token 长度 guard 仍要看完整一轮的实际文本量。
-                            if getattr(chunk, "tool_round_persisted", False):
-                                length_guard_persisted_prefix = assistant_message_total
+                            tool_round_persisted = getattr(chunk, "tool_round_persisted", False)
+                            if tool_round_persisted:
+                                # Persistence happened before this sentinel.
+                                # Record it before any pending-prefix guard can
+                                # break; UI truncation cannot make this text new
+                                # unpersisted recovery content again.
+                                length_guard_persisted_prefix = assistant_message_total + (
+                                    prefix_buffer if not prefix_checked else ""
+                                )
                                 assistant_message = ""
-                                # 重置围栏 / prefix buffer：下一段是新的语义
-                                # 单元（模型基于 tool 结果重新出文本），不应
-                                # 复用之前的 fence / prefix 状态。
-                                pipe_count = 0
-                                prefix_buffer = ""
-                                prefix_checked = not bool(self._prefix_buffer_size)
-                                if think_stripper is not None:
-                                    # Flush before reset: if this pre-tool segment
-                                    # never emitted </think>, the stripper is still
-                                    # holding real answer text it withheld from
-                                    # TTS/UI. The inner generator already persisted
-                                    # that text to history (stripped), so emit it to
-                                    # TTS/UI only here — dropping it (a bare reset)
-                                    # would lose the pre-tool sentence. Then re-arm
-                                    # for the post-tool segment (new semantic unit).
-                                    _pretool_residual = think_stripper.flush()
-                                    if _pretool_residual and _pretool_residual.strip() and self.on_text_delta:
-                                        await self.on_text_delta(_pretool_residual, is_first_chunk)
-                                        is_first_chunk = False
-                                    think_stripper.reset()
-                                # Summary 状态收尾：cutover 之后的 tail 已经 UI-only
-                                # 发出去了，但 TTS 还没听到。tool 边界处不知道
-                                # post-tool 段会有多长，没法走"final < max+slack"
-                                # 那套判断，所以一律 abandon —— 把 tail 续给 TTS
-                                # 当原文读完。`_astream_*_with_tools` 已经把含
-                                # tail 的完整 pre-tool 文本写进 assistant.tool_calls.content
-                                # 持久化到 _conversation_history，UI/TTS/history 这下
-                                # 三家口径一致。然后再重置 state 让 post-tool 重新
-                                # 走 idle 起点。
-                                if (
-                                    summary_mode_enabled
-                                    and summary_state == 'cutover_done'
-                                    and summary_tail_buffer
-                                ):
-                                    logger.info(
-                                        "OmniOfflineClient summary: tool 边界 abandon "
-                                        "(pre-tool tail %d chars 续给 TTS)",
-                                        len(summary_tail_buffer),
-                                    )
-                                    if self.on_text_delta:
-                                        await self.on_text_delta(
-                                            summary_tail_buffer, False,
-                                            ui_enabled=False, tts_enabled=True,
-                                        )
-                                summary_state = 'idle'
-                                summary_prefix_for_history = ""
-                                summary_tail_buffer = ""
-                                summary_next_gibberish_check = _SUMMARY_GIBBERISH_RECHECK_TOKENS
-                                summary_trigger_tokens = 0
-                                summary_overflow_offset = 0
-                                continue
                             if not self._response_generation_is_active(response_generation):
                                 break
 
@@ -1212,18 +1171,19 @@ class _StreamingMixin:
                                 break
 
                             content = chunk.content if hasattr(chunk, 'content') else str(chunk)
-                            if think_stripper is not None and content:
-                                # Holds CoT until the first </think>; returns "" while
-                                # buffering so the empty-content guard below skips it.
-                                content = think_stripper.feed(content)
-
+                            if tool_round_persisted and prefix_buffer and not prefix_checked:
+                                # A short pre-tool answer may never reach the
+                                # name-prefix lookahead length. Process it via
+                                # the normal guards before resetting the segment.
+                                content = prefix_buffer
+                                prefix_buffer = ""
                             if content and content.strip():
                                 truncated_content = content
 
                                 # ── 前缀检测阶段：缓冲初始输出，判断是否有角色名前缀 ──
                                 if not prefix_checked:
                                     prefix_buffer += truncated_content
-                                    if len(prefix_buffer) >= self._prefix_buffer_size:
+                                    if len(prefix_buffer) >= self._prefix_buffer_size or tool_round_persisted:
                                         prefix_checked = True
                                         master_match = self._match_name_prefix(prefix_buffer, self.master_name)
                                         lanlan_match = self._match_name_prefix(prefix_buffer, self.lanlan_name)
@@ -1239,7 +1199,7 @@ class _StreamingMixin:
                                         else:
                                             truncated_content = prefix_buffer
                                         # 前缀解析完毕，将结果送入下方的通用 emit/guard 路径
-                                        if not (truncated_content and truncated_content.strip()):
+                                        if not (truncated_content and truncated_content.strip()) and not tool_round_persisted:
                                             continue
                                     else:
                                         continue  # 缓冲区未满，等更多 chunk
@@ -1414,24 +1374,51 @@ class _StreamingMixin:
                             elif content and not content.strip():
                                 logger.debug(f"OmniOfflineClient: 过滤空白内容 - content_repr: {repr(content)[:100]}")
 
-                        # 流结束后：先 flush thinking stripper 的残留。仅漏型
-                        # provider 的 thinking_on 轮挂了它；若整轮没出现 </think>
-                        # （模型本轮没思考），它一直 hold，这里把攒住的正文还回
-                        # prefix_buffer，走下面的通用 emit/guard 路径，避免丢答案。
-                        if think_stripper is not None:
-                            _think_residual = think_stripper.flush()
-                            if _think_residual:
-                                prefix_buffer += _think_residual
-                                # Force the unified flush below to run on this
-                                # residual. When prefix checking is disabled
-                                # (_prefix_buffer_size == 0) prefix_checked starts
-                                # True, so `and not prefix_checked` would otherwise
-                                # drop the held answer silently. Safe to clear: a
-                                # non-empty residual means no </think> ever arrived,
-                                # which only happens when the stripper held the whole
-                                # stream → prefix_buffer was never filled by the live
-                                # path, so prefix_checked carried no completed state.
-                                prefix_checked = False
+                            # The pre-tool text is already persisted. Flush its
+                            # pending visible prefix above before clearing the
+                            # final segment, otherwise a short answer disappears
+                            # from UI/TTS while remaining in tool-call history.
+                            if tool_round_persisted:
+                                length_guard_persisted_prefix = assistant_message_total
+                                assistant_message = ""
+                                pipe_count = 0
+                                prefix_buffer = ""
+                                prefix_checked = not bool(self._prefix_buffer_size)
+                                # Pre-tool summary tails are already in history
+                                # and UI; release them to TTS before the next
+                                # model iteration starts a new summary segment.
+                                if (
+                                    summary_mode_enabled
+                                    and summary_state == 'cutover_done'
+                                    and summary_tail_buffer
+                                ):
+                                    logger.info(
+                                        "OmniOfflineClient summary: tool 边界 abandon "
+                                        "(pre-tool tail %d chars 续给 TTS)",
+                                        len(summary_tail_buffer),
+                                    )
+                                    if self.on_text_delta:
+                                        await self.on_text_delta(
+                                            summary_tail_buffer, False,
+                                            ui_enabled=False, tts_enabled=True,
+                                        )
+                                summary_state = 'idle'
+                                summary_prefix_for_history = ""
+                                summary_tail_buffer = ""
+                                summary_next_gibberish_check = _SUMMARY_GIBBERISH_RECHECK_TOKENS
+                                summary_trigger_tokens = 0
+                                summary_overflow_offset = 0
+
+                        if tool_round_persisted:
+                            # A guard may have left the loop while flushing an
+                            # already-persisted prefix, before the reset above.
+                            # Neither the normal nor summary epilogue may write
+                            # any part of that tool-call turn a second time.
+                            assistant_message = ""
+                            summary_prefix_for_history = ""
+                            prefix_buffer = ""
+                            prefix_checked = True
+
                         # 流结束后：flush 未处理的前缀缓冲区（走通用 emit/guard 路径）
                         if prefix_buffer and not prefix_checked:
                             prefix_checked = True

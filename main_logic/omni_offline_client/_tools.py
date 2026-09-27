@@ -24,6 +24,7 @@ from ._shared import (
     List,
     OnToolCallCallback,
     Optional,
+    ThinkingStreamStripper,
     ToolCall,
     ToolDefinition,
     ToolLeakFilter,
@@ -59,9 +60,10 @@ from config.prompts.prompts_tool import (
 class _DialogTextFilter(ToolLeakFilter):
     """Filter at the tool-loop boundary, before both emission and persistence."""
 
-    def __init__(self, *, screen_guard_enabled, **kwargs):
+    def __init__(self, *, screen_guard_enabled, strip_thinking=False, **kwargs):
         super().__init__(**kwargs)
         self.screen_guard_enabled = screen_guard_enabled
+        self._thinking = ThinkingStreamStripper() if strip_thinking else None
         self._screen = ScreenCommentChainFilter(enabled=screen_guard_enabled)
 
     def _screen_feed(self, text):
@@ -73,14 +75,25 @@ class _DialogTextFilter(ToolLeakFilter):
 
     def feed(self, chunk):
         visible, event = super().feed(chunk)
+        if self._thinking is not None:
+            visible = self._thinking.feed(visible)
         return self._screen_feed(visible), event
 
-    def finalize(self):
+    def finalize(self, *, interrupted=False):
         visible, event = super().finalize()
+        if self._thinking is not None:
+            visible = self._thinking.feed(visible)
+            # A completed call without a close tag is a non-thinking reply.
+            # On failure that same buffer may be unfinished reasoning: the
+            # former downstream stripper never flushed it on exceptions.
+            if not interrupted:
+                visible += self._thinking.flush()
         return self._screen_feed(visible) + self._screen.finalize(), event
 
     def reset(self):
         super().reset()
+        if self._thinking is not None:
+            self._thinking.reset()
         self._screen.reset()
 
 
@@ -698,11 +711,15 @@ class _ToolingMixin:
             if getattr(tool, "name", None)
         }
         guard_enabled = overrides.pop("_screen_guard_enabled", screen_guard_enabled(messages))
-        leak_filter = _DialogTextFilter(tool_names=tool_names, screen_guard_enabled=guard_enabled)
+        leak_filter = _DialogTextFilter(
+            tool_names=tool_names,
+            screen_guard_enabled=guard_enabled,
+            strip_thinking=overrides.pop("_strip_thinking", False),
+        )
         provider = getattr(self, "base_url", None) or getattr(self, "model", None)
 
-        def _finalize_filter_chunk():
-            visible, event = leak_filter.finalize()
+        def _finalize_filter_chunk(*, interrupted=False):
+            visible, event = leak_filter.finalize(interrupted=interrupted)
             if event:
                 log_tool_leak_filtered(event, provider=provider)
             if not visible:
@@ -738,7 +755,7 @@ class _ToolingMixin:
                     setattr(chunk, "_tool_leak_filtered", True)
                 yield chunk
         except Exception:
-            chunk = _finalize_filter_chunk()
+            chunk = _finalize_filter_chunk(interrupted=True)
             if chunk is not None:
                 yield chunk
             raise
