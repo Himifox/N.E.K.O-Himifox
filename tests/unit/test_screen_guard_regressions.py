@@ -43,6 +43,17 @@ def assert_at_every_split(text, expected):
     "Analyze the previous battle.",
     "Summarize the earlier game.",
     "Translate the original menu on this screen.",
+    "翻译刚才那张截图里的原话",
+    "请翻译那张截图里的原话",
+    "引用这张图片中的原话",
+    "分析上一局敌人的原话",
+    "请翻译原话",
+    "翻译截图里的那段对话",
+    "翻译截图中刚才那条回复",
+    "请引用书上的那段原话",
+    "分析文档里的聊天记录",
+    "翻译你刚才说的那张截图里的原话",
+    "引用你说过的那本书里的原话",
 ])
 def test_current_screen_and_translation_requests_do_not_exempt_history(user_text):
     history = [{"role": "assistant", "content": "好的。" + CHAIN},
@@ -64,12 +75,46 @@ def test_current_screen_and_translation_requests_do_not_exempt_history(user_text
     "Please analyze your answer.",
     "Summarize our chat history.",
     "Translate the original response.",
+    "请翻译刚才那段对话",
+    "请复述刚才那条回复",
+    "请引用你的原话",
+    "请翻译那段对话",
+    "请引用你上一条回复里的原话",
+    "请翻译你说过的那段对话",
+    "请引用你刚才说的原话",
+    "总结之前那段聊天记录",
 ])
 def test_explicit_history_reference_is_not_mistaken_for_a_stop_request(user_text):
     history = [{"role": "assistant", "content": CHAIN},
                {"role": "user", "content": user_text}]
     assert not guard_module.screen_guard_enabled(history)
     assert guard_module.project_screen_history(history) is history
+
+
+@pytest.mark.parametrize("reference", ["刚才", "之前", "上面"])
+@pytest.mark.parametrize("selector", ["的", "那条", "的那段", "的两段", "这两条"])
+@pytest.mark.parametrize("subject", ["回复", "对话", "原话", "聊天记录"])
+def test_reference_phrase_grammar_keeps_conversation_but_not_external_objects(reference, selector, subject):
+    # Change only the referent, keeping the action/time/demonstrative constant.
+    # A word anywhere in the clause must not override an intervening object.
+    direct = "请翻译" + reference + selector + subject
+    external = "请翻译" + reference + selector + "截图里的" + subject
+    for text, enabled in ((direct, False), (external, True)):
+        history = [{"role": "assistant", "content": "好的。" + CHAIN},
+                   {"role": "user", "content": text}]
+        assert guard_module.screen_guard_enabled(history) is enabled
+        projected = guard_module.project_screen_history(history)
+        assert projected[0]["content"] == ("好的。" if enabled else "好的。" + CHAIN)
+        assert history[0]["content"] == "好的。" + CHAIN
+
+
+@pytest.mark.parametrize("text", [
+    "不要复述刚才那条回复",
+    "别翻译刚才那段对话",
+    "请不要引用你的原话",
+])
+def test_negated_reference_phrase_keeps_guard_enabled(text):
+    assert guard_module.screen_guard_enabled([{"role": "user", "content": text}])
 
 
 def test_measurement_quote_does_not_protect_the_remaining_reply():

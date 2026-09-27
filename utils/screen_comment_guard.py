@@ -30,14 +30,22 @@ _MARKER = regex.compile(
 )
 _THINK_TAG = regex.compile(r"</?think(?:ing)?[ \t]{0,8}>", regex.IGNORECASE)
 _ACTION = re.compile(r"复述|引用|翻译|回顾|重复|重说|再说|总结|分析|\b(?:repeat|quote|recap|translate|summari\w*|analy[sz]\w*)\b", re.I)
-# A temporal subject (previous battle, earlier screenshot) is not permission
-# to replay assistant history. Require a conversational object, not time alone.
+# Match a contiguous reference phrase, not independent keywords in a clause.
+# Selectors may modify the conversational object, but cannot skip another
+# referent (e.g. "刚才那张截图里的原话"). Bare "原话" is ambiguous.
+_REFERENCE_SELECTOR = r"(?:的)?[这那]?(?:[一二三四五六七八九十两0-9]+)?(?:条|段|句|次)?(?:的)?"
+_CONVERSATION_OBJECT = r"(?:(?:聊天|对话)(?:历史|记录)|回答|回复|发言|消息|对话|聊天|原话|原文)"
 _CHAT_REFERENCE = re.compile(
-    r"原话|(?:聊天|对话)(?:历史|记录)|你(?:说过|说的|的(?:回答|回复|发言))"
-    r"|(?:刚才|之前|以前|先前|前面|上面|上次|上一|前一)(?:条|段|句)?(?:的)?(?:回答|回复|发言|消息|原文)"
+    r"(?:聊天|对话)(?:历史|记录)"
+    rf"|你(?:刚才|之前|以前|先前|上次)?(?:说过|说的){_REFERENCE_SELECTOR}(?:{_CONVERSATION_OBJECT}|话)"
+    rf"|(?:刚才|之前|以前|先前|前面|上面|上次|上一|前一|你|助手|这|那){_REFERENCE_SELECTOR}{_CONVERSATION_OBJECT}"
     r"|\b(?:(?:previous|earlier|original|last|your)\s+(?:answers?|responses?|repl(?:y|ies)|messages?)"
     r"|(?:chat|conversation)\s+(?:history|transcript))\b", re.I,
 )
+# A nested noun phrase such as "截图里的那段对话" belongs to the outer
+# source, not this chat. An earlier explicit chat owner ("你说的...")
+# can still establish the reference; no list of external-source names is needed.
+_REFERENCE_OWNER = re.compile(r"[的里中上内]\s*$")
 _NEGATIVE = re.compile(
     r"不要|不许|禁止|停止|无需|不用|不再|(?:^|\s)(?:请)?(?:你)?别"
     r"|\b(?:don['’]t|do not|stop|never)\b", re.I,
@@ -49,8 +57,10 @@ def requests_history_reference(text: str) -> bool:
     for clause in re.split(r"[。！？.!?;；\n,，]", text):
         if _NEGATIVE.search(clause):
             continue
-        if _ACTION.search(clause) and _CHAT_REFERENCE.search(clause):
-            return True
+        if _ACTION.search(clause):
+            for reference in _CHAT_REFERENCE.finditer(clause):
+                if not _REFERENCE_OWNER.search(clause[:reference.start()]):
+                    return True
         # Discussing a *label* is different from asking about the current view.
         if re.search(_LABEL, clause, re.I) and re.search(
             r"这个词|这个说法|一词|这个前缀|前缀的含义|标签的含义|\b(?:term|phrase)\b", clause, re.I,

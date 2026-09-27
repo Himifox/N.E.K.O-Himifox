@@ -328,6 +328,38 @@ async def test_temporal_subject_keeps_request_output_and_history_guarded(client,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_text,exempt", [
+    ("请翻译刚才那段对话", True),
+    ("请复述刚才那条回复", True),
+    ("请分别复述刚才的两段原话", True),
+    ("翻译刚才那张截图里的原话", False),
+    ("翻译之前那张截图里的回复", False),
+    ("翻译截图里的那段对话", False),
+    ("翻译截图中刚才那条回复", False),
+])
+@pytest.mark.parametrize("split", [1, 9999])
+async def test_reference_object_controls_request_output_and_saved_reply(client, user_text, exempt, split):
+    original = ANSWER + FIRST + SECOND
+    old = AIMessage(content=original)
+    client._conversation_history.append(old)
+    payloads = []
+
+    async def astream(messages, **kwargs):
+        payloads.append(deepcopy(messages))
+        async for chunk in chunks(original, split):
+            yield chunk
+        yield LLMStreamChunk(content="", finish_reason="stop")
+
+    client.llm = SimpleNamespace(astream=astream, max_completion_tokens=3000)
+    await client.stream_text(user_text, thinking_on=False)
+    assert payloads[0][1].content == (original if exempt else ANSWER)
+    assert old.content == original
+    expected = original if exempt else ANSWER + FIRST
+    assert visible(client) == expected
+    assert client._conversation_history[-1].content == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 @pytest.mark.parametrize("slack", [0, 10000])
 @pytest.mark.parametrize("prefix_size", [0, 32])
