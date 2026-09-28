@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from utils.screen_comment_guard import project_screen_history
+
 from ._shared import (
     _same_route,
     LLMStreamChunk,
@@ -64,6 +66,23 @@ _TOOLS_REFUSAL_REQUEST_QUALIFIERS = (
 
 
 class _ToolingMixin:
+    def _dialog_messages_for_provider(self, messages):
+        """Quarantine whole abnormal assistant bodies in the request view only.
+
+        Keep original messages, user inputs, tools, images and system/memory
+        context unchanged. The saved transcript is never rewritten, and no user
+        wording restores a quarantined body — asking to quote or translate
+        history gets the same placeholder as any other turn.
+        """
+        projected = project_screen_history(messages)
+        if projected is not messages:
+            changed = sum(new is not old for new, old in zip(projected, messages))
+            logger.info(
+                "OmniOfflineClient: screen-chain request view repaired %d message(s)",
+                changed,
+            )
+        return projected
+
     def set_tools(self, tool_definitions: Optional[List[ToolDefinition]]) -> None:
         """Replace the active tool list. Takes effect on the next
         ``stream_text`` / ``prompt_ephemeral`` call. Pass ``None`` or
@@ -865,7 +884,13 @@ class _ToolingMixin:
             streamed_reasoning_buffer = ""
             # 上一轮注入的工具图，本轮才谈得上"送到了"。
             tool_frames_published = False
-            async for chunk in self._astream_declining_tools(messages, overrides):
+            async for chunk in self._astream_declining_tools(
+                # Projected here rather than inside the helper so both the
+                # first attempt and the retry-after-tools-refusal get the same
+                # quarantined view.
+                self._dialog_messages_for_provider(messages),
+                overrides,
+            ):
                 if not tool_frames_published:
                     # 任何一个 chunk 都算数，不必等有内容的那个：astream 是惰性
                     # 的，请求要到第一次 __anext__ 才真正发出，能拿到 chunk 就
@@ -1058,7 +1083,7 @@ class _ToolingMixin:
         # finally 才换回占位符），所以它也是一个真投递点，同样要抄送。漏掉它
         # 的话，"模型看到了但插件读不到"恰好发生在工具轮打满的那些回合上。
         tool_frames_published = False
-        async for chunk in self.llm.astream(messages, **final_overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
+        async for chunk in self.llm.astream(self._dialog_messages_for_provider(messages), **final_overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
             if not tool_frames_published:
                 tool_frames_published = True
                 self._publish_pending_tool_frames(
