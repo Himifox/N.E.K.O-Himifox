@@ -207,6 +207,8 @@ class _ToolingMixin:
         try:
             async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
                 received_any = True
+                if not generation_is_active():
+                    return
                 yield chunk
             return
         except Exception as exc:
@@ -232,7 +234,15 @@ class _ToolingMixin:
         if not generation_is_active():
             return
         async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
+            if not generation_is_active():
+                return
             yield chunk
+
+    @staticmethod
+    def _rollback_tool_round(messages, owned_messages):
+        """Remove only this unfinished round, preserving concurrent appends."""
+        owned_ids = {id(message) for message in owned_messages}
+        messages[:] = [message for message in messages if id(message) not in owned_ids]
 
     async def _execute_and_append_openai_tool_calls(
         self,
@@ -242,6 +252,7 @@ class _ToolingMixin:
         assistant_reasoning: str = "",
         tool_image_slots=None,
         tool_bus_frames=None,
+        generation_is_active=lambda: True,
     ) -> int:
         """Run each tool call through ``on_tool_call`` and mutate
         ``messages`` in place: append one assistant turn announcing all
@@ -278,7 +289,7 @@ class _ToolingMixin:
         # tool_calls 历史中混入空 name 会被下一轮 server schema reject，
         # 整条会话连带挂掉。
         calls = [c for c in calls if (getattr(c, "name", "") or "").strip()]
-        if not calls:
+        if not calls or not generation_is_active():
             return 0
         tool_calls_dict = []
         for i, c in enumerate(calls):
@@ -307,49 +318,61 @@ class _ToolingMixin:
         if assistant_reasoning:
             assistant_turn["reasoning_content"] = assistant_reasoning
         messages.append(assistant_turn)
+        owned_messages = [assistant_turn]
         # Image turns must wait until every ``tool`` reply is written —
         # OpenAI-compat providers reject assistant(tool_calls) → tool →
         # user(image) → tool sequences.
         image_results: list = []
-        for i, c in enumerate(calls):
-            tool_call = ToolCall(
-                name=c.name,
-                arguments=parse_arguments_json(c.arguments),
-                call_id=c.id or f"call_{i}",
-                raw_arguments=c.arguments or "",
-            )
-            handler = self.on_tool_call
-            if handler is None:
-                # No handler — surface a structured error back so the
-                # model can apologize / abort gracefully.
-                result = ToolResult(
-                    call_id=tool_call.call_id, name=tool_call.name,
-                    output={"error": "no on_tool_call handler bound"},
-                    is_error=True, error_message="no on_tool_call handler bound",
+        round_complete = False
+        try:
+            for i, c in enumerate(calls):
+                if not generation_is_active():
+                    return 0
+                tool_call = ToolCall(
+                    name=c.name,
+                    arguments=parse_arguments_json(c.arguments),
+                    call_id=c.id or f"call_{i}",
+                    raw_arguments=c.arguments or "",
                 )
-            else:
-                try:
-                    with _suspend_dialog_slop():
-                        result = await handler(tool_call)
-                except Exception as e:
-                    logger.exception("OmniOfflineClient: on_tool_call '%s' raised", c.name)
+                handler = self.on_tool_call
+                if handler is None:
+                    # No handler — surface a structured error back so the
+                    # model can apologize / abort gracefully.
                     result = ToolResult(
                         call_id=tool_call.call_id, name=tool_call.name,
-                        output={"error": f"{type(e).__name__}: {e}"},
-                        is_error=True, error_message=str(e),
+                        output={"error": "no on_tool_call handler bound"},
+                        is_error=True, error_message="no on_tool_call handler bound",
                     )
-            tool_result_message = {
-                "role": "tool",
-                "tool_call_id": tool_call.call_id,
-                # 写入 ``name`` 让 Gemini 路径能直接用（FunctionResponse.name
-                # 必须与原 function_call name 完全一致）。OpenAI-compat 不需要
-                # 这个字段也不会因此报错——它只用 tool_call_id 关联。
-                "name": tool_call.name,
-                "content": result.output_as_json_string(),
-            }
-            messages.append(tool_result_message)
-            if getattr(result, "images", None):
-                image_results.append((result, tool_result_message))
+                else:
+                    try:
+                        with _suspend_dialog_slop():
+                            result = await handler(tool_call)
+                    except Exception as e:
+                        logger.exception("OmniOfflineClient: on_tool_call '%s' raised", c.name)
+                        result = ToolResult(
+                            call_id=tool_call.call_id, name=tool_call.name,
+                            output={"error": f"{type(e).__name__}: {e}"},
+                            is_error=True, error_message=str(e),
+                        )
+                if not generation_is_active():
+                    return 0
+                tool_result_message = {
+                    "role": "tool",
+                    "tool_call_id": tool_call.call_id,
+                    # 写入 ``name`` 让 Gemini 路径能直接用（FunctionResponse.name
+                    # 必须与原 function_call name 完全一致）。OpenAI-compat 不需要
+                    # 这个字段也不会因此报错——它只用 tool_call_id 关联。
+                    "name": tool_call.name,
+                    "content": result.output_as_json_string(),
+                }
+                messages.append(tool_result_message)
+                owned_messages.append(tool_result_message)
+                if getattr(result, "images", None):
+                    image_results.append((result, tool_result_message))
+            round_complete = True
+        finally:
+            if not round_complete:
+                self._rollback_tool_round(messages, owned_messages)
         for result, tool_result_message in image_results:
             self._append_tool_result_images(
                 messages,
@@ -922,6 +945,8 @@ class _ToolingMixin:
                 overrides,
                 response_generation=response_generation,
             ):
+                if not generation_is_active():
+                    return
                 if not tool_frames_published:
                     # 任何一个 chunk 都算数，不必等有内容的那个：astream 是惰性
                     # 的，请求要到第一次 __anext__ 才真正发出，能拿到 chunk 就
@@ -946,6 +971,8 @@ class _ToolingMixin:
                     # them in one LLMStreamChunk), and a reasoning tool-call turn
                     # has no visible token to show feedback otherwise (Codex P2).
                     await self._notify_reasoning_active()
+                    if not generation_is_active():
+                        return
                 if chunk.tool_call_deltas:
                     deltas_per_chunk.append(chunk.tool_call_deltas)
                 if chunk.finish_reason:
@@ -1038,6 +1065,7 @@ class _ToolingMixin:
                     assistant_reasoning=streamed_reasoning_buffer,
                     tool_image_slots=tool_image_slots,
                     tool_bus_frames=tool_bus_frames,
+                    generation_is_active=generation_is_active,
                 )
                 if not generation_is_active():
                     return
@@ -1123,6 +1151,8 @@ class _ToolingMixin:
         # 的话，"模型看到了但插件读不到"恰好发生在工具轮打满的那些回合上。
         tool_frames_published = False
         async for chunk in self.llm.astream(self._dialog_messages_for_provider(messages), **final_overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
+            if not generation_is_active():
+                return
             if not tool_frames_published:
                 tool_frames_published = True
                 self._publish_pending_tool_frames(
@@ -1139,6 +1169,8 @@ class _ToolingMixin:
             # below — same fix as the main loop (Codex P2).
             if getattr(chunk, "reasoning_content", None):
                 await self._notify_reasoning_active()
+                if not generation_is_active():
+                    return
             # 与常规 tool-loop 路径一致：不向下游转发 thinking 模型的纯
             # reasoning chunk（有 reasoning_content、无 content / tool delta /
             # finish / usage）。stream_text 在首个 yield 的 chunk 上记 TTFT，

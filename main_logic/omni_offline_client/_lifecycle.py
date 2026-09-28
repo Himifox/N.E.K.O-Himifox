@@ -188,6 +188,9 @@ class _LifecycleMixin:
         return True
 
     def _cancel_response_generation(self) -> bool:
+        # Invalidate pending completion callbacks even after synchronous cleanup
+        # retired the active generation, but before its cleanup awaits finish.
+        self._response_generation = int(getattr(self, "_response_generation", 0)) + 1
         if getattr(self, "_active_response_generation", None) is None:
             return False
         self._active_response_generation = None
@@ -609,7 +612,10 @@ class _LifecycleMixin:
                             await _emit_pending_budget_notice()
 
                     # ── flush 前缀缓冲区（流提前结束时） ──
-                    if prefix_buffer and not prefix_checked:
+                    if (
+                        self._response_generation_is_active(response_generation)
+                        and prefix_buffer and not prefix_checked
+                    ):
                         prefix_checked = True
                         master_match = self._match_name_prefix(prefix_buffer, self.master_name)
                         lanlan_match = self._match_name_prefix(prefix_buffer, self.lanlan_name)
@@ -775,7 +781,11 @@ class _LifecycleMixin:
             # idempotent when nothing pulsed or the first token already cleared it.
             await self._notify_reasoning_done(_reasoning_owner_seq)
             if completion_mode == "response":
-                if not response_cancelled and self.on_response_done:
+                if (
+                    not response_cancelled
+                    and self._response_generation == response_generation
+                    and self.on_response_done
+                ):
                     await self.on_response_done()
                 # 只录常规 reply（completion_mode == "response"）。proactive 路径
                 # 已经在 ``core.finish_proactive_delivery`` 上录，这里再录会双写。
@@ -792,9 +802,17 @@ class _LifecycleMixin:
                         )
             else:
                 proactive_done_cb = getattr(self, "on_proactive_done", None)
-                if not response_cancelled and proactive_done_cb:
+                if (
+                    not response_cancelled
+                    and self._response_generation == response_generation
+                    and proactive_done_cb
+                ):
                     await proactive_done_cb(content_committed)
-                elif not response_cancelled and self.on_response_done:
+                elif (
+                    not response_cancelled
+                    and self._response_generation == response_generation
+                    and self.on_response_done
+                ):
                     await self.on_response_done()
             # 对话总线的第二条：她真正说出口的那句。判据和上面那条指令不同 ——
             # 指令问的是「provider 收到了吗」（第一个 chunk），这条问的是「她说了

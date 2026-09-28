@@ -501,6 +501,8 @@ class _GenaiMixin:
                 # 吐出东西才算送到。
                 tool_frames_published = False
                 async for chunk in stream:
+                    if not generation_is_active():
+                        return
                     if not tool_frames_published:
                         tool_frames_published = True
                         self._publish_pending_tool_frames(
@@ -523,6 +525,8 @@ class _GenaiMixin:
                     cand_content = getattr(cand, "content", None)
                     parts = getattr(cand_content, "parts", None) or []
                     for part in parts:
+                        if not generation_is_active():
+                            return
                         # Skip thinking parts (Gemini 2.5+ thinking models) — but
                         # surface the boolean "is thinking" pulse first so the
                         # bubble shows on genai reasoning turns too (dual with the
@@ -530,6 +534,8 @@ class _GenaiMixin:
                         # itself is still dropped.
                         if getattr(part, "thought", False):
                             await self._notify_reasoning_active()
+                            if not generation_is_active():
+                                return
                             continue
                         text = getattr(part, "text", None) or ""
                         fn_call = getattr(part, "function_call", None)
@@ -578,6 +584,8 @@ class _GenaiMixin:
                                 setattr(chunk_out, "_tool_leak_filtered", True)
                             yield chunk_out
                     # Usage metadata may arrive on the chunk.
+                    if not generation_is_active():
+                        return
                     usage_meta = getattr(chunk, "usage_metadata", None)
                     if usage_meta is not None and not usage_emitted:
                         try:
@@ -618,6 +626,8 @@ class _GenaiMixin:
                     raise _GenaiToolsUnsupported(f"genai stream rejected tools: {e}") from e
                 raise
 
+            if not generation_is_active():
+                return
             # Empty-completion 诊断：落 self 字段 + 单独 INFO log。和 OpenAI 路径
             # 对偶；finish_reason / block_reason 两边都有可能填，谁先填就以谁为
             # 准（stream_text/prompt_ephemeral 的兜底 warning 会读这两个字段）。
@@ -696,6 +706,8 @@ class _GenaiMixin:
                     break
                 continue
             if collected_tool_calls and self.on_tool_call is not None:
+                if not generation_is_active():
+                    return
                 # Execute tools, append a unified assistant + tool history (dict shape
                 # accepted by both paths), then continue tool-iteration loop.
                 tool_calls_dict = []
@@ -712,44 +724,55 @@ class _GenaiMixin:
                 # 里允许 text part 与 function_call part 并存；如果这里仍写
                 # ``content=""``，下一轮 LLM 看到的上下文会缺掉前半句，模型
                 # 会重复前缀或改口，最终持久化历史的顺序也跟真实生成顺序对不上。
-                messages.append({
+                assistant_turn = {
                     "role": "assistant",
                     # Symmetric with the OpenAI path: strip leaked <think> CoT
                     # before persisting the pre-tool text to history (no-op on
                     # clean replies / the genai path, which routes thought out).
                     "content": strip_thinking_segments(streamed_text_buffer),
                     "tool_calls": tool_calls_dict,
-                })
+                }
+                messages.append(assistant_turn)
+                owned_messages = [assistant_turn]
                 executed_tool_calls += len(collected_tool_calls)
                 image_results = []
-                for i, (tc_id, tc_name, tc_args, tc_raw, _tc_extra) in enumerate(collected_tool_calls):
-                    tool_call = ToolCall(
-                        name=tc_name,
-                        arguments=tc_args,
-                        call_id=tc_id or f"call_{i}",
-                        raw_arguments=tc_raw,
-                    )
-                    try:
-                        with _suspend_dialog_slop():
-                            result = await self.on_tool_call(tool_call)
-                    except Exception as e:
-                        logger.exception("OmniOfflineClient(genai): on_tool_call '%s' raised", tc_name)
-                        result = ToolResult(
-                            call_id=tool_call.call_id, name=tc_name,
-                            output={"error": f"{type(e).__name__}: {e}"},
-                            is_error=True, error_message=str(e),
+                round_complete = False
+                try:
+                    for i, (tc_id, tc_name, tc_args, tc_raw, _tc_extra) in enumerate(collected_tool_calls):
+                        if not generation_is_active():
+                            return
+                        tool_call = ToolCall(
+                            name=tc_name,
+                            arguments=tc_args,
+                            call_id=tc_id or f"call_{i}",
+                            raw_arguments=tc_raw,
                         )
-                    if not generation_is_active():
-                        return
-                    tool_result_message = {
-                        "role": "tool",
-                        "tool_call_id": tool_call.call_id,
-                        "name": tc_name,
-                        "content": result.output_as_json_string(),
-                    }
-                    messages.append(tool_result_message)
-                    if getattr(result, "images", None):
-                        image_results.append((result, tool_result_message))
+                        try:
+                            with _suspend_dialog_slop():
+                                result = await self.on_tool_call(tool_call)
+                        except Exception as e:
+                            logger.exception("OmniOfflineClient(genai): on_tool_call '%s' raised", tc_name)
+                            result = ToolResult(
+                                call_id=tool_call.call_id, name=tc_name,
+                                output={"error": f"{type(e).__name__}: {e}"},
+                                is_error=True, error_message=str(e),
+                            )
+                        if not generation_is_active():
+                            return
+                        tool_result_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call.call_id,
+                            "name": tc_name,
+                            "content": result.output_as_json_string(),
+                        }
+                        messages.append(tool_result_message)
+                        owned_messages.append(tool_result_message)
+                        if getattr(result, "images", None):
+                            image_results.append((result, tool_result_message))
+                    round_complete = True
+                finally:
+                    if not round_complete:
+                        self._rollback_tool_round(messages, owned_messages)
                 # Symmetric with the OpenAI-compat path: every tool reply
                 # first, then multimodal user turns. ``_genai_parts_from_content``
                 # maps ``image_url`` data URLs onto ``inline_data`` parts.
@@ -832,6 +855,8 @@ class _GenaiMixin:
             contents=final_contents,
             config=final_config,
         )
+        if not generation_is_active():
+            return
         final_finish_reason: Optional[str] = None
         final_block_reason: Optional[str] = None
         final_prompt_tokens: Optional[int] = None
@@ -839,6 +864,8 @@ class _GenaiMixin:
         # 与 OpenAI 路径对偶：封顶后这一次同样带着尚未 release 的工具图。
         tool_frames_published = False
         async for chunk in final_stream:
+            if not generation_is_active():
+                return
             if not tool_frames_published:
                 tool_frames_published = True
                 self._publish_pending_tool_frames(
@@ -867,6 +894,8 @@ class _GenaiMixin:
                 final_finish_reason = str(fr)
             cand_content = getattr(cand, "content", None)
             for part in (getattr(cand_content, "parts", None) or []):
+                if not generation_is_active():
+                    return
                 if getattr(part, "thought", False):
                     continue
                 text = getattr(part, "text", None) or ""

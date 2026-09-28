@@ -1435,6 +1435,11 @@ class _StreamingMixin:
                             elif content and not content.strip():
                                 logger.debug(f"OmniOfflineClient: 过滤空白内容 - content_repr: {repr(content)[:100]}")
 
+                        # A guard pause still owns this generation. Cancellation
+                        # or replacement does not: discard all un-emitted buffers.
+                        if self._active_response_generation != response_generation:
+                            break
+
                         # 流结束后：先 flush thinking stripper 的残留。仅漏型
                         # provider 的 thinking_on 轮挂了它；若整轮没出现 </think>
                         # （模型本轮没思考），它一直 hold，这里把攒住的正文还回
@@ -1992,10 +1997,7 @@ class _StreamingMixin:
         finally:
             # 先于其它收尾：把 base64 从历史里摘掉，别让它跟着后续每一次请求
             # 走（token 计数器把图像部分算成短占位符，截断器看不见它）。
-            response_cancelled = (
-                not guard_exhausted
-                and not self._response_generation_is_active(response_generation)
-            )
+            response_cancelled = self._active_response_generation != response_generation
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
 
@@ -2052,5 +2054,9 @@ class _StreamingMixin:
                         await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
 
             # Call response done callback
-            if not response_cancelled and self.on_response_done:
+            if (
+                not response_cancelled
+                and self._response_generation == response_generation
+                and self.on_response_done
+            ):
                 await self.on_response_done()
