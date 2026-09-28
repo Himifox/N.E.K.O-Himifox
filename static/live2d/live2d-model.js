@@ -211,6 +211,25 @@ function patchLive2DRendererProfile(renderer) {
     profile.__nekoBufferBindingFixApplied = true;
 }
 
+// setClippingMaskBufferSize() releases the clipping manager and builds a new
+// one, which would drop the per-instance fixes above. It also never hands the
+// new manager the GL context, so the call breaks rendering once started.
+function patchLive2DClippingManagerRebuild(renderer) {
+    if (renderer.__nekoClippingRebuildPatched
+        || typeof renderer.setClippingMaskBufferSize !== 'function') return;
+
+    const originalSetClippingMaskBufferSize = renderer.setClippingMaskBufferSize;
+    renderer.setClippingMaskBufferSize = function(size) {
+        const previousManager = this._clippingManager;
+        originalSetClippingMaskBufferSize.call(this, size);
+        const manager = this._clippingManager;
+        if (!manager || manager === previousManager) return;
+        if (this.gl) manager.setGL(this.gl);
+        configureLive2DClipping(this);
+    };
+    renderer.__nekoClippingRebuildPatched = true;
+}
+
 function configureLive2DClipping(renderer) {
     const manager = renderer?._clippingManager;
     if (!manager) return;
@@ -239,6 +258,7 @@ function configureLive2DClipping(renderer) {
     manager.calcClippedDrawTotalBounds = calculateLive2DClippedDrawBounds;
     manager.__nekoClippingFixApplied = true;
     patchLive2DRendererProfile(renderer);
+    patchLive2DClippingManagerRebuild(renderer);
 }
 
 Live2DManager.prototype.hasActiveActionMotion = function(model = this.currentModel) {

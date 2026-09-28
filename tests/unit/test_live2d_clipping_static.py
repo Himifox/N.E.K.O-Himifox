@@ -31,15 +31,24 @@ function bundledClassSource(name, next) {
     assert.ok(first >= 0 && last > first, `locate bundled ${name}`);
     return bundle.slice(first, last);
 }
-function bundledMethodSource(name) {
-    const first = bundle.indexOf(`${name}(){`);
-    assert.ok(first >= 0, `locate bundled ${name}`);
-    let depth = 0;
-    for (let i = bundle.indexOf('{', first); i < bundle.length; i++) {
-        if (bundle[i] === '{') depth++;
-        else if (bundle[i] === '}' && --depth === 0) return bundle.slice(first, i + 1);
+// Return the first bundled method definition named `name` whose source
+// contains `marker`, which disambiguates same-named methods on other classes.
+function bundledMethodSource(name, marker = '') {
+    for (let first = bundle.indexOf(`${name}(`); first >= 0;
+        first = bundle.indexOf(`${name}(`, first + 1)) {
+        const open = bundle.indexOf('{', first);
+        if (!/^\w*\)$/.test(bundle.slice(first + name.length + 1, open))) continue;
+        let depth = 0;
+        for (let i = open; i < bundle.length; i++) {
+            if (bundle[i] === '{') depth++;
+            else if (bundle[i] === '}' && --depth === 0) {
+                const source = bundle.slice(first, i + 1);
+                if (source.includes(marker)) return source;
+                break;
+            }
+        }
     }
-    throw new Error(`unterminated bundled ${name}`);
+    throw new Error(`locate bundled ${name}`);
 }
 function bundledClass(name, next) {
     return new Function(bundledClassSource(name, next) + `; return ${name};`)();
@@ -95,7 +104,7 @@ async function configure(n, rendererOverrides = {}) {
         assert.equal(manager._clippingContextListForMask[i], context);
         assert.deepEqual(context._clippedDrawableIndexList, targets[i]);
     });
-    return { manager, renderer };
+    return { manager, renderer, core };
 }
 
 function assertValidLayout(manager, n, activeCount = n, setup = true) {
@@ -331,6 +340,26 @@ function assertValidLayout(manager, n, activeCount = n, setup = true) {
         pendingMasks = [];
     }
     assert.equal(clippedDraws, hugeCount * 2);
+
+    // setClippingMaskBufferSize() swaps in a brand-new manager. Run the shipped
+    // renderer method and require the fixes and GL context to follow it.
+    const rebuildGl = { name: 'rebuild-gl' };
+    const rebuild = await configure(95, {
+        gl: rebuildGl,
+        setClippingMaskBufferSize: new Function('fe',
+            `return function ${bundledMethodSource('setClippingMaskBufferSize', 'isUsingMasking')};`)(
+            ClippingManager),
+    });
+    rebuild.renderer._model = Object.assign({ isUsingMasking: () => true }, rebuild.core);
+    rebuild.renderer.getModel = () => rebuild.renderer._model;
+    rebuild.renderer.setClippingMaskBufferSize(512);
+    const rebuiltManager = rebuild.renderer._clippingManager;
+    assert.notEqual(rebuiltManager, rebuild.manager);
+    assert.equal(rebuiltManager.getClippingMaskBufferSize(), 512);
+    assert.equal(rebuiltManager.gl, rebuildGl);
+    assert.equal(rebuiltManager.__nekoClippingFixApplied, true);
+    assert.equal(rebuiltManager.getRenderTextureCount(), 3);
+    assertValidLayout(rebuiltManager, 95);
 
     // Regression for Number.MIN_VALUE: an all-negative drawable must not be
     // expanded to the model-space origin.
