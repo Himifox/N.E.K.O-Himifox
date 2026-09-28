@@ -916,13 +916,21 @@ def _find_similar_recent_proactive_chat(
     )
 
 
+# Emoji glue that is not category P/S/Z: variation selectors (Mn), the ZWJ that
+# joins sequences (Cf) and the keycap mark (Me). Listed explicitly rather than
+# dropping every Mn/Cf so accents and other real combining marks survive.
+_VERBATIM_EMOJI_GLUE = frozenset("\ufe0e\ufe0f\u200d\u20e3")
+
+
 def _verbatim_key(text: str) -> str:
-    """Reduce *text* to its words: NFKC, lowercase, drop whitespace/punctuation/symbols."""
+    """Reduce *text* to its words: NFKC, lowercase, drop whitespace/punctuation/symbols/emoji."""
     normalized = unicodedata.normalize("NFKC", text or "").lower()
     return "".join(
         ch
         for ch in normalized
-        if not ch.isspace() and unicodedata.category(ch)[0] not in "PSZ"
+        if not ch.isspace()
+        and ch not in _VERBATIM_EMOJI_GLUE
+        and unicodedata.category(ch)[0] not in "PSZ"
     )
 
 

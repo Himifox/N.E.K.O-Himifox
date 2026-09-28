@@ -1569,7 +1569,9 @@ async def _guard_phase2_output(
             f"(bm25={bm25_total:.2f}, unanswered_repeat="
             f"{unanswered_repeat_triggered}, literal_repeat="
             f"{literal_regen_triggered}, "
-            f"避开={avoid_terms})"
+            # A verbatim hit's avoid term is the whole caption; keep it out of
+            # the persisted stdout log like the other literal-guard paths do.
+            f"避开={'(整句配文)' if literal_regen_triggered else avoid_terms})"
         )
         avoid_message = render_regen_avoid_instruction(
             avoid_terms,

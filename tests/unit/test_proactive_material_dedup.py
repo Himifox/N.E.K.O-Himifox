@@ -159,6 +159,17 @@ def test_verbatim_guard_matches_pure_repeat_only(monkeypatch):
     assert state._find_verbatim_recent_proactive_chat(
         name, "快看这个，笑死我了！"
     ).is_duplicate is False
+    # emoji 的变体选择符 / ZWJ 也不算内容，但重音等真实组合字符保留
+    state = _seed_chat_history(
+        monkeypatch,
+        name,
+        (time.time(), "快看❤️", "meme"),
+        (time.time(), "快看👩\u200d💻", "meme"),
+    )
+    assert state._verbatim_key("快看❤️") == "快看"
+    assert state._verbatim_key("快看👩\u200d💻") == "快看"
+    assert state._find_verbatim_recent_proactive_chat(name, "快看").is_duplicate is True
+    assert state._verbatim_key("café") != state._verbatim_key("cafe")
     # 只有标点的草稿没有可比的内容
     assert state._find_verbatim_recent_proactive_chat(name, "！！😂").is_duplicate is False
 
