@@ -2,7 +2,7 @@
 
 No live provider is called. Real preparation, final swap, callback bookkeeping,
 and offline system-message assembly run with configuration/HTTP stubs. These
-tests assert the desired once-only behavior, so affected cases currently fail.
+tests assert the repaired once-only behavior.
 """
 
 import asyncio
@@ -25,10 +25,12 @@ class _ChatSession(OmniOfflineClient):
     def __init__(self):
         self.model = "qwen3.7-plus"
         self.closed = False
+        self.llm = object()
         self._conversation_history = []
 
     async def close(self):
         self.closed = True
+        self.llm = None
 
     async def handle_messages(self):
         await asyncio.Event().wait()
@@ -140,5 +142,166 @@ async def test_consumed_chat_callback_is_not_reinjected_by_swap(monkeypatch, del
     try:
         content = await _swap(mgr, pending)
         assert marker not in content, content
+    finally:
+        await _drain_task(mgr.message_handler_task)
+
+
+def test_text_drain_preserves_legacy_extras(monkeypatch):
+    mgr, _ = _manager(monkeypatch)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": "unique mixed queue notice", "delivery_mode": "proactive",
+    })
+    unrelated = {"_callback_delivery_id": "unrelated", "text": "keep"}
+    mgr.pending_extra_replies.extend(["legacy text", unrelated])
+    assert "unique mixed queue notice" in mgr.drain_agent_callbacks_for_llm()
+    assert mgr.pending_agent_callbacks == []
+    assert mgr.pending_extra_replies == ["legacy text", unrelated]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed", [False, True])
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError, None])
+async def test_plain_callback_survives_only_precommit_failure(
+    monkeypatch, committed, failure,
+):
+    from main_logic import core as core_module
+    from tests.unit.test_core_game_route_memory_contract import (
+        _make_callback_media_manager,
+        _make_offline_session_for_callback_media,
+    )
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": "plain notice must survive", "delivery_mode": "proactive",
+    })
+    callback = mgr.pending_agent_callbacks[0]
+    assert mgr.pending_extra_replies
+    original_extras = list(mgr.pending_extra_replies)
+    reached_stream = []
+
+    async def fail_stream(_text, **kwargs):
+        reached_stream.append(kwargs["system_prefix"])
+        if committed:
+            kwargs["on_turn_committed"]()
+        if failure is not None:
+            raise failure("interrupted")
+
+    session.stream_text = AsyncMock(side_effect=fail_stream)
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda *_: None)
+    try:
+        await mgr._process_stream_data_internal({"input_type": "text", "data": "hello"})
+    except asyncio.CancelledError:
+        assert failure is asyncio.CancelledError
+    assert len(reached_stream) == 1
+    assert "plain notice must survive" in reached_stream[0]
+    assert mgr.pending_extra_replies == ([] if committed else original_extras)
+    assert mgr.pending_agent_callbacks == ([] if committed else [callback])
+    if not committed:
+        assert "plain notice must survive" in mgr.drain_agent_callbacks_for_llm()
+        assert mgr.drain_agent_callbacks_for_llm() == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery_mode", ["passive", "proactive"])
+async def test_real_empty_turn_restores_callback_for_hot_swap(monkeypatch, delivery_mode):
+    from main_logic import core as core_module
+    from tests.unit.test_hot_swap_cancellation import _make_fake_realtime_session
+    from tests.unit.test_core_game_route_memory_contract import (
+        _make_callback_media_manager,
+        _make_offline_session_for_callback_media,
+    )
+
+    session = _make_offline_session_for_callback_media()
+    session.stream_text = OmniOfflineClient.stream_text.__get__(session)
+    mgr = _make_callback_media_manager(session)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    marker = "RESTORED_CALLBACK_SWAP_003"
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": marker, "delivery_mode": delivery_mode,
+    })
+    callback = mgr.pending_agent_callbacks[0]
+    original_extras = list(mgr.pending_extra_replies)
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda *_: None)
+    await mgr._process_stream_data_internal({"input_type": "text", "data": "   "})
+    assert mgr.pending_agent_callbacks == [callback]
+    assert mgr.pending_extra_replies == original_extras
+
+    swap_mgr = _make_swap_manager()
+    pending = _make_fake_realtime_session("restored-callback")
+    swap_mgr.pending_agent_callbacks = mgr.pending_agent_callbacks
+    swap_mgr.pending_extra_replies = mgr.pending_extra_replies
+    swap_mgr.pending_session = pending
+    swap_mgr.is_hot_swap_imminent = True
+    try:
+        await swap_mgr._perform_final_swap_sequence()
+        assert swap_mgr.session is pending
+        content = "\n".join(text for text, _ in pending.prime_calls)
+        assert content.count(marker) == 1
+        assert swap_mgr.pending_agent_callbacks == []
+        assert swap_mgr.pending_extra_replies == []
+        assert swap_mgr.drain_agent_callbacks_for_llm() == ""
+        next_pending = _make_fake_realtime_session("second-swap")
+        swap_mgr.pending_session = next_pending
+        swap_mgr.is_hot_swap_imminent = True
+        await swap_mgr._perform_final_swap_sequence()
+        assert swap_mgr.session is next_pending
+        assert all(marker not in text for text, _ in next_pending.prime_calls)
+    finally:
+        await _drain_task(swap_mgr.message_handler_task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prime_fails", [False, True])
+async def test_swap_consumes_only_original_successful_callback(monkeypatch, prime_fails):
+    mgr, pending = _manager(monkeypatch)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    marker = "ORIGINAL_SWAP_NOTICE"
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": marker, "delivery_mode": "proactive",
+    })
+    original = mgr.pending_agent_callbacks[0]
+    ack = asyncio.get_running_loop().create_future()
+    from main_logic.proactive_delivery import DELIVERY_ACK_FUTURE_KEY
+    original[DELIVERY_ACK_FUTURE_KEY] = ack
+    original_extras = list(mgr.pending_extra_replies)
+    replacement = dict(original, summary="NEW_SAME_ID_NOTICE")
+    replacement.pop(DELIVERY_ACK_FUTURE_KEY)
+    unrelated = dict(replacement, summary="UNRELATED_NOTICE", _callback_delivery_id="other")
+    await pending.connect("SYSTEM\n")
+    real_prime = pending.prime_context
+
+    async def prime(text, *, skipped=False):
+        # New objects arrive while the old snapshot is in flight.
+        mgr.pending_agent_callbacks.extend([replacement, unrelated])
+        if prime_fails:
+            raise RuntimeError("prime unavailable")
+        await real_prime(text, skipped=skipped)
+
+    pending.prime_context = prime
+    mgr.pending_session = pending
+    mgr.is_hot_swap_imminent = True
+    try:
+        await mgr._perform_final_swap_sequence()
+        assert replacement in mgr.pending_agent_callbacks
+        assert unrelated in mgr.pending_agent_callbacks
+        if prime_fails:
+            assert original in mgr.pending_agent_callbacks
+            assert mgr.pending_extra_replies == original_extras
+            assert not ack.done()
+            assert marker in mgr.drain_agent_callbacks_for_llm()
+        else:
+            assert all(cb is not original for cb in mgr.pending_agent_callbacks)
+            assert ack.result() is True
+            rendered = mgr.drain_agent_callbacks_for_llm()
+            assert marker not in rendered
+            assert "NEW_SAME_ID_NOTICE" in rendered
+            assert "UNRELATED_NOTICE" in rendered
     finally:
         await _drain_task(mgr.message_handler_task)

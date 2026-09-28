@@ -2986,8 +2986,10 @@ class LifecycleMixin:
                 cb.pop(SWAP_PRIME_DELIVERY_CLAIM_KEY, None)
 
     def _remove_swap_delivered_passive_cbs(self, selected: list) -> list:
-        """[Hot-swap related] Dequeue prime-injected passive callbacks at
+        """[Hot-swap related] Dequeue prime-injected callback objects at
         promote success; returns the actually-removed subset (ack'd True).
+
+        Also used for callbacks paired with delivered extra-reply mirrors.
 
         Identity-based removal, same as the extras counterpart: entries a
         concurrent path consumed inside the prime→promote window (text-turn
@@ -3132,6 +3134,7 @@ class LifecycleMixin:
             _prime_selected_extras: list = []
             _removed_extras: list = []
             _removed_cb_backed_ids: set = set()
+            _prime_extra_callbacks: list = []
             # Passive callbacks riding this swap (voice pending session only).
             # Same deferred-removal bookkeeping as _prime_selected_extras:
             # queue untouched until promote succeeds. Injection goes through
@@ -3216,6 +3219,22 @@ class LifecycleMixin:
                     e for e in _selected
                     if not self._coalesce_entry_is_stale(e)
                 ]
+                # Snapshot paired objects before the provider await. A later
+                # same-id enqueue must not be acknowledged or removed for text
+                # that came from this snapshot.
+                _selected_delivery_ids = {
+                    e.get("_callback_delivery_id") for e in _selected
+                    if isinstance(e, dict) and e.get("_callback_delivery_id")
+                }
+                _prime_extra_callbacks = [
+                    cb for cb in (getattr(self, "pending_agent_callbacks", None) or [])
+                    if isinstance(cb, dict)
+                    and cb.get("_callback_delivery_id") in _selected_delivery_ids
+                    and not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+                    and not cb.get(DELIVERY_RETRACTED_KEY)
+                ]
+                for cb in _prime_extra_callbacks:
+                    cb[SWAP_PRIME_DELIVERY_CLAIM_KEY] = True
                 final_prime_text += _render_pending_extra_replies_by_origin(
                     _selected,
                     lang=_lang,
@@ -4201,6 +4220,26 @@ class LifecycleMixin:
             if self.is_active and self.session and hasattr(self.session, 'handle_messages') and (not self.message_handler_task or self.message_handler_task.done()):
                 self.message_handler_task = asyncio.create_task(self.session.handle_messages())
         finally:
+            # Keep paired objects through all failure-recovery awaits. An extra
+            # restored by an abort is still pending; only a removed extra in a
+            # surviving promoted session has actually completed this delivery.
+            if (
+                _prime_extra_callbacks
+                and _removed_extras
+                and new_session is not None
+                and self.session is new_session
+                and not self._swap_session_is_dead(new_session)
+            ):
+                queued_extra_objects = {id(e) for e in self.pending_extra_replies}
+                delivered_ids = {
+                    e.get("_callback_delivery_id") for e in _removed_extras
+                    if isinstance(e, dict) and id(e) not in queued_extra_objects
+                }
+                self._remove_swap_delivered_passive_cbs([
+                    cb for cb in _prime_extra_callbacks
+                    if cb.get("_callback_delivery_id") in delivered_ids
+                ])
+            self._release_swap_prime_passive_claims(_prime_extra_callbacks)
             self._release_swap_prime_passive_claims(_passive_sel)
             self._purge_undeliverable_callbacks()
             self.is_hot_swap_imminent = False  # Always reset this flag

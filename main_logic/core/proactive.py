@@ -3549,16 +3549,14 @@ class ProactiveMixin:
             if isinstance(callback, dict):
                 callback.pop(SWAP_PRIME_DELIVERY_CLAIM_KEY, None)
 
-    def _requeue_undelivered_callback_media(self, callbacks: list) -> None:
-        """Put media-carrying callbacks back when their turn never reached history.
+    def _requeue_undelivered_callbacks(
+        self, callbacks: list, extras_snapshot: list | None = None,
+    ) -> None:
+        """Restore drained callbacks when their turn never reached history.
 
-        The drain removes a callback the moment its text renders, which is the
-        deliberate best-effort contract for a plain passive notice. Media adds a
-        failure boundary that contract never covered: the Offline turn still has
-        to switch to its vision model, and a network/credential failure there
-        raises before anything is appended, so the callback's text AND its images
-        vanish without ever reaching the model. Restore exactly those callbacks,
-        in their original relative order, at the head of the queue.
+        Drain removes both the callback and its hot-swap mirror. Restore the
+        callbacks in their original order so failures cannot lose plain text
+        notices either. Once committed, the caller must not retry them.
 
         The delivery ack cannot be taken back once resolved, so drop the spent
         future instead: this retry is about getting the content in front of the
@@ -3577,8 +3575,25 @@ class ProactiveMixin:
         for callback in restored:
             callback.pop(DELIVERY_ACK_FUTURE_KEY, None)
         self.pending_agent_callbacks[0:0] = restored
+        # Proactive callbacks need their original mirror to remain eligible for
+        # hot-swap delivery. Passive callbacks never had one; do not invent it.
+        restored_ids = {
+            cb.get("_callback_delivery_id") for cb in restored
+            if cb.get("_callback_delivery_id")
+        }
+        extras = getattr(self, "pending_extra_replies", None) or []
+        queued_ids = {
+            extra.get("_callback_delivery_id") for extra in extras
+            if isinstance(extra, dict)
+        }
+        self.pending_extra_replies = [
+            extra for extra in (extras_snapshot or [])
+            if isinstance(extra, dict)
+            and extra.get("_callback_delivery_id") in restored_ids
+            and extra.get("_callback_delivery_id") not in queued_ids
+        ] + extras
         logger.info(
-            "[%s] re-queued %d callback(s) whose image turn never committed",
+            "[%s] re-queued %d callback(s) whose turn never committed",
             getattr(self, "lanlan_name", ""),
             len(restored),
         )
@@ -3723,6 +3738,7 @@ class ProactiveMixin:
                 self.pending_extra_replies = [
                     extra
                     for extra in (getattr(self, "pending_extra_replies", None) or [])
-                    if extra.get("_callback_delivery_id") not in delivered_delivery_ids
+                    if not isinstance(extra, dict)
+                    or extra.get("_callback_delivery_id") not in delivered_delivery_ids
                 ]
             self._release_agent_callback_prompt_claims(callbacks_snapshot)
