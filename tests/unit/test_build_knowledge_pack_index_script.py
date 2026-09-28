@@ -177,3 +177,37 @@ def test_builder_output_is_validation_stable_and_staging_compatible(
     )
     assert result["state"] == "ready_hybrid"
     assert service.list_packs()[0]["index_validation"] == "accepted"
+
+
+def test_verify_rejects_an_oversized_manifest_without_reading_it_whole(
+    tmp_path, monkeypatch, capsys
+):
+    from knowledge.limits import MAX_PREBUILT_MANIFEST_BYTES
+
+    pack_path = tmp_path / "fixture.neko-knowledge.json"
+    pack_path.write_bytes(canonical_pack_bytes(_pack_payload()))
+    manifest = tmp_path / "oversized.manifest.json"
+    with manifest.open("wb") as handle:
+        handle.truncate(MAX_PREBUILT_MANIFEST_BYTES + 1)
+    vectors = tmp_path / "fixture.vectors.bin"
+    vectors.write_bytes(b"")
+
+    def _unbounded_read(self):
+        raise AssertionError("verify must not read an artifact without a bound")
+
+    monkeypatch.setattr(Path, "read_bytes", _unbounded_read)
+
+    assert (
+        MODULE.main(
+            [
+                str(pack_path),
+                "--verify",
+                "--manifest",
+                str(manifest),
+                "--vectors",
+                str(vectors),
+            ]
+        )
+        != 0
+    )
+    assert json.loads(capsys.readouterr().out)["reason"] == "file exceeds its size limit"

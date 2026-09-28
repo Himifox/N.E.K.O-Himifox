@@ -16,7 +16,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from knowledge._strict_file import read_bounded_regular_file
 from knowledge.chunking import derive_knowledge_chunks
+from knowledge.limits import (
+    MAX_PACK_BYTES,
+    MAX_PREBUILT_MANIFEST_BYTES,
+    MAX_PREBUILT_VECTOR_BYTES,
+)
 from knowledge.prebuilt_index import (
     PREBUILT_DIMENSIONS,
     PREBUILT_MODEL_ID,
@@ -85,7 +91,9 @@ async def _build(pack_path: Path, output_dir: Path) -> dict[str, object]:
     from memory.local_embedding_provider import bind_process_local_embedding_provider
 
     bind_process_local_embedding_provider()
-    pack_raw, chunks = _validated_pack_artifact(pack_path.read_bytes())
+    pack_raw, chunks = _validated_pack_artifact(
+        read_bounded_regular_file(pack_path, max_bytes=MAX_PACK_BYTES)
+    )
     service = get_local_embedding_service()
     try:
         if not await service.request_load():
@@ -147,9 +155,16 @@ async def _build(pack_path: Path, output_dir: Path) -> dict[str, object]:
 def _verify(
     pack_path: Path, manifest_path: Path, vectors_path: Path
 ) -> dict[str, object]:
-    pack_raw = pack_path.read_bytes()
-    manifest_raw = manifest_path.read_bytes()
-    vectors_raw = vectors_path.read_bytes()
+    # Same protocol limits the runtime import applies, enforced while reading
+    # so an oversized or corrupt artifact fails validation instead of being
+    # loaded whole first.
+    pack_raw = read_bounded_regular_file(pack_path, max_bytes=MAX_PACK_BYTES)
+    manifest_raw = read_bounded_regular_file(
+        manifest_path, max_bytes=MAX_PREBUILT_MANIFEST_BYTES
+    )
+    vectors_raw = read_bounded_regular_file(
+        vectors_path, max_bytes=MAX_PREBUILT_VECTOR_BYTES
+    )
     validated = validate_prebuilt_index(
         pack_raw,
         manifest_raw,
