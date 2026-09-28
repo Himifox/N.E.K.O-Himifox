@@ -459,10 +459,12 @@ def dry_run_plan(target: KnowledgeTarget, *, full: bool) -> dict[str, Any]:
     }
 
 
-def _backfill_all(store: Any, *, batch_size: int) -> int:
-    from knowledge.packs import installed_source_embedding_policies
-
-    policies = installed_source_embedding_policies(store.database_path)
+def _backfill_all(
+    store: Any,
+    *,
+    batch_size: int,
+    policies: dict[str, str],
+) -> int:
     processed = 0
     while True:
         count = store.backfill_missing_chunks(
@@ -597,12 +599,36 @@ async def rebuild_target(
     if before.get("error_type"):
         return inspection_unavailable(before)
 
+    # Same rule as the background indexer: the pack registry is the durable
+    # record of local-embedding consent, so SQLite policies are brought in
+    # line with it before any work is selected, and an unreadable registry
+    # stops the run instead of trusting whatever policy SQLite still holds.
+    from knowledge.packs import (
+        KnowledgePackRegistryError,
+        reconcile_installed_source_embedding_policies,
+    )
+
+    try:
+        policies = await asyncio.to_thread(
+            reconcile_installed_source_embedding_policies,
+            target.database_path,
+        )
+    except KnowledgePackRegistryError as exc:
+        return {
+            **before,
+            "action": action,
+            "result_state": "registry_unavailable",
+            "error_type": type(exc).__name__,
+            "complete": False,
+        }, False
+
     store = KnowledgeStore(target.database_path)
     reset_chunks = store.reset_chunk_index(full=True) if full else 0
     backfilled_entries = await asyncio.to_thread(
         _backfill_all,
         store,
         batch_size=batch_size,
+        policies=policies,
     )
 
     capacity_limited = False

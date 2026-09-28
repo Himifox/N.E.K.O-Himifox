@@ -719,3 +719,102 @@ async def test_rebuild_does_not_report_complete_when_final_inspection_fails(
     assert result["result_state"] == "inspection_unavailable"
     assert result["error_type"] == "DatabaseError"
     assert complete is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_stops_before_mutation_when_the_pack_registry_is_corrupt(
+    monkeypatch,
+    tmp_path,
+):
+    """Local-embedding consent lives in the registry, not in SQLite.
+
+    With the registry unreadable, a chunk still marked ``local`` in SQLite has
+    no current consent behind it, so the rebuild must not select any work.
+    """
+    import knowledge.store as store_module
+
+    database = tmp_path / "knowledge.db"
+    database.write_bytes(b"fixture")
+    (tmp_path / "packs.json").write_text("not-json", encoding="utf-8")
+
+    class UnexpectedStore:
+        def __init__(self, _path):
+            raise AssertionError("store must not open without a readable registry")
+
+    monkeypatch.setattr(store_module, "KnowledgeStore", UnexpectedStore)
+    monkeypatch.setattr(
+        MODULE,
+        "inspect_database",
+        lambda _path: {"database": str(database), "database_exists": True},
+    )
+
+    result, complete = await MODULE.rebuild_target(
+        MODULE.KnowledgeTarget(database),
+        full=False,
+        batch_size=4,
+    )
+
+    assert result["result_state"] == "registry_unavailable"
+    assert result["error_type"] == "KnowledgePackRegistryError"
+    assert complete is False
+
+
+@pytest.mark.asyncio
+async def test_rebuild_backfills_with_the_reconciled_registry_policies(
+    monkeypatch,
+    tmp_path,
+):
+    import knowledge.packs as packs_module
+    import knowledge.store as store_module
+    import utils.local_embedding_runtime as embedding_runtime
+
+    database = tmp_path / "knowledge.db"
+    database.write_bytes(b"fixture")
+    status = {
+        "chunks_ready": 0,
+        "chunks_pending": 0,
+        "chunks_stale": 0,
+        "chunks_failed": 0,
+        "chunks_failed_retryable_now": 0,
+        "chunks_failed_waiting": 0,
+        "chunks_failed_exhausted": 0,
+    }
+    events = []
+    policies = {"source:community.demo": "prebuilt_only"}
+
+    def reconcile(path):
+        events.append(("reconcile", Path(path)))
+        return dict(policies)
+
+    class FakeStore:
+        def __init__(self, _path):
+            events.append(("open_store",))
+            self.database_path = database
+
+    def backfill(_store, *, batch_size, policies):
+        events.append(("backfill", policies))
+        return 0
+
+    monkeypatch.setattr(
+        packs_module, "reconcile_installed_source_embedding_policies", reconcile
+    )
+    monkeypatch.setattr(store_module, "KnowledgeStore", FakeStore)
+    monkeypatch.setattr(MODULE, "inspect_database", lambda _path: dict(status))
+    monkeypatch.setattr(MODULE, "_backfill_all", backfill)
+    monkeypatch.setattr(
+        embedding_runtime,
+        "get_local_embedding_status",
+        lambda: SimpleNamespace(state="ready", model_id="fixture", dimensions=2),
+    )
+
+    await MODULE.rebuild_target(
+        MODULE.KnowledgeTarget(database),
+        full=False,
+        batch_size=4,
+    )
+
+    assert events == [
+        ("reconcile", database),
+        ("open_store",),
+        ("backfill", policies),
+    ]
