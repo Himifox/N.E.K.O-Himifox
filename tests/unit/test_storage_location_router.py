@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1784,6 +1785,51 @@ def test_storage_location_cleanup_reports_unproved_runtime_entries(tmp_path):
     migration_payload = load_storage_migration(reloaded_manager)
     assert migration_payload["retained_source_mode"] == "manual_retention"
     assert migration_payload["retained_source_root"] == str(source_root.resolve())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("v1_checkpoint", (False, True))
+def test_storage_location_cleanup_finishes_after_the_user_removes_the_rest(
+    tmp_path, v1_checkpoint
+):
+    """A reported leftover removed by hand must not turn the retry into a 500."""
+    config_manager = _make_real_config_manager(tmp_path)
+    source_root = tmp_path / "legacy-runtime" / "N.E.K.O"
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    (source_root / "config").mkdir(parents=True)
+    (source_root / "config" / "characters.json").write_text("original", encoding="utf-8")
+    create_pending_storage_migration(
+        config_manager,
+        source_root=source_root,
+        target_root=target_root,
+        selection_source="recommended",
+    )
+    assert run_pending_storage_migration(config_manager)["completed"] is True
+    if v1_checkpoint:
+        _downgrade_to_v1_checkpoint(config_manager)
+    (source_root / "memory").mkdir()
+    (source_root / "memory" / "unproved.json").write_text("{}", encoding="utf-8")
+
+    reloaded_manager = _make_real_config_manager(tmp_path)
+    with _build_client(reloaded_manager) as client:
+        first = client.post(
+            "/api/storage/location/retained-source/cleanup",
+            json={"retained_root": str(source_root)},
+        )
+        assert first.status_code == 409
+        assert first.json()["remaining_entries"] == ["memory"]
+        assert not (source_root / "config").exists()
+
+        shutil.rmtree(source_root / "memory")
+        second = client.post(
+            "/api/storage/location/retained-source/cleanup",
+            json={"retained_root": str(source_root)},
+        )
+
+    assert second.status_code == 200, second.json()
+    assert not source_root.exists()
+    assert load_storage_migration(reloaded_manager)["retained_source_mode"] == "cleaned"
+    assert (target_root / "config" / "characters.json").read_text(encoding="utf-8") == "original"
 
 
 def _downgrade_to_v1_checkpoint(config_manager) -> None:
