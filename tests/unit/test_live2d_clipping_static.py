@@ -31,6 +31,16 @@ function bundledClassSource(name, next) {
     assert.ok(first >= 0 && last > first, `locate bundled ${name}`);
     return bundle.slice(first, last);
 }
+function bundledMethodSource(name) {
+    const first = bundle.indexOf(`${name}(){`);
+    assert.ok(first >= 0, `locate bundled ${name}`);
+    let depth = 0;
+    for (let i = bundle.indexOf('{', first); i < bundle.length; i++) {
+        if (bundle[i] === '{') depth++;
+        else if (bundle[i] === '}' && --depth === 0) return bundle.slice(first, i + 1);
+    }
+    throw new Error(`unterminated bundled ${name}`);
+}
 function bundledClass(name, next) {
     return new Function(bundledClassSource(name, next) + `; return ${name};`)();
 }
@@ -254,6 +264,73 @@ function assertValidLayout(manager, n, activeCount = n, setup = true) {
         assert.ok([...context._matrixForDraw.getArray()].every(Number.isFinite));
     });
     assert.equal(huge.manager.getMaskRenderTexture().length, 1);
+
+    // Drive the shipped renderer's draw loop: in high-precision mode every
+    // clipped drawable must redraw exactly its own mask sources into texture 0
+    // immediately before it is drawn with that clipping context.
+    const doDrawModel = new Function('Ot', 'Pt', '_e', 'pe',
+        `return function ${bundledMethodSource('doDrawModel')};`)(
+        () => {}, { CubismBlendMode_Normal: 0 }, null, [0, 0, 800, 600]);
+    const hugeCount = 1025;
+    const maskFramebuffer = huge.manager.getMaskRenderTexture()[0];
+    let boundMaskFramebuffer = null;
+    let maskContext = null;
+    let drawContext = null;
+    const events = [];
+    const drawCore = {
+        getDrawableCount: () => hugeCount * 3,
+        getDrawableRenderOrders: () => Array.from({ length: hugeCount * 3 }, (_, i) => i),
+        getDrawableDynamicFlagIsVisible: () => true,
+        getDrawableDynamicFlagVertexPositionsDidChange: () => true,
+        getDrawableCulling: () => false,
+        getDrawableTextureIndex: i => i,
+        getDrawableVertexIndexCount: () => 3, getDrawableVertexCount: () => 3,
+        getDrawableVertexIndices: () => new Uint16Array([0, 1, 2]),
+        getDrawableVertices: () => new Float32Array(6),
+        getDrawableVertexUvs: () => new Float32Array(6),
+        getMultiplyColor: () => ({}), getScreenColor: () => ({}),
+        getDrawableOpacity: () => 1, getDrawableBlendMode: () => 0,
+        getDrawableInvertedMaskBit: () => false, getPixelsPerUnit: () => 100,
+    };
+    Object.assign(hpRenderer, {
+        gl: {
+            FRAMEBUFFER: 'FRAMEBUFFER', COLOR_BUFFER_BIT: 'COLOR_BUFFER_BIT',
+            viewport() {}, clearColor() {}, clear() {},
+            bindFramebuffer(target, framebuffer) { boundMaskFramebuffer = framebuffer; },
+        },
+        _model: drawCore,
+        getModel: () => drawCore,
+        _sortedDrawableIndexList: [],
+        setClippingContextBufferForMask(context) { maskContext = context; },
+        setClippingContextBufferForDraw(context) { drawContext = context; },
+        drawMesh(drawable) {
+            events.push({ drawable, mask: maskContext, draw: drawContext,
+                framebuffer: boundMaskFramebuffer });
+        },
+    });
+    doDrawModel.call(hpRenderer);
+    const drawMapping = huge.manager.getClippingContextListForDraw();
+    let pendingMasks = [];
+    let clippedDraws = 0;
+    for (const event of events) {
+        if (event.mask) {
+            assert.equal(event.framebuffer, maskFramebuffer);
+            pendingMasks.push(event);
+            continue;
+        }
+        const context = drawMapping[event.drawable];
+        assert.equal(event.draw, context);
+        if (context) {
+            clippedDraws++;
+            assert.ok(pendingMasks.every(mask => mask.mask === context));
+            assert.deepEqual(pendingMasks.map(mask => mask.drawable),
+                context._clippingIdList.slice(0, context._clippingIdCount));
+        } else {
+            assert.equal(pendingMasks.length, 0);
+        }
+        pendingMasks = [];
+    }
+    assert.equal(clippedDraws, hugeCount * 2);
 
     // Regression for Number.MIN_VALUE: an all-negative drawable must not be
     // expanded to the model-space origin.
