@@ -16,13 +16,16 @@ const LIVE2D_MOTION_PRIORITY = Object.freeze({
 });
 
 // The bundled Cubism renderer uses 36 slots for a single render texture and
-// 32 slots per texture when multiple textures are used. Keep a product-level
-// ceiling so unsupported models fail before any mask framebuffer is rendered.
-const LIVE2D_MAX_MASK_RENDER_TEXTURES = 8;
+// 32 slots per texture when multiple textures are used. Each 256x256 mask
+// texture costs 256 KiB, so the atlas grows with the model up to 1024 contexts
+// (8 MiB). Larger models switch to high-precision masks instead of failing.
+const LIVE2D_MAX_MASK_RENDER_TEXTURES = 32;
 const LIVE2D_MIN_MASK_RENDER_TEXTURES = 3;
 const LIVE2D_SINGLE_MASK_TEXTURE_CAPACITY = 36;
 const LIVE2D_MULTI_MASK_TEXTURE_CAPACITY = 32;
 
+// Returns null when the atlas would need more than the texture budget; the
+// caller then renders masks per drawable in high-precision mode.
 function getLive2DMaskRenderTextureCount(clippingContextCount) {
     if (!Number.isSafeInteger(clippingContextCount) || clippingContextCount < 0) {
         throw new TypeError(`Invalid Live2D clipping context count: ${clippingContextCount}`);
@@ -33,16 +36,16 @@ function getLive2DMaskRenderTextureCount(clippingContextCount) {
         LIVE2D_MIN_MASK_RENDER_TEXTURES,
         Math.ceil(clippingContextCount / LIVE2D_MULTI_MASK_TEXTURE_CAPACITY)
     );
-    if (renderTextureCount > LIVE2D_MAX_MASK_RENDER_TEXTURES) {
-        const error = new RangeError(
-            `Live2D model requires ${clippingContextCount} clipping contexts; `
-            + `the supported maximum is ${LIVE2D_MAX_MASK_RENDER_TEXTURES
-                * LIVE2D_MULTI_MASK_TEXTURE_CAPACITY}.`
-        );
-        error.name = 'Live2DMaskCapacityError';
-        throw error;
-    }
-    return renderTextureCount;
+    return renderTextureCount > LIVE2D_MAX_MASK_RENDER_TEXTURES ? null : renderTextureCount;
+}
+
+// High-precision mode redraws each clipped drawable's mask into the whole of
+// texture 0 right before drawing it, so it has no context-count limit. Pin it:
+// switching back to the shared atlas would exceed the atlas capacity.
+function forceLive2DHighPrecisionMask(renderer) {
+    renderer.useHighPrecisionMask(true);
+    renderer.useHighPrecisionMask = function() {};
+    renderer.__nekoHighPrecisionMaskForced = true;
 }
 
 function setLive2DMaskLayout(context, bufferIndex, channelNo, index, count) {
@@ -221,7 +224,17 @@ function configureLive2DClipping(renderer) {
         throw new Error('Cannot reconfigure Live2D clipping after mask texture allocation.');
     }
 
-    manager._renderTextureCount = renderTextureCount;
+    if (renderTextureCount === null) {
+        console.warn(
+            `Live2D 模型有 ${contextCount} 个遮罩上下文，超过遮罩图集容量`
+            + `（${LIVE2D_MAX_MASK_RENDER_TEXTURES * LIVE2D_MULTI_MASK_TEXTURE_CAPACITY}），`
+            + '改用高精度遮罩逐个绘制。'
+        );
+        manager._renderTextureCount = 1;
+        forceLive2DHighPrecisionMask(renderer);
+    } else {
+        manager._renderTextureCount = renderTextureCount;
+    }
     manager.setupLayoutBounds = setupLive2DMaskLayoutBounds;
     manager.calcClippedDrawTotalBounds = calculateLive2DClippedDrawBounds;
     manager.__nekoClippingFixApplied = true;
@@ -895,15 +908,6 @@ Live2DManager.prototype.loadModel = async function(modelPath, options = {}) {
         return model;
     } catch (error) {
         if (error && error.name === 'LoadSuperseded') {
-            throw error;
-        }
-        if (error && error.name === 'Live2DMaskCapacityError') {
-            console.error('Live2D 模型遮罩数量超过支持上限:', error);
-            const failedModel = this.currentModel;
-            this.currentModel = null;
-            try {
-                failedModel?.destroy?.({ children: true });
-            } catch (_) {}
             throw error;
         }
         if (error && error.name === 'PNGTuberActiveLive2DSkip') {

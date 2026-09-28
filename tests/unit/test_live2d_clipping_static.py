@@ -25,11 +25,14 @@ const bundle = fs.readFileSync('static/libs/index.min.js', 'utf8');
 const start = bundle.indexOf('class fe{');
 const end = bundle.indexOf('class Me{', start);
 assert.ok(start >= 0 && end > start, 'locate bundled clipping classes');
-function bundledClass(name, next) {
+function bundledClassSource(name, next) {
     const first = bundle.indexOf(`class ${name}{`);
     const last = bundle.indexOf(next, first);
     assert.ok(first >= 0 && last > first, `locate bundled ${name}`);
-    return new Function(bundle.slice(first, last) + `; return ${name};`)();
+    return bundle.slice(first, last);
+}
+function bundledClass(name, next) {
+    return new Function(bundledClassSource(name, next) + `; return ${name};`)();
 }
 const ClippingManager = new Function('ge', 'Ct', 'bt', 'Bt', 'Ot',
     'let _e = null, pe = [0, 0, 800, 600]; const Pt = { CubismBlendMode_Normal: 0 }; '
@@ -123,13 +126,20 @@ function assertValidLayout(manager, n, activeCount = n, setup = true) {
         assertValidLayout(manager, n);
     }
 
+    // Sparse checks for the grown atlas, up to the 32-texture budget.
+    for (const n of [300, 513, 1024]) {
+        const { manager } = await configure(n);
+        assert.equal(manager.getRenderTextureCount(), Math.ceil(n / 32));
+        assertValidLayout(manager, n);
+    }
+
     const empty = await configure(0);
     assert.equal(empty.manager.getRenderTextureCount(), 3);
     empty.manager.setupLayoutBounds(0);
 
     // Use the real SDK frame loop, including its rendering of inactive entries.
     // Slots must stay independent through activity changes and mode switches.
-    for (const n of [5, 37, 95, 256]) {
+    for (const n of [5, 37, 95, 256, 1024]) {
         const { manager } = await configure(n);
         manager.setGL({
             createTexture: () => ({}), createFramebuffer: () => ({}),
@@ -209,19 +219,41 @@ function assertValidLayout(manager, n, activeCount = n, setup = true) {
         assert.deepEqual(layout(), originalLayout);
     }
 
-    // 257 contexts exceed the explicit product limit and must fail before the
-    // model reaches the stage. Never alias every context onto a fallback slot.
-    const overflow = makeManager(257);
-    const overflowModel = {
-        internalModel: { renderer: { _clippingManager: overflow.manager }, coreModel: overflow.core }
+    // Beyond the atlas budget the model must still load: masks switch to the
+    // SDK's per-drawable high-precision path, pinned on, with one texture.
+    const hpRendererBase = {
+        _useHighPrecisionMask: false,
+        useHighPrecisionMask(value) { this._useHighPrecisionMask = value; },
+        isUsingHighPrecisionMask() { return this._useHighPrecisionMask; },
+        preDraw() {}, setIsCulling() {}, drawMesh() {},
+        setClippingContextBufferForMask() {},
     };
-    await assert.rejects(
-        sandbox.Live2DManager.prototype._configureLoadedModel.call(
-            { _isLoadTokenActive: () => true }, overflowModel,
-            '/user_live2d/test/test.model3.json', {}, 1),
-        error => error?.name === 'Live2DMaskCapacityError'
-            && /supported maximum is 256/.test(error.message)
-    );
+    const huge = await configure(1025, hpRendererBase);
+    const hpRenderer = huge.renderer;
+    assert.equal(huge.manager.getRenderTextureCount(), 1);
+    assert.equal(hpRenderer.isUsingHighPrecisionMask(), true);
+    assert.equal(hpRenderer.__nekoHighPrecisionMaskForced, true);
+    hpRenderer.useHighPrecisionMask(false);
+    assert.equal(hpRenderer.isUsingHighPrecisionMask(), true, 'high precision stays pinned');
+    huge.manager.setGL({
+        createTexture: () => ({}), createFramebuffer: () => ({}),
+        bindFramebuffer() {}, framebufferTexture2D() {}, bindTexture() {},
+        texImage2D() {}, texParameteri() {}, viewport() {}, clearColor() {}, clear() {},
+    });
+    huge.manager.setupClippingContext({
+        getDrawableVertexCount: () => 3,
+        getDrawableVertices: () => new Float32Array([-4, -3, -2, -1, -4, -1]),
+        getDrawableDynamicFlagVertexPositionsDidChange: () => true,
+        getPixelsPerUnit: () => 100,
+    }, hpRenderer);
+    huge.manager._clippingContextListForMask.forEach(context => {
+        assert.equal(context._isUsing, true);
+        assert.deepEqual([context._bufferIndex, context._layoutChannelNo,
+            context._layoutBounds.x, context._layoutBounds.y,
+            context._layoutBounds.width, context._layoutBounds.height], [0, 0, 0, 0, 1, 1]);
+        assert.ok([...context._matrixForDraw.getArray()].every(Number.isFinite));
+    });
+    assert.equal(huge.manager.getMaskRenderTexture().length, 1);
 
     // Regression for Number.MIN_VALUE: an all-negative drawable must not be
     // expanded to the model-space origin.
@@ -273,29 +305,37 @@ function assertValidLayout(manager, n, activeCount = n, setup = true) {
     assert.equal(textures.length, 3, 'reuse allocated mask textures');
 
     // The bundled profile overwrites the saved ARRAY_BUFFER value with the
-    // ELEMENT_ARRAY_BUFFER value. Verify the compatibility patch separates them.
+    // ELEMENT_ARRAY_BUFFER value. Patch the shipped class, not a replica, so a
+    // vendor change that stops matching the detector fails here.
+    const Profile = new Function('Ot', bundledClassSource('Me', 'class Ce{') + '; return Me;')(
+        () => {});
     const arrayBinding = { name: 'array' };
     const elementBinding = { name: 'element' };
-    const gl = {
-        ARRAY_BUFFER_BINDING: 1,
-        ELEMENT_ARRAY_BUFFER_BINDING: 2,
-        getParameter(parameter) {
-            return parameter === this.ARRAY_BUFFER_BINDING ? arrayBinding : elementBinding;
+    const bound = {};
+    const gl = new Proxy({}, {
+        get(target, prop) {
+            if (prop === 'getParameter') {
+                return parameter => ({
+                    ARRAY_BUFFER_BINDING: arrayBinding,
+                    ELEMENT_ARRAY_BUFFER_BINDING: elementBinding,
+                    COLOR_WRITEMASK: [true, true, true, true],
+                })[parameter] ?? null;
+            }
+            if (prop === 'bindBuffer') return (bufferTarget, buffer) => { bound[bufferTarget] = buffer; };
+            if (typeof prop === 'string' && /^[A-Z0-9_]+$/.test(prop)) return prop;
+            return () => null;
         },
-    };
-    const profile = {
-        gl,
-        save() {
-            this._lastArrayBufferBinding = this.gl.getParameter(this.gl.ARRAY_BUFFER_BINDING);
-            this._lastArrayBufferBinding = this.gl.getParameter(
-                this.gl.ELEMENT_ARRAY_BUFFER_BINDING
-            );
-        },
-    };
+    });
+    const profile = new Profile();
+    profile.setGl(gl);
     await configure(1, { _rendererProfile: profile });
+    assert.equal(profile.__nekoBufferBindingFixApplied, true);
     profile.save();
     assert.equal(profile._lastArrayBufferBinding, arrayBinding);
     assert.equal(profile._lastElementArrayBufferBinding, elementBinding);
+    profile.restore();
+    assert.equal(bound.ARRAY_BUFFER, arrayBinding);
+    assert.equal(bound.ELEMENT_ARRAY_BUFFER, elementBinding);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = run_node_stdin(
