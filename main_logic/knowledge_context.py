@@ -552,6 +552,21 @@ def register_public_knowledge_tool(
 class PublicKnowledgeTurnResult:
     context: str = ""
     route_owner: str | None = None
+    # Cooldown bookkeeping travels with the result instead of being written
+    # when retrieval finishes: the caller starts retrieval early and may drop
+    # the result (cancelled turn, failed request), and a card that never
+    # reached the model must not be suppressed for the rest of the session.
+    session_key: str = ""
+    card_identities: tuple[KnowledgeCardIdentity, ...] = ()
+
+
+def record_public_knowledge_delivery(result: PublicKnowledgeTurnResult) -> None:
+    """Put a turn's card on cooldown once that turn has entered history."""
+    if not result.context or not result.card_identities:
+        return
+    if not _session_delivery_is_valid(result.session_key):
+        return
+    _record_injections(result.session_key, result.card_identities)
 
 
 def _extract_explicit_local_knowledge_query(user_text: str) -> str:
@@ -729,14 +744,16 @@ async def build_public_knowledge_turn_context(
         )
         if not delivery_valid or repeated:
             return PublicKnowledgeTurnResult()
-        if result.text:
-            _record_injections(session_key, result.card_identities)
         logger.info(
             "[public-knowledge] automatic turn context hits=%d mode=%s",
             result.hit_count,
             result.match_mode,
         )
-        return PublicKnowledgeTurnResult(context=result.text)
+        return PublicKnowledgeTurnResult(
+            context=result.text,
+            session_key=session_key,
+            card_identities=tuple(result.card_identities),
+        )
     except Exception as exc:
         logger.warning(
             "[public-knowledge] automatic turn context failed: %s",

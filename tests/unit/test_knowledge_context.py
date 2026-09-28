@@ -682,6 +682,7 @@ async def test_same_card_is_not_injected_twice_in_a_row(monkeypatch):
         "聊聊永动机", session_key="lanlan"
     )
     assert first.context, "the first match should be delivered"
+    knowledge_tool.record_public_knowledge_delivery(first)
 
     second = await knowledge_tool.build_public_knowledge_turn_context(
         "再说说永动机", session_key="lanlan"
@@ -708,6 +709,7 @@ async def test_cooldown_is_scoped_per_session(monkeypatch):
         "聊聊永动机", session_key="lanlan-a"
     )
     assert first.context
+    knowledge_tool.record_public_knowledge_delivery(first)
 
     # The other half of "scoped": A must actually be on cooldown, otherwise a
     # globally broken cooldown would satisfy the B assertion just as well.
@@ -742,6 +744,7 @@ async def test_a_different_card_still_gets_through(monkeypatch):
     first = await knowledge_tool.build_public_knowledge_turn_context(
         "聊聊永动机", session_key="lanlan"
     )
+    knowledge_tool.record_public_knowledge_delivery(first)
     second = await knowledge_tool.build_public_knowledge_turn_context(
         "那薛定谔的猫呢", session_key="lanlan"
     )
@@ -777,6 +780,7 @@ async def test_dedup_lasts_the_whole_session_and_no_longer(monkeypatch):
         "聊聊永动机", session_key="session-1"
     )
     assert first.context
+    knowledge_tool.record_public_knowledge_delivery(first)
 
     # Still the same session, arbitrarily later in the conversation.
     for _ in range(5):
@@ -791,6 +795,58 @@ async def test_dedup_lasts_the_whole_session_and_no_longer(monkeypatch):
         "聊聊永动机", session_key="session-2"
     )
     assert after_reset.context, "a rebuilt session must start with a clean slate"
+
+
+@pytest.mark.asyncio
+async def test_a_card_whose_turn_never_reached_history_is_not_suppressed(monkeypatch):
+    """Retrieval starts before the turn is certain to be sent.
+
+    The card goes on cooldown when its turn is committed, not when retrieval
+    finishes, so a turn that was cancelled or failed before reaching history
+    leaves the card deliverable on the next turn.
+    """
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context("永动机")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+
+    dropped = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan"
+    )
+    assert dropped.context
+    retried = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="lanlan"
+    )
+    assert retried.context, "an undelivered card must stay deliverable"
+
+
+@pytest.mark.asyncio
+async def test_delivery_after_the_session_ended_records_nothing(monkeypatch):
+    import main_logic.knowledge_context as knowledge_tool
+
+    knowledge_tool.reset_public_knowledge_injection_state()
+
+    async def _context(*_args, **_kwargs):
+        return _turn_context("永动机")
+
+    monkeypatch.setattr(knowledge_tool, "open_knowledge", lambda _root: object())
+    monkeypatch.setattr(
+        knowledge_tool, "build_automatic_public_knowledge_context", _context
+    )
+
+    result = await knowledge_tool.build_public_knowledge_turn_context(
+        "聊聊永动机", session_key="session-old"
+    )
+    knowledge_tool.invalidate_public_knowledge_session("session-old")
+    knowledge_tool.record_public_knowledge_delivery(result)
+    assert "session-old" not in knowledge_tool._RECENT_INJECTIONS
 
 
 @pytest.mark.asyncio

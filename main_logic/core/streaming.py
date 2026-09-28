@@ -44,6 +44,26 @@ from ._shared import (
 from main_logic import core as _core_facade
 
 
+def _discard_task_outcome(task: asyncio.Future) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+def _start_public_knowledge_turn_context(
+    user_text: str,
+    session_key: str,
+) -> asyncio.Future:
+    """Run one turn's knowledge retrieval alongside the rest of turn setup."""
+    from main_logic.knowledge_context import build_public_knowledge_turn_context
+
+    task = asyncio.ensure_future(
+        build_public_knowledge_turn_context(user_text, session_key=session_key)
+    )
+    # The turn can fail before it awaits this; its outcome is then unused.
+    task.add_done_callback(_discard_task_outcome)
+    return task
+
+
 class StreamingMixin:
     """Live input streaming methods (see module docstring)."""
 
@@ -548,6 +568,26 @@ class StreamingMixin:
                     if hasattr(self.session, 'update_max_response_length'):
                         self.session.update_max_response_length(self._get_text_guard_max_length())
 
+                    # Knowledge retrieval only needs the user's text, and the
+                    # card has to be in the request, so it is started here and
+                    # awaited right before stream_text: the interrupt, TTS
+                    # clear, sid rotation and callback staging below overlap it
+                    # instead of adding its budget to every turn's first token.
+                    # If setup fails before the await, the task is left to run
+                    # out its own budget and its result is dropped; that has no
+                    # lasting effect, since the card only goes on cooldown once
+                    # its turn reaches history.
+                    #
+                    # An explicit openclaw magic command never builds a reply;
+                    # retrieval for it falls back to the serial path below if
+                    # the command turns out not to be dispatched.
+                    _knowledge_task = None
+                    if not self._normalize_explicit_openclaw_magic_command(data):
+                        _knowledge_task = _start_public_knowledge_turn_context(
+                            record_data,
+                            str(getattr(self, "_public_knowledge_session_key", "") or ""),
+                        )
+
                     # 先打断当前正在播放的语音（旧speech_id），避免误打断新回复
                     async with self.lock:
                         interrupted_speech_id = self.current_speech_id
@@ -738,16 +778,15 @@ class StreamingMixin:
                             record_data,
                             request_id=text_request_id,
                         )
-                        from main_logic.knowledge_context import (
-                            build_public_knowledge_turn_context,
-                        )
-
-                        _knowledge_turn_result = await build_public_knowledge_turn_context(
-                            record_data,
-                            session_key=str(
-                                getattr(self, "_public_knowledge_session_key", "") or ""
-                            ),
-                        )
+                        if _knowledge_task is None:
+                            _knowledge_task = _start_public_knowledge_turn_context(
+                                record_data,
+                                str(
+                                    getattr(self, "_public_knowledge_session_key", "")
+                                    or ""
+                                ),
+                            )
+                        _knowledge_turn_result = await _knowledge_task
                         _knowledge_turn_context = _knowledge_turn_result.context
                         _route_request_id = str(text_request_id or "")
                         if _route_request_id:
@@ -837,6 +876,28 @@ class StreamingMixin:
                             stream_text_kwargs["on_turn_committed"] = (
                                 _mark_cb_turn_committed
                             )
+                        if _knowledge_turn_context:
+                            # The card goes on cooldown only once this turn is in
+                            # history, so a failed or cancelled turn can still
+                            # deliver it next time.
+                            from main_logic.knowledge_context import (
+                                record_public_knowledge_delivery,
+                            )
+
+                            def _on_turn_committed(
+                                _result=_knowledge_turn_result,
+                            ) -> None:
+                                _mark_cb_turn_committed()
+                                try:
+                                    record_public_knowledge_delivery(_result)
+                                except Exception as _cooldown_error:
+                                    logger.warning(
+                                        "[%s] knowledge card cooldown not recorded: %s",
+                                        self.lanlan_name,
+                                        type(_cooldown_error).__name__,
+                                    )
+
+                            stream_text_kwargs["on_turn_committed"] = _on_turn_committed
                         if input_transcript_callback:
                             stream_text_kwargs["input_transcript_callback"] = input_transcript_callback
                         if memory_text:

@@ -4649,6 +4649,104 @@ async def test_typed_text_cancels_the_in_flight_offline_stream_first(monkeypatch
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_text_turn_retrieves_knowledge_while_it_interrupts_the_old_stream(
+    monkeypatch,
+):
+    """Retrieval overlaps turn setup instead of adding its budget to it.
+
+    The interrupt below waits for retrieval to start; a serial implementation
+    only starts retrieval after the interrupt has returned.
+    """
+    import main_logic.knowledge_context as knowledge_context
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    retrieval_started = asyncio.Event()
+    seen_kwargs = {}
+
+    async def _build(_text, *, session_key=""):
+        retrieval_started.set()
+        return knowledge_context.PublicKnowledgeTurnResult(context="card")
+
+    overlapped = {}
+
+    async def _handle_interruption():
+        try:
+            await asyncio.wait_for(retrieval_started.wait(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+        overlapped["during_interrupt"] = retrieval_started.is_set()
+
+    async def _stream_text(_text, **kwargs):
+        seen_kwargs.update(kwargs)
+
+    monkeypatch.setattr(
+        knowledge_context, "build_public_knowledge_turn_context", _build
+    )
+    session.handle_interruption = AsyncMock(side_effect=_handle_interruption)
+    session.stream_text = AsyncMock(side_effect=_stream_text)
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "聊聊永动机"},
+    )
+
+    assert overlapped == {"during_interrupt": True}
+    assert seen_kwargs.get("ephemeral_response_instruction") == "card"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_knowledge_card_goes_on_cooldown_only_when_its_turn_commits(
+    monkeypatch,
+):
+    import main_logic.knowledge_context as knowledge_context
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    result = knowledge_context.PublicKnowledgeTurnResult(context="card")
+    delivered = []
+
+    async def _build(_text, *, session_key=""):
+        return result
+
+    commit = {"now": False}
+
+    async def _stream_text(_text, **kwargs):
+        if commit["now"]:
+            kwargs["on_turn_committed"]()
+        raise RuntimeError("provider dropped")
+
+    monkeypatch.setattr(
+        knowledge_context, "build_public_knowledge_turn_context", _build
+    )
+    monkeypatch.setattr(
+        knowledge_context, "record_public_knowledge_delivery", delivered.append
+    )
+    session.stream_text = AsyncMock(side_effect=_stream_text)
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "聊聊永动机"},
+    )
+    assert delivered == [], "a turn that never reached history delivered nothing"
+
+    commit["now"] = True
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "聊聊永动机"},
+    )
+    assert delivered == [result]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_callback_media_returns_when_cancelled_before_the_stream_begins(
     monkeypatch,
 ):
