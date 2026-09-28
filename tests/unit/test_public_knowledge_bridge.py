@@ -159,6 +159,28 @@ def test_local_bridge_accepts_only_supported_local_origins(monkeypatch):
         assert failure.value.status_code == 403
 
 
+def test_packaged_bridge_rejects_the_vite_dev_origin(monkeypatch):
+    """5173 is the repository Vite dev server; a packaged build must not trust it."""
+    from plugin.server.routes import market_bridge as module
+
+    monkeypatch.setattr(module, "_main_server_port", lambda: 49321)
+    monkeypatch.setattr(module, "_ALLOW_PLUGIN_MANAGER_DEV_ORIGIN", False)
+
+    def request(origin: str):
+        return SimpleNamespace(
+            headers={"host": "127.0.0.1:48910", "origin": origin},
+            client=SimpleNamespace(host="127.0.0.1"),
+        )
+
+    for origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+        with pytest.raises(HTTPException) as failure:
+            module._require_local_bridge_token_access(request(origin))
+        assert failure.value.status_code == 403
+    assert module._require_local_bridge_token_access(
+        request("http://127.0.0.1:49321")
+    ) == 48910
+
+
 def test_knowledge_bridge_rejects_oversized_body_before_forwarding(monkeypatch):
     captured = {}
     client = _client(monkeypatch, captured)

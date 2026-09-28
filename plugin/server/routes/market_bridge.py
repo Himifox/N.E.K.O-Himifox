@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import secrets
+import sys
 import tempfile
 import time
 import tomllib
@@ -94,6 +95,15 @@ _TASK_MAX_ENTRIES = 200
 _ONE_TIME_CODES: dict[str, float] = {}
 _ONE_TIME_CODE_TTL_SECONDS = 5 * 60
 _PLUGIN_MANAGER_DEV_PORT = 5173
+# The repository's Vite dev server (plugin-manager `npm run dev`) proxies
+# /market/* with the browser's Origin intact, so the bridge must accept 5173
+# while developing. A packaged build never runs that server, and there any
+# unrelated local page on 5173 (another project's dev server) would otherwise
+# be able to read the bridge token. Nuitka marks compiled modules with
+# __compiled__, PyInstaller sets sys.frozen.
+_ALLOW_PLUGIN_MANAGER_DEV_ORIGIN = not (
+    bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+)
 
 # OAuth 登录状态存储在本机用户目录，仅供本地插件面板使用。
 _OAUTH_CLIENT_ID = NEKO_AUTH_CLIENT_ID
@@ -349,11 +359,9 @@ def _require_local_bridge_token_access(request: Request) -> int:
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
 
     origin = request.headers.get("origin")
-    expected_origin_ports = {
-        request_port,
-        _main_server_port(),
-        _PLUGIN_MANAGER_DEV_PORT,
-    }
+    expected_origin_ports = {request_port, _main_server_port()}
+    if _ALLOW_PLUGIN_MANAGER_DEV_ORIGIN:
+        expected_origin_ports.add(_PLUGIN_MANAGER_DEV_PORT)
     if origin and not _is_local_bridge_origin(origin, expected_origin_ports):
         raise HTTPException(status_code=403, detail="仅允许本地同源访问")
     return request_port
