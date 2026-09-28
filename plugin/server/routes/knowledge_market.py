@@ -69,6 +69,9 @@ _unsubscribe_settlements: dict[int, asyncio.Task[dict[str, Any]]] = {}
 _TASK_TTL_SECONDS = 60 * 60
 _TASK_MAX_ENTRIES = 200
 _MAX_ACTIVE_SUBSCRIPTIONS = 4
+# Workers that gave their download slot back still poll an indexing job for up
+# to _JOB_WAIT_TIMEOUT_SECONDS; this bounds how many of those can pile up.
+_MAX_TRACKED_SUBSCRIPTIONS = 32
 _JOB_POLL_SECONDS = 5.0
 _JOB_WAIT_TIMEOUT_SECONDS = 24 * 60 * 60
 _MAX_INDEX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -171,7 +174,10 @@ async def subscribe_knowledge_package(
             status_code=409,
             detail={"code": "knowledge_subscription_conflict"},
         )
-    if _subscription_slots_in_use() >= _MAX_ACTIVE_SUBSCRIPTIONS:
+    if (
+        _subscription_slots_in_use() >= _MAX_ACTIVE_SUBSCRIPTIONS
+        or len(_task_workers) >= _MAX_TRACKED_SUBSCRIPTIONS
+    ):
         raise HTTPException(
             status_code=429,
             detail={"code": "knowledge_subscription_busy"},

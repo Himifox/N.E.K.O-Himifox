@@ -1884,6 +1884,38 @@ async def test_indexing_waits_do_not_hold_a_subscription_slot():
 
 
 @pytest.mark.asyncio
+async def test_indexing_waits_are_bounded_in_total(monkeypatch):
+    """Released slots must not let indexing pollers accumulate without limit."""
+    monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
+    release = asyncio.Event()
+    workers = [
+        asyncio.create_task(release.wait())
+        for _ in range(module._MAX_TRACKED_SUBSCRIPTIONS)
+    ]
+    for index, worker in enumerate(workers):
+        task_id = f"indexing-{index}"
+        module._task_workers[task_id] = worker
+        module._tasks[task_id] = {"task_id": task_id, "slot_released": True}
+    try:
+        assert module._subscription_slots_in_use() == 0
+        with pytest.raises(HTTPException) as busy:
+            await module.subscribe_knowledge_package(
+                module.KnowledgeSubscribeRequest(
+                    package_id=99, version="1.0.0", pack_id="fixture-pack-99"
+                ),
+                token="fixture",
+            )
+        assert busy.value.status_code == 429
+        assert busy.value.detail == {"code": "knowledge_subscription_busy"}
+    finally:
+        release.set()
+        await asyncio.gather(*workers)
+        for index in range(len(workers)):
+            module._task_workers.pop(f"indexing-{index}", None)
+            module._tasks.pop(f"indexing-{index}", None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("installed_sha", "expected"),
     (("a" * 64, "active"), ("b" * 64, "job_not_found")),
