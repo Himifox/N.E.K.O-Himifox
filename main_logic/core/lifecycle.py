@@ -2648,6 +2648,13 @@ class LifecycleMixin:
             next_session_context_messages = list(getattr(self, "next_session_context_messages", []) or [])
             self.initial_next_session_context_snapshot_len = len(next_session_context_messages)
             self.initial_cache_snapshot_len = len(self.message_cache_for_new_session)
+            # Snapshot the cache the same way as next_session_context_messages
+            # above: the prompt must render the state the snapshot length was
+            # taken from. Anything appended while the memory request is in
+            # flight is picked up by the swap-time slice
+            # (``initial_cache_snapshot_len:`` below), so rendering the live
+            # cache here primes those entries twice.
+            initial_cache_snapshot = list(self.message_cache_for_new_session)
             from utils.internal_http_client import get_internal_http_client
             _hs_client = get_internal_http_client()
             try:
@@ -2664,7 +2671,7 @@ class LifecycleMixin:
             initial_prompt += (
                 resp.text
                 + self._convert_cache_to_str(next_session_context_messages)
-                + self._convert_cache_to_str(self.message_cache_for_new_session)
+                + self._convert_cache_to_str(initial_cache_snapshot)
             )
             self._bind_session_lifecycle_callbacks(self.pending_session)
             await self.pending_session.connect(initial_prompt, native_audio=not self.pending_use_tts)

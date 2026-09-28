@@ -3706,4 +3706,23 @@ class ProactiveMixin:
                 cb for cb in self.pending_agent_callbacks
                 if id(cb) not in delivered_obj_ids
             ]
+            # The voice-mode mirror of a callback this drain rendered has been
+            # spoken about too. Dropping only the callback half leaves the
+            # mirror for the next hot swap to re-prime, which re-announces it —
+            # the same paired prune trigger_agent_callbacks already does on the
+            # voice path (see the delivered_ids block there).
+            delivered_delivery_ids = {
+                cb.get("_callback_delivery_id")
+                for cb in active_callbacks
+                if cb.get("_callback_delivery_id")
+            }
+            if delivered_delivery_ids:
+                # getattr like the enqueue path above: a manager built without
+                # __init__ has no queue yet, and a raise here would replace this
+                # function's return value, silently emptying the whole drain.
+                self.pending_extra_replies = [
+                    extra
+                    for extra in (getattr(self, "pending_extra_replies", None) or [])
+                    if extra.get("_callback_delivery_id") not in delivered_delivery_ids
+                ]
             self._release_agent_callback_prompt_claims(callbacks_snapshot)

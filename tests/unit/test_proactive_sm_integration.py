@@ -1313,15 +1313,22 @@ def test_drain_agent_callbacks_purges_retracted_callbacks_and_extras():
         "summary": "cancelled",
     }
     active_extra = {"_callback_delivery_id": "id-active-drain", "origin": "task_result", "summary": "shown"}
+    # Neither retracted nor delivered: proves the prunes below are targeted
+    # rather than a blanket clear of the queue.
+    survivor_extra = {"_callback_delivery_id": "id-survivor-drain", "origin": "task_result", "summary": "pending"}
     mgr.pending_agent_callbacks = [retracted_cb, active_cb]
-    mgr.pending_extra_replies = [retracted_extra, active_extra]
+    mgr.pending_extra_replies = [retracted_extra, active_extra, survivor_extra]
 
     rendered = core_module.LLMSessionManager.drain_agent_callbacks_for_llm(mgr)
 
     assert "shown" in rendered
     assert "cancelled" not in rendered
     assert mgr.pending_agent_callbacks == []
-    assert mgr.pending_extra_replies == [active_extra]
+    # Both halves go: the retracted pair is purged, and active_cb was rendered
+    # so its voice mirror is delivered too. Leaving the mirror behind lets the
+    # next hot swap re-prime it, re-announcing what the model just said — the
+    # same paired prune trigger_agent_callbacks already does on the voice path.
+    assert mgr.pending_extra_replies == [survivor_extra]
 
 
 async def test_drain_agent_callbacks_resolves_delivery_ack():
@@ -1775,8 +1782,14 @@ async def test_drain_agent_callbacks_rechecks_topic_release_gate():
         "origin": "task_result",
         "summary": "regular callback",
     }
+    # Untouched by either prune: neither retracted nor delivered.
+    survivor_extra = {
+        "_callback_delivery_id": "id-survivor-gate",
+        "origin": "task_result",
+        "summary": "still pending",
+    }
     mgr.pending_agent_callbacks = [topic_cb, normal_cb]
-    mgr.pending_extra_replies = [topic_extra, normal_extra]
+    mgr.pending_extra_replies = [topic_extra, normal_extra, survivor_extra]
 
     rendered = core_module.LLMSessionManager.drain_agent_callbacks_for_llm(mgr)
 
@@ -1787,7 +1800,10 @@ async def test_drain_agent_callbacks_rechecks_topic_release_gate():
     assert normal_future.done()
     assert normal_future.result() is True
     assert mgr.pending_agent_callbacks == []
-    assert mgr.pending_extra_replies == [normal_extra]
+    # normal_cb was delivered, so its voice mirror leaves with it; the topic
+    # pair is cleared by the gate. See the paired-prune note in
+    # test_drain_agent_callbacks_purges_retracted_callbacks_and_extras.
+    assert mgr.pending_extra_replies == [survivor_extra]
 
 
 async def test_voice_mode_reject_during_await_not_pruned():
