@@ -41,6 +41,7 @@ These documents preserve design intent and implementation context. They are grou
 
 ## Security, persistence, and incident analysis
 
+- [Screen-history isolation and local references](./screen-history-local-reference) — Chinese-only proposal; explicit reference selection, delivery and context isolation, not implemented.
 - [Local mutation endpoint authentication](./security/local-mutation-auth)
 - [Steam Auto-Cloud synchronization](./cloud-save-sync-optimization-plan)
 - [Telemetry distribution and Steam user ID race](./telemetry-distribution-race-impact)
