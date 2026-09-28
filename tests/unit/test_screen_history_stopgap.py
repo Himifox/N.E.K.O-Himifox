@@ -210,3 +210,78 @@ def test_untouched_messages_and_roles_pass_the_client_path_unchanged():
         {"role": "user", "content": [image, {"type": "text", "text": "看看图"}]},
     ]
     assert client._dialog_messages_for_provider(messages) is messages
+
+
+# ── Cross-message chains ────────────────────────────────────────────────────
+# A chain can be spread over several messages, and whether it propagates is
+# positional. Both halves of the rule were measured separately against a real
+# model, so each is pinned here:
+#
+#   [u, a, a, ask]   chains 5/5        a run answering a user turn propagates
+#   [u, a×7, ask]    chains 2/2
+#   [a×7, u]         chains 0/3        no user turn ahead of the run
+#   [a×7, u1, ask]   chains 0/2        an intervening user turn ends it
+#   [u, a, tool, a]  chains 0/3        a tool result ends it
+#
+# The first two are why the run is merged at all; the last three are why the
+# merge is bounded rather than global.
+
+_COMMENT_A = "屏幕搭话 蓝色小车停在一棵大树旁边，树叶的影子落在了车顶上。"
+_COMMENT_B = "屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"
+
+
+def _assistant(text):
+    return {"role": "assistant", "content": text}
+
+
+def _user(text):
+    return {"role": "user", "content": text}
+
+
+def _quarantined(messages):
+    projected = project_screen_history(messages)
+    return [i for i, (new, old) in enumerate(zip(projected, messages)) if new is not old]
+
+
+def test_chain_spread_over_the_run_answering_a_user_turn_is_quarantined():
+    messages = [{"role": "system", "content": "sys"},
+                _user("陪我聊聊。"), _assistant(_COMMENT_A), _assistant(_COMMENT_B),
+                _user("那你继续说说。")]
+    assert screen_chain_start(_COMMENT_A) is None, "one comment alone is not a chain"
+    assert screen_chain_start(_COMMENT_B) is None
+    assert _quarantined(messages) == [2, 3]
+
+
+def test_deliveries_with_no_user_turn_ahead_are_left_alone():
+    """The app's own proactive deliveries: 7 single-comment messages, then the
+    user replies. Measured 0/3 propagation, and the shape the payload test
+    pins as must-pass."""
+    messages = [{"role": "system", "content": "sys"}] + [
+        _assistant(f"屏幕搭话 第{index}条观察，画面里有些东西值得说。") for index in range(7)
+    ] + [_user("陪我聊聊。")]
+    assert _quarantined(messages) == []
+
+
+def test_intervening_user_turn_ends_the_run():
+    messages = [{"role": "system", "content": "sys"},
+                _assistant(_COMMENT_A), _assistant(_COMMENT_B),
+                _user("陪我聊聊。"), _user("那你继续说说。")]
+    assert _quarantined(messages) == []
+
+
+def test_tool_result_ends_the_run():
+    """Measured 0/3: the tool boundary breaks the pattern rather than
+    continuing it, so the two halves are not merged across it."""
+    messages = [{"role": "system", "content": "sys"}, _user("陪我聊聊。"),
+                _assistant(_COMMENT_A),
+                {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+                _assistant(_COMMENT_B), _user("那你继续说说。")]
+    assert _quarantined(messages) == []
+
+
+def test_a_single_trailing_comment_is_not_a_chain():
+    """One comment in the run is not a chain, so a normal single delivery
+    survives even when it answers a user turn."""
+    messages = [{"role": "system", "content": "sys"}, _user("陪我聊聊。"),
+                _assistant(_COMMENT_A), _user("那你继续说说。")]
+    assert _quarantined(messages) == []

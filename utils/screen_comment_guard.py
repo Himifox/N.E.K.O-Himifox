@@ -55,6 +55,53 @@ def screen_guard_enabled(messages) -> bool:
     return True
 
 
+def _role_and_content(message):
+    if isinstance(message, dict):
+        return message.get("role"), message.get("content")
+    return getattr(message, "type", None), getattr(message, "content", None)
+
+
+def _assistant_tail_run(messages) -> tuple[int, int]:
+    """Half-open range of the consecutive assistant messages that answer the
+    last user turn; ``(n, n)`` when there is no such run.
+
+    The run must sit immediately before the last user message *and* be
+    preceded by a user message. Both halves are load-bearing and were measured
+    separately:
+
+    * ``[u, a, a, ask]`` and ``[u, a×7, ask]`` chain (5/5 and 2/2), so a run
+      before the current turn does propagate.
+    * ``[a×7, u]`` — the shape the app's own proactive deliveries produce, with
+      no user turn ahead of them — does **not** chain (0/3), so requiring the
+      preceding user message is what keeps normal history out of quarantine.
+    * ``[a×7, u1, ask]`` does not chain either (0/2): an intervening user turn
+      ends it.
+    * A non-assistant message ends the run, which is why the measured
+      tool-boundary case does not chain (0/3).
+    """
+    last_user = -1
+    for index, message in enumerate(messages):
+        role, _content = _role_and_content(message)
+        if role in {"user", "human"}:
+            last_user = index
+    if last_user <= 1:
+        return 0, 0
+    start = last_user
+    while start > 0:
+        role, _content = _role_and_content(messages[start - 1])
+        if role not in {"assistant", "ai"}:
+            break
+        start -= 1
+    if start == last_user:
+        return 0, 0
+    # A run with no user turn ahead of it is unprompted proactive output, which
+    # the model does not continue.
+    preceding_role, _content = _role_and_content(messages[start - 1])
+    if preceding_role not in {"user", "human"}:
+        return 0, 0
+    return start, last_user
+
+
 def project_screen_history(messages, *, guard_enabled: bool | None = None):
     """Return a request-only view; keep saved transcripts and tool metadata.
 
@@ -65,6 +112,12 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None):
     are preserved so the provider contract and tool-result pairing stay
     intact. Only the copy is touched; ``messages`` is never mutated.
 
+    A chain may also be spread over several messages. When the consecutive
+    assistant run immediately before the last user turn carries one, every
+    message in that run is quarantined — judging each message alone would miss
+    it, while merging across user turns would quarantine the app's own
+    independent proactive deliveries.
+
     Detection needs labelled, multi-item chains. Unlabelled history and
     comments below ``MIN_PROSE`` are left byte-for-byte alone, silently.
     """
@@ -72,20 +125,28 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None):
         guard_enabled = screen_guard_enabled(messages)
     if not guard_enabled:
         return messages
+    tail_start, tail_end = _assistant_tail_run(messages)
+    tail_quarantine: set[int] = set()
+    if tail_end - tail_start >= 2:
+        merged = "".join(
+            content
+            for content in (c for _role, c in map(_role_and_content, messages[tail_start:tail_end]))
+            if isinstance(content, str)
+        )
+        if screen_chain_start(merged) is not None:
+            tail_quarantine = set(range(tail_start, tail_end))
     projected = []
     changed = 0
-    for message in messages:
-        if isinstance(message, dict):
-            role = message.get("role")
-            content = message.get("content")
-        else:
-            role = getattr(message, "type", None)
-            content = getattr(message, "content", None)
+    for index, message in enumerate(messages):
+        role, content = _role_and_content(message)
         is_assistant = role in {"assistant", "ai"}
         if (
             not is_assistant
             or not isinstance(content, str)
-            or screen_chain_start(content) is None
+            or (
+                index not in tail_quarantine
+                and screen_chain_start(content) is None
+            )
         ):
             projected.append(message)
             continue
