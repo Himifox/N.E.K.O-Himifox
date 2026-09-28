@@ -467,7 +467,12 @@ class _LifecycleMixin:
                 _ephemeral_msg = HumanMessage(content=instruction)
         else:
             _ephemeral_msg = HumanMessage(content=instruction)
-        messages_to_send = self._conversation_history + [_ephemeral_msg]
+        # A text turn streaming concurrently may have its own turn-local
+        # instruction (e.g. a knowledge card) in the shared history; it was
+        # written for that turn, not this one.
+        messages_to_send = self._history_without_inflight_turn_instructions() + [
+            _ephemeral_msg
+        ]
         # 送达之后要抄给插件总线的东西：这一轮的指令，以及（若有）真正附上的那批
         # 图。一个槽装两样，是为了让「一轮只发一次」只有一处清标记 —— 两个槽两处
         # 清，就是下一次有人只清了其中一个的地方。None = 已经发过了。

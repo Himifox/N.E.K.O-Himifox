@@ -314,6 +314,45 @@ async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_proactive_turn_does_not_see_a_text_turns_card(monkeypatch):
+    """The card is in the shared history only for its own turn's requests.
+
+    In text mode a proactive ``prompt_ephemeral`` can run while ``stream_text``
+    is mid-stream; it must not send the other turn's instruction as if a user
+    had said it.
+    """
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from utils.llm_client import LLMStreamChunk
+
+    sent = []
+
+    async def _astream(self, messages, **_overrides):
+        sent.append([str(getattr(message, "content", "")) for message in messages])
+        if len(sent) == 1:
+            await self.prompt_ephemeral("proactive instruction")
+        yield LLMStreamChunk(content="reply")
+
+    async def _noop(*_args, **_kwargs):
+        pass
+
+    monkeypatch.setattr(OmniOfflineClient, "_astream_with_tools", _astream)
+    client = _make_client()
+    client.on_response_done = _noop
+    client.on_status_message = _noop
+
+    await client.stream_text(
+        "raw user message",
+        ephemeral_response_instruction="knowledge card for this turn",
+    )
+
+    assert len(sent) >= 2
+    assert "knowledge card for this turn" in sent[0]
+    assert "proactive instruction" in sent[1]
+    assert "knowledge card for this turn" not in sent[1]
+    assert client._inflight_turn_instructions() == []
+
+
+@pytest.mark.asyncio
 async def test_ephemeral_meme_instruction_is_removed_after_stream_error(monkeypatch):
     from main_logic.omni_offline_client import OmniOfflineClient
 

@@ -134,6 +134,24 @@ class _StreamingMixin:
                 return len(variant)
         return 0
 
+    def _inflight_turn_instructions(self) -> list:
+        """Turn-local instructions a running ``stream_text`` put in history."""
+        inflight = getattr(self, "_inflight_turn_instruction_messages", None)
+        if inflight is None:
+            inflight = []
+            self._inflight_turn_instruction_messages = inflight
+        return inflight
+
+    def _history_without_inflight_turn_instructions(self) -> list:
+        inflight = self._inflight_turn_instructions()
+        if not inflight:
+            return list(self._conversation_history)
+        return [
+            message
+            for message in self._conversation_history
+            if not any(message is instruction for instruction in inflight)
+        ]
+
     async def connect(self, instructions: str, native_audio=False) -> None:
         """Initialize the client with system instructions."""
         self._instructions = instructions
@@ -991,6 +1009,11 @@ class _StreamingMixin:
                     content=_ephemeral_instruction_clean
                 )
                 self._conversation_history.append(_ephemeral_instruction_message)
+                # The instruction sits in the shared history only for this
+                # turn's own requests; other readers skip it by identity.
+                self._inflight_turn_instructions().append(
+                    _ephemeral_instruction_message
+                )
             reroll_count = 0
             set_call_type("conversation")
 
@@ -2009,6 +2032,11 @@ class _StreamingMixin:
                 for index in range(len(self._conversation_history) - 1, -1, -1):
                     if self._conversation_history[index] is _ephemeral_instruction_message:
                         del self._conversation_history[index]
+                        break
+                _inflight = self._inflight_turn_instructions()
+                for index in range(len(_inflight) - 1, -1, -1):
+                    if _inflight[index] is _ephemeral_instruction_message:
+                        del _inflight[index]
                         break
 
             if (
