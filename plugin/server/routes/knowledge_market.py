@@ -171,7 +171,7 @@ async def subscribe_knowledge_package(
             status_code=409,
             detail={"code": "knowledge_subscription_conflict"},
         )
-    if len(_task_workers) >= _MAX_ACTIVE_SUBSCRIPTIONS:
+    if _subscription_slots_in_use() >= _MAX_ACTIVE_SUBSCRIPTIONS:
         raise HTTPException(
             status_code=429,
             detail={"code": "knowledge_subscription_busy"},
@@ -206,6 +206,20 @@ async def subscribe_knowledge_package(
     )
     _cleanup_tasks()
     return {"task_id": task_id, "status": "pending"}
+
+
+def _subscription_slots_in_use() -> int:
+    """Workers still downloading or installing; indexing waits do not count.
+
+    The cap bounds concurrent artifact downloads and installs. Once a pack is
+    staged the worker only polls the Main Server job every few seconds while
+    indexing runs (up to a day with local embedding), so it gives its slot back.
+    """
+    return sum(
+        1
+        for task_id in _task_workers
+        if not _tasks.get(task_id, {}).get("slot_released")
+    )
 
 
 def _subscription_done(
@@ -837,7 +851,16 @@ async def _execute_subscription(
             )
         job_id = str(result.get("job_id") or "")
         if job_id:
-            activated = await _wait_for_pack_job(task, job_id=job_id)
+            # Staged: the artifacts now live in the Main Server job, so neither
+            # the bytes nor a download slot need to outlive the indexing wait.
+            raw = pack_payload = manifest_raw = vectors_raw = None
+            task["slot_released"] = True
+            activated = await _wait_for_pack_job(
+                task,
+                job_id=job_id,
+                expected_pack_id=descriptor.pack_id,
+                expected_artifact_sha256=descriptor.artifacts.knowledge.sha256,
+            )
             result = {**result, "activation": activated}
         task["result"] = result
         task["status"] = "completed"
@@ -1163,6 +1186,8 @@ async def _wait_for_pack_job(
     task: dict[str, Any],
     *,
     job_id: str,
+    expected_pack_id: str = "",
+    expected_artifact_sha256: str = "",
 ) -> dict[str, Any]:
     """Keep marketplace install pending until the staged pack is truly active."""
     deadline = time.monotonic() + _JOB_WAIT_TIMEOUT_SECONDS
@@ -1183,6 +1208,13 @@ async def _wait_for_pack_job(
             None,
         )
         if job is None:
+            # Terminal jobs are pruned by count and age, so an activated job
+            # can vanish between two polls. The installed registry is the
+            # durable record: accept it only for this exact pack and artifact.
+            if await _installed_pack_matches(
+                expected_pack_id, expected_artifact_sha256
+            ):
+                return {"job_id": job_id, "state": "active", "reconciled": "registry"}
             raise _KnowledgeTaskError("job_not_found", "knowledge job not found")
         state = str(job.get("state") or "")
         if state == "active":
@@ -1198,6 +1230,25 @@ async def _wait_for_pack_job(
         task["message"] = "Knowledge pack indexing in the background"
         await asyncio.sleep(_JOB_POLL_SECONDS)
     raise _KnowledgeTaskError("job_timeout", "knowledge job timed out")
+
+
+async def _installed_pack_matches(pack_id: str, artifact_sha256: str) -> bool:
+    if not pack_id or not artifact_sha256:
+        return False
+    try:
+        response = await _main_request("GET", "packs")
+    except _KnowledgeTaskError:
+        return False
+    for item in response.get("packs", ()):
+        if not isinstance(item, dict) or item.get("pack_id") != pack_id:
+            continue
+        subscription = item.get("subscription")
+        return (
+            isinstance(subscription, dict)
+            and subscription.get("provider") == "plugin-market"
+            and subscription.get("artifact_sha256") == artifact_sha256
+        )
+    return False
 
 
 async def _report_subscription_best_effort(

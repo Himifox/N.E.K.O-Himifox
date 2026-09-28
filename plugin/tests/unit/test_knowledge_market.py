@@ -1860,3 +1860,72 @@ def test_every_market_http_client_ignores_environment_proxies():
         assert isinstance(trust_env, ast.Constant) and trust_env.value is False, (
             f"AsyncClient at line {client.lineno} reads environment proxies"
         )
+
+
+@pytest.mark.asyncio
+async def test_indexing_waits_do_not_hold_a_subscription_slot():
+    """The cap bounds downloads/installs, not day-long indexing polls."""
+    release = asyncio.Event()
+    workers = [
+        asyncio.create_task(release.wait())
+        for _ in range(module._MAX_ACTIVE_SUBSCRIPTIONS)
+    ]
+    for index, worker in enumerate(workers):
+        task_id = f"indexing-{index}"
+        module._task_workers[task_id] = worker
+        module._tasks[task_id] = {"task_id": task_id, "slot_released": True}
+    try:
+        assert module._subscription_slots_in_use() == 0
+        module._tasks["indexing-0"]["slot_released"] = False
+        assert module._subscription_slots_in_use() == 1
+    finally:
+        release.set()
+        await asyncio.gather(*workers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installed_sha", "expected"),
+    (("a" * 64, "active"), ("b" * 64, "job_not_found")),
+)
+async def test_pruned_job_is_confirmed_against_the_installed_registry(
+    monkeypatch, installed_sha, expected
+):
+    """An active job pruned between polls must not turn a finished install into a failure."""
+
+    async def fake_main(method, path, **_kwargs):
+        if path == "packs/jobs":
+            return {"ok": True, "jobs": []}
+        assert path == "packs"
+        return {
+            "ok": True,
+            "packs": [
+                {
+                    "pack_id": "fixture-pack",
+                    "subscription": {
+                        "provider": "plugin-market",
+                        "artifact_sha256": installed_sha,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    task = {"task_id": "t"}
+    if expected == "active":
+        job = await module._wait_for_pack_job(
+            task,
+            job_id="fixture-pack-0123456789ab",
+            expected_pack_id="fixture-pack",
+            expected_artifact_sha256="a" * 64,
+        )
+        assert job["state"] == "active"
+    else:
+        with pytest.raises(module._KnowledgeTaskError) as failure:
+            await module._wait_for_pack_job(
+                task,
+                job_id="fixture-pack-0123456789ab",
+                expected_pack_id="fixture-pack",
+                expected_artifact_sha256="a" * 64,
+            )
+        assert failure.value.code == "job_not_found"
