@@ -44,26 +44,6 @@ from ._shared import (
 from main_logic import core as _core_facade
 
 
-def _discard_task_outcome(task: asyncio.Future) -> None:
-    if not task.cancelled():
-        task.exception()
-
-
-def _start_public_knowledge_turn_context(
-    user_text: str,
-    session_key: str,
-) -> asyncio.Future:
-    """Run one turn's knowledge retrieval alongside the rest of turn setup."""
-    from main_logic.knowledge_context import build_public_knowledge_turn_context
-
-    task = asyncio.ensure_future(
-        build_public_knowledge_turn_context(user_text, session_key=session_key)
-    )
-    # The turn can fail before it awaits this; its outcome is then unused.
-    task.add_done_callback(_discard_task_outcome)
-    return task
-
-
 class StreamingMixin:
     """Live input streaming methods (see module docstring)."""
 
@@ -583,9 +563,15 @@ class StreamingMixin:
                     # the command turns out not to be dispatched.
                     _knowledge_task = None
                     if not self._normalize_explicit_openclaw_magic_command(data):
-                        _knowledge_task = _start_public_knowledge_turn_context(
+                        from main_logic.knowledge_context import (
+                            start_public_knowledge_turn_context,
+                        )
+
+                        _knowledge_task = start_public_knowledge_turn_context(
                             record_data,
-                            str(getattr(self, "_public_knowledge_session_key", "") or ""),
+                            session_key=str(
+                                getattr(self, "_public_knowledge_session_key", "") or ""
+                            ),
                         )
 
                     # 先打断当前正在播放的语音（旧speech_id），避免误打断新回复
@@ -779,9 +765,13 @@ class StreamingMixin:
                             request_id=text_request_id,
                         )
                         if _knowledge_task is None:
-                            _knowledge_task = _start_public_knowledge_turn_context(
+                            from main_logic.knowledge_context import (
+                                start_public_knowledge_turn_context,
+                            )
+
+                            _knowledge_task = start_public_knowledge_turn_context(
                                 record_data,
-                                str(
+                                session_key=str(
                                     getattr(self, "_public_knowledge_session_key", "")
                                     or ""
                                 ),

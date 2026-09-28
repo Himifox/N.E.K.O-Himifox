@@ -611,6 +611,20 @@ async def build_automatic_public_knowledge_context(
     )
 
 
+def start_public_knowledge_turn_context(
+    user_text: str,
+    *,
+    session_key: str = "",
+) -> asyncio.Future[PublicKnowledgeTurnResult]:
+    """Start one turn's retrieval so it overlaps the rest of turn setup."""
+    task = asyncio.ensure_future(
+        build_public_knowledge_turn_context(user_text, session_key=session_key)
+    )
+    # The turn can fail before it awaits this; its outcome is then unused.
+    task.add_done_callback(_consume_task_result)
+    return task
+
+
 async def build_public_knowledge_turn_context(
     user_text: str,
     *,
