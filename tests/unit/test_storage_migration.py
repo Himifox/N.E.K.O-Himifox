@@ -352,6 +352,40 @@ def test_v1_completed_migration_repairs_missing_knowledge_before_cleanup(tmp_pat
 
 
 @pytest.mark.unit
+def test_v1_knowledge_repair_into_an_empty_target_fails_before_publishing(tmp_path):
+    """A v1 repair reuses the target as-is, so an empty target must fail up front.
+
+    Checking only after publish left the repaired knowledge/ in the target and
+    the transaction backup orphaned, because a VERIFYING-state failure is not
+    cleaned up.
+    """
+    config_manager = _make_config_manager(tmp_path)
+    source_root = config_manager.app_docs_dir
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    _write_knowledge_tree(source_root)
+    target_root.mkdir(parents=True)
+    save_storage_migration(
+        config_manager,
+        {
+            "version": 1,
+            "txid": "legacy-v1-empty",
+            "status": STORAGE_MIGRATION_STATUS_COMPLETED,
+            "source_root": str(source_root),
+            "target_root": str(target_root),
+            "selection_source": "legacy",
+            "retained_source_root": str(source_root),
+        },
+    )
+
+    result = run_pending_storage_migration(config_manager)
+
+    assert result["completed"] is False
+    assert result["error_code"] == "target_missing_runtime"
+    assert not (target_root / "knowledge").exists()
+    assert not (target_root / ".smtx").exists()
+
+
+@pytest.mark.unit
 def test_v1_completed_migration_blocks_conflicting_knowledge_repair(tmp_path):
     config_manager = _make_config_manager(tmp_path)
     source_root = config_manager.app_docs_dir

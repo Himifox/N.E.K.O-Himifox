@@ -951,6 +951,13 @@ def run_pending_storage_migration(
                 "Failed to remove unpublished storage migration transaction: %s",
                 cleanup_exc,
             )
+            return
+        # Drop the shared transaction parent too once nothing else is in it,
+        # so a failed first migration leaves the target as it found it.
+        try:
+            transaction_root.parent.rmdir()
+        except OSError:
+            pass
 
     try:
         source_root = normalize_runtime_root(str(payload.get("source_root") or "").strip())
@@ -1140,6 +1147,19 @@ def run_pending_storage_migration(
             if os.path.lexists(target_entry):
                 original_target_entries.append(entry_name)
 
+        # Reusing an existing target only makes sense if it already held runtime
+        # data before this run. Decide that here, after staging (whose conflict
+        # checks give the more specific errors) and before anything is published:
+        # a failure from VERIFYING on keeps the transaction for recovery, so
+        # published entries and their backup would be stranded. The value was
+        # computed before staging; recomputing now would count the new
+        # transaction directory as content.
+        if use_existing_target and not target_has_user_content:
+            raise StorageMigrationError(
+                "target_missing_runtime",
+                "目标路径没有可用数据，无法直接切换到现有目录。",
+            )
+
         payload = _persist_migration_payload(
             config_manager,
             payload,
@@ -1208,14 +1228,6 @@ def run_pending_storage_migration(
             backup_root=str(source_root),
             copied_entries=copied_entries,
         )
-
-        if use_existing_target and not _root_has_user_content(
-            target_root, config_manager=config_manager
-        ):
-            raise StorageMigrationError(
-                "target_missing_runtime",
-                "目标路径没有可用数据，无法直接切换到现有目录。",
-            )
 
         payload = _persist_migration_payload(
             config_manager,
