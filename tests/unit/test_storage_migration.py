@@ -277,6 +277,7 @@ def test_storage_migration_copies_complete_knowledge_tree_with_digest_proof(tmp_
     proof = result["payload"]["copied_entries"]["knowledge"]
     assert proof["source_manifest"] == proof["target_manifest"]
     assert proof["source_manifest"]["manifest_digest"]
+    assert result["payload"]["legacy_v1_checkpoint"] is False
     assert (target_root / "knowledge" / "knowledge.db").is_file()
     assert (target_root / "knowledge" / "packs.json").is_file()
     assert (target_root / "knowledge" / "catalog_overrides.json").is_file()
@@ -347,6 +348,8 @@ def test_v1_completed_migration_repairs_missing_knowledge_before_cleanup(tmp_pat
     assert result["completed"] is True
     assert result["payload"]["version"] == 2
     assert "knowledge" in result["payload"]["copied_entries"]
+    # Only knowledge is proven; cleanup must still treat the rest as v1 data.
+    assert result["payload"]["legacy_v1_checkpoint"] is True
     assert (target_root / "config" / "existing.json").is_file()
     assert (target_root / "knowledge" / "knowledge.db").is_file()
 

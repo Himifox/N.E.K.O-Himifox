@@ -590,6 +590,22 @@ def load_storage_migration(
     return payload
 
 
+def is_legacy_unproven_checkpoint(payload: dict[str, Any] | None) -> bool:
+    """Whether a completed checkpoint predates per-entry copy evidence.
+
+    v1 builds migrated without recording ``copied_entries``, and a later v1
+    knowledge repair proves only ``knowledge``. Retained-root cleanup cannot
+    demand evidence such a checkpoint never had.
+    """
+    if not isinstance(payload, dict):
+        return False
+    try:
+        version = int(payload.get("version") or 1)
+    except (TypeError, ValueError):
+        version = 1
+    return version < STORAGE_MIGRATION_VERSION or payload.get("legacy_v1_checkpoint") is True
+
+
 def is_storage_migration_pending(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -902,6 +918,12 @@ def run_pending_storage_migration(
                 publishing_entry="",
                 publishing_target_existed=False,
                 repairing_v1_knowledge=False,
+                # A v1 repair only proves the knowledge copy; the rest of the
+                # target came from a v1 run that recorded no evidence.
+                legacy_v1_checkpoint=bool(
+                    payload.get("repairing_v1_knowledge")
+                    or payload.get("legacy_v1_checkpoint")
+                ),
             )
         except Exception as exc:
             logger.warning(

@@ -69,6 +69,7 @@ from utils.storage_migration import (
     STORAGE_MIGRATION_STATUS_FAILED,
     create_pending_storage_migration,
     delete_storage_migration,
+    is_legacy_unproven_checkpoint,
     is_retained_root_cleanup_available,
     is_storage_migration_pending,
     load_storage_migration,
@@ -1210,7 +1211,7 @@ def _build_completed_migration_notice(
         )
     )
     cleanup_available = (
-        has_cleanup_proof
+        (has_cleanup_proof or is_legacy_unproven_checkpoint(migration_payload))
         and not is_storage_migration_pending(migration_payload)
         and is_retained_root_cleanup_available(
         retained_root,
@@ -1246,6 +1247,7 @@ def _cleanup_retained_runtime_root(
     anchor_root: Path,
     target_root: Path | str | None = None,
     copied_entries: dict | None = None,
+    legacy_checkpoint: bool = False,
 ) -> tuple[str, ...]:
     if not is_retained_root_cleanup_available(
         retained_path,
@@ -1266,11 +1268,26 @@ def _cleanup_retained_runtime_root(
         for entry_name, proof in proofs.items()
         if entry_name in MIGRATED_RUNTIME_ENTRY_NAMES and isinstance(proof, dict)
     ]
-    if not proved_entries or normalized_target is None:
+    # A checkpoint from before copy evidence existed (v1) is cleaned the way
+    # those builds cleaned it, with one extra guard: an entry without evidence
+    # is removed only if the target holds the same entry, so data that was
+    # never copied stays for the user to look at.
+    legacy_entries = [
+        entry_name
+        for entry_name in MIGRATED_RUNTIME_ENTRY_NAMES
+        if legacy_checkpoint
+        and normalized_target is not None
+        and entry_name not in proofs
+        and os.path.lexists(retained_path / entry_name)
+        and os.path.lexists(normalized_target / entry_name)
+    ]
+    if (not proved_entries and not legacy_entries) or normalized_target is None:
         raise ValueError("迁移检查点没有可验证的复制证据，拒绝清理。")
 
     with ExitStack() as barrier_stack:
-        if any(entry_name == "knowledge" for entry_name, _proof in proved_entries):
+        if "knowledge" in legacy_entries or any(
+            entry_name == "knowledge" for entry_name, _proof in proved_entries
+        ):
             for knowledge_root in sorted(
                 {retained_path / "knowledge", normalized_target / "knowledge"},
                 key=lambda item: os.path.normcase(str(item.resolve(strict=False))),
@@ -1290,7 +1307,7 @@ def _cleanup_retained_runtime_root(
             ):
                 raise ValueError(f"保留目录条目证据已变化，拒绝清理: {entry_name}")
 
-        for entry_name, _proof in proved_entries:
+        for entry_name in [name for name, _proof in proved_entries] + legacy_entries:
             entry_path = retained_path / entry_name
             if entry_path.is_dir() and not entry_path.is_symlink():
                 shutil.rmtree(entry_path)
@@ -1540,6 +1557,7 @@ async def _post_storage_location_retained_source_cleanup_locked(
     retained_path = Path(expected_retained_root)
     current_root = normalize_runtime_root(config_manager.app_docs_dir)
     anchor_root = compute_anchor_root(config_manager, current_root=current_root)
+    cleanup_checkpoint = load_storage_migration(config_manager, anchor_root=anchor_root) or {}
     try:
         # 这一步 rmtree 保留目录，同样不能在取消时把 _storage_mutation_lock 让出去
         remaining_entries = await _run_locked_storage_job(
@@ -1548,9 +1566,8 @@ async def _post_storage_location_retained_source_cleanup_locked(
                 current_root=current_root,
                 anchor_root=anchor_root,
                 target_root=notice.get("target_root") or "",
-                copied_entries=(
-                    load_storage_migration(config_manager, anchor_root=anchor_root) or {}
-                ).get("copied_entries"),
+                copied_entries=cleanup_checkpoint.get("copied_entries"),
+                legacy_checkpoint=is_legacy_unproven_checkpoint(cleanup_checkpoint),
             )
         )
     except Exception as exc:
