@@ -3010,6 +3010,8 @@ async def test_passive_callback_media_remains_bound_across_concurrent_focus_wait
 
     async def stream_text(text, **kwargs):
         stream_calls.append((text, kwargs))
+        if kwargs.get("on_turn_committed"):
+            kwargs["on_turn_committed"]()
 
     offline_session.stream_text = AsyncMock(side_effect=stream_text)
     mgr.session = offline_session
@@ -4747,8 +4749,9 @@ async def test_knowledge_card_goes_on_cooldown_only_when_its_turn_commits(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.parametrize("images", [[], ["cb-image-1"]])
 async def test_callback_media_returns_when_cancelled_before_the_stream_begins(
-    monkeypatch,
+    monkeypatch, images,
 ):
     """The rollback window is the whole post-drain stretch, not just stream_text.
 
@@ -4760,7 +4763,7 @@ async def test_callback_media_returns_when_cancelled_before_the_stream_begins(
     """
     session = _make_offline_session_for_callback_media()
     mgr = _make_callback_media_manager(session)
-    callback = _media_callback("agent finished", ["cb-image-1"])
+    callback = _media_callback("agent finished", images)
     mgr.pending_agent_callbacks = [callback]
     session.stream_text = AsyncMock()
 
@@ -4782,7 +4785,7 @@ async def test_callback_media_returns_when_cancelled_before_the_stream_begins(
     # 这一轮从没到达 stream_text，callback 必须完好回队。
     session.stream_text.assert_not_awaited()
     assert mgr.pending_agent_callbacks == [callback]
-    assert callback["media_images"] == ["cb-image-1"]
+    assert callback["media_images"] == images
 
 
 @pytest.mark.unit
