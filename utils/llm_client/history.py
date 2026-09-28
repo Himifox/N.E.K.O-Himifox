@@ -35,6 +35,8 @@ def _persisted_additional_kwargs(message: BaseMessage) -> dict[str, str]:
         value = message.additional_kwargs.get(key)
         if isinstance(value, str) and value:
             persisted[key] = value
+    if message.additional_kwargs.get("dialog_source") == "proactive":
+        persisted["dialog_source"] = "proactive"
     return persisted
 
 

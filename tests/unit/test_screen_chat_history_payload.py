@@ -34,8 +34,9 @@ USER_TURNS = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["", "屏幕搭话 "])
 @pytest.mark.parametrize("with_screenshot", [False, True])
+@pytest.mark.parametrize("with_prior_user", [False, True])
 async def test_screen_history_is_not_duplicated_or_concatenated_on_chat_request(
-    monkeypatch, prefix, with_screenshot,
+    monkeypatch, prefix, with_screenshot, with_prior_user,
 ):
     monkeypatch.setattr("utils.token_tracker.TokenTracker.get_instance", MagicMock())
     client, _ = _make_client()
@@ -103,8 +104,14 @@ async def test_screen_history_is_not_duplicated_or_concatenated_on_chat_request(
             ),
         )
 
+    if with_prior_user:
+        from utils.llm_client import HumanMessage
+        client._conversation_history.append(HumanMessage(content="之前的用户发言。"))
     for index in range(7):
         await commit(index)
+    delivered = client._conversation_history[-7:]
+    assert len({m.additional_kwargs["anti_repeat_response_id"] for m in delivered}) == 7
+    assert all(m.additional_kwargs["dialog_source"] == "proactive" for m in delivered)
     for turn, count in enumerate((7, 8)):
         if turn:
             await commit(7)
@@ -113,6 +120,7 @@ async def test_screen_history_is_not_duplicated_or_concatenated_on_chat_request(
         payload = payloads[-1]
         assert payload["model"] == "qwen3.7-plus"
         messages = payload["messages"]
+        assert all("additional_kwargs" not in m and "dialog_source" not in m for m in messages)
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "sys"
         def text_content(message):
@@ -144,6 +152,7 @@ async def test_screen_history_is_not_duplicated_or_concatenated_on_chat_request(
         for comment in SCREEN_COMMENTS[:count]:
             assert joined.count(comment) == 1
         assert joined.count("屏幕搭话") == (count if prefix else 0)
+        assert [m.content for m in delivered] == [prefix + text for text in SCREEN_COMMENTS[:7]]
         assert client._conversation_history[-1].content == replies[turn]
     if with_screenshot:
         # No new screen delivery and no staged picture on this turn. Existing

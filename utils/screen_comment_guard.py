@@ -63,7 +63,7 @@ def _role_and_content(message):
 
 def _assistant_tail_run(messages) -> tuple[int, int]:
     """Half-open range of the consecutive assistant messages that answer the
-    last user turn; ``(n, n)`` when there is no such run.
+    last user turn; ``(0, 0)`` when there is no such run.
 
     The run must sit immediately before the last user message *and* be
     preceded by a user message. Both halves are load-bearing and were measured
@@ -71,9 +71,11 @@ def _assistant_tail_run(messages) -> tuple[int, int]:
 
     * ``[u, a, a, ask]`` and ``[u, a×7, ask]`` chain (5/5 and 2/2), so a run
       before the current turn does propagate.
-    * ``[a×7, u]`` — the shape the app's own proactive deliveries produce, with
-      no user turn ahead of them — does **not** chain (0/3), so requiring the
-      preceding user message is what keeps normal history out of quarantine.
+    * ``[a×7, u]`` with no preceding user does **not** chain (0/3).
+      This positional condition does not identify message origin: independent
+      proactive deliveries can also occur between two user turns and then
+      satisfy the same rule. Internal proactive source markers split that run
+      during projection; unmarked legacy deliveries remain ambiguous.
     * ``[a×7, u1, ask]`` does not chain either (0/2): an intervening user turn
       ends it.
     * A non-assistant message ends the run, which is why the measured
@@ -92,10 +94,9 @@ def _assistant_tail_run(messages) -> tuple[int, int]:
         if role not in {"assistant", "ai"}:
             break
         start -= 1
-    if start == last_user:
+    if start == 0 or start == last_user:
         return 0, 0
-    # A run with no user turn ahead of it is unprompted proactive output, which
-    # the model does not continue.
+    # Require an actual preceding user; position alone does not prove origin.
     preceding_role, _content = _role_and_content(messages[start - 1])
     if preceding_role not in {"user", "human"}:
         return 0, 0
@@ -115,8 +116,8 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None):
     A chain may also be spread over several messages. When the consecutive
     assistant run immediately before the last user turn carries one, every
     message in that run is quarantined — judging each message alone would miss
-    it, while merging across user turns would quarantine the app's own
-    independent proactive deliveries.
+    it. Internally marked proactive deliveries split the run and are checked
+    individually. Unmarked legacy deliveries remain positionally ambiguous.
 
     Detection needs labelled, multi-item chains. Unlabelled history and
     comments below ``MIN_PROSE`` are left byte-for-byte alone, silently.
@@ -127,14 +128,22 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None):
         return messages
     tail_start, tail_end = _assistant_tail_run(messages)
     tail_quarantine: set[int] = set()
-    if tail_end - tail_start >= 2:
+    segment_start = tail_start
+    for boundary in range(tail_start, tail_end + 1):
+        if boundary < tail_end:
+            message = messages[boundary]
+            metadata = (message.get("additional_kwargs", {}) if isinstance(message, dict)
+                        else getattr(message, "additional_kwargs", {}))
+            if not (isinstance(metadata, dict) and metadata.get("dialog_source") == "proactive"):
+                continue
         merged = "".join(
             content
-            for content in (c for _role, c in map(_role_and_content, messages[tail_start:tail_end]))
+            for content in (c for _role, c in map(_role_and_content, messages[segment_start:boundary]))
             if isinstance(content, str)
         )
-        if screen_chain_start(merged) is not None:
-            tail_quarantine = set(range(tail_start, tail_end))
+        if boundary - segment_start >= 2 and screen_chain_start(merged) is not None:
+            tail_quarantine.update(range(segment_start, boundary))
+        segment_start = boundary + 1
     projected = []
     changed = 0
     for index, message in enumerate(messages):

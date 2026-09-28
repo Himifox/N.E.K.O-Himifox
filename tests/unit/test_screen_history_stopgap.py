@@ -252,11 +252,12 @@ def test_chain_spread_over_the_run_answering_a_user_turn_is_quarantined():
     assert _quarantined(messages) == [2, 3]
 
 
-def test_deliveries_with_no_user_turn_ahead_are_left_alone():
+@pytest.mark.parametrize("with_system", [False, True])
+def test_deliveries_with_no_user_turn_ahead_are_left_alone(with_system):
     """The app's own proactive deliveries: 7 single-comment messages, then the
     user replies. Measured 0/3 propagation, and the shape the payload test
     pins as must-pass."""
-    messages = [{"role": "system", "content": "sys"}] + [
+    messages = ([{"role": "system", "content": "sys"}] if with_system else []) + [
         _assistant(f"屏幕搭话 第{index}条观察，画面里有些东西值得说。") for index in range(7)
     ] + [_user("陪我聊聊。")]
     assert _quarantined(messages) == []
@@ -285,3 +286,58 @@ def test_a_single_trailing_comment_is_not_a_chain():
     messages = [{"role": "system", "content": "sys"}, _user("陪我聊聊。"),
                 _assistant(_COMMENT_A), _user("那你继续说说。")]
     assert _quarantined(messages) == []
+
+
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_proactive_source_splits_runs_without_exempting_single_message_chains(as_dict):
+    from utils.llm_client import AIMessage
+
+    def proactive(text):
+        metadata = {"dialog_source": "proactive"}
+        return ({"role": "assistant", "content": text, "additional_kwargs": metadata}
+                if as_dict else AIMessage(content=text, additional_kwargs=metadata))
+
+    messages = [_user("开始"), _assistant(_COMMENT_A), proactive(_COMMENT_B),
+                _assistant(_COMMENT_A), _assistant(_COMMENT_B), proactive(chain()),
+                _assistant(_COMMENT_A), _assistant(_COMMENT_B), _user("继续")]
+    snapshot = deepcopy(messages)
+    assert _quarantined(messages) == [3, 4, 5, 6, 7]
+    assert messages == snapshot
+
+
+@pytest.mark.parametrize("metadata", [{}, {"dialog_source": "unknown"},
+                                     {"anti_repeat_response_id": "delivery-1"}])
+def test_unknown_source_keeps_cross_message_detection(metadata):
+    messages = [_user("开始"),
+                {**_assistant(_COMMENT_A), "additional_kwargs": metadata},
+                _assistant(_COMMENT_B), _user("继续")]
+    assert _quarantined(messages) == [1, 2]
+
+
+def test_proactive_source_survives_file_and_sql_history_roundtrip(tmp_path):
+    import json
+    from sqlalchemy import select
+    from utils.llm_client import AIMessage, HumanMessage
+    from utils.llm_client.messages import messages_from_dict, messages_to_dict
+    from utils.llm_client.history import SQLChatMessageHistory
+
+    messages = [HumanMessage(content="开始"), *[
+        AIMessage(content=text, additional_kwargs={
+            "dialog_source": "proactive", "not_persisted": "private",
+        }) for text in (_COMMENT_A, _COMMENT_B)
+    ], HumanMessage(content="继续")]
+    restored = messages_from_dict(json.loads(json.dumps(messages_to_dict(messages))))
+    assert project_screen_history(restored) is restored
+    history = SQLChatMessageHistory(f"sqlite:///{tmp_path / 'source.db'}", "source-test")
+    try:
+        history.add_messages(messages)
+        with history._engine.connect() as connection:
+            rows = connection.execute(select(history._table.c.message).order_by(history._table.c.id))
+            saved = [json.loads(row[0]) for row in rows]
+        assert saved[1]["data"]["additional_kwargs"] == {"dialog_source": "proactive"}
+        restored = messages_from_dict(saved)
+        assert project_screen_history(restored) is restored
+        assert "dialog_source" not in restored[1].to_openai()
+    finally:
+        history._engine.dispose()
+        SQLChatMessageHistory._engine_cache.pop(f"sqlite:///{tmp_path / 'source.db'}", None)
