@@ -692,6 +692,12 @@ class StreamingMixin:
                             _agent_cb_extra_snapshot = list(
                                 getattr(self, "pending_extra_replies", None) or []
                             )
+                            # Taken after the media await and before the
+                            # synchronous drain: a callback another path
+                            # dequeued during that await is not this drain's.
+                            _queued_before_drain = {
+                                id(cb) for cb in self.pending_agent_callbacks
+                            }
                             _agent_cb_ctx = (
                                 self.drain_agent_callbacks_for_llm(
                                     callbacks_snapshot
@@ -714,6 +720,7 @@ class StreamingMixin:
                                     cb
                                     for cb in callbacks_snapshot
                                     if isinstance(cb, dict)
+                                    and id(cb) in _queued_before_drain
                                     and id(cb) not in _still_queued
                                 ]
                         except Exception as _cb_err:

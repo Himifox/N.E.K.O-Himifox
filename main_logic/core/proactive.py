@@ -1446,10 +1446,8 @@ class ProactiveMixin:
                 #      announcements.
                 # Match by the stable ``_callback_delivery_id`` stamped on both
                 # entries by ``enqueue_agent_callback``. Length-based alignment
-                # would be unsafe — ``drain_agent_callbacks_for_llm`` clears
-                # ``pending_agent_callbacks`` while leaving
-                # ``pending_extra_replies`` intact, so the queues legitimately
-                # drift apart across user turns.
+                # would be unsafe — passive callbacks never get a mirror, so the
+                # two queues are not positionally aligned.
                 # Object-identity fallback for pending_agent_callbacks: defense
                 # in depth against any future code path that appends a cb
                 # without going through ``enqueue_agent_callback`` (the only
@@ -3079,12 +3077,13 @@ class ProactiveMixin:
            retries on a text session) and retract it, letting
            ``_purge_undeliverable_callbacks`` sweep it and its paired
            ``pending_extra_replies`` entry by ``_callback_delivery_id``.
-        2. ``pending_extra_replies`` orphans: ``drain_agent_callbacks_for_llm``
-           clears ``pending_agent_callbacks`` on a text user turn but leaves the
-           paired extras behind, so a topic hook can survive as an extras-only
-           entry (callback already delivered + acked in text) and be rendered by
-           the hot-swap ``prime_context`` path. Those have no callback left to
-           ack/retract — just drop them. They are identified by
+        2. ``pending_extra_replies`` orphans: defensive. The text drain now
+           removes a rendered callback's mirror with it, so the normal path no
+           longer leaves an extras-only topic hook; any entry that still gets
+           here (e.g. a drain whose render raised, which keeps the mirror) would
+           otherwise be rendered by the hot-swap ``prime_context`` path. Those
+           have no callback left to ack/retract — just drop them. They are
+           identified by
            ``source_kind == "topic"`` (stamped by ``build_topic_hook_callback``
            and copied onto the extra by ``enqueue_agent_callback``).
 
@@ -3345,10 +3344,8 @@ class ProactiveMixin:
             # Stable delivery id so the voice inject success path can
             # precisely drop the matching extras entry from
             # ``pending_extra_replies``. Length-based alignment is unsafe:
-            # ``drain_agent_callbacks_for_llm`` clears
-            # ``pending_agent_callbacks`` while leaving
-            # ``pending_extra_replies`` intact, so the queues legitimately
-            # drift apart across user turns.
+            # passive callbacks never get a mirror, so the two queues are not
+            # positionally aligned.
             delivery_id = callback.setdefault("_callback_delivery_id", uuid4().hex)
             # Coalescing is OPT-IN and channel-agnostic: when a callback carries
             # a non-empty ``coalesce_key``, the newest cue collapses any already
@@ -3581,6 +3578,8 @@ class ProactiveMixin:
         self.pending_agent_callbacks[0:0] = restored
         # Proactive callbacks need their original mirror to remain eligible for
         # hot-swap delivery. Passive callbacks never had one; do not invent it.
+        # Mirrors go back to the queue head, not their original slots, so their
+        # order relative to later-enqueued extras matches the callbacks above.
         restored_ids = {
             cb.get("_callback_delivery_id") for cb in restored
             if cb.get("_callback_delivery_id")
@@ -3608,8 +3607,9 @@ class ProactiveMixin:
     ) -> str:
         """Drain pending_agent_callbacks and format as a system context string.
 
-        Clears pending_agent_callbacks (NOT pending_extra_replies, which is
-        consumed separately by the voice-mode hot-swap path).
+        Removes the rendered callbacks from pending_agent_callbacks and, once
+        rendering succeeds, their paired pending_extra_replies mirrors (matched
+        by ``_callback_delivery_id``) so a later hot swap cannot re-prime them.
         Returns an empty string if there are no callbacks.
 
         Renders with the same grouped/source-aware logic as
@@ -3730,11 +3730,17 @@ class ProactiveMixin:
             # mirror for the next hot swap to re-prime, which re-announces it —
             # the same paired prune trigger_agent_callbacks already does on the
             # voice path (see the delivered_ids block there).
+            #
+            # Only when rendering succeeded: a render failure returns nothing to
+            # the caller, so there is no drained set to requeue. The callback
+            # half still leaves the queue (a failure that repeats on every turn
+            # must not wedge it), but the mirror stays for the hot swap, whose
+            # renderer is independent of this one.
             delivered_delivery_ids = {
                 cb.get("_callback_delivery_id")
                 for cb in active_callbacks
                 if cb.get("_callback_delivery_id")
-            }
+            } if delivered_to_prompt else set()
             if delivered_delivery_ids:
                 # getattr like the enqueue path above: a manager built without
                 # __init__ has no queue yet, and a raise here would replace this

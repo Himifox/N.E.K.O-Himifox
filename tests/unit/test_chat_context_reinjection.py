@@ -160,6 +160,74 @@ def test_text_drain_preserves_legacy_extras(monkeypatch):
     assert mgr.pending_extra_replies == ["legacy text", unrelated]
 
 
+def test_text_drain_render_failure_keeps_mirror(monkeypatch):
+    """A drain whose render raises hands nothing back to requeue; the mirror
+    must survive so the hot swap can still deliver the notice."""
+    mgr, _ = _manager(monkeypatch)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": "render failure notice", "delivery_mode": "proactive",
+    })
+    original_extras = list(mgr.pending_extra_replies)
+    assert original_extras
+
+    def fail_render(*_args, **_kwargs):
+        raise RuntimeError("render broke")
+
+    monkeypatch.setattr(
+        "main_logic.core.proactive._build_callback_instruction", fail_render,
+    )
+    with pytest.raises(RuntimeError):
+        mgr.drain_agent_callbacks_for_llm()
+    assert mgr.pending_agent_callbacks == []
+    assert mgr.pending_extra_replies == original_extras
+
+
+@pytest.mark.asyncio
+async def test_callback_dequeued_during_media_await_is_not_requeued(monkeypatch):
+    """Only callbacks this drain consumed are restored on a precommit failure;
+    one another path delivered during the media await must stay gone."""
+    from main_logic import core as core_module
+    from tests.unit.test_core_game_route_memory_contract import (
+        _make_callback_media_manager,
+        _make_offline_session_for_callback_media,
+    )
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    for summary in ("KEPT_BY_DRAIN", "TAKEN_ELSEWHERE"):
+        mgr.enqueue_agent_callback({
+            "origin": "event", "source_kind": "agent",
+            "summary": summary, "delivery_mode": "proactive",
+        })
+    kept, taken = mgr.pending_agent_callbacks
+    taken_id = taken["_callback_delivery_id"]
+    kept_extras = [
+        e for e in mgr.pending_extra_replies
+        if e.get("_callback_delivery_id") != taken_id
+    ]
+
+    async def stage_and_deliver_elsewhere(_callbacks, _session):
+        # Another path delivers TAKEN (both halves) inside the media await.
+        mgr.pending_agent_callbacks = [
+            cb for cb in mgr.pending_agent_callbacks if cb is not taken
+        ]
+        mgr.pending_extra_replies = [
+            e for e in mgr.pending_extra_replies
+            if e.get("_callback_delivery_id") != taken_id
+        ]
+        return {}
+
+    mgr._stage_passive_callback_media = stage_and_deliver_elsewhere
+    session.stream_text = AsyncMock(side_effect=RuntimeError("precommit"))
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda *_: None)
+    await mgr._process_stream_data_internal({"input_type": "text", "data": "hello"})
+    assert mgr.pending_agent_callbacks == [kept]
+    assert mgr.pending_extra_replies == kept_extras
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("committed", [False, True])
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError, None])

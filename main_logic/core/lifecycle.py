@@ -2856,7 +2856,7 @@ class LifecycleMixin:
         swap (same semantics as the extras ``_deferred``).
 
         The queue is NOT drained here — removal is deferred to promote
-        success via :meth:`_remove_swap_delivered_passive_cbs`. Selected
+        success via :meth:`_remove_swap_delivered_callbacks`. Selected
         entries are atomically marked provider-owned before this method
         returns, so enqueue coalescing, text drain, staleness sweeps, and the
         flood guard cannot retract them during the prime await. Every
@@ -2985,7 +2985,7 @@ class LifecycleMixin:
             if isinstance(cb, dict):
                 cb.pop(SWAP_PRIME_DELIVERY_CLAIM_KEY, None)
 
-    def _remove_swap_delivered_passive_cbs(self, selected: list) -> list:
+    def _remove_swap_delivered_callbacks(self, selected: list) -> list:
         """[Hot-swap related] Dequeue prime-injected callback objects at
         promote success; returns the actually-removed subset (ack'd True).
 
@@ -3982,7 +3982,7 @@ class LifecycleMixin:
                     }
             # Passive 搭车条目的对偶出队：同样按对象身份、同样只在 promote
             # 成功后。窗口期被 drain/清扫抢先消费的条目在此 no-op。
-            _removed_passive_cbs = self._remove_swap_delivered_passive_cbs(
+            _removed_passive_cbs = self._remove_swap_delivered_callbacks(
                 _prime_selected_passive_cbs
             )
             self.response_backend = (
@@ -4235,7 +4235,7 @@ class LifecycleMixin:
                     e.get("_callback_delivery_id") for e in _removed_extras
                     if isinstance(e, dict) and id(e) not in queued_extra_objects
                 }
-                self._remove_swap_delivered_passive_cbs([
+                self._remove_swap_delivered_callbacks([
                     cb for cb in _prime_extra_callbacks
                     if cb.get("_callback_delivery_id") in delivered_ids
                 ])
