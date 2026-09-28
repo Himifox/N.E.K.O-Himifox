@@ -420,6 +420,7 @@ const hasMore = ref(false)
 const entriesRequestGate = createLatestRequestGate()
 const entryRequestGate = createLatestRequestGate()
 const packJobsRequestGate = createLatestRequestGate()
+const diagnosticsRequestGate = createLatestRequestGate()
 const overviewRequestGate = createOverviewRequestGate()
 const drawerOpen = ref(false)
 const selectedEntry = ref<KnowledgeEntrySummary | null>(null)
@@ -1144,13 +1145,19 @@ async function removePack(row: KnowledgePackSummary) {
 }
 
 async function loadDiagnostics() {
+  const requestId = diagnosticsRequestGate.begin()
   diagnosticsLoading.value = true
   try {
     const items = (await knowledgeApi.diagnostics()).items || []
+    if (disposed || !diagnosticsRequestGate.isLatest(requestId)) return
     diagnostics.value = items.filter(hasDiagnosticEntry)
+  } catch {
+    if (!disposed && diagnosticsRequestGate.isLatest(requestId)) {
+      ElMessage.error(t('knowledge.loadFailed'))
+    }
+  } finally {
+    if (diagnosticsRequestGate.isLatest(requestId)) diagnosticsLoading.value = false
   }
-  catch { ElMessage.error(t('knowledge.loadFailed')) }
-  finally { diagnosticsLoading.value = false }
 }
 
 function hasDiagnosticEntry(item: any): boolean {
