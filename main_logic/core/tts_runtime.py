@@ -1081,7 +1081,11 @@ class TtsRuntimeMixin:
             # 等待 TTS worker 处理 __interrupt__ 并 mute 回调（worker 轮询间隔 ~10ms）
             # 然后再次清空响应队列，确保旧 synthesizer 泄漏的音频全部丢弃
             await asyncio.sleep(0.02)
-            if self.current_speech_id == expected_speech_id:
+            # A full clear drains unconditionally: its caller rotates to a new
+            # sid right after, so bare bytes the old synthesizer leaked after
+            # __interrupt__ would otherwise play under that new sid. Only a
+            # scoped clear that lost its turn leaves the queue to the new owner.
+            if clear_all_pending or self.current_speech_id == expected_speech_id:
                 while not self.tts_response_queue.empty():
                     try:
                         self.tts_response_queue.get_nowait()

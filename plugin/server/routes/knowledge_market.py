@@ -44,6 +44,9 @@ _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS = KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SE
 _UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS = 0.05
 _UNSUBSCRIBE_DRAIN_SECONDS = 24 * 60 * 60
 _REMOVAL_STATUS_POLL_SECONDS = 0.25
+# The background drain may run for _UNSUBSCRIBE_DRAIN_SECONDS; it backs off to
+# this interval instead of polling every _REMOVAL_STATUS_POLL_SECONDS all day.
+_REMOVAL_DRAIN_MAX_POLL_SECONDS = 30.0
 # Main Server reasons that mean "try again later", not "this pack is invalid".
 _LOCAL_KNOWLEDGE_BUSY_REASONS = frozenset(
     {"knowledge_mutation_busy", "knowledge_mutation_stopping"}
@@ -470,8 +473,10 @@ async def _confirm_removal_operation(
     operation_id: str,
     *,
     deadline: float,
+    max_poll_seconds: float | None = None,
 ) -> dict[str, Any]:
     last_status = "unknown"
+    poll_seconds = _REMOVAL_STATUS_POLL_SECONDS
     while _remaining_budget(deadline) > 0:
         try:
             result = await _main_request(
@@ -489,7 +494,9 @@ async def _confirm_removal_operation(
         remaining = _remaining_budget(deadline)
         if remaining <= 0:
             break
-        await asyncio.sleep(min(_REMOVAL_STATUS_POLL_SECONDS, remaining))
+        await asyncio.sleep(min(poll_seconds, remaining))
+        if max_poll_seconds is not None:
+            poll_seconds = min(poll_seconds * 2, max_poll_seconds)
     return {"ok": False, "operation_status": last_status}
 
 
@@ -514,7 +521,11 @@ async def _drain_removal_operation(
 ) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _UNSUBSCRIBE_DRAIN_SECONDS
-    result = await _confirm_removal_operation(operation_id, deadline=deadline)
+    result = await _confirm_removal_operation(
+        operation_id,
+        deadline=deadline,
+        max_poll_seconds=_REMOVAL_DRAIN_MAX_POLL_SECONDS,
+    )
     if (
         result.get("ok") is True
         and str(result.get("operation_status") or "") == "committed"

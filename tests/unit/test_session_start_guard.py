@@ -91,6 +91,48 @@ async def test_inactive_end_session_preserves_starting_guard_for_internal_cleanu
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_idle_reset_style_end_session_rotates_knowledge_but_keeps_guard():
+    """The idle reset keeps the startup guard yet still starts a fresh dialog."""
+    mgr = _make_inactive_manager(starting_count=1)
+
+    await LLMSessionManager.end_session(
+        mgr,
+        reset_starting_count=False,
+        rotate_knowledge_session=True,
+    )
+
+    assert mgr._starting_session_count == 1
+    assert mgr._public_knowledge_session_key != "logical-session-before-end"
+
+
+@pytest.mark.unit
+def test_idle_session_reset_asks_for_a_knowledge_rotation():
+    """Guard the one caller that ends a dialog without resetting the guard."""
+    import ast
+    import inspect
+    import textwrap
+
+    from main_logic.core import lifecycle
+
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(lifecycle.LifecycleMixin._idle_session_reset_loop))
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "end_session"
+    ]
+    assert calls
+    for call in calls:
+        keywords = {kw.arg: kw.value for kw in call.keywords}
+        assert isinstance(keywords.get("rotate_knowledge_session"), ast.Constant)
+        assert keywords["rotate_knowledge_session"].value is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_inactive_end_session_does_not_clear_next_start_pending_input():
     mgr = _make_inactive_manager(starting_count=1)
     teardown_started = asyncio.Event()

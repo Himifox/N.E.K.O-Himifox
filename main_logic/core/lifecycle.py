@@ -889,6 +889,9 @@ class LifecycleMixin:
                         by_server=True,
                         expected_session=session_snapshot,
                         reset_starting_count=False,
+                        # The next message starts a fresh dialog, so its
+                        # knowledge cards must not inherit this one's cooldown.
+                        rotate_knowledge_session=True,
                     )
                 except Exception as e:
                     logger.warning("[%s] idle_session_reset: end_session 失败: %s", self.lanlan_name, e)
@@ -4395,7 +4398,16 @@ class LifecycleMixin:
         after_memory_settlement=None,
         memory_settlement_timeout=15.0,
         preserve_pending_input=False,
+        rotate_knowledge_session=None,
     ):  # 与Core API断开连接
+        # The knowledge session key follows the conversation, not the startup
+        # guard: it rotates wherever the conversation really ends. By default
+        # that is the same set of calls that reset the guard (user end, server
+        # recovery); the idle reset keeps the guard but still starts a fresh
+        # dialog, so it asks for the rotation explicitly. Internal handoffs
+        # that carry the conversation over (voice -> text) keep the key.
+        if rotate_knowledge_session is None:
+            rotate_knowledge_session = reset_starting_count
         # 「用户/前端主动结束启动」信号：只有前端发来的 end_session / pause_session
         # （by_server=False 且 reset_starting_count=True，见 websocket_router）才计。
         # 内部 recovery（reset_starting_count=False）与各类 by_server=True cleanup
@@ -4449,7 +4461,7 @@ class LifecycleMixin:
         await self._close_independent_asr(next_route_mode="blocked")
 
         if _inactive_early:
-            if reset_starting_count:
+            if rotate_knowledge_session:
                 self._rotate_public_knowledge_session()
             if reset_starting_count:
                 # 前端启动超时会在 session 尚未 active 时发送 end_session。
@@ -4495,7 +4507,7 @@ class LifecycleMixin:
                 _post_init_inactive = True
             else:
                 self.is_active = False
-                if reset_starting_count:
+                if rotate_knowledge_session:
                     self._rotate_public_knowledge_session()
                 # 重置 _starting_session_count：如果 start_session 正在执行中（比如卡在预热），
                 # 前端超时后发来 end_session，必须解除这个 guard，否则用户手动重试会被

@@ -4349,6 +4349,35 @@ async def test_clear_tts_pipeline_drops_chunks_from_sid_rotated_without_clear(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_full_tts_clear_drains_leaked_audio_even_if_the_sid_rotates(
+    monkeypatch,
+):
+    """The full clear is what text input relies on across a sid rotation.
+
+    Bytes the old synthesizer leaks after ``__interrupt__`` carry no sid; left
+    in the response queue they would play under the next turn's sid.
+    """
+    import queue
+
+    mgr = _make_manager()
+    mgr.tts_thread = _FakeAliveThread()
+    mgr.current_speech_id = "sid-old"
+    mgr.tts_response_queue = queue.Queue()
+    mgr.tts_request_queue = queue.Queue()
+
+    async def leak_and_rotate(_seconds):
+        mgr.tts_response_queue.put(b"leaked-after-interrupt")
+        mgr.current_speech_id = "sid-proactive"
+
+    monkeypatch.setattr(tts_runtime_module.asyncio, "sleep", leak_and_rotate)
+
+    await core_module.LLMSessionManager._clear_tts_pipeline(mgr)
+
+    assert mgr.tts_response_queue.empty()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_clear_tts_pipeline_clears_deferred_done_when_nothing_stays_pending(
     monkeypatch,
 ):

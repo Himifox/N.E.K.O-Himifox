@@ -1884,6 +1884,46 @@ async def test_indexing_waits_do_not_hold_a_subscription_slot():
 
 
 @pytest.mark.asyncio
+async def test_removal_drain_backs_off_while_the_sync_path_keeps_short_polls(
+    monkeypatch,
+):
+    statuses = iter(["pending"] * 9 + ["committed"])
+    slept = []
+
+    async def fake_main(method, path, **_kwargs):
+        assert (method, path) == ("GET", "packs/remove/status")
+        return {"ok": True, "operation_status": next(statuses)}
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(module, "_main_request", fake_main)
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    deadline = asyncio.get_running_loop().time() + 3600
+
+    result = await module._confirm_removal_operation(
+        "op-1", deadline=deadline, max_poll_seconds=4.0
+    )
+    assert result["operation_status"] == "committed"
+    assert slept == [0.25, 0.5, 1.0, 2.0, 4.0, 4.0, 4.0, 4.0, 4.0]
+
+    statuses = iter(["pending"] * 3 + ["committed"])
+    slept.clear()
+    await module._confirm_removal_operation("op-2", deadline=deadline)
+    assert slept == [module._REMOVAL_STATUS_POLL_SECONDS] * 3
+
+    captured = {}
+
+    async def fake_confirm(operation_id, **kwargs):
+        captured.update(kwargs)
+        return {"ok": False, "operation_status": "failed"}
+
+    monkeypatch.setattr(module, "_confirm_removal_operation", fake_confirm)
+    await module._drain_removal_operation(7, "op-3")
+    assert captured["max_poll_seconds"] == module._REMOVAL_DRAIN_MAX_POLL_SECONDS
+
+
+@pytest.mark.asyncio
 async def test_indexing_waits_are_bounded_in_total(monkeypatch):
     """Released slots must not let indexing pollers accumulate without limit."""
     monkeypatch.setattr(module, "_verify_bridge_token", lambda _token: None)
