@@ -16,6 +16,209 @@
 
     window.appUi = window.appUi || {};
     const I = window.__appUiParts || (window.__appUiParts = {});
+    const PROGRAMMATIC_GOODBYE_RETURN_TIMEOUT_MS = 15000;
+    let programmaticGoodbyeReturnPromise = null;
+
+    function getVisibleGoodbyeReturnContainer() {
+        if (typeof I.getVisibleIdleReturnBallContainer === 'function') {
+            const container = I.getVisibleIdleReturnBallContainer();
+            if (container) return container;
+        }
+        return document.querySelector(
+            '[id$="-return-button-container"][data-neko-return-visible="true"]'
+        );
+    }
+
+    function isGoodbyeRuntimeActive() {
+        if (typeof window.isNekoGoodbyeModeActive === 'function' && window.isNekoGoodbyeModeActive()) {
+            return true;
+        }
+        return !!(
+            (window.live2dManager && window.live2dManager._goodbyeClicked)
+            || (window.vrmManager && window.vrmManager._goodbyeClicked)
+            || (window.mmdManager && window.mmdManager._goodbyeClicked)
+        );
+    }
+
+    function isModelCatTransitionActive(direction) {
+        return typeof I.isNekoModelCatTransitionActive === 'function'
+            && I.isNekoModelCatTransitionActive(direction);
+    }
+
+    function isReturnBallViewportActive() {
+        const pendingRestoreBounds = typeof I.getPendingModelViewportRestoreBounds === 'function'
+            ? I.getPendingModelViewportRestoreBounds()
+            : null;
+        if (pendingRestoreBounds) return true;
+        return !!(
+            window.nekoPetDrag
+            && typeof I.isNativeReturnBallViewportSize === 'function'
+            && I.isNativeReturnBallViewportSize(window.innerWidth, window.innerHeight)
+        );
+    }
+
+    function resolveGoodbyeReturnModelType(container) {
+        const visibleTypeMatch = container && String(container.id || '')
+            .match(/^(live2d|vrm|mmd|pngtuber)-return-button-container$/);
+        if (visibleTypeMatch) return visibleTypeMatch[1];
+
+        const configuredType = String(window.lanlan_config?.model_type || 'live2d').toLowerCase();
+        const live3dSubType = String(window.lanlan_config?.live3d_sub_type || '').toLowerCase();
+        if (configuredType === 'live3d') {
+            return live3dSubType === 'mmd' ? 'mmd' : 'vrm';
+        }
+        return ['live2d', 'vrm', 'mmd', 'pngtuber'].includes(configuredType)
+            ? configuredType
+            : 'live2d';
+    }
+
+    function waitForGoodbyeReturnTerminal(options) {
+        const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+            ? Math.max(1000, Number(options.timeoutMs))
+            : PROGRAMMATIC_GOODBYE_RETURN_TIMEOUT_MS;
+
+        return new Promise((resolve) => {
+            let settled = false;
+            let timeoutId = null;
+            const waitForTransitionToSettle = async (direction) => {
+                while (!settled && isModelCatTransitionActive(direction)) {
+                    const transition = I.nekoModelCatTransitionActive;
+                    if (transition && transition.promise && typeof transition.promise.then === 'function') {
+                        try {
+                            await transition.promise;
+                        } catch (_) {
+                            // A rejected transition may remain registered until
+                            // its owner's cleanup runs. Yield before rechecking
+                            // so the loop cannot starve that cleanup or timeout.
+                            await new Promise((resume) => window.setTimeout(resume, 16));
+                        }
+                    } else {
+                        await new Promise((resume) => window.setTimeout(resume, 16));
+                    }
+                }
+            };
+            const finish = (restored) => {
+                if (settled) return;
+                settled = true;
+                if (timeoutId !== null) window.clearTimeout(timeoutId);
+                window.removeEventListener('neko:cat-return-complete', handleComplete);
+                window.removeEventListener('neko:cat-return-abort', handleAbort);
+                resolve(restored === true);
+            };
+            const handleComplete = () => {
+                // The canonical handler publishes complete from inside its
+                // finally-protected lifecycle. Let that stack unwind and wait
+                // for the concurrently running cat-to-model smoke transition
+                // before allowing a model reload to replace its container.
+                Promise.resolve().then(async () => {
+                    await waitForTransitionToSettle('cat-to-model');
+                    const fullyRestored = !isGoodbyeRuntimeActive()
+                        && !getVisibleGoodbyeReturnContainer()
+                        && !isReturnBallViewportActive()
+                        && !I.nekoCatReturnInProgress
+                        && !isModelCatTransitionActive('model-to-cat')
+                        && !isModelCatTransitionActive('cat-to-model');
+                    finish(fullyRestored);
+                }).catch((error) => {
+                    console.error('[App] 等待猫咪返回过渡结束失败:', error);
+                    finish(false);
+                });
+            };
+            const handleAbort = () => finish(false);
+
+            window.addEventListener('neko:cat-return-complete', handleComplete);
+            window.addEventListener('neko:cat-return-abort', handleAbort);
+            timeoutId = window.setTimeout(() => {
+                console.warn('[App] 程序化恢复模型超时:', options.source || 'unknown');
+                finish(false);
+            }, timeoutMs);
+
+            const dispatchReturnWhenReady = async () => {
+                // “请她离开”会先置 goodbye 标志，再播放 model-to-cat 动画；
+                // 统一 return handler 在动画结束前会忽略事件，因此这里先加入动画。
+                await waitForTransitionToSettle('model-to-cat');
+                if (settled) return;
+
+                // 用户可能已先点了“请她回来”。此时只等待同一条标准返回链的
+                // terminal event，不能再派发一次并发恢复。
+                if (I.nekoCatReturnInProgress) {
+                    return;
+                }
+                if (isModelCatTransitionActive('cat-to-model')) {
+                    // A manual return may have already published its terminal
+                    // event just before this helper installed listeners. Join
+                    // the remaining visual transition, then adjudicate state.
+                    await waitForTransitionToSettle('cat-to-model');
+                    if (settled) return;
+                    if (!isGoodbyeRuntimeActive()
+                        && !getVisibleGoodbyeReturnContainer()
+                        && !isReturnBallViewportActive()) {
+                        finish(true);
+                        return;
+                    }
+                }
+
+                const visibleReturnContainer = getVisibleGoodbyeReturnContainer();
+                if (!isGoodbyeRuntimeActive()
+                    && !visibleReturnContainer
+                    && !isReturnBallViewportActive()) {
+                    finish(true);
+                    return;
+                }
+
+                const activeType = resolveGoodbyeReturnModelType(visibleReturnContainer);
+                let returnButtonRect = null;
+                if (visibleReturnContainer && typeof visibleReturnContainer.getBoundingClientRect === 'function') {
+                    const clientRect = visibleReturnContainer.getBoundingClientRect();
+                    const transitionRect = typeof I.toNekoVirtualTransitionRect === 'function'
+                        ? (I.toNekoVirtualTransitionRect(clientRect) || clientRect)
+                        : clientRect;
+                    returnButtonRect = {
+                        left: transitionRect.left,
+                        top: transitionRect.top,
+                        width: transitionRect.width,
+                        height: transitionRect.height
+                    };
+                }
+                window.dispatchEvent(new CustomEvent(`${activeType}-return-click`, {
+                    detail: {
+                        source: options.source || 'programmatic-return',
+                        retryViewportRestore: options.retryViewportRestore === true,
+                        returnButtonRect
+                    }
+                }));
+            };
+
+            dispatchReturnWhenReady().catch((error) => {
+                console.error('[App] 程序化恢复模型失败:', error);
+                finish(false);
+            });
+        });
+    }
+
+    I.returnFromGoodbye = function returnFromGoodbye(options = {}) {
+        options = options && typeof options === 'object' ? options : {};
+        if (programmaticGoodbyeReturnPromise) return programmaticGoodbyeReturnPromise;
+
+        const hasReturnState = isGoodbyeRuntimeActive()
+            || !!getVisibleGoodbyeReturnContainer()
+            || !!I.nekoCatReturnInProgress
+            || isModelCatTransitionActive('model-to-cat')
+            || isModelCatTransitionActive('cat-to-model')
+            || isReturnBallViewportActive();
+        if (!hasReturnState) return Promise.resolve(true);
+
+        const returnPromise = waitForGoodbyeReturnTerminal(options);
+        programmaticGoodbyeReturnPromise = returnPromise;
+        const clearProgrammaticReturn = () => {
+            if (programmaticGoodbyeReturnPromise === returnPromise) {
+                programmaticGoodbyeReturnPromise = null;
+            }
+        };
+        returnPromise.then(clearProgrammaticReturn, clearProgrammaticReturn);
+        return returnPromise;
+    };
+
     function initFloatingButtonListeners() {
         // DOM refs from orchestrator
         const micButton = I.S.dom.micButton;
@@ -230,16 +433,138 @@
 
         const SOCIAL_OPEN_DEDUPE_MS = 1200;
         const SOCIAL_OPEN_RELEASE_DELAY_MS = 800;
+        const SOCIAL_WINDOW_NAME = 'neko-social';
+        const SOCIAL_OAUTH_CALLBACK_PATHS = new Set([
+            '/oauth/callback',
+            '/api/card-drop/oauth/callback'
+        ]);
 
         function getSocialOpenState() {
             if (!window.__nekoSocialOpenState || typeof window.__nekoSocialOpenState !== 'object') {
                 window.__nekoSocialOpenState = {
                     inFlight: false,
                     lastStartedAt: 0,
-                    releaseTimer: null
+                    releaseTimer: null,
+                    generation: 0,
+                    // Keep the community window singleton across click handlers;
+                    // only a closed window may be opened again.
+                    windowRef: null
                 };
             }
             return window.__nekoSocialOpenState;
+        }
+
+        function getOpenSocialWindow() {
+            const state = getSocialOpenState();
+            const socialWindow = state.windowRef;
+            if (!socialWindow) return null;
+            try {
+                if (socialWindow.closed) {
+                    state.windowRef = null;
+                    state.inFlight = false;
+                    state.lastStartedAt = 0;
+                    state.generation = (Number(state.generation) || 0) + 1;
+                    if (state.releaseTimer) {
+                        clearTimeout(state.releaseTimer);
+                        state.releaseTimer = null;
+                    }
+                    return null;
+                }
+            } catch (_) {
+                // A cross-origin WindowProxy may reject property access. Keep the
+                // reference in that case; focus() below is still safe to try.
+            }
+            return socialWindow;
+        }
+
+        function rememberSocialWindow(socialWindow, generation = null) {
+            const state = getSocialOpenState();
+            if (generation !== null && Number(state.generation) !== Number(generation)) {
+                return socialWindow;
+            }
+            if (socialWindow) {
+                state.windowRef = socialWindow;
+            }
+            return socialWindow;
+        }
+
+        function forgetSocialWindow(socialWindow, generation = null) {
+            const state = getSocialOpenState();
+            if (generation !== null && Number(state.generation) !== Number(generation)) {
+                return;
+            }
+            if (!socialWindow || state.windowRef === socialWindow) {
+                state.windowRef = null;
+            }
+        }
+
+        function focusOpenSocialWindow() {
+            const socialWindow = getOpenSocialWindow();
+            if (!socialWindow) return false;
+            if (isSocialOAuthCallbackWindow(socialWindow)) {
+                // Let the click flow probe the named window again and reuse it
+                // for the community feed instead of trapping the user on the
+                // completed OAuth callback page.
+                forgetSocialWindow(socialWindow);
+                return false;
+            }
+            try {
+                if (typeof socialWindow.focus === 'function') socialWindow.focus();
+            } catch (_) {
+                // If the native window disappeared between the closed check and
+                // focus(), clear the stale reference so the next click can reopen it.
+                forgetSocialWindow(socialWindow);
+                return false;
+            }
+            return true;
+        }
+
+        function isSocialOpenRequestCurrent(generation) {
+            return generation === null
+                || generation === undefined
+                || Number(getSocialOpenState().generation) === Number(generation);
+        }
+
+        function isSocialOAuthCallbackWindow(socialWindow) {
+            if (!socialWindow) return false;
+            try {
+                const href = String(socialWindow.location && socialWindow.location.href || '');
+                const callbackUrl = new URL(href, window.location.href);
+                return callbackUrl.origin === window.location.origin
+                    && SOCIAL_OAUTH_CALLBACK_PATHS.has(
+                        callbackUrl.pathname.replace(/\/+$/, '') || '/'
+                    );
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function probeNamedSocialWindow() {
+            let socialWindow = null;
+            try {
+                // An empty URL returns an existing named window without navigating
+                // it. If the name is not present, it creates the blank popup that
+                // the browser flow can reuse for the current user gesture.
+                socialWindow = window.open('', SOCIAL_WINDOW_NAME);
+            } catch (_) {
+                return null;
+            }
+            if (!socialWindow) return null;
+            try {
+                const href = String(socialWindow.location && socialWindow.location.href || '');
+                return {
+                    socialWindow,
+                    // The OAuth callback is a completed one-shot page, not the
+                    // community surface. Reuse that named window for the next
+                    // feed navigation instead of focusing a dead-end callback.
+                    existing: href !== '' && href !== 'about:blank'
+                        && !isSocialOAuthCallbackWindow(socialWindow)
+                };
+            } catch (_) {
+                // A cross-origin community page cannot expose location to the
+                // opener; that is the existing-window case we need to recover.
+                return { socialWindow, existing: true };
+            }
         }
 
         function shouldIgnoreSocialOpenRequest() {
@@ -255,16 +580,25 @@
             }
             state.inFlight = true;
             state.lastStartedAt = now;
+            state.generation = (Number(state.generation) || 0) + 1;
             return false;
         }
 
-        function releaseSocialOpenRequest() {
+        function releaseSocialOpenRequest(generation = null) {
             const state = getSocialOpenState();
+            if (generation !== null && Number(state.generation) !== Number(generation)) {
+                return;
+            }
             if (state.releaseTimer) {
                 clearTimeout(state.releaseTimer);
             }
+            const releaseGeneration = generation === null ? null : Number(generation);
             state.releaseTimer = setTimeout(() => {
                 const latestState = getSocialOpenState();
+                if (releaseGeneration !== null
+                    && Number(latestState.generation) !== releaseGeneration) {
+                    return;
+                }
                 latestState.inFlight = false;
                 latestState.releaseTimer = null;
             }, SOCIAL_OPEN_RELEASE_DELAY_MS);
@@ -368,10 +702,36 @@
             if (window.nekoSocialUnlock && window.nekoSocialUnlock.isLocked()) {
                 return;
             }
+            if (typeof focusOpenSocialWindow === 'function' && focusOpenSocialWindow()) {
+                return;
+            }
             if (shouldIgnoreSocialOpenRequest()) {
                 return;
             }
+            const socialOpenGeneration = typeof getSocialOpenState === 'function'
+                ? (Number(getSocialOpenState().generation) || 0)
+                : null;
+            const releaseSocialOpenRequestForFlow = () => {
+                if (typeof releaseSocialOpenRequest === 'function') {
+                    releaseSocialOpenRequest(socialOpenGeneration);
+                }
+            };
             const isElectron = !!(window.electronShell && typeof window.electronShell.openExternal === 'function');
+            let pendingSocialWindow = null;
+            if (!isElectron && typeof probeNamedSocialWindow === 'function') {
+                const probe = probeNamedSocialWindow();
+                if (probe && probe.existing) {
+                    rememberSocialWindow(probe.socialWindow, socialOpenGeneration);
+                    try { probe.socialWindow.focus && probe.socialWindow.focus(); } catch (_) { /* ignore */ }
+                    const releaseExistingSocialWindowRequest = releaseSocialOpenRequestForFlow;
+                    releaseExistingSocialWindowRequest();
+                    return;
+                }
+                if (probe && probe.socialWindow) {
+                    pendingSocialWindow = probe.socialWindow;
+                    rememberSocialWindow(pendingSocialWindow, socialOpenGeneration);
+                }
+            }
             let socialOpenRequestReleased = false;
             let popupRef = null;
             const closePopup = () => {
@@ -383,9 +743,16 @@
                         popupRef.close();
                     }
                 } catch (_) { /* ignore */ }
+                if (typeof forgetSocialWindow === 'function') {
+                    forgetSocialWindow(popupRef, socialOpenGeneration);
+                }
                 popupRef = null;
             };
             const navigateBrowserPopup = (targetUrl, options = {}) => {
+                if (typeof isSocialOpenRequestCurrent === 'function'
+                    && !isSocialOpenRequestCurrent(socialOpenGeneration)) {
+                    return true;
+                }
                 if (!popupRef) {
                     return false;
                 }
@@ -432,6 +799,9 @@
                         }
                         try {
                             if (popupRef.closed) {
+                                if (typeof forgetSocialWindow === 'function') {
+                                    forgetSocialWindow(popupRef, socialOpenGeneration);
+                                }
                                 popupRef = null;
                                 return false;
                             }
@@ -459,6 +829,10 @@
                 return false;
             };
             const openElectronSocialWindow = (targetUrl) => {
+                if (typeof isSocialOpenRequestCurrent === 'function'
+                    && !isSocialOpenRequestCurrent(socialOpenGeneration)) {
+                    return true;
+                }
                 // frameName=neko-social：NEKO-PC setWindowOpenHandler 靠名字识别社区窗，
                 // 强制 frame/thickFrame + 原生最小/最大/关（尤其 Windows 右上角）。
                 // features 为兜底提示；最终以主进程 overrideBrowserWindowOptions 为准。
@@ -473,6 +847,9 @@
                 if (!socialWin) {
                     return false;
                 }
+                if (typeof rememberSocialWindow === 'function') {
+                    rememberSocialWindow(socialWin, socialOpenGeneration);
+                }
                 registerSocialThemeTarget(socialWin, resolvedTargetUrl);
                 try { socialWin.focus && socialWin.focus(); } catch (_) { /* ignore */ }
                 return true;
@@ -486,7 +863,10 @@
             };
             const fetchNativeSyncTicket = async () => {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 4000);
+                // Both proof endpoints may validate for 60s and refresh for
+                // another 30s. Keep the request alive past the initial window
+                // navigation budget so the completed handoff can still arrive.
+                const timeoutId = setTimeout(() => controller.abort(), 120000);
                 try {
                     const response = await fetch('/api/card-drop/sync-ticket', {
                         cache: 'no-store',
@@ -507,7 +887,7 @@
             };
             const fetchNativeDelegate = async () => {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 4000);
+                const timeoutId = setTimeout(() => controller.abort(), 120000);
                 try {
                     const response = await fetch('/api/card-drop/native-delegate', {
                         cache: 'no-store',
@@ -548,6 +928,17 @@
                     return '';
                 }
             };
+            const waitForInitialNativeProof = async (proofPromise, fallback = '') => {
+                let timeoutId;
+                try {
+                    return await Promise.race([
+                        proofPromise,
+                        new Promise(resolve => { timeoutId = setTimeout(() => resolve(fallback), 4000); })
+                    ]);
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+            };
             const applyNativeSyncTicket = (targetUrl, syncTicket) => {
                 targetUrl.hash = '';
                 const hashParams = new URLSearchParams();
@@ -572,21 +963,25 @@
                 targetUrl.hash = hash;
                 return targetUrl;
             };
-            const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '') => {
+            const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '', pendingProofs = {}) => {
                 // 已登录快速路径直接复用并行取得的 delegate。仅在状态接口失败、
                 // 但 auth-status 兜底确认已登录时重试一次，避免重复解析 OAuth 会话。
                 let nativeDelegate = initialNativeDelegate;
+                if (!nativeDelegate && pendingProofs.nativeHandoff) {
+                    nativeDelegate = (await pendingProofs.nativeHandoff).nativeDelegate;
+                }
                 if (!nativeDelegate) {
                     const retryHandoff = await fetchNativeDelegate();
                     nativeDelegate = retryHandoff.nativeDelegate;
                 }
                 if (nativeDelegate) {
-                    // 二次导航使用新签发的 native_sync，并与 delegate 一次性交付。
-                    // 即使首次页面尚未读取 fragment 而被替换，也不会丢失同步能力；
-                    // 同时不会重放首次导航中的一次性票据。
-                    const delegateTargetUrl = await attachNativeSyncTicket(
-                        new URL(targetUrl, window.location.href)
-                    );
+                    // A ticket omitted from the first navigation is still
+                    // unused. Reuse its late result; only mint again when the
+                    // first ticket was already sent or issuance actually failed.
+                    const unusedTicket = pendingProofs.syncTicket ? await pendingProofs.syncTicket : '';
+                    const delegateTargetUrl = unusedTicket
+                        ? applyNativeSyncTicket(new URL(targetUrl, window.location.href), unusedTicket)
+                        : await attachNativeSyncTicket(new URL(targetUrl, window.location.href));
                     attachNativeDelegate(delegateTargetUrl, nativeDelegate);
                     if (isElectron) {
                         if (!openElectronSocialWindow(delegateTargetUrl.toString())) {
@@ -605,7 +1000,12 @@
                     // 浏览器通常只为一次用户手势放行一个弹窗。先保留唯一的
                     // WindowProxy，完成登录态判断后再决定导航到社区或 OAuth。
                     // Chromium 在 windowFeatures 里指定 noopener 时可能直接返回 null。
-                    popupRef = window.open('about:blank', '_blank');
+                    if (pendingSocialWindow) {
+                        popupRef = pendingSocialWindow;
+                        pendingSocialWindow = null;
+                    } else {
+                        popupRef = window.open('about:blank', '_blank');
+                    }
                     if (!popupRef) {
                         if (typeof window.showStatusToast === 'function') {
                             window.showStatusToast(
@@ -615,6 +1015,9 @@
                             );
                         }
                         return;
+                    }
+                    if (typeof rememberSocialWindow === 'function') {
+                        rememberSocialWindow(popupRef, socialOpenGeneration);
                     }
                     try {
                         const popupRoot = popupRef.document.documentElement;
@@ -663,8 +1066,12 @@
                 const initialSyncTicketPromise = fetchNativeSyncTicket();
                 const initialClientIdPromise = fetchSocialClientId();
                 const initialNativeHandoffPromise = fetchNativeDelegate();
+                const initialNativeHandoffReadiness = waitForInitialNativeProof(
+                    initialNativeHandoffPromise,
+                    { nativeDelegate: '', loginState: 'unknown' }
+                );
                 const [initialSyncTicket, clientId] = await Promise.all([
-                    initialSyncTicketPromise,
+                    waitForInitialNativeProof(initialSyncTicketPromise),
                     initialClientIdPromise
                 ]);
                 // 只有从本体按钮打开的页面才能拿到一次性同步票据。票据放 fragment，
@@ -685,7 +1092,7 @@
                 } else if (!navigateBrowserPopup(url, { keepReference: true })) {
                     throw new Error('popup blocked');
                 }
-                const initialNativeHandoff = await initialNativeHandoffPromise;
+                const initialNativeHandoff = await initialNativeHandoffReadiness;
                 let communityLoggedIn = initialNativeHandoff.loginState === 'logged-in';
                 if (initialNativeHandoff.loginState === 'unknown') {
                     try {
@@ -756,7 +1163,7 @@
                         const shouldWaitForOAuth = (isElectron && oauthLaunched)
                             || (!isElectron && browserOAuthStarted);
                         if (shouldWaitForOAuth) {
-                            releaseSocialOpenRequest();
+                            releaseSocialOpenRequestForFlow();
                             socialOpenRequestReleased = true;
                             const oauthCompleted = await waitForOAuthCompletion(
                                 browserOAuthTimeoutMs,
@@ -793,14 +1200,22 @@
                         } else {
                             await completeInitialCommunityHandoff(
                                 url,
-                                initialNativeHandoff.nativeDelegate
+                                initialNativeHandoff.nativeDelegate,
+                                {
+                                    nativeHandoff: initialNativeHandoffPromise,
+                                    syncTicket: initialSyncTicket ? null : initialSyncTicketPromise
+                                }
                             );
                         }
                     }
                 } else {
                     await completeInitialCommunityHandoff(
                         url,
-                        initialNativeHandoff.nativeDelegate
+                        initialNativeHandoff.nativeDelegate,
+                        {
+                            nativeHandoff: initialNativeHandoffPromise,
+                            syncTicket: initialSyncTicket ? null : initialSyncTicketPromise
+                        }
                     );
                 }
                 return;
@@ -816,7 +1231,7 @@
                 }
             } finally {
                 if (!socialOpenRequestReleased) {
-                    releaseSocialOpenRequest();
+                    releaseSocialOpenRequestForFlow();
                 }
             }
         });
@@ -1424,6 +1839,29 @@
                 console.log('[App] 模型正在切换为猫形态，忽略本次请她回来事件');
                 return;
             }
+            if (I.nekoCatReturnInProgress) {
+                console.log('[App] 请她回来流程已在执行，忽略重复事件');
+                return;
+            }
+            I.nekoCatReturnInProgress = true;
+            const publishReturnAbort = () => {
+                window.dispatchEvent(new CustomEvent('neko:cat-return-abort', {
+                    detail: {
+                        source: event && event.type ? event.type : 'return-click',
+                        reason: 'return-incomplete',
+                        timestamp: Date.now()
+                    }
+                }));
+            };
+            const abortReturnBeforeTerminalGuard = () => {
+                I.nekoCatReturnInProgress = false;
+                publishReturnAbort();
+            };
+            let live2DPeekRestoreAnchor = null;
+            try {
+            const returnDetail = event && event.detail && typeof event.detail === 'object'
+                ? event.detail
+                : {};
             const hadPendingGoodbyeReset = !!window._goodbyeResetClickTimerId;
             if (hadPendingGoodbyeReset) {
                 clearTimeout(window._goodbyeResetClickTimerId);
@@ -1436,15 +1874,28 @@
             }
             const preReturnViewportReady = await I.ensureModelViewportReadyBeforeShowCurrentModel();
             if (!preReturnViewportReady.ready) {
-                console.warn('[App] 请她回来已暂缓：Pet viewport 仍处于猫形态小窗口，保留 return 状态');
-                restoreReturnBallAfterBlockedModelViewport(event);
-                if (hadPendingGoodbyeReset) {
-                    runGoodbyeResetClickIfActive('return-viewport-blocked');
+                let retryViewportReady = preReturnViewportReady;
+                if (returnDetail.retryViewportRestore === true) {
+                    // Electron 的 Pet carrier 从 160x160 恢复到完整 viewport 是异步的。
+                    // 托盘触发时额外给有限次数重试，避免 resize 通知略晚于首轮等待。
+                    for (let attempt = 0; attempt < 2 && !retryViewportReady.ready; attempt += 1) {
+                        await new Promise((resolve) => window.setTimeout(resolve, 50));
+                        retryViewportReady = await I.ensureModelViewportReadyBeforeShowCurrentModel();
+                    }
                 }
-                return;
+                if (retryViewportReady.ready) {
+                    console.log('[App] Pet viewport 重试后已恢复，继续请她回来流程');
+                } else {
+                    console.warn('[App] 请她回来已暂缓：Pet viewport 仍处于猫形态小窗口，保留 return 状态');
+                    restoreReturnBallAfterBlockedModelViewport(event);
+                    if (hadPendingGoodbyeReset) {
+                        runGoodbyeResetClickIfActive('return-viewport-blocked');
+                    }
+                    abortReturnBeforeTerminalGuard();
+                    return;
+                }
             }
             let hadCatCycle = false;
-            let live2DPeekRestoreAnchor = null;
             try {
                 const returnContainer = I.getVisibleIdleReturnBallContainer();
                 hadCatCycle = !!(returnContainer &&
@@ -1472,6 +1923,10 @@
                     timestamp: Date.now()
                 }
             }));
+            } catch (error) {
+                abortReturnBeforeTerminalGuard();
+                throw error;
+            }
             let returnTerminalPublished = false;
             try {
             const isReturningToPngtuber = (window.lanlan_config?.model_type || '').toLowerCase() === 'pngtuber';
@@ -1958,6 +2413,7 @@
 
             console.log('[App] 请她回来完成，未自动开始会话，等待用户主动发起对话');
             } finally {
+                I.nekoCatReturnInProgress = false;
                 if (!returnTerminalPublished) {
                     window.dispatchEvent(new CustomEvent('neko:cat-return-abort', {
                         detail: {
@@ -1978,6 +2434,7 @@
     }
 
     I.mod.initFloatingButtonListeners = initFloatingButtonListeners;
+    I.mod.returnFromGoodbye = I.returnFromGoodbye;
 
     // ================================================================
     //  5. ensureHiddenElements & final UI init  (app.js lines 11354-11420)

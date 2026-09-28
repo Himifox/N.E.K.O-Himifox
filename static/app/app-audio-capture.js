@@ -10,6 +10,87 @@
 
     const mod = {};
     const S = window.appState;
+    S.voiceInputRecoveryState = S.voiceInputRecoveryState || 'idle';
+    S.voiceInputRecoveryGeneration = S.voiceInputRecoveryGeneration || 0;
+    S.voiceInputRecoverySessionEpoch = null;
+    S.voiceInputRecoveryLeaseGeneration = null;
+    S.voiceInputRecoveryTimer = null;
+    function recoveryStatusElement() {
+        return document.getElementById('status-toast');
+    }
+    function updateRecoveryStatus(state) {
+        const el = recoveryStatusElement();
+        if (!el) return;
+        const messages = { recovering: '正在恢复语音识别…', ready: '语音识别已恢复', failed: '语音识别恢复失败，请重试' };
+        const keys = { recovering: 'microphone.voiceInputRecoveryRecovering', ready: 'microphone.voiceInputRecoveryReady', failed: 'microphone.voiceInputRecoveryFailed' };
+        const localized = keys[state] && typeof window.t === 'function' ? window.t(keys[state]) : null;
+        if (messages[state] && typeof window.showStatusToast === 'function') {
+            window.showStatusToast(localized && localized !== keys[state] ? localized : messages[state], state === 'ready' ? 1600 : 4000);
+        }
+    }
+    function clearVoiceInputRecoveryTimer() { if (S.voiceInputRecoveryTimer) clearTimeout(S.voiceInputRecoveryTimer); S.voiceInputRecoveryTimer = null; }
+    function resetVoiceInputRecoveryState() {
+        clearVoiceInputRecoveryTimer();
+        // Retire callbacks already queued by the previous session as well as
+        // its transport identity. A hardware restart within a session must not
+        // call this: it still has to wait for the current recovery verdict.
+        S.voiceInputRecoveryGeneration += 1;
+        S.voiceInputRecoverySessionEpoch = null;
+        S.voiceInputRecoveryLeaseGeneration = null;
+        S.voiceInputRecoveryState = 'idle';
+    }
+    mod.resetVoiceInputRecoveryState = resetVoiceInputRecoveryState;
+    function isVoiceInputRecoveryPending() {
+        return S.voiceInputRecoveryState === 'recovering' || S.voiceInputRecoveryState === 'timed_out';
+    }
+    function matchesCurrentVoiceInputRecovery(detail) {
+        const payload = detail || {};
+        const generation = payload.generation;
+        if (generation != null && generation !== S.voiceInputRecoveryGeneration) return false;
+        if (payload.session_epoch != null && S.voiceInputRecoverySessionEpoch != null
+                && payload.session_epoch !== S.voiceInputRecoverySessionEpoch) return false;
+        // Bind happens on the actual lease_sync send. An unbound cycle or an
+        // unsigned event cannot prove it belongs to this recovery period.
+        if (S.voiceInputRecoveryLeaseGeneration == null
+                || payload.lease_generation == null
+                || payload.lease_generation !== S.voiceInputRecoveryLeaseGeneration) return false;
+        return true;
+    }
+    function beginVoiceInputRecovery() {
+        clearVoiceInputRecoveryTimer();
+        const generation = ++S.voiceInputRecoveryGeneration;
+        // The backend-confirmed route is authoritative; the settings toggle
+        // can already describe the next session. Native voice has no
+        // independent transport-ready notification to wait for.
+        if (S.independentAsrActive !== true || !S.isRecording || S.gameVoiceSttGateActive) {
+            S.voiceInputRecoveryState = 'idle';
+            return;
+        }
+        S.voiceInputRecoveryState = 'recovering'; updateRecoveryStatus('recovering');
+        S.voiceInputRecoverySessionEpoch = S.voiceSessionEpoch ?? S.sessionEpoch ?? null;
+        // Bind to the actual lease snapshot sent below, including reconnect
+        // replay, whose generation starts again at one.
+        S.voiceInputRecoveryLeaseGeneration = null;
+        window.dispatchEvent(new CustomEvent('voice-input-recovery-changed', { detail: { state: 'recovering', generation } }));
+        S.voiceInputRecoveryTimer = setTimeout(() => {
+            if (generation !== S.voiceInputRecoveryGeneration || S.voiceInputRecoveryState !== 'recovering') return;
+            S.voiceInputRecoveryTimer = null;
+            // This UI deadline does not cancel the backend transport attempt.
+            // Keep dropping PCM, but accept a current READY arriving later.
+            S.voiceInputRecoveryState = 'timed_out'; updateRecoveryStatus('failed');
+            window.dispatchEvent(new CustomEvent('voice-input-recovery-changed', { detail: { state: 'timed_out', generation } }));
+        }, 4000);
+    }
+    window.addEventListener('voice-input-recovery-ready', (event) => {
+        if (S.independentAsrActive !== true || S.isMicMuted || !isVoiceInputRecoveryPending()) return;
+        if (!matchesCurrentVoiceInputRecovery(event?.detail)) return;
+        clearVoiceInputRecoveryTimer(); S.voiceInputRecoveryState = 'ready'; updateRecoveryStatus('ready');
+    });
+    window.addEventListener('voice-input-recovery-failed', (event) => {
+        if (S.independentAsrActive !== true || S.isMicMuted || !isVoiceInputRecoveryPending()) return;
+        if (!matchesCurrentVoiceInputRecovery(event?.detail)) return;
+        clearVoiceInputRecoveryTimer(); S.voiceInputRecoveryState = 'failed'; updateRecoveryStatus('failed');
+    });
     const C = window.appConst;
     const MIC_LEASE = Object.freeze({
         NONE: 'none',
@@ -82,18 +163,23 @@
         if (!S.socket || S.socket.readyState !== WebSocket.OPEN) return false;
         const state = currentVoiceInputControlState();
         const fingerprint = JSON.stringify(state);
-        if (force !== true && fingerprint === lastVoiceLeaseFingerprint) return true;
-        voiceLeaseGeneration += 1;
-        S.socket.send(JSON.stringify({
-            action: 'voice_input_control',
-            event: 'lease_sync',
-            owner: state.owner,
-            hard_muted: state.hard_muted,
-            focus_suppressed: state.focus_suppressed,
-            engaged: state.engaged,
-            lease_generation: voiceLeaseGeneration
-        }));
-        lastVoiceLeaseFingerprint = fingerprint;
+        if (force === true || fingerprint !== lastVoiceLeaseFingerprint) {
+            voiceLeaseGeneration += 1;
+            S.socket.send(JSON.stringify({
+                action: 'voice_input_control',
+                event: 'lease_sync',
+                owner: state.owner,
+                hard_muted: state.hard_muted,
+                focus_suppressed: state.focus_suppressed,
+                engaged: state.engaged,
+                lease_generation: voiceLeaseGeneration
+            }));
+            lastVoiceLeaseFingerprint = fingerprint;
+        }
+        S.voiceInputCurrentLeaseGeneration = voiceLeaseGeneration;
+        if (isVoiceInputRecoveryPending()) {
+            S.voiceInputRecoveryLeaseGeneration = voiceLeaseGeneration;
+        }
         return true;
     }
 
@@ -163,7 +249,8 @@
     function canUploadOrdinaryMicFrame() {
         if (refreshMicLease() !== MIC_LEASE.CORE) return false;
         const state = currentVoiceInputControlState();
-        return !state.hard_muted && !state.focus_suppressed;
+        return !state.hard_muted && !state.focus_suppressed
+            && !isVoiceInputRecoveryPending() && S.voiceInputRecoveryState !== 'failed';
     }
 
     // ======================== DOM 辅助 ========================
@@ -499,6 +586,20 @@
         return window.SpeechRecognition || window.webkitSpeechRecognition || null;
     }
 
+    function publishGameVoiceBrowserTranscriptionState(ready, reason) {
+        if (
+            window.appWebSocket
+            && typeof window.appWebSocket.setGameVoiceTranscriptionState === 'function'
+        ) {
+            window.appWebSocket.setGameVoiceTranscriptionState({
+                transcription_mode: ready ? 'browser_fallback' : 'unavailable',
+                provider: 'browser',
+                ready: ready === true,
+                reason: String(reason || '')
+            });
+        }
+    }
+
     function gameVoiceRequestId() {
         return `game-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
@@ -549,8 +650,9 @@
 
     function getGameVoiceSttRouteSnapshot() {
         return {
-            gameType: S.gameVoiceSttGameType || 'soccer',
-            sessionId: S.gameVoiceSttSessionId || S.gameRouteSessionId || ''
+            gameType: S.gameVoiceSttGameType || S.gameRouteGameType || '',
+            sessionId: S.gameVoiceSttSessionId || S.gameRouteSessionId || '',
+            routeInstanceId: S.gameRouteInstanceId || ''
         };
     }
 
@@ -565,8 +667,13 @@
         }
 
         const frozenRoute = routeSnapshot || getGameVoiceSttRouteSnapshot();
-        const gameType = frozenRoute.gameType || 'soccer';
+        const gameType = frozenRoute.gameType || '';
         const sessionId = frozenRoute.sessionId || '';
+        const routeInstanceId = frozenRoute.routeInstanceId || '';
+        if (!gameType || !sessionId) {
+            console.warn('[GameVoiceSTT] missing source route identity, drop transcript');
+            return;
+        }
         const requestId = gameVoiceRequestId();
         console.log(`[GameVoiceSTT] 最终转写 | game=${gameType} request=${requestId} text="${text}"`);
         try {
@@ -576,6 +683,7 @@
                 body: JSON.stringify({
                     lanlan_name: lanlanName,
                     session_id: sessionId,
+                    sdk_route_instance_id: routeInstanceId,
                     transcript: text,
                     request_id: requestId,
                     source: 'main_voice_stt_gate'
@@ -599,7 +707,7 @@
                 stopGameVoiceSttGate();
                 return;
             }
-            console.log(`[GameVoiceSTT] 已提交足球路由 | game=${gameType} request=${requestId} handled=${result ? result.handled !== false : 'unknown'} text="${text}"`);
+            console.log(`[GameVoiceSTT] 已提交小游戏路由 | game=${gameType} request=${requestId} handled=${result ? result.handled !== false : 'unknown'} text="${text}"`);
         } catch (error) {
             console.warn('[GameVoiceSTT] transcript submit failed:', error);
         }
@@ -664,6 +772,7 @@
 
         const SpeechRecognition = getGameVoiceSpeechRecognition();
         if (!SpeechRecognition) {
+            publishGameVoiceBrowserTranscriptionState(false, 'browser_unsupported');
             if (!S.gameVoiceSttUnsupportedNotified) {
                 S.gameVoiceSttUnsupportedNotified = true;
                 console.warn('[GameVoiceSTT] 当前浏览器不支持 SpeechRecognition，无法启动游戏语音 STT gate');
@@ -704,6 +813,7 @@
             if (S.gameVoiceSttRecognition !== recognition) return;
             S.gameVoiceSttListening = true;
             S.gameVoiceSttStopping = false;
+            publishGameVoiceBrowserTranscriptionState(true, 'browser_ready');
             console.log('[GameVoiceSTT][Diag] recognition start');
         };
         recognition.onaudiostart = function () {
@@ -760,6 +870,8 @@
             }
             if (errorCode === 'no-speech') {
                 console.warn('[GameVoiceSTT][Diag] no-speech: 识别器启动了但没有形成可用语音。优先检查默认麦克风是否正确、是否有 audio/sound/speech start 日志。');
+            } else {
+                publishGameVoiceBrowserTranscriptionState(false, errorCode);
             }
             if (errorCode === 'not-allowed' || errorCode === 'service-not-allowed') {
                 if (typeof window.showStatusToast === 'function') {
@@ -788,7 +900,7 @@
             releaseOrdinaryMicCaptureForGameVoiceSttGate();
             S.gameVoiceSttRecognition.start();
             S.gameVoiceSttListening = true;
-            console.log(`[GameVoiceSTT] STT gate 已启动 | game=${S.gameVoiceSttGameType || 'soccer'} recording=${!!S.isRecording} ordinary_mic=released`);
+            console.log(`[GameVoiceSTT] STT gate 已启动 | game=${S.gameVoiceSttGameType || S.gameRouteGameType || '-'} recording=${!!S.isRecording} ordinary_mic=released`);
             return true;
         } catch (error) {
             if (error && error.name === 'InvalidStateError') {
@@ -798,6 +910,7 @@
             }
             console.warn('[GameVoiceSTT] recognition start failed:', error);
             S.gameVoiceSttListening = false;
+            publishGameVoiceBrowserTranscriptionState(false, 'browser_start_failed');
             restoreOrdinaryMicCaptureAfterGameVoiceSttFailure('recognition_start_failed', error);
             return false;
         }
@@ -1230,6 +1343,18 @@
         S.hasSoundDetected = false;
     }
 
+    // 排下一次音量监测：Electron Pet 里渲染后端切到定时器驱动时，本循环也改走
+    // 定时器（frame-pacing.requestPacedFrame），否则这条 rAF 链会单独把 Blink 主帧
+    // 顶回显示器刷新率。非 Pet 页面没有 nekoFramePacing，保持 rAF。
+    function scheduleMonitorInputVolume() {
+        const pacing = window.nekoFramePacing;
+        if (pacing && typeof pacing.requestPacedFrame === 'function') {
+            pacing.requestPacedFrame(monitorInputVolume);
+            return;
+        }
+        requestAnimationFrame(monitorInputVolume);
+    }
+
     // 监测音频输入音量
     function monitorInputVolume() {
         if (!S.inputAnalyser || !S.isRecording) {
@@ -1242,7 +1367,7 @@
         // guard 把"本地噪声"误判成"用户在说话"导致语音模式 nudge 被静默
         // skip 卡死 (`_isUserRecentlySpeaking()` 8s 窗口拖尾)。
         if (S.isMicMuted) {
-            requestAnimationFrame(monitorInputVolume);
+            scheduleMonitorInputVolume();
             return;
         }
 
@@ -1281,7 +1406,7 @@
 
         // 持续监测
         if (S.isRecording) {
-            requestAnimationFrame(monitorInputVolume);
+            scheduleMonitorInputVolume();
         }
     }
 
@@ -2243,6 +2368,9 @@
     function stopRecording(options) {
         options = options || {};
         const notifyServer = options.notifyServer !== false;
+        // Also retire recovery when startup failed before isRecording became
+        // true. The owning session's failure path uses this same teardown.
+        resetVoiceInputRecoveryState();
         // 停止语音期间主动视觉定时
         if (typeof window.stopProactiveVisionDuringSpeech === 'function') {
             window.stopProactiveVisionDuringSpeech();
@@ -2363,9 +2491,10 @@
                 return;
             }
 
-            // 检查弹出框是否仍然可见
+            // 检查弹出框是否仍然可见：不可见时只需低频探测它何时重新出现，
+            // 不必按刷新率排 rAF（弹窗关着也让 Blink 每 vsync 跑主帧）
             if (!cachedPopup || cachedPopup.style.display === 'none' || !cachedPopup.offsetParent) {
-                S.micVolumeAnimationId = requestAnimationFrame(updateVolumeDisplay);
+                scheduleMicVolumeFrame(MIC_VOLUME_HIDDEN_POLL_MS);
                 return;
             }
 
@@ -2480,19 +2609,49 @@
             }
 
             // 继续下一帧
+            scheduleMicVolumeFrame();
+        }
+
+        // 排下一帧：渲染后端在定时器驱动时跟随其周期（frame-pacing），否则 rAF；
+        // 传 delayMs 时固定用该延时（弹窗不可见的低频探测）
+        function scheduleMicVolumeFrame(delayMs) {
+            cancelMicVolumeFrame();
+            if (Number(delayMs) > 0) {
+                const id = setTimeout(updateVolumeDisplay, Number(delayMs));
+                _micVolumePacedCancel = () => clearTimeout(id);
+                return;
+            }
+            const pacing = window.nekoFramePacing;
+            if (pacing && typeof pacing.requestPacedFrame === 'function') {
+                _micVolumePacedCancel = pacing.requestPacedFrame(updateVolumeDisplay);
+                return;
+            }
             S.micVolumeAnimationId = requestAnimationFrame(updateVolumeDisplay);
         }
 
         // 启动动画循环
-        S.micVolumeAnimationId = requestAnimationFrame(updateVolumeDisplay);
+        scheduleMicVolumeFrame();
     }
 
-    // 停止麦克风音量可视化
-    function stopMicVolumeVisualization() {
+    // 弹窗不可见时探测它重新出现的周期
+    const MIC_VOLUME_HIDDEN_POLL_MS = 250;
+    // 定时器驱动路径的取消句柄（rAF 路径用 S.micVolumeAnimationId）
+    let _micVolumePacedCancel = null;
+
+    function cancelMicVolumeFrame() {
         if (S.micVolumeAnimationId) {
             cancelAnimationFrame(S.micVolumeAnimationId);
             S.micVolumeAnimationId = null;
         }
+        if (_micVolumePacedCancel) {
+            try { _micVolumePacedCancel(); } catch (_) {}
+            _micVolumePacedCancel = null;
+        }
+    }
+
+    // 停止麦克风音量可视化
+    function stopMicVolumeVisualization() {
+        cancelMicVolumeFrame();
     }
 
     // 立即更新音量显示状态（用于录音状态变化时立即反映）
@@ -2561,6 +2720,7 @@
             return S.isMicMuted;
         }
         S.isMicMuted = !S.isMicMuted;
+        if (!S.isMicMuted) beginVoiceInputRecovery(); else { ++S.voiceInputRecoveryGeneration; clearVoiceInputRecoveryTimer(); S.voiceInputRecoveryState = 'idle'; updateRecoveryStatus('idle'); }
         refreshMicLease();
         if (S.isMicMuted) {
             stopSilenceDetection();
@@ -2592,7 +2752,11 @@
     };
 
     window.setMicMuted = function(muted, showToast = false) {
+        const wasMuted = S.isMicMuted;
         S.isMicMuted = muted;
+        // An idempotent setter call must not restart a completed recovery, but
+        // a newly claimed session resets the state to idle while remaining unmuted.
+        if (!muted && (wasMuted || S.voiceInputRecoveryState === 'idle')) beginVoiceInputRecovery(); else if (muted) { ++S.voiceInputRecoveryGeneration; clearVoiceInputRecoveryTimer(); S.voiceInputRecoveryState = 'idle'; updateRecoveryStatus('idle'); }
         refreshMicLease();
         if (S.isMicMuted) {
             stopSilenceDetection();

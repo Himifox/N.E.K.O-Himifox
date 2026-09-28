@@ -37,6 +37,7 @@ from ._shared import (
     LEGACY_RUNTIME_DIR_NAMES,
     NON_RUNTIME_CONTENT_DIR_NAMES,
     ROOT_CONFIG_MERGE_FILES,
+    TRANSACTIONAL_RUNTIME_ENTRY_PATTERNS,
     RUNTIME_ASSET_DIR_NAMES,
     TARGET_OPTIONAL_STATE_FILES,
 )
@@ -108,9 +109,12 @@ def _runtime_root_has_user_content(root: Path, *, config_manager=None) -> bool:
                 if _runtime_config_dir_has_user_content(config_manager):
                     return True
                 continue
+            transactional_pattern = TRANSACTIONAL_RUNTIME_ENTRY_PATTERNS.get(name)
             try:
                 for child in candidate.iterdir():
-                    if _is_ignorable_runtime_entry(child):
+                    if _is_ignorable_runtime_entry(
+                        child, transactional_pattern=transactional_pattern
+                    ):
                         continue
                     return True
             except StopIteration:
@@ -123,12 +127,17 @@ def runtime_root_has_user_content(root: Path, *, config_manager=None) -> bool:
     return _runtime_root_has_user_content(root, config_manager=config_manager)
 
 
-def _is_ignorable_runtime_entry(path: Path) -> bool:
+def _is_ignorable_runtime_entry(path: Path, *, transactional_pattern=None) -> bool:
     name = path.name
     if name == ".gitkeep":
         return True
     if name.startswith("."):
-        return True
+        # 事务目录是崩溃恢复的唯一线索，判定「有没有用户内容」时它算内容。
+        # 名字必须逐字命中该目录声明的事务模式，不能只看点前缀和后缀。
+        return not (
+            transactional_pattern is not None
+            and transactional_pattern.fullmatch(name) is not None
+        )
     if name == "__pycache__":
         return True
     return False
@@ -365,6 +374,7 @@ def _runtime_root_summary(config_manager, root: Path) -> dict[str, Any]:
     voice_storage_path = config_root / "voice_storage.json"
     workshop_config_path = config_root / "workshop_config.json"
     core_config_path = config_root / "core_config.json"
+    plugin_models_path = config_root / "plugin_models.json"
 
     characters_payload = _load_json_if_exists(characters_path)
     user_preferences_payload = _load_json_if_exists(user_preferences_path)
@@ -392,6 +402,7 @@ def _runtime_root_summary(config_manager, root: Path) -> dict[str, Any]:
         + (2 if voice_storage_path.is_file() else 0)
         + (1 if workshop_config_path.is_file() else 0)
         + (1 if core_config_path.is_file() else 0)
+        + (1 if plugin_models_path.is_file() else 0)
         + sum(2 for has_content in asset_dirs_with_content.values() if has_content)
     )
 
@@ -404,6 +415,7 @@ def _runtime_root_summary(config_manager, root: Path) -> dict[str, Any]:
         "has_voice_storage": voice_storage_path.is_file(),
         "has_workshop_config": workshop_config_path.is_file(),
         "has_core_config": core_config_path.is_file(),
+        "has_plugin_models": plugin_models_path.is_file(),
         "asset_dirs_with_content": asset_dirs_with_content,
         "seeded_character_shell": seeded_character_shell,
         "looks_like_seeded": (
@@ -419,6 +431,7 @@ def _runtime_root_summary(config_manager, root: Path) -> dict[str, Any]:
                 or _config_payload_looks_seeded(config_manager, "voice_storage.json", voice_storage_payload)
             )
             and not workshop_config_path.is_file()
+            and not plugin_models_path.is_file()
             and (
                 not core_config_path.is_file()
                 or _config_payload_looks_seeded(config_manager, "core_config.json", core_config_payload)
@@ -448,6 +461,7 @@ def _legacy_root_provides_repair_benefit(config_manager, source_summary: dict[st
             ("has_voice_storage", "missing_voice_storage"),
             ("has_workshop_config", "missing_workshop_config"),
             ("has_core_config", "missing_core_config"),
+            ("has_plugin_models", "missing_plugin_models"),
         ):
             if source_summary[flag_name] and not target_summary[flag_name]:
                 return True, reason
@@ -503,6 +517,9 @@ def _stage_merged_runtime_configs(config_manager, *, source_root: Path, target_r
         merged_preferences = _merge_preferences_payloads(source_preferences, target_preferences)
         atomic_write_json(config_dir / "user_preferences.json", merged_preferences, ensure_ascii=False, indent=2)
 
+    # plugin_models.json is copied as one configuration unit by
+    # _copy_runtime_root_entries (the current root wins). Deep-merging it could
+    # pair an old API key with a new endpoint or resurrect a deleted binding.
     for filename in ROOT_CONFIG_MERGE_FILES:
         source_payload = _load_json_if_exists(source_root / "config" / filename)
         target_payload = _load_json_if_exists(target_root / "config" / filename)

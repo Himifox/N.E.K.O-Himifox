@@ -69,8 +69,15 @@ export default function MessageBubble({
         data-guide-message={isGuideMessage(message) ? 'true' : undefined}
         data-message-sort-key={message.sortKey ?? ''}
       >
-        <div className="system-chip">
+        <div className={clsx("system-chip", { "system-chip-card": message.blocks.some(block => block.type === "html_card") })}>
           <span className="system-chip-time">{message.time}</span>
+          {message.author ? (
+            // Where this came from. A plugin may phrase its text in the
+            // character's voice, so without a source the reader cannot tell it
+            // apart from something she actually said — and for blind pushes she
+            // has no memory of it at all.
+            <span className="system-chip-source">{message.author}</span>
+          ) : null}
           <div className="system-chip-content">
             {message.blocks.map((block, index) => (
               <MessageBlockView

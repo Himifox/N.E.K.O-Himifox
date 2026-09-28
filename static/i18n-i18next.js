@@ -29,9 +29,8 @@
     const SUPPORTED_LANGUAGES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'ru', 'es', 'pt'];
 
     // locale 资源版本（用于 cache-busting，避免客户端长期缓存旧语言包导致新增 key 不生效）
-    // 修改原因：Owner 声纹页新增一次录入、开关、重录与删除文案；递增版本让
-    // Electron、Docker 等长期缓存重新拉取包含完整新 key 的语言包。
-    const LOCALE_VERSION = '2026-08-16-voice-identity-one-click';
+    // 合入主分支的屏幕授权等待、唤醒词/插件 HTML 卡片、独立 ASR 恢复、点歌台管理入口与排序锁提示语言包 key，递增版本让长期缓存重新拉取完整语言包。
+    const LOCALE_VERSION = '2026-09-28-locale-key-sync';
     function initDecorativeImageDragGuard() {
         const markImage = (img) => {
             if (!(img instanceof HTMLImageElement)) return;

@@ -53,7 +53,7 @@ def test_social_open_request_is_deduped_before_fetching_config():
     assert "const SOCIAL_OPEN_DEDUPE_MS = 1200;" in source
     assert "window.__nekoSocialOpenState" in source
     assert "function shouldIgnoreSocialOpenRequest()" in source
-    assert "function releaseSocialOpenRequest()" in source
+    assert "function releaseSocialOpenRequest(generation = null)" in source
 
     listener_start = source.index("window.addEventListener('live2d-social-click', async () => {")
     listener_end = source.index("// 睡觉按钮（请她离开）", listener_start)
@@ -63,7 +63,7 @@ def test_social_open_request_is_deduped_before_fetching_config():
         "fetch('/api/system/social/config')"
     )
     assert "let socialOpenRequestReleased = false;" in listener
-    assert listener.count("releaseSocialOpenRequest();") == 2
+    assert listener.count("releaseSocialOpenRequestForFlow();") == 2
     assert "if (!socialOpenRequestReleased)" in listener
     # Community opens in-app (Electron framed child / browser tab); OAuth may still use openExternal.
     helper_start = listener.index("const openElectronSocialWindow = (targetUrl) => {")
@@ -76,7 +76,7 @@ def test_social_open_request_is_deduped_before_fetching_config():
         electron_helper,
     )
     assert "openElectronSocialWindow(url)" in listener
-    assert listener.index("releaseSocialOpenRequest();") > listener.index("openElectronSocialWindow(url)")
+    assert listener.index("releaseSocialOpenRequestForFlow();") > listener.index("openElectronSocialWindow(url)")
     assert "fetch('/api/card-drop/sync-ticket', {" in listener
     assert "hashParams.set('native_sync', syncTicket)" in listener
     assert "fetch('/api/card-drop/native-delegate', {" in listener
@@ -86,9 +86,10 @@ def test_social_open_request_is_deduped_before_fetching_config():
     assert "const initialNativeHandoffPromise = fetchNativeDelegate();" in listener
     assert "const [initialSyncTicket, clientId] = await Promise.all([" in listener
     assert "applyNativeSyncTicket(targetUrl, initialSyncTicket);" in listener
-    assert listener.count("setTimeout(() => controller.abort(), 4000)") == 2
+    assert listener.count("setTimeout(() => controller.abort(), 120000)") == 2
+    assert "waitForInitialNativeProof(initialSyncTicketPromise)" in listener
     assert listener.count("signal: controller.signal") == 2
-    assert listener.count("clearTimeout(timeoutId)") == 2
+    assert listener.count("clearTimeout(timeoutId)") == 3
     assert "native session sync ticket fetch failed: HTTP" in listener
     assert "native delegate fetch failed (non-fatal):" in listener
     assert "targetUrl.searchParams.set('cid', clientId)" in listener
@@ -131,9 +132,9 @@ def test_social_open_request_is_deduped_before_fetching_config():
     assert "fetch('/api/card-drop/oauth/start'" in listener
     assert "请在浏览器完成统一账号登录" in listener
     assert listener.index("openElectronSocialWindow(url)") < listener.index(
-        "const initialNativeHandoff = await initialNativeHandoffPromise;"
+        "const initialNativeHandoff = await initialNativeHandoffReadiness;"
     )
-    assert listener.index("const initialNativeHandoff = await initialNativeHandoffPromise;") < listener.index(
+    assert listener.index("const initialNativeHandoff = await initialNativeHandoffReadiness;") < listener.index(
         "fetch('/api/card-drop/auth-status'"
     )
     assert listener.index("fetch('/api/card-drop/auth-status'") < listener.index(
@@ -154,10 +155,10 @@ def test_social_open_request_is_deduped_before_fetching_config():
         "openElectronSocialWindow(url)"
     )
     assert listener.index("openElectronSocialWindow(url)") < listener.index(
-        "const initialNativeHandoff = await initialNativeHandoffPromise;"
+        "const initialNativeHandoff = await initialNativeHandoffReadiness;"
     )
     helper_start = listener.index(
-        "const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '') => {"
+        "const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '', pendingProofs = {}) => {"
     )
     helper_end = listener.index("\n            try {", helper_start)
     helper = listener[helper_start:helper_end]
@@ -166,13 +167,11 @@ def test_social_open_request_is_deduped_before_fetching_config():
     assert helper.index("let nativeDelegate = initialNativeDelegate;") < helper.index(
         "openElectronSocialWindow(delegateTargetUrl.toString())"
     )
-    assert re.search(
-        r"const delegateTargetUrl = await attachNativeSyncTicket\(\s*"
-        r"new URL\(targetUrl, window\.location\.href\)\s*\);",
-        listener,
-    )
+    assert "const unusedTicket = pendingProofs.syncTicket ? await pendingProofs.syncTicket : '';" in helper
+    assert "applyNativeSyncTicket(new URL(targetUrl, window.location.href), unusedTicket)" in helper
+    assert "await attachNativeSyncTicket(new URL(targetUrl, window.location.href))" in helper
     assert "attachNativeDelegate(delegateTargetUrl, nativeDelegate);" in listener
-    assert "const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '') => {" in listener
+    assert "const completeInitialCommunityHandoff = async (targetUrl, initialNativeDelegate = '', pendingProofs = {}) => {" in listener
     assert listener.count(
         "await completeInitialCommunityHandoff("
     ) == 2
@@ -182,11 +181,373 @@ def test_social_open_request_is_deduped_before_fetching_config():
     assert main_flow.index("fetch('/api/card-drop/auth-status'") < main_flow.index(
         "await completeInitialCommunityHandoff("
     )
-    assert re.search(
-        r"else \{\s*await completeInitialCommunityHandoff\(\s*"
-        r"url,\s*initialNativeHandoff\.nativeDelegate\s*\);\s*\}",
-        listener,
+    assert "syncTicket: initialSyncTicket ? null : initialSyncTicketPromise" in main_flow
+    assert "nativeHandoff: initialNativeHandoffPromise" in main_flow
+    assert main_flow.index("const initialNativeHandoffReadiness = waitForInitialNativeProof(") < main_flow.index(
+        "const [initialSyncTicket, clientId] = await Promise.all(["
     )
+
+
+@pytest.mark.unit
+def test_social_existing_window_is_reused_and_closed_window_reopens():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    source = read_js_parts(APP_UI_PATH)
+    listener_start = source.index("window.addEventListener('live2d-social-click', async () => {")
+    listener = source[listener_start:source.index("// 睡觉按钮（请她离开）", listener_start)]
+    helpers = "\n".join(
+        _extract_js_function(source, signature)
+        for signature in (
+            "function getSocialOpenState()",
+            "function getOpenSocialWindow()",
+            "function rememberSocialWindow(socialWindow, generation = null)",
+            "function forgetSocialWindow(socialWindow, generation = null)",
+            "function isSocialOAuthCallbackWindow(socialWindow)",
+            "function focusOpenSocialWindow()",
+            "function probeNamedSocialWindow()",
+        )
+    )
+    script = r"""
+const assert = require('node:assert/strict');
+const SOCIAL_WINDOW_NAME = 'neko-social';
+let onClick;
+let openCalls = 0;
+let createdPopups = 0;
+let focusCalls = 0;
+let popup = null;
+const makePopup = () => ({
+    closed: false,
+    location: {
+        href: 'about:blank',
+        replace(url) { this.href = url; },
+    },
+    focus() { focusCalls += 1; },
+    close() { this.closed = true; },
+});
+const window = {
+    location: new URL('http://localhost:48911/'),
+    addEventListener: (_type, callback) => { onClick = callback; },
+    open: (_url, name) => {
+        openCalls += 1;
+        if (name === SOCIAL_WINDOW_NAME && popup && !popup.closed) return popup;
+        popup = makePopup();
+        createdPopups += 1;
+        return popup;
+    },
+};
+const document = { documentElement: { getAttribute: () => 'light' } };
+const shouldIgnoreSocialOpenRequest = () => {
+    const state = getSocialOpenState();
+    if (state.inFlight) return true;
+    state.inFlight = true;
+    state.lastStartedAt = Date.now();
+    return false;
+};
+const releaseSocialOpenRequest = () => { getSocialOpenState().inFlight = false; };
+const isResolvedDarkTheme = () => false;
+const registerSocialThemeTarget = () => null;
+const queueSocialThemeSync = () => {};
+const response = body => ({ ok: true, json: async () => body });
+const fetch = async url => {
+    if (url === '/api/system/social/config') return response({ social_base_url: 'https://community.example' });
+    if (url === '/api/system/client-id') return response({ client_id: '' });
+    if (url === '/api/card-drop/sync-ticket') return response({ sync_ticket: '' });
+    if (url === '/api/card-drop/native-delegate') return response({ native_delegate: '' });
+    if (url === '/api/card-drop/auth-status') return response({ logged_in: true });
+    throw new Error('unexpected request: ' + url);
+};
+""" + helpers + "\n" + listener + r"""
+(async () => {
+    await onClick();
+    assert.equal(openCalls, 1, 'the first click opens one named popup');
+    const firstPopup = popup;
+    const initialFocusCalls = focusCalls;
+    await onClick();
+    assert.equal(openCalls, 1, 'a second click reuses the existing popup');
+    assert.equal(popup, firstPopup);
+    assert.equal(focusCalls, initialFocusCalls + 1, 'a second click focuses the existing popup');
+
+    // Simulate a renderer refresh: the in-memory reference is gone, but the
+    // named cross-origin popup is still discoverable and must not be recreated.
+    window.__nekoSocialOpenState = null;
+    Object.defineProperty(popup.location, 'href', {
+        configurable: true,
+        get() { throw new Error('cross-origin'); },
+    });
+    const refreshFocusCalls = focusCalls;
+    await onClick();
+    assert.equal(createdPopups, 1, 'refresh recovery does not create another popup');
+    assert.equal(focusCalls, refreshFocusCalls + 1, 'refresh recovery focuses the named popup');
+
+    popup.closed = true;
+    window.__nekoSocialOpenState = null;
+    await onClick();
+    assert.equal(createdPopups, 2, 'a closed popup can be opened again');
+    assert.notEqual(popup, firstPopup);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = run_node_stdin(node, script, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.unit
+def test_social_oauth_callback_window_is_reused_for_community_navigation():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    source = read_js_parts(APP_UI_PATH)
+    listener_start = source.index("window.addEventListener('live2d-social-click', async () => {")
+    listener = source[listener_start:source.index("// 睡觉按钮（请她离开）", listener_start)]
+    helpers = "\n".join(
+        _extract_js_function(source, signature)
+        for signature in (
+            "function getSocialOpenState()",
+            "function getOpenSocialWindow()",
+            "function rememberSocialWindow(socialWindow, generation = null)",
+            "function forgetSocialWindow(socialWindow, generation = null)",
+            "function isSocialOAuthCallbackWindow(socialWindow)",
+            "function focusOpenSocialWindow()",
+            "function probeNamedSocialWindow()",
+        )
+    )
+    script = r"""
+const assert = require('node:assert/strict');
+const SOCIAL_WINDOW_NAME = 'neko-social';
+const SOCIAL_OAUTH_CALLBACK_PATHS = new Set([
+    '/oauth/callback',
+    '/api/card-drop/oauth/callback'
+]);
+let onClick;
+let createdPopups = 0;
+let popup = null;
+const makePopup = () => ({
+    closed: false,
+    location: {
+        href: 'about:blank',
+        replace(url) { this.href = url; },
+    },
+    focus() {},
+    close() { this.closed = true; },
+});
+const window = {
+    location: new URL('http://localhost:48911/'),
+    addEventListener: (_type, callback) => { onClick = callback; },
+    open: (_url, name) => {
+        if (name === SOCIAL_WINDOW_NAME && popup && !popup.closed) return popup;
+        popup = makePopup();
+        createdPopups += 1;
+        return popup;
+    },
+};
+const document = { documentElement: { getAttribute: () => 'light' } };
+const shouldIgnoreSocialOpenRequest = () => {
+    const state = getSocialOpenState();
+    if (state.inFlight) return true;
+    state.inFlight = true;
+    state.lastStartedAt = Date.now();
+    state.generation = (Number(state.generation) || 0) + 1;
+    return false;
+};
+const releaseSocialOpenRequest = () => { getSocialOpenState().inFlight = false; };
+const isResolvedDarkTheme = () => false;
+const registerSocialThemeTarget = () => null;
+const queueSocialThemeSync = () => {};
+const response = body => ({ ok: true, json: async () => body });
+const fetch = async url => {
+    if (url === '/api/system/social/config') return response({ social_base_url: 'https://community.example' });
+    if (url === '/api/system/client-id') return response({ client_id: '' });
+    if (url === '/api/card-drop/sync-ticket') return response({ sync_ticket: '' });
+    if (url === '/api/card-drop/native-delegate') return response({ native_delegate: '' });
+    if (url === '/api/card-drop/auth-status') return response({ logged_in: true });
+    throw new Error('unexpected request: ' + url);
+};
+""" + helpers + "\n" + listener + r"""
+(async () => {
+    await onClick();
+    assert.equal(createdPopups, 1);
+    assert.match(popup.location.href, /^https:\/\/community\.example\/feed/);
+
+    // A saved callback reference must be classified before focusOpenSocialWindow
+    // returns, otherwise the click would stop at the callback page.
+    popup.location.href = 'http://localhost:48911/oauth/callback?code=done';
+    await onClick();
+    assert.equal(createdPopups, 1, 'a saved callback window is reused');
+    assert.match(popup.location.href, /^https:\/\/community\.example\/feed/);
+
+    // A refreshed renderer loses the in-memory reference while the named
+    // popup remains on the local OAuth callback page. It must be navigated to
+    // the community feed instead of being mistaken for an already-open feed.
+    window.__nekoSocialOpenState = null;
+    popup.location.href = 'http://localhost:48911/oauth/callback?code=done';
+    await onClick();
+    assert.equal(createdPopups, 1, 'the callback window is reused');
+    assert.match(popup.location.href, /^https:\/\/community\.example\/feed/);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = run_node_stdin(node, script, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.unit
+def test_slow_social_proof_survives_the_initial_window_navigation_budget():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    source = read_js_parts(APP_UI_PATH)
+    helpers = "\n".join(_extract_js_function(source, signature) + ";" for signature in (
+        "const fetchNativeSyncTicket = async () =>",
+        "const waitForInitialNativeProof = async (proofPromise, fallback = '') =>",
+    ))
+    script = r"""
+const assert = require('node:assert/strict');
+const timers = new Map();
+let timerId = 0;
+let now = 0;
+const setTimeout = (callback, delay) => {
+    const id = ++timerId;
+    timers.set(id, { callback, at: now + delay });
+    return id;
+};
+const clearTimeout = id => timers.delete(id);
+const advance = elapsed => {
+    now += elapsed;
+    for (const [id, timer] of [...timers]) {
+        if (timer.at <= now) { timers.delete(id); timer.callback(); }
+    }
+};
+let finishFetch;
+let signal;
+const fetch = (_url, options) => new Promise((resolve, reject) => {
+    signal = options.signal;
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    finishFetch = () => resolve({ ok: true, json: async () => ({ sync_ticket: 'late-ticket' }) });
+});
+""" + helpers + r"""
+(async () => {
+    const ticket = fetchNativeSyncTicket();
+    const initial = waitForInitialNativeProof(ticket);
+    advance(4000);
+    assert.equal(await initial, '', 'the community may open before slow validation finishes');
+    assert.equal(signal.aborted, false, 'navigation must not cancel proof issuance');
+    advance(1000);
+    finishFetch();
+    assert.equal(await ticket, 'late-ticket');
+    assert.equal(timers.size, 0, 'successful completion cleans both deadlines');
+    const timedOut = fetchNativeSyncTicket();
+    advance(120000);
+    assert.equal(await timedOut, '');
+    assert.equal(signal.aborted, true, 'the longer remote validation wait remains bounded');
+    assert.equal(timers.size, 0);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = run_node_stdin(node, script, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ticket_delay_ms", [2000, 5000])
+@pytest.mark.parametrize("oauth_launch_failed", [False, True])
+def test_social_handoff_reuses_only_unsent_tickets_and_starts_fallback_early(
+    ticket_delay_ms, oauth_launch_failed,
+):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    source = read_js_parts(APP_UI_PATH)
+    start = source.index("window.addEventListener('live2d-social-click', async () => {")
+    listener = source[start:source.index("// 睡觉按钮（请她离开）", start)]
+    script = (
+        "const ticketDelay = " + str(ticket_delay_ms) + ";\n"
+        + "const oauthLaunchFailed = " + str(oauth_launch_failed).lower() + ";\n"
+    ) + r"""
+const assert = require('node:assert/strict');
+let now = 0;
+let nextTimer = 0;
+const timers = new Map();
+const setTimeout = (callback, delay) => {
+    const id = ++nextTimer;
+    timers.set(id, { callback, at: now + delay });
+    return id;
+};
+const clearTimeout = id => timers.delete(id);
+const advance = elapsed => {
+    now += elapsed;
+    for (const [id, timer] of [...timers]) {
+        if (timer.at <= now) { timers.delete(id); timer.callback(); }
+    }
+};
+const flush = () => new Promise(resolve => setImmediate(resolve));
+let onClick;
+let released = 0;
+const opened = [];
+const requests = [];
+let ticketRequests = 0;
+let delegateRequests = 0;
+const shouldIgnoreSocialOpenRequest = () => false;
+const releaseSocialOpenRequest = () => { released += 1; };
+const isResolvedDarkTheme = () => false;
+const registerSocialThemeTarget = () => null;
+const queueSocialThemeSync = () => {};
+const window = {
+    location: new URL('http://localhost:48911/'),
+    electronShell: { openExternal: async () => { throw new Error('already logged in'); } },
+    addEventListener: (_type, callback) => { onClick = callback; },
+    open: url => { opened.push({ url: new URL(url), at: now }); return { focus() {} }; },
+};
+const response = body => ({ ok: true, json: async () => body });
+const fetch = async (url, options = {}) => {
+    requests.push({ url, at: now, signal: options.signal });
+    if (url === '/api/system/social/config') return response({ social_base_url: 'https://community.example' });
+    if (url === '/api/system/client-id') return response({ client_id: 'device-id' });
+    if (url === '/api/card-drop/sync-ticket') {
+        ticketRequests += 1;
+        if (ticketRequests === 1) {
+            return new Promise(resolve => setTimeout(() => resolve(response({ sync_ticket: 'ticket-1' })), ticketDelay));
+        }
+        return response({ sync_ticket: 'ticket-2' });
+    }
+    if (url === '/api/card-drop/native-delegate') {
+        delegateRequests += 1;
+        return new Promise(resolve => setTimeout(() => resolve(response({ native_delegate: 'desktop-delegate' })), 7000));
+    }
+    if (url === '/api/card-drop/auth-status') {
+        if (oauthLaunchFailed) return response({ logged_in: false });
+        return new Promise(resolve => setTimeout(() => resolve(response({ logged_in: true })), Math.max(0, 7000 - now)));
+    }
+    if (url === '/api/card-drop/oauth/start' && oauthLaunchFailed) return { ok: false };
+    throw new Error('unexpected request: ' + url);
+};
+""" + listener + r"""
+(async () => {
+    const flow = onClick();
+    await flush();
+    advance(2000); await flush();
+    advance(2000); await flush();
+    assert.equal(opened.length, 1, 'the first community navigation stays within its budget');
+    assert.equal(opened[0].at, Math.min(ticketDelay, 4000));
+    const status = requests.filter(request => request.url === '/api/card-drop/auth-status');
+    assert.equal(status.length, 1, 'fallback must join the still-running validation');
+    assert.equal(status[0].at, 4000, 'delegate readiness must not wait for the long HTTP timeout');
+    assert.ok(requests.filter(request => request.signal).every(request => !request.signal.aborted));
+    advance(1000); await flush();
+    advance(2000); await flush();
+    await flow;
+    assert.equal(delegateRequests, 1, 'reuse the late initial delegate instead of validating again');
+    assert.equal(requests.filter(request => request.url === '/api/card-drop/oauth/start').length,
+        oauthLaunchFailed ? 1 : 0);
+    assert.equal(ticketRequests, ticketDelay > 4000 ? 1 : 2);
+    assert.equal(opened.length, 2);
+    assert.equal(opened[0].url.hash.includes('native_sync'), ticketDelay <= 4000);
+    const finalProofs = new URLSearchParams(opened[1].url.hash.slice(1));
+    assert.equal(finalProofs.get('native_sync'), ticketDelay > 4000 ? 'ticket-1' : 'ticket-2');
+    assert.equal(finalProofs.get('native_delegate'), 'desktop-delegate');
+    assert.equal(timers.size, 0);
+    assert.equal(released, 1);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = run_node_stdin(node, script, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.unit
@@ -205,7 +566,7 @@ def test_social_native_delegate_is_the_fast_path_login_proof_with_safe_fallback(
     assert "loginState: nativeDelegate ? 'logged-in' : 'unknown'" in delegate_helper
     assert delegate_helper.count("{ nativeDelegate: '', loginState: 'unknown' }") == 2
 
-    main_start = listener.index("const initialNativeHandoff = await initialNativeHandoffPromise;")
+    main_start = listener.index("const initialNativeHandoff = await initialNativeHandoffReadiness;")
     main_flow = listener[main_start:]
     unknown_guard = "if (initialNativeHandoff.loginState === 'unknown')"
     assert unknown_guard in main_flow
@@ -261,7 +622,7 @@ def test_social_browser_fallback_preopens_popup_before_async_fetches():
         listener,
     )
     assert listener.index("navigateBrowserPopup(url, { keepReference: true })") < listener.index(
-        "const initialNativeHandoff = await initialNativeHandoffPromise;"
+        "const initialNativeHandoff = await initialNativeHandoffReadiness;"
     )
     assert listener.index("fetch('/api/card-drop/auth-status'") < listener.index(
         "navigateBrowserPopup(authUrl, { keepReference: true })"
@@ -274,7 +635,7 @@ def test_social_browser_fallback_preopens_popup_before_async_fetches():
         r"closePopup\(\);",
         listener,
     )
-    assert listener.index("releaseSocialOpenRequest();") < listener.index(
+    assert listener.index("releaseSocialOpenRequestForFlow();") < listener.index(
         "await waitForOAuthCompletion("
     )
     assert listener.index("await waitForOAuthCompletion(") < listener.index(

@@ -2769,75 +2769,6 @@ async def test_deferred_scoped_synthesis_falls_back_when_locale_lookup_fails(
     ]
 
 
-@pytest.mark.asyncio
-async def test_qq_bootstrap_forwards_explicit_locale_but_writes_omit_fallback(
-    monkeypatch,
-):
-    from plugin.plugins.qq_auto_reply.memory_bridge import QQMemoryBridge
-    from utils import language_utils
-
-    calls = []
-
-    class Response:
-        text = "ok"
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"status": "ok"}
-
-    class Client:
-        async def get(self, _url, **kwargs):
-            calls.append(("get", kwargs))
-            return Response()
-
-        async def post(self, _url, **kwargs):
-            calls.append(("post", kwargs))
-            return Response()
-
-    monkeypatch.setattr(QQMemoryBridge, "_client", staticmethod(Client))
-    monkeypatch.setattr(
-        language_utils,
-        "get_global_language_full",
-        lambda: "zh-TW",
-    )
-    bridge = QQMemoryBridge(object())
-    await bridge.fetch_bootstrap_memory("Neko", language="zh-TW")
-    await bridge.fetch_scoped_bootstrap_memory(
-        "Neko",
-        subjects=[{
-            "subject_kind": "group_chat",
-            "subject_id": "qq:7788",
-        }],
-        language="zh-TW",
-    )
-    await bridge.post_scoped_memory_history(
-        "Neko",
-        [{"role": "user", "content": "喜歡貓"}],
-        subject={
-            "subject_kind": "group_chat",
-            "subject_id": "qq:7788",
-        },
-    )
-    await bridge.post_scoped_memory_history_batch(
-        "Neko",
-        [{
-            "messages": [{"role": "user", "content": "喜歡貓"}],
-            "subject": {
-                "subject_kind": "group_participant",
-                "subject_id": "qq:7788:1001",
-            },
-            "speaker_label": "Alice",
-        }],
-    )
-
-    assert calls[0][1]["params"] == {"language": "zh-TW"}
-    assert calls[1][1]["json"]["language"] == "zh-TW"
-    assert "language" not in calls[2][1]["json"]
-    assert "language" not in calls[3][1]["json"]
-
-
 def test_memory_prompt_locale_detection_ignores_formatter_metadata():
     from memory.fact_dedup import FactDedupResolver
     from memory.refine import MemoryRefineEngine
@@ -4328,10 +4259,9 @@ async def test_reflect_endpoint_uses_durable_character_locale(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_plugins_without_session_locale_omit_process_fallback(monkeypatch):
+async def test_wechat_plugin_without_session_locale_omits_process_fallback(monkeypatch):
     import httpx
 
-    from plugin.plugins.bilibili_dm import BiliDMPlugin
     from plugin.plugins.wechat_integration import WechatIntegrationPlugin
     from utils import language_utils
 
@@ -4352,16 +4282,6 @@ async def test_plugins_without_session_locale_omit_process_fallback(monkeypatch)
             calls.append((url, kwargs))
             return Response()
 
-    class Logger:
-        def info(self, *_args):
-            return None
-
-        def warning(self, *_args):
-            return None
-
-    class Harness:
-        logger = Logger()
-
     monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
     monkeypatch.setattr(language_utils, "get_global_language", lambda: "zh")
     monkeypatch.setattr(
@@ -4370,16 +4290,6 @@ async def test_plugins_without_session_locale_omit_process_fallback(monkeypatch)
         lambda: "zh-TW",
     )
 
-    await BiliDMPlugin._build_session_instructions(
-        Harness(),
-        "Neko",
-        "Master",
-        "character",
-        {},
-        "admin",
-        "123",
-        "Master",
-    )
     assert await WechatIntegrationPlugin._fetch_memory_context("Neko") == "memory"
 
     assert all("params" not in kwargs for _url, kwargs in calls)

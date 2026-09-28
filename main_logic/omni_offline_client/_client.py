@@ -144,6 +144,7 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         self.provider_type = provider_type
         self.vision_provider_type = vision_provider_type or provider_type
         self._model_switch_lock = asyncio.Lock()
+        self._multimodal_submit_lock = asyncio.Lock()
         self.on_text_delta = on_text_delta
         # Called with True the first time a stream emits a reasoning / thinking
         # chunk (the text itself is filtered out before it reaches text/TTS —
@@ -240,13 +241,27 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         self._use_genai_sdk = _should_use_genai_sdk(self.model, self.base_url)
         self._genai_client = None  # initialized lazily inside _stream_text_genai
         self._genai_tools_unsupported = False  # set True if genai path falls back at runtime
+        # OpenAI-compat 端点明确拒收 ``tools``（例如 Ollama 上的 llava 返回
+        # 400 "does not support tools"）后置 True，本会话后续轮次不再带工具，
+        # 省掉每轮一次必然失败的请求。这是模型能力，只在换模型 / 关闭时清掉。
+        self._openai_tools_unsupported = False
+        # 端点只在请求带图时拒收 tools（"tool use is not supported with images"）。
+        self._openai_tools_unsupported_with_images = False
 
         # State management
         self._is_responding = False
+        self._response_generation = 0
+        self._active_response_generation: int | None = None
         self._conversation_history = []
         self._instructions = ""
         self._stream_task = None
         self._pending_images = []  # Store pending images to send with next text
+        # 插件 read 图片的独立暂存位。刻意不与 _pending_images 共用：两者共用时
+        # 任何淘汰策略都会伤到用户——丢最旧会丢掉用户刚暂存的帧，拒新会让插件占
+        # 满后挡住用户自己的图（两种都在 review 中试过并被正确驳回）。分开计额后
+        # 谁也花不了对方的预算，超额时裁的永远是自己那一侧最旧的一张。
+        # 与 _proactive_image_to_inject 同为「独立拥有的视觉暂存」模式。
+        self._pending_plugin_images = []
         # 主动搭话以「屏幕」为素材投递后遗留的那张截图，待下一条用户 text 回复
         # 时作为前导视觉背景注入（让对话模型「看到」刚才搭话评论的屏幕）。刻意
         # 与 _pending_images（用户自己的下一帧）隔离：共用会偷走用户的待发帧，

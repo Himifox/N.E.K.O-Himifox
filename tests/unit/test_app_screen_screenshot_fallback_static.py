@@ -7,6 +7,21 @@ APP_SCREEN_JS = Path(__file__).resolve().parents[2] / "static" / "app" / "app-sc
 
 
 @pytest.mark.unit
+def test_shared_screen_frame_wait_is_bounded_and_cleans_up_video():
+    source = APP_SCREEN_JS.read_text(encoding="utf-8")
+    capture = source.split("async function captureFrameFromStream(stream, jpegQuality, fullResolution)", 1)[1].split(
+        "mod.captureFrameFromStream = captureFrameFromStream;", 1
+    )[0]
+
+    assert "setTimeout(function ()" in capture
+    assert "video.removeEventListener('loadeddata', onLoaded);" in capture
+    assert "if (!loaded) return null;" in capture
+    assert "finally {" in capture
+    assert "video.srcObject = null;" in capture
+    assert "video.remove();" in capture
+
+
+@pytest.mark.unit
 def test_backend_screenshot_remains_a_safe_one_shot_fallback():
     source = APP_SCREEN_JS.read_text(encoding="utf-8")
     fallback = source.split("async function fetchBackendScreenshot()", 1)[1].split(
@@ -33,6 +48,47 @@ def test_manual_screen_share_never_polls_the_backend_screenshot_endpoint():
     assert "进入后端 pyautogui 轮询模式" not in start_once
     assert "streamError.name = 'NotReadableError'" in start_once
     assert "用户没有选择的其它窗口" in start_once
+
+
+@pytest.mark.unit
+def test_windows_wgc_failure_offers_an_explicit_compatibility_restart():
+    source = APP_SCREEN_JS.read_text(encoding="utf-8")
+    helper = source.split(
+        "async function requestWindowsGraphicsCaptureFallback", 1
+    )[1].split("function hasVisibleModelSurface", 1)[0]
+    start_once = source.split("async function startScreenSharingOnce(attempt)", 1)[
+        1
+    ].split("mod.startScreenSharing = startScreenSharing;", 1)[0]
+
+    assert "provider.requestWindowsGraphicsCaptureFallback" in helper
+    assert "name: String(error && error.name || '')" in helper
+    assert "message: String(error && error.message || '')" in helper
+    assert "deferRestartUntilConfirmed: true" in helper
+    assert "sourceType:" in helper
+    assert "sourceId:" not in helper
+    assert "prompted: false" in helper
+    assert start_once.count("requestWindowsGraphicsCaptureFallback(") == 2
+    assert start_once.count("Fallback.restarting") == 2
+    assert "if (!windowsGraphicsCapturePrompted)" in start_once
+
+    selected_source_failure = start_once.split(
+        "} catch (captureErr) {", 1
+    )[1].split("} else if (!isNativeFrameProvider(desktopProvider)) {", 1)[0]
+    assert selected_source_failure.index("if (!fallbackSucceeded)") < (
+        selected_source_failure.index("requestWindowsGraphicsCaptureFallback(")
+    )
+    fallback_picker_failure = selected_source_failure.split(
+        "} catch (fallback2Err) {", 1
+    )[1].split("if (!fallbackSucceeded)", 1)[0]
+    assert "if (fallback2Err.name === 'NotAllowedError') throw fallback2Err;" in (
+        fallback_picker_failure
+    )
+    assert fallback_picker_failure.index(
+        "discardCancelledScreenSharingStart(attempt)"
+    ) < fallback_picker_failure.index("fallback2Err.name === 'NotAllowedError'")
+    assert start_once.count("confirmWindowsGraphicsCaptureFallback(") == 2
+    assert start_once.count("&& windowsGraphicsCaptureFallback.prompted") == 2
+    assert start_once.count("&& displayWgcFallback.prompted") == 2
 
 
 @pytest.mark.unit

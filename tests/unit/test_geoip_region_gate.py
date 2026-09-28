@@ -36,6 +36,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'
 # ConfigManager / core_config，混用 import 与 from-import 会被静态检查判为风格问题。
 import utils.config_manager as config_manager_pkg  # noqa: E402
 
+from tests.repo_ast_cache import parse_source_file
+
 ConfigManager = config_manager_pkg.ConfigManager
 core_config_mod = config_manager_pkg.core_config
 
@@ -929,11 +931,15 @@ def test_every_plugin_offline_client_settles_the_region():
     import ast
 
     files = _plugin_files_constructing_offline_clients()
-    assert files, '未发现任何构造 OmniOfflineClient 的插件文件，本断言已失效'
+    if not files:
+        # 本 PR 删掉了 qq_auto_reply、main 又移出了 bilibili_danmaku，仓库里已没有构造
+        # OmniOfflineClient 的插件，发现集为空时这条守卫没有标的。跳过而不是断言失败：
+        # 将来再有插件用这个模式，守卫会自动重新生效（这正是"发现式"而非硬编码清单的意义）。
+        pytest.skip('仓库内已无构造 OmniOfflineClient 的插件文件，本守卫暂时无标的')
 
     problems = []
     for path in files:
-        tree = ast.parse(path.read_text(encoding='utf-8'))
+        tree = parse_source_file(path)
         for func in ast.walk(tree):
             if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -1004,57 +1010,6 @@ def test_raw_config_gate_ignores_an_explicit_lanlan_app_endpoint():
     # 免费路由本身不受影响
     assert ConfigManager._config_needs_region(
         {'CORE_URL': 'wss://www.lanlan.tech/core'}) is True
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize('rel_path', [
-    'plugin/plugins/qq_auto_reply/session_bootstrap_service.py',
-    'plugin/plugins/bilibili_dm/__init__.py',
-])
-def test_plugin_session_paths_settle_the_region(rel_path):
-    """Plugin sessions cache an OmniOfflineClient too — same base-URL freeze.
-
-    Both plugins keep the client in a session-keyed dict, so a route picked before
-    the verdict lands sticks for the life of that session.
-
-    Checked per enclosing function and by line order, not by whole-file counts: a
-    settle call sitting in some unrelated function, or after the config read it is
-    supposed to guard, would satisfy a count-based assertion while guaranteeing
-    nothing.
-    """
-    import ast
-    import pathlib
-
-    source = pathlib.Path(__file__).resolve().parents[2] / rel_path
-    tree = ast.parse(source.read_text(encoding='utf-8'))
-
-    def _named(call):
-        return getattr(call.func, 'attr', None) or getattr(call.func, 'id', None)
-
-    checked = 0
-    for func in ast.walk(tree):
-        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        reads, settles = [], []
-        for call in ast.walk(func):
-            if not isinstance(call, ast.Call):
-                continue
-            name = _named(call)
-            if (name == 'get_model_api_config' and call.args
-                    and isinstance(call.args[0], ast.Constant)
-                    and call.args[0].value == 'conversation'):
-                reads.append(call.lineno)
-            elif name == 'aensure_region_resolved':
-                settles.append(call.lineno)
-        for read_line in reads:
-            checked += 1
-            earlier = [s for s in settles if s < read_line]
-            assert earlier, (
-                f'{rel_path}:{read_line} 在 {func.name}() 里冻结会话线路前没有先落定区域'
-                f'（该函数内的落定调用: {settles or "无"}）'
-            )
-
-    assert checked, f'{rel_path} 里没找到 conversation 配置读取，本断言已失效'
 
 
 @pytest.mark.unit
@@ -1734,7 +1689,12 @@ def test_paths_that_pick_a_voice_and_build_a_tts_url_settle_first():
                         f'晚于第一次区域敏感读取 line {first_read}'
                     )
 
-    assert checked, '未找到任何「挑音色 + 拼 TTS 端点」的路径，断言失效'
+    if not checked:
+        # 唯一符合条件的样本（plugin/plugins/qq_auto_reply/voice_reply_service.py 的
+        # synthesize_reply_voice_audio）随市场插件一起被 gitignore，CI 检出里不存在，
+        # 于是扫描为空。此时跳过而非断言失败——测试只对「仓库内确实存在该模式」时生效，
+        # 避免护栏在无样本的检出里因空集而阻塞 CI。
+        pytest.skip('未找到任何「挑音色 + 拼 TTS 端点」的路径（样本在 gitignore 的市场插件中），跳过')
     assert not missing, f'这些路径在一次操作里两次读区域却未先落定: {missing}'
 
 
@@ -2539,12 +2499,12 @@ def test_case_variant_official_hostname_still_rewrites(config_manager):
 
 @pytest.mark.unit
 def test_every_offline_client_constructor_in_lifecycle_applies_the_flip_failsafe():
-    """Both lifecycle paths that build an OmniOfflineClient run the flip fail-safe.
+    """Every lifecycle path that builds an OmniOfflineClient runs the flip fail-safe.
 
-    The normal-session and hot-swap branches are duals; guarding only one lets
-    the other freeze a voice from the pre-flip catalog into the pending client.
-    Discovered from the constructor sites, line-ordered, so a third path added
-    later cannot silently skip it.
+    Normal-session, hot-swap, and multimodal handoff are parallel entry points;
+    guarding only some lets another freeze a voice from the pre-flip catalog.
+    Follow the shared constructor helper at its call sites, line-ordered, so a
+    later path cannot silently skip the guard.
     """
     import ast
     import pathlib
@@ -2552,17 +2512,42 @@ def test_every_offline_client_constructor_in_lifecycle_applies_the_flip_failsafe
     source = pathlib.Path(__file__).resolve().parents[2] / 'main_logic' / 'core' / 'lifecycle.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
 
+    class _DirectCallVisitor(ast.NodeVisitor):
+        """Collect calls without merging a nested callable's lexical scope."""
+
+        def __init__(self):
+            self.calls = []
+
+        def visit_Call(self, node):
+            self.calls.append(node)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node):
+            return
+
+        def visit_AsyncFunctionDef(self, node):
+            return
+
+        def visit_Lambda(self, node):
+            return
+
+        def visit_ClassDef(self, node):
+            return
+
     checked = []
     problems = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
+        if node.name == '_create_offline_vlm_client':
+            continue
         builds, drops = [], []
-        for c in ast.walk(node):
-            if not isinstance(c, ast.Call):
-                continue
+        visitor = _DirectCallVisitor()
+        for statement in node.body:
+            visitor.visit(statement)
+        for c in visitor.calls:
             name = getattr(c.func, 'attr', None) or getattr(c.func, 'id', None)
-            if name == 'OmniOfflineClient':
+            if name in {'OmniOfflineClient', '_create_offline_vlm_client'}:
                 builds.append(c.lineno)
             elif name == '_drop_free_voice_on_route_flip':
                 drops.append(c.lineno)
@@ -2575,5 +2560,5 @@ def test_every_offline_client_constructor_in_lifecycle_applies_the_flip_failsafe
             problems.append(
                 f'{node.name}: fail-safe 在 line {min(drops)}，晚于 client 构造 line {min(builds)}')
 
-    assert len(checked) >= 2, f'未找到足够的 OmniOfflineClient 构造点，断言失效: {checked}'
+    assert len(checked) >= 3, f'未找到足够的 OmniOfflineClient 构造入口，断言失效: {checked}'
     assert not problems, f'这些构造点缺少区域翻转音色 fail-safe: {problems}'

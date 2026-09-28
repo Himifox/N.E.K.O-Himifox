@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -217,6 +219,44 @@ def test_binary_audio_frame_decodes_extreme_sample_values() -> None:
     assert _decode_binary_audio_frame(payload)["data"] == samples
 
 
+@pytest.mark.asyncio
+async def test_live_visual_validation_is_tracked_before_background_processing(
+    monkeypatch,
+) -> None:
+    manager = _ProtocolManager()
+    websocket = _EventWebSocket(
+        [
+            {
+                "action": "stream_data",
+                "input_type": "screen",
+                "data": "raw-frame",
+            }
+        ]
+    )
+    _install_protocol_endpoint(
+        monkeypatch,
+        manager=manager,
+        websocket=websocket,
+    )
+    ordering = []
+
+    async def stream_data(message: dict) -> None:
+        ordering.append(("stream", message))
+
+    def track_validation(task: asyncio.Task, *, captured_at: object) -> bool:
+        assert not task.done()
+        ordering.append(("track", captured_at))
+        return True
+
+    manager.stream_data = stream_data
+    manager._track_independent_visual_validation_task = track_validation
+
+    await websocket_router.websocket_endpoint(websocket, "Lan")
+
+    assert [kind for kind, _value in ordering] == ["track", "stream"]
+    assert isinstance(ordering[0][1], float)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -262,6 +302,66 @@ def test_binary_audio_frame_accepts_real_and_boundary_frame_sizes(
 
     assert len(message["data"]) == samples
     assert message["sample_rate_hz"] == sample_rate_hz
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "docs/api/websocket/audio-streaming.md",
+        "docs/api/websocket/message-types.md",
+    ),
+)
+def test_public_audio_docs_match_the_120_ms_frame_limit(relative_path: str) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    text = (project_root / relative_path).read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert re.search(
+        r"\b(?:at most|no longer than) 120 ms\b",
+        normalized,
+        re.IGNORECASE,
+    )
+    assert re.search(r"\b10\s*[-–]\s*32 ms\b", normalized)
+    assert not re.search(
+        r"\b(?:at most|no longer than)\s+(?:one|1)\s*(?:s|secs?|seconds?)\b",
+        normalized,
+        re.IGNORECASE,
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "docs/api/websocket/audio-streaming.md",
+        "docs/api/websocket/message-types.md",
+        "docs/api/websocket/protocol.md",
+    ),
+)
+def test_public_lease_docs_explain_engaged_claim_semantics(
+    relative_path: str,
+) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    text = (project_root / relative_path).read_text(encoding="utf-8")
+    rows: dict[str, str] = {}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) == 3 and cells[0] in {"`true`", "`false`", "omitted"}:
+            rows[cells[0]] = " ".join(cells[1:]).lower()
+
+    assert "active recording" in rows["`true`"]
+    assert "reconnecting" in rows["`true`"]
+    assert "claims" in rows["`true`"]
+    assert "does not claim" not in rows["`true`"]
+
+    assert "passive" in rows["`false`"]
+    assert "does not claim" in rows["`false`"]
+
+    assert "legacy" in rows["omitted"]
+    assert "claims" in rows["omitted"]
+    assert "does not claim" not in rows["omitted"]
+
+    normalized = " ".join(text.split()).lower()
+    assert "only the literal json value `false` suppresses the claim" in normalized
 
 
 @pytest.mark.asyncio
@@ -775,6 +875,22 @@ _LEASE_RELEASE_MESSAGE = {
 _PAUSE_SESSION_MESSAGE = {"action": "pause_session"}
 
 
+_SWITCHING_TERMINAL_STATUS = {
+    "code": "CHARACTER_SWITCHING_TERMINAL",
+    "details": {"name": "Lan"},
+}
+
+
+def _statuses_sent_to(socket) -> list:
+    """Decode the status payloads a fake socket received directly."""
+    statuses = []
+    for payload in socket.sent_text:
+        frame = json.loads(payload)
+        if frame.get("type") == "status":
+            statuses.append(json.loads(frame["message"]))
+    return statuses
+
+
 class _TwoPhaseWebSocket(_EventWebSocket):
     """Socket that delivers a first burst, then holds until released.
 
@@ -1089,10 +1205,11 @@ async def test_stale_socket_after_voice_takeover_is_closed_without_reclaim(
     call_names = [name for name, _payload in manager.calls]
     assert call_names.count("begin") == 2
     assert call_names.count("stream_data") == 1
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } in manager.statuses
+    # The kick notice goes to the socket being closed, never to the window
+    # that now owns the character.
+    assert _SWITCHING_TERMINAL_STATUS in _statuses_sent_to(stale_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(takeover_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
 
 
 @pytest.mark.asyncio
@@ -1201,10 +1318,9 @@ async def test_recording_survives_second_text_socket_and_its_text_message(
     assert superseded_pcm in stream_payloads
     assert [name for name, _payload in manager.calls].count("control") == 2
     assert manager._avatar_position is sentinel
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(recording_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(chat_socket)
 
     # The chat window's text takeover worked unchanged: text session started
     # and its text message dispatched, without ever claiming voice.
@@ -1457,10 +1573,11 @@ async def test_superseded_voice_socket_non_voice_message_is_still_closed(
     assert recording_socket.closed is True
     assert "authorize" not in [name for name, _payload in manager.calls]
     assert "start_session" not in [name for name, _payload in manager.calls]
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } in manager.statuses
+    # The kick notice goes to the socket being closed, never to the window
+    # that now owns the character.
+    assert _SWITCHING_TERMINAL_STATUS in _statuses_sent_to(recording_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(chat_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
 
     chat_socket.release.set()
     await chat_task
@@ -1514,10 +1631,9 @@ async def test_superseded_recorder_pause_ends_the_session_without_a_stale_close(
     # lost a character switch it was not part of.
     assert manager.active_session_is_idle is True
     assert recording_socket.closed is False
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(recording_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(chat_socket)
 
     call_names = [name for name, _payload in manager.calls]
     # The lease release still applies -- that is how the backend learns the
@@ -1579,10 +1695,9 @@ async def test_superseded_recorder_pause_does_not_end_a_newer_text_session(
     assert "end_session" not in call_names
     # Still not a character switch -- the recorder keeps its socket either way.
     assert recording_socket.closed is False
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(recording_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(chat_socket)
 
     chat_socket.release.set()
     await chat_task
@@ -1629,10 +1744,11 @@ async def test_pause_from_a_socket_that_lost_voice_is_still_a_character_switch(
 
     assert recording_socket.closed is True
     assert "end_session" not in [name for name, _payload in manager.calls]
-    assert {
-        "code": "CHARACTER_SWITCHING_TERMINAL",
-        "details": {"name": "Lan"},
-    } in manager.statuses
+    # The kick notice goes to the socket being closed, never to the window
+    # that now owns the character.
+    assert _SWITCHING_TERMINAL_STATUS in _statuses_sent_to(recording_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in _statuses_sent_to(takeover_socket)
+    assert _SWITCHING_TERMINAL_STATUS not in manager.statuses
 
     takeover_socket.release.set()
     await takeover_task

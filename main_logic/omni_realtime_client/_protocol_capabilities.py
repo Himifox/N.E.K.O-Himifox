@@ -59,12 +59,24 @@ class ResponseStartEvidence(str, Enum):
     ANNOUNCEMENT_OR_ID_BEARING_CONTENT = "response_created_or_id_bearing_content"
 
 
+class MultimodalTurnDelivery(str, Enum):
+    """How a completed text+image user turn must be delivered."""
+
+    DIRECT_ATOMIC = "direct_atomic"
+    HANDOFF_REQUIRED = "handoff_required"
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeProtocolCapabilities:
     """Immutable capabilities for one resolved Realtime route."""
 
     route_key: str
     response_start_evidence: ResponseStartEvidence
+    multimodal_turn_delivery: MultimodalTurnDelivery = (
+        MultimodalTurnDelivery.HANDOFF_REQUIRED
+    )
+    responds_to_conversation_items: bool = False
+    function_call_ids_match_terminal: bool = True
 
     @property
     def accepts_id_bearing_content_start(self) -> bool:
@@ -79,11 +91,25 @@ STRICT_REALTIME_PROTOCOL_CAPABILITIES = RealtimeProtocolCapabilities(
     response_start_evidence=ResponseStartEvidence.ANNOUNCEMENT_ONLY,
 )
 
+OPENAI_REALTIME_PROTOCOL_CAPABILITIES = RealtimeProtocolCapabilities(
+    route_key="strict_default",
+    response_start_evidence=ResponseStartEvidence.ANNOUNCEMENT_ONLY,
+    multimodal_turn_delivery=MultimodalTurnDelivery.DIRECT_ATOMIC,
+)
+
+GEMINI_REALTIME_PROTOCOL_CAPABILITIES = RealtimeProtocolCapabilities(
+    route_key="strict_default",
+    response_start_evidence=ResponseStartEvidence.ANNOUNCEMENT_ONLY,
+    multimodal_turn_delivery=MultimodalTurnDelivery.DIRECT_ATOMIC,
+)
+
 LANLAN_APP_REALTIME_PROTOCOL_CAPABILITIES = RealtimeProtocolCapabilities(
     route_key="lanlan_app_gemini",
     response_start_evidence=(
         ResponseStartEvidence.ANNOUNCEMENT_OR_ID_BEARING_CONTENT
     ),
+    responds_to_conversation_items=True,
+    function_call_ids_match_terminal=False,
 )
 
 LANLAN_TECH_REALTIME_PROTOCOL_CAPABILITIES = RealtimeProtocolCapabilities(
@@ -106,4 +132,9 @@ def resolve_realtime_protocol_capabilities(
         return LANLAN_APP_REALTIME_PROTOCOL_CAPABILITIES
     if is_free_lanlan_tech_route(api_type, realtime_base_url):
         return LANLAN_TECH_REALTIME_PROTOCOL_CAPABILITIES
+    provider_key = str(api_type or "").strip().lower()
+    if provider_key in {"openai", "gpt"}:
+        return OPENAI_REALTIME_PROTOCOL_CAPABILITIES
+    if provider_key == "gemini":
+        return GEMINI_REALTIME_PROTOCOL_CAPABILITIES
     return STRICT_REALTIME_PROTOCOL_CAPABILITIES
