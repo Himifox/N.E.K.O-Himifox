@@ -23,6 +23,14 @@ import portalocker
 
 KNOWLEDGE_SCHEMA_VERSION = 7
 ROOT_BARRIER_TIMEOUT_SECONDS = 30.0
+# What a knowledge write raises when a lock stays held past its budget: the
+# in-process half of the root barrier raises TimeoutError, the cross-process
+# portalocker halves (root barrier and mutation_lock) raise LockException.
+# Callers report these as a retryable "busy", never as bad input.
+KNOWLEDGE_LOCK_BUSY_ERRORS: tuple[type[BaseException], ...] = (
+    TimeoutError,
+    portalocker.exceptions.LockException,
+)
 
 _BARRIERS_LOCK = threading.Lock()
 _BARRIERS: dict[str, threading.RLock] = {}

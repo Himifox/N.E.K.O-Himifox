@@ -44,6 +44,10 @@ _UNSUBSCRIBE_TOTAL_BUDGET_SECONDS = KNOWLEDGE_PLUGIN_TO_MAIN_MUTATION_TIMEOUT_SE
 _UNSUBSCRIBE_RESPONSE_MARGIN_SECONDS = 0.05
 _UNSUBSCRIBE_DRAIN_SECONDS = 24 * 60 * 60
 _REMOVAL_STATUS_POLL_SECONDS = 0.25
+# Main Server reasons that mean "try again later", not "this pack is invalid".
+_LOCAL_KNOWLEDGE_BUSY_REASONS = frozenset(
+    {"knowledge_mutation_busy", "knowledge_mutation_stopping"}
+)
 _CONNECT_TIMEOUT_SECONDS = 2.0
 
 
@@ -824,9 +828,12 @@ async def _execute_subscription(
         )
         result = await asyncio.shield(installation_mutation)
         if result.get("ok") is not True:
+            reason = str(result.get("reason") or "install_failed")
             raise _KnowledgeTaskError(
-                str(result.get("reason") or "install_failed"),
-                "本地知识库拒绝了该知识包",
+                reason,
+                "本地知识库正忙，请稍后重试"
+                if reason in _LOCAL_KNOWLEDGE_BUSY_REASONS
+                else "本地知识库拒绝了该知识包",
             )
         job_id = str(result.get("job_id") or "")
         if job_id:

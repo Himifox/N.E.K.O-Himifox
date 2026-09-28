@@ -11,7 +11,10 @@ from typing import TypeVar
 
 # The barrier is shared with root migration, so it lives in the storage layer;
 # re-exported here for the knowledge writers and routers that already use it.
-from utils.storage.knowledge_contract import knowledge_root_barrier
+from utils.storage.knowledge_contract import (  # noqa: F401
+    KNOWLEDGE_LOCK_BUSY_ERRORS,
+    knowledge_root_barrier,
+)
 
 
 _T = TypeVar("_T")

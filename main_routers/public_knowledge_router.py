@@ -23,6 +23,7 @@ from knowledge.catalog_overrides import (
 )
 from knowledge.pack_jobs import KnowledgeJobRegistryError
 from knowledge.mutation_runtime import (
+    KNOWLEDGE_LOCK_BUSY_ERRORS,
     KnowledgeMutationAdmissionClosed,
     run_knowledge_writer,
 )
@@ -348,6 +349,8 @@ async def set_public_knowledge_entry_disabled(request: Request):
         return {"ok": False, "reason": "catalog_override_invalid"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     return {"ok": True, "disabled": disabled, "disabled_entries": count}
 
 
@@ -391,6 +394,8 @@ async def import_public_knowledge_pack(request: Request):
         return {"ok": False, "reason": "knowledge_job_registry_invalid"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -486,6 +491,8 @@ async def apply_public_knowledge_subscription(
         return {"ok": False, "reason": "knowledge_job_registry_invalid"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     except (OSError, ValueError) as exc:
         return {"ok": False, "reason": "invalid_pack", "error_type": type(exc).__name__}
     return {
@@ -517,6 +524,8 @@ async def cancel_public_knowledge_pack_job(request: Request):
         )
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     return {"ok": cancelled, "reason": "" if cancelled else "not_found"}
 
 
@@ -538,6 +547,8 @@ async def discard_degraded_public_knowledge_pack_job(request: Request):
         )
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     return {"ok": discarded, "reason": "" if discarded else "not_found"}
 
 
@@ -563,6 +574,8 @@ async def set_public_knowledge_pack_auto_context(request: Request):
         return {"ok": False, "reason": "pack_registry_recovery_required"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "auto_context": enabled}
@@ -590,6 +603,8 @@ async def set_public_knowledge_pack_index_policy(request: Request):
         return {"ok": False, "reason": "pack_registry_recovery_required"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "local_embedding_enabled": enabled}
@@ -620,6 +635,8 @@ async def set_public_knowledge_pack_material_type(request: Request):
         return {"ok": False, "reason": "pack_registry_recovery_required"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     except ValueError:
         return {"ok": False, "reason": "not_found"}
     return {"ok": True, "material_type_override": material_type}
@@ -820,11 +837,20 @@ async def _remove_pack_once(
         return {"ok": False, "reason": "not_found"}
     except KnowledgeMutationAdmissionClosed:
         return _knowledge_mutation_stopping()
+    except KNOWLEDGE_LOCK_BUSY_ERRORS:
+        return _knowledge_mutation_busy()
     return {"ok": True, **result}
 
 
 def _knowledge_mutation_stopping() -> dict[str, Any]:
     return {"ok": False, "reason": "knowledge_mutation_stopping"}
+
+
+def _knowledge_mutation_busy() -> dict[str, Any]:
+    # A lock held past its budget (indexing, a pack activation or a storage
+    # migration holding the root barrier). Retryable; must not read as the
+    # request being invalid.
+    return {"ok": False, "reason": "knowledge_mutation_busy"}
 
 
 @router.get("/diagnostics/recent")

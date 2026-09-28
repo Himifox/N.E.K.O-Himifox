@@ -941,3 +941,56 @@ def test_material_type_endpoint_controls_auto_context(monkeypatch, tmp_path):
         ]
         == "corpus"
     )
+
+
+def _lock_busy_errors():
+    import portalocker
+
+    return (
+        TimeoutError("knowledge root barrier is held by another thread"),
+        portalocker.exceptions.AlreadyLocked("held by another process"),
+    )
+
+
+@pytest.mark.parametrize("error", _lock_busy_errors(), ids=["thread", "process"])
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    (
+        ("/api/public-knowledge/packs/import", {"pack": None}),
+        ("/api/public-knowledge/packs/jobs/cancel", {"job_id": "fixture-job"}),
+        ("/api/public-knowledge/packs/jobs/discard", {"job_id": "fixture-job"}),
+        (
+            "/api/public-knowledge/packs/auto-context",
+            {"pack_id": "market-fixture", "enabled": True},
+        ),
+        (
+            "/api/public-knowledge/packs/index-policy",
+            {"pack_id": "market-fixture", "local_embedding_enabled": True},
+        ),
+        (
+            "/api/public-knowledge/packs/material-type",
+            {"pack_id": "market-fixture", "material_type": "knowledge"},
+        ),
+    ),
+)
+def test_knowledge_writes_report_a_held_lock_as_busy(
+    monkeypatch, tmp_path, path, payload, error
+):
+    """A lock held past its budget is retryable, not invalid input and not a 500.
+
+    TimeoutError is an OSError, so import/apply used to report it as
+    ``invalid_pack`` and the Marketplace marked the subscription as rejected.
+    """
+    import main_routers.public_knowledge_router as module
+
+    async def lock_busy(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(module, "run_knowledge_writer", lock_busy)
+    if payload.get("pack", "") is None:
+        payload = {"pack": _pack(pack_id="busy-fixture")}
+    with _client(monkeypatch, tmp_path) as client:
+        response = client.post(path, json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "reason": "knowledge_mutation_busy"}
