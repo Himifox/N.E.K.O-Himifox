@@ -174,6 +174,11 @@ def test_verbatim_guard_matches_pure_repeat_only(monkeypatch):
     ) == "快看"
     assert state._find_verbatim_recent_proactive_chat(name, "快看").is_duplicate is True
     assert state._verbatim_key("café") != state._verbatim_key("cafe")
+    # 兼容符号按原始类别剔除，不被 NFKC 展开成字母；全角字母照常归一
+    assert state._verbatim_key("快看™") == "快看"
+    assert state._verbatim_key("快看℡") == "快看"
+    assert state._verbatim_key("Ｋｕａｉ") == "kuai"
+    assert state._verbatim_key("cafe\u0301") == state._verbatim_key("café")
     # 只有标点的草稿没有可比的内容
     assert state._find_verbatim_recent_proactive_chat(name, "！！😂").is_duplicate is False
 

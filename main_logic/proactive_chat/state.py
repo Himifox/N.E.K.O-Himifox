@@ -925,16 +925,23 @@ _VERBATIM_EMOJI_GLUE = frozenset(
 )
 
 
-def _verbatim_key(text: str) -> str:
-    """Reduce *text* to its words: NFKC, lowercase, drop whitespace/punctuation/symbols/emoji."""
-    normalized = unicodedata.normalize("NFKC", text or "").lower()
-    return "".join(
-        ch
-        for ch in normalized
-        if not ch.isspace()
+def _is_verbatim_content_char(ch: str) -> bool:
+    return (
+        not ch.isspace()
         and ch not in _VERBATIM_EMOJI_GLUE
         and unicodedata.category(ch)[0] not in "PSZ"
     )
+
+
+def _verbatim_key(text: str) -> str:
+    """Reduce *text* to its words: drop whitespace/punctuation/symbols/emoji, NFKC, lowercase."""
+    # Filter on the ORIGINAL categories first: NFKC expands compatibility
+    # symbols into letters (™ -> "TM", ℡ -> "TEL", ㈱ -> 株), which would make
+    # a trailing symbol count as content. Filter again afterwards because NFKC
+    # can also emit new separators (½ -> "1⁄2", NBSP -> space).
+    content = "".join(filter(_is_verbatim_content_char, text or ""))
+    normalized = unicodedata.normalize("NFKC", content).lower()
+    return "".join(filter(_is_verbatim_content_char, normalized))
 
 
 def _find_verbatim_recent_proactive_chat(
