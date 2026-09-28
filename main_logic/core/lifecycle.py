@@ -3135,6 +3135,11 @@ class LifecycleMixin:
             _removed_extras: list = []
             _removed_cb_backed_ids: set = set()
             _prime_extra_callbacks: list = []
+            _prime_extra_claimed: list = []
+            # Set by the cancellation exit: a session promoted before the cancel
+            # is about to be closed by the canceller, so its primed extras are
+            # not delivered even when the swap removed none of them.
+            _swap_cancelled = False
             # Passive callbacks riding this swap (voice pending session only).
             # Same deferred-removal bookkeeping as _prime_selected_extras:
             # queue untouched until promote succeeds. Injection goes through
@@ -3226,14 +3231,22 @@ class LifecycleMixin:
                     e.get("_callback_delivery_id") for e in _selected
                     if isinstance(e, dict) and e.get("_callback_delivery_id")
                 }
+                # Include callbacks a text turn has claimed: if that turn later
+                # fails before commit it restores them, and the swap must still
+                # be able to consume them once their mirror is delivered. Only
+                # claim (and later release) the ones nobody else holds, so the
+                # text turn's claim is never cleared from under it.
                 _prime_extra_callbacks = [
                     cb for cb in (getattr(self, "pending_agent_callbacks", None) or [])
                     if isinstance(cb, dict)
                     and cb.get("_callback_delivery_id") in _selected_delivery_ids
-                    and not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
                     and not cb.get(DELIVERY_RETRACTED_KEY)
                 ]
-                for cb in _prime_extra_callbacks:
+                _prime_extra_claimed = [
+                    cb for cb in _prime_extra_callbacks
+                    if not cb.get(SWAP_PRIME_DELIVERY_CLAIM_KEY)
+                ]
+                for cb in _prime_extra_claimed:
                     cb[SWAP_PRIME_DELIVERY_CLAIM_KEY] = True
                 final_prime_text += _render_pending_extra_replies_by_origin(
                     _selected,
@@ -4106,6 +4119,7 @@ class LifecycleMixin:
             
 
         except asyncio.CancelledError:
+            _swap_cancelled = True
             logger.info("Final Swap Sequence: Task cancelled.")
             self.is_hot_swap_imminent = False
             if voice_handoff_ticket is not None:
@@ -4221,25 +4235,38 @@ class LifecycleMixin:
                 self.message_handler_task = asyncio.create_task(self.session.handle_messages())
         finally:
             # Keep paired objects through all failure-recovery awaits. An extra
-            # restored by an abort is still pending; only a removed extra in a
-            # surviving promoted session has actually completed this delivery.
+            # restored by an abort is still pending; a primed extra in a
+            # surviving promoted session has actually completed this delivery,
+            # whether the swap removed it or a concurrent path (a text drain)
+            # took it out of the queue inside the prime→promote window.
             if (
                 _prime_extra_callbacks
-                and _removed_extras
+                and _prime_selected_extras
+                and not _swap_cancelled
                 and new_session is not None
                 and self.session is new_session
                 and not self._swap_session_is_dead(new_session)
             ):
                 queued_extra_objects = {id(e) for e in self.pending_extra_replies}
                 delivered_ids = {
-                    e.get("_callback_delivery_id") for e in _removed_extras
+                    e.get("_callback_delivery_id") for e in _prime_selected_extras
                     if isinstance(e, dict) and id(e) not in queued_extra_objects
                 }
-                self._remove_swap_delivered_callbacks([
+                delivered_cbs = [
                     cb for cb in _prime_extra_callbacks
                     if cb.get("_callback_delivery_id") in delivered_ids
+                ]
+                queued_cb_objects = {id(cb) for cb in self.pending_agent_callbacks}
+                self._remove_swap_delivered_callbacks([
+                    cb for cb in delivered_cbs if id(cb) in queued_cb_objects
                 ])
-            self._release_swap_prime_passive_claims(_prime_extra_callbacks)
+                # A paired callback outside the queue is held by a text turn
+                # that drained it. Retract it so a precommit failure there does
+                # not restore it (and its mirror) after the swap delivered them.
+                for cb in delivered_cbs:
+                    if id(cb) not in queued_cb_objects:
+                        cb[DELIVERY_RETRACTED_KEY] = True
+            self._release_swap_prime_passive_claims(_prime_extra_claimed)
             self._release_swap_prime_passive_claims(_passive_sel)
             self._purge_undeliverable_callbacks()
             self.is_hot_swap_imminent = False  # Always reset this flag

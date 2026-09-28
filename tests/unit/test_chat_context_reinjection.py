@@ -373,3 +373,94 @@ async def test_swap_consumes_only_original_successful_callback(monkeypatch, prim
             assert "UNRELATED_NOTICE" in rendered
     finally:
         await _drain_task(mgr.message_handler_task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requeue_at", ["during_prime", "after_swap"])
+async def test_swap_consumes_callback_claimed_by_failing_text_turn(
+    monkeypatch, requeue_at,
+):
+    """A text turn holds the callback while the swap primes its mirror, then
+    fails before commit. Whenever its restore lands, the swap-delivered notice
+    must not come back for the next text turn or hot swap."""
+    from main_logic.proactive_delivery import SWAP_PRIME_DELIVERY_CLAIM_KEY
+
+    mgr, pending = _manager(monkeypatch)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    marker = "CLAIMED_BY_TEXT_NOTICE"
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": marker, "delivery_mode": "proactive",
+    })
+    callback = mgr.pending_agent_callbacks[0]
+    # The text turn has claimed it and is awaiting media staging.
+    callback[SWAP_PRIME_DELIVERY_CLAIM_KEY] = True
+    await pending.connect("SYSTEM\n")
+    real_prime = pending.prime_context
+    text_turn = {}
+
+    async def prime(text, *, skipped=False):
+        # The text turn drains inside the prime await, then fails precommit.
+        text_turn["extras"] = list(mgr.pending_extra_replies)
+        assert marker in mgr.drain_agent_callbacks_for_llm([callback])
+        if requeue_at == "during_prime":
+            mgr._requeue_undelivered_callbacks([callback], text_turn["extras"])
+        await real_prime(text, skipped=skipped)
+
+    pending.prime_context = prime
+    mgr.pending_session = pending
+    mgr.is_hot_swap_imminent = True
+    try:
+        await mgr._perform_final_swap_sequence()
+        assert mgr.session is pending
+        assert marker in "\n".join(m.content for m in pending._conversation_history)
+        if requeue_at == "after_swap":
+            mgr._requeue_undelivered_callbacks([callback], text_turn["extras"])
+        assert mgr.pending_agent_callbacks == []
+        assert mgr.pending_extra_replies == []
+        assert mgr.drain_agent_callbacks_for_llm() == ""
+    finally:
+        await _drain_task(mgr.message_handler_task)
+
+
+@pytest.mark.asyncio
+async def test_post_promote_cancel_leaves_text_turn_restore_intact(monkeypatch):
+    """A swap cancelled after promote never delivers its prime, so a text turn
+    that drained the callback inside the window must still restore it."""
+    from main_logic.proactive_delivery import SWAP_PRIME_DELIVERY_CLAIM_KEY
+    from tests.unit.test_hot_swap_cancellation import _run_swap_as_final_swap_task
+
+    mgr, pending = _manager(monkeypatch)
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    marker = "CANCELLED_SWAP_NOTICE"
+    mgr.enqueue_agent_callback({
+        "origin": "event", "source_kind": "agent",
+        "summary": marker, "delivery_mode": "proactive",
+    })
+    callback = mgr.pending_agent_callbacks[0]
+    callback[SWAP_PRIME_DELIVERY_CLAIM_KEY] = True
+    original_extras = list(mgr.pending_extra_replies)
+    await pending.connect("SYSTEM\n")
+    real_prime = pending.prime_context
+
+    async def prime(text, *, skipped=False):
+        assert marker in mgr.drain_agent_callbacks_for_llm([callback])
+        await real_prime(text, skipped=skipped)
+
+    async def cancelled_mid_post_promote(*_args, **_kwargs):
+        asyncio.current_task().cancel()
+        await asyncio.sleep(0)
+        return 0
+
+    pending.prime_context = prime
+    mgr._prime_late_next_session_context_after_swap = cancelled_mid_post_promote
+    mgr.pending_session = pending
+    mgr.is_hot_swap_imminent = True
+    try:
+        await _run_swap_as_final_swap_task(mgr)
+        assert mgr.session is pending, "fixture must cancel after promote"
+        mgr._requeue_undelivered_callbacks([callback], original_extras)
+        assert mgr.pending_agent_callbacks == [callback]
+        assert mgr.pending_extra_replies == original_extras
+    finally:
+        await _drain_task(mgr.message_handler_task)
