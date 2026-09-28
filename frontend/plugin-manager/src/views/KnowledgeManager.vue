@@ -1165,7 +1165,13 @@ function hasDiagnosticEntry(item: any): boolean {
   return Boolean(title) && title.toLowerCase() !== 'null'
 }
 
-watch(activeTab, (tab) => {
+watch(activeTab, (tab, previousTab) => {
+  if (previousTab === 'diagnostics' && tab !== 'diagnostics') {
+    // A load still in flight belongs to a tab the user has left; its result
+    // or error toast would land on an unrelated tab.
+    diagnosticsRequestGate.invalidate()
+    diagnosticsLoading.value = false
+  }
   if (tab === 'catalog') loadEntries(true)
   if (tab === 'packs') {
     loadPacks()
