@@ -917,9 +917,12 @@ def _find_similar_recent_proactive_chat(
 
 
 # Emoji glue that is not category P/S/Z: variation selectors (Mn), the ZWJ that
-# joins sequences (Cf) and the keycap mark (Me). Listed explicitly rather than
+# joins sequences (Cf), the keycap mark (Me) and the tag characters that spell
+# subdivision flags (Cf, U+E0020..U+E007F). Listed explicitly rather than
 # dropping every Mn/Cf so accents and other real combining marks survive.
-_VERBATIM_EMOJI_GLUE = frozenset("\ufe0e\ufe0f\u200d\u20e3")
+_VERBATIM_EMOJI_GLUE = frozenset(
+    "\ufe0e\ufe0f\u200d\u20e3" + "".join(map(chr, range(0xE0020, 0xE0080)))
+)
 
 
 def _verbatim_key(text: str) -> str:

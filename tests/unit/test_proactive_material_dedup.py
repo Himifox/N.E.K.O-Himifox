@@ -168,6 +168,10 @@ def test_verbatim_guard_matches_pure_repeat_only(monkeypatch):
     )
     assert state._verbatim_key("快看❤️") == "快看"
     assert state._verbatim_key("快看👩\u200d💻") == "快看"
+    # 地区旗帜（🏴 + tag 字符序列）同样只是 emoji
+    assert state._verbatim_key(
+        "快看\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"
+    ) == "快看"
     assert state._find_verbatim_recent_proactive_chat(name, "快看").is_duplicate is True
     assert state._verbatim_key("café") != state._verbatim_key("cafe")
     # 只有标点的草稿没有可比的内容
