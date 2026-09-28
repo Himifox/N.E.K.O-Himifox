@@ -470,10 +470,11 @@ def pack_registry_state(database_path: str | Path) -> str:
     except OSError:
         return "recovery_required"
     else:
-        try:
-            recover_pack_remove_intent(database_path)
-        except KnowledgePackRegistryError:
-            return "recovery_required"
+        # Report only. Recovery rewrites knowledge.db and packs.json, so it runs
+        # through a writer (every mutation, and each indexer round via
+        # reconcile_installed_source_embedding_policies) that holds the root
+        # barrier and writer admission, never from a read.
+        return "recovery_required"
     registry_path = get_pack_registry_path(database_path)
     try:
         registry_path.lstat()

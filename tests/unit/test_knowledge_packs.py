@@ -1341,3 +1341,47 @@ def test_knowledge_service_constructor_performs_no_path_io(monkeypatch, tmp_path
     service = KnowledgeService(tmp_path)
 
     assert service.knowledge_root == tmp_path
+
+
+def test_read_paths_report_a_pending_removal_without_recovering_it(
+    monkeypatch, tmp_path
+):
+    """Recovery rewrites knowledge.db and packs.json, so it must go through a writer.
+
+    Service construction (every open_knowledge(), including each chat turn's
+    automatic lookup) and registry-state reads used to run it outside the root
+    barrier and writer admission, where it could race a storage migration or
+    write after shutdown closed admission. The indexer round recovers instead.
+    """
+    import knowledge.packs as packs
+    from knowledge.service import KnowledgeService
+
+    def must_not_recover(*_args, **_kwargs):
+        raise AssertionError("a read path ran pack-removal recovery")
+
+    monkeypatch.setattr(packs, "recover_pack_remove_intent", must_not_recover)
+    monkeypatch.setattr(packs, "_recover_pack_remove_intent_locked", must_not_recover)
+    (tmp_path / "pack-remove-intent.json").write_text("{}", encoding="utf-8")
+
+    service = KnowledgeService(tmp_path)
+
+    assert pack_registry_state(service.database_path()) == "recovery_required"
+    assert (tmp_path / "pack-remove-intent.json").is_file()
+
+
+def test_indexer_policy_reconcile_is_where_pending_removals_recover(
+    monkeypatch, tmp_path
+):
+    """The read paths no longer recover, so the per-round writer must."""
+    import knowledge.packs as packs
+
+    recovered = []
+    monkeypatch.setattr(
+        packs,
+        "_recover_pack_remove_intent_locked",
+        lambda database_path, registry_path: recovered.append(database_path),
+    )
+
+    packs.reconcile_installed_source_embedding_policies(tmp_path / "knowledge.db")
+
+    assert recovered == [tmp_path / "knowledge.db"]
