@@ -575,9 +575,12 @@ class StreamingMixin:
                             )
 
                     self.audio_resampler.clear()
-                    await self._clear_tts_pipeline(
-                        expected_speech_id=interrupted_speech_id,
-                    )
+                    # Full clear, not the expected_speech_id form: the await on
+                    # handle_interruption() above lets a proactive delivery rotate
+                    # the sid, and the selective form would then keep that turn's
+                    # pending chunks. This path rotates to a new user sid right
+                    # below, so everything still queued belongs to a dead turn.
+                    await self._clear_tts_pipeline()
                     await self.send_user_activity(interrupted_speech_id)
 
                     # 再为本次新回复生成新的speech_id（用于TTS和lipsync）
