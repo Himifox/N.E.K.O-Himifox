@@ -178,7 +178,12 @@ class _ToolingMixin:
             return "model"
         return "request"
 
-    async def _astream_declining_tools(self, messages, overrides: dict):
+    async def _astream_declining_tools(
+        self,
+        messages,
+        overrides: dict,
+        response_generation: Optional[int] = None,
+    ):
         """``self.llm.astream`` that survives an endpoint rejecting ``tools``.
 
         If the request fails before the first chunk because the endpoint
@@ -190,6 +195,14 @@ class _ToolingMixin:
         other failure, or one after a chunk was already received, propagates
         unchanged.
         """
+        def generation_is_active() -> bool:
+            return (
+                response_generation is None
+                or self._response_generation_is_active(response_generation)
+            )
+
+        if not generation_is_active():
+            return
         received_any = False
         try:
             async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
@@ -216,6 +229,8 @@ class _ToolingMixin:
             self._openai_tools_unsupported_with_images = True
         overrides.pop("tools", None)
         overrides.pop("tool_choice", None)
+        if not generation_is_active():
+            return
         async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
             yield chunk
 
@@ -686,6 +701,7 @@ class _ToolingMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        response_generation = overrides.pop("_response_generation", None)
         if self._use_genai_sdk and not self._genai_tools_unsupported:
             # 跟踪本轮 Gemini 路径是否已经把 text chunk yield 给上游。如果
             # 已经吐过文本，再 fallback 到 OpenAI-compat 会让用户在同一轮
@@ -701,6 +717,7 @@ class _ToolingMixin:
                     _tool_image_slots=tool_image_slots,
                     _tool_bus_frames=tool_bus_frames,
                     _tool_frames_turn_id=tool_frames_turn_id,
+                    _response_generation=response_generation,
                     **overrides,
                 ):
                     if getattr(chunk, "content", None):
@@ -740,6 +757,7 @@ class _ToolingMixin:
             _tool_image_slots=tool_image_slots,
             _tool_bus_frames=tool_bus_frames,
             _tool_frames_turn_id=tool_frames_turn_id,
+            _response_generation=response_generation,
             **overrides,
         ):
             yield chunk
@@ -850,6 +868,16 @@ class _ToolingMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        response_generation = overrides.pop("_response_generation", None)
+
+        def generation_is_active() -> bool:
+            return (
+                response_generation is None
+                or self._response_generation_is_active(response_generation)
+            )
+
+        if not generation_is_active():
+            return
         tools_payload = self._openai_tools_payload()
         if (
             tools_payload
@@ -871,6 +899,8 @@ class _ToolingMixin:
         # 封顶日志据此别谎称迭代被耗尽。
         zero_exec_break = False
         for tool_iter in range(self.max_tool_iterations):
+            if not generation_is_active():
+                return
             deltas_per_chunk: list = []
             finish_reason: Optional[str] = None
             # 累积本轮已 yield 给上游的 text，下面 finish_reason=tool_calls
@@ -890,6 +920,7 @@ class _ToolingMixin:
                 # quarantined view.
                 self._dialog_messages_for_provider(messages),
                 overrides,
+                response_generation=response_generation,
             ):
                 if not tool_frames_published:
                     # 任何一个 chunk 都算数，不必等有内容的那个：astream 是惰性
@@ -943,6 +974,8 @@ class _ToolingMixin:
                 # 永远 yield 文本 chunk —— 即便是 tool-only turn 也可能在
                 # finish_reason=tool_calls 之前 emit usage chunk 和空 content。
                 yield chunk
+            if not generation_is_active():
+                return
             # 记录本次 attempt 的最终 finish_reason，供上层 empty-completion
             # 兜底警告引用（"safety" / "length" / "content_filter" / "stop" 都
             # 可能在 content 为空时出现，是诊断 Gemini-via-OpenAI-compat 静默
@@ -1006,6 +1039,8 @@ class _ToolingMixin:
                     tool_image_slots=tool_image_slots,
                     tool_bus_frames=tool_bus_frames,
                 )
+                if not generation_is_active():
+                    return
                 executed_tool_calls += executed_this_round
                 if executed_this_round:
                     # 通知上游 ``stream_text``：本轮的 pre-tool text + tool_calls
@@ -1036,6 +1071,8 @@ class _ToolingMixin:
                     zero_exec_break = True
                     break
                 continue
+            return
+        if not generation_is_active():
             return
         if executed_tool_calls == 0:
             # 进过 tool 分支却一次都没执行成（provider 流出的 tool_call 分片
@@ -1074,6 +1111,8 @@ class _ToolingMixin:
         # 积累的 tool 结果给出最终文本。否则弱模型在 finish_reason=tool_calls
         # 上死循环到封顶后整轮静默，上游只能报"未产生文本回复"，用户那边就
         # 表现为不回话。去掉 tools 后模型无法再发起调用，必须输出文本。
+        if not generation_is_active():
+            return
         final_overrides = {
             k: v for k, v in overrides.items() if k not in ("tools", "tool_choice")
         }

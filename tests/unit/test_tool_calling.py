@@ -415,6 +415,108 @@ async def test_offline_openai_path_runs_tool_then_text():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_tool_round_does_not_start_another_provider_call():
+    """Cancellation during a tool callback must retire the whole tool loop.
+
+    The provider stream that produced the tool call has already happened, but
+    the next loop iteration must not issue another provider request (including
+    the forced-finalize fallback).
+    """
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from main_logic.tool_calling import ToolDefinition, ToolResult
+    from utils.llm_client import LLMStreamChunk
+
+    client = OmniOfflineClient.__new__(OmniOfflineClient)
+    _init_bare(client)
+    client._use_genai_sdk = False
+    client._genai_tools_unsupported = False
+    client._openai_tools_unsupported = False
+    client._openai_tools_unsupported_with_images = False
+    client.max_tool_iterations = 3
+
+    async def cancel_in_tool(_call):
+        await client.cancel_response()
+        return ToolResult(call_id="call_1", name="lookup", output={"ok": True})
+
+    client.on_tool_call = cancel_in_tool
+    client._tool_definitions = [ToolDefinition(
+        name="lookup",
+        description="lookup",
+        parameters={"type": "object", "properties": {}},
+        handler=None,
+    )]
+    client.llm = _FakeLLM([[
+        LLMStreamChunk(
+            content="",
+            tool_call_deltas=[{
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }],
+        ),
+        LLMStreamChunk(content="", finish_reason="tool_calls"),
+    ]])
+
+    generation = client._begin_response_generation()
+    messages = [{"role": "user", "content": "look it up"}]
+    async for _chunk in client._astream_with_tools(
+        messages,
+        _response_generation=generation,
+    ):
+        pass
+
+    assert len(client.llm.calls) == 1
+    assert client._response_generation_is_active(generation) is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_does_not_emit_response_done_boundary():
+    """A cancelled user turn must not send the TTS/turn-end callback."""
+    from unittest.mock import AsyncMock
+
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from utils.llm_client import HumanMessage, LLMStreamChunk, SystemMessage
+
+    client = OmniOfflineClient.__new__(OmniOfflineClient)
+    _init_bare(client)
+    client.lanlan_name = "Test"
+    client.master_name = "M"
+    client._prefix_buffer_size = 0
+    client._conversation_history = [SystemMessage(content="sys")]
+    client._pending_images = []
+    client._is_responding = False
+    client._recent_responses = []
+    client._repetition_threshold = 0.8
+    client._max_recent_responses = 3
+    client.max_response_length = 300
+    client.max_response_rerolls = 0
+    client.enable_response_guard = False
+    client.vision_model = ""
+    client.model = "m"
+    client.on_text_delta = AsyncMock()
+    client.on_input_transcript = None
+    client.on_response_done = AsyncMock()
+    client.on_response_discarded = None
+    client.on_status_message = None
+    client.on_repetition_detected = None
+
+    async def _cancelled_stream(_messages, **_overrides):
+        yield LLMStreamChunk(content="已经说出的半句")
+        await client.cancel_response()
+        yield LLMStreamChunk(content="不应继续送出的尾巴")
+
+    client._astream_visible_with_tools = _cancelled_stream
+
+    await client.stream_text("打断这轮")
+
+    assert client.on_text_delta.await_count == 1
+    client.on_response_done.assert_not_awaited()
+    assert client._active_response_generation is None
+    assert client._is_responding is False
+
+
+@pytest.mark.asyncio
 async def test_offline_openai_path_filters_pretool_leak_before_history():
     from utils.llm_client import LLMStreamChunk
     from main_logic.omni_offline_client import OmniOfflineClient
@@ -3656,6 +3758,39 @@ def _bare_genai_client(rounds, handler, *, cap, finalize_parts=None):
     genai_client, calls = _genai_client_stub(rounds, finalize_parts)
     client._genai_client = genai_client
     return client, calls
+
+
+@pytest.mark.asyncio
+async def test_cancelled_genai_tool_round_does_not_start_another_provider_call(monkeypatch):
+    """The native Gemini loop obeys the same cancellation generation boundary."""
+    from main_logic.tool_calling import ToolResult
+
+    monkeypatch.setattr(_ofc_genai, "_GENAI_AVAILABLE", True)
+
+    client = None
+
+    async def cancel_in_tool(_call):
+        await client.cancel_response()
+        return ToolResult(call_id="call_1", name="recall_memory", output={"ok": True})
+
+    client, calls = _bare_genai_client(
+        [[_GenaiPart(function_call=_GenaiFunctionCall("recall_memory", id_="call_1"))]],
+        cancel_in_tool,
+        cap=3,
+    )
+    client._use_genai_sdk = True
+    generation = client._begin_response_generation()
+
+    # Enter through the production router: this is the regression boundary for
+    # forwarding the private generation token into the Gemini implementation.
+    async for _chunk in client._astream_with_tools(
+        [{"role": "user", "content": "remember this"}],
+        _response_generation=generation,
+    ):
+        pass
+
+    assert calls == [0]
+    assert client._response_generation_is_active(generation) is False
 
 
 @pytest.mark.asyncio

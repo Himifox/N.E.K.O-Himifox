@@ -394,6 +394,16 @@ class _GenaiMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        response_generation = overrides.pop("_response_generation", None)
+
+        def generation_is_active() -> bool:
+            return (
+                response_generation is None
+                or self._response_generation_is_active(response_generation)
+            )
+
+        if not generation_is_active():
+            return
         if not _ensure_genai():
             raise _GenaiToolsUnsupported("google-genai SDK not importable")
         types = _genai_types
@@ -419,6 +429,8 @@ class _GenaiMixin:
         # 迭代被耗尽（cap=3 时我们可能在第 1 轮就跳出）。
         zero_exec_break = False
         for tool_iter in range(self.max_tool_iterations):
+            if not generation_is_active():
+                return
             self._ensure_genai_client()
             system_instruction, contents = _genai_messages_to_contents(
                 _slop_reduced_for_genai(self._dialog_messages_for_provider(messages))
@@ -455,6 +467,9 @@ class _GenaiMixin:
                         f"generate_content_stream rejected tools: {e}"
                     ) from e
                 raise
+
+            if not generation_is_active():
+                return
 
             # Per-iteration accumulators.
             # list of (id, name, args_dict, raw_args_str, extra_content|None)
@@ -724,6 +739,8 @@ class _GenaiMixin:
                             output={"error": f"{type(e).__name__}: {e}"},
                             is_error=True, error_message=str(e),
                         )
+                    if not generation_is_active():
+                        return
                     tool_result_message = {
                         "role": "tool",
                         "tool_call_id": tool_call.call_id,
@@ -749,12 +766,16 @@ class _GenaiMixin:
                 # assistant turn 的 content 字段）。
                 yield LLMStreamChunk(content="", tool_round_persisted=True)
                 # Loop again to let the model produce a final answer.
+                if not generation_is_active():
+                    return
                 if not had_text:
                     continue
                 # Edge case: model emitted text AND tool calls — text already
                 # streamed to the user. Continue to next iter to give the
                 # model a chance to follow up after seeing tool results.
                 continue
+            return
+        if not generation_is_active():
             return
         if executed_tool_calls == 0:
             # 与 OpenAI 路径对偶：进过 tool 轮却一次都没执行成（function_call
@@ -793,6 +814,8 @@ class _GenaiMixin:
         # prompt_ephemeral 现成的 retry / 状态上报 / response_discarded 清泡泡逻辑
         # 接管。若在这里 try/except 成 warning，就把真实失败伪装成"空回复"，弱模型
         # 超限后反而可能重回静音态，与本兜底目标冲突。
+        if not generation_is_active():
+            return
         final_cfg_kw = {k: v for k, v in gen_config_kw.items() if k != "tools"}
         final_system_instruction, final_contents = _genai_messages_to_contents(
             _slop_reduced_for_genai(self._dialog_messages_for_provider(messages))

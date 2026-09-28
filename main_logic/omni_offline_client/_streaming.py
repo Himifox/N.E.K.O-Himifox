@@ -1129,6 +1129,7 @@ class _StreamingMixin:
                             self._conversation_history,
                             _tool_image_slots=_turn_tool_image_slots,
                             _tool_bus_frames=_turn_tool_bus_frames,
+                            _response_generation=response_generation,
                             **_focus_overrides,
                         ):
                             if not _ttft_recorded:
@@ -1991,6 +1992,10 @@ class _StreamingMixin:
         finally:
             # 先于其它收尾：把 base64 从历史里摘掉，别让它跟着后续每一次请求
             # 走（token 计数器把图像部分算成短占位符，截断器看不见它）。
+            response_cancelled = (
+                not guard_exhausted
+                and not self._response_generation_is_active(response_generation)
+            )
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
 
@@ -2009,7 +2014,12 @@ class _StreamingMixin:
 
             # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
             # 用 final-segment 会让"tool 轮跑完了但模型没出 final 文本"的场景被错报。
-            if not assistant_message_total and not guard_exhausted and not status_reported:
+            if (
+                not response_cancelled
+                and not assistant_message_total
+                and not guard_exhausted
+                and not status_reported
+            ):
                 # 把最后一次 attempt 的 finish_reason / block_reason / prompt_tokens
                 # 拼进 warning。Gemini-via-OpenAI-compat 静默 empty 时（safety /
                 # recitation / max_tokens / 上下文超限），这条 log 是日志里能拿到
@@ -2042,5 +2052,5 @@ class _StreamingMixin:
                         await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
 
             # Call response done callback
-            if self.on_response_done:
+            if not response_cancelled and self.on_response_done:
                 await self.on_response_done()

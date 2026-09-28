@@ -536,6 +536,7 @@ class _LifecycleMixin:
                         # 里的工具图会以 turn_id=None 上总线，插件没法把它和
                         # 同一轮的指令/回复对上——而那正是 turn_id 存在的理由。
                         _tool_frames_turn_id=_bus_turn_id,
+                        _response_generation=response_generation,
                     ):
                         # 插件总线：provider 已经吐出东西了 —— 这一轮的指令连同那
                         # 批图确凿地被它收下了。这是本函数里最早能这么断言的地方，
@@ -704,6 +705,7 @@ class _LifecycleMixin:
         finally:
             # 先于其它收尾：把 base64 从历史里摘掉。跨 attempt 存活的代价
             # 就是必须由这里统一释放，否则它会跟着这一轮之后的每次请求走。
+            response_cancelled = not self._response_generation_is_active(response_generation)
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
             # Token usage 由 _AsyncStreamWrapper hook 在流结束时自动记录，
@@ -773,7 +775,7 @@ class _LifecycleMixin:
             # idempotent when nothing pulsed or the first token already cleared it.
             await self._notify_reasoning_done(_reasoning_owner_seq)
             if completion_mode == "response":
-                if self.on_response_done:
+                if not response_cancelled and self.on_response_done:
                     await self.on_response_done()
                 # 只录常规 reply（completion_mode == "response"）。proactive 路径
                 # 已经在 ``core.finish_proactive_delivery`` 上录，这里再录会双写。
@@ -790,9 +792,9 @@ class _LifecycleMixin:
                         )
             else:
                 proactive_done_cb = getattr(self, "on_proactive_done", None)
-                if proactive_done_cb:
+                if not response_cancelled and proactive_done_cb:
                     await proactive_done_cb(content_committed)
-                elif self.on_response_done:
+                elif not response_cancelled and self.on_response_done:
                     await self.on_response_done()
             # 对话总线的第二条：她真正说出口的那句。判据和上面那条指令不同 ——
             # 指令问的是「provider 收到了吗」（第一个 chunk），这条问的是「她说了
