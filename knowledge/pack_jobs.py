@@ -20,7 +20,11 @@ from utils.file_utils import atomic_write_bytes, atomic_write_json
 
 from ._mutation_lock import mutation_lock
 from .limits import MAX_READY_VECTOR_CHUNKS
-from .mutation_runtime import run_knowledge_writer
+from .mutation_runtime import (
+    KNOWLEDGE_LOCK_BUSY_ERRORS,
+    KnowledgeMutationAdmissionClosed,
+    run_knowledge_writer,
+)
 from .store import KnowledgeStore, KnowledgeStoreError
 from .packs import (
     KnowledgePack,
@@ -1997,33 +2001,41 @@ async def process_pack_jobs(
         if activated.get("state") == "failed":
             return {"state": "failed", "selected": 0, "stored": 0}
         return {"state": "ready_bm25", "selected": 0, "stored": 0}
+    except (KnowledgeMutationAdmissionClosed, *KNOWLEDGE_LOCK_BUSY_ERRORS):
+        # Shutdown closing the writer gate, or a migration holding the root
+        # barrier, says nothing about the pack. The job stays where it was and
+        # the next round (or next start) picks it up again.
+        raise
     except Exception as exc:
-        safe_job_dir = _revalidated_job_dir(job_dir)
-        if safe_job_dir is None:
-            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
-        job_dir = safe_job_dir
-        current = _read_job(job_dir)
-        if current.get("state") == DEGRADED_STATE:
-            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
-        if current.get("state") == "cancelled":
-            _cleanup_payload(job_dir)
-            return {"state": "cancelled", "selected": 0, "stored": 0}
-        final_state = await _write_state_async(
+        final_state = await run_knowledge_writer(
+            service.knowledge_root,
+            _record_job_failure,
             job_dir,
-            state="failed",
-            retrieval_mode="none",
             reason=type(exc).__name__,
         )
-        if final_state.get("state") == DEGRADED_STATE:
-            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
-        if final_state.get("state") == "cancelled":
-            _cleanup_payload(job_dir)
-            return {"state": "cancelled", "selected": 0, "stored": 0}
-        if not final_state:
-            return {"state": DEGRADED_STATE, "selected": 0, "stored": 0}
-        _cleanup_payload(job_dir)
-        return {
-            "state": str(final_state.get("state") or "failed"),
-            "selected": 0,
-            "stored": 0,
-        }
+        return {"state": final_state, "selected": 0, "stored": 0}
+
+
+def _record_job_failure(job_dir: Path, *, reason: str) -> str:
+    """Mark a job failed and drop its payload, unless it already settled."""
+    safe_job_dir = _revalidated_job_dir(job_dir)
+    if safe_job_dir is None:
+        return DEGRADED_STATE
+    current = _read_job(safe_job_dir)
+    if current.get("state") == DEGRADED_STATE:
+        return DEGRADED_STATE
+    if current.get("state") == "cancelled":
+        _cleanup_payload(safe_job_dir)
+        return "cancelled"
+    final_state = _update_state_locked(
+        safe_job_dir,
+        state="failed",
+        retrieval_mode="none",
+        reason=reason,
+    )
+    if not final_state or final_state.get("state") == DEGRADED_STATE:
+        return DEGRADED_STATE
+    _cleanup_payload(safe_job_dir)
+    if final_state.get("state") == "cancelled":
+        return "cancelled"
+    return str(final_state.get("state") or "failed")

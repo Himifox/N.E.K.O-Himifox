@@ -1327,22 +1327,82 @@ async def test_failed_state_race_observes_concurrent_cancel(tmp_path, monkeypatc
     service = KnowledgeService.from_root(tmp_path)
     job = service.stage_pack(_pack())
     job_id = str(job["job_id"])
-    original_update = pack_jobs._write_state_async
+    original_update = pack_jobs._update_state_locked
 
     def fail_activation(*_args, **_kwargs):
         raise OSError("activation unavailable")
 
-    async def cancel_before_failed_update(job_dir, **changes):
+    def cancel_before_failed_update(job_dir, **changes):
         assert cancel_pack_job(tmp_path, job_id) is True
-        return await original_update(job_dir, **changes)
+        return original_update(job_dir, **changes)
 
     monkeypatch.setattr(pack_jobs, "_activate_job", fail_activation)
-    monkeypatch.setattr(pack_jobs, "_write_state_async", cancel_before_failed_update)
+    monkeypatch.setattr(pack_jobs, "_update_state_locked", cancel_before_failed_update)
 
     result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
 
     assert result["state"] == "cancelled"
     assert service.list_pack_jobs()[0]["state"] == "cancelled"
+
+
+@pytest.mark.parametrize(
+    "busy_error",
+    (
+        TimeoutError("knowledge root barrier is held by another thread"),
+        __import__("portalocker").exceptions.LockException("held"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_busy_lock_during_activation_leaves_the_job_to_retry(
+    tmp_path, monkeypatch, busy_error
+):
+    """A held lock says nothing about the pack; it must not fail the job."""
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    job = service.stage_pack(_pack())
+    before = service.list_pack_jobs()[0]["state"]
+
+    def busy_activation(*_args, **_kwargs):
+        raise busy_error
+
+    monkeypatch.setattr(pack_jobs, "_activate_job", busy_activation)
+
+    with pytest.raises(type(busy_error)):
+        await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    state = service.list_pack_jobs()[0]
+    assert state["job_id"] == job["job_id"]
+    assert state["state"] not in {"failed", "cancelled"}
+    assert before not in {"failed", "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_job_failure_is_recorded_off_the_event_loop(tmp_path, monkeypatch):
+    import threading
+
+    import knowledge.pack_jobs as pack_jobs
+
+    service = KnowledgeService.from_root(tmp_path)
+    service.stage_pack(_pack())
+    original_record = pack_jobs._record_job_failure
+    threads = []
+
+    def fail_activation(*_args, **_kwargs):
+        raise OSError("activation unavailable")
+
+    def tracked_record(job_dir, **kwargs):
+        threads.append(threading.current_thread())
+        return original_record(job_dir, **kwargs)
+
+    monkeypatch.setattr(pack_jobs, "_activate_job", fail_activation)
+    monkeypatch.setattr(pack_jobs, "_record_job_failure", tracked_record)
+
+    result = await process_pack_jobs(service, batch_size=4, ready_vector_chunks=0)
+
+    assert result["state"] == "failed"
+    assert service.list_pack_jobs()[0]["state"] == "failed"
+    assert threads and threads[0] is not threading.main_thread()
 
 
 @pytest.mark.parametrize(
