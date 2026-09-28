@@ -2950,6 +2950,50 @@ def test_topic_hook_delivery_allowed_in_text_session():
     assert core_module.LLMSessionManager.topic_hook_delivery_allowed(mgr) is True
 
 
+@pytest.mark.parametrize("transition", ["text", "voice_start", "voice_active", "voice_teardown"])
+async def test_drained_callback_restore_rechecks_current_voice_gate(transition):
+    mgr = _make_mgr(session=_FakeOmniOffline(delivered=True))
+    mgr._normalize_context_text_for_source = lambda _source, text: text
+    for kind, summary in [("topic", "topic restore notice"), ("agent", "ordinary restore notice")]:
+        callback = {
+            "origin": "event", "source_kind": kind,
+            "summary": summary, "delivery_mode": "proactive",
+        }
+        if kind == "topic":
+            callback["channel"] = "topic_hook"
+        mgr.enqueue_agent_callback(callback)
+    callbacks = list(mgr.pending_agent_callbacks)
+    extras = list(mgr.pending_extra_replies)
+    assert len(callbacks) == len(extras) == 2
+    rendered = mgr.drain_agent_callbacks_for_llm()
+    assert "topic restore notice" in rendered
+    assert not mgr.pending_agent_callbacks
+    assert not mgr.pending_extra_replies
+
+    if transition == "voice_start":
+        mgr._starting_session_count = 1
+        mgr._starting_input_mode = "audio"
+    elif transition == "voice_active":
+        mgr.is_active = True
+        mgr.input_mode = "audio"
+    elif transition == "voice_teardown":
+        mgr.session = _make_voice_sess()
+        mgr.is_active = True
+        mgr.input_mode = "text"
+    if transition != "text":
+        # The start sweep runs while this text turn owns the drained snapshot.
+        mgr._drop_pending_topic_hooks_for_voice()
+        assert not callbacks[0].get(DELIVERY_RETRACTED_KEY)
+
+    mgr._requeue_undelivered_callbacks(callbacks, extras)
+    expected_callbacks = callbacks if transition == "text" else callbacks[1:]
+    expected_extras = extras if transition == "text" else extras[1:]
+    assert mgr.pending_agent_callbacks == expected_callbacks
+    assert mgr.pending_extra_replies == expected_extras
+    assert bool(callbacks[0].get(DELIVERY_RETRACTED_KEY)) == (transition != "text")
+    assert "ordinary restore notice" in mgr.drain_agent_callbacks_for_llm()
+
+
 def test_topic_hook_delivery_blocked_when_unfinished_thread_open():
     mgr = _make_mgr(session=_FakeOmniOffline(delivered=True))
     mgr._activity_tracker = MagicMock()

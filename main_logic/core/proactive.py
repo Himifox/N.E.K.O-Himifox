@@ -3562,6 +3562,10 @@ class ProactiveMixin:
         future instead: this retry is about getting the content in front of the
         model, not about re-acknowledging it to the producer.
         """
+        # A voice-start sweep cannot see callbacks held outside the queues by
+        # a text turn. Recheck the current release gate before restoring either
+        # half; drain has already released these callbacks' prompt claims.
+        self._retract_unavailable_topic_hook_snapshots(callbacks)
         queued_obj_ids = {id(callback) for callback in self.pending_agent_callbacks}
         restored = [
             callback
