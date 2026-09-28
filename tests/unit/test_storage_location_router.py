@@ -1859,6 +1859,40 @@ def test_storage_location_v1_cleanup_keeps_entries_the_target_does_not_have(tmp_
 
 
 @pytest.mark.unit
+def test_storage_location_v1_cleanup_keeps_entries_whose_target_content_differs(tmp_path):
+    """A same-named target entry is not evidence; its content must match."""
+    config_manager = _make_real_config_manager(tmp_path)
+    source_root = tmp_path / "legacy-runtime" / "N.E.K.O"
+    target_root = tmp_path / "target-selected" / "N.E.K.O"
+    (source_root / "config").mkdir(parents=True)
+    (source_root / "config" / "characters.json").write_text("original", encoding="utf-8")
+    (source_root / "memory").mkdir()
+    (source_root / "memory" / "recent.json").write_text("[1, 2, 3]", encoding="utf-8")
+    create_pending_storage_migration(
+        config_manager,
+        source_root=source_root,
+        target_root=target_root,
+        selection_source="recommended",
+    )
+    assert run_pending_storage_migration(config_manager)["completed"] is True
+    _downgrade_to_v1_checkpoint(config_manager)
+    # The target's copy is only a leftover: the same name, none of the data.
+    (target_root / "memory" / "recent.json").unlink()
+
+    reloaded_manager = _make_real_config_manager(tmp_path)
+    with _build_client(reloaded_manager) as client:
+        cleanup_response = client.post(
+            "/api/storage/location/retained-source/cleanup",
+            json={"retained_root": str(source_root)},
+        )
+
+    assert cleanup_response.status_code == 409
+    assert cleanup_response.json()["remaining_entries"] == ["memory"]
+    assert (source_root / "memory" / "recent.json").read_text(encoding="utf-8") == "[1, 2, 3]"
+    assert not (source_root / "config").exists()
+
+
+@pytest.mark.unit
 def test_storage_location_cleanup_retained_anchor_root_removes_runtime_entries_only(tmp_path):
     config_manager = _make_anchor_root_config_manager(tmp_path)
     source_root = config_manager.app_docs_dir

@@ -838,14 +838,36 @@ class StreamingMixin:
                             "thinking_on": _focus_thinking,
                             "response_discarded_callback": response_discarded_callback,
                         }
-                        def _mark_cb_turn_committed() -> None:
+                        def _on_turn_committed() -> None:
+                            # One callback for everything that waits on this
+                            # turn reaching history, so neither piece of
+                            # bookkeeping can replace the other.
                             nonlocal _cb_turn_committed
                             _cb_turn_committed = True
+                            if not _knowledge_turn_context:
+                                return
+                            # The card goes on cooldown only once this turn is
+                            # in history, so a failed or cancelled turn can
+                            # still deliver it next time.
+                            from main_logic.knowledge_context import (
+                                record_public_knowledge_delivery,
+                            )
+
+                            try:
+                                record_public_knowledge_delivery(
+                                    _knowledge_turn_result
+                                )
+                            except Exception as _cooldown_error:
+                                logger.warning(
+                                    "[%s] knowledge card cooldown not recorded: %s",
+                                    self.lanlan_name,
+                                    type(_cooldown_error).__name__,
+                                )
 
                         if _agent_cb_images:
                             stream_text_kwargs["system_prefix_images"] = _agent_cb_images
-                        if _agent_cb_media_drained:
-                            # 装载判据必须跟下面回滚的判据**是同一个**。回滚看的是
+                        if _agent_cb_media_drained or _knowledge_turn_context:
+                            # 装载判据必须**包含**下面回滚的判据。回滚看的是
                             # _agent_cb_media_drained（带图且已出队的 callback），
                             # 按 _agent_cb_images 装的话，两者一旦分叉，那一轮就没
                             # 人置 _cb_turn_committed：stream_text 把文字写进
@@ -864,30 +886,8 @@ class StreamingMixin:
                             # 本次调用自己的「已进 history」标记。不能拿全局 history
                             # 长度判断：并发的另一条文本请求同样会追加。
                             stream_text_kwargs["on_turn_committed"] = (
-                                _mark_cb_turn_committed
+                                _on_turn_committed
                             )
-                        if _knowledge_turn_context:
-                            # The card goes on cooldown only once this turn is in
-                            # history, so a failed or cancelled turn can still
-                            # deliver it next time.
-                            from main_logic.knowledge_context import (
-                                record_public_knowledge_delivery,
-                            )
-
-                            def _on_turn_committed(
-                                _result=_knowledge_turn_result,
-                            ) -> None:
-                                _mark_cb_turn_committed()
-                                try:
-                                    record_public_knowledge_delivery(_result)
-                                except Exception as _cooldown_error:
-                                    logger.warning(
-                                        "[%s] knowledge card cooldown not recorded: %s",
-                                        self.lanlan_name,
-                                        type(_cooldown_error).__name__,
-                                    )
-
-                            stream_text_kwargs["on_turn_committed"] = _on_turn_committed
                         if input_transcript_callback:
                             stream_text_kwargs["input_transcript_callback"] = input_transcript_callback
                         if memory_text:

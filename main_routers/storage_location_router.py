@@ -1268,10 +1268,11 @@ def _cleanup_retained_runtime_root(
         for entry_name, proof in proofs.items()
         if entry_name in MIGRATED_RUNTIME_ENTRY_NAMES and isinstance(proof, dict)
     ]
-    # A checkpoint from before copy evidence existed (v1) is cleaned the way
-    # those builds cleaned it, with one extra guard: an entry without evidence
-    # is removed only if the target holds the same entry, so data that was
-    # never copied stays for the user to look at.
+    # A checkpoint from before copy evidence existed (v1) has no record of
+    # what was copied, so an entry is removed only when the target holds the
+    # same entry with the same content right now (compared under the barrier
+    # below). Anything else -- never copied, copied partially, or changed in
+    # the target since -- stays for the user to look at.
     legacy_entries = [
         entry_name
         for entry_name in MIGRATED_RUNTIME_ENTRY_NAMES
@@ -1307,6 +1308,12 @@ def _cleanup_retained_runtime_root(
             ):
                 raise ValueError(f"保留目录条目证据已变化，拒绝清理: {entry_name}")
 
+        legacy_entries = [
+            entry_name
+            for entry_name in legacy_entries
+            if _snapshot_path(retained_path / entry_name)
+            == _snapshot_path(normalized_target / entry_name)
+        ]
         for entry_name in [name for name, _proof in proved_entries] + legacy_entries:
             entry_path = retained_path / entry_name
             if entry_path.is_dir() and not entry_path.is_symlink():
