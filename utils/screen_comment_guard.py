@@ -8,8 +8,8 @@ observed propagation: polluted history in, imitated chains out.
 
 Detection needs a labelled, multi-item chain whose comments reach
 ``MIN_PROSE``. Unlabelled history and comments below that threshold pass
-through unchanged and silently; see the incident record section
-"修复生效前提与失效条件" for the measured boundary.
+through unchanged and silently; see the incident record's applicability
+and failure-boundary section for the measured limits.
 
 This module deliberately does **not** filter this turn's own output. The
 measured propagation stops once the stimulus is removed, so an output-side
