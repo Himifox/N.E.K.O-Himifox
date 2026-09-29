@@ -77,10 +77,18 @@ async def test_round_exception_transaction(provider, failure, fail_at, monkeypat
     else:
         with pytest.raises(ValueError, match=failure + " failed"):
             await consume()
-        assert len(messages) == 2
-        assert messages[0] is original
-        assert messages[1] is concurrent
         assert len(executed) == fail_at - (failure == "construction")
+        # Calls recorded before the failure stay, paired and contiguous;
+        # with none recorded the round is gone. The concurrent append stays.
+        kept = fail_at - 1
+        assert messages[0] is original
+        assert messages[-1] is concurrent
+        if kept:
+            assistant, *replies = messages[1:-1]
+            assert [c["id"] for c in assistant["tool_calls"]] == ["0"]
+            assert [r["tool_call_id"] for r in replies] == ["0"]
+        else:
+            assert len(messages) == 2
 
 
 @pytest.mark.asyncio
@@ -136,9 +144,18 @@ def install_stream(client, provider, chunks, before=None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "gemini"])
-@pytest.mark.parametrize("cancel_at", [1, 2])
+@pytest.mark.parametrize("cancel_at", [1, 2, 3])
 @pytest.mark.parametrize("task_cancel", [False, True])
-async def test_cancelled_batch_rolls_back_by_identity(provider, cancel_at, task_cancel, monkeypatch):
+async def test_cancelled_batch_keeps_executed_calls_by_identity(
+    provider, cancel_at, task_cancel, monkeypatch,
+):
+    """A handler that returned already had its side effects: its record stays.
+
+    The round is trimmed to the calls with results, kept contiguous ahead of
+    whatever another turn appended meanwhile, and dropped only when no call
+    finished. Equal-valued copies of the round must survive untouched, so
+    every match is by identity.
+    """
     messages = [{"role": "user", "content": "lookup"}]
     original = messages[0]
     concurrent = []
@@ -147,7 +164,6 @@ async def test_cancelled_batch_rolls_back_by_identity(provider, cancel_at, task_
     async def handler(call):
         executed.append(call.call_id)
         if len(executed) == cancel_at:
-            # Equal-valued copies must survive: rollback must use identity.
             concurrent.extend(dict(message) for message in messages[1:])
             concurrent.append({"role": "user", "content": "new turn"})
             messages.extend(concurrent)
@@ -170,21 +186,35 @@ async def test_cancelled_batch_rolls_back_by_identity(provider, cancel_at, task_
         ])]
     requests = install_stream(client, provider, chunks)
     generation = client._begin_response_generation()
+    yielded = []
 
     async def consume():
-        return [chunk async for chunk in client._astream_with_tools(
-            messages, _response_generation=generation)]
+        async for chunk in client._astream_with_tools(
+            messages, _response_generation=generation,
+        ):
+            yielded.append(chunk)
 
     if task_cancel:
         with pytest.raises(asyncio.CancelledError):
             await consume()
     else:
         await consume()
+    kept = cancel_at - task_cancel
     assert len(executed) == cancel_at
-    assert len(requests) == 1
-    assert len(messages) == 1 + len(concurrent)
+    assert len(requests) == 1, "no provider request after the cancellation"
     assert messages[0] is original
-    assert all(a is b for a, b in zip(messages[1:], concurrent))
+    assert all(a is b for a, b in zip(messages[-len(concurrent):], concurrent))
+    own = messages[1:-len(concurrent)]
+    if kept:
+        assistant, *replies = own
+        ids = [str(i) for i in range(kept)]
+        assert [c["id"] for c in assistant["tool_calls"]] == ids
+        assert [r["tool_call_id"] for r in replies] == ids
+    else:
+        assert own == []
+    # The caller learns the pre-tool text is persisted only when it is.
+    persisted = [c for c in yielded if getattr(c, "tool_round_persisted", False)]
+    assert len(persisted) == int(bool(kept) and not task_cancel)
 
 
 @pytest.mark.asyncio

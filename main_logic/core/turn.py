@@ -329,6 +329,17 @@ class TurnMixin:
         self._note_ai_turn(text=self._current_ai_turn_text or None)
         self._current_ai_turn_text = ''
 
+    def _flush_interrupted_ai_turn_text(self) -> None:
+        """Close an interrupted offline reply as its own AI turn.
+
+        A cancelled generation skips ``on_response_done``, so its turn end
+        never flushes the text it already sent. Called right after the
+        interruption, before the next reply starts appending. A no-op when
+        nothing was said, so it never records a phantom AI turn.
+        """
+        if self._current_ai_turn_text:
+            self._flush_ai_turn_text_to_tracker()
+
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.
 
@@ -1229,6 +1240,7 @@ class TurnMixin:
                         "[%s] mini-game magic command could not interrupt the reply: %s",
                         self.lanlan_name, exc,
                     )
+            self._flush_interrupted_ai_turn_text()
         self.audio_resampler.clear()
         await self._clear_tts_pipeline()
         await self.send_user_activity(interrupted_speech_id)

@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from utils.screen_comment_guard import project_screen_history
 
 from ._shared import (
+    _find_by_identity,
     _same_route,
     LLMStreamChunk,
     List,
@@ -74,12 +76,18 @@ class _ToolingMixin:
         wording restores a quarantined body — asking to quote or translate
         history gets the same placeholder as any other turn.
         """
-        projected = project_screen_history(messages)
+        hits: dict = {}
+        projected = project_screen_history(
+            messages,
+            placeholder=_loc(SCREEN_HISTORY_PLACEHOLDER, self._tool_image_locale()),
+            hits=hits,
+        )
         if projected is not messages:
-            changed = sum(new is not old for new, old in zip(projected, messages))
             logger.info(
-                "OmniOfflineClient: screen-chain request view repaired %d message(s)",
-                changed,
+                "OmniOfflineClient: screen-chain request view quarantined "
+                "%d message(s) with an in-message chain, %d in a cross-message run",
+                hits.get("message", 0),
+                hits.get("run", 0),
             )
         return projected
 
@@ -239,10 +247,30 @@ class _ToolingMixin:
             yield chunk
 
     @staticmethod
-    def _rollback_tool_round(messages, owned_messages):
-        """Remove only this unfinished round, preserving concurrent appends."""
-        owned_ids = {id(message) for message in owned_messages}
-        messages[:] = [message for message in messages if id(message) not in owned_ids]
+    def _settle_unfinished_tool_round(messages, assistant_turn, tool_results) -> int:
+        """Keep the calls that already ran; drop the round only if none did.
+
+        A handler that returned has already had its side effects (a sent
+        message, a written file). Deleting its record would let the next
+        turn ask for it again, so the assistant turn is trimmed to the calls
+        that have results and stays paired with them. With no result at all
+        the whole round goes. Owned messages are matched by identity and put
+        back contiguously at the assistant turn's position, so a message
+        another turn appended meanwhile is neither lost nor left between a
+        ``tool_calls`` turn and its replies. Returns the calls kept.
+        """
+        owned_ids = {id(assistant_turn)} | {id(message) for message in tool_results}
+        position = next(
+            (i for i, message in enumerate(messages) if message is assistant_turn),
+            len(messages),
+        )
+        rebuilt = [message for message in messages if id(message) not in owned_ids]
+        if tool_results:
+            # Calls run in order, so the results are a prefix of tool_calls.
+            assistant_turn["tool_calls"] = assistant_turn["tool_calls"][:len(tool_results)]
+            rebuilt[position:position] = [assistant_turn, *tool_results]
+        messages[:] = rebuilt
+        return len(tool_results)
 
     async def _execute_and_append_openai_tool_calls(
         self,
@@ -318,7 +346,7 @@ class _ToolingMixin:
         if assistant_reasoning:
             assistant_turn["reasoning_content"] = assistant_reasoning
         messages.append(assistant_turn)
-        owned_messages = [assistant_turn]
+        tool_results: list = []
         # Image turns must wait until every ``tool`` reply is written —
         # OpenAI-compat providers reject assistant(tool_calls) → tool →
         # user(image) → tool sequences.
@@ -327,7 +355,7 @@ class _ToolingMixin:
         try:
             for i, c in enumerate(calls):
                 if not generation_is_active():
-                    return 0
+                    break
                 tool_call = ToolCall(
                     name=c.name,
                     arguments=parse_arguments_json(c.arguments),
@@ -354,8 +382,8 @@ class _ToolingMixin:
                             output={"error": f"{type(e).__name__}: {e}"},
                             is_error=True, error_message=str(e),
                         )
-                if not generation_is_active():
-                    return 0
+                # No cancellation check between the handler and its record:
+                # once the handler returned, its side effects happened.
                 tool_result_message = {
                     "role": "tool",
                     "tool_call_id": tool_call.call_id,
@@ -366,13 +394,17 @@ class _ToolingMixin:
                     "content": result.output_as_json_string(),
                 }
                 messages.append(tool_result_message)
-                owned_messages.append(tool_result_message)
+                tool_results.append(tool_result_message)
                 if getattr(result, "images", None):
                     image_results.append((result, tool_result_message))
-            round_complete = True
+            else:
+                round_complete = True
         finally:
-            if not round_complete:
-                self._rollback_tool_round(messages, owned_messages)
+            if not round_complete or not generation_is_active():
+                self._settle_unfinished_tool_round(messages, assistant_turn, tool_results)
+        if not round_complete or not generation_is_active():
+            # The turn is over: no image turns for a round nobody continues.
+            return len(tool_results)
         for result, tool_result_message in image_results:
             self._append_tool_result_images(
                 messages,
@@ -635,7 +667,10 @@ class _ToolingMixin:
             return
         for messages, index, message, placeholder in slots:
             try:
-                if 0 <= index < len(messages) and messages[index] is message:
+                # A settled concurrent tool round or a cancelled reply commit
+                # may have shifted the turn; identity finds it again.
+                index = _find_by_identity(messages, index, message)
+                if index >= 0:
                     messages[index] = {"role": "user", "content": placeholder}
             except Exception as e:
                 logger.warning("Releasing a tool image slot failed (ignored): %s", e)
@@ -1068,6 +1103,11 @@ class _ToolingMixin:
                     generation_is_active=generation_is_active,
                 )
                 if not generation_is_active():
+                    # Calls that ran before the cancellation stay in history
+                    # with their results; tell the caller the pre-tool text
+                    # is persisted so it is not committed a second time.
+                    if executed_this_round:
+                        yield _LLMStreamChunk(content="", tool_round_persisted=True)
                     return
                 executed_tool_calls += executed_this_round
                 if executed_this_round:
@@ -1139,8 +1179,7 @@ class _ToolingMixin:
         # 积累的 tool 结果给出最终文本。否则弱模型在 finish_reason=tool_calls
         # 上死循环到封顶后整轮静默，上游只能报"未产生文本回复"，用户那边就
         # 表现为不回话。去掉 tools 后模型无法再发起调用，必须输出文本。
-        if not generation_is_active():
-            return
+        # 取消已由循环出口那一处检查挡住：从那里到这里只有同步的日志。
         final_overrides = {
             k: v for k, v in overrides.items() if k not in ("tools", "tool_choice")
         }

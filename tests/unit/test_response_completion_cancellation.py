@@ -26,10 +26,13 @@ async def test_ephemeral_completion_rechecks_generation_after_cleanup(mode, inte
             client._begin_response_generation()
 
     client._notify_reasoning_done = cleanup
-    assert await client.prompt_ephemeral(
+    delivered = await client.prompt_ephemeral(
         "hello", completion_mode="response" if mode == "response" else "proactive",
         persist_response=False,
     )
+    # Response mode promises "True means the regular completion ran": the
+    # avatar path leaves its turn meta for that completion to consume.
+    assert delivered is (mode != "response" or interrupt == "none")
     expected = int(interrupt == "none")
     assert client.on_response_done.await_count == (expected if mode != "proactive" else 0)
     if client.on_proactive_done is not None:

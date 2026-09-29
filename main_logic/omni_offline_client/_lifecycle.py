@@ -758,7 +758,14 @@ class _LifecycleMixin:
                     except Exception:
                         logger.exception("prompt_ephemeral on_committed callback failed")
             if content_committed and persist_response:
-                self._conversation_history.append(AIMessage(content=assistant_message))
+                # Greetings, agent/topic callbacks and voice nudges answer an
+                # instruction, not the user. Mark them like finish_proactive_
+                # delivery does so the screen-history guard never joins them
+                # with the reply to the user's turn (utils/screen_comment_guard).
+                self._conversation_history.append(AIMessage(
+                    content=assistant_message,
+                    additional_kwargs={"dialog_source": "proactive"},
+                ))
             # 防复读 corpus 拆成两半：内存更新在收尾信号**之前**（同步，不含 await，
             # 所以不是取消点），落盘在**之后**。客户端看到 turn end 就可能立刻发下一
             # 条，那一轮的打分必须已经看得到刚提交的这句；而落盘那个 await 一旦被取消
@@ -780,17 +787,24 @@ class _LifecycleMixin:
             # newer user turn interleaved and re-pulsed; the call is otherwise
             # idempotent when nothing pulsed or the first token already cleared it.
             await self._notify_reasoning_done(_reasoning_owner_seq)
+            # Cancelled, or a newer response started during the cleanup await.
+            completion_superseded = (
+                response_cancelled or self._response_generation != response_generation
+            )
+            reported_committed = content_committed
             if completion_mode == "response":
-                if (
-                    not response_cancelled
-                    and self._response_generation == response_generation
-                    and self.on_response_done
-                ):
+                # The caller's contract for this mode is "True means the regular
+                # completion ran" (greeting's avatar path leaves its turn meta
+                # for handle_response_complete to consume). A skipped completion
+                # therefore reports False, even though the text was committed.
+                if completion_superseded:
+                    reported_committed = False
+                elif self.on_response_done:
                     await self.on_response_done()
                 # 只录常规 reply（completion_mode == "response"）。proactive 路径
                 # 已经在 ``core.finish_proactive_delivery`` 上录，这里再录会双写。
                 # 与 core.finish_proactive_delivery 同因同治：摘下来不 await。下面的
-                # `return content_committed` 是调用方判断这轮有没有提交的依据，在它
+                # `return reported_committed` 是调用方判断这轮有没有提交的依据，在它
                 # 之前留一个取消点，就会让一次已经发出去的回复被记成没发。
                 if staged_anti_repeat is not None:
                     try:
@@ -802,17 +816,11 @@ class _LifecycleMixin:
                         )
             else:
                 proactive_done_cb = getattr(self, "on_proactive_done", None)
-                if (
-                    not response_cancelled
-                    and self._response_generation == response_generation
-                    and proactive_done_cb
-                ):
+                if completion_superseded:
+                    pass
+                elif proactive_done_cb:
                     await proactive_done_cb(content_committed)
-                elif (
-                    not response_cancelled
-                    and self._response_generation == response_generation
-                    and self.on_response_done
-                ):
+                elif self.on_response_done:
                     await self.on_response_done()
             # 对话总线的第二条：她真正说出口的那句。判据和上面那条指令不同 ——
             # 指令问的是「provider 收到了吗」（第一个 chunk），这条问的是「她说了
@@ -851,7 +859,7 @@ class _LifecycleMixin:
                     )
                 )
 
-        return content_committed
+        return reported_committed
 
     async def cancel_response(self) -> None:
         """Cancel the current response if possible"""

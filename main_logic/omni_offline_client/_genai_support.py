@@ -733,14 +733,13 @@ class _GenaiMixin:
                     "tool_calls": tool_calls_dict,
                 }
                 messages.append(assistant_turn)
-                owned_messages = [assistant_turn]
-                executed_tool_calls += len(collected_tool_calls)
+                tool_results: list = []
                 image_results = []
                 round_complete = False
                 try:
                     for i, (tc_id, tc_name, tc_args, tc_raw, _tc_extra) in enumerate(collected_tool_calls):
                         if not generation_is_active():
-                            return
+                            break
                         tool_call = ToolCall(
                             name=tc_name,
                             arguments=tc_args,
@@ -757,8 +756,8 @@ class _GenaiMixin:
                                 output={"error": f"{type(e).__name__}: {e}"},
                                 is_error=True, error_message=str(e),
                             )
-                        if not generation_is_active():
-                            return
+                        # No cancellation check between the handler and its
+                        # record: once it returned, its side effects happened.
                         tool_result_message = {
                             "role": "tool",
                             "tool_call_id": tool_call.call_id,
@@ -766,13 +765,23 @@ class _GenaiMixin:
                             "content": result.output_as_json_string(),
                         }
                         messages.append(tool_result_message)
-                        owned_messages.append(tool_result_message)
+                        tool_results.append(tool_result_message)
                         if getattr(result, "images", None):
                             image_results.append((result, tool_result_message))
-                    round_complete = True
+                    else:
+                        round_complete = True
                 finally:
-                    if not round_complete:
-                        self._rollback_tool_round(messages, owned_messages)
+                    if not round_complete or not generation_is_active():
+                        self._settle_unfinished_tool_round(
+                            messages, assistant_turn, tool_results,
+                        )
+                executed_tool_calls += len(tool_results)
+                if not round_complete or not generation_is_active():
+                    # Cancelled: the kept prefix is persisted, so the caller
+                    # still needs the sentinel; no image turns, no next call.
+                    if tool_results:
+                        yield LLMStreamChunk(content="", tool_round_persisted=True)
+                    return
                 # Symmetric with the OpenAI-compat path: every tool reply
                 # first, then multimodal user turns. ``_genai_parts_from_content``
                 # maps ``image_url`` data URLs onto ``inline_data`` parts.
@@ -788,9 +797,9 @@ class _GenaiMixin:
                 # final-segment buffer 清掉（pre-tool 文本已被持久化进
                 # assistant turn 的 content 字段）。
                 yield LLMStreamChunk(content="", tool_round_persisted=True)
-                # Loop again to let the model produce a final answer.
-                if not generation_is_active():
-                    return
+                # Loop again to let the model produce a final answer. A
+                # cancellation during that yield is caught at the loop top or,
+                # after the last round, at the loop exit.
                 if not had_text:
                     continue
                 # Edge case: model emitted text AND tool calls — text already
@@ -837,8 +846,7 @@ class _GenaiMixin:
         # prompt_ephemeral 现成的 retry / 状态上报 / response_discarded 清泡泡逻辑
         # 接管。若在这里 try/except 成 warning，就把真实失败伪装成"空回复"，弱模型
         # 超限后反而可能重回静音态，与本兜底目标冲突。
-        if not generation_is_active():
-            return
+        # 取消已由循环出口那一处检查挡住：从那里到这里只有同步的日志。
         final_cfg_kw = {k: v for k, v in gen_config_kw.items() if k != "tools"}
         final_system_instruction, final_contents = _genai_messages_to_contents(
             _slop_reduced_for_genai(self._dialog_messages_for_provider(messages))

@@ -1,7 +1,8 @@
 """Keep chained screen-source narration out of the request view.
 
 The request view replaces the whole body of any assistant message that carries
-a confirmed chain with ``SCREEN_HISTORY_PLACEHOLDER``. A saved transcript is
+a confirmed chain with the session locale's ``SCREEN_HISTORY_PLACEHOLDER`` row
+(``config/prompts/prompts_screen_history.py``). A saved transcript is
 never rewritten, and no user wording restores a quarantined body. This removes
 the sample the model would otherwise copy from, which is what feeds the
 observed propagation: polluted history in, imitated chains out.
@@ -18,19 +19,20 @@ boundary story would trade a visible chain for truncated legitimate text.
 """
 from __future__ import annotations
 
+import os
 from copy import copy
 
 import regex
 
+from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
+
 
 MIN_PROSE = 16
-# Request-view replacement for a whole quarantined message. Application copy,
-# not model text: it states that the body is missing rather than rephrasing it.
-# Keep it free of every marker form so projecting twice is a no-op.
-SCREEN_HISTORY_PLACEHOLDER = (
-    "[系统占位：此条历史回复正文未加载，原始记录保留在历史面板中，"
-    "不能据此还原或声称完整复述。]"
-)
+# Operator kill switch, read per request: a false positive in the field can be
+# stopped without a release. Not reachable from anything a user says.
+SCREEN_GUARD_ENV = "NEKO_SCREEN_HISTORY_GUARD"
+_USER_ROLES = {"user", "human"}
+_ASSISTANT_ROLES = {"assistant", "ai"}
 _LABEL = (
     r"(?:当前)?屏幕(?:搭话|画面|观察|内容|截图|显示)"
     r"|(?:current[ \t]{1,8})?screen[ \t]{1,8}(?:comment|observation|content|display|image)"
@@ -38,27 +40,53 @@ _LABEL = (
 # Match only through the first separator. No unbounded whitespace lookahead.
 # The lexer checks the preceding character; complete and partial matches use
 # the same engine (re and regex disagree about Unicode combining characters).
+# The bare English label needs a colon: "screen comment " followed by a space
+# is ordinary English grammar, while "屏幕搭话" is almost never followed by one.
 _MARKER = regex.compile(
     rf"(?:[/／][ \t]{{0,8}}(?:{_LABEL})[\s:：/／]"
     rf"|(?:{_LABEL})[ \t]{{0,8}}[/／]"
-    r"|(?:屏幕搭话|screen[ \t]{1,8}comment)[\s:：])",
+    r"|屏幕搭话[\s:：]"
+    r"|screen[ \t]{1,8}comment[:：])",
     regex.IGNORECASE,
 )
 _THINK_TAG = regex.compile(r"</?think(?:ing)?[ \t]{0,8}>", regex.IGNORECASE)
 _QUOTES = {"“": "”", "「": "」", "『": "』", "‘": "’", '"': '"', "'": "'"}
 
 
-def screen_guard_enabled(messages) -> bool:
-    """Always on. Kept as a function because providers thread its result as a
-    per-call override, and because turning the guard off is not something any
-    user wording is allowed to request."""
-    return True
+def screen_guard_enabled(messages=None) -> bool:
+    """On unless the operator switch ``NEKO_SCREEN_HISTORY_GUARD`` says off.
+
+    Kept as a function because providers thread its result as a per-call
+    override, and because turning the guard off is not something any user
+    wording is allowed to request.
+    """
+    raw = os.environ.get(SCREEN_GUARD_ENV, "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _role_and_content(message):
     if isinstance(message, dict):
         return message.get("role"), message.get("content")
     return getattr(message, "type", None), getattr(message, "content", None)
+
+
+def _is_tool_image_turn(messages, index) -> bool:
+    """Whether ``messages[index]`` is a user turn the tool loop injected.
+
+    Tool results that carry pictures are followed by ``{"role": "user"}``
+    dicts (see ``_append_tool_result_images``). They are not the user
+    speaking, and counting one as "the last user turn" would move the
+    assistant run off the real one on every request after such a tool.
+    A real user turn in the saved transcript is a message object.
+    """
+    for back in range(index, -1, -1):
+        message = messages[back]
+        role, _content = _role_and_content(message)
+        if back < index and role == "tool":
+            return True
+        if not (isinstance(message, dict) and role in _USER_ROLES):
+            return False
+    return False
 
 
 def _assistant_tail_run(messages) -> tuple[int, int]:
@@ -80,30 +108,43 @@ def _assistant_tail_run(messages) -> tuple[int, int]:
       ends it.
     * A non-assistant message ends the run, which is why the measured
       tool-boundary case does not chain (0/3).
+
+    Image turns injected by the tool loop are not user turns and are skipped
+    when looking for the last one.
     """
-    last_user = -1
-    for index, message in enumerate(messages):
-        role, _content = _role_and_content(message)
-        if role in {"user", "human"}:
-            last_user = index
+    last_user = next(
+        (
+            index for index in range(len(messages) - 1, -1, -1)
+            if _role_and_content(messages[index])[0] in _USER_ROLES
+            and not _is_tool_image_turn(messages, index)
+        ),
+        -1,
+    )
     if last_user <= 1:
         return 0, 0
     start = last_user
     while start > 0:
         role, _content = _role_and_content(messages[start - 1])
-        if role not in {"assistant", "ai"}:
+        if role not in _ASSISTANT_ROLES:
             break
         start -= 1
     if start == 0 or start == last_user:
         return 0, 0
     # Require an actual preceding user; position alone does not prove origin.
     preceding_role, _content = _role_and_content(messages[start - 1])
-    if preceding_role not in {"user", "human"}:
+    if preceding_role not in _USER_ROLES:
         return 0, 0
     return start, last_user
 
 
-def project_screen_history(messages, *, guard_enabled: bool | None = None):
+def _is_independent_delivery(message) -> bool:
+    metadata = (message.get("additional_kwargs", {}) if isinstance(message, dict)
+                else getattr(message, "additional_kwargs", {}))
+    return isinstance(metadata, dict) and metadata.get("dialog_source") == "proactive"
+
+
+def project_screen_history(messages, *, guard_enabled: bool | None = None,
+                           placeholder: str | None = None, hits: dict | None = None):
     """Return a request-only view; keep saved transcripts and tool metadata.
 
     A message carrying a confirmed chain loses its whole body, not just the
@@ -121,49 +162,53 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None):
 
     Detection needs labelled, multi-item chains. Unlabelled history and
     comments below ``MIN_PROSE`` are left byte-for-byte alone, silently.
+
+    ``placeholder`` is the locale row the caller resolved (English when
+    omitted). ``hits``, when given, receives the count of quarantined messages
+    per category: ``"message"`` for a chain inside one message and ``"run"``
+    for one spread over the assistant run.
     """
     if guard_enabled is None:
         guard_enabled = screen_guard_enabled(messages)
     if not guard_enabled:
         return messages
+    if placeholder is None:
+        placeholder = SCREEN_HISTORY_PLACEHOLDER["en"]
     tail_start, tail_end = _assistant_tail_run(messages)
     tail_quarantine: set[int] = set()
     segment_start = tail_start
     for boundary in range(tail_start, tail_end + 1):
-        if boundary < tail_end:
-            message = messages[boundary]
-            metadata = (message.get("additional_kwargs", {}) if isinstance(message, dict)
-                        else getattr(message, "additional_kwargs", {}))
-            if not (isinstance(metadata, dict) and metadata.get("dialog_source") == "proactive"):
-                continue
-        merged = "".join(
+        if boundary < tail_end and not _is_independent_delivery(messages[boundary]):
+            continue
+        texts = [
             content
-            for content in (c for _role, c in map(_role_and_content, messages[segment_start:boundary]))
+            for _role, content in map(_role_and_content, messages[segment_start:boundary])
             if isinstance(content, str)
-        )
-        if boundary - segment_start >= 2 and screen_chain_start(merged) is not None:
+        ]
+        if boundary - segment_start >= 2 and _chain_start_across(texts) is not None:
             tail_quarantine.update(range(segment_start, boundary))
         segment_start = boundary + 1
     projected = []
     changed = 0
     for index, message in enumerate(messages):
         role, content = _role_and_content(message)
-        is_assistant = role in {"assistant", "ai"}
-        if (
-            not is_assistant
-            or not isinstance(content, str)
-            or (
-                index not in tail_quarantine
-                and screen_chain_start(content) is None
-            )
-        ):
+        if role not in _ASSISTANT_ROLES or not isinstance(content, str):
             projected.append(message)
             continue
+        if screen_chain_start(content) is not None:
+            category = "message"
+        elif index in tail_quarantine:
+            category = "run"
+        else:
+            projected.append(message)
+            continue
+        if hits is not None:
+            hits[category] = hits.get(category, 0) + 1
         if isinstance(message, dict):
-            message = {**message, "content": SCREEN_HISTORY_PLACEHOLDER}
+            message = {**message, "content": placeholder}
         else:
             message = copy(message)
-            message.content = SCREEN_HISTORY_PLACEHOLDER
+            message.content = placeholder
         projected.append(message)
         changed += 1
     return projected if changed else messages
@@ -334,15 +379,28 @@ class _ChainTracker:
         return None
 
 
+def _chain_start_across(texts) -> int | None:
+    """Find a chain spread over several messages.
+
+    Each message gets a fresh lexer: its lexical state (an open quote or
+    ``<think>``, a fence, a quote block, the word before a marker) ends with
+    the message, so a reply ending in "喵" or an unclosed quote cannot hide
+    the next message's label. One tracker spans them all, positions offset by
+    the preceding lengths, so the chain itself may cross the boundary.
+    """
+    tracker = _ChainTracker()
+    offset = 0
+    for text in texts:
+        lexer = _ScreenLexer()
+        for tokens in (lexer.feed(text), lexer.finalize()):
+            for token_text, marker, start in tokens:
+                cut = tracker.accept(token_text, marker, start + offset)
+                if cut is not None:
+                    return cut
+        offset += len(text)
+    return None
+
+
 def screen_chain_start(text: str) -> int | None:
     """Find an entire chain in a finished transcript, including its first item."""
-    lexer, tracker = _ScreenLexer(), _ChainTracker()
-    for token in lexer.feed(text):
-        cut = tracker.accept(*token)
-        if cut is not None:
-            return cut
-    for token in lexer.finalize():
-        cut = tracker.accept(*token)
-        if cut is not None:
-            return cut
-    return None
+    return _chain_start_across([text])

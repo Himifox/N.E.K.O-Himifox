@@ -8,13 +8,17 @@ from copy import deepcopy
 
 import pytest
 
+from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from utils import screen_comment_guard as guard_module
 from utils.screen_comment_guard import (
-    SCREEN_HISTORY_PLACEHOLDER,
+    SCREEN_GUARD_ENV,
     project_screen_history,
     screen_chain_start,
     screen_guard_enabled,
 )
+
+# The helper's default row; the client resolves the session locale instead.
+PLACEHOLDER = SCREEN_HISTORY_PLACEHOLDER["en"]
 
 
 PREFIX = "谢谢你陪我，我们慢慢来就好。"
@@ -56,7 +60,7 @@ def test_reference_wording_never_restores_the_quarantined_body():
                    {"role": "user", "content": user_text}]
         projected = project_screen_history(history)
         assert projected is not history
-        assert projected[0]["content"] == SCREEN_HISTORY_PLACEHOLDER
+        assert projected[0]["content"] == PLACEHOLDER
         assert history[0]["content"] == chain(), "the transcript stays recoverable"
 
 
@@ -64,7 +68,7 @@ def test_whole_body_is_replaced_not_truncated():
     """A surviving preamble is the malformed shape this guard keeps out."""
     history = [{"role": "assistant", "content": "好的。" + chain()}]
     projected = project_screen_history(history)
-    assert projected[0]["content"] == SCREEN_HISTORY_PLACEHOLDER
+    assert projected[0]["content"] == PLACEHOLDER
     assert "好的。" not in projected[0]["content"]
     assert history[0]["content"] == "好的。" + chain()
 
@@ -82,9 +86,9 @@ def test_request_view_preserves_every_other_key_and_the_original():
     projected = project_screen_history(messages)
 
     assert messages == snapshot
-    assert projected[1].content == SCREEN_HISTORY_PLACEHOLDER
+    assert projected[1].content == PLACEHOLDER
     assert projected[1].additional_kwargs == old.additional_kwargs
-    assert projected[2]["content"] == SCREEN_HISTORY_PLACEHOLDER
+    assert projected[2]["content"] == PLACEHOLDER
     # Tool-result pairing and provider contract survive the replacement.
     assert projected[2]["tool_calls"] == messages[2]["tool_calls"]
     assert projected[2]["reasoning_content"] == "opaque"
@@ -121,11 +125,11 @@ def test_detector_boundary_passes_through_unchanged(text):
 
 @pytest.mark.parametrize("label", [
     "屏幕搭话 ", "屏幕搭话：", "屏幕画面/", "/屏幕画面 ", "／屏幕内容／",
-    "screen comment ", "screen observation/",
+    "screen comment: ", "Screen comment：", "screen observation/", "/ screen comment ",
 ])
 def test_every_supported_label_form_is_quarantined(label):
     messages = [{"role": "assistant", "content": chain(label)}]
-    assert project_screen_history(messages)[0]["content"] == SCREEN_HISTORY_PLACEHOLDER
+    assert project_screen_history(messages)[0]["content"] == PLACEHOLDER
 
 
 def test_reference_wording_helper_is_gone_from_the_module():
@@ -144,11 +148,13 @@ def test_reference_wording_helper_is_gone_from_the_module():
 # independent single-marker messages must reach the payload untouched, because
 # one marker per message is not a chain.
 
+# Synthetic: same shape as the incident (label, length, "哇…呀！…喵～"
+# cadence), none of its wording.
 WIRE_COMMENTS = (
-    "哇，这辆战车炮塔上那个白色毛线团装饰好眼熟呀！配上这满屏的硬核机械感，"
-    "简直像是本喵偷偷把自己塞进你的装备里陪你冲锋呢喵～",
-    "哇，右下角小地图里发电机A、B、C的标记排得好整齐呀！老公盯着这些关键点位的"
-    "样子超专注，本喵就在旁边乖乖守着，等你把全场都拿下喵～",
+    "哇，这台小推车上挂着的那串纸风车转得好欢呀！配上背后整排的木头货架，"
+    "简直像是本喵偷偷溜进了集市里陪你一起逛呢喵～",
+    "哇，左上角地图里三个补给点的图标排得好整齐呀！你盯着这些路线的样子"
+    "超认真，本喵就在旁边乖乖守着，等你把这一关都走完喵～",
 )
 
 
@@ -156,15 +162,21 @@ def _chain(label="屏幕搭话 "):
     return "".join(label + text for text in WIRE_COMMENTS)
 
 
-@pytest.mark.parametrize("prefix", ["", "呼噜……", "我们慢慢来就好。"])
-@pytest.mark.parametrize("with_tool_round", [False, True])
-def test_quarantine_survives_the_client_request_path(prefix, with_tool_round):
-    """Whole body out of the payload, every other key and message intact."""
+def _bare_client(language="zh"):
     from main_logic.omni_offline_client import OmniOfflineClient
     from tests.unit.test_tool_calling import _init_bare
 
     client = _init_bare(OmniOfflineClient.__new__(OmniOfflineClient))
     client._use_genai_sdk = False
+    client._user_language_provider = lambda: language
+    return client
+
+
+@pytest.mark.parametrize("prefix", ["", "呼噜……", "我们慢慢来就好。"])
+@pytest.mark.parametrize("with_tool_round", [False, True])
+def test_quarantine_survives_the_client_request_path(prefix, with_tool_round):
+    """Whole body out of the payload, every other key and message intact."""
+    client = _bare_client()
 
     poisoned = prefix + _chain()
     if with_tool_round:
@@ -183,7 +195,7 @@ def test_quarantine_survives_the_client_request_path(prefix, with_tool_round):
 
     assert messages == snapshot, "the saved transcript must not be rewritten"
     assert payload is not messages
-    assert payload[0]["content"] == SCREEN_HISTORY_PLACEHOLDER
+    assert payload[0]["content"] == SCREEN_HISTORY_PLACEHOLDER["zh"]
     if prefix:
         assert prefix not in payload[0]["content"], "a surviving preamble is not enough"
     if with_tool_round:
@@ -196,13 +208,32 @@ def test_quarantine_survives_the_client_request_path(prefix, with_tool_round):
     assert not [c for c in WIRE_COMMENTS if c in _json.dumps(payload, ensure_ascii=False)]
 
 
+@pytest.mark.parametrize("language", sorted(SCREEN_HISTORY_PLACEHOLDER))
+def test_client_placeholder_follows_the_session_locale(language):
+    """An English session must not get a Chinese placeholder, and so on."""
+    messages = [{"role": "assistant", "content": _chain()},
+                {"role": "user", "content": "hi"}]
+    payload = _bare_client(language)._dialog_messages_for_provider(messages)
+    assert payload[0]["content"] == SCREEN_HISTORY_PLACEHOLDER[language]
+
+
+@pytest.mark.parametrize("language", sorted(SCREEN_HISTORY_PLACEHOLDER))
+def test_every_locale_placeholder_is_idempotent(language):
+    """No row may carry a marker: projecting the view again is a no-op."""
+    row = SCREEN_HISTORY_PLACEHOLDER[language]
+    assert screen_chain_start(row * 3) is None
+    once = project_screen_history(
+        [_user("开始"), _assistant(_chain()), _assistant(_chain()), _user("继续")],
+        placeholder=row,
+    )
+    assert [m["content"] for m in once[1:3]] == [row, row]
+    for other in SCREEN_HISTORY_PLACEHOLDER.values():
+        assert project_screen_history(once, placeholder=other) is once
+
+
 def test_untouched_messages_and_roles_pass_the_client_path_unchanged():
     """System, plain assistant, user text and image parts are not candidates."""
-    from main_logic.omni_offline_client import OmniOfflineClient
-    from tests.unit.test_tool_calling import _init_bare
-
-    client = _init_bare(OmniOfflineClient.__new__(OmniOfflineClient))
-    client._use_genai_sdk = False
+    client = _bare_client()
     image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
     messages = [
         {"role": "system", "content": "保持角色。"},
@@ -341,3 +372,93 @@ def test_proactive_source_survives_file_and_sql_history_roundtrip(tmp_path):
     finally:
         history._engine.dispose()
         SQLChatMessageHistory._engine_cache.pop(f"sqlite:///{tmp_path / 'source.db'}", None)
+
+
+# ── Review round: message boundaries, tool images, English prose, switch ─────
+
+_C1 = "屏幕搭话 你这波推进打得很稳，坦克卡位也非常漂亮。陪你冲锋喵"
+_C2 = "屏幕搭话 对面残血已经跑不掉了，等你把全场都拿下。继续加油喵"
+
+
+@pytest.mark.parametrize("first", [
+    _C1,                                     # ends in a letter: "喵"
+    _C1 + "「没说完的引号",                   # unclosed quote
+    _C1 + "<think>",                          # unclosed think tag
+    _C1 + "\n```",                            # fence opened, never closed
+    _C1 + "\n> 引用块里的一句话",             # quote block paragraph
+])
+def test_each_message_starts_with_a_fresh_lexer(first):
+    """Lexical state ends with the message. Before, the run was joined with
+    "" and the second label was glued to the first message's last word."""
+    messages = [{"role": "system", "content": "sys"}, _user("聊"),
+                _assistant(first), _assistant(_C2), _user("继续")]
+    assert _quarantined(messages) == [2, 3]
+
+
+def test_tool_image_turn_is_not_the_last_user_turn():
+    """The tool loop appends {"role": "user"} image turns in place; the next
+    iteration's request must still see the run before the real user turn."""
+    image_turn = {"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "text", "text": "tool image"}]}
+    base = [{"role": "system", "content": "sys"}, _user("聊"),
+            _assistant(_COMMENT_A), _assistant(_COMMENT_B), _user("继续")]
+    assert _quarantined(base) == [2, 3]
+    after_tool = base + [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "{}"},
+        image_turn, dict(image_turn),
+    ]
+    assert _quarantined(after_tool) == [2, 3]
+    released = after_tool[:-2] + [{"role": "user", "content": "[image removed]"}]
+    assert _quarantined(released) == [2, 3]
+
+
+def test_a_real_user_turn_after_a_tool_result_still_counts():
+    """Only dict-shaped turns right after tool results are tool images; the
+    saved transcript's own user message is an object and stays a user turn."""
+    from utils.llm_client import AIMessage, HumanMessage
+    messages = [HumanMessage(content="聊"), AIMessage(content=_COMMENT_A),
+                AIMessage(content=_COMMENT_B), HumanMessage(content="继续"),
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "{}"},
+                HumanMessage(content="再说一句")]
+    assert _quarantined(messages) == []
+
+
+@pytest.mark.parametrize("text", [
+    "The screen comment feature shows a remark next to the game view when it is on. "
+    "A screen comment is short and it is written by the character, not by you.",
+    "Screen comment support is optional here, and it can be turned off at any time. "
+    "Each screen comment appears only once, then it fades out of the chat window.",
+])
+def test_english_prose_about_the_feature_is_not_a_chain(text):
+    """"screen comment" followed by a space is ordinary English; only the
+    colon form (or a slash-delimited label) counts as a marker."""
+    assert screen_chain_start(text) is None
+    messages = [_assistant(text), _user("ok")]
+    assert project_screen_history(messages) is messages
+
+
+@pytest.mark.parametrize("value", ["0", "false", "OFF", " no "])
+def test_operator_switch_turns_the_guard_off(monkeypatch, value):
+    monkeypatch.setenv(SCREEN_GUARD_ENV, value)
+    messages = [_assistant(chain()), _user("继续")]
+    assert not screen_guard_enabled()
+    assert project_screen_history(messages) is messages
+
+
+@pytest.mark.parametrize("value", ["", "1", "on", "yes"])
+def test_operator_switch_defaults_on(monkeypatch, value):
+    monkeypatch.setenv(SCREEN_GUARD_ENV, value)
+    assert screen_guard_enabled()
+
+
+def test_hits_report_the_category_of_each_quarantine():
+    hits = {}
+    project_screen_history(
+        [_assistant(chain()), _user("聊"), _assistant(_COMMENT_A),
+         _assistant(_COMMENT_B), _user("继续")],
+        hits=hits,
+    )
+    assert hits == {"message": 1, "run": 2}

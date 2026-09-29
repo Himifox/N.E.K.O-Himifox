@@ -3266,6 +3266,11 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
     mgr.is_active = True
     mgr._starting_session_count = 0
     mgr._session_start_circuit_open = False
+    # The interrupted offline reply is closed as its own AI turn (its
+    # cancelled generation never reaches turn end).
+    ai_turn_notes = []
+    mgr._note_ai_turn = lambda text=None, **_kw: ai_turn_notes.append(text)
+    mgr._current_ai_turn_text = "half a reply"
     if session_state == "no_session":
         mgr.session = None
         mgr.is_active = False
@@ -3306,6 +3311,7 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
     mgr._process_stream_data_internal.assert_not_awaited()
     assert mgr.pending_input_data == []
     mgr._clear_tts_pipeline.assert_awaited_once()
+    assert ai_turn_notes == (["half a reply"] if session_state == "offline" else [])
     if session_state == "offline":
         mgr.session.handle_interruption.assert_awaited_once()
         assert mgr.session._pending_images == [earlier_image]
@@ -4521,6 +4527,41 @@ async def test_typed_text_cancels_the_in_flight_offline_stream_first(monkeypatch
     # 取消要发生在 speech_id 轮换**之前**，否则旧流的 delta 会挂到新 id 上。
     assert sid_at_interrupt["sid"] == old_sid
     assert mgr.current_speech_id != old_sid
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted_text", ["A-half;", ""])
+async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
+    monkeypatch, interrupted_text,
+):
+    """A cancelled offline generation skips ``on_response_done``, so its turn
+    end never flushes the half it already said. The text interruption closes
+    it; otherwise it is glued onto the next reply's AI turn. Nothing said,
+    nothing recorded: an empty buffer must not become a phantom AI turn."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    notes = []
+    mgr._note_ai_turn = lambda text=None, **_kw: notes.append(text)
+    mgr._current_ai_turn_text = interrupted_text
+
+    async def _stream_text(_text, **_kwargs):
+        notes.append("stream_text")
+        mgr._current_ai_turn_text += "B-full."
+
+    session.handle_interruption = AsyncMock()
+    session.stream_text = AsyncMock(side_effect=_stream_text)
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "换个话题"},
+    )
+
+    assert notes == ([interrupted_text] if interrupted_text else []) + ["stream_text"]
+    assert mgr._current_ai_turn_text == "B-full."
 
 
 @pytest.mark.unit

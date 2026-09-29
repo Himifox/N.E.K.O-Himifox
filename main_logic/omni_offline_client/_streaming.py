@@ -21,6 +21,7 @@ from main_logic.proactive_delivery import (
 )
 
 from ._shared import (
+    _find_by_identity,
     _same_route,
     AIMessage,
     Any,
@@ -289,6 +290,31 @@ class _StreamingMixin:
                 await old_llm.aclose()
             except Exception as e:
                 logger.warning(f"switch_model: old client aclose failed: {e}")
+
+    def _commit_cancelled_reply(self, user_message, text: str) -> None:
+        """Commit the visible part of a cancelled reply to its own turn.
+
+        The cancelling turn may already have appended its user message, so
+        the reply goes before the first user message that follows this
+        turn's own, not at the end. Tool-image turns are dicts, not
+        ``HumanMessage``, and belong to this turn. When the turn's user
+        message is gone (history rebuilt), fall back to appending.
+        """
+        history = self._conversation_history
+        start = next(
+            (i for i, message in enumerate(history) if message is user_message),
+            None,
+        )
+        position = len(history)
+        if start is not None:
+            position = next(
+                (
+                    i for i in range(start + 1, len(history))
+                    if isinstance(history[i], HumanMessage)
+                ),
+                len(history),
+            )
+        history.insert(position, AIMessage(content=text))
 
     async def _check_repetition(self, response: str) -> bool:
         """
@@ -1175,6 +1201,12 @@ class _StreamingMixin:
                             if getattr(chunk, "tool_round_persisted", False):
                                 length_guard_persisted_prefix = assistant_message_total
                                 assistant_message = ""
+                                # A cancelled round still reports what it kept
+                                # (see _settle_unfinished_tool_round); reset the
+                                # state below but emit nothing further.
+                                _round_cancelled = (
+                                    self._active_response_generation != response_generation
+                                )
                                 # 重置围栏 / prefix buffer：下一段是新的语义
                                 # 单元（模型基于 tool 结果重新出文本），不应
                                 # 复用之前的 fence / prefix 状态。
@@ -1191,7 +1223,11 @@ class _StreamingMixin:
                                     # would lose the pre-tool sentence. Then re-arm
                                     # for the post-tool segment (new semantic unit).
                                     _pretool_residual = think_stripper.flush()
-                                    if _pretool_residual and _pretool_residual.strip() and self.on_text_delta:
+                                    if (
+                                        not _round_cancelled
+                                        and _pretool_residual and _pretool_residual.strip()
+                                        and self.on_text_delta
+                                    ):
                                         await self.on_text_delta(_pretool_residual, is_first_chunk)
                                         is_first_chunk = False
                                     think_stripper.reset()
@@ -1205,7 +1241,8 @@ class _StreamingMixin:
                                 # 三家口径一致。然后再重置 state 让 post-tool 重新
                                 # 走 idle 起点。
                                 if (
-                                    summary_mode_enabled
+                                    not _round_cancelled
+                                    and summary_mode_enabled
                                     and summary_state == 'cutover_done'
                                     and summary_tail_buffer
                                 ):
@@ -1436,8 +1473,13 @@ class _StreamingMixin:
                                 logger.debug(f"OmniOfflineClient: 过滤空白内容 - content_repr: {repr(content)[:100]}")
 
                         # A guard pause still owns this generation. Cancellation
-                        # or replacement does not: discard all un-emitted buffers.
+                        # or replacement does not: discard every un-emitted
+                        # buffer (name prefix, think residual, summary epilogue)
+                        # but keep what already reached UI/TTS, or the next
+                        # request would not see what the user just saw.
                         if self._active_response_generation != response_generation:
+                            if assistant_message:
+                                self._commit_cancelled_reply(user_message, assistant_message)
                             break
 
                         # 流结束后：先 flush thinking stripper 的残留。仅漏型
@@ -2001,14 +2043,16 @@ class _StreamingMixin:
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
 
-            if (
-                history_replacement_text
-                and 0 <= history_replacement_index < len(self._conversation_history)
-                and self._conversation_history[history_replacement_index] is user_message
-            ):
-                self._conversation_history[history_replacement_index] = HumanMessage(
-                    content=history_replacement_text
+            if history_replacement_text:
+                # The index is a hint: a concurrent turn's cancelled tool round
+                # or reply commit may have shifted this message. Identity is
+                # the only proof it is still ours.
+                _history = self._conversation_history
+                _replace_at = _find_by_identity(
+                    _history, history_replacement_index, user_message,
                 )
+                if _replace_at >= 0:
+                    _history[_replace_at] = HumanMessage(content=history_replacement_text)
 
             # 还原 summary 模式临时抬高的 API budget，别泄漏给 prompt_ephemeral。
             if _summary_prev_max_tokens is not None and getattr(self, "llm", None) is not None:
