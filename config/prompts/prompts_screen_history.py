@@ -20,8 +20,8 @@ of a quarantined assistant message with this placeholder, in the request copy
 only. The model reads it, the user never does. It says that the body is
 missing rather than rephrasing it.
 
-Every row must stay free of every marker form the guard detects (no
-``屏幕…`` label, no ``screen …`` label), so projecting a request view twice,
+Every row must stay free of every marker form the guard detects (neither
+the Chinese "screen" label nor the English one), so projecting a request view twice,
 in any locale, is a no-op. ``tests/unit/test_screen_history_stopgap.py`` pins
 that per row.
 

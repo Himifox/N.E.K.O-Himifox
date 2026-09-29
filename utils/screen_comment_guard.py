@@ -384,7 +384,7 @@ def _chain_start_across(texts) -> int | None:
 
     Each message gets a fresh lexer: its lexical state (an open quote or
     ``<think>``, a fence, a quote block, the word before a marker) ends with
-    the message, so a reply ending in "喵" or an unclosed quote cannot hide
+    the message, so a reply ending in a CJK letter or an unclosed quote cannot hide
     the next message's label. One tracker spans them all, positions offset by
     the preceding lengths, so the chain itself may cross the boundary.
     """
