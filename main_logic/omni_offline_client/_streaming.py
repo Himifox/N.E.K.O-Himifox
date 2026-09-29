@@ -1838,6 +1838,13 @@ class _StreamingMixin:
                                     prefix=summary_prefix_for_history,
                                     tail=summary_tail_buffer,
                                 )
+                                # The summary call is a cancellation point of its
+                                # own: a turn cancelled while it ran must not
+                                # reach TTS or commit prefix + summary. Keep what
+                                # the UI already shows, like the check above.
+                                if self._active_response_generation != response_generation:
+                                    self._commit_cancelled_reply(user_message, assistant_message)
+                                    break
                                 if summary_text:
                                     logger.info(
                                         "OmniOfflineClient summary: 摘要成功 "

@@ -4705,6 +4705,53 @@ async def test_stream_text_summary_replaces_tail_when_overshoot_large(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_stream_text_summary_cancelled_while_summarizing_is_not_delivered(monkeypatch):
+    """Cancelled during the summary call: the summary never reaches TTS, and
+    history keeps the text the UI already showed, not prefix + summary."""
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from utils.llm_client import LLMStreamChunk
+
+    async def cancelling_summarize(self, prefix, tail):
+        await self.cancel_response()
+        return "总之就这样啦"
+    monkeypatch.setattr(OmniOfflineClient, "_summarize_tail_for_tts", cancelling_summarize)
+
+    long_text = (
+        "one two three four. five, six seven eight nine ten. "
+        + " ".join(f"w{i}" for i in range(25)) + "."
+    )
+
+    async def _astream(self, messages, **overrides):
+        yield LLMStreamChunk(content=long_text)
+
+    monkeypatch.setattr(OmniOfflineClient, "_astream_with_tools", _astream)
+    delta_calls = []
+
+    async def fake_text_delta(text, is_first, **kwargs):
+        delta_calls.append((text, kwargs.get("ui_enabled", True), kwargs.get("tts_enabled", True)))
+
+    async def noop(*_a, **_kw):
+        pass
+
+    done = []
+    client = _build_summary_client(monkeypatch, max_response_length=4)
+    client.on_text_delta = fake_text_delta
+    client.on_input_transcript = noop
+    client.on_response_done = lambda: done.append(True)
+    client.on_response_discarded = None
+    client.on_status_message = noop
+    client.on_repetition_detected = None
+
+    await client.stream_text("trigger long")
+
+    assert not [c for c in delta_calls if c[0] == "总之就这样啦"]
+    ui_text = "".join(text for text, ui, _tts in delta_calls if ui)
+    assert client._conversation_history[-1].content == ui_text
+    assert "总之就这样啦" not in client._conversation_history[-1].content
+    assert done == []
+
+
+@pytest.mark.asyncio
 async def test_stream_text_summary_abandoned_when_overshoot_under_slack(monkeypatch):
     """超 budget 但只多几个 token（< slack）时放弃摘要，tail 续给 TTS 读完，
     history 留完整原文，没有 prefix/summary 分裂。"""
