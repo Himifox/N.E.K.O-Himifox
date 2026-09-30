@@ -1647,6 +1647,12 @@ class LifecycleMixin:
             enable_long_response_summary=external_tts_enabled,
         )
         session.on_proactive_done = self.handle_proactive_complete
+        # A reply whose completion is skipped is closed by whoever took it
+        # over: a displacing user reply reports it here; the owed wrap-up is
+        # paid once the session goes idle (the interrupted reply's own
+        # completion would have run it).
+        session.on_response_displaced = self._close_displaced_offline_turn
+        session.on_idle = self._on_offline_session_idle
         session.on_thinking_active = self._make_thinking_active_callback(session)
         # 和两个 realtime 构造点同一处理：句柄绑到这个 client 自己，而不是
         # 构造时刻的 self.session。handoff candidate 在被提升前既不是
@@ -1780,7 +1786,7 @@ class LifecycleMixin:
                         else:
                             # Close the offline reply this turn interrupted
                             # before handle_new_message clears its text; its
-                            # wrap-up is owed to the next finalize.
+                            # wrap-up is owed (see _interrupt_offline_reply).
                             await self._interrupt_offline_reply(current)
                         if (
                             not operation_is_current()
@@ -3216,22 +3222,26 @@ class LifecycleMixin:
                 list(incremental_next_session_context)
                 + self.message_cache_for_new_session[self.initial_cache_snapshot_len:]
             )
+            # What the pending session was primed with at preparation, in
+            # prime order: next-session context snapshot, then cache snapshot.
+            primed_snapshot = (
+                list(next_session_context_messages[
+                    :self.initial_next_session_context_snapshot_len
+                ])
+                + list(self.message_cache_for_new_session[
+                    :self.initial_cache_snapshot_len
+                ])
+            )
+            # ...and everything the final prime below adds. Late context
+            # (arriving while that prime awaits) is judged after all of it.
+            primed_context_sequence = primed_snapshot + incremental_cache
             # 1. Send incremental cache (or a heartbeat) to PENDING session for its *second* ignored response
             if incremental_cache:
                 # Judged together with exactly what the pending session was
-                # already primed with, in prime order (next-session context
-                # snapshot, then cache snapshot), so a chain crossing that
-                # boundary counts.
+                # already primed with, so a chain crossing that boundary counts.
                 final_prime_text = self._convert_cache_to_str(
                     incremental_cache,
-                    preceding=(
-                        list(next_session_context_messages[
-                            :self.initial_next_session_context_snapshot_len
-                        ])
-                        + list(self.message_cache_for_new_session[
-                            :self.initial_cache_snapshot_len
-                        ])
-                    ),
+                    preceding=primed_snapshot,
                 )
             else:  # Ensure session cycles a turn even if no incremental cache
                 final_prime_text = ""  # Initialize to empty string to prevent NameError
@@ -4095,6 +4105,7 @@ class LifecycleMixin:
                 self._prime_late_next_session_context_after_swap(
                     transferred_next_context_count,
                     next_context_count_at_promote,
+                    preceding=primed_context_sequence,
                 ),
                 stage="late context reconciliation",
                 allow_promoted=True,

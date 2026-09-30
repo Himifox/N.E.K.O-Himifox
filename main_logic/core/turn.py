@@ -333,18 +333,19 @@ class TurnMixin:
         """Stop ``session``'s reply and close it as its own AI turn.
 
         Every interruption point goes through here rather than awaiting
-        ``handle_interruption()`` itself: an interruption that claims a
-        finished reply's completion must be followed by the close, or that
-        reply never gets a turn end. Returns whether a reply was interrupted.
+        ``handle_interruption()`` itself: an interruption takes the reply's
+        close over from its completion (which then does not run), so it must
+        be followed by the close, or that reply never gets a turn end.
+        Returns whether a reply was interrupted.
 
         An interrupted reply's completion will not run, so the wrap-up it
         would have run (``_finalize_turn_after_emit``: renewal check, final
         swap, queued agent callbacks) is recorded as owed rather than run
-        here: a newer reply is about to stream, and running it now could
-        start a final swap or clear the renewal cache mid-reply. The next
-        finalize pays it (the new turn's own completion, as before this
-        change), and a path that starts no reply pays it via
-        ``_settle_owed_turn_wrap_up``. Only a "response" reply owes one:
+        here: a newer reply is usually about to stream, and running it now
+        could start a final swap or clear the renewal cache mid-reply. The
+        next finalize pays it (the new turn's own completion, as before this
+        change); when none comes, ``_settle_owed_turn_wrap_up`` pays it once
+        the offline session is idle. Only a "response" reply owes one:
         ``handle_proactive_complete`` never runs that wrap-up.
         """
         interrupt = getattr(session, "handle_interruption", None)
@@ -353,95 +354,144 @@ class TurnMixin:
         kind = await interrupt()
         if not kind:
             return False
-        kind = kind if isinstance(kind, str) else "response"
+        # A claimed completion belongs to a reply that streamed to the end;
+        # a cancelled one was cut mid-reply (OmniOfflineClient.InterruptedReply).
+        finished = getattr(kind, "finished", False) is True
+        kind = str(kind) if isinstance(kind, str) else "response"
         request_id = (
             getattr(self, '_active_text_request_id', None)
             if kind != "agent_callback" else None
         )
-        self._close_interrupted_offline_turn(kind)
+        turn_end_msg = self._close_interrupted_offline_turn(kind)
         if kind == "response":
             self._turn_wrap_up_owed = True
-        if request_id:
+        if finished and isinstance(turn_end_msg, dict):
+            # The completion this claim skipped would have sent this turn end
+            # to the frontend too. Nothing newer has streamed (a claim leaves
+            # no live generation, and every caller starts its reply only after
+            # this returns, after its user_activity), so the frontend's current
+            # bubble is still the finished reply's: seal it now, in the order a
+            # reply that ended just before the input would have had. It also
+            # releases the request's rollback draft. No TTS done: the
+            # interrupting path clears the pipeline itself.
+            await self._send_turn_end_to_frontend(turn_end_msg)
+        elif request_id:
             await self._send_turn_abandoned(request_id)
         return True
 
     async def _send_turn_abandoned(self, request_id) -> None:
         """Tell the frontend the reply to ``request_id`` was cut off.
 
-        Not a ``turn end``: the frontend seals whatever bubble is current on
-        a turn end, and by now that belongs to the interrupting turn. This
-        only releases what was held for ``request_id`` (its rollback draft
-        and the last-submitted marker), which the skipped completion's turn
-        end used to do. Best effort.
+        Not a ``turn end``: the reply was cut mid-stream, and the frontend
+        seals whatever bubble is current on a turn end, which the
+        interrupting turn is about to take over. This only releases what was
+        held for ``request_id`` (its rollback draft and the last-submitted
+        marker), which the skipped completion's turn end used to do. Best
+        effort.
         """
-        ws = getattr(self, 'websocket', None)
         try:
-            if ws and hasattr(ws, 'client_state') and ws.client_state == ws.client_state.CONNECTED:
-                await ws.send_json({'type': 'system', 'data': 'turn abandoned', 'request_id': request_id})
+            if self._has_connected_websocket():
+                await self.websocket.send_json({'type': 'system', 'data': 'turn abandoned', 'request_id': request_id})
         except Exception as e:
             logger.debug("[%s] turn abandoned not sent: %s", self.lanlan_name, e)
 
     async def _settle_owed_turn_wrap_up(self) -> None:
-        """Pay an interrupted reply's owed wrap-up on a path that starts no
-        reply of its own (a magic command). Left owed while an offline reply
-        is still live or finishing: that reply's completion pays it."""
+        """Pay an interrupted reply's owed wrap-up once nothing else will.
+
+        Runs when the offline session reports it went idle
+        (``_on_offline_session_idle``), when a typed input's handling ends
+        (``_process_stream_input``), and on the command paths that start no
+        reply. Left owed while a typed input is still being handled (its
+        reply's completion pays it, and a wrap-up between the interruption
+        and that reply could start a final swap right before it), and while
+        the offline session is not idle: a reply live, guard-paused, waiting
+        on its completion, or a cancelled one still finishing its task (a
+        tool handler, its history commit). The session's idle notification
+        pays it once that drains.
+        """
         if not getattr(self, "_turn_wrap_up_owed", False):
             return
+        if getattr(self, "_reply_setup_depth", 0) > 0:
+            return
         session = self.session
-        if isinstance(session, OmniOfflineClient) and (
-            getattr(session, "_is_responding", False)
-            or getattr(session, "_active_response_generation", None) is not None
-        ):
+        if isinstance(session, OmniOfflineClient) and not session.is_idle():
             return
         await self._finalize_turn_after_emit()
 
-    def _close_interrupted_offline_turn(self, kind: str = "response") -> bool:
-        """Close an offline reply that an interruption actually stopped.
+    def _on_offline_session_idle(self) -> None:
+        """``OmniOfflineClient.on_idle``: its last reply call returned.
 
-        ``kind`` is what ``handle_interruption()`` reported: the turn end the
-        skipped completion would have sent. "agent_callback" is a proactive
-        reply, closed with ``turn end agent_callback`` as
-        ``handle_proactive_complete`` would, so cross_server does not send an
-        analyze request for it. Without a turn end, the text it already said
-        is glued onto the next reply's AI turn in the activity tracker, and
-        ``cross_server`` never leaves its assistant turn: the next reply lands
-        in the same memory message and the interrupting user input is
-        written after it.
-
-        Runs before the next reply starts. For a response it retires the
-        interrupted text request id (what the completion would have done),
-        and its turn end carries that id and any pending turn meta. It
-        flushes the tracker and puts a sync-only turn end on the queue; the
-        WebSocket and TTS belong to the new turn and are left alone. Nothing
-        said since the last turn end means no turn end to send, but the
-        request id and the turn meta are taken either way, so neither can
-        ride the next turn's turn end. Returns whether a turn end was sent.
+        Sync (called from the client's own task): an owed wrap-up is paid in
+        a task of its own, which checks the session again when it runs.
         """
+        if getattr(self, "_turn_wrap_up_owed", False):
+            self._fire_task(self._settle_owed_turn_wrap_up())
+
+    def _close_interrupted_offline_turn(
+        self, kind: str = "response", *, take_request_id: bool = True,
+    ) -> dict | None:
+        """Close an offline reply whose close was handed over to the caller.
+
+        ``kind`` is what ``handle_interruption()`` (or a displacing begin)
+        reported: the turn end the skipped completion would have sent.
+        "agent_callback" is a proactive reply, closed with ``turn end
+        agent_callback`` as ``handle_proactive_complete`` would, so
+        cross_server does not send an analyze request for it. Without a turn
+        end, the text it already said is glued onto the next reply's AI turn
+        in the activity tracker, and ``cross_server`` never leaves its
+        assistant turn: the next reply lands in the same memory message and
+        the interrupting user input is written after it.
+
+        Runs before the next reply emits anything. For a response it carries
+        any pending turn meta (an interrupted avatar-interaction reply still
+        owns it: the avatar path clears it only after prompt_ephemeral
+        returns), so cross_server keeps that text on the isolated avatar
+        path, off ordinary memory. With ``take_request_id`` it also retires
+        the interrupted text request id (what the completion would have
+        done) and the turn end carries it; a displaced reply leaves it alone,
+        since by then it may already be the displacing turn's. It flushes the
+        tracker and puts a sync-only turn end on the queue; the WebSocket
+        and TTS are the caller's business. Nothing said since the last turn
+        end means no turn end to send, but the request id and the turn meta
+        are taken either way, so neither can ride the next turn's turn end.
+        Returns the turn end it queued, or None.
+        """
+        if kind == "agent_callback":
+            if not self._current_ai_turn_text:
+                return None
+            self._flush_ai_turn_text_to_tracker()
+            turn_end_msg: dict = {'type': 'system', 'data': 'turn end agent_callback'}
+            self.sync_message_queue.put(turn_end_msg)
+            return turn_end_msg
         request_id = None
-        pending_meta = None
-        if kind != "agent_callback":
+        if take_request_id:
             request_id = getattr(self, '_active_text_request_id', None)
             self._active_text_request_id = None
-            pending_meta = getattr(self, '_pending_turn_meta', None)
-            self._pending_turn_meta = None
         if not self._current_ai_turn_text:
-            return False
+            self._pending_turn_meta = None
+            return None
+        turn_end_msg = self._queue_turn_end(request_id)
         self._flush_ai_turn_text_to_tracker()
-        if kind == "agent_callback":
-            turn_end_msg: dict = {'type': 'system', 'data': 'turn end agent_callback'}
-        else:
-            turn_end_msg = {'type': 'system', 'data': 'turn end'}
-            # An interrupted avatar-interaction reply still owns its meta (the
-            # avatar path clears it only after prompt_ephemeral returns). Carry
-            # and consume it here, as _emit_turn_end would, so cross_server
-            # keeps that text on the isolated avatar path, off ordinary memory.
-            if pending_meta:
-                turn_end_msg['meta'] = pending_meta
-            if request_id:
-                turn_end_msg['request_id'] = request_id
-        if self.sync_message_queue:
-            self.sync_message_queue.put(turn_end_msg)
-        return True
+        return turn_end_msg
+
+    def _close_displaced_offline_turn(self, kind: str = "response") -> None:
+        """``OmniOfflineClient.on_response_displaced``: a user reply began
+        over this one without an interruption and handed its close here.
+
+        Called synchronously from the new reply's begin, before it emits
+        anything, so the AI-turn buffer holds only the displaced reply's
+        text. Closed like an interrupted one, except the text request id is
+        left alone: it is set before the new text reply starts, so it may
+        already be that turn's. (A displaced text turn's own id is either
+        already overwritten by then or retired by the next reply's turn end.)
+        Any pending turn meta is the displaced reply's: ``prompt_ephemeral``
+        never displaces, so only a user reply displaces an avatar one. A
+        displaced "response" owes its wrap-up, as an interrupted one does.
+        """
+        kind = str(kind) if isinstance(kind, str) else "response"
+        self._close_interrupted_offline_turn(kind, take_request_id=False)
+        if kind == "response":
+            self._turn_wrap_up_owed = True
 
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.
@@ -475,6 +525,36 @@ class TurnMixin:
         except Exception as e:
             logger.warning("[%s] handle_proactive_complete: WS send turn_end error: %s", self.lanlan_name, e)
 
+    def _queue_turn_end(self, request_id) -> dict:
+        """Put a ``turn end`` for ``request_id`` on the sync queue, carrying
+        and consuming ``_pending_turn_meta``, and return it. The one builder
+        for the memory side of a regular turn end: ``_emit_turn_end`` adds
+        the frontend copy, a handed-over reply's close may not."""
+        turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
+        pending_meta = getattr(self, '_pending_turn_meta', None)
+        if pending_meta:
+            turn_end_msg['meta'] = pending_meta
+            self._pending_turn_meta = None
+        if request_id:
+            turn_end_msg['request_id'] = request_id
+        self.sync_message_queue.put(turn_end_msg)
+        return turn_end_msg
+
+    async def _send_turn_end_to_frontend(self, turn_end_msg: dict) -> None:
+        """The WebSocket copy of a turn end already on the sync queue: a
+        ``turn end`` always names its request id (None included) and carries
+        the same meta; ``turn end agent_callback`` is sent as is."""
+        ws_msg: dict = {'type': 'system', 'data': turn_end_msg['data']}
+        if ws_msg['data'] == 'turn end':
+            ws_msg['request_id'] = turn_end_msg.get('request_id')
+            if 'meta' in turn_end_msg:
+                ws_msg['meta'] = turn_end_msg['meta']
+        try:
+            if self._has_connected_websocket():
+                await self.websocket.send_json(ws_msg)
+        except Exception as e:
+            logger.error(f"💥 WS Send Turn End Error: {e}")
+
     async def _emit_turn_end(self, active_request_id) -> None:
         """Send the turn end signal to both sync_message_queue and the WebSocket,
         passing ``_pending_turn_meta`` through both channels before clearing it.
@@ -483,26 +563,8 @@ class TurnMixin:
         - ``handle_response_discarded``'s truncate-recovery / too-long-final
         Unified semantics: sync queue and WS carry the same meta, avoiding one
         having meta while the other doesn't."""
-        turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
-        pending_meta = self._pending_turn_meta
-        if pending_meta:
-            turn_end_msg['meta'] = pending_meta
-            self._pending_turn_meta = None
-        if active_request_id:
-            turn_end_msg['request_id'] = active_request_id
-        self.sync_message_queue.put(turn_end_msg)
-        try:
-            if self.websocket and hasattr(self.websocket, 'client_state') and self.websocket.client_state == self.websocket.client_state.CONNECTED:
-                ws_msg = {
-                    'type': 'system',
-                    'data': 'turn end',
-                    'request_id': active_request_id,
-                }
-                if 'meta' in turn_end_msg:
-                    ws_msg['meta'] = turn_end_msg['meta']
-                await self.websocket.send_json(ws_msg)
-        except Exception as e:
-            logger.error(f"💥 WS Send Turn End Error: {e}")
+        turn_end_msg = self._queue_turn_end(active_request_id)
+        await self._send_turn_end_to_frontend(turn_end_msg)
         # Activity tracker flush：AI 刚结束一轮（普通完成 + truncate-recovery 都
         # 走这里）。text 用于 unfinished_thread 检测——tracker 跑问号启发式决定
         # 要不要开 5min 跟进窗口；为 None 时不开窗，但仍更新 seconds_since_ai_msg。

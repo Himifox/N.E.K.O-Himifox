@@ -324,7 +324,12 @@ class GreetingMixin:
             if not (self.is_active and isinstance(self.session, OmniOfflineClient)):
                 await self.send_avatar_interaction_ack(interaction_id, False, "session_changed")
                 return {"accepted": False, "reason": "session_changed", "interaction_id": interaction_id}
-            if getattr(self.session, "_is_responding", False):
+            # A guard pause drops _is_responding while its reply is still live;
+            # prompt_ephemeral would decline to start over it, after the speech
+            # id below had already been rotated under that reply.
+            if getattr(self.session, "_is_responding", False) or isinstance(
+                getattr(self.session, "_active_response_generation", None), int
+            ):
                 logger.debug("[%s] handle_avatar_interaction: text session busy, skipping", self.lanlan_name)
                 await self.send_avatar_interaction_ack(interaction_id, False, "busy")
                 return {"accepted": False, "reason": "busy", "interaction_id": interaction_id}
@@ -389,9 +394,9 @@ class GreetingMixin:
             if interrupted:
                 self._pending_turn_meta = None
             # Still ours after the call: neither handle_response_complete nor an
-            # interruption's turn close consumed it, so the completion never ran
-            # (the reply was superseded during cleanup). Drop it here, or it
-            # lands on the next, unrelated turn end.
+            # interrupted or displaced turn's close consumed it, so no reply ran
+            # (prompt_ephemeral declines to start over another reply still in
+            # progress). Drop it here, or it lands on the next, unrelated turn end.
             if self._pending_turn_meta is turn_meta:
                 self._pending_turn_meta = None
             if accepted:

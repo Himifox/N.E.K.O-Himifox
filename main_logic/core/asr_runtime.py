@@ -5462,7 +5462,8 @@ class AsrRuntimeMixin:
             else:
                 # Offline: close the reply this voice turn interrupted before
                 # handle_new_message clears its text buffer. Its wrap-up is
-                # owed to the next _finalize_turn_after_emit.
+                # owed: paid when the offline session next goes idle, or by
+                # the next _finalize_turn_after_emit.
                 await self._interrupt_offline_reply(session_ref)
             if not operation_is_current():
                 if abandon_on_failure:

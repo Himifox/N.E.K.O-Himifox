@@ -68,7 +68,7 @@ from ._media import (
 from ._genai_support import (
     _should_use_genai_sdk,
 )
-from ._lifecycle import _with_dialog_slop
+from ._lifecycle import _tracked_reply_call, _with_dialog_slop
 
 
 def _strip_route_bound_tool_call_extras(history) -> int:
@@ -596,6 +596,7 @@ class _StreamingMixin:
             overrides["max_completion_tokens"] = base_max_tokens + FOCUS_THINKING_EXTRA_TOKENS
         return overrides
 
+    @_tracked_reply_call
     @_with_dialog_slop
     async def stream_text(
         self,
@@ -2117,10 +2118,12 @@ class _StreamingMixin:
                 self.llm.max_completion_tokens = _summary_prev_max_tokens
 
             # The status await below is the one window in which an interruption
-            # can claim this finished turn's completion. Mark it only for that
-            # window and always take the mark back, or a raising status send
-            # leaves it behind for the next, unrelated interruption to claim.
-            if not interrupter_owned and self._response_generation == response_generation:
+            # (or a displacing user reply) can claim this finished turn's
+            # completion. Mark it only for that window and always take the mark
+            # back, or a raising status send leaves it behind for the next,
+            # unrelated interruption to claim. A turn taken over mid-reply
+            # never marks, so its take reports it as taken over too.
+            if not interrupter_owned:
                 self._mark_completion_pending(response_generation)
             try:
                 # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
@@ -2162,16 +2165,11 @@ class _StreamingMixin:
                         else:
                             await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
             finally:
-                completion_claimed = not self._take_completion(response_generation)
+                completion_taken_over = not self._take_completion(response_generation)
 
-            # Call response done callback. Skipped when an interrupter took the
-            # turn over (mid-reply, or a claim during the status await above) or
-            # a newer response started (see prompt_ephemeral); a close() still
-            # runs it.
-            if (
-                not interrupter_owned
-                and not completion_claimed
-                and self._response_generation == response_generation
-                and self.on_response_done
-            ):
+            # Call response done callback. Skipped exactly when someone else
+            # took the close over: an interrupter (mid-reply, or a claim during
+            # the status await above) or a user reply that displaced this one
+            # (see _begin_response_generation). A close() still runs it.
+            if not completion_taken_over and self.on_response_done:
                 await self.on_response_done()

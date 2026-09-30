@@ -253,6 +253,15 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         self._response_generation = 0
         self._interrupter_owned_generations: set[int] = set()
         self._active_response_generation: int | None = None
+        self._completion_pending_generation: int | None = None
+        # stream_text / prompt_ephemeral calls still running (see is_idle).
+        self._reply_calls_in_flight = 0
+        # Both sync and optional. on_response_displaced(kind): a user reply
+        # began over this one without an interruption and took its close over
+        # (the owner closes it). on_idle(): the last reply call returned and
+        # nothing is left in progress.
+        self.on_response_displaced: Optional[Callable[[str], None]] = None
+        self.on_idle: Optional[Callable[[], None]] = None
         self._conversation_history = []
         self._instructions = ""
         self._stream_task = None

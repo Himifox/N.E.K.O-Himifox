@@ -159,7 +159,7 @@ class StreamingMixin:
                                     dropped_text_for_voice += 1
                                     next_unprocessed = index + 1
                                     continue
-                                await self._process_stream_data_internal(message)
+                                await self._process_stream_input(message)
                         except asyncio.CancelledError:
                             raise
                         except Exception as e:
@@ -289,7 +289,7 @@ class StreamingMixin:
                     return
         
         # Session已就绪，直接处理
-        await self._process_stream_data_internal(message)
+        await self._process_stream_input(message)
 
     async def _ensure_offline_session_for_text_input(
         self,
@@ -394,6 +394,41 @@ class StreamingMixin:
             logger.error("💥 文本模式Session重建失败，放弃本次数据流")
             return False
         return True
+
+    async def _process_stream_input(self, message: dict):
+        """Process one ready input; a typed text input holds an owed wrap-up.
+
+        A typed input interrupts the offline reply and then starts its own,
+        with several awaits in between. The interrupted reply's owed wrap-up
+        is not paid in that gap (a final swap would start right before the
+        new reply, even if the interrupted task ends first): the new reply's
+        completion pays it, or, when none ran (a command, an abandoned input,
+        a failure, a reply interrupted in turn), the settle once this input
+        has been handled.
+        """
+        if message.get("input_type") != "text" or not isinstance(message.get("data"), str):
+            await self._process_stream_data_internal(message)
+            return
+        self._reply_setup_depth = getattr(self, "_reply_setup_depth", 0) + 1
+        cancelled = False
+        try:
+            await self._process_stream_data_internal(message)
+        except asyncio.CancelledError:
+            # Torn down (a session end resets the debt): start nothing.
+            cancelled = True
+            raise
+        finally:
+            self._reply_setup_depth -= 1
+            if not cancelled:
+                # Never let the settle replace an error the input raised.
+                try:
+                    await self._settle_owed_turn_wrap_up()
+                except Exception as settle_error:
+                    logger.warning(
+                        "[%s] owed turn wrap-up after a typed input failed: %s",
+                        self.lanlan_name,
+                        settle_error,
+                    )
 
     async def _process_stream_data_internal(self, message: dict):
         """Internal method: the actual stream_data processing logic"""
@@ -574,7 +609,9 @@ class StreamingMixin:
                     # 被打断的回复不再走 turn end（取消的 generation 跳过
                     # on_response_done）：_interrupt_offline_reply 在确实打断了
                     # 什么时替它收尾（记 AI 轮 + 同步 turn end），它欠下的续期检查
-                    # 与回调投递记为欠账，由下一次 _finalize_turn_after_emit 付清。
+                    # 与回调投递记为欠账：这条输入处理期间不付（_process_stream_input），
+                    # 由新回复的 _finalize_turn_after_emit 付清；没有新回复时，输入处理完、
+                    # 会话空闲后再付。
 
                     self.audio_resampler.clear()
                     await self._clear_tts_pipeline()

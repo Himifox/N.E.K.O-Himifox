@@ -358,6 +358,9 @@ class LLMSessionManager(
         self._tts_fallback_uses_default_voice: bool = False
         self._active_text_request_id: Optional[str] = None
         self._turn_wrap_up_owed = False
+        # Typed inputs being handled (StreamingMixin._process_stream_input):
+        # an owed wrap-up waits for their reply rather than running before it.
+        self._reply_setup_depth = 0
         self._magic_command_image_drop_request_ids: set[str] = set()
         self._magic_command_image_drop_request_order: deque[str] = deque()
         # (request_id, staged image) pairs for offline attachments still queued in

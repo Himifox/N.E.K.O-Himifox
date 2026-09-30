@@ -42,7 +42,10 @@ _LABEL = (
 # The lexer checks the preceding character; complete and partial matches use
 # the same engine (re and regex disagree about Unicode combining characters).
 # The bare English label needs a colon: "screen comment " followed by a space
-# is ordinary English grammar, while "屏幕搭话" is almost never followed by one.
+# is ordinary English grammar. The bare Chinese label counts with whitespace or
+# a colon, the recorded shape; a reply that itself opens two sentences with
+# that shape is lexically the same and gets the same verdict (design doc,
+# section 7.1.3, item 5).
 _MARKER = regex.compile(
     rf"(?:[/／][ \t]{{0,8}}(?:{_LABEL})[\s:：/／]"
     rf"|(?:{_LABEL})[ \t]{{0,8}}[/／]"
@@ -267,6 +270,7 @@ class _ScreenLexer:
         self.line_prefix = True
         self.pending = ""
         self.pending_kind = ""
+        self.pending_after_word = False
         self.quote = ""
         self.escaped = False
         self.thinking = False
@@ -311,6 +315,12 @@ class _ScreenLexer:
             candidate = self.pending + char
             pattern = _MARKER if self.pending_kind == "marker" else _THINK_TAG
             match = pattern.fullmatch(candidate, partial=True)
+            if (match is not None and not match.partial and self.pending_kind == "marker"
+                    and self.pending_after_word and _has_ascii_letter(candidate)):
+                # An English label glued to an ASCII word is part of that word
+                # or phrase ("screenshot", "prescreen", "keyboard/screen
+                # display"). Rescan from the next character.
+                match = None
             if match is not None:
                 self.pending = candidate if match.partial else ""
                 if match.partial:
@@ -378,11 +388,13 @@ class _ScreenLexer:
             attached = self.previous.isalnum() or self.previous == "_"
             if not ((char == '"' and self.previous.isdigit()) or (char == "'" and attached)):
                 self.quote = _QUOTES[char]
-        elif char in "/／屏当sScC" and not _is_ascii_word_char(self.previous):
-            # Only an ASCII word character blocks a marker start, so
-            # "screenshot" inside an English word stays inert while a label
-            # glued to the preceding Chinese sentence ("…喵屏幕搭话 …") counts.
+        elif char in "/／屏当sScC":
+            # An ASCII word character before a marker blocks it only when the
+            # label is English (checked once the marker is complete). A
+            # Chinese label counts after any character, so "…喵屏幕搭话 …",
+            # "…233屏幕搭话 …" and "…QwQ屏幕搭话 …" are markers.
             self.pending, self.pending_kind = char, "marker"
+            self.pending_after_word = _is_ascii_word_char(self.previous)
             return []
         return [self._emit(char)]
 
@@ -452,6 +464,11 @@ def _cached_chain_start_across(texts: tuple) -> int | None:
 
 def _is_ascii_word_char(char: str) -> bool:
     return char.isascii() and (char.isalnum() or char == "_")
+
+
+def _has_ascii_letter(text: str) -> bool:
+    """Whether a marker carries an English label; Chinese labels have none."""
+    return any(char.isascii() and char.isalpha() for char in text)
 
 
 def screen_chain_start(text: str) -> int | None:

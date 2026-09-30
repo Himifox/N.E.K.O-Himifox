@@ -1,0 +1,1092 @@
+"""Every offline reply is closed exactly once, by whoever owns its close.
+
+A generation's own completion callback closes it, unless someone took the
+close over: an interrupter (``handle_interruption`` cancelled it mid-reply or
+claimed its pending completion), or a user reply that began over it without an
+interruption (``_begin_response_generation`` displaced it and reported it to
+``on_response_displaced``). Core closes a taken-over reply without touching the
+new turn's request id, and the wrap-up the skipped completion would have run
+is owed and paid by one idle-gated settle, which the client triggers when its
+last reply call returns (``on_idle``).
+
+Real ``OmniOfflineClient`` over a scripted provider (only the transport is
+faked) and the real core ``TurnMixin`` paths on the manager doubles from
+test_core_game_route_memory_contract.
+"""
+import asyncio
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import main_logic.core as core_module
+from main_logic.tool_calling import ToolResult
+from tests.unit.test_core_game_route_memory_contract import (
+    _FakeConnectedWebSocket,
+    _make_callback_media_manager,
+    _make_manager,
+    _make_offline_session_for_callback_media,
+    _make_transcript_manager,
+)
+from tests.unit.test_offline_turn_cancellation_e2e import _client, _text, _tool_calls
+
+pytestmark = pytest.mark.unit
+
+M = core_module.LLMSessionManager
+
+
+@pytest.fixture(autouse=True)
+def _no_token_tracker(monkeypatch):
+    monkeypatch.setattr("utils.token_tracker.TokenTracker.get_instance", MagicMock())
+
+
+async def _drain(n=20):
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+def _bind_like_lifecycle(mgr, client):
+    """What ``_create_offline_vlm_client`` binds (looked up, so the file also
+    runs where a hook does not exist yet)."""
+    client.on_response_done = mgr.handle_response_complete
+    client.on_proactive_done = mgr.handle_proactive_complete
+    displaced = getattr(mgr, "_close_displaced_offline_turn", None)
+    if displaced is not None:
+        client.on_response_displaced = displaced
+    idle = getattr(mgr, "_on_offline_session_idle", None)
+    if idle is not None:
+        client.on_idle = idle
+
+
+def _turn_ends(mgr):
+    return [
+        m for m in mgr.sync_message_queue.messages
+        if isinstance(m, dict) and str(m.get("data", "")).startswith("turn end")
+    ]
+
+
+def _system(mgr):
+    return [m for m in mgr.websocket.sent if m.get("type") == "system"]
+
+
+# ── Finding 1: a displaced reply is closed by its displacer ──────────────────
+
+
+def _wire_text_path(monkeypatch):
+    """Real client, real core text path and completion; the text-delta sink
+    appends to ``_current_ai_turn_text`` like ``handle_text_data``."""
+    session = _client()
+    mgr = _make_callback_media_manager(session)
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._finalize_turn_after_emit = AsyncMock(
+        side_effect=lambda: setattr(mgr, "_turn_wrap_up_owed", False)
+    )
+    notes = []
+    mgr._note_ai_turn = lambda text=None, **_kw: notes.append(text)
+    mgr._fire_task = asyncio.ensure_future
+
+    async def on_text_delta(text, is_first, **_kw):
+        mgr._current_ai_turn_text += text
+
+    session.on_text_delta = on_text_delta
+    _bind_like_lifecycle(mgr, session)
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda _n, _t: None)
+    return session, mgr, notes
+
+
+async def test_an_avatar_reply_begun_in_the_text_setup_window_is_closed_with_its_meta(
+    monkeypatch,
+):
+    """handle_avatar_interaction passes its busy gate (greeting.py) after the
+    text path's interrupt and before stream_text begins; the text reply then
+    displaces it with no interrupt. The avatar turn is closed as its own turn
+    with its isolation meta and no request id (that id is already the text
+    turn's), and the text reply's own turn end still carries its id."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    meta = {"kind": "avatar_interaction", "interaction_id": "i-1"}
+    text_began = asyncio.Event()
+    avatar = []
+    facts = {}
+
+    async def park_avatar():
+        await text_began.wait()
+
+    async def text_begins():
+        facts["request_id_at_displacement"] = mgr._active_text_request_id
+        text_began.set()
+        await _drain()
+
+    session.script = [
+        [_text("摸头好舒服，"), park_avatar, _text("还要摸摸。"), _text("", "stop")],
+        [text_begins, _text("你好呀。"), _text("", "stop")],
+    ]
+    real_clear = mgr._clear_tts_pipeline
+
+    async def clear_then_avatar_arrives():
+        facts["gate_busy"] = bool(session._is_responding)
+        mgr._pending_turn_meta = meta
+
+        async def avatar_turn():  # greeting.py, around prompt_ephemeral
+            delivered = await session.prompt_ephemeral(
+                "avatar", completion_mode="response", persist_response=False,
+            )
+            if mgr._pending_turn_meta is meta:
+                mgr._pending_turn_meta = None
+            return delivered
+
+        avatar.append(asyncio.create_task(avatar_turn()))
+        await _drain()
+        await real_clear()
+
+    mgr._clear_tts_pipeline = clear_then_avatar_arrives
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "在吗", "request_id": "req-text"},
+    )
+    await avatar[0]
+
+    assert facts["gate_busy"] is False
+    assert facts["request_id_at_displacement"] == "req-text"
+    assert _turn_ends(mgr) == [
+        {"type": "system", "data": "turn end", "meta": meta},
+        {"type": "system", "data": "turn end", "request_id": "req-text"},
+    ]
+    assert notes == ["摸头好舒服，", "你好呀。"]
+    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-text"}]
+    assert mgr._turn_wrap_up_owed is False  # the text reply's completion paid it
+
+
+async def test_a_text_reply_displaced_by_a_second_text_is_closed_on_its_own(monkeypatch):
+    """Two typed messages in quick succession: B's interrupt runs before A
+    begins and finds nothing, then B's stream_text displaces A."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    a_streaming, b_began, b_parked = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    interrupts = []
+    tasks = []
+
+    async def park_a():
+        a_streaming.set()
+        await b_began.wait()
+
+    async def b_begins():
+        b_began.set()
+        await _drain()
+
+    session.script = [
+        [_text("A说到一半，"), park_a, _text("A后半句。"), _text("", "stop")],
+        [b_begins, _text("B的回复。"), _text("", "stop")],
+    ]
+    real_interrupt = session.handle_interruption
+
+    async def interrupt_logged():
+        kind = await real_interrupt()
+        interrupts.append(kind)
+        return kind
+
+    session.handle_interruption = interrupt_logged
+    real_clear = mgr._clear_tts_pipeline
+    clears = []
+
+    async def clear_hook():
+        clears.append(1)
+        if len(clears) == 1:  # A's setup window: B arrives
+            tasks.append(asyncio.create_task(M._process_stream_data_internal(
+                mgr, {"input_type": "text", "data": "B", "request_id": "req-B"},
+            )))
+            await b_parked.wait()
+        await real_clear()
+
+    real_inject = mgr._inject_pending_user_directives
+    injects = []
+
+    async def inject_hook():
+        injects.append(1)
+        if len(injects) == 1:  # B, before its request id is set
+            b_parked.set()
+            await a_streaming.wait()
+        await real_inject()
+
+    mgr._clear_tts_pipeline = clear_hook
+    mgr._inject_pending_user_directives = inject_hook
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "A", "request_id": "req-A"},
+    )
+    await tasks[0]
+
+    assert not any(interrupts)
+    assert notes == ["A说到一半，", "B的回复。"]
+    assert _turn_ends(mgr) == [
+        {"type": "system", "data": "turn end"},
+        {"type": "system", "data": "turn end", "request_id": "req-B"},
+    ]
+
+
+async def test_a_text_reply_displaced_by_a_voice_submit_is_closed_on_its_own(monkeypatch):
+    """Independent ASR: the voice turn interrupted at speech onset (before A
+    began); its submit at the final begins with no second interrupt."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    a_streaming, voice_began = asyncio.Event(), asyncio.Event()
+
+    async def park_a():
+        a_streaming.set()
+        await voice_began.wait()
+
+    async def voice_begins():
+        voice_began.set()
+        await _drain()
+
+    session.script = [
+        [_text("A说到一半，"), park_a, _text("A后半句。"), _text("", "stop")],
+        [voice_begins, _text("语音回复。"), _text("", "stop")],
+    ]
+
+    async def voice_final():
+        await a_streaming.wait()
+        await session.submit_external_voice_turn("语音", turn_id="t1")
+
+    voice = asyncio.create_task(voice_final())
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "A", "request_id": "req-A"},
+    )
+    await voice
+    assert notes == ["A说到一半，", "语音回复。"]
+    # A's id is still current at displacement (voice never sets one): the
+    # displaced close leaves it, the voice reply's turn end retires it.
+    assert _turn_ends(mgr) == [
+        {"type": "system", "data": "turn end"},
+        {"type": "system", "data": "turn end", "request_id": "req-A"},
+    ]
+
+
+async def test_a_displaced_generation_is_handed_to_exactly_one_closer():
+    client = _client()
+    began = asyncio.Event()
+
+    async def park():
+        await began.wait()
+
+    async def new_begins():
+        began.set()
+        await _drain()
+
+    client.script = [
+        [_text("摸头，"), park, _text("还要"), _text("", "stop")],
+        [new_begins, _text("好"), _text("", "stop")],
+    ]
+    client.on_response_displaced = MagicMock()
+    avatar = asyncio.create_task(
+        client.prompt_ephemeral("avatar", completion_mode="response", persist_response=False)
+    )
+    await _drain()
+    await client.stream_text("hi")
+    await avatar
+    assert client.on_response_done.await_count == 1  # the new reply's own
+    client.on_response_displaced.assert_called_once_with("response")
+    assert client.on_response_displaced.call_args.args[0].finished is False
+
+
+@pytest.mark.parametrize("state", ["live", "guard_paused", "completion_pending"])
+async def test_a_non_user_reply_never_displaces_another(state):
+    """prompt_ephemeral declines to begin over a reply that is live,
+    guard-paused or waiting on its completion: no provider request, nothing
+    displaced, and the avatar meta is left for the caller to drop."""
+    client = _client()
+    client.on_response_displaced = MagicMock()
+    seen = {}
+
+    async def avatar_arrives():
+        if seen:
+            return  # once (a tree without the check would recurse)
+        seen["arrived"] = True
+        if state == "guard_paused":
+            client._pause_response_generation(client._active_response_generation)
+        requests_before = len(client.requests)
+        seen["delivered"] = await client.prompt_ephemeral(
+            "avatar", completion_mode="response", persist_response=False,
+        )
+        seen["requests"] = len(client.requests) - requests_before
+        if state == "guard_paused":
+            client._resume_response_generation(client._active_response_generation)
+
+    if state == "completion_pending":
+        async def cleanup(_seq):
+            await avatar_arrives()
+
+        client._notify_reasoning_done = cleanup
+        client.script = [[_text("回调说完。"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback")
+        client.on_proactive_done.assert_awaited_once()
+    else:
+        client.script = [[_text("文本前半，"), avatar_arrives, _text("后半。"), _text("", "stop")]]
+        await client.stream_text("T")
+        client.on_response_done.assert_awaited_once()
+    assert seen == {"arrived": True, "delivered": False, "requests": 0}
+    client.on_response_displaced.assert_not_called()
+
+
+async def test_an_avatar_over_a_guard_paused_text_reply_does_not_tag_it(monkeypatch):
+    """The avatar gate reads only _is_responding, which a guard pause drops.
+    The avatar must not begin (it would cut the text reply, and whichever
+    close runs would carry the avatar meta over the text)."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    meta = {"kind": "avatar_interaction", "interaction_id": "i-2"}
+
+    async def pause_and_let_avatar_in():
+        session._pause_response_generation(session._active_response_generation)
+        mgr._pending_turn_meta = meta
+        await session.prompt_ephemeral("avatar", completion_mode="response", persist_response=False)
+        if mgr._pending_turn_meta is meta:  # greeting.py drops unconsumed meta
+            mgr._pending_turn_meta = None
+        session._resume_response_generation(session._active_response_generation)
+
+    session.script = [
+        [_text("文本前半，"), pause_and_let_avatar_in, _text("文本后半。"), _text("", "stop")],
+        [_text("摸头。"), _text("", "stop")],
+    ]
+    mgr._active_text_request_id = "req-T"
+    await session.stream_text("T")
+    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-T"}]
+    assert notes == ["文本前半，文本后半。"]
+
+
+async def test_taking_over_a_displaced_reply():
+    client = _client()
+    assert client._take_displaced_reply() == ""
+    live = client._begin_response_generation("agent_callback")
+    taken = client._take_displaced_reply()
+    assert (taken, taken.finished) == ("agent_callback", False)
+    assert client._take_interrupter_ownership(live) is True
+    client._finish_response_generation(live)
+    client._mark_completion_pending(7, "response")
+    taken = client._take_displaced_reply()
+    assert (taken, taken.finished) == ("response", True)
+    assert client._completion_pending_generation is None
+    assert client._take_completion(7) is False  # claimed: its completion is skipped
+    assert client._take_displaced_reply() == ""
+
+
+def test_a_displaced_agent_callback_leaves_the_request_id_and_meta_alone():
+    mgr = _make_manager()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = "回调说到一半"
+    mgr._active_text_request_id = "req-new"
+    meta = {"kind": "avatar_interaction"}
+    mgr._pending_turn_meta = meta
+    mgr._turn_wrap_up_owed = False
+    M._close_displaced_offline_turn(mgr, "agent_callback")
+    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end agent_callback"}]
+    assert (mgr._active_text_request_id, mgr._pending_turn_meta) == ("req-new", meta)
+    assert mgr._turn_wrap_up_owed is False
+
+
+async def test_the_offline_client_is_born_bound_to_its_closer_and_its_idle_settle():
+    from main_logic.core import lifecycle as core_lifecycle
+    from tests.unit.test_tool_image_protocol import _Manager, _result
+
+    manager = _Manager(_result(), None)
+    manager.lanlan_name, manager.master_name, manager.user_language = "l", "m", "zh"
+    manager._make_thinking_active_callback = lambda session: None
+    for callback in (
+        "handle_text_data", "handle_text_input_transcript",
+        "handle_output_transcript", "handle_connection_error",
+        "handle_response_complete", "handle_repetition_detected",
+        "handle_response_discarded", "send_status", "handle_proactive_complete",
+        "_close_displaced_offline_turn", "_on_offline_session_idle",
+    ):
+        setattr(manager, callback, MagicMock(name=callback))
+    endpoint = {"base_url": "https://x.test/v1", "api_key": "k", "model": "m"}
+    session = core_lifecycle.LifecycleMixin._create_offline_vlm_client(
+        manager,
+        conversation_config=dict(endpoint),
+        vision_config=dict(endpoint),
+        tool_definitions=[],
+        max_response_length=100,
+        external_tts_enabled=False,
+    )
+    assert session.on_response_displaced is manager._close_displaced_offline_turn
+    assert session.on_idle is manager._on_offline_session_idle
+
+
+# ── Findings 2-5: the owed wrap-up and the busy flag ─────────────────────────
+
+
+def _manager(client):
+    """A real TurnMixin manager whose finalize can start a final swap and
+    deliver a queued agent callback, bound to ``client`` like lifecycle."""
+    mgr = _make_transcript_manager()
+    mgr.session = client
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    _bind_like_lifecycle(mgr, client)
+    mgr._turn_wrap_up_owed = False
+    mgr.is_hot_swap_imminent = False
+    mgr.is_preparing_new_session = True
+    mgr.summary_triggered_time = datetime.now()
+    mgr.background_preparation_task = None
+    mgr.pending_session_warmed_up_event = asyncio.Event()
+    mgr.pending_session_warmed_up_event.set()
+    mgr.final_swap_task = None
+    mgr.pending_extra_replies = []
+    mgr.pending_agent_callbacks = [{"summary": "queued during T1"}]
+    mgr.wrap_ups = []
+
+    async def swap():
+        mgr.wrap_ups.append("final_swap")
+
+    async def trigger():
+        mgr.wrap_ups.append("agent_callbacks")
+
+    mgr._perform_final_swap_sequence = swap
+    mgr.trigger_agent_callbacks = trigger
+    mgr._bg = []
+    mgr._fire_task = lambda coro: mgr._bg.append(asyncio.ensure_future(coro))
+    return mgr
+
+
+def _parked_tool():
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def handler(call):
+        entered.set()
+        await release.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    return handler, entered, release
+
+
+async def _mini_game_command(mgr, session):
+    """turn.py mini-game path: interrupt, (awaits), then settle."""
+    await mgr._interrupt_offline_reply(session)
+    await asyncio.sleep(0)
+    await mgr._settle_owed_turn_wrap_up()
+
+
+async def test_a_voice_turn_dropped_after_interrupting_a_reply_still_wraps_that_reply_up():
+    """Finding 2. T1 streams; a noise onset interrupts it (the ASR prepare
+    call) and the voice turn is then dropped (empty final / echo suppression:
+    no core call follows). T1's owed wrap-up is paid when T1's task ends,
+    when main ran it from T1's own completion."""
+    client = _client()
+    mgr = _manager(client)
+
+    async def noise_onset():
+        await mgr._interrupt_offline_reply(client)
+
+    client.script = [[_text("说到一半"), noise_onset, _text("late"), _text("", "stop")]]
+    await client.stream_text("Q1")
+    await _drain()
+    assert mgr.wrap_ups == ["final_swap", "agent_callbacks"]
+    assert mgr._turn_wrap_up_owed is False
+
+
+async def test_a_command_wrap_up_waits_for_the_cancelled_task():
+    """Finding 3. A mini-game command interrupts T1 inside its tool handler:
+    the wrap-up runs once T1's task has finished, not while it is still in
+    the handler."""
+    handler, entered, release = _parked_tool()
+    client = _client(handler=handler)
+    mgr = _manager(client)
+    client.script = [[_text("我查一下"), _tool_calls("c1")]]
+    t1 = asyncio.ensure_future(client.stream_text("Q1"))
+    await asyncio.wait_for(entered.wait(), 1)
+    await _mini_game_command(mgr, client)
+    await _drain()
+    during = list(mgr.wrap_ups)
+    release.set()
+    await t1
+    await _drain()
+    assert during == []
+    assert mgr.wrap_ups == ["final_swap", "agent_callbacks"]
+
+
+async def test_a_callback_reply_after_a_command_lands_after_the_interrupted_half():
+    """Finding 3's consequence: a wrap-up run before the cancelled task
+    committed its half let the callback reply land before it in history."""
+    client = _client()
+    mgr = _manager(client)
+    gate = asyncio.Event()
+
+    async def trigger():
+        mgr.wrap_ups.append("agent_callbacks")
+        client.script = [[_text("回调说完"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback")
+
+    mgr.trigger_agent_callbacks = trigger
+
+    async def command_then_stall():
+        await _mini_game_command(mgr, client)
+        await _drain()
+        await gate.wait()
+
+    async def release_later():
+        await asyncio.sleep(0.05)
+        gate.set()
+
+    client.script = [[_text("A说到一半"), command_then_stall, _text("late"), _text("", "stop")]]
+    rel = asyncio.ensure_future(release_later())
+    await client.stream_text("Q1")
+    await rel
+    await asyncio.gather(*mgr._bg, return_exceptions=True)
+    await _drain()
+    contents = [getattr(m, "content", None) for m in client._conversation_history[1:]]
+    assert contents.index("A说到一半") < contents.index("回调说完"), contents
+
+
+@pytest.mark.parametrize("entry", ["stream_text_status", "avatar_reasoning_done"])
+async def test_a_command_claiming_the_completion_window_still_wraps_up(entry):
+    """Finding 4. A finished reply is in its completion window (stream_text's
+    LLM_NO_RESPONSE send, prompt_ephemeral's reasoning-done send) when a
+    command claims it: the claim retires the window's busy flag, and the
+    claimed task's end pays the debt."""
+    client = _client()
+    mgr = _manager(client)
+    seen = {}
+
+    async def window(*_a):
+        await _mini_game_command(mgr, client)
+        seen["is_responding_after_claim"] = client._is_responding
+
+    if entry == "stream_text_status":
+        client.on_status_message = AsyncMock(side_effect=window)
+        client.script = [[_text("", "stop")]]
+        await client.stream_text("Q1")
+    else:
+        client._notify_reasoning_done = window
+        client.script = [[_text("摸摸头"), _text("", "stop")]]
+        await client.prompt_ephemeral("avatar", completion_mode="response")
+    await _drain()
+    assert seen == {"is_responding_after_claim": False}
+    assert mgr.wrap_ups == ["final_swap", "agent_callbacks"]
+
+
+async def test_a_claimed_window_leaves_the_session_not_busy():
+    client = _client()
+    seen = []
+
+    async def window(_owner):
+        seen.append(await client.handle_interruption())
+        seen.append(client._is_responding)
+
+    client._notify_reasoning_done = window
+    client.script = [[_text("摸摸头"), _text("", "stop")]]
+    await client.prompt_ephemeral("avatar", completion_mode="response")
+    assert seen == ["response", False]
+    assert client.is_idle()
+    client.on_response_done.assert_not_awaited()
+
+
+async def test_a_finishing_interrupted_turn_keeps_another_turns_window_flag():
+    """Finding 5. A is interrupted inside a tool; B (a proactive reply)
+    streams and enters its reasoning-done window. A's tool then returns and
+    A's finally runs: B's window flag is B's, and stays set."""
+    handler, entered, release = _parked_tool()
+    in_window, end_window = asyncio.Event(), asyncio.Event()
+    client = _client(handler=handler)
+    client.script = [[_text("我查一下"), _tool_calls("c1")], [_text("回调来了"), _text("", "stop")]]
+    a = asyncio.ensure_future(client.stream_text("Q1"))
+    await asyncio.wait_for(entered.wait(), 1)
+    await client.handle_interruption()
+
+    async def window(_owner):
+        in_window.set()
+        await end_window.wait()
+
+    client._notify_reasoning_done = window
+    b = asyncio.ensure_future(client.prompt_ephemeral("callback"))
+    await asyncio.wait_for(in_window.wait(), 1)
+    before = client._is_responding
+    release.set()
+    await a
+    after = client._is_responding
+    end_window.set()
+    await b
+    client.on_proactive_done.assert_awaited_once()
+    assert (before, after) == (True, True)
+    assert client._is_responding is False
+
+
+async def test_typed_text_holds_the_debt_until_its_own_reply_even_if_the_old_task_ends_first(
+    monkeypatch,
+):
+    """The interrupted reply's task ends while the typed input is still being
+    set up: the owed wrap-up must not run then (a final swap would start
+    right before the new reply). With a reply that never completes (stub),
+    it is paid once the input is handled."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._finalize_turn_after_emit = AsyncMock(
+        side_effect=lambda: setattr(mgr, "_turn_wrap_up_owed", False)
+    )
+    tasks = []
+    mgr._fire_task = lambda coro: tasks.append(asyncio.ensure_future(coro))
+    session.handle_interruption = AsyncMock(return_value="response")
+
+    async def old_task_ends(_sid):
+        M._on_offline_session_idle(mgr)
+        await _drain()
+
+    mgr.send_user_activity = old_task_ends
+    finalized_before_reply = []
+
+    async def _stream_text(_text, **_kwargs):
+        finalized_before_reply.append(mgr._finalize_turn_after_emit.await_count)
+
+    session.stream_text = AsyncMock(side_effect=_stream_text)
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda _n, _t: None)
+    await M._process_stream_input(mgr, {"input_type": "text", "data": "换个话题"})
+    await _drain()
+    assert finalized_before_reply == [0]
+    mgr._finalize_turn_after_emit.assert_awaited_once()
+    assert mgr._turn_wrap_up_owed is False
+
+
+async def test_a_voice_reply_in_its_pre_generation_awaits_holds_the_debt():
+    """A settle fired while a reply call is still before its begin (input
+    transcript callback, image preparation) waits for it: that reply's own
+    completion pays, exactly once."""
+    client = _client()
+    mgr = _manager(client)
+    order = []
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def finalize():
+        order.append(list(mgr.wrap_ups))
+        await real_finalize()
+
+    mgr._finalize_turn_after_emit = finalize
+    before_begin = asyncio.Event()
+    t1_done = asyncio.Event()
+
+    async def transcript(_text_):
+        before_begin.set()
+        await t1_done.wait()
+        await mgr._settle_owed_turn_wrap_up()  # e.g. a command's settle
+
+    async def interrupt_and_submit():
+        await mgr._interrupt_offline_reply(client)
+        mgr._bg.append(asyncio.ensure_future(
+            client.stream_text("语音", input_transcript_callback=transcript)
+        ))
+        await before_begin.wait()
+
+    client.script = [
+        [_text("说到一半"), interrupt_and_submit, _text("late"), _text("", "stop")],
+        [_text("语音回复"), _text("", "stop")],
+    ]
+    await client.stream_text("Q1")
+    t1_done.set()
+    await asyncio.gather(*mgr._bg)
+    await _drain()
+    assert order == [[]]  # one finalize, from the voice reply's completion
+    assert mgr.wrap_ups == ["final_swap", "agent_callbacks"]
+
+
+@pytest.mark.parametrize("where", ["response_done", "status"])
+async def test_a_reply_call_that_raises_in_its_finally_still_leaves_the_session_idle(where):
+    client = _client()
+    idle = MagicMock()
+    client.on_idle = idle
+    if where == "response_done":
+        client.on_response_done = AsyncMock(side_effect=RuntimeError("boom"))
+        client.script = [[_text("好"), _text("", "stop")]]
+    else:
+        client.on_status_message = AsyncMock(side_effect=asyncio.CancelledError())
+        client.script = [[_text("", "stop")]]
+    with pytest.raises((RuntimeError, asyncio.CancelledError)):
+        await client.stream_text("hi")
+    assert client.is_idle()
+    idle.assert_called_once_with()
+
+
+async def test_the_idle_settle_does_not_pay_while_another_reply_is_live():
+    """A's task ends while B streams: B's own completion pays, once."""
+    client = _client()
+    mgr = _manager(client)
+    order = []
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def finalize():
+        order.append(("finalize", client._active_response_generation))
+        await real_finalize()
+
+    mgr._finalize_turn_after_emit = finalize
+
+    async def interrupt_and_start_b():
+        await mgr._interrupt_offline_reply(client)
+        mgr._bg.append(asyncio.ensure_future(client.stream_text("Q2")))
+        await asyncio.sleep(0)
+
+    client.script = [
+        [_text("A说到一半"), interrupt_and_start_b, _text("late"), _text("", "stop")],
+        [_text("B"), _text("", "stop")],
+    ]
+    await client.stream_text("Q1")
+    await asyncio.gather(*mgr._bg)
+    await _drain()
+    assert order == [("finalize", None)]
+    assert mgr._turn_wrap_up_owed is False
+
+
+# ── Finding 6: a claimed, fully streamed reply is sealed on the frontend ─────
+
+
+def _wire_ws():
+    client = _client()
+    mgr = _make_manager()
+    mgr.session = client
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._finalize_turn_after_emit = AsyncMock()
+    mgr._turn_wrap_up_owed = False
+
+    async def on_text_delta(text, _is_first):
+        mgr._current_ai_turn_text += text
+        mgr.websocket.sent.append({"type": "gemini_response", "text": text})
+
+    client.on_text_delta = AsyncMock(side_effect=on_text_delta)
+    client.on_proactive_done = mgr.handle_proactive_complete
+    client.on_response_done = mgr.handle_response_complete
+    return client, mgr
+
+
+async def test_a_claimed_agent_callback_reply_gets_its_frontend_turn_end():
+    client, mgr = _wire_ws()
+
+    async def cleanup(_owner):
+        await M._interrupt_offline_reply(mgr, client)
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("我查完了，结果在这里。"), _text("", "stop")]]
+    assert await client.prompt_ephemeral("callback") is True
+    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end agent_callback"}]
+    assert _system(mgr) == [{"type": "system", "data": "turn end agent_callback"}]
+
+
+async def test_a_claimed_response_reply_gets_its_frontend_turn_end():
+    client, mgr = _wire_ws()
+    mgr._active_text_request_id = "req-old"
+
+    async def cleanup(_owner):
+        await M._interrupt_offline_reply(mgr, client)
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("早上好呀。"), _text("", "stop")]]
+    assert await client.prompt_ephemeral("greet", completion_mode="response") is True
+    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-old"}]
+    assert mgr._turn_wrap_up_owed is True
+
+
+async def test_a_reply_cut_mid_stream_still_gets_only_turn_abandoned():
+    client, mgr = _wire_ws()
+    mgr._active_text_request_id = "req-old"
+
+    async def interrupt():
+        await M._interrupt_offline_reply(mgr, client)
+
+    client.script = [[_text("说到一半"), interrupt, _text("后半句"), _text("", "stop")]]
+    await client.stream_text("Q")
+    assert _system(mgr) == [{"type": "system", "data": "turn abandoned", "request_id": "req-old"}]
+
+
+async def test_a_reply_cut_by_close_and_then_claimed_is_not_sealed():
+    client, mgr = _wire_ws()
+    mgr._active_text_request_id = "req-old"
+    seen = []
+
+    async def session_close_cut():
+        client._cancel_response_generation()  # what close() does
+
+    async def cleanup(_owner):
+        seen.append(await client.handle_interruption())
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说到一半"), session_close_cut, _text("x"), _text("", "stop")]]
+    await client.prompt_ephemeral("greet", completion_mode="response")
+    assert seen == ["response"] and seen[0].finished is False
+
+
+@pytest.mark.parametrize("kind, expected", [
+    ("response", {"type": "system", "data": "turn end", "request_id": "req-old"}),
+    ("agent_callback", {"type": "system", "data": "turn end agent_callback"}),
+])
+async def test_the_claimed_turn_end_precedes_user_activity_and_the_new_reply(
+    monkeypatch, kind, expected,
+):
+    from main_logic.omni_offline_client._lifecycle import InterruptedReply
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = "说完了。"
+    mgr._active_text_request_id = "req-old"
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._finalize_turn_after_emit = AsyncMock()
+
+    async def send_user_activity(_sid):
+        mgr.websocket.sent.append({"type": "user_activity"})
+
+    async def stream_text(_text, **_kwargs):
+        mgr.websocket.sent.append({"type": "gemini_response", "isNewMessage": True})
+
+    mgr.send_user_activity = send_user_activity
+    session.handle_interruption = AsyncMock(return_value=InterruptedReply(kind, finished=True))
+    session.stream_text = AsyncMock(side_effect=stream_text)
+    monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda _n, _t: None)
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "换个话题", "request_id": "req-new"},
+    )
+    relevant = [m for m in mgr.websocket.sent
+                if m["type"] in ("system", "user_activity", "gemini_response")]
+    assert relevant == [expected, {"type": "user_activity"},
+                        {"type": "gemini_response", "isNewMessage": True}]
+
+
+@pytest.mark.parametrize("text, finished", [("旧的说完了。新的说到一半", False), ("", True)])
+async def test_only_a_finished_claim_with_text_is_sealed(text, finished):
+    from main_logic.omni_offline_client._lifecycle import InterruptedReply
+
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = text
+    mgr._active_text_request_id = "req-old"
+    mgr.websocket = _FakeConnectedWebSocket()
+    session.handle_interruption = AsyncMock(
+        return_value=InterruptedReply("response", finished=finished))
+    assert await M._interrupt_offline_reply(mgr, session) is True
+    assert mgr.websocket.sent == [
+        {"type": "system", "data": "turn abandoned", "request_id": "req-old"},
+    ]
+
+
+async def test_an_interruption_that_cancels_a_newer_live_reply_reports_it_unfinished():
+    """A finished generation in its cleanup window is displaced by a newer
+    one (claimed by the begin), and the interruption then cancels the newer
+    live one: that reply was cut, never sealed as finished."""
+    client = _client()
+    client.on_response_displaced = MagicMock()
+    seen = []
+
+    async def cleanup(_owner):
+        client._begin_response_generation("response")
+        seen.append(await client.handle_interruption())
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说完了。"), _text("", "stop")]]
+    await client.prompt_ephemeral("callback", completion_mode="response")
+    assert seen == ["response"] and seen[0].finished is False
+    client.on_response_displaced.assert_called_once()
+    assert client.on_response_displaced.call_args.args[0].finished is True
+
+
+# ── Finding 11: one turn-end builder ─────────────────────────────────────────
+
+
+async def test_a_completed_reply_turn_end_carries_its_meta_on_both_channels():
+    mgr = _make_manager()
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._finalize_turn_after_emit = AsyncMock()
+    mgr._current_ai_turn_text = "摸头。"
+    meta = {"kind": "avatar_interaction", "interaction_id": "i-3"}
+    mgr._pending_turn_meta = meta
+    mgr._active_text_request_id = "req-1"
+    await M.handle_response_complete(mgr)
+    expected = {"type": "system", "data": "turn end", "request_id": "req-1", "meta": meta}
+    assert _turn_ends(mgr) == [expected]
+    assert _system(mgr) == [expected]
+    assert mgr._pending_turn_meta is None
+
+
+# ── Invariants: exactly one close per generation; busy flag left clean ───────
+
+
+async def _scenario(client, name):
+    """Drive ``client`` through one ownership path. Interruptions go through
+    ``client.handle_interruption`` (counted by the caller)."""
+    if name == "completes":
+        client.script = [[_text("好的。"), _text("", "stop")]]
+        await client.stream_text("Q")
+    elif name == "interrupted_mid_reply":
+        async def cut():
+            await client.handle_interruption()
+        client.script = [[_text("说到"), cut, _text("一半"), _text("", "stop")]]
+        await client.stream_text("Q")
+    elif name == "interrupted_while_guard_paused":
+        async def paused_cut():
+            client._pause_response_generation(client._active_response_generation)
+            await client.handle_interruption()
+            client._resume_response_generation(client._response_generation)
+        client.script = [[_text("说到"), paused_cut, _text("一半"), _text("", "stop")]]
+        await client.stream_text("Q")
+    elif name == "interrupted_in_a_tool":
+        async def handler(call):
+            await client.handle_interruption()
+            return ToolResult(call_id=call.call_id, name=call.name, output={})
+        client.on_tool_call = handler
+        client.script = [[_text("查一下"), _tool_calls("c1")], [_text("x"), _text("", "stop")]]
+        await client.stream_text("Q")
+    elif name == "claimed_in_its_cleanup":
+        async def cleanup(_seq):
+            await client.handle_interruption()
+        client._notify_reasoning_done = cleanup
+        client.script = [[_text("回调。"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback")
+    elif name == "displaced_live":
+        began = asyncio.Event()
+
+        async def park():
+            await began.wait()
+
+        async def displacer_begins():
+            began.set()
+            await _drain()
+        client.script = [[_text("摸头，"), park, _text("还要"), _text("", "stop")],
+                         [displacer_begins, _text("好"), _text("", "stop")]]
+        avatar = asyncio.ensure_future(client.prompt_ephemeral("avatar", completion_mode="response"))
+        await _drain()
+        await client.stream_text("hi")
+        await avatar
+    elif name == "displaced_in_its_cleanup":
+        voice = []
+
+        async def cleanup(_seq):
+            voice.append(asyncio.ensure_future(client.stream_text("语音")))
+            await _drain()
+        client._notify_reasoning_done = cleanup
+        client.script = [[_text("回调。"), _text("", "stop")], [_text("语音回复"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback")
+        await voice[0]
+    elif name == "cut_by_close":
+        async def close_cut():
+            client._cancel_response_generation()
+        client.script = [[_text("说到"), close_cut, _text("一半"), _text("", "stop")]]
+        await client.stream_text("Q")
+    elif name == "declined_over_a_live_reply":
+        declined = []
+
+        async def proactive_arrives():
+            if not declined:  # once (a tree without the check would recurse)
+                declined.append(None)
+                declined[0] = await client.prompt_ephemeral("callback")
+        client.script = [[_text("文本，"), proactive_arrives, _text("说完"), _text("", "stop")]]
+        await client.stream_text("Q")
+        assert declined == [False]
+    else:  # pragma: no cover
+        raise AssertionError(name)
+
+
+@pytest.mark.parametrize("name", [
+    "completes", "interrupted_mid_reply", "interrupted_while_guard_paused",
+    "interrupted_in_a_tool", "claimed_in_its_cleanup", "displaced_live",
+    "displaced_in_its_cleanup", "cut_by_close", "declined_over_a_live_reply",
+])
+async def test_every_begun_generation_is_closed_exactly_once(name):
+    client = _client()
+    begun, handed_over = [], []
+    real_begin = client._begin_response_generation
+
+    def begin(kind="response"):
+        generation = real_begin(kind)
+        begun.append(generation)
+        return generation
+
+    client._begin_response_generation = begin
+    real_interrupt = client.handle_interruption
+
+    async def interrupt():
+        kind = await real_interrupt()
+        if kind:
+            handed_over.append(kind)
+        return kind
+
+    client.handle_interruption = interrupt
+    client.on_response_displaced = MagicMock(side_effect=handed_over.append)
+    idle = MagicMock()
+    client.on_idle = idle
+
+    await _scenario(client, name)
+    await _drain()
+
+    completions = client.on_response_done.await_count + client.on_proactive_done.await_count
+    assert completions + len(handed_over) == len(begun), (completions, handed_over, begun)
+    # Nothing is left owned, pending or busy once every call has returned.
+    assert getattr(client, "_interrupter_owned_generations", set()) == set()
+    assert getattr(client, "_completion_pending_generation", None) is None
+    assert client._active_response_generation is None
+    assert client._is_responding is False
+    assert client.is_idle()
+    idle.assert_called()
+
+
+async def test_an_avatar_poke_over_a_guard_paused_reply_reads_busy(monkeypatch):
+    """A guard pause drops _is_responding while its reply is still live. The
+    avatar gate must still read busy: prompt_ephemeral would decline anyway,
+    after the speech id had been rotated under the paused reply."""
+    from tests.unit.test_avatar_interaction_payload_contract import (
+        _builtin_runtime, _fist_payload,
+    )
+
+    runtime = _builtin_runtime(monkeypatch, cooldown_ms=0)
+    runtime.session._active_response_generation = 3  # live, guard-paused
+    runtime.session.prompt_ephemeral = AsyncMock(return_value=True)
+    result = await runtime.handle_avatar_interaction(_fist_payload("fist-paused"))
+    assert result.get("reason") == "busy"
+    assert runtime.current_speech_id == ""
+    runtime.session.prompt_ephemeral.assert_not_awaited()
+    assert runtime._pending_turn_meta is None
+
+
+async def test_a_failing_settle_never_replaces_the_typed_inputs_own_error():
+    mgr = _make_manager()
+    mgr._reply_setup_depth = 0
+    mgr._process_stream_data_internal = AsyncMock(side_effect=ValueError("input"))
+    mgr._settle_owed_turn_wrap_up = AsyncMock(side_effect=RuntimeError("settle"))
+    with pytest.raises(ValueError):
+        await M._process_stream_input(mgr, {"input_type": "text", "data": "hi"})
+    mgr._settle_owed_turn_wrap_up.assert_awaited_once()
+    assert mgr._reply_setup_depth == 0
+
+
+@pytest.mark.parametrize("kind,owed", [("response", True), ("agent_callback", False)])
+def test_a_displaced_response_owes_its_wrap_up(kind, owed):
+    """The displacing reply's own completion usually pays it, but that reply
+    can fail or be interrupted in turn; the displaced one's skipped wrap-up
+    must still be on the books then. A displaced agent-callback reply owes
+    none (``handle_proactive_complete`` runs no wrap-up)."""
+    mgr = _make_transcript_manager()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = "摸头，"
+    mgr._active_text_request_id = "req-new"
+    M._close_displaced_offline_turn(mgr, kind)
+    assert getattr(mgr, "_turn_wrap_up_owed", False) is owed
+    assert mgr._active_text_request_id == "req-new"
+
+
+@pytest.mark.parametrize("entry", ["live", "flushed"])
+async def test_every_ready_typed_input_goes_through_the_setup_tracking(entry):
+    """Both ways a typed input reaches processing (a ready session, or the
+    replay of inputs queued while it started) hold an owed wrap-up for the
+    input's own reply (``_process_stream_input``)."""
+    mgr = _make_manager()
+    mgr.session = MagicMock()
+    mgr.is_active = True
+    mgr.input_cache_lock = asyncio.Lock()
+    mgr._pending_input_flush_active = False
+    mgr._maybe_handle_mini_game_magic_command = AsyncMock(return_value=False)
+    mgr._process_stream_input = AsyncMock()
+    mgr._process_stream_data_internal = AsyncMock()
+    message = {"input_type": "text", "data": "你好"}
+    if entry == "live":
+        mgr.session_ready = True
+        mgr._starting_session_count = 0
+        mgr.pending_input_data = []
+        await M._stream_data_now(mgr, message)
+    else:
+        mgr.session_ready = True
+        mgr._starting_session_count = 0
+        mgr.pending_input_data = [message]
+        await M._flush_pending_input_data(mgr)
+    mgr._process_stream_input.assert_awaited_once()
+    assert mgr._process_stream_input.await_args.args[0]["data"] == "你好"
+    mgr._process_stream_data_internal.assert_not_awaited()

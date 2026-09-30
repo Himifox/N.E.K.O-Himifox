@@ -465,14 +465,23 @@ def test_hits_report_the_category_of_each_quarantine():
     assert hits == {"message": 1, "run": 2}
 
 
-@pytest.mark.parametrize("glue", ["", "喵", "。", "\n"])
+@pytest.mark.parametrize("glue", ["", "喵", "。", "\n", "233", "OK", "QwQ", "LOL", "_"])
 def test_a_label_glued_to_the_previous_chinese_sentence_is_a_marker(glue):
-    """Within one message, a label glued to the end of the previous Chinese
-    sentence must still count: only an ASCII word character blocks a
-    marker start."""
+    """Within one message, a label glued to the end of the previous sentence
+    must still count, whether that sentence ends in a CJK letter or in an
+    ASCII word ("233", "OK", "QwQ"). The ASCII-word rule is for English
+    labels only."""
     joined = _C1 + glue + _C2
     assert screen_chain_start(joined) == 0
     assert project_screen_history([_assistant(joined), _user("继续")])[0]["content"] == PLACEHOLDER
+
+
+@pytest.mark.parametrize("label", ["屏幕搭话 ", "屏幕搭话：", "屏幕画面/", "/屏幕画面 ", "／屏幕内容／"])
+def test_a_chinese_label_after_an_ascii_word_is_a_marker(label):
+    """Every Chinese label form, slash-delimited ones included, counts right
+    after an ASCII letter or digit."""
+    text = "好耶233" + label + PARTS[0] + "OK" + label + PARTS[1]
+    assert screen_chain_start(text) == len("好耶233")
 
 
 @pytest.mark.parametrize("text", [
@@ -480,9 +489,27 @@ def test_a_label_glued_to_the_previous_chinese_sentence_is_a_marker(glue):
     "Another screenshot comment: the layout also reads well on a small phone.",
     "prescreen comment: this is just a word that happens to contain a label. "
     "prescreen comment: and here it is again, still inside a longer word.",
+    # A slash glued to an English word joins it to the next one.
+    "Check the keyboard/screen display first, it may just be dimmed. "
+    "If the keyboard/screen display still flickers, restart the laptop.",
+    "Open Settings/Screen comment and switch it on for this character. "
+    "Later, Settings/Screen comment also lets you pick how often it talks.",
 ])
 def test_labels_inside_english_words_stay_inert(text):
     assert screen_chain_start(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "屏幕搭话就是我会定时看看你的屏幕，然后主动和你聊几句哦。屏幕搭话需要你先在设置里授权才可以使用呢。",
+    "“屏幕搭话”功能开启之后我会定时看看你的屏幕，然后主动和你聊几句哦。“屏幕搭话”需要你先在设置里授权才可以使用呢。",
+    "- **屏幕搭话**：开启之后我会定时看看你的屏幕，然后主动和你聊几句哦。\n- **屏幕截图**：你也可以随时手动发截图给我看呢。",
+])
+def test_feature_prose_that_names_the_label_like_prose_is_not_a_chain(text):
+    """Explaining the feature does not trip the guard when the reply names
+    it the way prose does: no separator, quoted, or in bold."""
+    assert screen_chain_start(text) is None
+    messages = [_assistant(text), _user("ok")]
+    assert project_screen_history(messages) is messages
 
 
 def test_repeated_projection_reuses_the_lexer_result(monkeypatch):

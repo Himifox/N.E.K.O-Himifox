@@ -702,6 +702,25 @@ async def test_a_reasoning_only_start_cancelled_still_publishes_the_turn(provide
     assert _emitted(client) == []
 
 
+@pytest.mark.parametrize("cap", [2, 0])
+async def test_a_reasoning_only_last_chunk_cancelled_still_publishes_the_turn(cap):
+    """Like the case above, but the reasoning chunk is the stream's last: no
+    later chunk re-checks the generation, so the check right after the
+    thinking pulse (tool loop and forced-final alike) must hand callers the
+    answered chunk they publish on."""
+    client = _client("openai", handler=_noop_tool, cap=cap)
+
+    async def thinking(active):
+        if active:
+            await client.handle_interruption()
+
+    client.on_thinking_active = thinking
+    client.script = [[LLMStreamChunk(content="", reasoning_content="thinking")]]
+    await client.stream_text("look", turn_images=[_png_b64(4, 4, (3, 3, 3))])
+    client._publish_provider_frames.assert_called_once()
+    assert _emitted(client) == []
+
+
 async def test_an_interrupted_proactive_reply_reports_its_agent_callback_kind():
     """prompt_ephemeral's proactive completion is handle_proactive_complete,
     which closes with 'turn end agent_callback'; an interruption reports
