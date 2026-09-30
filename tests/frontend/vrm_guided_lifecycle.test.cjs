@@ -27,6 +27,8 @@ const vm = require('node:vm');
     function fixture() {
         assert.equal(frames.size, 0, 'previous case must not leave animation frames');
         const leases = new Map();
+        window.electronScreen = null;
+        window.screen = { width: 1920, height: 1080 };
         const saves = [];
         let rests = 0;
         window.NekoMotion = {
@@ -54,6 +56,13 @@ const vm = require('node:vm');
         const mouseDown = button => interaction.mouseDownHandler({ button, clientX: 0, clientY: 0,
             preventDefault() {}, stopPropagation() {} });
         return { interaction, manager, scene, leases, saves, select, mouseDown, rests: () => rests };
+    }
+    function capturePreferences(f) {
+        const writes = [];
+        f.manager.currentModel.url = '/model-a.vrm';
+        f.manager.core.saveUserPreferences = async (...args) => { writes.push(args); return true; };
+        f.interaction._savePositionAfterInteraction = window.VRMInteraction.prototype._savePositionAfterInteraction;
+        return writes;
     }
 
     // Clicking the current position before the walk loads must release the lease,
@@ -173,5 +182,68 @@ const vm = require('node:vm');
         assert.equal(f.rests(), 0, 'superseded finish must not restart rest playback');
         f.interaction.cleanupDragAndZoom();
     }
-    console.log('VRM guided lifecycle: OK (loading, retargeting, arrival, pan/orbit, locking and cleanup)');
+    // Locking settles the current pose; unlike a drag, there is no later mouseup
+    // to persist it. Cover every stage, including release after the final frame.
+    for (const stage of ['moving', 'arrival-start', 'arrival-middle', 'release-pending']) {
+        const f = fixture(); const writes = capturePreferences(f);
+        f.select(new THREE.Vector3(0, 2, 0)); await flush(); writes.length = 0;
+        f.scene.position.set(0, stage === 'moving' ? 1 : 2, 0);
+        f.scene.rotation.y = Math.PI / 2;
+        const releasing = deferred();
+        if (stage === 'release-pending') {
+            const release = window.NekoMotion.releaseExternalPlayback;
+            window.NekoMotion.releaseExternalPlayback = async (...args) => { await release(...args); await releasing.promise; };
+        }
+        if (stage !== 'moving') { f.interaction._updateGuidedMovement(1 / 60); await flush(); }
+        if (stage === 'arrival-middle') {
+            for (const [id, callback] of [...frames.entries()]) { frames.delete(id); callback(180); }
+        } else if (stage === 'release-pending') finishTurn();
+        const lockedRotation = f.scene.quaternion.clone();
+        f.interaction.setLocked(true); await flush();
+        assert.equal(writes.length, 1, `${stage}: locking must persist the stopped pose`);
+        assert.deepEqual([writes[0][1].x, writes[0][1].y, writes[0][1].z], [0, stage === 'moving' ? 1 : 2, 0]);
+        const savedRotation = writes[0][3];
+        const restored = new THREE.Object3D();
+        restored.position.set(writes[0][1].x, writes[0][1].y, writes[0][1].z);
+        restored.rotation.set(savedRotation.x, savedRotation.y, savedRotation.z);
+        assert.ok(restored.position.distanceTo(f.scene.position) < 1e-8);
+        assert.ok(restored.quaternion.angleTo(lockedRotation) < 1e-7);
+        assert.equal(frames.size, 0); assert.equal(f.leases.size, 0);
+        releasing.resolve(); await flush();
+        assert.equal(writes.length, 1, 'cancelled arrival must not overwrite the locked pose');
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Display lookup can delay the departure snapshot past the locking save.
+    // It must not overwrite the settled pose when it eventually completes.
+    {
+        const f = fixture(); const writes = capturePreferences(f);
+        const lookups = [];
+        window.electronScreen = { getCurrentDisplay() {
+            const lookup = deferred(); lookups.push(lookup); return lookup.promise;
+        } };
+        f.select(new THREE.Vector3(0, 2, 0)); await flush();
+        f.scene.position.y = 2; f.scene.rotation.y = Math.PI / 2;
+        f.interaction._updateGuidedMovement(1 / 60); await flush();
+        f.interaction.setLocked(true); await flush();
+        assert.equal(lookups.length, 2);
+        lookups[1].resolve(null); await flush();
+        assert.equal(writes.length, 1); assert.equal(writes[0][1].y, 2);
+        lookups[0].resolve(null); await flush();
+        assert.equal(writes.length, 1, 'late departure save must not overwrite lock');
+        f.interaction.cleanupDragAndZoom();
+    }
+    // A pending locked snapshot must never be saved under a replacement model,
+    // or continue after drag takeover/disposal.
+    for (const takeover of ['model-switch', 'orbit', 'cleanup']) {
+        const f = fixture(); const writes = capturePreferences(f); const lookup = deferred();
+        window.electronScreen = { getCurrentDisplay: () => lookup.promise };
+        f.scene.position.y = 2; f.interaction.setLocked(true);
+        if (takeover === 'model-switch') f.manager.currentModel = { scene: new THREE.Object3D(), url: '/model-b.vrm' };
+        else if (takeover === 'orbit') { f.interaction.setLocked(false); f.mouseDown(2); }
+        else f.interaction.cleanupDragAndZoom();
+        lookup.resolve(null); await flush();
+        assert.equal(writes.length, 0, `${takeover}: stale snapshot must not be persisted`);
+        f.interaction.cleanupDragAndZoom();
+    }
+    console.log('VRM guided lifecycle: OK (loading, retargeting, arrival, pan/orbit, locking persistence and cleanup)');
 })().catch(error => { console.error(error); process.exitCode = 1; });

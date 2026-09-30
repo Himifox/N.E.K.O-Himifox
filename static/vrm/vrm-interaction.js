@@ -127,6 +127,7 @@ class VRMInteraction {
         this._movementPhaseTimer = null;
         this._smoothFacingFrame = null;
         this._smoothFacingResolve = null;
+        this._positionSaveToken = 0;
         this._movementKeyDownHandler = null;
         this._movementKeyUpHandler = null;
         this._movementBlurHandler = null;
@@ -433,6 +434,7 @@ class VRMInteraction {
         this._cancelSmoothFacing();
         // 已完成转向的结束流程仍可能在等待播放器；接管时也要使其失效。
         this.movementToken += 1;
+        this._positionSaveToken += 1;
         if (this.isMoving || this._movementAction || this._movementOwnerToken !== null) {
             void this._finishMovement({ cancel: true });
         }
@@ -1171,7 +1173,11 @@ class VRMInteraction {
             // 恢复按钮的 pointer-events
             this._restoreButtonPointerEvents();
         }
-        if (locked) this._cancelGuidedMovement();
+        if (locked) {
+            this._cancelGuidedMovement();
+            // 锁定后没有拖拽结束事件补存，保留停止时的位置和朝向。
+            void this._savePositionAfterInteraction();
+        }
     }
 
     /**
@@ -2335,14 +2341,17 @@ class VRMInteraction {
      * 保存模型位置和状态到后端（交互结束后调用）
      */
     async _savePositionAfterInteraction() {
-        if (!this.manager.currentModel || !this.manager.currentModel.url) {
+        const model = this.manager.currentModel;
+        if (!model || !model.url) {
             return;
         }
 
-        const scene = this.manager.currentModel.scene;
+        const scene = model.scene;
         if (!scene) {
             return;
         }
+        const saveToken = ++this._positionSaveToken;
+        const modelUrl = model.url;
 
         const position = {
             x: scene.position.x,
@@ -2400,6 +2409,9 @@ class VRMInteraction {
             }
         }
 
+        // 显示器查询期间可能锁定、换模型或开始下一次交互；旧快照不能覆盖新状态。
+        if (saveToken !== this._positionSaveToken || this.manager.currentModel !== model) return;
+
         // 获取当前屏幕尺寸（用于跨分辨率缩放归一化）
         // 使用 screen.width/height 而非 renderer/窗口尺寸，避免临时视口变化（F12、输入法等）污染保存数据
         let viewportInfo = null;
@@ -2432,7 +2444,7 @@ class VRMInteraction {
         // 异步保存，不阻塞交互
         if (this.manager.core && typeof this.manager.core.saveUserPreferences === 'function') {
             this.manager.core.saveUserPreferences(
-                this.manager.currentModel.url,
+                modelUrl,
                 position,
                 scale,
                 rotation,
