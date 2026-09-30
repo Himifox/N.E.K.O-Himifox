@@ -936,3 +936,25 @@ async def test_a_stalled_cooldown_ack_does_not_hold_the_interaction_gate(monkeyp
 
     release.set()
     await asyncio.gather(stalled, follower)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_delivered_reply_whose_completion_was_skipped_drops_its_meta(monkeypatch):
+    """prompt_ephemeral reports a fully delivered reply as True even when its
+    completion callback was skipped (superseded during cleanup). Nothing then
+    consumed the turn meta, so the avatar path drops it itself; left behind,
+    it would ride the next, unrelated turn end."""
+    runtime = _builtin_runtime(monkeypatch)
+    seen = []
+
+    async def delivered_without_completion(*_args, **_kwargs):
+        seen.append(runtime._pending_turn_meta)
+        return True
+
+    runtime.session.prompt_ephemeral = delivered_without_completion
+    result = await runtime.handle_avatar_interaction(_fist_payload("fist-skip"))
+
+    assert result["accepted"] is True
+    assert seen and seen[0]["kind"] == "avatar_interaction"
+    assert runtime._pending_turn_meta is None

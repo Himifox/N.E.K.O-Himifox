@@ -498,13 +498,17 @@ class _GenaiMixin:
                 # 吐出东西才算送到。
                 tool_frames_published = False
                 async for chunk in stream:
-                    if not generation_is_active():
-                        return
                     if not tool_frames_published:
                         tool_frames_published = True
                         self._publish_pending_tool_frames(
                             tool_bus_frames, turn_id=tool_frames_turn_id
                         )
+                    if not generation_is_active():
+                        # Answered, then cancelled: what the request carried was
+                        # delivered. Publish (above), then let callers publish
+                        # their pending bus copies on one empty chunk.
+                        yield LLMStreamChunk(content="")
+                        return
                     # prompt_feedback.block_reason：Gemini 整段 input 被 safety
                     # 拦掉时填这个，candidate 可能根本没出现。
                     pf = getattr(chunk, "prompt_feedback", None)
@@ -729,67 +733,31 @@ class _GenaiMixin:
                     "content": strip_thinking_segments(streamed_text_buffer),
                     "tool_calls": tool_calls_dict,
                 }
-                messages.append(assistant_turn)
-                tool_results: list = []
-                image_results = []
-                round_complete = False
-                try:
-                    for i, (tc_id, tc_name, tc_args, tc_raw, _tc_extra) in enumerate(collected_tool_calls):
-                        if not generation_is_active():
-                            break
-                        tool_call = ToolCall(
-                            name=tc_name,
-                            arguments=tc_args,
-                            call_id=tc_id or f"call_{i}",
-                            raw_arguments=tc_raw,
-                        )
-                        try:
-                            with _suspend_dialog_slop():
-                                result = await self.on_tool_call(tool_call)
-                        except Exception as e:
-                            logger.exception("OmniOfflineClient(genai): on_tool_call '%s' raised", tc_name)
-                            result = ToolResult(
-                                call_id=tool_call.call_id, name=tc_name,
-                                output={"error": f"{type(e).__name__}: {e}"},
-                                is_error=True, error_message=str(e),
-                            )
-                        # No cancellation check between the handler and its
-                        # record: once it returned, its side effects happened.
-                        tool_result_message = {
-                            "role": "tool",
-                            "tool_call_id": tool_call.call_id,
-                            "name": tc_name,
-                            "content": result.output_as_json_string(),
-                        }
-                        messages.append(tool_result_message)
-                        tool_results.append(tool_result_message)
-                        if getattr(result, "images", None):
-                            image_results.append((result, tool_result_message))
-                    else:
-                        round_complete = True
-                finally:
-                    if not round_complete or not generation_is_active():
-                        self._settle_unfinished_tool_round(
-                            messages, assistant_turn, tool_results,
-                        )
-                executed_tool_calls += len(tool_results)
-                if not round_complete or not generation_is_active():
+                builders = [
+                    (lambda i=i, tc=tc: ToolCall(
+                        name=tc[1],
+                        arguments=tc[2],
+                        call_id=tc[0] or f"call_{i}",
+                        raw_arguments=tc[3],
+                    ))
+                    for i, tc in enumerate(collected_tool_calls)
+                ]
+                executed, live = await self._run_tool_round(
+                    messages,
+                    assistant_turn,
+                    builders,
+                    tool_image_slots=tool_image_slots,
+                    tool_bus_frames=tool_bus_frames,
+                    generation_is_active=generation_is_active,
+                    log_prefix="OmniOfflineClient(genai)",
+                )
+                executed_tool_calls += executed
+                if not live:
                     # Cancelled: the kept prefix is persisted, so the caller
                     # still needs the sentinel; no image turns, no next call.
-                    if tool_results:
+                    if executed:
                         yield LLMStreamChunk(content="", tool_round_persisted=True)
                     return
-                # Symmetric with the OpenAI-compat path: every tool reply
-                # first, then multimodal user turns. ``_genai_parts_from_content``
-                # maps ``image_url`` data URLs onto ``inline_data`` parts.
-                for result, tool_result_message in image_results:
-                    self._append_tool_result_images(
-                        messages,
-                        result,
-                        slots=tool_image_slots,
-                        tool_result_message=tool_result_message,
-                        bus_frames=tool_bus_frames,
-                    )
                 # Sentinel：与 OpenAI 路径对偶，告诉上游 stream_text 把
                 # final-segment buffer 清掉（pre-tool 文本已被持久化进
                 # assistant turn 的 content 字段）。
@@ -869,13 +837,15 @@ class _GenaiMixin:
         # 与 OpenAI 路径对偶：封顶后这一次同样带着尚未 release 的工具图。
         tool_frames_published = False
         async for chunk in final_stream:
-            if not generation_is_active():
-                return
             if not tool_frames_published:
                 tool_frames_published = True
                 self._publish_pending_tool_frames(
                     tool_bus_frames, turn_id=tool_frames_turn_id
                 )
+            if not generation_is_active():
+                # Answered, then cancelled: see the tool-loop stream above.
+                yield LLMStreamChunk(content="")
+                return
             # 与常规 genai 分支对偶地采集空回复诊断：block_reason / finish_reason /
             # prompt_tokens。否则若 forced-finalize 也被 safety / recitation /
             # max-tokens 挡住而无文本，上层只能引用上一轮 tool-iteration 的过期

@@ -345,7 +345,7 @@ class GreetingMixin:
             # 等 prompt_ephemeral 触发 handle_response_complete 时随 turn end
             # 原子地下发。不再走独立的 sync_message_queue 控制消息，避免
             # meta 与 turn end 两条消息时序错乱导致本轮被误判成 proactive。
-            self._pending_turn_meta = {
+            turn_meta = self._pending_turn_meta = {
                 "kind": "avatar_interaction",
                 "interaction_id": interaction_id,
                 "memory_note": memory_note,
@@ -387,6 +387,12 @@ class GreetingMixin:
             interrupted = self.current_speech_id != current_turn_id
             accepted = bool(delivered) and not interrupted
             if interrupted:
+                self._pending_turn_meta = None
+            # Still ours after the call: neither handle_response_complete nor an
+            # interruption's turn close consumed it, so the completion never ran
+            # (the reply was superseded during cleanup). Drop it here, or it
+            # lands on the next, unrelated turn end.
+            if self._pending_turn_meta is turn_meta:
                 self._pending_turn_meta = None
             if accepted:
                 self._last_avatar_interaction_speak_at = int(time.time() * 1000)

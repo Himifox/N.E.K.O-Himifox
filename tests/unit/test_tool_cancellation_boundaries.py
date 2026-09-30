@@ -220,7 +220,12 @@ async def test_cancelled_batch_keeps_executed_calls_by_identity(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "gemini"])
 @pytest.mark.parametrize("cap", [0, 2])
-async def test_late_chunks_never_publish_or_yield(provider, cap, monkeypatch):
+async def test_an_answered_request_publishes_but_yields_no_late_content(
+    provider, cap, monkeypatch,
+):
+    """Cancelled while the request was in flight, answered afterwards: the
+    provider received what the request carried, so its frames are published
+    and callers get one empty chunk to publish theirs. No content leaks."""
     client = make_client(provider, monkeypatch, None, cap=cap)
     publications = []
     client._publish_pending_tool_frames = lambda *a, **kw: publications.append(kw)
@@ -230,8 +235,8 @@ async def test_late_chunks_never_publish_or_yield(provider, cap, monkeypatch):
     generation = client._begin_response_generation()
     result = [chunk async for chunk in client._astream_with_tools(
         [{"role": "user", "content": "hello"}], _response_generation=generation)]
-    assert result == []
-    assert publications == []
+    assert [chunk.content for chunk in result] == [""]
+    assert len(publications) == 1
     assert len(requests) == 1
 
 

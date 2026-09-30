@@ -1779,10 +1779,9 @@ class LifecycleMixin:
                                 'handle_interruption',
                                 None,
                             )
-                            if callable(interrupt):
-                                await interrupt()
-                                # Close the offline reply this turn interrupted
-                                # before handle_new_message clears its text.
+                            # Close the offline reply this turn interrupted
+                            # before handle_new_message clears its text.
+                            if callable(interrupt) and await interrupt():
                                 self._close_interrupted_offline_turn()
                         if (
                             not operation_is_current()

@@ -30,6 +30,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from config.prompts.prompts_sys import _loc
 from config.prompts.prompts_memory import (
     INNER_THOUGHTS_HEADER,
@@ -46,6 +47,7 @@ from config.prompts.prompts_memory import (
     _normalize_memory_prompt_lang,
 )
 from utils.frontend_utils import get_timestamp
+from utils.screen_comment_guard import project_screen_history
 from utils.language_utils import (
     get_global_language_full,
     is_supported_language_code,
@@ -1162,6 +1164,22 @@ async def settle_conversation(request: HistoryRequest, lanlan_name: str):
             return {"status": "error", "message": str(e)}
 
 
+def _quarantined_recent_history(history, lang):
+    """Recent history as it may be rendered into a new session's prompt.
+
+    Session renewal and restarts bring this history back as system-prompt
+    text, where the offline client's request-view projection never sees it.
+    Apply the same screen-chain quarantine here, on the structured messages
+    before they are flattened. The independent-delivery marker does not
+    survive this store, so an unmarked run between two user turns is judged
+    by position alone (the documented legacy limitation).
+    """
+    return project_screen_history(
+        list(history),
+        placeholder=_loc(SCREEN_HISTORY_PLACEHOLDER, lang),
+    )
+
+
 @app.get("/get_recent_history/{lanlan_name}")
 async def get_recent_history(lanlan_name: str, language: str | None = None):
     lanlan_name = validate_lanlan_name(lanlan_name)
@@ -1177,7 +1195,10 @@ async def get_recent_history(lanlan_name: str, language: str | None = None):
         logger.error(f"检查角色配置失败: {e}")
         return _loc(NO_RECENT_HISTORY, _lang)
 
-    history = await runtime.recent_history_manager.aget_recent_history(lanlan_name)
+    history = _quarantined_recent_history(
+        await runtime.recent_history_manager.aget_recent_history(lanlan_name),
+        _lang,
+    )
     _, _, _, _, name_mapping, _, _, _, _ = await runtime._config_manager.aget_character_data()
     name_mapping['ai'] = lanlan_name
     result = _loc(RECENT_HISTORY_INTRO, _lang).format(name=lanlan_name)
@@ -3904,7 +3925,10 @@ async def _new_dialog(
             time=get_timestamp(),
         )
 
-        for i in await runtime.recent_history_manager.aget_recent_history(lanlan_name):
+        for i in _quarantined_recent_history(
+            await runtime.recent_history_manager.aget_recent_history(lanlan_name),
+            _lang,
+        ):
             if isinstance(i.content, str):
                 cleaned_content = brackets_pattern.sub('', i.content).strip()
                 result += f"{name_mapping[i.type]} | {cleaned_content}\n"

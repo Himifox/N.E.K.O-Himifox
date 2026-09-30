@@ -71,7 +71,10 @@ from config.prompts.prompts_sys import (
     AGENT_TASKS_HEADER,
     AGENT_TASKS_NOTICE,
 )
+from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
+from config.prompts.prompts_tool import normalize_tool_image_locale
 from utils.language_utils import normalize_language_code, is_supported_language_code
+from utils.screen_comment_guard import screen_chain_start, screen_guard_enabled
 from ._shared import logger
 
 
@@ -133,10 +136,32 @@ class NotifyMixin:
             logger.error(f"💥 WS Send User Activity Error: {e}")
 
     def _convert_cache_to_str(self, cache):
-        """[Hot-swap related] Convert the cache to a string"""
+        """[Hot-swap related] Convert the cache to a string.
+
+        This text is primed into the next session's system prompt, where the
+        offline client's request-view projection never sees it, so the
+        character's lines pass the same screen-chain quarantine here. The
+        cache already merges consecutive character lines into one entry, so
+        a chain spread over several replies is one text to check.
+        """
+        guard = screen_guard_enabled()
+        placeholder = None
         res = ""
         for i in cache:
-            res += f"{i['role']} | {i['text']}\n"
+            text = i['text']
+            if (
+                guard
+                and i['role'] == self.lanlan_name
+                and isinstance(text, str)
+                and screen_chain_start(text) is not None
+            ):
+                if placeholder is None:
+                    placeholder = _loc(
+                        SCREEN_HISTORY_PLACEHOLDER,
+                        normalize_tool_image_locale(getattr(self, 'user_language', None)),
+                    )
+                text = placeholder
+            res += f"{i['role']} | {text}\n"
         return res
 
     async def _build_initial_prompt(self) -> str:

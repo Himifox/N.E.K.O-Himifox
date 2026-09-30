@@ -187,6 +187,26 @@ class _LifecycleMixin:
         self._is_responding = False
         return True
 
+    def _mark_completion_pending(self, generation: int) -> None:
+        """A finished generation whose completion callback has not run yet.
+
+        ``handle_interruption`` can claim it in that window (the cleanup
+        awaits), so the interrupting turn closes it instead of a late
+        callback that would land inside the new turn.
+        """
+        self._completion_pending_generation = generation
+
+    def _take_completion(self, generation: int) -> bool:
+        """Whether ``generation`` may still run its completion callback.
+
+        Clears the pending mark, so an interruption arriving after this point
+        sees the callback as already running and leaves it alone.
+        """
+        if getattr(self, "_completion_pending_generation", None) != generation:
+            return False
+        self._completion_pending_generation = None
+        return True
+
     def _cancel_response_generation(self) -> bool:
         # Invalidate pending completion callbacks even after synchronous cleanup
         # retired the active generation, but before its cleanup awaits finish.
@@ -719,6 +739,8 @@ class _LifecycleMixin:
             response_cancelled = not self._response_generation_is_active(response_generation)
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
+            if not response_cancelled:
+                self._mark_completion_pending(response_generation)
             # Token usage 由 _AsyncStreamWrapper hook 在流结束时自动记录，
             # 此处不再手动调用 TokenTracker.record() 避免双重计数。
             committed_text = _strip_nonverbal_directives(assistant_message).strip()
@@ -798,19 +820,26 @@ class _LifecycleMixin:
             # newer user turn interleaved and re-pulsed; the call is otherwise
             # idempotent when nothing pulsed or the first token already cleared it.
             await self._notify_reasoning_done(_reasoning_owner_seq)
-            # Cancelled, or a newer response started during the cleanup await.
+            # Skip the callback when the turn was cancelled, when an
+            # interruption claimed its completion during the cleanup await
+            # (the interrupting turn closed it), or when a newer response
+            # started meanwhile: a late callback would land in that turn.
+            completion_claimed = not self._take_completion(response_generation)
             completion_superseded = (
-                response_cancelled or self._response_generation != response_generation
+                response_cancelled
+                or completion_claimed
+                or self._response_generation != response_generation
             )
-            reported_committed = content_committed
+            # The return value says what happened to the reply, not whether the
+            # callback ran: a reply that was fully delivered stays True even if
+            # its completion was skipped. Only a cancellation mid-reply makes a
+            # response-mode turn report False. Callers that hand state to the
+            # completion (the avatar path's turn meta) check it themselves.
+            reported_committed = content_committed and not (
+                completion_mode == "response" and response_cancelled
+            )
             if completion_mode == "response":
-                # The caller's contract for this mode is "True means the regular
-                # completion ran" (greeting's avatar path leaves its turn meta
-                # for handle_response_complete to consume). A skipped completion
-                # therefore reports False, even though the text was committed.
-                if completion_superseded:
-                    reported_committed = False
-                elif self.on_response_done:
+                if not completion_superseded and self.on_response_done:
                     await self.on_response_done()
                 # 只录常规 reply（completion_mode == "response"）。proactive 路径
                 # 已经在 ``core.finish_proactive_delivery`` 上录，这里再录会双写。
@@ -827,11 +856,9 @@ class _LifecycleMixin:
                         )
             else:
                 proactive_done_cb = getattr(self, "on_proactive_done", None)
-                if completion_superseded:
-                    pass
-                elif proactive_done_cb:
+                if not completion_superseded and proactive_done_cb:
                     await proactive_done_cb(content_committed)
-                elif self.on_response_done:
+                elif not completion_superseded and self.on_response_done:
                     await self.on_response_done()
             # 对话总线的第二条：她真正说出口的那句。判据和上面那条指令不同 ——
             # 指令问的是「provider 收到了吗」（第一个 chunk），这条问的是「她说了
@@ -872,9 +899,9 @@ class _LifecycleMixin:
 
         return reported_committed
 
-    async def cancel_response(self) -> None:
-        """Cancel the current response if possible"""
-        self._cancel_response_generation()
+    async def cancel_response(self) -> bool:
+        """Cancel the current response if possible; whether one was live."""
+        return self._cancel_response_generation()
 
     async def _cancel_external_voice_submit_task(self) -> bool:
         """Cancel the narrow external-ASR child task, if another task owns it."""
@@ -892,15 +919,28 @@ class _LifecycleMixin:
             self._external_voice_submit_task = None
         return True
 
-    async def handle_interruption(self):
-        """Handle user interruption - cancel current response"""
+    async def handle_interruption(self) -> bool:
+        """Handle user interruption - cancel current response.
+
+        Returns whether a reply was interrupted: a live generation (streaming
+        or paused by a guard) was cancelled, or a finished one had not yet
+        run its completion callback, which is claimed here and will not run.
+        Callers close the interrupted AI turn only then, so a reply whose
+        completion is already running never gets a second turn end.
+        """
         if await self._cancel_external_voice_submit_task():
             logger.info("Cancelling pending external voice submit")
-        if not self._is_responding:
-            return
+        claimed = getattr(self, "_completion_pending_generation", None) is not None
+        self._completion_pending_generation = None
+        if not (
+            self._is_responding
+            or getattr(self, "_active_response_generation", None) is not None
+        ):
+            return claimed
 
         logger.info("Handling text mode interruption")
-        await self.cancel_response()
+        cancelled = await self.cancel_response()
+        return bool(cancelled) or claimed
 
     async def handle_messages(self) -> None:
         """

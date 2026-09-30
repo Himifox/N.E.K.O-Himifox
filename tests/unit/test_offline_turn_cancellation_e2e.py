@@ -458,3 +458,170 @@ def test_an_empty_cancelled_reply_is_never_written(content):
     before = list(client._conversation_history)
     client._commit_cancelled_reply(anchor, AIMessage(content=content))
     assert client._conversation_history == before
+
+
+# ── What handle_interruption reports (third review round) ───────────────────
+
+async def test_interruption_reports_false_when_nothing_is_live():
+    client = _client()
+    assert await client.handle_interruption() is False
+
+
+async def test_interruption_reports_true_for_a_live_stream():
+    client = _client()
+    seen = []
+
+    async def interrupt():
+        seen.append(await client.handle_interruption())
+
+    client.script = [[_text("hi"), interrupt, _text("", "stop")]]
+    await client.stream_text("Q1")
+    assert seen == [True]
+
+
+async def test_interruption_claims_a_finished_reply_awaiting_its_completion():
+    """Finished and committed, still in the cleanup await: the interruption
+    claims the completion (the interrupting turn closes it) instead of a late
+    callback landing inside the new turn. The reply was delivered, so the
+    call still reports True."""
+    client = _client()
+    seen = []
+
+    async def cleanup(_owner):
+        seen.append(await client.handle_interruption())
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说完了。"), _text("", "stop")]]
+    assert await client.prompt_ephemeral("callback", completion_mode="response") is True
+    assert seen == [True]
+    client.on_response_done.assert_not_awaited()
+
+
+async def test_interruption_leaves_a_running_completion_alone():
+    """Once the completion callback started, it owns the turn end: the
+    interruption must report False so no second turn end is sent."""
+    client = _client()
+    seen = []
+
+    async def proactive_done(_committed):
+        seen.append(await client.handle_interruption())
+
+    client.on_proactive_done = AsyncMock(side_effect=proactive_done)
+    client.script = [[_text("说完了。"), _text("", "stop")]]
+    assert await client.prompt_ephemeral("callback") is True
+    assert seen == [False]
+    client.on_proactive_done.assert_awaited_once()
+
+
+async def test_a_turn_cancelled_before_its_first_chunk_still_publishes_its_frames():
+    """stream_text publishes the turn's frames on the first chunk the
+    provider sends. Cancelled while the request was in flight, the tool loop
+    still hands that first (empty) chunk up, so the frames the provider did
+    receive reach the plugin bus; nothing is shown."""
+    client = _client()
+
+    async def interrupt():
+        await client.handle_interruption()
+
+    client.script = [[interrupt, _text("late"), _text("", "stop")]]
+    await client.stream_text("look", turn_images=[_png_b64(4, 4, (9, 9, 9))])
+    client._publish_provider_frames.assert_called_once()
+    assert _emitted(client) == []
+
+
+# ── Request view pairs tool rounds (third review round) ─────────────────────
+
+def _call(call_id):
+    return {"id": call_id, "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"}}
+
+
+def _reply(call_id):
+    return {"role": "tool", "tool_call_id": call_id, "name": "lookup", "content": "{}"}
+
+
+def test_an_unanswered_tool_call_round_is_dropped_from_the_request_view():
+    """Round A still waits on a slow tool when turn B builds its request:
+    [.., A.assistant(tool_calls), B.user] is a 400 on OpenAI-compatible
+    endpoints. The request view keeps A's text and drops the dangling call;
+    the saved history is untouched."""
+    client = _client()
+    pending = {"role": "assistant", "content": "我查一下", "tool_calls": [_call("c1")]}
+    messages = [HumanMessage(content="A"), pending, HumanMessage(content="B")]
+    view = client._dialog_messages_for_provider(messages)
+    assert view[1] == {"role": "assistant", "content": "我查一下"}
+    assert view[0] is messages[0] and view[2] is messages[2]
+    assert messages[1] is pending and pending["tool_calls"] == [_call("c1")]
+
+
+def test_a_partly_answered_round_keeps_only_answered_calls():
+    client = _client()
+    turn = {"role": "assistant", "content": "", "tool_calls": [_call("c1"), _call("c2")]}
+    messages = [HumanMessage(content="A"), turn, _reply("c1"), HumanMessage(content="B")]
+    view = client._dialog_messages_for_provider(messages)
+    assert view[1]["tool_calls"] == [_call("c1")]
+    assert view[2] is messages[2] and len(view) == 4
+
+
+def test_a_textless_unanswered_round_and_orphan_replies_are_dropped():
+    client = _client()
+    messages = [HumanMessage(content="A"),
+                {"role": "assistant", "content": "", "tool_calls": [_call("c1")]},
+                HumanMessage(content="B"), _reply("zz")]
+    view = client._dialog_messages_for_provider(messages)
+    assert view == [messages[0], messages[2]]
+
+
+def test_a_complete_round_leaves_the_request_view_untouched():
+    client = _client()
+    messages = [HumanMessage(content="A"),
+                {"role": "assistant", "content": "", "tool_calls": [_call("c1")]},
+                _reply("c1"),
+                {"role": "user", "content": [{"type": "text", "text": "tool image"}]},
+                HumanMessage(content="B")]
+    assert client._dialog_messages_for_provider(messages) is messages
+
+
+async def test_the_interrupting_turn_never_sends_the_pending_round():
+    """End to end: A is inside a slow tool when B arrives and requests."""
+    release = asyncio.Event()
+
+    async def slow_tool(call):
+        await release.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    client = _client(handler=slow_tool)
+    client.script = [[_text("我查一下"), _tool_calls("c1")],
+                     [_text("好的"), _text("", "stop")]]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    for _ in range(50):
+        if len(client.requests) == 1 and any(
+            isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history
+        ):
+            break
+        await asyncio.sleep(0)
+    await client.handle_interruption()
+    await client.stream_text("B")
+    release.set()
+    await turn_a
+    b_request = client.requests[1]
+    assert not [m for m in b_request if isinstance(m, dict) and m.get("tool_calls")]
+
+
+async def test_a_kept_cancelled_round_holds_only_the_text_that_was_shown():
+    """The pre-tool text sits unshown in the name-prefix buffer when the
+    turn is cancelled inside the tool: the kept round must not carry it."""
+    async def handler(call):
+        await client.handle_interruption()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    client = _client(handler=handler)
+    client._prefix_buffer_size = 100
+    client.script = [[_text("好的，我这就发"), _tool_calls("c1")]]
+    await client.stream_text("帮我发消息")
+    assert _emitted(client) == []
+    assert _history_shape(client) == [
+        ("human", "帮我发消息", None),
+        ("assistant", "", ["c1"]),
+        ("tool", "{}", None),
+    ]

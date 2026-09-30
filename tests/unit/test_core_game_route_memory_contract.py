@@ -3273,6 +3273,7 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
     ai_turn_notes = []
     mgr._note_ai_turn = lambda text=None, **_kw: ai_turn_notes.append(text)
     mgr._current_ai_turn_text = "half a reply"
+    mgr._finalize_turn_after_emit = AsyncMock()
     if session_state == "no_session":
         mgr.session = None
         mgr.is_active = False
@@ -3321,8 +3322,12 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
         mgr.session.set_proactive_screenshot.assert_called_once_with(None)
         assert mgr.session._pending_plugin_images == []
         # cross_server leaves the interrupted assistant turn before the
-        # command's mirrored user line arrives.
+        # command's mirrored user line arrives, and the wrap-up the skipped
+        # completion owned runs here: no new reply follows a command.
         assert sync_messages.pop(0) == {"type": "system", "data": "turn end"}
+        mgr._finalize_turn_after_emit.assert_awaited_once_with()
+    else:
+        mgr._finalize_turn_after_emit.assert_not_awaited()
     assert sync_messages[0]["data"]["metadata"] == {
         "source": "mini_game",
         "kind": "magic_command",
@@ -4550,12 +4555,13 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
     notes = []
     mgr._note_ai_turn = lambda text=None, **_kw: notes.append(text)
     mgr._current_ai_turn_text = interrupted_text
+    mgr._active_text_request_id = "req-old"
 
     async def _stream_text(_text, **_kwargs):
         notes.append("stream_text")
         mgr._current_ai_turn_text += "B-full."
 
-    session.handle_interruption = AsyncMock()
+    session.handle_interruption = AsyncMock(return_value=True)
     session.stream_text = AsyncMock(side_effect=_stream_text)
     monkeypatch.setattr(
         core_module, "dispatch_text_user_message", lambda _n, _t: None
@@ -4571,8 +4577,44 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
     # cross_server needs a turn end to stop merging the next reply into the
     # interrupted one; nothing said, nothing to close.
     turn_ends = [m for m in mgr.sync_message_queue.messages
-                 if m == {"type": "system", "data": "turn end"}]
-    assert len(turn_ends) == (1 if interrupted_text else 0)
+                 if isinstance(m, dict) and m.get("data") == "turn end"]
+    # The interrupted request's id rides on its turn end and is retired, as
+    # handle_response_complete would have done.
+    assert turn_ends == (
+        [{"type": "system", "data": "turn end", "request_id": "req-old"}]
+        if interrupted_text else []
+    )
+    assert mgr._active_text_request_id is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_typed_text_does_not_close_a_reply_nothing_interrupted(monkeypatch):
+    """handle_interruption() stopped nothing (the reply finished and its own
+    completion is running or done): that completion sends the turn end, so
+    the text path must not send a second one or steal the avatar meta."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    notes = []
+    mgr._note_ai_turn = lambda text=None, **_kw: notes.append(text)
+    mgr._current_ai_turn_text = "finished reply"
+    meta = {"kind": "avatar_interaction"}
+    mgr._pending_turn_meta = meta
+    session.handle_interruption = AsyncMock(return_value=False)
+    session.stream_text = AsyncMock()
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "换个话题"},
+    )
+
+    assert not [m for m in mgr.sync_message_queue.messages
+                if isinstance(m, dict) and m.get("data") == "turn end"]
+    assert notes == []
+    assert mgr._pending_turn_meta is meta
 
 
 @pytest.mark.unit
@@ -4587,7 +4629,7 @@ async def test_interrupted_avatar_reply_keeps_its_isolation_meta(monkeypatch):
     mgr._current_ai_turn_text = "摸头好舒服"
     meta = {"kind": "avatar_interaction", "memory_note": "tapped"}
     mgr._pending_turn_meta = meta
-    session.handle_interruption = AsyncMock()
+    session.handle_interruption = AsyncMock(return_value=True)
     session.stream_text = AsyncMock()
     monkeypatch.setattr(
         core_module, "dispatch_text_user_message", lambda _n, _t: None

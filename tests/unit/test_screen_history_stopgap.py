@@ -499,3 +499,48 @@ def test_repeated_projection_reuses_the_lexer_result(monkeypatch):
     for _ in range(3):
         assert [m["content"] for m in project_screen_history(messages)] == [m["content"] for m in first]
     assert len(calls) == lexed
+
+
+# ── Restore paths (third review round) ──────────────────────────────────────
+
+def _cache_owner(language="zh"):
+    from types import SimpleNamespace
+    return SimpleNamespace(lanlan_name="YUI", user_language=language)
+
+
+def test_hot_swap_cache_quarantines_the_characters_chain(monkeypatch):
+    """The cache is primed into the next session's system prompt, past the
+    request-view projection. Consecutive character lines are merged into one
+    entry, so a chain spread over replies is caught as one text."""
+    from main_logic.core.notify import NotifyMixin
+
+    monkeypatch.delenv(SCREEN_GUARD_ENV, raising=False)
+    cache = [{"role": "Alice", "text": "屏幕搭话 这句是用户说的，不该被改。屏幕搭话 用户这边也会写很长很长的句子。"},
+             {"role": "YUI", "text": _COMMENT_A + _COMMENT_B},
+             {"role": "YUI", "text": "普通的一句回复。"}]
+    rendered = NotifyMixin._convert_cache_to_str(_cache_owner(), cache)
+    assert rendered.splitlines() == [
+        f"Alice | {cache[0]['text']}",
+        f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}",
+        "YUI | 普通的一句回复。",
+    ]
+    monkeypatch.setenv(SCREEN_GUARD_ENV, "0")
+    assert _COMMENT_A in NotifyMixin._convert_cache_to_str(_cache_owner(), cache)
+
+
+def test_a_repeated_quarantine_is_logged_once_at_info(monkeypatch):
+    """Every provider call re-projects the history; the same quarantine must
+    not add an INFO line to each of them, or a new hit gets lost."""
+    from unittest.mock import MagicMock
+    import main_logic.omni_offline_client._tools as tooling
+
+    fake = MagicMock()
+    monkeypatch.setattr(tooling, "logger", fake)
+    client = _bare_client()
+    messages = [_user("聊"), _assistant(chain()), _user("继续")]
+    levels = []
+    for batch in (messages, messages, messages, messages + [_assistant(chain("屏幕搭话："))]):
+        fake.reset_mock()
+        client._dialog_messages_for_provider(batch)
+        levels.append("info" if fake.info.called else "debug" if fake.debug.called else None)
+    assert levels == ["info", "debug", "debug", "info"]

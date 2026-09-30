@@ -30,9 +30,10 @@ async def test_ephemeral_completion_rechecks_generation_after_cleanup(mode, inte
         "hello", completion_mode="response" if mode == "response" else "proactive",
         persist_response=False,
     )
-    # Response mode promises "True means the regular completion ran": the
-    # avatar path leaves its turn meta for that completion to consume.
-    assert delivered is (mode != "response" or interrupt == "none")
+    # The reply was fully delivered before the cleanup await, so it reports
+    # True in every mode even when its completion is skipped; callers that
+    # hand state to the completion check whether it was consumed.
+    assert delivered is True
     expected = int(interrupt == "none")
     assert client.on_response_done.await_count == (expected if mode != "proactive" else 0)
     if client.on_proactive_done is not None:

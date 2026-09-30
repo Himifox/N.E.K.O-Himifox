@@ -319,6 +319,27 @@ class _StreamingMixin:
             )
         history.insert(position, reply)
 
+    def _trim_cancelled_round_text(self, anchor, shown: str) -> None:
+        """Make a kept, cancelled tool round hold only the text that was shown.
+
+        The tool loop writes its own stream buffer into the round, which also
+        holds what this turn deliberately withheld (the name-prefix buffer, a
+        think residual, a summary tail). A cancelled turn never emits that,
+        so the next request must not see it either.
+        """
+        history = self._conversation_history
+        start = _find_by_identity(history, -1, anchor)
+        if start < 0:
+            return
+        for message in reversed(history[start + 1:]):
+            if (
+                isinstance(message, dict)
+                and message.get("role") == "assistant"
+                and message.get("tool_calls")
+            ):
+                message["content"] = shown
+                return
+
     async def _check_repetition(self, response: str) -> bool:
         """
         Check whether the reply is highly repetitive of recent replies.
@@ -1202,14 +1223,17 @@ class _StreamingMixin:
                             # 第二次写进 history。``_total`` 不重置——重复检测
                             # / token 长度 guard 仍要看完整一轮的实际文本量。
                             if getattr(chunk, "tool_round_persisted", False):
-                                length_guard_persisted_prefix = assistant_message_total
-                                assistant_message = ""
                                 # A cancelled round still reports what it kept
                                 # (see _settle_unfinished_tool_round); reset the
-                                # state below but emit nothing further.
+                                # state below but emit nothing further, and keep
+                                # only the text that reached UI/TTS in it.
                                 _round_cancelled = (
                                     self._active_response_generation != response_generation
                                 )
+                                if _round_cancelled:
+                                    self._trim_cancelled_round_text(user_message, assistant_message)
+                                length_guard_persisted_prefix = assistant_message_total
+                                assistant_message = ""
                                 # 重置围栏 / prefix buffer：下一段是新的语义
                                 # 单元（模型基于 tool 结果重新出文本），不应
                                 # 复用之前的 fence / prefix 状态。
@@ -2066,6 +2090,8 @@ class _StreamingMixin:
             response_cancelled = self._active_response_generation != response_generation
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
+            if not response_cancelled:
+                self._mark_completion_pending(response_generation)
 
             if history_replacement_text:
                 # The index is a hint: a concurrent turn's cancelled tool round
@@ -2121,9 +2147,13 @@ class _StreamingMixin:
                     else:
                         await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
 
-            # Call response done callback
+            # Call response done callback. Skipped when cancelled, when an
+            # interruption claimed it during the status await above, or when a
+            # newer response started (see prompt_ephemeral).
+            completion_claimed = not self._take_completion(response_generation)
             if (
                 not response_cancelled
+                and not completion_claimed
                 and self._response_generation == response_generation
                 and self.on_response_done
             ):
