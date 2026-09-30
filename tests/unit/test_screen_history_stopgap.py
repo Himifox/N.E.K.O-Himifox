@@ -467,8 +467,9 @@ def test_hits_report_the_category_of_each_quarantine():
 
 @pytest.mark.parametrize("glue", ["", "喵", "。", "\n"])
 def test_a_label_glued_to_the_previous_chinese_sentence_is_a_marker(glue):
-    """Within one message, "…陪你冲锋喵屏幕搭话 …" must still count: only an
-    ASCII word character blocks a marker start."""
+    """Within one message, a label glued to the end of the previous Chinese
+    sentence must still count: only an ASCII word character blocks a
+    marker start."""
     joined = _C1 + glue + _C2
     assert screen_chain_start(joined) == 0
     assert project_screen_history([_assistant(joined), _user("继续")])[0]["content"] == PLACEHOLDER
