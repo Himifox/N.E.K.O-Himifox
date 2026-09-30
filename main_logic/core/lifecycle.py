@@ -948,6 +948,7 @@ class LifecycleMixin:
         _allow_cross_mode_restart=True,
         handshake_override=_HANDSHAKE_OVERRIDE_UNSET,
         resource_optimization_override=_HANDSHAKE_OVERRIDE_UNSET,
+        provider_preference_override=_HANDSHAKE_OVERRIDE_UNSET,
         request_id=None,
     ):
         # user_initiated：True 仅由 websocket_router 的 start_session action 传入，
@@ -980,6 +981,15 @@ class LifecycleMixin:
             if resource_optimization_override is _HANDSHAKE_OVERRIDE_UNSET
             else resource_optimization_override
         )
+        session_provider_preference_handshake_override = (
+            getattr(
+                self,
+                "_independent_asr_provider_preference_handshake_override",
+                None,
+            )
+            if provider_preference_override is _HANDSHAKE_OVERRIDE_UNSET
+            else provider_preference_override
+        )
         self._start_session_seed_turn_language()
         # 重置防刷屏标志
         self.session_closed_by_server = False
@@ -1000,6 +1010,9 @@ class LifecycleMixin:
             handshake_override=session_handshake_override,
             resource_optimization_override=(
                 session_resource_optimization_handshake_override
+            ),
+            provider_preference_override=(
+                session_provider_preference_handshake_override
             ),
         ):
             return
@@ -1095,6 +1108,9 @@ class LifecycleMixin:
                     resource_optimization_override=(
                         session_resource_optimization_handshake_override
                     ),
+                    provider_preference_override=(
+                        session_provider_preference_handshake_override
+                    ),
                 )
             else:
                 raise Exception("Session not initialized")
@@ -1134,6 +1150,7 @@ class LifecycleMixin:
         request_id,
         handshake_override,
         resource_optimization_override,
+        provider_preference_override,
     ):
         """Handle a start request that collides with an in-flight start_session.
 
@@ -1203,6 +1220,7 @@ class LifecycleMixin:
                     ),
                     handshake_override=handshake_override,
                     resource_optimization_override=resource_optimization_override,
+                    provider_preference_override=provider_preference_override,
                 )
                 # ``also_notify``：重跑若 fail-closed 会 revoke lease，把
                 # _voice_lease_connection_id 和 voice socket 一起清掉，本请求方
@@ -1296,6 +1314,7 @@ class LifecycleMixin:
                     request_id=request_id,
                     handshake_override=handshake_override,
                     resource_optimization_override=resource_optimization_override,
+                    provider_preference_override=provider_preference_override,
                 )
         else:
             logger.warning("⚠️ Session正在启动中（跨模式重复请求），忽略")
@@ -2444,6 +2463,7 @@ class LifecycleMixin:
         request_id=None,
         handshake_override=...,
         resource_optimization_override=...,
+        provider_preference_override=...,
     ):
         """Post-connect activation: flip the active flags, start the message
         handler, reset the failure circuit, ack the frontend, and open the
@@ -2474,6 +2494,7 @@ class LifecycleMixin:
             input_mode,
             handshake_override=handshake_override,
             resource_optimization_override=resource_optimization_override,
+            provider_preference_override=provider_preference_override,
         )
 
         # 启动成功，重置失败计数器和熔断
