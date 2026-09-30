@@ -349,8 +349,17 @@ class TurnMixin:
         if not self._current_ai_turn_text:
             return
         self._flush_ai_turn_text_to_tracker()
+        turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
+        # An interrupted avatar-interaction reply still owns its meta (the
+        # avatar path clears it only after prompt_ephemeral returns). Carry
+        # and consume it here, as _emit_turn_end would, so cross_server keeps
+        # that text on the isolated avatar path instead of ordinary memory.
+        pending_meta = getattr(self, '_pending_turn_meta', None)
+        if pending_meta:
+            turn_end_msg['meta'] = pending_meta
+            self._pending_turn_meta = None
         if self.sync_message_queue:
-            self.sync_message_queue.put({'type': 'system', 'data': 'turn end'})
+            self.sync_message_queue.put(turn_end_msg)
 
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.

@@ -4577,6 +4577,35 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_interrupted_avatar_reply_keeps_its_isolation_meta(monkeypatch):
+    """The sync turn end for an interrupted avatar-interaction reply carries
+    (and consumes) its meta, so cross_server keeps the text off ordinary
+    memory, the same as the completion path's _emit_turn_end did."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = "摸头好舒服"
+    meta = {"kind": "avatar_interaction", "memory_note": "tapped"}
+    mgr._pending_turn_meta = meta
+    session.handle_interruption = AsyncMock()
+    session.stream_text = AsyncMock()
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "换个话题"},
+    )
+
+    turn_ends = [m for m in mgr.sync_message_queue.messages
+                 if isinstance(m, dict) and m.get("data") == "turn end"]
+    assert turn_ends == [{"type": "system", "data": "turn end", "meta": meta}]
+    assert mgr._pending_turn_meta is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 @pytest.mark.parametrize("images", [[], ["cb-image-1"]])
 async def test_callback_media_returns_when_cancelled_before_the_stream_begins(
     monkeypatch, images,
