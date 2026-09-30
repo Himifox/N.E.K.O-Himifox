@@ -31,12 +31,16 @@ enforced by ``scripts/check_api_trailing_slash.py``.
 import array
 import json
 import math
+import re
 import struct
 import sys
 import uuid
 import asyncio
 import time
 
+from utils.conversation_settings_constants import (
+    normalize_independent_asr_provider_preference_handshake,
+)
 from utils.logger_config import get_module_logger
 from utils.language_utils import is_supported_language_code, normalize_language_code
 from utils.new_character_greeting_state import has_pending as has_new_character_greeting_pending
@@ -65,6 +69,24 @@ _VOICE_BINARY_HEADER_BYTES = 8
 # control: the sibling JSON branch below carries the same materialization and
 # is bounded separately (MIC_PCM_FRAME_TOO_LONG in the Core bridge).
 _VOICE_BINARY_MAX_DURATION_MS = 120
+
+
+def _log_voice_lifecycle_request(message, *, connection_id, is_current):
+    """Record control-message provenance without logging arbitrary client data."""
+    action = message.get("action")
+    if action not in ("start_session", "pause_session", "end_session"):
+        return
+    trace = message.get("lifecycle_trace")
+    if not (
+        isinstance(trace, str)
+        and len(trace) <= 256
+        and re.fullmatch(r"app-[a-z-]+\.js:\d{1,6}:\d{1,6}(;app-[a-z-]+\.js:\d{1,6}:\d{1,6}){0,3}", trace)
+    ):
+        trace = "unavailable"
+    logger.info(
+        "Voice lifecycle received action=%s connection=%s current=%s client_sites=%s",
+        action, connection_id, is_current, trace,
+    )
 
 
 def _decode_binary_audio_frame(payload: bytes) -> dict[str, object]:
@@ -787,6 +809,11 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 # 兼容只实现 receive_text 的测试 double。
                 data = await websocket.receive_text()
                 message = json.loads(data)
+            _log_voice_lifecycle_request(
+                message,
+                connection_id=this_session_id,
+                is_current=session_id.get(lanlan_name) == this_session_id,
+            )
             # 安全检查：如果角色已被重命名或删除，lanlan_name 可能不再存在
             if lanlan_name not in session_manager:
                 logger.info(f"角色 {lanlan_name} 已被重命名或删除，关闭旧连接")
@@ -827,7 +854,17 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                     logger.info(f"角色 {lanlan_name} 已被重命名或删除，关闭旧连接")
                     await websocket.close()
                     break
-                await session_manager[lanlan_name].send_status(json.dumps({"code": "CHARACTER_SWITCHING_TERMINAL", "details": {"name": lanlan_name}}))
+                # 「正在前往另一个终端」是说给被踢下线的这条旧连接听的。
+                # send_status 走 mgr.websocket，而它此刻已经归新窗口所有——发过去
+                # 就成了刚接走角色的那个窗口收到「角色要离开」。格式与 send_status
+                # 一致，前端按同一条 status 翻译路径显示。
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "status",
+                        "message": json.dumps({"code": "CHARACTER_SWITCHING_TERMINAL", "details": {"name": lanlan_name}}),
+                    }))
+                except Exception as send_err:
+                    logger.debug(f"CHARACTER_SWITCHING_TERMINAL 未能送达旧连接: {send_err}")
                 await websocket.close()
                 break
             action = message.get("action")
@@ -878,6 +915,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                     if isinstance(raw_optimization_override, bool)
                     else None
                 )
+                # Absent -> None (persisted setting decides); malformed -> "auto".
+                request_provider_preference_override = (
+                    normalize_independent_asr_provider_preference_handshake(
+                        message.get("independent_asr_provider_preference")
+                    )
+                )
                 # Handshake: the frontend rides its authoritative independent-ASR
                 # toggle along on every start_session so the route decision cannot
                 # use a stale persisted value (settings POST failed or still in
@@ -900,6 +943,15 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 if callable(optimization_handshake_setter):
                     optimization_handshake_setter(
                         message.get("voice_input_resource_optimization_enabled")
+                    )
+                provider_preference_handshake_setter = getattr(
+                    session_manager[lanlan_name],
+                    "set_independent_asr_provider_preference_handshake",
+                    None,
+                )
+                if callable(provider_preference_handshake_setter):
+                    provider_preference_handshake_setter(
+                        message.get("independent_asr_provider_preference")
                     )
                 input_type = message.get("input_type", "audio")
                 # 前端每次 start_session 自带的请求标识，原样回带进
@@ -937,6 +989,9 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                                     handshake_override=request_handshake_override,
                                     resource_optimization_override=(
                                         request_optimization_override
+                                    ),
+                                    provider_preference_override=(
+                                        request_provider_preference_override
                                     ),
                                 )
                             )
@@ -987,6 +1042,9 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                             handshake_override=request_handshake_override,
                             resource_optimization_override=(
                                 request_optimization_override
+                            ),
+                            provider_preference_override=(
+                                request_provider_preference_override
                             ),
                         )
                     )
@@ -1148,6 +1206,10 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 mark_capture_client(lanlan_name, websocket, message)
 
             elif action == "capture_bridge_response":
+                from utils.capture_bridge import resolve_capture_response
+                resolve_capture_response(lanlan_name, message)
+
+            elif action == "capture_bridge_computer_use_response":
                 from utils.capture_bridge import resolve_capture_response
                 resolve_capture_response(lanlan_name, message)
 

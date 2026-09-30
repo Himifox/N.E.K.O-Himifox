@@ -103,6 +103,22 @@ dependencies = [
   "python-osc>=1.9.0",
 ]
 
+[project.optional-dependencies]
+# Optional local wake-word inference; model weights and the patched runtime are
+# provisioned separately. Keep this extra dependency-free: the upstream
+# 1.13.8 wheel is not compatible with the timestamp/decoder patches required by
+# the backend, and publishing a platform-specific custom wheel through the
+# lockfile would silently install the wrong runtime on unsupported platforms.
+# Install the locally built 1.13.8+neko.kws2 wheel as documented in
+# docs/development/wake-word-runtime.md.
+wake-word = []
+# Optional local speech recognition (main_logic/asr_client/workers/faster_whisper.py),
+# selectable in the voice-recognition settings. Not part of the default install
+# or packaged builds: it pulls in CTranslate2 and model downloads. Until it is
+# installed (`uv sync --extra local-asr`), the provider reports
+# ASR_INDEPENDENT_DEPENDENCY_MISSING instead of starting.
+local-asr = ["faster-whisper>=1.1.0"]
+
 [tool.hatch.version]
 path = "config/application.py"
 pattern = '''^APP_VERSION\s*=\s*["'](?P<version>[^"']+)["']'''
