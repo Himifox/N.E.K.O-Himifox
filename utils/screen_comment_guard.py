@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from copy import copy
+from functools import lru_cache
 
 import regex
 
@@ -53,7 +54,7 @@ _THINK_TAG = regex.compile(r"</?think(?:ing)?[ \t]{0,8}>", regex.IGNORECASE)
 _QUOTES = {"“": "”", "「": "」", "『": "』", "‘": "’", '"': '"', "'": "'"}
 
 
-def screen_guard_enabled(messages=None) -> bool:
+def screen_guard_enabled() -> bool:
     """On unless the operator switch ``NEKO_SCREEN_HISTORY_GUARD`` says off.
 
     Kept as a function because providers thread its result as a per-call
@@ -169,7 +170,7 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
     for one spread over the assistant run.
     """
     if guard_enabled is None:
-        guard_enabled = screen_guard_enabled(messages)
+        guard_enabled = screen_guard_enabled()
     if not guard_enabled:
         return messages
     if placeholder is None:
@@ -185,7 +186,7 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
             for _role, content in map(_role_and_content, messages[segment_start:boundary])
             if isinstance(content, str)
         ]
-        if boundary - segment_start >= 2 and _chain_start_across(texts) is not None:
+        if boundary - segment_start >= 2 and _cached_chain_start_across(tuple(texts)) is not None:
             tail_quarantine.update(range(segment_start, boundary))
         segment_start = boundary + 1
     projected = []
@@ -195,7 +196,7 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
         if role not in _ASSISTANT_ROLES or not isinstance(content, str):
             projected.append(message)
             continue
-        if screen_chain_start(content) is not None:
+        if _cached_chain_start_across((content,)) is not None:
             category = "message"
         elif index in tail_quarantine:
             category = "run"
@@ -340,7 +341,10 @@ class _ScreenLexer:
             attached = self.previous.isalnum() or self.previous == "_"
             if not ((char == '"' and self.previous.isdigit()) or (char == "'" and attached)):
                 self.quote = _QUOTES[char]
-        elif char in "/／屏当sScC" and not (self.previous.isalnum() or self.previous == "_"):
+        elif char in "/／屏当sScC" and not _is_ascii_word_char(self.previous):
+            # Only an ASCII word character blocks a marker start, so
+            # "screenshot" inside an English word stays inert while a label
+            # glued to the preceding Chinese sentence ("…喵屏幕搭话 …") counts.
             self.pending, self.pending_kind = char, "marker"
             return []
         return [self._emit(char)]
@@ -399,6 +403,18 @@ def _chain_start_across(texts) -> int | None:
                     return cut
         offset += len(text)
     return None
+
+
+# The request view is rebuilt for every provider call (each tool iteration and
+# the forced-final one) over a history whose messages never change, and the
+# lexer is pure Python. Strings cache their own hash, so a hit costs a lookup.
+@lru_cache(maxsize=256)
+def _cached_chain_start_across(texts: tuple) -> int | None:
+    return _chain_start_across(texts)
+
+
+def _is_ascii_word_char(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
 
 
 def screen_chain_start(text: str) -> int | None:

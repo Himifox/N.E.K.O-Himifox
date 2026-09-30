@@ -217,6 +217,18 @@ def _strip_nonverbal_directives(text: str) -> str:
     return _NONVERBAL_DIRECTIVE_PATTERN.sub("", text)
 
 
+def _generation_check(client, generation):
+    """The "is this turn still live" predicate the tool loops poll.
+
+    ``None`` means the caller threads no generation (direct callers and
+    tests), so nothing can cancel it. Module-level rather than a mixin
+    method so tool-loop doubles that compose only ``_ToolingMixin`` work.
+    """
+    if generation is None:
+        return lambda: True
+    return lambda: client._response_generation_is_active(generation)
+
+
 def _find_by_identity(messages, index: int, message) -> int:
     """Where ``message`` is in ``messages``: ``index`` if it still holds it,
     else a scan by identity; -1 when it is gone. Equal-valued copies never

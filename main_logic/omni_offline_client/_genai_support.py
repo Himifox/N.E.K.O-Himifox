@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from ._shared import (
+    _generation_check,
     AIMessage,
     Any,
     HumanMessage,
@@ -396,11 +397,7 @@ class _GenaiMixin:
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
         response_generation = overrides.pop("_response_generation", None)
 
-        def generation_is_active() -> bool:
-            return (
-                response_generation is None
-                or self._response_generation_is_active(response_generation)
-            )
+        generation_is_active = _generation_check(self, response_generation)
 
         if not generation_is_active():
             return

@@ -922,6 +922,7 @@ async def test_offline_replacement_wins_and_receives_multimodal_turn() -> None:
     manager._core_voice_session_swap_barrier_timeout_s = 1.0
     manager.handle_new_message = AsyncMock()
     manager.ensure_tts_pipeline_alive = AsyncMock()
+    manager._close_interrupted_offline_turn = MagicMock()
 
     expected = OmniOfflineClient.__new__(OmniOfflineClient)
     expected.handle_interruption = AsyncMock()
@@ -955,6 +956,8 @@ async def test_offline_replacement_wins_and_receives_multimodal_turn() -> None:
     expected.handle_interruption.assert_not_awaited()
     expected.submit_multimodal_turn.assert_not_awaited()
     replacement.handle_interruption.assert_awaited_once_with()
+    # The replacement's interrupted reply is closed as its own AI turn.
+    manager._close_interrupted_offline_turn.assert_called_once_with()
     replacement.submit_multimodal_turn.assert_awaited_once_with(
         "what is this",
         ("raw-frame",),

@@ -48,8 +48,9 @@ def test_no_wording_turns_the_guard_off(user_text):
     """User wording must never decide whether a body is quarantined."""
     history = [{"role": "assistant", "content": chain()},
                {"role": "user", "content": user_text}]
-    assert screen_guard_enabled(history)
-    assert screen_guard_enabled([])
+    # The switch takes no input at all, and the projection reads none.
+    assert screen_guard_enabled()
+    assert project_screen_history(history)[0]["content"] == PLACEHOLDER
 
 
 def test_reference_wording_never_restores_the_quarantined_body():
@@ -462,3 +463,38 @@ def test_hits_report_the_category_of_each_quarantine():
         hits=hits,
     )
     assert hits == {"message": 1, "run": 2}
+
+
+@pytest.mark.parametrize("glue", ["", "喵", "。", "\n"])
+def test_a_label_glued_to_the_previous_chinese_sentence_is_a_marker(glue):
+    """Within one message, "…陪你冲锋喵屏幕搭话 …" must still count: only an
+    ASCII word character blocks a marker start."""
+    joined = _C1 + glue + _C2
+    assert screen_chain_start(joined) == 0
+    assert project_screen_history([_assistant(joined), _user("继续")])[0]["content"] == PLACEHOLDER
+
+
+@pytest.mark.parametrize("text", [
+    "The screenshot comment: it looks fine to me, and the colours are right. "
+    "Another screenshot comment: the layout also reads well on a small phone.",
+    "prescreen comment: this is just a word that happens to contain a label. "
+    "prescreen comment: and here it is again, still inside a longer word.",
+])
+def test_labels_inside_english_words_stay_inert(text):
+    assert screen_chain_start(text) is None
+
+
+def test_repeated_projection_reuses_the_lexer_result(monkeypatch):
+    """Each provider call rebuilds the request view over unchanged history;
+    the per-message result is cached instead of re-lexed."""
+    calls = []
+    real = guard_module._chain_start_across
+    monkeypatch.setattr(guard_module, "_chain_start_across",
+                        lambda texts: calls.append(texts) or real(texts))
+    guard_module._cached_chain_start_across.cache_clear()
+    messages = [_user("聊"), _assistant(_COMMENT_A), _assistant(_COMMENT_B), _user("继续")]
+    first = project_screen_history(messages)
+    lexed = len(calls)
+    for _ in range(3):
+        assert [m["content"] for m in project_screen_history(messages)] == [m["content"] for m in first]
+    assert len(calls) == lexed

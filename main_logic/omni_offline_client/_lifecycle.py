@@ -471,6 +471,11 @@ class _LifecycleMixin:
         else:
             _ephemeral_msg = HumanMessage(content=instruction)
         messages_to_send = self._conversation_history + [_ephemeral_msg]
+        # This turn's place in history: the instruction itself is never saved,
+        # so a cancelled reply is anchored to the last message it was shown.
+        _history_anchor = (
+            self._conversation_history[-1] if self._conversation_history else None
+        )
         # 送达之后要抄给插件总线的东西：这一轮的指令，以及（若有）真正附上的那批
         # 图。一个槽装两样，是为了让「一轮只发一次」只有一处清标记 —— 两个槽两处
         # 清，就是下一次有人只清了其中一个的地方。None = 已经发过了。
@@ -762,10 +767,16 @@ class _LifecycleMixin:
                 # instruction, not the user. Mark them like finish_proactive_
                 # delivery does so the screen-history guard never joins them
                 # with the reply to the user's turn (utils/screen_comment_guard).
-                self._conversation_history.append(AIMessage(
+                reply = AIMessage(
                     content=assistant_message,
                     additional_kwargs={"dialog_source": "proactive"},
-                ))
+                )
+                if response_cancelled:
+                    # Whoever cancelled it may already have appended its own
+                    # user message; the half that was shown goes before it.
+                    self._commit_cancelled_reply(_history_anchor, reply)
+                else:
+                    self._conversation_history.append(reply)
             # 防复读 corpus 拆成两半：内存更新在收尾信号**之前**（同步，不含 await，
             # 所以不是取消点），落盘在**之后**。客户端看到 turn end 就可能立刻发下一
             # 条，那一轮的打分必须已经看得到刚提交的这句；而落盘那个 await 一旦被取消

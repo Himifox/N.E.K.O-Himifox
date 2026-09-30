@@ -574,9 +574,9 @@ class StreamingMixin:
                                 _interrupt_error,
                             )
                     # 被打断的回复不再走 turn end（取消的 generation 跳过
-                    # on_response_done），这里替它把已说出的半段记成一个 AI 轮，
-                    # 否则会拼进下一轮的 AI 文本里。
-                    self._flush_interrupted_ai_turn_text()
+                    # on_response_done），这里替它收尾：已说出的半段记成一个
+                    # AI 轮，并给 cross_server 发一条同步用的 turn end。
+                    self._close_interrupted_offline_turn()
 
                     self.audio_resampler.clear()
                     await self._clear_tts_pipeline()

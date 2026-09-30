@@ -5463,6 +5463,9 @@ class AsrRuntimeMixin:
                 interrupt = getattr(session_ref, "handle_interruption", None)
                 if callable(interrupt):
                     await interrupt()
+                    # Offline: close the reply this voice turn interrupted
+                    # before handle_new_message clears its text buffer.
+                    self._close_interrupted_offline_turn()
             if not operation_is_current():
                 if abandon_on_failure:
                     self._abandon_core_voice_turn(

@@ -3314,12 +3314,16 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
     assert mgr.pending_input_data == []
     mgr._clear_tts_pipeline.assert_awaited_once()
     assert ai_turn_notes == (["half a reply"] if session_state == "offline" else [])
+    sync_messages = list(mgr.sync_message_queue.messages)
     if session_state == "offline":
         mgr.session.handle_interruption.assert_awaited_once()
         assert mgr.session._pending_images == [earlier_image]
         mgr.session.set_proactive_screenshot.assert_called_once_with(None)
         assert mgr.session._pending_plugin_images == []
-    assert mgr.sync_message_queue.messages[0]["data"]["metadata"] == {
+        # cross_server leaves the interrupted assistant turn before the
+        # command's mirrored user line arrives.
+        assert sync_messages.pop(0) == {"type": "system", "data": "turn end"}
+    assert sync_messages[0]["data"]["metadata"] == {
         "source": "mini_game",
         "kind": "magic_command",
         "command": "watch-together",
@@ -4564,6 +4568,11 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
 
     assert notes == ([interrupted_text] if interrupted_text else []) + ["stream_text"]
     assert mgr._current_ai_turn_text == "B-full."
+    # cross_server needs a turn end to stop merging the next reply into the
+    # interrupted one; nothing said, nothing to close.
+    turn_ends = [m for m in mgr.sync_message_queue.messages
+                 if m == {"type": "system", "data": "turn end"}]
+    assert len(turn_ends) == (1 if interrupted_text else 0)
 
 
 @pytest.mark.unit

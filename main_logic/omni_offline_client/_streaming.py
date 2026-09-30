@@ -291,22 +291,25 @@ class _StreamingMixin:
             except Exception as e:
                 logger.warning(f"switch_model: old client aclose failed: {e}")
 
-    def _commit_cancelled_reply(self, user_message, text: str) -> None:
+    def _commit_cancelled_reply(self, anchor, reply) -> None:
         """Commit the visible part of a cancelled reply to its own turn.
 
-        The cancelling turn may already have appended its user message, so
-        the reply goes before the first user message that follows this
-        turn's own, not at the end. Tool-image turns are dicts, not
-        ``HumanMessage``, and belong to this turn. When the turn's user
-        message is gone (history rebuilt), fall back to appending.
+        ``anchor`` is the last message this turn owns in history (its user
+        message, or for ``prompt_ephemeral`` the message it saw last; ``None``
+        when history was empty). The cancelling turn may already have appended
+        its own user message, so the reply goes before the first
+        ``HumanMessage`` after the anchor instead of at the end. Tool-image
+        turns are dicts, not ``HumanMessage``, and belong to this turn. An
+        anchor that is gone (history rebuilt) falls back to appending, and an
+        empty reply is never written: some providers reject an empty
+        assistant message.
         """
+        if not str(getattr(reply, "content", "") or "").strip():
+            return
         history = self._conversation_history
-        start = next(
-            (i for i, message in enumerate(history) if message is user_message),
-            None,
-        )
+        start = -1 if anchor is None else _find_by_identity(history, -1, anchor)
         position = len(history)
-        if start is not None:
+        if anchor is None or start >= 0:
             position = next(
                 (
                     i for i in range(start + 1, len(history))
@@ -314,7 +317,7 @@ class _StreamingMixin:
                 ),
                 len(history),
             )
-        history.insert(position, AIMessage(content=text))
+        history.insert(position, reply)
 
     async def _check_repetition(self, response: str) -> bool:
         """
@@ -1478,8 +1481,9 @@ class _StreamingMixin:
                         # but keep what already reached UI/TTS, or the next
                         # request would not see what the user just saw.
                         if self._active_response_generation != response_generation:
-                            if assistant_message:
-                                self._commit_cancelled_reply(user_message, assistant_message)
+                            self._commit_cancelled_reply(
+                                user_message, AIMessage(content=assistant_message),
+                            )
                             break
 
                         # 流结束后：先 flush thinking stripper 的残留。仅漏型
@@ -1843,7 +1847,9 @@ class _StreamingMixin:
                                 # reach TTS or commit prefix + summary. Keep what
                                 # the UI already shows, like the check above.
                                 if self._active_response_generation != response_generation:
-                                    self._commit_cancelled_reply(user_message, assistant_message)
+                                    self._commit_cancelled_reply(
+                                        user_message, AIMessage(content=assistant_message),
+                                    )
                                     break
                                 if summary_text:
                                     logger.info(
@@ -1873,14 +1879,25 @@ class _StreamingMixin:
                         # Token usage 由 _AsyncStreamWrapper hook 在流结束时自动记录，
                         # 此处不再手动调用 TokenTracker.record() 避免双重计数。
 
+                        # The awaits above (prefix flush, tail/summary to TTS)
+                        # are cancellation points too, so the commit decides
+                        # where to write at the moment it writes.
+                        _cancelled_at_commit = (
+                            self._active_response_generation != response_generation
+                        )
                         if assistant_message:
                             # final AIMessage 只写未被 inline 持久化的最后一段
                             # （pre-tool 文本已经在前面 ``assistant.tool_calls.content``
                             # 里了，再 append 一次会双写历史）。
-                            self._conversation_history.append(AIMessage(content=assistant_message))
+                            if _cancelled_at_commit:
+                                self._commit_cancelled_reply(
+                                    user_message, AIMessage(content=assistant_message),
+                                )
+                            else:
+                                self._conversation_history.append(AIMessage(content=assistant_message))
                         # 重复检测看完整一轮文本（含 pre-tool），与人类用户感知
                         # 的"这一轮 AI 说了什么"一致。
-                        if assistant_message_total:
+                        if assistant_message_total and not _cancelled_at_commit:
                             await self._check_repetition(assistant_message_total)
                         break
 

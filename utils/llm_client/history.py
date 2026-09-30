@@ -26,6 +26,8 @@ from .messages import BaseMessage
 _PERSISTED_ADDITIONAL_KWARGS = (
     "anti_repeat_response_id",
     "anti_repeat_visible_text_length",
+    # Independent-delivery marker read by utils.screen_comment_guard.
+    "dialog_source",
 )
 
 
@@ -35,8 +37,6 @@ def _persisted_additional_kwargs(message: BaseMessage) -> dict[str, str]:
         value = message.additional_kwargs.get(key)
         if isinstance(value, str) and value:
             persisted[key] = value
-    if message.additional_kwargs.get("dialog_source") == "proactive":
-        persisted["dialog_source"] = "proactive"
     return persisted
 
 

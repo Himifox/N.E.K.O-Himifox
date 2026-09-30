@@ -406,3 +406,55 @@ async def test_cancel_between_tool_calls_stops_the_batch(provider):
     assert executed == ["c1"]
     assert [m["tool_call_id"] for m in messages if isinstance(m, dict) and m["role"] == "tool"] == ["c1"]
     await asyncio.sleep(0)
+
+
+# ── Where a cancelled reply lands (second review round) ─────────────────────
+
+async def test_cancelled_proactive_reply_goes_before_the_interrupting_user_turn():
+    """prompt_ephemeral's instruction is never saved, so the reply is anchored
+    to the last message the turn saw; the interrupter's HumanMessage that was
+    appended meanwhile stays after it."""
+    client = _client()
+    client._conversation_history.append(HumanMessage(content="earlier"))
+
+    async def interrupt():
+        await client.handle_interruption()
+        client._conversation_history.append(HumanMessage(content="Q-new"))
+
+    client.script = [[_text("刚才看到"), interrupt, _text("late"), _text("", "stop")]]
+    assert await client.prompt_ephemeral("callback") is True
+    assert _history_shape(client) == [
+        ("human", "earlier", None), ("ai", "刚才看到", None), ("human", "Q-new", None),
+    ]
+    assert client._conversation_history[2].additional_kwargs == {"dialog_source": "proactive"}
+
+
+async def test_cancel_during_the_prefix_flush_commits_before_the_interrupter():
+    """A short reply sits whole in the name-prefix buffer and is emitted by
+    the end-of-stream flush; a cancellation during that emit is caught at
+    the commit, not only right after the stream loop."""
+    client = _client()
+    client._prefix_buffer_size = 100
+
+    async def on_text_delta(text, is_first, **_kw):
+        await client.handle_interruption()
+        client._conversation_history.append(HumanMessage(content="Q2"))
+
+    client.on_text_delta = AsyncMock(side_effect=on_text_delta)
+    client.script = [[_text("短回复"), _text("", "stop")]]
+    await client.stream_text("Q1")
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", "短回复", None), ("human", "Q2", None),
+    ]
+    client.on_response_done.assert_not_awaited()
+
+
+@pytest.mark.parametrize("content", ["", "   "])
+def test_an_empty_cancelled_reply_is_never_written(content):
+    """Some providers reject an empty assistant message."""
+    client = _client()
+    anchor = HumanMessage(content="Q1")
+    client._conversation_history.append(anchor)
+    before = list(client._conversation_history)
+    client._commit_cancelled_reply(anchor, AIMessage(content=content))
+    assert client._conversation_history == before

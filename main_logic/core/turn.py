@@ -329,16 +329,28 @@ class TurnMixin:
         self._note_ai_turn(text=self._current_ai_turn_text or None)
         self._current_ai_turn_text = ''
 
-    def _flush_interrupted_ai_turn_text(self) -> None:
+    def _close_interrupted_offline_turn(self) -> None:
         """Close an interrupted offline reply as its own AI turn.
 
-        A cancelled generation skips ``on_response_done``, so its turn end
-        never flushes the text it already sent. Called right after the
-        interruption, before the next reply starts appending. A no-op when
-        nothing was said, so it never records a phantom AI turn.
+        A cancelled generation skips ``on_response_done``, and a finished
+        one superseded by the new turn during its cleanup await skips it too,
+        so neither reaches ``_emit_turn_end``. Without that, the text it
+        already said is glued onto the next reply's AI turn in the activity
+        tracker, and ``cross_server`` never leaves its assistant turn: the
+        next reply lands in the same memory message and the interrupting
+        user input is written after it.
+
+        Called at every offline interruption point, before the next reply
+        starts. It flushes the tracker and puts a sync-only ``turn end`` on
+        the queue; the WebSocket, TTS and request state belong to the new
+        turn and are left alone. A no-op when nothing was said since the last
+        turn end, so it never records a phantom AI turn.
         """
-        if self._current_ai_turn_text:
-            self._flush_ai_turn_text_to_tracker()
+        if not self._current_ai_turn_text:
+            return
+        self._flush_ai_turn_text_to_tracker()
+        if self.sync_message_queue:
+            self.sync_message_queue.put({'type': 'system', 'data': 'turn end'})
 
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.
@@ -1240,7 +1252,7 @@ class TurnMixin:
                         "[%s] mini-game magic command could not interrupt the reply: %s",
                         self.lanlan_name, exc,
                     )
-            self._flush_interrupted_ai_turn_text()
+            self._close_interrupted_offline_turn()
         self.audio_resampler.clear()
         await self._clear_tts_pipeline()
         await self.send_user_activity(interrupted_speech_id)

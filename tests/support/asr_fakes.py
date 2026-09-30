@@ -103,6 +103,9 @@ class _Runtime(AsrRuntimeMixin):
         self.session.create_response = AsyncMock()
         self.session.handle_interruption = AsyncMock()
         self.handle_new_message = AsyncMock()
+        # TurnMixin in production; closes the offline reply a voice turn
+        # interrupts.
+        self._close_interrupted_offline_turn = MagicMock()
         self.handle_input_transcript = AsyncMock(return_value=True)
         self.send_status = AsyncMock()
 

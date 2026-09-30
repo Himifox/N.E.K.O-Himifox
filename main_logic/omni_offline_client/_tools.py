@@ -17,6 +17,7 @@ from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from utils.screen_comment_guard import project_screen_history
 
 from ._shared import (
+    _generation_check,
     _find_by_identity,
     _same_route,
     LLMStreamChunk,
@@ -203,11 +204,7 @@ class _ToolingMixin:
         other failure, or one after a chunk was already received, propagates
         unchanged.
         """
-        def generation_is_active() -> bool:
-            return (
-                response_generation is None
-                or self._response_generation_is_active(response_generation)
-            )
+        generation_is_active = _generation_check(self, response_generation)
 
         if not generation_is_active():
             return
@@ -260,10 +257,9 @@ class _ToolingMixin:
         ``tool_calls`` turn and its replies. Returns the calls kept.
         """
         owned_ids = {id(assistant_turn)} | {id(message) for message in tool_results}
-        position = next(
-            (i for i, message in enumerate(messages) if message is assistant_turn),
-            len(messages),
-        )
+        position = _find_by_identity(messages, -1, assistant_turn)
+        if position < 0:
+            position = len(messages)
         rebuilt = [message for message in messages if id(message) not in owned_ids]
         if tool_results:
             # Calls run in order, so the results are a prefix of tool_calls.
@@ -928,11 +924,7 @@ class _ToolingMixin:
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
         response_generation = overrides.pop("_response_generation", None)
 
-        def generation_is_active() -> bool:
-            return (
-                response_generation is None
-                or self._response_generation_is_active(response_generation)
-            )
+        generation_is_active = _generation_check(self, response_generation)
 
         if not generation_is_active():
             return
