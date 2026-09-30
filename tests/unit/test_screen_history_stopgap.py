@@ -572,3 +572,35 @@ def test_hot_swap_cache_catches_a_chain_split_over_entries(monkeypatch):
     assert rendered == ["Alice | 陪我聊聊",
                         f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}",
                         f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}"]
+
+
+def test_list_content_is_checked_like_text():
+    """Memory restores assistant messages as [{"type": "text", ...}]; the
+    guard must read their text, in one message and across the run."""
+    from types import SimpleNamespace
+
+    def listed(text):
+        return SimpleNamespace(type="ai", content=[{"type": "text", "text": text}])
+
+    single = [SimpleNamespace(type="human", content="聊"), listed(chain())]
+    assert project_screen_history(single, trailing_turn=True)[1].content == PLACEHOLDER
+    run = [SimpleNamespace(type="human", content="聊"), listed(_COMMENT_A), listed(_COMMENT_B)]
+    projected = project_screen_history(run, trailing_turn=True)
+    assert [m.content for m in projected[1:]] == [PLACEHOLDER, PLACEHOLDER]
+    assert run[1].content == [{"type": "text", "text": _COMMENT_A}], "originals untouched"
+
+
+def test_a_cache_slice_is_judged_with_what_precedes_it(monkeypatch):
+    """A slice primed after an earlier one is judged together with it: a
+    chain split across the boundary is caught, and only the slice renders."""
+    from types import SimpleNamespace
+    from main_logic.core.notify import NotifyMixin
+
+    monkeypatch.delenv(SCREEN_GUARD_ENV, raising=False)
+    owner = SimpleNamespace(lanlan_name="YUI", master_name="Alice", user_language="zh")
+    earlier = [{"role": "Alice", "text": "陪我聊聊"}, {"role": "YUI", "text": _COMMENT_A}]
+    later = [{"role": "YUI", "text": _COMMENT_B}]
+    assert NotifyMixin._convert_cache_to_str(owner, later).splitlines() == [f"YUI | {_COMMENT_B}"]
+    assert NotifyMixin._convert_cache_to_str(owner, later, preceding=earlier).splitlines() == [
+        f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}",
+    ]

@@ -329,41 +329,78 @@ class TurnMixin:
         self._note_ai_turn(text=self._current_ai_turn_text or None)
         self._current_ai_turn_text = ''
 
-    def _close_interrupted_offline_turn(self) -> bool:
+    async def _interrupt_offline_reply(self, session) -> bool:
+        """Stop ``session``'s reply and close it as its own AI turn.
+
+        Every interruption point goes through here rather than awaiting
+        ``handle_interruption()`` itself: an interruption that claims a
+        finished reply's completion must be followed by the close, or that
+        reply never gets a turn end. Returns whether a turn was closed; the
+        caller then owes it the wrap-up its completion would have run (see
+        ``_schedule_interrupted_turn_wrap_up``), once the new turn has marked
+        its user input.
+        """
+        interrupt = getattr(session, "handle_interruption", None)
+        if not callable(interrupt):
+            return False
+        kind = await interrupt()
+        if not kind:
+            return False
+        return self._close_interrupted_offline_turn(
+            kind if isinstance(kind, str) else "response"
+        )
+
+    def _schedule_interrupted_turn_wrap_up(self) -> None:
+        """Run the wrap-up a closed, interrupted turn's completion skipped.
+
+        Renewal check and queued agent-callback delivery. Fired, not awaited,
+        so the user's new turn is not held up; schedule it only after that
+        turn marked its user input, so callback delivery defers to it.
+        """
+        self._fire_task(self._finalize_turn_after_emit())
+
+    def _close_interrupted_offline_turn(self, kind: str = "response") -> bool:
         """Close an offline reply that an interruption actually stopped.
 
-        Call only when ``handle_interruption()`` reported an interruption: a
-        cancelled generation, or a finished one whose completion it claimed.
-        Neither runs ``on_response_done``, so neither reaches
-        ``_emit_turn_end``. Without that, the text it already said is glued
-        onto the next reply's AI turn in the activity tracker, and
+        ``kind`` is what ``handle_interruption()`` reported: the turn end the
+        skipped completion would have sent. "agent_callback" is a proactive
+        reply, closed with ``turn end agent_callback`` as
+        ``handle_proactive_complete`` would, so cross_server does not send an
+        analyze request for it. Without a turn end, the text it already said
+        is glued onto the next reply's AI turn in the activity tracker, and
         ``cross_server`` never leaves its assistant turn: the next reply lands
-        in the same memory message and the interrupting user input is written
-        after it.
+        in the same memory message and the interrupting user input is
+        written after it.
 
-        Runs before the next reply starts. It retires the interrupted text
-        request id (what the completion would have done), flushes the
-        tracker and puts a sync-only ``turn end`` carrying that request id and
-        any pending turn meta on the queue; the WebSocket and TTS belong to
-        the new turn and are left alone. Nothing said since the last turn end
-        means nothing to close. Returns whether a turn end was sent.
+        Runs before the next reply starts. For a response it retires the
+        interrupted text request id (what the completion would have done),
+        and its turn end carries that id and any pending turn meta. It
+        flushes the tracker and puts a sync-only turn end on the queue; the
+        WebSocket and TTS belong to the new turn and are left alone. Nothing
+        said since the last turn end means nothing to close. Returns whether
+        a turn end was sent.
         """
-        request_id = getattr(self, '_active_text_request_id', None)
-        self._active_text_request_id = None
+        request_id = None
+        if kind != "agent_callback":
+            request_id = getattr(self, '_active_text_request_id', None)
+            self._active_text_request_id = None
         if not self._current_ai_turn_text:
             return False
         self._flush_ai_turn_text_to_tracker()
-        turn_end_msg: dict = {'type': 'system', 'data': 'turn end'}
-        # An interrupted avatar-interaction reply still owns its meta (the
-        # avatar path clears it only after prompt_ephemeral returns). Carry
-        # and consume it here, as _emit_turn_end would, so cross_server keeps
-        # that text on the isolated avatar path instead of ordinary memory.
-        pending_meta = getattr(self, '_pending_turn_meta', None)
-        if pending_meta:
-            turn_end_msg['meta'] = pending_meta
-            self._pending_turn_meta = None
-        if request_id:
-            turn_end_msg['request_id'] = request_id
+        if kind == "agent_callback":
+            turn_end_msg: dict = {'type': 'system', 'data': 'turn end agent_callback'}
+        else:
+            turn_end_msg = {'type': 'system', 'data': 'turn end'}
+            # An interrupted avatar-interaction reply still owns its meta (the
+            # avatar path clears it only after prompt_ephemeral returns). Carry
+            # and consume it here, as _emit_turn_end would, so cross_server
+            # keeps that text on the isolated avatar path, off ordinary memory.
+            pending_meta = getattr(self, '_pending_turn_meta', None)
+            if pending_meta:
+                turn_end_msg['meta'] = pending_meta
+                self._pending_turn_meta = None
+            if request_id:
+                turn_end_msg['request_id'] = request_id
         if self.sync_message_queue:
             self.sync_message_queue.put(turn_end_msg)
         return True
@@ -1256,24 +1293,17 @@ class TurnMixin:
         # its current speech dropped by the frontend.
         async with self.lock:
             interrupted_speech_id = self.current_speech_id
+        _closed = False
         if isinstance(self.session, OmniOfflineClient):
-            _interrupt = getattr(self.session, "handle_interruption", None)
-            _interrupted = False
-            if callable(_interrupt):
-                try:
-                    _interrupted = await _interrupt()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning(
-                        "[%s] mini-game magic command could not interrupt the reply: %s",
-                        self.lanlan_name, exc,
-                    )
-            if _interrupted and self._close_interrupted_offline_turn():
-                # No new reply follows a command, so the wrap-up the skipped
-                # completion would have run (renewal check, queued agent
-                # callbacks) runs here instead of waiting for an unrelated turn.
-                await self._finalize_turn_after_emit()
+            try:
+                _closed = await self._interrupt_offline_reply(self.session)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "[%s] mini-game magic command could not interrupt the reply: %s",
+                    self.lanlan_name, exc,
+                )
         self.audio_resampler.clear()
         await self._clear_tts_pipeline()
         await self.send_user_activity(interrupted_speech_id)
@@ -1288,6 +1318,11 @@ class TurnMixin:
         )
         await self._emit_agent_callback_turn_end(request_id)
         await self._push_mini_game_magic_command_launch(game_type)
+        if _closed:
+            # No new reply follows a command, so the wrap-up the interrupted
+            # reply's skipped completion owed (renewal check, queued agent
+            # callbacks) runs now that the command's own turn is sealed.
+            await self._finalize_turn_after_emit()
         logger.info(
             "[%s] text input sent mini-game magic command: %s",
             self.lanlan_name,

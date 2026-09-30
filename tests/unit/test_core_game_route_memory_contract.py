@@ -3273,7 +3273,10 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
     ai_turn_notes = []
     mgr._note_ai_turn = lambda text=None, **_kw: ai_turn_notes.append(text)
     mgr._current_ai_turn_text = "half a reply"
-    mgr._finalize_turn_after_emit = AsyncMock()
+    sent_at_finalize = []
+    mgr._finalize_turn_after_emit = AsyncMock(
+        side_effect=lambda: sent_at_finalize.append(len(mgr.websocket.sent))
+    )
     if session_state == "no_session":
         mgr.session = None
         mgr.is_active = False
@@ -3326,6 +3329,9 @@ async def test_mini_game_magic_command_launches_before_session_lifecycle(session
         # completion owned runs here: no new reply follows a command.
         assert sync_messages.pop(0) == {"type": "system", "data": "turn end"}
         mgr._finalize_turn_after_emit.assert_awaited_once_with()
+        # Only after the command's own turn end and launch were sent, so
+        # delivered callbacks cannot race the command's cleanup.
+        assert sent_at_finalize == [2]
     else:
         mgr._finalize_turn_after_emit.assert_not_awaited()
     assert sync_messages[0]["data"]["metadata"] == {
@@ -4556,6 +4562,7 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
     mgr._note_ai_turn = lambda text=None, **_kw: notes.append(text)
     mgr._current_ai_turn_text = interrupted_text
     mgr._active_text_request_id = "req-old"
+    mgr._schedule_interrupted_turn_wrap_up = Mock()
 
     async def _stream_text(_text, **_kwargs):
         notes.append("stream_text")
@@ -4585,6 +4592,9 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
         if interrupted_text else []
     )
     assert mgr._active_text_request_id is None
+    # The closed turn's skipped wrap-up is owed, and scheduled (not awaited)
+    # after this turn marked its user input.
+    assert mgr._schedule_interrupted_turn_wrap_up.call_count == (1 if interrupted_text else 0)
 
 
 @pytest.mark.unit
@@ -4615,6 +4625,52 @@ async def test_typed_text_does_not_close_a_reply_nothing_interrupted(monkeypatch
                 if isinstance(m, dict) and m.get("data") == "turn end"]
     assert notes == []
     assert mgr._pending_turn_meta is meta
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_interrupted_agent_callback_reply_closes_as_agent_callback(monkeypatch):
+    """handle_proactive_complete would send 'turn end agent_callback', which
+    tells cross_server not to send an analyze request for a callback reply.
+    The interruption closes it the same way and leaves the text request's id
+    and any avatar meta alone."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._schedule_interrupted_turn_wrap_up = Mock()
+    mgr._current_ai_turn_text = "回调说到一半"
+    mgr._active_text_request_id = "req-other"
+    meta = {"kind": "avatar_interaction"}
+    mgr._pending_turn_meta = meta
+    session.handle_interruption = AsyncMock(return_value="agent_callback")
+    session.stream_text = AsyncMock()
+    monkeypatch.setattr(
+        core_module, "dispatch_text_user_message", lambda _n, _t: None
+    )
+
+    await core_module.LLMSessionManager._process_stream_data_internal(
+        mgr,
+        {"input_type": "text", "data": "换个话题"},
+    )
+
+    turn_ends = [m for m in mgr.sync_message_queue.messages
+                 if isinstance(m, dict) and str(m.get("data", "")).startswith("turn end")]
+    assert turn_ends == [{"type": "system", "data": "turn end agent_callback"}]
+    assert mgr._pending_turn_meta is meta
+
+
+@pytest.mark.unit
+def test_closing_an_agent_callback_turn_leaves_the_text_request_alone():
+    """A callback reply owns no text request: its close must not retire the
+    id of a text request that is still in flight."""
+    session = _make_offline_session_for_callback_media()
+    mgr = _make_callback_media_manager(session)
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._current_ai_turn_text = "回调说到一半"
+    mgr._active_text_request_id = "req-other"
+
+    assert core_module.LLMSessionManager._close_interrupted_offline_turn(mgr, "agent_callback")
+    assert mgr._active_text_request_id == "req-other"
 
 
 @pytest.mark.unit

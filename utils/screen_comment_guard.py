@@ -71,6 +71,27 @@ def _role_and_content(message):
     return getattr(message, "type", None), getattr(message, "content", None)
 
 
+def _text_of(content) -> str | None:
+    """The text a message body shows the model, or ``None`` when it has none.
+
+    Memory restores assistant messages with list content
+    (``[{"type": "text", "text": ...}]``), so a string-only check would let
+    every restored chain through. Text parts are joined with newlines, the
+    way the renderers join them.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            part.get("text")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
 def _is_tool_image_turn(messages, index) -> bool:
     """Whether ``messages[index]`` is a user turn the tool loop injected.
 
@@ -194,9 +215,12 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
         if boundary < tail_end and not _is_independent_delivery(messages[boundary]):
             continue
         texts = [
-            content
-            for _role, content in map(_role_and_content, messages[segment_start:boundary])
-            if isinstance(content, str)
+            text
+            for text in (
+                _text_of(content)
+                for _role, content in map(_role_and_content, messages[segment_start:boundary])
+            )
+            if text is not None
         ]
         if boundary - segment_start >= 2 and _cached_chain_start_across(tuple(texts)) is not None:
             tail_quarantine.update(range(segment_start, boundary))
@@ -205,10 +229,11 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
     changed = 0
     for index, message in enumerate(messages):
         role, content = _role_and_content(message)
-        if role not in _ASSISTANT_ROLES or not isinstance(content, str):
+        text = _text_of(content)
+        if role not in _ASSISTANT_ROLES or text is None:
             projected.append(message)
             continue
-        if _cached_chain_start_across((content,)) is not None:
+        if _cached_chain_start_across((text,)) is not None:
             category = "message"
         elif index in tail_quarantine:
             category = "run"

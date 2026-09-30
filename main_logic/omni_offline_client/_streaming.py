@@ -2097,8 +2097,6 @@ class _StreamingMixin:
             response_cancelled = self._active_response_generation != response_generation
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
-            if not response_cancelled:
-                self._mark_completion_pending(response_generation)
 
             if history_replacement_text:
                 # The index is a hint: a concurrent turn's cancelled tool round
@@ -2115,49 +2113,57 @@ class _StreamingMixin:
             if _summary_prev_max_tokens is not None and getattr(self, "llm", None) is not None:
                 self.llm.max_completion_tokens = _summary_prev_max_tokens
 
-            # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
-            # 用 final-segment 会让"tool 轮跑完了但模型没出 final 文本"的场景被错报。
-            if (
-                not response_cancelled
-                and not assistant_message_total
-                and not guard_exhausted
-                and not status_reported
-            ):
-                # 把最后一次 attempt 的 finish_reason / block_reason / prompt_tokens
-                # 拼进 warning。Gemini-via-OpenAI-compat 静默 empty 时（safety /
-                # recitation / max_tokens / 上下文超限），这条 log 是日志里能拿到
-                # 的唯一"为什么 empty"线索。
-                logger.warning(
-                    "OmniOfflineClient: 所有重试均未产生文本回复 "
-                    "(finish_reason=%s block_reason=%s prompt_tokens=%s model=%s)",
-                    getattr(self, "_last_finish_reason", None),
-                    getattr(self, "_last_block_reason", None),
-                    getattr(self, "_last_prompt_tokens", None),
-                    getattr(self, "model", None),
-                )
-                if self.on_status_message:
-                    finish_reason = getattr(self, "_last_finish_reason", None)
-                    block_reason = getattr(self, "_last_block_reason", None)
-                    prompt_tokens = getattr(self, "_last_prompt_tokens", None)
-                    model = getattr(self, "model", None)
-                    if _is_safety_violation_signal(finish_reason, block_reason):
-                        await self.on_status_message(json.dumps({
-                            "code": "API_POLICY_VIOLATION",
-                            "details": {
-                                "msg": "LLM completion was blocked by upstream safety policy.",
-                                "finish_reason": finish_reason,
-                                "block_reason": block_reason,
-                                "prompt_tokens": prompt_tokens,
-                                "model": model,
-                            },
-                        }))
-                    else:
-                        await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
+            # The status await below is the one window in which an interruption
+            # can claim this finished turn's completion. Mark it only for that
+            # window and always take the mark back, or a raising status send
+            # leaves it behind for the next, unrelated interruption to claim.
+            if not response_cancelled:
+                self._mark_completion_pending(response_generation)
+            try:
+                # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
+                # 用 final-segment 会让"tool 轮跑完了但模型没出 final 文本"的场景被错报。
+                if (
+                    not response_cancelled
+                    and not assistant_message_total
+                    and not guard_exhausted
+                    and not status_reported
+                ):
+                    # 把最后一次 attempt 的 finish_reason / block_reason / prompt_tokens
+                    # 拼进 warning。Gemini-via-OpenAI-compat 静默 empty 时（safety /
+                    # recitation / max_tokens / 上下文超限），这条 log 是日志里能拿到
+                    # 的唯一"为什么 empty"线索。
+                    logger.warning(
+                        "OmniOfflineClient: 所有重试均未产生文本回复 "
+                        "(finish_reason=%s block_reason=%s prompt_tokens=%s model=%s)",
+                        getattr(self, "_last_finish_reason", None),
+                        getattr(self, "_last_block_reason", None),
+                        getattr(self, "_last_prompt_tokens", None),
+                        getattr(self, "model", None),
+                    )
+                    if self.on_status_message:
+                        finish_reason = getattr(self, "_last_finish_reason", None)
+                        block_reason = getattr(self, "_last_block_reason", None)
+                        prompt_tokens = getattr(self, "_last_prompt_tokens", None)
+                        model = getattr(self, "model", None)
+                        if _is_safety_violation_signal(finish_reason, block_reason):
+                            await self.on_status_message(json.dumps({
+                                "code": "API_POLICY_VIOLATION",
+                                "details": {
+                                    "msg": "LLM completion was blocked by upstream safety policy.",
+                                    "finish_reason": finish_reason,
+                                    "block_reason": block_reason,
+                                    "prompt_tokens": prompt_tokens,
+                                    "model": model,
+                                },
+                            }))
+                        else:
+                            await self.on_status_message(json.dumps({"code": "LLM_NO_RESPONSE"}))
+            finally:
+                completion_claimed = not self._take_completion(response_generation)
 
             # Call response done callback. Skipped when cancelled, when an
             # interruption claimed it during the status await above, or when a
             # newer response started (see prompt_ephemeral).
-            completion_claimed = not self._take_completion(response_generation)
             if (
                 not response_cancelled
                 and not completion_claimed

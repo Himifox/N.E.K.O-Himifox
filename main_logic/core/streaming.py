@@ -558,28 +558,24 @@ class StreamingMixin:
                     # 会继续吐 delta，全部挂到这条新消息的 sid 上；两条流还共用
                     # _is_responding，先收尾的那条把它翻 False，另一条被截断。
                     # 与独立 ASR 准备回合前那次 handle_interruption() 同一判据。
-                    _interrupt = getattr(self.session, "handle_interruption", None)
-                    _interrupted = False
-                    if callable(_interrupt):
-                        try:
-                            _interrupted = await _interrupt()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as _interrupt_error:
-                            # 打断是尽力而为：一个坏掉的会话不该把用户刚打的这句话
-                            # 一起吞掉。失败时旧流可能继续吐 delta（就是这段要修的
-                            # 问题），但比丢消息轻。
-                            logger.warning(
-                                "[%s] text input could not interrupt the session: %s",
-                                self.lanlan_name,
-                                _interrupt_error,
-                            )
+                    _closed = False
+                    try:
+                        _closed = await self._interrupt_offline_reply(self.session)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as _interrupt_error:
+                        # 打断是尽力而为：一个坏掉的会话不该把用户刚打的这句话
+                        # 一起吞掉。失败时旧流可能继续吐 delta（就是这段要修的
+                        # 问题），但比丢消息轻。
+                        logger.warning(
+                            "[%s] text input could not interrupt the session: %s",
+                            self.lanlan_name,
+                            _interrupt_error,
+                        )
                     # 被打断的回复不再走 turn end（取消的 generation 跳过
-                    # on_response_done），这里替它收尾：已说出的半段记成一个
-                    # AI 轮，并给 cross_server 发一条同步用的 turn end。只在
-                    # 确实打断了什么时才做，否则会给已正常收尾的回复再补一次。
-                    if _interrupted:
-                        self._close_interrupted_offline_turn()
+                    # on_response_done）：_interrupt_offline_reply 在确实打断了
+                    # 什么时替它收尾（记 AI 轮 + 同步 turn end），它欠下的续期检查
+                    # 与回调投递在下面 USER_INPUT 标记之后补上。
 
                     self.audio_resampler.clear()
                     await self._clear_tts_pipeline()
@@ -598,6 +594,10 @@ class StreamingMixin:
                     # 状态机：文本模式 stream_text 入口同样需要发射 USER_INPUT。
                     # handle_new_message 只在语音模式走到，这里是文本模式的对偶。
                     await self.state.fire(SessionEvent.USER_INPUT, sid=new_user_sid)
+                    if _closed:
+                        # After USER_INPUT, so queued agent callbacks defer to
+                        # this user turn instead of racing it.
+                        self._schedule_interrupted_turn_wrap_up()
                     # Activity tracker：文本模式真实用户输入。故意不在 handle_new_message
                     # 里挂——后者也被 proactive abort 流程调用做清理（见
                     # main_routers/system_router.py），那不算用户活动。

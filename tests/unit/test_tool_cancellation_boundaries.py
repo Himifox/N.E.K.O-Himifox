@@ -77,10 +77,12 @@ async def test_round_exception_transaction(provider, failure, fail_at, monkeypat
     else:
         with pytest.raises(ValueError, match=failure + " failed"):
             await consume()
-        assert len(executed) == fail_at - (failure == "construction")
-        # Calls recorded before the failure stay, paired and contiguous;
+        # Calls are built before the round, so a construction failure stops
+        # the turn before any tool ran. A serialization failure lands inside
+        # the round: calls recorded before it stay, paired and contiguous;
         # with none recorded the round is gone. The concurrent append stays.
-        kept = fail_at - 1
+        assert len(executed) == (0 if failure == "construction" else fail_at)
+        kept = 0 if failure == "construction" else fail_at - 1
         assert messages[0] is original
         assert messages[-1] is concurrent
         if kept:
@@ -102,7 +104,8 @@ async def test_gemini_reasoning_callback_cancellation(monkeypatch):
     generation = client._begin_response_generation()
     result = [chunk async for chunk in client._astream_genai_with_tools(
         [{"role": "user", "content": "hello"}], _response_generation=generation)]
-    assert result == []
+    # Only the empty "answered" chunk callers publish on; no late text.
+    assert [chunk.content for chunk in result] == [""]
 
 
 def make_client(provider, monkeypatch, handler, cap=2):

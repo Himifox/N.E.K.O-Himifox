@@ -536,6 +536,9 @@ class _GenaiMixin:
                         if getattr(part, "thought", False):
                             await self._notify_reasoning_active()
                             if not generation_is_active():
+                                # Thought parts are never yielded, so callers
+                                # may not have seen this answered request yet.
+                                yield LLMStreamChunk(content="")
                                 return
                             continue
                         text = getattr(part, "text", None) or ""
@@ -733,19 +736,22 @@ class _GenaiMixin:
                     "content": strip_thinking_segments(streamed_text_buffer),
                     "tool_calls": tool_calls_dict,
                 }
-                builders = [
-                    (lambda i=i, tc=tc: ToolCall(
-                        name=tc[1],
-                        arguments=tc[2],
-                        call_id=tc[0] or f"call_{i}",
-                        raw_arguments=tc[3],
-                    ))
-                    for i, tc in enumerate(collected_tool_calls)
+                # Built before the round (see _run_tool_round): a call that
+                # cannot be constructed stops the turn before any side effect.
+                tool_calls = [
+                    ToolCall(
+                        name=tc_name,
+                        arguments=tc_args,
+                        call_id=tc_id or f"call_{i}",
+                        raw_arguments=tc_raw,
+                    )
+                    for i, (tc_id, tc_name, tc_args, tc_raw, _tc_extra)
+                    in enumerate(collected_tool_calls)
                 ]
                 executed, live = await self._run_tool_round(
                     messages,
                     assistant_turn,
-                    builders,
+                    tool_calls,
                     tool_image_slots=tool_image_slots,
                     tool_bus_frames=tool_bus_frames,
                     generation_is_active=generation_is_active,

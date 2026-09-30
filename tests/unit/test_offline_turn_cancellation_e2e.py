@@ -464,7 +464,7 @@ def test_an_empty_cancelled_reply_is_never_written(content):
 
 async def test_interruption_reports_false_when_nothing_is_live():
     client = _client()
-    assert await client.handle_interruption() is False
+    assert await client.handle_interruption() == ""
 
 
 async def test_interruption_reports_true_for_a_live_stream():
@@ -476,7 +476,7 @@ async def test_interruption_reports_true_for_a_live_stream():
 
     client.script = [[_text("hi"), interrupt, _text("", "stop")]]
     await client.stream_text("Q1")
-    assert seen == [True]
+    assert seen == ["response"]
 
 
 async def test_interruption_claims_a_finished_reply_awaiting_its_completion():
@@ -493,7 +493,7 @@ async def test_interruption_claims_a_finished_reply_awaiting_its_completion():
     client._notify_reasoning_done = cleanup
     client.script = [[_text("说完了。"), _text("", "stop")]]
     assert await client.prompt_ephemeral("callback", completion_mode="response") is True
-    assert seen == [True]
+    assert seen == ["response"]
     client.on_response_done.assert_not_awaited()
 
 
@@ -509,7 +509,7 @@ async def test_interruption_leaves_a_running_completion_alone():
     client.on_proactive_done = AsyncMock(side_effect=proactive_done)
     client.script = [[_text("说完了。"), _text("", "stop")]]
     assert await client.prompt_ephemeral("callback") is True
-    assert seen == [False]
+    assert seen == [""]
     client.on_proactive_done.assert_awaited_once()
 
 
@@ -674,3 +674,56 @@ async def test_a_tools_refusal_retry_cancelled_in_flight_still_publishes():
     assert len(client.requests) == 2
     client._publish_provider_frames.assert_called_once()
     assert _emitted(client) == []
+
+
+# ── Fourth review round ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("provider,cap", [("openai", 2), ("openai", 0), ("gemini", 2)])
+async def test_a_reasoning_only_start_cancelled_still_publishes_the_turn(provider, cap):
+    """The stream opens with reasoning, which is never yielded; the user
+    interrupts during it. The provider saw the turn's frames, so they are
+    published all the same, and nothing is shown."""
+    client = _client(provider, handler=_noop_tool, cap=cap)
+
+    async def thinking(active):
+        if active:
+            await client.handle_interruption()
+
+    client.on_thinking_active = thinking
+    if provider == "gemini":
+        thought = _GenaiPart(text="thinking")
+        thought.thought = True
+        client.script = [[_GenaiChunk([thought]), _GenaiChunk([_GenaiPart(text="late")])]]
+    else:
+        client.script = [[LLMStreamChunk(content="", reasoning_content="thinking"),
+                          _text("late"), _text("", "stop")]]
+    await client.stream_text("look", turn_images=[_png_b64(4, 4, (3, 3, 3))])
+    client._publish_provider_frames.assert_called_once()
+    assert _emitted(client) == []
+
+
+async def test_an_interrupted_proactive_reply_reports_its_agent_callback_kind():
+    """prompt_ephemeral's proactive completion is handle_proactive_complete,
+    which closes with 'turn end agent_callback'; an interruption reports
+    that kind so the core closes the turn the same way."""
+    client = _client()
+    seen = []
+
+    async def interrupt():
+        seen.append(await client.handle_interruption())
+
+    client.script = [[_text("回调说到一半"), interrupt, _text("", "stop")]]
+    await client.prompt_ephemeral("callback")
+    assert seen == ["agent_callback"]
+    client.on_proactive_done.assert_not_awaited()
+
+
+async def test_a_raising_status_send_leaves_no_claimable_completion():
+    """The completion-pending mark lives only for the cleanup await; if that
+    await raises, the next interruption must not claim a phantom turn."""
+    client = _client()
+    client.on_status_message = AsyncMock(side_effect=RuntimeError("socket gone"))
+    client.script = [[_text("", "stop")]]
+    with pytest.raises(RuntimeError):
+        await client.stream_text("hi")
+    assert await client.handle_interruption() == ""

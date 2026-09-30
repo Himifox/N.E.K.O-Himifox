@@ -360,7 +360,10 @@ class ContextAppendMixin:
         if not late_context:
             return consumed_count
         try:
-            await prime_context(self._convert_cache_to_str(late_context), skipped=True)
+            await prime_context(
+                self._convert_cache_to_str(late_context, preceding=snapshot[:consumed_count]),
+                skipped=True,
+            )
         except Exception as exc:
             logger.warning(
                 "[%s] final-swap late next-session context prime failed: %s",

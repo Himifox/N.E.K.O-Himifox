@@ -145,7 +145,8 @@ async def test_get_recent_history_quarantines_screen_chains_before_rendering():
         # A chain split over the replies that end the history: the new
         # session's user turn follows them, so they are one run.
         SimpleNamespace(type="ai", content="屏幕搭话 蓝色小车停在一棵大树旁边，树叶的影子落在了车顶上。"),
-        SimpleNamespace(type="ai", content="屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"),
+        # cross_server stores assistant turns as text-part lists.
+        SimpleNamespace(type="ai", content=[{"type": "text", "text": "屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"}]),
     ]))
 
     with patch.object(memory_server.runtime, "_config_manager", fake_config), \

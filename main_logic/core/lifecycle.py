@@ -1699,8 +1699,11 @@ class LifecycleMixin:
                 self.lanlan_name,
                 self.memory_server_port,
             )
-            initial_prompt += self._convert_cache_to_str(next_context)
-            initial_prompt += self._convert_cache_to_str(cached_turns)
+            # One call for both slices: a screen chain split across them is
+            # judged as one run (see _convert_cache_to_str).
+            initial_prompt += self._convert_cache_to_str(
+                list(next_context) + list(cached_turns)
+            )
             self._bind_session_lifecycle_callbacks(candidate)
             await candidate.connect(initial_prompt, native_audio=False)
         except BaseException:
@@ -1759,6 +1762,7 @@ class LifecycleMixin:
                     # repeating interruption/handle_new_message would rotate its
                     # speech id twice. Only a hot-swap replacement needs the
                     # preparation that could not run at the original boundary.
+                    closed_interrupted_turn = False
                     if current is not prepared_session:
                         prepare = getattr(
                             current,
@@ -1774,21 +1778,19 @@ class LifecycleMixin:
                             ):
                                 return False
                         else:
-                            interrupt = getattr(
-                                current,
-                                'handle_interruption',
-                                None,
-                            )
                             # Close the offline reply this turn interrupted
                             # before handle_new_message clears its text.
-                            if callable(interrupt) and await interrupt():
-                                self._close_interrupted_offline_turn()
+                            closed_interrupted_turn = (
+                                await self._interrupt_offline_reply(current)
+                            )
                         if (
                             not operation_is_current()
                             or self.session is not current
                         ):
                             return False
                         await self.handle_new_message()
+                        if closed_interrupted_turn:
+                            self._schedule_interrupted_turn_wrap_up()
                         if (
                             not operation_is_current()
                             or self.session is not current
@@ -1870,10 +1872,11 @@ class LifecycleMixin:
                             )
                         ):
                             return False
-                    else:
-                        interrupt = getattr(current, 'handle_interruption', None)
-                        if callable(interrupt):
-                            await interrupt()
+                    elif await self._interrupt_offline_reply(current):
+                        # Through the helper, never a bare handle_interruption():
+                        # an interruption that claims a finished reply's
+                        # completion must also close that reply's turn.
+                        self._schedule_interrupted_turn_wrap_up()
                     if (
                         not operation_is_current()
                         or self.session is not current
@@ -2692,8 +2695,11 @@ class LifecycleMixin:
                 raise ConnectionError(f"❌ 记忆服务热切换时返回非2xx状态 {resp.status_code}: {resp.text[:200]}")
             initial_prompt += (
                 resp.text
-                + self._convert_cache_to_str(next_session_context_messages)
-                + self._convert_cache_to_str(initial_cache_snapshot)
+                # One call for both slices: a screen chain split across them
+                # is judged as one run (see _convert_cache_to_str).
+                + self._convert_cache_to_str(
+                    list(next_session_context_messages) + list(initial_cache_snapshot)
+                )
             )
             self._bind_session_lifecycle_callbacks(self.pending_session)
             await self.pending_session.connect(initial_prompt, native_audio=not self.pending_use_tts)
@@ -3212,7 +3218,12 @@ class LifecycleMixin:
             )
             # 1. Send incremental cache (or a heartbeat) to PENDING session for its *second* ignored response
             if incremental_cache:
-                final_prime_text = self._convert_cache_to_str(incremental_cache)
+                # Judged together with the snapshot the pending session was
+                # already primed with, so a chain crossing that boundary counts.
+                final_prime_text = self._convert_cache_to_str(
+                    incremental_cache,
+                    preceding=self.message_cache_for_new_session[:self.initial_cache_snapshot_len],
+                )
             else:  # Ensure session cycles a turn even if no incremental cache
                 final_prime_text = ""  # Initialize to empty string to prevent NameError
                 logger.debug(f"🔄 No incremental cache found. 缓存长度: {len(self.message_cache_for_new_session)}, 快照长度: {self.initial_cache_snapshot_len}")

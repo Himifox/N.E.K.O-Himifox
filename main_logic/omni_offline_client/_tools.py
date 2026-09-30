@@ -415,19 +415,21 @@ class _ToolingMixin:
         }
         if assistant_reasoning:
             assistant_turn["reasoning_content"] = assistant_reasoning
-        builders = [
-            (lambda i=i, c=c: ToolCall(
+        # Built before the round: a call that cannot even be constructed
+        # stops the turn before any tool has had a side effect.
+        tool_calls = [
+            ToolCall(
                 name=c.name,
                 arguments=parse_arguments_json(c.arguments),
                 call_id=c.id or f"call_{i}",
                 raw_arguments=c.arguments or "",
-            ))
+            )
             for i, c in enumerate(calls)
         ]
         executed, _live = await self._run_tool_round(
             messages,
             assistant_turn,
-            builders,
+            tool_calls,
             tool_image_slots=tool_image_slots,
             tool_bus_frames=tool_bus_frames,
             generation_is_active=generation_is_active,
@@ -439,7 +441,7 @@ class _ToolingMixin:
         self,
         messages,
         assistant_turn,
-        build_calls,
+        tool_calls,
         *,
         tool_image_slots,
         tool_bus_frames,
@@ -448,9 +450,9 @@ class _ToolingMixin:
     ):
         """Execute one tool round for either provider path.
 
-        Appends ``assistant_turn``, then runs each call (``build_calls`` are
-        per-call ``ToolCall`` builders, so a construction failure lands
-        inside the round) and appends its ``tool`` reply. Cancellation is
+        Appends ``assistant_turn``, then runs each of ``tool_calls`` (built
+        by the caller, each provider path with its own ``ToolCall``) and
+        appends its ``tool`` reply. Cancellation is
         checked before each call, never between a handler and its record:
         once a handler returned, its side effects happened. An unfinished
         round (cancelled or raising) is settled by
@@ -466,10 +468,9 @@ class _ToolingMixin:
         image_results: list = []
         round_complete = False
         try:
-            for build in build_calls:
+            for tool_call in tool_calls:
                 if not generation_is_active():
                     break
-                tool_call = build()
                 handler = self.on_tool_call
                 if handler is None:
                     # No handler — surface a structured error back so the
@@ -1113,6 +1114,10 @@ class _ToolingMixin:
                     # has no visible token to show feedback otherwise (Codex P2).
                     await self._notify_reasoning_active()
                     if not generation_is_active():
+                        # Reasoning chunks are never yielded, so callers may
+                        # not have seen this answered request yet: hand them
+                        # the empty chunk they publish on (see above).
+                        yield LLMStreamChunk(content="")
                         return
                 if chunk.tool_call_deltas:
                     deltas_per_chunk.append(chunk.tool_call_deltas)
@@ -1318,6 +1323,8 @@ class _ToolingMixin:
             if getattr(chunk, "reasoning_content", None):
                 await self._notify_reasoning_active()
                 if not generation_is_active():
+                    # Reasoning is never yielded: see the tool-loop stream.
+                    yield LLMStreamChunk(content="")
                     return
             # 与常规 tool-loop 路径一致：不向下游转发 thinking 模型的纯
             # reasoning chunk（有 reasoning_content、无 content / tool delta /

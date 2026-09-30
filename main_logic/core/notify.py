@@ -135,7 +135,7 @@ class NotifyMixin:
         except Exception as e:
             logger.error(f"💥 WS Send User Activity Error: {e}")
 
-    def _convert_cache_to_str(self, cache):
+    def _convert_cache_to_str(self, cache, preceding=()):
         """[Hot-swap related] Convert the cache to a string.
 
         This text is primed into the next session's system prompt, where the
@@ -145,14 +145,21 @@ class NotifyMixin:
         character lines that ends the cache and follows a master line). The
         next thing the new session sees is the user speaking, hence
         ``trailing_turn``.
+
+        Pass every slice that ends up adjacent in one prompt in one call:
+        judged apart, a chain split across two slices is missed. A slice
+        appended after text that was already primed passes that text as
+        ``preceding``; it is judged with the slice but not rendered again.
         """
+        preceding = list(preceding)
+        entries = preceding + list(cache)
         roles = {
             self.lanlan_name: "assistant",
             getattr(self, "master_name", None): "user",
         }
         messages = [
             {"role": roles.get(i['role'], "system"), "content": i['text']}
-            for i in cache
+            for i in entries
         ]
         projected = project_screen_history(
             messages,
@@ -163,7 +170,7 @@ class NotifyMixin:
             trailing_turn=True,
         )
         res = ""
-        for i, message in zip(cache, projected):
+        for i, message in list(zip(entries, projected))[len(preceding):]:
             res += f"{i['role']} | {message['content']}\n"
         return res
 
