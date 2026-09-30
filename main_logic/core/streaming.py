@@ -558,9 +558,9 @@ class StreamingMixin:
                     # 会继续吐 delta，全部挂到这条新消息的 sid 上；两条流还共用
                     # _is_responding，先收尾的那条把它翻 False，另一条被截断。
                     # 与独立 ASR 准备回合前那次 handle_interruption() 同一判据。
-                    _closed = False
+                    _interrupted = False
                     try:
-                        _closed = await self._interrupt_offline_reply(self.session)
+                        _interrupted = await self._interrupt_offline_reply(self.session)
                     except asyncio.CancelledError:
                         raise
                     except Exception as _interrupt_error:
@@ -594,7 +594,7 @@ class StreamingMixin:
                     # 状态机：文本模式 stream_text 入口同样需要发射 USER_INPUT。
                     # handle_new_message 只在语音模式走到，这里是文本模式的对偶。
                     await self.state.fire(SessionEvent.USER_INPUT, sid=new_user_sid)
-                    if _closed:
+                    if _interrupted:
                         # After USER_INPUT, so queued agent callbacks defer to
                         # this user turn instead of racing it.
                         self._schedule_interrupted_turn_wrap_up()

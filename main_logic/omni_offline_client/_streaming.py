@@ -1189,7 +1189,9 @@ class _StreamingMixin:
                             _response_generation=response_generation,
                             **_focus_overrides,
                         ):
-                            if not _ttft_recorded:
+                            # The empty chunk a cancelled tool loop hands up is
+                            # not a token: it must not set the TTFT metric.
+                            if not _ttft_recorded and not getattr(chunk, "_answered_ack", False):
                                 _ttft_recorded = True
                                 try:
                                     from utils.instrument import histogram as _instr_h

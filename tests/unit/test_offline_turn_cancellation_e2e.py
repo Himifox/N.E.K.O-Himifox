@@ -727,3 +727,29 @@ async def test_a_raising_status_send_leaves_no_claimable_completion():
     with pytest.raises(RuntimeError):
         await client.stream_text("hi")
     assert await client.handle_interruption() == ""
+
+
+async def test_the_answered_chunk_of_a_cancelled_turn_sets_no_first_token_time(monkeypatch):
+    """The empty chunk a cancelled tool loop hands up carries no output, so
+    it must not be recorded as the turn's first token."""
+    recorded = []
+    monkeypatch.setattr(
+        "utils.instrument.histogram", lambda name, value, *a, **k: recorded.append(name),
+    )
+    client = _client(handler=_noop_tool)
+
+    async def thinking(active):
+        if active:
+            await client.handle_interruption()
+
+    client.on_thinking_active = thinking
+    client.script = [[LLMStreamChunk(content="", reasoning_content="thinking"),
+                      _text("late"), _text("", "stop")]]
+    await client.stream_text("hi")
+    assert "llm_ttft_ms" not in recorded
+    # A normal turn still records it.
+    client.on_thinking_active = None
+    client.script = [[_text("好"), _text("", "stop")]]
+    client.requests.clear()
+    await client.stream_text("again")
+    assert "llm_ttft_ms" in recorded

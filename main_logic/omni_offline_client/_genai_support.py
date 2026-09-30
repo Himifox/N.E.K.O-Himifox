@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from ._shared import (
+    _answered_chunk,
     _generation_check,
     AIMessage,
     Any,
@@ -507,7 +508,7 @@ class _GenaiMixin:
                         # Answered, then cancelled: what the request carried was
                         # delivered. Publish (above), then let callers publish
                         # their pending bus copies on one empty chunk.
-                        yield LLMStreamChunk(content="")
+                        yield _answered_chunk()
                         return
                     # prompt_feedback.block_reason：Gemini 整段 input 被 safety
                     # 拦掉时填这个，candidate 可能根本没出现。
@@ -538,7 +539,7 @@ class _GenaiMixin:
                             if not generation_is_active():
                                 # Thought parts are never yielded, so callers
                                 # may not have seen this answered request yet.
-                                yield LLMStreamChunk(content="")
+                                yield _answered_chunk()
                                 return
                             continue
                         text = getattr(part, "text", None) or ""
@@ -850,7 +851,7 @@ class _GenaiMixin:
                 )
             if not generation_is_active():
                 # Answered, then cancelled: see the tool-loop stream above.
-                yield LLMStreamChunk(content="")
+                yield _answered_chunk()
                 return
             # 与常规 genai 分支对偶地采集空回复诊断：block_reason / finish_reason /
             # prompt_tokens。否则若 forced-finalize 也被 safety / recitation /

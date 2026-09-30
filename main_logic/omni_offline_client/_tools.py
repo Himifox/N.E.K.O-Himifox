@@ -17,6 +17,7 @@ from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from utils.screen_comment_guard import project_screen_history
 
 from ._shared import (
+    _answered_chunk,
     _generation_check,
     _find_by_identity,
     _same_route,
@@ -1095,7 +1096,7 @@ class _ToolingMixin:
                     # was delivered even though the turn is cancelled: the
                     # frames are published above, and callers get one empty
                     # chunk so they publish their own pending bus copies.
-                    yield LLMStreamChunk(content="")
+                    yield _answered_chunk()
                     return
                 if getattr(chunk, "content", None):
                     if tool_leak_filter is not None:
@@ -1117,7 +1118,7 @@ class _ToolingMixin:
                         # Reasoning chunks are never yielded, so callers may
                         # not have seen this answered request yet: hand them
                         # the empty chunk they publish on (see above).
-                        yield LLMStreamChunk(content="")
+                        yield _answered_chunk()
                         return
                 if chunk.tool_call_deltas:
                     deltas_per_chunk.append(chunk.tool_call_deltas)
@@ -1309,7 +1310,7 @@ class _ToolingMixin:
             if not generation_is_active():
                 # Answered, then cancelled: publish (above), then let callers
                 # publish their pending bus copies on one empty chunk.
-                yield LLMStreamChunk(content="")
+                yield _answered_chunk()
                 return
             if chunk.finish_reason:
                 final_finish_reason = chunk.finish_reason
@@ -1324,7 +1325,7 @@ class _ToolingMixin:
                 await self._notify_reasoning_active()
                 if not generation_is_active():
                     # Reasoning is never yielded: see the tool-loop stream.
-                    yield LLMStreamChunk(content="")
+                    yield _answered_chunk()
                     return
             # 与常规 tool-loop 路径一致：不向下游转发 thinking 模型的纯
             # reasoning chunk（有 reasoning_content、无 content / tool delta /

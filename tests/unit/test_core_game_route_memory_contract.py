@@ -3370,7 +3370,8 @@ async def test_mini_game_magic_command_removes_only_its_own_staged_attachment(mo
         mgr.session._pending_images.append(image_b64)
 
     mgr.session.stream_image = AsyncMock(side_effect=_stage)
-    mgr.session.handle_interruption = AsyncMock()
+    # Nothing in flight: this test is about the staged attachment.
+    mgr.session.handle_interruption = AsyncMock(return_value="")
     mgr.session.set_proactive_screenshot = Mock()
     mgr.is_active = True
     mgr.session_ready = True
@@ -4592,9 +4593,11 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
         if interrupted_text else []
     )
     assert mgr._active_text_request_id is None
-    # The closed turn's skipped wrap-up is owed, and scheduled (not awaited)
-    # after this turn marked its user input.
-    assert mgr._schedule_interrupted_turn_wrap_up.call_count == (1 if interrupted_text else 0)
+    # The interrupted reply's completion will not run, so its wrap-up is
+    # owed even when it said nothing (no turn end to send, but the renewal
+    # check and queued callbacks still need their turn), scheduled (not
+    # awaited) after this turn marked its user input.
+    mgr._schedule_interrupted_turn_wrap_up.assert_called_once_with()
 
 
 @pytest.mark.unit

@@ -335,10 +335,11 @@ class TurnMixin:
         Every interruption point goes through here rather than awaiting
         ``handle_interruption()`` itself: an interruption that claims a
         finished reply's completion must be followed by the close, or that
-        reply never gets a turn end. Returns whether a turn was closed; the
-        caller then owes it the wrap-up its completion would have run (see
-        ``_schedule_interrupted_turn_wrap_up``), once the new turn has marked
-        its user input.
+        reply never gets a turn end. Returns whether a reply was interrupted,
+        whether or not it had said anything: either way its completion will
+        not run, so the caller owes it the wrap-up that completion would have
+        run (see ``_schedule_interrupted_turn_wrap_up``), once the new turn
+        has marked its user input.
         """
         interrupt = getattr(session, "handle_interruption", None)
         if not callable(interrupt):
@@ -346,9 +347,10 @@ class TurnMixin:
         kind = await interrupt()
         if not kind:
             return False
-        return self._close_interrupted_offline_turn(
+        self._close_interrupted_offline_turn(
             kind if isinstance(kind, str) else "response"
         )
+        return True
 
     def _schedule_interrupted_turn_wrap_up(self) -> None:
         """Run the wrap-up a closed, interrupted turn's completion skipped.
@@ -1293,10 +1295,10 @@ class TurnMixin:
         # its current speech dropped by the frontend.
         async with self.lock:
             interrupted_speech_id = self.current_speech_id
-        _closed = False
+        _interrupted = False
         if isinstance(self.session, OmniOfflineClient):
             try:
-                _closed = await self._interrupt_offline_reply(self.session)
+                _interrupted = await self._interrupt_offline_reply(self.session)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1318,7 +1320,7 @@ class TurnMixin:
         )
         await self._emit_agent_callback_turn_end(request_id)
         await self._push_mini_game_magic_command_launch(game_type)
-        if _closed:
+        if _interrupted:
             # No new reply follows a command, so the wrap-up the interrupted
             # reply's skipped completion owed (renewal check, queued agent
             # callbacks) runs now that the command's own turn is sealed.

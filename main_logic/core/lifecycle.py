@@ -1762,7 +1762,7 @@ class LifecycleMixin:
                     # repeating interruption/handle_new_message would rotate its
                     # speech id twice. Only a hot-swap replacement needs the
                     # preparation that could not run at the original boundary.
-                    closed_interrupted_turn = False
+                    interrupted_reply = False
                     if current is not prepared_session:
                         prepare = getattr(
                             current,
@@ -1780,7 +1780,7 @@ class LifecycleMixin:
                         else:
                             # Close the offline reply this turn interrupted
                             # before handle_new_message clears its text.
-                            closed_interrupted_turn = (
+                            interrupted_reply = (
                                 await self._interrupt_offline_reply(current)
                             )
                         if (
@@ -1789,7 +1789,7 @@ class LifecycleMixin:
                         ):
                             return False
                         await self.handle_new_message()
-                        if closed_interrupted_turn:
+                        if interrupted_reply:
                             self._schedule_interrupted_turn_wrap_up()
                         if (
                             not operation_is_current()
@@ -1872,11 +1872,14 @@ class LifecycleMixin:
                             )
                         ):
                             return False
-                    elif await self._interrupt_offline_reply(current):
+                    else:
                         # Through the helper, never a bare handle_interruption():
                         # an interruption that claims a finished reply's
-                        # completion must also close that reply's turn.
-                        self._schedule_interrupted_turn_wrap_up()
+                        # completion must also close that reply's turn. No
+                        # wrap-up is scheduled here: this user turn has not
+                        # marked its input yet, and an Offline session never
+                        # reaches this branch (the fast path above returns).
+                        await self._interrupt_offline_reply(current)
                     if (
                         not operation_is_current()
                         or self.session is not current

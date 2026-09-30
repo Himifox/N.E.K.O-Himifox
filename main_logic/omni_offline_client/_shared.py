@@ -217,6 +217,15 @@ def _strip_nonverbal_directives(text: str) -> str:
     return _NONVERBAL_DIRECTIVE_PATTERN.sub("", text)
 
 
+def _answered_chunk():
+    """The empty chunk a cancelled tool loop hands up once its request was
+    answered, so callers publish what that request carried. It carries no
+    output: callers must not count it as a first token (``llm_ttft_ms``)."""
+    chunk = LLMStreamChunk(content="")
+    setattr(chunk, "_answered_ack", True)
+    return chunk
+
+
 def _generation_check(client, generation):
     """The "is this turn still live" predicate the tool loops poll.
 
