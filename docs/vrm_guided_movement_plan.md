@@ -103,7 +103,7 @@ movementFacing   // 是否由移动方向驱动身体朝向
 - `world-run.vrma.gz`
 - `world-run-back.vrma.gz`
 
-来源和许可记录在 [HANAMI_VRMA_NOTICE.md](../static/vrm/animation/HANAMI_VRMA_NOTICE.md)。这些动作保持在移动域，不加入普通聊天动作候选。Hanami 的目录说明 `world-` 域包含起步、步行、停止和转向动作；动作文件为 VRMA humanoid clip，模型无须专门绑定即可尝试播放，但仍必须对两个目标模型实测。
+来源和许可记录在 `static/vrm/animation/HANAMI_VRMA_NOTICE.md`。这些动作保持在移动域，不加入普通聊天动作候选。Hanami 的目录说明 `world-` 域包含起步、步行、停止和转向动作；动作文件为 VRMA humanoid clip，模型无须专门绑定即可尝试播放，但仍必须对两个目标模型实测。
 
 ### 动作播放策略
 
