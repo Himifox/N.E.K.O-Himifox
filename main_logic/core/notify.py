@@ -150,6 +150,12 @@ class NotifyMixin:
         judged apart, a chain split across two slices is missed. A slice
         appended after text that was already primed passes that text as
         ``preceding``; it is judged with the slice but not rendered again.
+
+        Known boundary: the memory server's recent history (rendered by
+        ``/new_dialog`` just before these lines) is judged on its own, so a
+        chain split between memory's last replies and the cache's first ones
+        is not joined. Closing it needs a structured memory tail from that
+        service.
         """
         preceding = list(preceding)
         entries = preceding + list(cache)

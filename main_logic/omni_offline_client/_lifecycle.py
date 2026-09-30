@@ -197,26 +197,39 @@ class _LifecycleMixin:
 
         ``handle_interruption`` can claim it in that window (the cleanup
         awaits), so the interrupting turn closes it instead of a late
-        callback that would land inside the new turn.
+        callback that would land inside the new turn. The session reads as
+        busy for the window: the turn is not over until its completion runs.
+        Only called while no newer generation has begun, so the flag is this
+        turn's to set.
         """
         self._completion_pending_generation = generation
         self._completion_pending_kind = kind
+        self._is_responding = True
 
     def _take_completion(self, generation: int) -> bool:
         """Whether ``generation`` may still run its completion callback.
 
         Clears the pending mark, so an interruption arriving after this point
-        sees the callback as already running and leaves it alone.
+        sees the callback as already running and leaves it alone, and drops
+        the window's busy flag unless a newer generation owns it.
         """
-        if getattr(self, "_completion_pending_generation", None) != generation:
+        pending = getattr(self, "_completion_pending_generation", None) == generation
+        if pending:
+            self._completion_pending_generation = None
+        if getattr(self, "_active_response_generation", None) is None:
+            self._is_responding = False
+        return pending
+
+    def _take_interrupter_ownership(self, generation: int) -> bool:
+        """Whether an interrupter (``cancel_response``) took over closing
+        ``generation``'s turn; its completion then does not run."""
+        owned = getattr(self, "_interrupter_owned_generations", None)
+        if not owned or generation not in owned:
             return False
-        self._completion_pending_generation = None
+        owned.discard(generation)
         return True
 
     def _cancel_response_generation(self) -> bool:
-        # Invalidate pending completion callbacks even after synchronous cleanup
-        # retired the active generation, but before its cleanup awaits finish.
-        self._response_generation = int(getattr(self, "_response_generation", 0)) + 1
         if getattr(self, "_active_response_generation", None) is None:
             return False
         self._active_response_generation = None
@@ -748,6 +761,7 @@ class _LifecycleMixin:
             # 先于其它收尾：把 base64 从历史里摘掉。跨 attempt 存活的代价
             # 就是必须由这里统一释放，否则它会跟着这一轮之后的每次请求走。
             response_cancelled = not self._response_generation_is_active(response_generation)
+            interrupter_owned = self._take_interrupter_ownership(response_generation)
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
             # Token usage 由 _AsyncStreamWrapper hook 在流结束时自动记录，
@@ -831,18 +845,19 @@ class _LifecycleMixin:
             # The cleanup await is the window in which an interruption can
             # claim this finished turn's completion: mark it only for that
             # window and always take the mark back, even if the await raises.
-            if not response_cancelled:
+            if not interrupter_owned and self._response_generation == response_generation:
                 self._mark_completion_pending(response_generation, _completion_kind)
             try:
                 await self._notify_reasoning_done(_reasoning_owner_seq)
             finally:
                 completion_claimed = not self._take_completion(response_generation)
-            # Skip the callback when the turn was cancelled, when an
-            # interruption claimed its completion during the cleanup await
-            # (the interrupting turn closed it), or when a newer response
-            # started meanwhile: a late callback would land in that turn.
+            # Skip the callback when an interrupter took the turn over
+            # (cancel_response mid-reply, or a claim during the cleanup await:
+            # the interrupting turn closed it), or when a newer response
+            # started meanwhile: a late callback would land in that turn. A
+            # close() cancels without taking anything over, so it still runs.
             completion_superseded = (
-                response_cancelled
+                interrupter_owned
                 or completion_claimed
                 or self._response_generation != response_generation
             )
@@ -916,8 +931,22 @@ class _LifecycleMixin:
         return reported_committed
 
     async def cancel_response(self) -> bool:
-        """Cancel the current response if possible; whether one was live."""
-        return self._cancel_response_generation()
+        """Cancel the current response; the caller takes over closing its turn.
+
+        The generation is recorded as interrupter-owned, so its completion
+        callback does not run: the interrupter closes the turn
+        (``TurnMixin._interrupt_offline_reply``). ``close()`` cancels through
+        ``_cancel_response_generation`` instead and owns nothing, so a reply
+        cut by a session close still runs its completion, as on main.
+        """
+        live = getattr(self, "_active_response_generation", None)
+        cancelled = self._cancel_response_generation()
+        if cancelled and live is not None:
+            owned = getattr(self, "_interrupter_owned_generations", None)
+            if owned is None:
+                owned = self._interrupter_owned_generations = set()
+            owned.add(live)
+        return cancelled
 
     async def _cancel_external_voice_submit_task(self) -> bool:
         """Cancel the narrow external-ASR child task, if another task owns it."""

@@ -159,11 +159,43 @@ async def test_get_recent_history_quarantines_screen_chains_before_rendering():
     assert "Master | 陪我聊聊" in result
 
 
-def test_new_dialog_renders_the_quarantined_recent_history():
-    """_new_dialog needs the whole runtime to run; pin its wiring instead."""
+@pytest.mark.parametrize("lang", ["zh", "en"])
+@pytest.mark.parametrize("list_content", [False, True])
+def test_new_dialog_lines_keep_the_placeholder_through_bracket_cleaning(lang, list_content):
+    """Every placeholder row is bracketed, and ordinary lines are
+    bracket-cleaned: a quarantined message must render its placeholder
+    verbatim, not an empty line."""
+    import re
+    from app.memory_server import routes
+    from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
+
+    brackets = re.compile(r'(\[.*?\]|\(.*?\)|（.*?）|【.*?】|\{.*?\}|<.*?>)')
+    chain = SimpleNamespace(
+        type="ai",
+        content=[{"type": "text", "text": _CHAIN}] if list_content else _CHAIN,
+    )
+    history = [
+        SimpleNamespace(type="human", content="陪我聊聊（小声）"),
+        chain,
+        SimpleNamespace(type="human", content="继续"),
+    ]
+    lines = routes._render_recent_history_lines(
+        history, {"human": "Master", "ai": "Lan"}, lang, brackets,
+    )
+    assert lines.splitlines() == [
+        "Master | 陪我聊聊",
+        f"Lan | {SCREEN_HISTORY_PLACEHOLDER[lang]}",
+        "Master | 继续",
+    ]
+    assert "屏幕搭话" not in lines
+
+
+def test_new_dialog_renders_through_the_quarantining_helper():
+    """_new_dialog needs the whole runtime to run; pin that it renders the
+    recent history through the tested helper."""
     import inspect
     from app.memory_server import routes
 
     source = inspect.getsource(routes._new_dialog)
-    assert "_quarantined_recent_history(" in source
+    assert "_render_recent_history_lines(" in source
     assert "for i in await runtime.recent_history_manager.aget_recent_history" not in source

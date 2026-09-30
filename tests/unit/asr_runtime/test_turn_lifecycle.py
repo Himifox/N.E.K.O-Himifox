@@ -36,10 +36,10 @@ async def test_speech_started_interrupts_and_prepares_turn_once() -> None:
 
     runtime.session.handle_interruption.assert_awaited_once_with()
     # The interrupted offline reply is closed before handle_new_message
-    # clears its text buffer, and its skipped wrap-up is scheduled once the
-    # new turn marked its user input.
+    # clears its text buffer; its skipped wrap-up is owed to the next
+    # finalize instead of running while this voice turn's reply streams.
     runtime._close_interrupted_offline_turn.assert_called_once_with("response")
-    runtime._schedule_interrupted_turn_wrap_up.assert_called_once_with()
+    assert runtime._turn_wrap_up_owed is True
     runtime.handle_new_message.assert_awaited_once_with()
     assert runtime._asr_turn_prepared is True
 

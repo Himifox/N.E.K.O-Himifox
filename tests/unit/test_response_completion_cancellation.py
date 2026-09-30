@@ -13,17 +13,23 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("mode", ["response", "proactive", "proactive_fallback"])
-@pytest.mark.parametrize("interrupt", ["cancel", "replace", "none"])
+@pytest.mark.parametrize("interrupt", ["interrupt", "replace", "close", "none"])
 async def test_ephemeral_completion_rechecks_generation_after_cleanup(mode, interrupt):
+    """During the cleanup await an interruption claims the completion (the
+    interrupter closes the turn) and a newer generation supersedes it; a
+    session close takes nothing over, so the completion still runs, as on
+    main."""
     client, set_chunks = _make_offline_for_ephemeral()
     set_chunks([SimpleNamespace(content="Hello")])
     client.on_proactive_done = AsyncMock() if mode != "proactive_fallback" else None
 
     async def cleanup(_owner):
-        if interrupt == "cancel":
-            await client.cancel_response()
+        if interrupt == "interrupt":
+            await client.handle_interruption()
         elif interrupt == "replace":
             client._begin_response_generation()
+        elif interrupt == "close":
+            client._cancel_response_generation()
 
     client._notify_reasoning_done = cleanup
     delivered = await client.prompt_ephemeral(
@@ -34,7 +40,7 @@ async def test_ephemeral_completion_rechecks_generation_after_cleanup(mode, inte
     # True in every mode even when its completion is skipped; callers that
     # hand state to the completion check whether it was consumed.
     assert delivered is True
-    expected = int(interrupt == "none")
+    expected = int(interrupt in ("none", "close"))
     assert client.on_response_done.await_count == (expected if mode != "proactive" else 0)
     if client.on_proactive_done is not None:
         assert client.on_proactive_done.await_count == (expected if mode == "proactive" else 0)
@@ -68,16 +74,18 @@ async def test_cancel_drops_unemitted_prefix_but_normal_end_flushes(ephemeral, c
     assert client.on_response_done.await_count == int(not cancel)
 
 
-@pytest.mark.parametrize("interrupt", ["cancel", "replace", "none"])
+@pytest.mark.parametrize("interrupt", ["interrupt", "replace", "close", "none"])
 async def test_normal_completion_rechecks_generation_after_status_await(interrupt):
     client, _ = _make_offline_for_stream()
     client.on_response_done = AsyncMock()
 
     async def status(_message):
-        if interrupt == "cancel":
-            await client.cancel_response()
+        if interrupt == "interrupt":
+            await client.handle_interruption()
         elif interrupt == "replace":
             client._begin_response_generation()
+        elif interrupt == "close":
+            client._cancel_response_generation()
 
     client.on_status_message = AsyncMock(side_effect=status)
 
@@ -88,7 +96,7 @@ async def test_normal_completion_rechecks_generation_after_status_await(interrup
     client._astream_visible_with_tools = empty_stream
     await client.stream_text("hello")
     client.on_status_message.assert_awaited_once()
-    assert client.on_response_done.await_count == int(interrupt == "none")
+    assert client.on_response_done.await_count == int(interrupt in ("none", "close"))
 
 
 @pytest.mark.parametrize("cancel", [False, True])

@@ -112,7 +112,6 @@ class _Runtime(AsrRuntimeMixin):
         # (so session.handle_interruption stays observable); closing the
         # interrupted reply and its wrap-up are recorded.
         self._close_interrupted_offline_turn = MagicMock(return_value=True)
-        self._schedule_interrupted_turn_wrap_up = MagicMock()
         self.handle_input_transcript = AsyncMock(return_value=True)
         self.send_status = AsyncMock()
 

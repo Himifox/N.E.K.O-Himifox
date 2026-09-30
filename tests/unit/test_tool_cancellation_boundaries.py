@@ -262,7 +262,14 @@ async def test_gemini_cancel_between_parts(cap, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cap", [0, 2])
 async def test_gemini_cancel_while_establishing_stream(cap, monkeypatch):
+    """With tools (cap=2) the SDK sends the request while the stream is being
+    established: a cancellation then is handled on the first chunk, which
+    publishes what the request carried and yields only the answered chunk.
+    The forced final call (cap=0) has no tools, is lazy, and returns before
+    anything is sent."""
     client = make_client("gemini", monkeypatch, None, cap=cap)
+    publications = []
+    client._publish_pending_tool_frames = lambda *a, **kw: publications.append(kw)
     consumed = []
 
     async def stream():
@@ -277,8 +284,15 @@ async def test_gemini_cancel_while_establishing_stream(cap, monkeypatch):
     generation = client._begin_response_generation()
     result = [chunk async for chunk in client._astream_with_tools(
         [{"role": "user", "content": "hello"}], _response_generation=generation)]
-    assert result == []
-    assert consumed == []
+    if cap:
+        assert [chunk.content for chunk in result] == [""]
+        assert getattr(result[0], "_answered_ack", False)
+        assert consumed == [True]
+        assert len(publications) == 1
+    else:
+        assert result == []
+        assert consumed == []
+        assert publications == []
 
 
 @pytest.mark.asyncio

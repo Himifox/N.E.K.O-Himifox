@@ -753,3 +753,91 @@ async def test_the_answered_chunk_of_a_cancelled_turn_sets_no_first_token_time(m
     client.requests.clear()
     await client.stream_text("again")
     assert "llm_ttft_ms" in recorded
+
+
+# ── Fifth review round: who owns an interrupted turn ────────────────────────
+
+@pytest.mark.parametrize("entry", ["stream_text", "response", "proactive"])
+async def test_a_session_close_mid_reply_still_runs_the_completion(entry):
+    """close() takes nothing over: nobody else closes that turn, so its
+    completion runs (turn end, request id, TTS), as on main."""
+    client = _client()
+
+    async def close_mid_reply():
+        client._cancel_response_generation()
+
+    client.script = [[_text("说到一半"), close_mid_reply, _text("late"), _text("", "stop")]]
+    if entry == "stream_text":
+        await client.stream_text("Q1")
+        client.on_response_done.assert_awaited_once()
+    elif entry == "response":
+        await client.prompt_ephemeral("avatar", completion_mode="response")
+        client.on_response_done.assert_awaited_once()
+    else:
+        await client.prompt_ephemeral("callback")
+        client.on_proactive_done.assert_awaited_once()
+    assert _emitted(client) == ["说到一半"]
+
+
+async def test_an_interrupter_takes_the_turn_over_and_leaves_no_record():
+    client = _client()
+
+    async def interrupt():
+        assert await client.handle_interruption() == "response"
+
+    client.script = [[_text("hi"), interrupt, _text("", "stop")]]
+    await client.stream_text("Q1")
+    client.on_response_done.assert_not_awaited()
+    assert getattr(client, "_interrupter_owned_generations", set()) == set()
+
+
+async def test_a_taken_over_turn_leaves_nothing_for_a_second_interruption():
+    """Once an interrupter took the turn over, its cleanup await is no
+    claim window: a second interruption meanwhile finds nothing to take, or
+    it would close the turn again (and take the new turn's request id)."""
+    client = _client()
+    seen = []
+
+    async def interrupt():
+        seen.append(await client.handle_interruption())
+
+    async def cleanup(_owner):
+        seen.append(await client.handle_interruption())
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说到一半"), interrupt, _text("late"), _text("", "stop")]]
+    await client.prompt_ephemeral("avatar", completion_mode="response")
+    assert seen == ["response", ""]
+    client.on_response_done.assert_not_awaited()
+
+
+async def test_the_completion_window_reads_as_busy():
+    """Finished but not yet completed is not idle: a proactive start or an
+    owed wrap-up must wait for that completion."""
+    client = _client()
+    seen = []
+
+    async def cleanup(_owner):
+        seen.append(client._is_responding)
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说完了。"), _text("", "stop")]]
+    await client.prompt_ephemeral("callback")
+    assert seen == [True]
+    assert client._is_responding is False
+    client.on_proactive_done.assert_awaited_once()
+
+
+async def test_the_completion_window_never_clobbers_a_newer_generation():
+    client = _client()
+    newer = []
+
+    async def cleanup(_owner):
+        await client.handle_interruption()
+        newer.append(client._begin_response_generation())
+
+    client._notify_reasoning_done = cleanup
+    client.script = [[_text("说完了。"), _text("", "stop")]]
+    await client.prompt_ephemeral("callback")
+    assert client._active_response_generation == newer[0]
+    assert client._is_responding is True

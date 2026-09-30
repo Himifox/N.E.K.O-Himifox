@@ -665,6 +665,7 @@ class LifecycleMixin:
         self.session_start_time = None
         await self._cleanup_pending_session_resources()  # 关闭由 manager 持有，取消也不会丢
         self.is_hot_swap_imminent = False
+        self._turn_wrap_up_owed = False
         # 状态机是 per-manager 的，跨 start_session/end_session 复用同一实例。
         # 若上一轮 proactive 在 PHASE1/PHASE2 中途 WS 断开、PROACTIVE_DONE 来不及
         # fire，phase/_preempted 会泄漏到新会话，堵死 can_start_proactive。
@@ -1762,7 +1763,6 @@ class LifecycleMixin:
                     # repeating interruption/handle_new_message would rotate its
                     # speech id twice. Only a hot-swap replacement needs the
                     # preparation that could not run at the original boundary.
-                    interrupted_reply = False
                     if current is not prepared_session:
                         prepare = getattr(
                             current,
@@ -1779,18 +1779,15 @@ class LifecycleMixin:
                                 return False
                         else:
                             # Close the offline reply this turn interrupted
-                            # before handle_new_message clears its text.
-                            interrupted_reply = (
-                                await self._interrupt_offline_reply(current)
-                            )
+                            # before handle_new_message clears its text; its
+                            # wrap-up is owed to the next finalize.
+                            await self._interrupt_offline_reply(current)
                         if (
                             not operation_is_current()
                             or self.session is not current
                         ):
                             return False
                         await self.handle_new_message()
-                        if interrupted_reply:
-                            self._schedule_interrupted_turn_wrap_up()
                         if (
                             not operation_is_current()
                             or self.session is not current
@@ -3221,11 +3218,20 @@ class LifecycleMixin:
             )
             # 1. Send incremental cache (or a heartbeat) to PENDING session for its *second* ignored response
             if incremental_cache:
-                # Judged together with the snapshot the pending session was
-                # already primed with, so a chain crossing that boundary counts.
+                # Judged together with exactly what the pending session was
+                # already primed with, in prime order (next-session context
+                # snapshot, then cache snapshot), so a chain crossing that
+                # boundary counts.
                 final_prime_text = self._convert_cache_to_str(
                     incremental_cache,
-                    preceding=self.message_cache_for_new_session[:self.initial_cache_snapshot_len],
+                    preceding=(
+                        list(next_session_context_messages[
+                            :self.initial_next_session_context_snapshot_len
+                        ])
+                        + list(self.message_cache_for_new_session[
+                            :self.initial_cache_snapshot_len
+                        ])
+                    ),
                 )
             else:  # Ensure session cycles a turn even if no incremental cache
                 final_prime_text = ""  # Initialize to empty string to prevent NameError

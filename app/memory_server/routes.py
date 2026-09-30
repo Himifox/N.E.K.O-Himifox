@@ -1174,13 +1174,41 @@ def _quarantined_recent_history(history, lang):
     is the user speaking, so the run at its end counts as the one before the
     current turn (``trailing_turn``). The independent-delivery marker does
     not survive this store, so an unmarked run is judged by position alone
-    (the documented legacy limitation).
+    (the documented legacy limitation). Known boundary: core renders its
+    own session cache right after this history and judges it separately
+    (``NotifyMixin._convert_cache_to_str``), so a chain split between the
+    two is not joined.
     """
     return project_screen_history(
         list(history),
         placeholder=_loc(SCREEN_HISTORY_PLACEHOLDER, lang),
         trailing_turn=True,
     )
+
+
+def _render_recent_history_lines(history, name_mapping, lang, brackets_pattern) -> str:
+    """Render recent history as ``speaker | text`` lines for a new dialog.
+
+    Quarantined messages (screen-comment chains) render their placeholder
+    verbatim: every placeholder row is bracketed, and the bracket cleaning
+    applied to ordinary lines would erase it, leaving the model an empty
+    line instead of the notice that the body is missing.
+    """
+    history = list(history)
+    lines = ""
+    for original, message in zip(history, _quarantined_recent_history(history, lang)):
+        speaker = name_mapping[message.type]
+        if message is not original:
+            lines += f"{speaker} | {message.content}\n"
+        elif isinstance(message.content, str):
+            lines += f"{speaker} | {brackets_pattern.sub('', message.content).strip()}\n"
+        else:
+            texts = [
+                brackets_pattern.sub('', j['text']).strip()
+                for j in message.content if j['type'] == 'text'
+            ]
+            lines += f"{speaker} | " + "\n".join(texts) + "\n"
+    return lines
 
 
 @app.get("/get_recent_history/{lanlan_name}")
@@ -3928,16 +3956,12 @@ async def _new_dialog(
             time=get_timestamp(),
         )
 
-        for i in _quarantined_recent_history(
+        result += _render_recent_history_lines(
             await runtime.recent_history_manager.aget_recent_history(lanlan_name),
+            name_mapping,
             _lang,
-        ):
-            if isinstance(i.content, str):
-                cleaned_content = brackets_pattern.sub('', i.content).strip()
-                result += f"{name_mapping[i.type]} | {cleaned_content}\n"
-            else:
-                texts = [brackets_pattern.sub('', j['text']).strip() for j in i.content if j['type'] == 'text']
-                result += f"{name_mapping[i.type]} | " + "\n".join(texts) + "\n"
+            brackets_pattern,
+        )
 
         # ── 距上次聊天间隔提示（放在最末尾，紧接 CONTEXT_SUMMARY_READY 之前） ──
         try:

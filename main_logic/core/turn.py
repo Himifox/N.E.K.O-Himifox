@@ -335,11 +335,17 @@ class TurnMixin:
         Every interruption point goes through here rather than awaiting
         ``handle_interruption()`` itself: an interruption that claims a
         finished reply's completion must be followed by the close, or that
-        reply never gets a turn end. Returns whether a reply was interrupted,
-        whether or not it had said anything: either way its completion will
-        not run, so the caller owes it the wrap-up that completion would have
-        run (see ``_schedule_interrupted_turn_wrap_up``), once the new turn
-        has marked its user input.
+        reply never gets a turn end. Returns whether a reply was interrupted.
+
+        An interrupted reply's completion will not run, so the wrap-up it
+        would have run (``_finalize_turn_after_emit``: renewal check, final
+        swap, queued agent callbacks) is recorded as owed rather than run
+        here: a newer reply is about to stream, and running it now could
+        start a final swap or clear the renewal cache mid-reply. The next
+        finalize pays it (the new turn's own completion, as before this
+        change), and a path that starts no reply pays it via
+        ``_settle_owed_turn_wrap_up``. Only a "response" reply owes one:
+        ``handle_proactive_complete`` never runs that wrap-up.
         """
         interrupt = getattr(session, "handle_interruption", None)
         if not callable(interrupt):
@@ -347,19 +353,47 @@ class TurnMixin:
         kind = await interrupt()
         if not kind:
             return False
-        self._close_interrupted_offline_turn(
-            kind if isinstance(kind, str) else "response"
+        kind = kind if isinstance(kind, str) else "response"
+        request_id = (
+            getattr(self, '_active_text_request_id', None)
+            if kind != "agent_callback" else None
         )
+        self._close_interrupted_offline_turn(kind)
+        if kind == "response":
+            self._turn_wrap_up_owed = True
+        if request_id:
+            await self._send_turn_abandoned(request_id)
         return True
 
-    def _schedule_interrupted_turn_wrap_up(self) -> None:
-        """Run the wrap-up a closed, interrupted turn's completion skipped.
+    async def _send_turn_abandoned(self, request_id) -> None:
+        """Tell the frontend the reply to ``request_id`` was cut off.
 
-        Renewal check and queued agent-callback delivery. Fired, not awaited,
-        so the user's new turn is not held up; schedule it only after that
-        turn marked its user input, so callback delivery defers to it.
+        Not a ``turn end``: the frontend seals whatever bubble is current on
+        a turn end, and by now that belongs to the interrupting turn. This
+        only releases what was held for ``request_id`` (its rollback draft
+        and the last-submitted marker), which the skipped completion's turn
+        end used to do. Best effort.
         """
-        self._fire_task(self._finalize_turn_after_emit())
+        ws = getattr(self, 'websocket', None)
+        try:
+            if ws and hasattr(ws, 'client_state') and ws.client_state == ws.client_state.CONNECTED:
+                await ws.send_json({'type': 'system', 'data': 'turn abandoned', 'request_id': request_id})
+        except Exception as e:
+            logger.debug("[%s] turn abandoned not sent: %s", self.lanlan_name, e)
+
+    async def _settle_owed_turn_wrap_up(self) -> None:
+        """Pay an interrupted reply's owed wrap-up on a path that starts no
+        reply of its own (a magic command). Left owed while an offline reply
+        is still live or finishing: that reply's completion pays it."""
+        if not getattr(self, "_turn_wrap_up_owed", False):
+            return
+        session = self.session
+        if isinstance(session, OmniOfflineClient) and (
+            getattr(session, "_is_responding", False)
+            or getattr(session, "_active_response_generation", None) is not None
+        ):
+            return
+        await self._finalize_turn_after_emit()
 
     def _close_interrupted_offline_turn(self, kind: str = "response") -> bool:
         """Close an offline reply that an interruption actually stopped.
@@ -379,13 +413,17 @@ class TurnMixin:
         and its turn end carries that id and any pending turn meta. It
         flushes the tracker and puts a sync-only turn end on the queue; the
         WebSocket and TTS belong to the new turn and are left alone. Nothing
-        said since the last turn end means nothing to close. Returns whether
-        a turn end was sent.
+        said since the last turn end means no turn end to send, but the
+        request id and the turn meta are taken either way, so neither can
+        ride the next turn's turn end. Returns whether a turn end was sent.
         """
         request_id = None
+        pending_meta = None
         if kind != "agent_callback":
             request_id = getattr(self, '_active_text_request_id', None)
             self._active_text_request_id = None
+            pending_meta = getattr(self, '_pending_turn_meta', None)
+            self._pending_turn_meta = None
         if not self._current_ai_turn_text:
             return False
         self._flush_ai_turn_text_to_tracker()
@@ -397,10 +435,8 @@ class TurnMixin:
             # avatar path clears it only after prompt_ephemeral returns). Carry
             # and consume it here, as _emit_turn_end would, so cross_server
             # keeps that text on the isolated avatar path, off ordinary memory.
-            pending_meta = getattr(self, '_pending_turn_meta', None)
             if pending_meta:
                 turn_end_msg['meta'] = pending_meta
-                self._pending_turn_meta = None
             if request_id:
                 turn_end_msg['request_id'] = request_id
         if self.sync_message_queue:
@@ -585,6 +621,7 @@ class TurnMixin:
         archiving/prewarming and fall into the "context grows → keeps truncating
         and recovering" loop.
         """
+        self._turn_wrap_up_owed = False
         # ── 热切换逻辑 ─────────────────────────────────────────────────────────
         # 正在切换过程中则跳过所有热切换判断
         if not self.is_hot_swap_imminent:
@@ -1295,10 +1332,9 @@ class TurnMixin:
         # its current speech dropped by the frontend.
         async with self.lock:
             interrupted_speech_id = self.current_speech_id
-        _interrupted = False
         if isinstance(self.session, OmniOfflineClient):
             try:
-                _interrupted = await self._interrupt_offline_reply(self.session)
+                await self._interrupt_offline_reply(self.session)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1320,11 +1356,9 @@ class TurnMixin:
         )
         await self._emit_agent_callback_turn_end(request_id)
         await self._push_mini_game_magic_command_launch(game_type)
-        if _interrupted:
-            # No new reply follows a command, so the wrap-up the interrupted
-            # reply's skipped completion owed (renewal check, queued agent
-            # callbacks) runs now that the command's own turn is sealed.
-            await self._finalize_turn_after_emit()
+        # No reply follows a command: pay an interrupted reply's owed wrap-up
+        # now that the command's own turn is sealed.
+        await self._settle_owed_turn_wrap_up()
         logger.info(
             "[%s] text input sent mini-game magic command: %s",
             self.lanlan_name,

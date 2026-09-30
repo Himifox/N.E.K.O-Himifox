@@ -357,6 +357,7 @@ class LLMSessionManager(
         # 防止把该 Voice ID 和自定义凭证误送给 CosyVoice 等无关 provider。
         self._tts_fallback_uses_default_voice: bool = False
         self._active_text_request_id: Optional[str] = None
+        self._turn_wrap_up_owed = False
         self._magic_command_image_drop_request_ids: set[str] = set()
         self._magic_command_image_drop_request_order: deque[str] = deque()
         # (request_id, staged image) pairs for offline attachments still queued in

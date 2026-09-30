@@ -251,6 +251,7 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         # State management
         self._is_responding = False
         self._response_generation = 0
+        self._interrupter_owned_generations: set[int] = set()
         self._active_response_generation: int | None = None
         self._conversation_history = []
         self._instructions = ""

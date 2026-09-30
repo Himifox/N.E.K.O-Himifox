@@ -2097,6 +2097,7 @@ class _StreamingMixin:
             # 先于其它收尾：把 base64 从历史里摘掉，别让它跟着后续每一次请求
             # 走（token 计数器把图像部分算成短占位符，截断器看不见它）。
             response_cancelled = self._active_response_generation != response_generation
+            interrupter_owned = self._take_interrupter_ownership(response_generation)
             self._release_tool_image_slots(_turn_tool_image_slots)
             self._finish_response_generation(response_generation)
 
@@ -2119,7 +2120,7 @@ class _StreamingMixin:
             # can claim this finished turn's completion. Mark it only for that
             # window and always take the mark back, or a raising status send
             # leaves it behind for the next, unrelated interruption to claim.
-            if not response_cancelled:
+            if not interrupter_owned and self._response_generation == response_generation:
                 self._mark_completion_pending(response_generation)
             try:
                 # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
@@ -2163,11 +2164,12 @@ class _StreamingMixin:
             finally:
                 completion_claimed = not self._take_completion(response_generation)
 
-            # Call response done callback. Skipped when cancelled, when an
-            # interruption claimed it during the status await above, or when a
-            # newer response started (see prompt_ephemeral).
+            # Call response done callback. Skipped when an interrupter took the
+            # turn over (mid-reply, or a claim during the status await above) or
+            # a newer response started (see prompt_ephemeral); a close() still
+            # runs it.
             if (
-                not response_cancelled
+                not interrupter_owned
                 and not completion_claimed
                 and self._response_generation == response_generation
                 and self.on_response_done

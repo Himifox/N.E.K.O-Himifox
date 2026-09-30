@@ -466,8 +466,13 @@ class _GenaiMixin:
                     ) from e
                 raise
 
-            if not generation_is_active():
-                return
+            # No cancellation check here. With tools declared the SDK sends the
+            # request during the await above, so a cancellation that landed
+            # meanwhile is handled on the first chunk: publish what the request
+            # carried, hand callers the answered chunk, and let the consumed
+            # stream release its connection (the dual of _astream_declining_
+            # tools). Without tools the SDK is lazy and the loop-top check has
+            # already covered it.
 
             # Per-iteration accumulators.
             # list of (id, name, args_dict, raw_args_str, extra_content|None)
@@ -835,6 +840,8 @@ class _GenaiMixin:
             contents=final_contents,
             config=final_config,
         )
+        # Safe to return here: the forced final call carries no tools, and
+        # without tools the SDK is lazy, so nothing was sent yet.
         if not generation_is_active():
             return
         final_finish_reason: Optional[str] = None

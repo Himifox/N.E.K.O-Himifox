@@ -464,3 +464,49 @@ async def test_post_promote_cancel_leaves_text_turn_restore_intact(monkeypatch):
         assert mgr.pending_extra_replies == original_extras
     finally:
         await _drain_task(mgr.message_handler_task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("split", [False, True])
+async def test_final_swap_judges_the_increment_with_what_was_primed(monkeypatch, split):
+    """The final swap primes only the increment, judged together with the
+    snapshot primed at preparation (next-session context, then cache): a
+    chain whose preceding user turn sits in that snapshot is still caught.
+    ``split`` starts the chain in the primed cache snapshot, so it joins the
+    increment only if the snapshot is replayed in prime order."""
+    from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
+
+    mgr, pending = _manager(monkeypatch)
+    mgr.master_name = "Alice"
+    comment_a = "屏幕搭话 蓝色小车停在一棵大树旁边，树叶的影子落在了车顶上。"
+    comment_b = "屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"
+
+    async def get(*_args, **_kwargs):
+        return SimpleNamespace(is_success=True, text="MEMORY\n")
+
+    monkeypatch.setattr(
+        "utils.internal_http_client.get_internal_http_client",
+        lambda: SimpleNamespace(get=get),
+    )
+    mgr.next_session_context_messages = [{"role": "Alice", "text": "陪我聊聊"}]
+    if split:
+        mgr.message_cache_for_new_session = [{"role": mgr.lanlan_name, "text": comment_a}]
+    prep = asyncio.create_task(mgr._background_prepare_pending_session())
+    try:
+        await asyncio.wait_for(prep, 3)
+        assert mgr.pending_session_warmed_up_event.is_set()
+        mgr.message_cache_for_new_session += [
+            {"role": mgr.lanlan_name, "text": comment_b},
+        ] if split else [
+            {"role": mgr.lanlan_name, "text": comment_a},
+            {"role": mgr.lanlan_name, "text": comment_b},
+        ]
+        content = await _swap(mgr, pending)
+        # Split: comment_a went out at preparation, alone and unjudgeable;
+        # only the increment can still be withheld.
+        assert comment_b not in content, content
+        assert split or comment_a not in content, content
+        assert any(row in content for row in SCREEN_HISTORY_PLACEHOLDER.values())
+    finally:
+        await _drain_task(prep)
+        await _drain_task(mgr.message_handler_task)

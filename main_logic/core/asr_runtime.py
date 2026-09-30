@@ -5445,7 +5445,6 @@ class AsrRuntimeMixin:
 
         prepare = getattr(session_ref, "prepare_external_voice_turn", None)
         preparation_succeeded = False
-        interrupted_reply = False
         try:
             if callable(prepare):
                 reconnected = await prepare(turn_id=external_turn_id)
@@ -5462,8 +5461,9 @@ class AsrRuntimeMixin:
                     return False
             else:
                 # Offline: close the reply this voice turn interrupted before
-                # handle_new_message clears its text buffer.
-                interrupted_reply = await self._interrupt_offline_reply(session_ref)
+                # handle_new_message clears its text buffer. Its wrap-up is
+                # owed to the next _finalize_turn_after_emit.
+                await self._interrupt_offline_reply(session_ref)
             if not operation_is_current():
                 if abandon_on_failure:
                     self._abandon_core_voice_turn(
@@ -5472,10 +5472,6 @@ class AsrRuntimeMixin:
                     )
                 return False
             await self.handle_new_message()
-            if interrupted_reply:
-                # handle_new_message marked the user input, so queued agent
-                # callbacks now defer to this voice turn.
-                self._schedule_interrupted_turn_wrap_up()
             if operation_is_current():
                 preparation_succeeded = True
                 return True
