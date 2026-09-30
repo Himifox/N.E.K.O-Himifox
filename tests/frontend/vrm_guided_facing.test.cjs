@@ -18,6 +18,8 @@ for (const file of ['vrm-orientation.js', 'vrm-interaction.js']) {
 const { VRMOrientationDetector: detector, VRMInteraction: Interaction } = context.window;
 assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, '0.0').vrmVersion, '0.0');
 assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: 'broken' } }, '1.0').vrmVersion, '1.0');
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, 'unknown').vrmVersion, '1.0');
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '0.0' } }).vrmVersion, '0.0');
 
 for (const version of ['0.0', '1.0']) {
     const authoredFront = version === '1.0' ? 1 : -1;

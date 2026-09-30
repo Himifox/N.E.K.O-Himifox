@@ -18,7 +18,7 @@ class VRMOrientationDetector {
     static getMovementFacingProfile(vrm, detectedVersion = null) {
         const coreVersion = String(detectedVersion || '');
         const metaVersion = String(vrm?.meta?.metaVersion || '');
-        const isVrm10 = coreVersion
+        const isVrm10 = coreVersion === '0.0' || coreVersion === '1.0'
             ? coreVersion === '1.0'
             : metaVersion === '1' || metaVersion === '1.0' || metaVersion.startsWith('1.');
         return {

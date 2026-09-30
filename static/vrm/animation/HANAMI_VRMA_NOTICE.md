@@ -3,6 +3,9 @@
 N.E.K.O. packaging note: the 11 imported `world-*.vrma` files are distributed
 as losslessly gzip-compressed `world-*.vrma.gz` files. The source filenames in
 the attribution below are retained; decompression restores the original bytes.
+This package imports only those 11 movement clips. The retained Hanami notice
+below also describes its broader source library; Rocketbox clips and conversion
+tools described there are not included in this N.E.K.O. import.
 
 Les fichiers `.vrma` de ce dossier sont des **œuvres dérivées** : chacun est la
 conversion (retargeting sur le squelette humanoïde VRM 1.0, découpage,
@@ -822,12 +825,11 @@ copyright notice and permission text reproduced above.*
 
 ### Comment ils ont été produits / how they were made
 
-Le convertisseur est livré : [`scripts/convert-rocketbox.mjs`](../scripts/convert-rocketbox.mjs),
-et le plan qui le pilote [`scripts/rocketbox-plan.json`](../scripts/rocketbox-plan.json)
-— source, famille, fenêtre, boucle, rôle et mesures de chacun des 38 clips. Les
-FBX d'origine (243 Mo, 77 fichiers) ne sont pas versionnés ; script + plan les
-refabriquent à l'octet près depuis le commit épinglé. Les deux fichiers portent
-leur empreinte SHA-256, recalculée à chaque exécution.
+Le processus de conversion de Hanami utilisait `scripts/convert-rocketbox.mjs`
+et `scripts/rocketbox-plan.json` — source, famille, fenêtre, boucle, rôle et
+mesures de chacun des 38 clips. Ces outils et les FBX d'origine ne sont pas
+inclus dans cette distribution N.E.K.O. ; aucune reproduction à l'octet près
+par ce paquet n'est garantie.
 
 Quatre écarts avec le rig Mixamo d'Overte ont demandé un traitement, tous
 consignés dans l'en-tête du script : le rig **Biped 3ds Max n'expose pas de
@@ -849,7 +851,10 @@ chaque clip. Seule la **fenêtre** a été choisie, clip par clip. Les yeux et l
 mâchoire, pourtant mappables, sont volontairement **hors export** : le regard
 appartient au moteur (`client/src/scene/gaze.ts`) et la bouche au lipsync.
 
-*The converter and its plan ship with the clips; the original FBX files do not.
+*Hanami's conversion process used `scripts/convert-rocketbox.mjs` and
+`scripts/rocketbox-plan.json`. Those tools and the original FBX files are not
+included in this N.E.K.O. distribution; byte-for-byte reproduction from this
+package is not guaranteed.
 No geometric retouching was needed — every clip comes from the same character
 and the same anchor pose (identical to within 0.09° across the family), so the
 seams fall into place on their own. Only the window was chosen, clip by clip.*
@@ -870,7 +875,7 @@ Sur 56 candidats, **18 ont été écartés** : six pour raccord (10,4 à 45,6 cm
 sept pour **redondance** avec un clip déjà retenu (jusqu'à 1,8° d'écart moyen —
 le même geste rejoué), un pour un 95ᵉ centile de vitesse à 1025 °/s, deux hors
 fourchette de raccord, deux enfin pour un pic pris en plein fondu d'entrée. Le
-détail est dans le plan livré.
+détail est dans le plan de conversion de Hanami, non inclus dans ce paquet.
 
 ### Les trente-huit clips / the thirty-eight clips
 

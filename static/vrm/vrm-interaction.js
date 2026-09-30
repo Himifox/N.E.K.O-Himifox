@@ -126,6 +126,7 @@ class VRMInteraction {
         this._movementOwnerToken = null;
         this._movementPhaseTimer = null;
         this._smoothFacingFrame = null;
+        this._smoothFacingResolve = null;
         this._movementKeyDownHandler = null;
         this._movementKeyUpHandler = null;
         this._movementBlurHandler = null;
@@ -417,33 +418,55 @@ class VRMInteraction {
         }
     }
 
-    _smoothTurnToCamera(scene, targetYaw = null) {
-        if (!Number.isFinite(targetYaw)) targetYaw = this._getCameraFacingRotationY(scene);
-        if (!scene || !Number.isFinite(targetYaw)) return;
+    _cancelSmoothFacing() {
         if (this._smoothFacingFrame !== null) {
             cancelAnimationFrame(this._smoothFacingFrame);
             this._smoothFacingFrame = null;
         }
+        if (this._smoothFacingResolve) {
+            this._smoothFacingResolve(false);
+            this._smoothFacingResolve = null;
+        }
+    }
+
+    _cancelGuidedMovement() {
+        this._cancelSmoothFacing();
+        // 已完成转向的结束流程仍可能在等待播放器；接管时也要使其失效。
+        this.movementToken += 1;
+        if (this.isMoving || this._movementAction || this._movementOwnerToken !== null) {
+            void this._finishMovement({ cancel: true });
+        }
+    }
+
+    _smoothTurnToCamera(scene, targetYaw = null) {
+        this._cancelSmoothFacing();
+        if (!Number.isFinite(targetYaw)) targetYaw = this._getCameraFacingRotationY(scene);
+        if (!scene || !Number.isFinite(targetYaw)) return Promise.resolve(false);
         let diff = targetYaw - this._getSceneYaw(scene);
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        if (Math.abs(diff) < 0.02) return;
+        if (Math.abs(diff) < 0.02) return Promise.resolve(true);
         const startYaw = this._getSceneYaw(scene);
         const startedAt = performance.now();
         const duration = 360;
-        const tick = (now) => {
-            const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
-            const eased = progress * progress * (3 - 2 * progress);
-            this._setSceneYaw(scene, startYaw + diff * eased);
-            if (progress < 1) {
-                this._smoothFacingFrame = requestAnimationFrame(tick);
-            } else {
-                // 最后一帧写入目标值，避免浮点误差在多次移动后累计成朝向偏移。
-                this._setSceneYaw(scene, targetYaw);
-                this._smoothFacingFrame = null;
-            }
-        };
-        this._smoothFacingFrame = requestAnimationFrame(tick);
+        return new Promise(resolve => {
+            this._smoothFacingResolve = resolve;
+            const tick = (now) => {
+                const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
+                const eased = progress * progress * (3 - 2 * progress);
+                this._setSceneYaw(scene, startYaw + diff * eased);
+                if (progress < 1) {
+                    this._smoothFacingFrame = requestAnimationFrame(tick);
+                } else {
+                    // 最后一帧写入目标值，避免浮点误差在多次移动后累计成朝向偏移。
+                    this._setSceneYaw(scene, targetYaw);
+                    this._smoothFacingFrame = null;
+                    this._smoothFacingResolve = null;
+                    resolve(true);
+                }
+            };
+            this._smoothFacingFrame = requestAnimationFrame(tick);
+        });
     }
 
     setMovementSpeed(speed) {
@@ -473,7 +496,8 @@ class VRMInteraction {
             fadeDuration: options.fadeDuration ?? 0.2,
             immediate: options.immediate === true,
             isIdle: false,
-            movement: true
+            movement: true,
+            shouldApply: () => token === this.movementToken && this.isMoving
         });
         if (token !== this.movementToken || !this.isMoving || played !== true) return 0;
         this._setMovementAction(action);
@@ -484,12 +508,18 @@ class VRMInteraction {
         const manager = this.manager;
         if (!manager || typeof manager.playVRMAAnimation !== 'function') return;
         const motion = window.NekoMotion;
+        const ownerToken = String(token);
         try {
-            this._movementOwnerToken = String(token);
+            this._movementOwnerToken = ownerToken;
             if (motion && typeof motion.holdExternalPlayback === 'function') {
-                await motion.holdExternalPlayback(this._movementRestOwner, { token: this._movementOwnerToken });
+                await motion.holdExternalPlayback(this._movementRestOwner, { token: ownerToken });
             }
-            if (token !== this.movementToken || !this.isMoving) return;
+            if (token !== this.movementToken || !this.isMoving) {
+                if (motion && typeof motion.releaseExternalPlayback === 'function') {
+                    await motion.releaseExternalPlayback(this._movementRestOwner, { token: ownerToken, resume: false });
+                }
+                return;
+            }
             // 桌宠场景不使用 world-walk-start：该过渡 clip 的首尾姿态与待机
             // crossfade 会造成起步瞬间的根节点拉动。直接从无根位移的循环走路开始。
             await this._playMovementClip(token, '/static/vrm/animation/world-walk.vrma.gz', 'walk', {
@@ -504,61 +534,68 @@ class VRMInteraction {
     }
 
     async _finishMovement({ cancel = false } = {}) {
-        if (!this.isMoving && !this._movementAction) return;
+        if (!this.isMoving && !this._movementAction && this._movementOwnerToken === null) return;
         const endedOwnerToken = this._movementOwnerToken;
         this.isMoving = false;
         this.moveTarget = null;
         this.movementToken += 1;
+        const endedToken = this.movementToken;
+        const endedScene = this.manager.currentModel?.scene;
         this._movementAction = null;
         this._movementOwnerToken = null;
         this._clearMovementPhaseTimer();
         const restFacing = this._movementRestRotationY;
         this._movementRestRotationY = null;
         const motion = window.NekoMotion;
+        const turnCompletion = !cancel && endedScene
+            ? this._smoothTurnToCamera(endedScene, restFacing) : Promise.resolve(false);
         try {
             // 当前两套目标模型对 stop/turn clip 的骨骼兼容性还不稳定；到达时先安全
             // 停止循环走路并恢复 humanoid/rest，避免连续切换多个 clip 触发 T-pose。
             if (this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
-            if (!cancel && this.manager.currentModel?.scene) {
-                this._smoothTurnToCamera(this.manager.currentModel.scene, restFacing);
-            }
+        } catch (error) {
+            console.warn('[VRM Interaction] 引导移动结束时停止动作失败:', error);
+        }
+        try {
             if (endedOwnerToken && motion && typeof motion.releaseExternalPlayback === 'function') {
                 await motion.releaseExternalPlayback(this._movementRestOwner, {
                     token: endedOwnerToken,
                     resume: !cancel
                 });
             }
-            if (!cancel && motion && typeof motion.rest === 'function') {
+            if (!cancel && endedToken === this.movementToken && !this.isDragging
+                && this.manager.currentModel?.scene === endedScene && motion && typeof motion.rest === 'function') {
                 await motion.rest({ force: true, seed: 'guided-movement-arrival' });
             }
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时恢复待机失败:', error);
         }
+        const turned = await turnCompletion;
+        if (turned && endedToken === this.movementToken && !this.isMoving && !this.isDragging
+            && this.manager.currentModel?.scene === endedScene) {
+            await this._savePositionAfterInteraction();
+        }
     }
 
     _selectMovementTarget(clientX, clientY) {
-        if (this._smoothFacingFrame !== null) {
-            cancelAnimationFrame(this._smoothFacingFrame);
-            this._smoothFacingFrame = null;
-        }
         const target = this._screenPointToMovementTarget(clientX, clientY);
         if (!target || !this.manager.currentModel?.scene) return false;
+        this._cancelSmoothFacing();
+        this.movementToken += 1;
         const scene = this.manager.currentModel.scene;
         // 目标替换/开始移动前只保存一次当前状态，避免在每帧推进时写配置。
         void this._savePositionAfterInteraction();
         const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
-        if (willMove && !this.isMoving && this._movementRestRotationY === null) {
-            this._movementRestRotationY = this._getSceneYaw(scene);
-        }
-        this.moveTarget = target;
-        this.isMoving = willMove;
-        this.movementVelocity = 0;
-        this.movementToken += 1;
-        if (!this.isMoving) {
-            this._movementRestRotationY = null;
+        if (!willMove) {
             void this._finishMovement();
             return true;
         }
+        if (!this.isMoving && this._movementRestRotationY === null) {
+            this._movementRestRotationY = this._getSceneYaw(scene);
+        }
+        this.moveTarget = target;
+        this.isMoving = true;
+        this.movementVelocity = 0;
         const token = this.movementToken;
         void this._beginMovementPlayback(token);
         return true;
@@ -574,7 +611,6 @@ class VRMInteraction {
             scene.position.copy(target);
             this.movementVelocity = 0;
             void this._finishMovement();
-            void this._savePositionAfterInteraction();
             return;
         }
         const dt = Math.max(0, Number(delta) || 0);
@@ -741,7 +777,7 @@ class VRMInteraction {
                     return; // 未命中模型，不拦截事件
                 }
                 // 普通拖拽接管模型时，取消尚未完成的自动移动；目标模式下的左键选点已在上方返回。
-                if (this.isMoving) void this._finishMovement({ cancel: true });
+                this._cancelGuidedMovement();
                 this.isDragging = true;
                 this.dragMode = 'pan';
                 // 同步升频：不等 300ms governor 轮询，消除拖拽起步的 30fps 顿挫
@@ -757,6 +793,7 @@ class VRMInteraction {
                 // 开始拖动时，临时禁用按钮的 pointer-events
                 this._disableButtonPointerEvents();
             } else if (e.button === 2) { // 右键 - 模型旋转
+                this._cancelGuidedMovement();
                 this.isDragging = true;
                 this.dragMode = 'orbit';
                 if (typeof this.manager._boostInteractiveFPS === 'function') this.manager._boostInteractiveFPS();
@@ -1134,7 +1171,7 @@ class VRMInteraction {
             // 恢复按钮的 pointer-events
             this._restoreButtonPointerEvents();
         }
-        if (locked && this.isMoving) void this._finishMovement({ cancel: true });
+        if (locked) this._cancelGuidedMovement();
     }
 
     /**
@@ -1165,10 +1202,7 @@ class VRMInteraction {
      * 移除时必须使用相同的选项，否则 removeEventListener 不会生效
      */
     cleanupDragAndZoom() {
-        if (this._smoothFacingFrame !== null) {
-            cancelAnimationFrame(this._smoothFacingFrame);
-            this._smoothFacingFrame = null;
-        }
+        this._cancelGuidedMovement();
         if (this._movementKeyDownHandler) {
             window.removeEventListener('keydown', this._movementKeyDownHandler);
             this._movementKeyDownHandler = null;
@@ -1182,7 +1216,6 @@ class VRMInteraction {
             this._movementBlurHandler = null;
         }
         this.targetMode = false;
-        if (this.isMoving || this._movementAction) void this._finishMovement({ cancel: true });
 
         if (this._touchGestures) {
             this._touchGestures.dispose();

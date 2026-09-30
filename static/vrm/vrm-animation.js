@@ -755,9 +755,11 @@ class VRMAnimation {
             const clip = await this._createAndValidateAnimationClip(vrmAnimation, vrm);
             if (abortStaleRequest()) return false;
             this._processTracksForVersion(clip, vrmVersion);
-            // 桌宠移动由 vrm-interaction 控制 scene.position；Hanami 的 Hips/Reference
-            // translation 会再次推动根节点，造成起步/停止时被额外拖动，因此只保留旋转轨道。
-            this._stripRootTranslationTracks(clip);
+            // 引导移动由 vrm-interaction 控制 scene.position，避免根平移叠加。
+            // 普通动画保留 authored 平移，否则坐姿/躺姿等动作会丢失髋部高度。
+            if (options.movement === true) {
+                this._stripRootTranslationTracks(clip);
+            }
             // 不用名称数量阈值否决动作：three-vrm 的 Normalized_* / VRM0 映射
             // 可能让静态节点名检查产生误判；由 createVRMAnimationClip 的实际绑定结果决定。
             this._normalizeQuaternionTrackSigns(clip);
