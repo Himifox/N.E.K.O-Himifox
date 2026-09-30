@@ -213,37 +213,8 @@ const vm = require('node:vm');
         assert.equal(writes.length, 1, 'cancelled arrival must not overwrite the locked pose');
         f.interaction.cleanupDragAndZoom();
     }
-    // Display lookup can delay the departure snapshot past the locking save.
-    // It must not overwrite the settled pose when it eventually completes.
-    {
-        const f = fixture(); const writes = capturePreferences(f);
-        const lookups = [];
-        window.electronScreen = { getCurrentDisplay() {
-            const lookup = deferred(); lookups.push(lookup); return lookup.promise;
-        } };
-        f.select(new THREE.Vector3(0, 2, 0)); await flush();
-        f.scene.position.y = 2; f.scene.rotation.y = Math.PI / 2;
-        f.interaction._updateGuidedMovement(1 / 60); await flush();
-        f.interaction.setLocked(true); await flush();
-        assert.equal(lookups.length, 2);
-        lookups[1].resolve(null); await flush();
-        assert.equal(writes.length, 1); assert.equal(writes[0][1].y, 2);
-        lookups[0].resolve(null); await flush();
-        assert.equal(writes.length, 1, 'late departure save must not overwrite lock');
-        f.interaction.cleanupDragAndZoom();
-    }
-    // A pending locked snapshot must never be saved under a replacement model,
-    // or continue after drag takeover/disposal.
-    for (const takeover of ['model-switch', 'orbit', 'cleanup']) {
-        const f = fixture(); const writes = capturePreferences(f); const lookup = deferred();
-        window.electronScreen = { getCurrentDisplay: () => lookup.promise };
-        f.scene.position.y = 2; f.interaction.setLocked(true);
-        if (takeover === 'model-switch') f.manager.currentModel = { scene: new THREE.Object3D(), url: '/model-b.vrm' };
-        else if (takeover === 'orbit') { f.interaction.setLocked(false); f.mouseDown(2); }
-        else f.interaction.cleanupDragAndZoom();
-        lookup.resolve(null); await flush();
-        assert.equal(writes.length, 0, `${takeover}: stale snapshot must not be persisted`);
-        f.interaction.cleanupDragAndZoom();
-    }
+    // Preference snapshots already accepted for saving survive model switches;
+    // request ordering and snapshot isolation use the real core in the dedicated
+    // vrm_preferences_persistence.test.cjs regression suite.
     console.log('VRM guided lifecycle: OK (loading, retargeting, arrival, pan/orbit, locking persistence and cleanup)');
 })().catch(error => { console.error(error); process.exitCode = 1; });

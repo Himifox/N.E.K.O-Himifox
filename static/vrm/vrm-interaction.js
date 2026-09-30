@@ -127,7 +127,6 @@ class VRMInteraction {
         this._movementPhaseTimer = null;
         this._smoothFacingFrame = null;
         this._smoothFacingResolve = null;
-        this._positionSaveToken = 0;
         this._movementKeyDownHandler = null;
         this._movementKeyUpHandler = null;
         this._movementBlurHandler = null;
@@ -434,7 +433,6 @@ class VRMInteraction {
         this._cancelSmoothFacing();
         // 已完成转向的结束流程仍可能在等待播放器；接管时也要使其失效。
         this.movementToken += 1;
-        this._positionSaveToken += 1;
         if (this.isMoving || this._movementAction || this._movementOwnerToken !== null) {
             void this._finishMovement({ cancel: true });
         }
@@ -2342,7 +2340,8 @@ class VRMInteraction {
      */
     async _savePositionAfterInteraction() {
         const model = this.manager.currentModel;
-        if (!model || !model.url) {
+        const core = this.manager.core;
+        if (!model || !model.url || !core || typeof core.saveUserPreferences !== 'function') {
             return;
         }
 
@@ -2350,7 +2349,6 @@ class VRMInteraction {
         if (!scene) {
             return;
         }
-        const saveToken = ++this._positionSaveToken;
         const modelUrl = model.url;
 
         const position = {
@@ -2377,40 +2375,6 @@ class VRMInteraction {
             console.warn('[VRM] 位置或缩放数据无效，跳过保存');
             return;
         }
-
-        // 获取当前窗口所在显示器的信息（用于多屏幕位置恢复）
-        let displayInfo = null;
-        if (window.electronScreen && window.electronScreen.getCurrentDisplay) {
-            try {
-                const currentDisplay = await window.electronScreen.getCurrentDisplay();
-                if (currentDisplay) {
-                    let screenX = currentDisplay.screenX;
-                    let screenY = currentDisplay.screenY;
-
-                    // 如果 screenX/screenY 不存在，尝试从 bounds 获取
-                    if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
-                        if (currentDisplay.bounds &&
-                            Number.isFinite(currentDisplay.bounds.x) &&
-                            Number.isFinite(currentDisplay.bounds.y)) {
-                            screenX = currentDisplay.bounds.x;
-                            screenY = currentDisplay.bounds.y;
-                        }
-                    }
-
-                    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
-                        displayInfo = {
-                            screenX: screenX,
-                            screenY: screenY
-                        };
-                    }
-                }
-            } catch (error) {
-                console.warn('[VRM] 获取显示器信息失败:', error);
-            }
-        }
-
-        // 显示器查询期间可能锁定、换模型或开始下一次交互；旧快照不能覆盖新状态。
-        if (saveToken !== this._positionSaveToken || this.manager.currentModel !== model) return;
 
         // 获取当前屏幕尺寸（用于跨分辨率缩放归一化）
         // 使用 screen.width/height 而非 renderer/窗口尺寸，避免临时视口变化（F12、输入法等）污染保存数据
@@ -2441,24 +2405,39 @@ class VRMInteraction {
             };
         }
 
-        // 异步保存，不阻塞交互
-        if (this.manager.core && typeof this.manager.core.saveUserPreferences === 'function') {
-            this.manager.core.saveUserPreferences(
-                modelUrl,
-                position,
-                scale,
-                rotation,
-                displayInfo,
-                viewportInfo,
-                cameraPosition
-            ).then(success => {
-                if (!success) {
-                    console.warn('[VRM] 自动保存位置失败');
-                }
-            }).catch(error => {
-                console.error('[VRM] 自动保存位置时出错:', error);
-            });
-        }
+        // 姿态、相机和屏幕信息已同步捕获；显示器查询作为快照的一部分排队。
+        const displayInfo = (async () => {
+            if (!window.electronScreen?.getCurrentDisplay) return null;
+            const currentDisplay = await window.electronScreen.getCurrentDisplay();
+            if (!currentDisplay) return null;
+            let { screenX, screenY } = currentDisplay;
+            if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+                screenX = currentDisplay.bounds?.x;
+                screenY = currentDisplay.bounds?.y;
+            }
+            return Number.isFinite(screenX) && Number.isFinite(screenY) ? { screenX, screenY } : null;
+        })().catch(error => {
+            console.warn('[VRM] 获取显示器信息失败:', error);
+            return null;
+        });
+        // 入队不阻塞交互；返回的 Promise 覆盖实际写入完成。
+        return core.saveUserPreferences(
+            modelUrl,
+            position,
+            scale,
+            rotation,
+            displayInfo,
+            viewportInfo,
+            cameraPosition
+        ).then(success => {
+            if (!success) {
+                console.warn('[VRM] 自动保存位置失败');
+            }
+            return success;
+        }).catch(error => {
+            console.error('[VRM] 自动保存位置时出错:', error);
+            return false;
+        });
     }
 
     /**

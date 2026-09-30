@@ -31,6 +31,7 @@ class VRMCore {
         this.targetFPS = this.performanceMode === 'low' ? 30 : (this.performanceMode === 'medium' ? 45 : 60);
         this.frameTime = 1000 / this.targetFPS;
         this.lastFrameTime = 0;
+        this._preferenceSaveQueue = Promise.resolve();
     }
 
     static _vrmUtilsCache = null;
@@ -1414,12 +1415,18 @@ class VRMCore {
      * @param {object} position - 位置 {x, y, z}
      * @param {object} scale - 缩放 {x, y, z}
      * @param {object} rotation - 旋转 {x, y, z}（可选）
-     * @param {object} display - 显示器信息（可选）
+     * @param {object|Promise<object|null>} display - 显示器信息或正在查询的信息（可选）
      * @param {object} viewport - 视口尺寸 {width, height}（可选，用于跨分辨率归一化）
      * @returns {Promise<boolean>} 是否保存成功
      */
     async saveUserPreferences(modelPath, position, scale, rotation, display, viewport, cameraPosition) {
         try {
+            const displaySnapshot = display && typeof display.then === 'function'
+                ? display : display && { screenX: display.screenX, screenY: display.screenY };
+            const displayRequest = Promise.resolve(displaySnapshot).catch(error => {
+                console.warn('[VRM Core] 获取显示器信息失败:', error);
+                return null;
+            });
             // 观看模式只读：viewer 不应把本地拖动覆盖到全局模型布局（也避免向 monitor 的只读端点 POST 触发 405）
             if (window.isViewerMode) {
                 return false;
@@ -1446,23 +1453,14 @@ class VRMCore {
 
             const preferences = {
                 model_path: modelPath,
-                position: position,
-                scale: scale
+                position: { x: position.x, y: position.y, z: position.z },
+                scale: { x: scale.x, y: scale.y, z: scale.z }
             };
 
             // 如果有旋转信息，添加到偏好中
             if (rotation && typeof rotation === 'object' &&
                 Number.isFinite(rotation.x) && Number.isFinite(rotation.y) && Number.isFinite(rotation.z)) {
-                preferences.rotation = rotation;
-            }
-
-            // 如果有显示器信息，添加到偏好中（用于多屏幕位置恢复）
-            if (display && typeof display === 'object' &&
-                Number.isFinite(display.screenX) && Number.isFinite(display.screenY)) {
-                preferences.display = {
-                    screenX: display.screenX,
-                    screenY: display.screenY
-                };
+                preferences.rotation = { x: rotation.x, y: rotation.y, z: rotation.z };
             }
 
             // 如果有视口信息，添加到偏好中（用于跨分辨率缩放归一化）
@@ -1485,6 +1483,36 @@ class VRMCore {
                 };
             }
             
+            // 显示器查询未完成也先占据写入顺序，所有调用入口共用队列。
+            // 已完成的交互快照不会因后续模型切换而丢失。
+            const write = async () => {
+                let displayTimer;
+                let displayInfo;
+                try {
+                    // Electron 查询无响应时仍保存姿态，不能让元数据堵住后续写入。
+                    displayInfo = await Promise.race([displayRequest, new Promise(resolve => {
+                        displayTimer = setTimeout(() => resolve(null), 1000);
+                    })]);
+                } finally {
+                    clearTimeout(displayTimer);
+                }
+                if (displayInfo && Number.isFinite(displayInfo.screenX) && Number.isFinite(displayInfo.screenY)) {
+                    preferences.display = { screenX: displayInfo.screenX, screenY: displayInfo.screenY };
+                }
+                return this._saveUserPreferencesRequest(preferences);
+            };
+            const request = this._preferenceSaveQueue.then(write, write);
+            this._preferenceSaveQueue = request.catch(() => {});
+            return await request;
+        } catch (error) {
+            console.error('[VRM] 保存用户偏好失败:', error);
+            return false;
+        }
+    }
+
+    async _saveUserPreferencesRequest(preferences) {
+        try {
+            if (window.isViewerMode) return false;
             // 添加超时保护（5秒超时）
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
