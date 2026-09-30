@@ -18,12 +18,14 @@ class VRMOrientationDetector {
     static getMovementFacingProfile(vrm, detectedVersion = null) {
         const coreVersion = String(detectedVersion || '');
         const metaVersion = String(vrm?.meta?.metaVersion || '');
-        const isVrm10 = coreVersion === '1.0' ||
-            metaVersion === '1' || metaVersion === '1.0' || metaVersion.startsWith('1.');
+        const isVrm10 = coreVersion
+            ? coreVersion === '1.0'
+            : metaVersion === '1' || metaVersion === '1.0' || metaVersion.startsWith('1.');
         return {
             vrmVersion: isVrm10 ? '1.0' : '0.0',
-            yawOffset: Math.PI,
-            horizontalSign: isVrm10 ? -1 : 1
+            // VRM0 的局部正面为 -Z，VRM1 为 +Z；用同一 yaw 校正所有方向。
+            yawOffset: isVrm10 ? 0 : Math.PI,
+            horizontalSign: 1
         };
     }
 

@@ -370,9 +370,22 @@ class VRMInteraction {
         return Math.atan2(dx, dz) + this._getMovementFacingProfile().yawOffset;
     }
 
+    _getSceneYaw(scene) {
+        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(scene.quaternion);
+        return Math.atan2(forward.x, forward.z);
+    }
+
+    _setSceneYaw(scene, yaw) {
+        // XYZ 欧拉角在掉头后可能等价地表示为 X/Z ≈ π。此时只改 rotation.y
+        // 会反转真实转向；绕世界 Y 轴组合四元数，保留模型原有俯仰和侧倾。
+        const delta = yaw - this._getSceneYaw(scene);
+        const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), delta);
+        scene.quaternion.premultiply(turn);
+    }
+
     async _turnToRestFacing(scene, targetYaw) {
         if (!scene || !Number.isFinite(targetYaw) || typeof this.manager.playVRMAAnimation !== 'function') return;
-        let diff = targetYaw - scene.rotation.y;
+        let diff = targetYaw - this._getSceneYaw(scene);
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
         if (Math.abs(diff) < 0.02) return;
@@ -389,13 +402,13 @@ class VRMInteraction {
             });
             if (played !== true) return;
             const duration = Math.max(0.25, Math.min(1.2, this._currentVRMADuration(0.65)));
-            const startYaw = scene.rotation.y;
+            const startYaw = this._getSceneYaw(scene);
             await new Promise(resolve => {
                 const startedAt = performance.now();
                 const tick = (now) => {
                     const progress = Math.min(1, Math.max(0, (now - startedAt) / (duration * 1000)));
                     const eased = progress * progress * (3 - 2 * progress);
-                    scene.rotation.y = startYaw + diff * eased;
+                    this._setSceneYaw(scene, startYaw + diff * eased);
                     if (progress < 1) requestAnimationFrame(tick);
                     else resolve();
                 };
@@ -413,22 +426,22 @@ class VRMInteraction {
             cancelAnimationFrame(this._smoothFacingFrame);
             this._smoothFacingFrame = null;
         }
-        let diff = targetYaw - scene.rotation.y;
+        let diff = targetYaw - this._getSceneYaw(scene);
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
         if (Math.abs(diff) < 0.02) return;
-        const startYaw = scene.rotation.y;
+        const startYaw = this._getSceneYaw(scene);
         const startedAt = performance.now();
         const duration = 360;
         const tick = (now) => {
             const progress = Math.min(1, Math.max(0, (now - startedAt) / duration));
             const eased = progress * progress * (3 - 2 * progress);
-            scene.rotation.y = startYaw + diff * eased;
+            this._setSceneYaw(scene, startYaw + diff * eased);
             if (progress < 1) {
                 this._smoothFacingFrame = requestAnimationFrame(tick);
             } else {
                 // 最后一帧写入目标值，避免浮点误差在多次移动后累计成朝向偏移。
-                scene.rotation.y = targetYaw;
+                this._setSceneYaw(scene, targetYaw);
                 this._smoothFacingFrame = null;
             }
         };
@@ -537,7 +550,7 @@ class VRMInteraction {
         void this._savePositionAfterInteraction();
         const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
         if (willMove && !this.isMoving && this._movementRestRotationY === null) {
-            this._movementRestRotationY = scene.rotation.y;
+            this._movementRestRotationY = this._getSceneYaw(scene);
         }
         this.moveTarget = target;
         this.isMoving = willMove;
@@ -578,7 +591,7 @@ class VRMInteraction {
         }
         const step = Math.min(distance, this.movementVelocity * dt);
         if (step <= 0) return;
-        scene.position.addScaledVector(offset.normalize(), step);
+        offset.normalize();
         const camera = this.manager.camera;
         if (camera) {
             // 位移发生在与屏幕平行的平面上，其中“上下”主要落在世界 Y 轴；直接只看 X/Z
@@ -594,22 +607,27 @@ class VRMInteraction {
             cameraForward.y = 0;
             if (cameraRight.lengthSq() > 1e-8) cameraRight.normalize();
             if (cameraForward.lengthSq() > 1e-8) cameraForward.normalize();
-            // 屏幕垂直方向与相机水平前向的符号相反：向上屏幕移动应对应远离镜头，
-            // 因此这里取反，避免上下移动时角色朝向反过来。
-            // 先按相机坐标得到完整移动方向，再由 yaw 偏移统一校正角色 authored 正面。
-            // 屏幕水平基向量与模型 yaw 的左右正方向相反；只翻水平分量，
-            // 垂直分量和完整的 π 朝向校正保持不变。
+            // cameraForward 指向远离镜头的方向，因此屏幕向上（screenY > 0）
+            // 使用正的前向分量。模型版本的局部正面差异由 yawOffset 统一校正。
             const profile = this._getMovementFacingProfile();
             const facing = cameraRight.multiplyScalar(screenX * profile.horizontalSign)
-                .addScaledVector(cameraForward, -screenY);
+                .addScaledVector(cameraForward, screenY);
             if (facing.lengthSq() > 1e-8) {
                 const angle = Math.atan2(facing.x, facing.z) + profile.yawOffset;
-                let diff = angle - scene.rotation.y;
+                const currentYaw = this._getSceneYaw(scene);
+                let diff = angle - currentYaw;
                 while (diff > Math.PI) diff -= Math.PI * 2;
                 while (diff < -Math.PI) diff += Math.PI * 2;
-                scene.rotation.y += diff * Math.min(1, (Number(delta) || 0) * 10);
+                const turnStep = diff * Math.min(1, dt * 10);
+                this._setSceneYaw(scene, currentYaw + turnStep);
+                // 连续选点可能要求掉头；先完成转向再位移，避免转身期间倒着滑行。
+                if (Math.abs(diff - turnStep) > Math.PI / 12) {
+                    this.movementVelocity = 0;
+                    return;
+                }
             }
         }
+        scene.position.addScaledVector(offset, step);
     }
 
     /**
@@ -1033,6 +1051,8 @@ class VRMInteraction {
      */
     _updateModelFacing(delta) {
         if (!this.enableFaceCamera) return;
+        // 引导移动和到达后的平滑转身各自拥有朝向，不能被每帧面向镜头覆盖。
+        if (this.isMoving || this._smoothFacingFrame !== null) return;
         // 手动 orbit 期间不自动朝向相机，避免和用户拖拽对抗
         // （当前 vrm-core.js:887 加载完会把 enableFaceCamera=false，这里是防御性守卫）
         if (this.dragMode === 'orbit') return;
@@ -1053,7 +1073,7 @@ class VRMInteraction {
         }
 
         // 3. 平滑插值处理角度突变
-        const currentAngle = model.rotation.y;
+        const currentAngle = this._getSceneYaw(model);
         let diff = targetAngle - currentAngle;
 
         while (diff > Math.PI) diff -= Math.PI * 2;
@@ -1062,7 +1082,7 @@ class VRMInteraction {
         // 4. 应用旋转 (速度可调)
         const rotateSpeed = 10.0;
         if (Math.abs(diff) > 0.001) {
-            model.rotation.y += diff * rotateSpeed * delta;
+            this._setSceneYaw(model, currentAngle + diff * Math.min(1, rotateSpeed * Math.max(0, Number(delta) || 0)));
         }
     }
     /**
