@@ -24,7 +24,8 @@ const vm = require('node:vm');
             assert.equal(url, '/api/config/preferences');
             const preferences = JSON.parse(options.body);
             return new Promise((resolve, reject) => {
-                requests.push({ preferences, fail: () => reject(new Error('fixture network failure')),
+                requests.push({ preferences, signal: options.signal, headers: resolve,
+                    fail: () => reject(new Error('fixture network failure')),
                     complete(success = true) {
                         if (success) persisted.set(preferences.model_path, preferences);
                         resolve({ ok: true, json: async () => ({ success }) });
@@ -89,6 +90,40 @@ const vm = require('node:vm');
         assert.equal(f.requests.length, 2);
         f.requests[1].complete(); await second;
         assert.equal(f.persisted.get('/model-a.vrm').position.y, 4);
+    }
+
+    // Real response-body readers must be aborted even after fetch returns headers.
+    // A stalled success JSON, error JSON or error text must not block later saves.
+    for (const [status, contentType] of [[200, 'application/json'], [500, 'application/json'], [500, 'text/plain']]) {
+        const f = fixture(); const timers = new Map(); let timerId = 0;
+        context.setTimeout = (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; };
+        context.clearTimeout = id => timers.delete(id);
+        try {
+            const core = f.manager.core;
+            const first = core.saveUserPreferences('/model-a.vrm', { x: 0, y: 1, z: 0 }, { x: 1, y: 1, z: 1 });
+            await flush();
+            const { signal } = f.requests[0];
+            const body = new ReadableStream({ start(controller) {
+                signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+            } });
+            f.requests[0].headers(new Response(body, { status, headers: { 'content-type': contentType } }));
+            const second = core.saveUserPreferences('/model-a.vrm', { x: 0, y: 9, z: 0 }, { x: 1, y: 1, z: 1 });
+            await flush();
+            assert.equal(body.locked, true, 'the response headers arrived and body consumption started');
+            assert.equal(f.requests.length, 1, 'the next save must wait for body consumption');
+            const requestTimer = [...timers.values()].find(timer => timer.delay === 5000);
+            assert.ok(requestTimer, 'the request timeout must remain active while reading the body');
+            requestTimer.callback();
+            assert.equal(await first, false);
+            assert.equal(signal.aborted, true);
+            await flush();
+            assert.equal(f.requests.length, 2, 'a timed-out body must release the save queue');
+            f.requests[1].complete(); assert.equal(await second, true);
+            assert.equal(f.persisted.get('/model-a.vrm').position.y, 9);
+            assert.equal(timers.size, 0, 'settled requests must clear their timers');
+        } finally {
+            context.setTimeout = setTimeout; context.clearTimeout = clearTimeout;
+        }
     }
 
     // A missing or failed display response falls back to saving the pose and

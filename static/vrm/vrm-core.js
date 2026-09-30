@@ -1511,32 +1511,20 @@ class VRMCore {
     }
 
     async _saveUserPreferencesRequest(preferences) {
+        let timeoutId;
         try {
             if (window.isViewerMode) return false;
-            // 添加超时保护（5秒超时）
+            // 5 秒超时覆盖请求和响应体读取，避免停滞响应阻塞保存队列。
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-            
-            let response;
-            try {
-                response = await fetch('/api/config/preferences', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(preferences),
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-            } catch (error) {
-                clearTimeout(timeoutId);
-                if (error.name === 'AbortError') {
-                    console.warn('[VRM Core] 保存偏好设置请求超时（5秒）');
-                    throw new Error('请求超时');
-                }
-                throw error;
-            }
+            timeoutId = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch('/api/config/preferences', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(preferences),
+                signal: controller.signal
+            });
 
             if (!response.ok) {
                 let errorText = '';
@@ -1549,6 +1537,7 @@ class VRMCore {
                         errorText = await response.text();
                     }
                 } catch (e) {
+                    if (e.name === 'AbortError') throw e;
                     errorText = response.statusText || '未知错误';
                 }
                 throw new Error(`保存偏好设置失败: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`);
@@ -1556,6 +1545,7 @@ class VRMCore {
 
             // 安全解析 JSON，避免空响应体或非 JSON 响应导致异常被吞掉
             const result = await response.json().catch((parseError) => {
+                if (parseError.name === 'AbortError') throw parseError;
                 const statusText = response.statusText || '';
                 const truncatedStatusText = statusText.length > 50 ? statusText.substring(0, 50) + '...' : statusText;
                 console.warn(`[VRM Core] 保存偏好设置响应解析失败: ${response.status} ${truncatedStatusText}`, parseError);
@@ -1564,8 +1554,13 @@ class VRMCore {
             
             return result.success || false;
         } catch (error) {
+            if (error.name === 'AbortError') {
+                console.warn('[VRM Core] 保存偏好设置请求超时（5秒）');
+            }
             console.error('[VRM] 保存用户偏好失败:', error);
             return false;
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 
