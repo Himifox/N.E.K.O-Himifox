@@ -313,8 +313,8 @@ class _ToolingMixin:
         if not generation_is_active():
             return
         async for chunk in self.llm.astream(messages, **overrides):  # noqa: LLM_INPUT_BUDGET  # dialog messages bounded by SESSION_ARCHIVE_TRIGGER_TOKENS + RECENT_PER_MESSAGE_MAX_TOKENS truncation; output budget set per-call via overrides.
-            if not generation_is_active():
-                return
+            # Same rule as the first attempt: the caller publishes what this
+            # request delivered on its first chunk, then checks.
             yield chunk
 
     @staticmethod

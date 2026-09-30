@@ -1170,13 +1170,16 @@ def _quarantined_recent_history(history, lang):
     Session renewal and restarts bring this history back as system-prompt
     text, where the offline client's request-view projection never sees it.
     Apply the same screen-chain quarantine here, on the structured messages
-    before they are flattened. The independent-delivery marker does not
-    survive this store, so an unmarked run between two user turns is judged
-    by position alone (the documented legacy limitation).
+    before they are flattened. What follows this history in the new session
+    is the user speaking, so the run at its end counts as the one before the
+    current turn (``trailing_turn``). The independent-delivery marker does
+    not survive this store, so an unmarked run is judged by position alone
+    (the documented legacy limitation).
     """
     return project_screen_history(
         list(history),
         placeholder=_loc(SCREEN_HISTORY_PLACEHOLDER, lang),
+        trailing_turn=True,
     )
 
 

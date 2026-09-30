@@ -74,7 +74,7 @@ from config.prompts.prompts_sys import (
 from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from config.prompts.prompts_tool import normalize_tool_image_locale
 from utils.language_utils import normalize_language_code, is_supported_language_code
-from utils.screen_comment_guard import screen_chain_start, screen_guard_enabled
+from utils.screen_comment_guard import project_screen_history
 from ._shared import logger
 
 
@@ -140,28 +140,31 @@ class NotifyMixin:
 
         This text is primed into the next session's system prompt, where the
         offline client's request-view projection never sees it, so the
-        character's lines pass the same screen-chain quarantine here. The
-        cache already merges consecutive character lines into one entry, so
-        a chain spread over several replies is one text to check.
+        character's lines pass the same screen-chain quarantine here, with
+        the same rules (a chain inside one line, or spread over the run of
+        character lines that ends the cache and follows a master line). The
+        next thing the new session sees is the user speaking, hence
+        ``trailing_turn``.
         """
-        guard = screen_guard_enabled()
-        placeholder = None
+        roles = {
+            self.lanlan_name: "assistant",
+            getattr(self, "master_name", None): "user",
+        }
+        messages = [
+            {"role": roles.get(i['role'], "system"), "content": i['text']}
+            for i in cache
+        ]
+        projected = project_screen_history(
+            messages,
+            placeholder=_loc(
+                SCREEN_HISTORY_PLACEHOLDER,
+                normalize_tool_image_locale(getattr(self, 'user_language', None)),
+            ),
+            trailing_turn=True,
+        )
         res = ""
-        for i in cache:
-            text = i['text']
-            if (
-                guard
-                and i['role'] == self.lanlan_name
-                and isinstance(text, str)
-                and screen_chain_start(text) is not None
-            ):
-                if placeholder is None:
-                    placeholder = _loc(
-                        SCREEN_HISTORY_PLACEHOLDER,
-                        normalize_tool_image_locale(getattr(self, 'user_language', None)),
-                    )
-                text = placeholder
-            res += f"{i['role']} | {text}\n"
+        for i, message in zip(cache, projected):
+            res += f"{i['role']} | {message['content']}\n"
         return res
 
     async def _build_initial_prompt(self) -> str:

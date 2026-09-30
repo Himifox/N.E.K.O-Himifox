@@ -625,3 +625,52 @@ async def test_a_kept_cancelled_round_holds_only_the_text_that_was_shown():
         ("assistant", "", ["c1"]),
         ("tool", "{}", None),
     ]
+
+
+async def test_trimming_a_cancelled_round_never_touches_the_interrupters_round():
+    """A is cancelled inside a slow tool; B runs its own tool round and
+    finishes before A's handler returns. Trimming A's kept round must stop
+    at B's user message and leave B's round alone."""
+    release = asyncio.Event()
+
+    async def handler(call):
+        if call.call_id == "a1":
+            await release.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    client = _client(handler=handler)
+    client._prefix_buffer_size = 100
+    client.script = [
+        [_text("A在查"), _tool_calls("a1")],
+        [_text("B也在查"), _tool_calls("b1")],
+        [_text("B查完了。"), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    for _ in range(50):
+        if any(isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history):
+            break
+        await asyncio.sleep(0)
+    await client.handle_interruption()
+    await client.stream_text("B")
+    release.set()
+    await turn_a
+    rounds = {m["tool_calls"][0]["id"]: m for m in client._conversation_history
+              if isinstance(m, dict) and m.get("tool_calls")}
+    assert rounds["b1"]["content"] == "B也在查"
+    assert rounds["a1"]["content"] == ""
+
+
+async def test_a_tools_refusal_retry_cancelled_in_flight_still_publishes():
+    """The retry after a tools refusal follows the first attempt's rule:
+    the caller publishes on the first chunk, then checks cancellation."""
+    client = _client(handler=_noop_tool)
+
+    async def interrupt():
+        await client.handle_interruption()
+
+    client.script = [RuntimeError("this model does not support tools"),
+                     [interrupt, _text("late"), _text("", "stop")]]
+    await client.stream_text("look", turn_images=[_png_b64(4, 4, (7, 7, 7))])
+    assert len(client.requests) == 2
+    client._publish_provider_frames.assert_called_once()
+    assert _emitted(client) == []

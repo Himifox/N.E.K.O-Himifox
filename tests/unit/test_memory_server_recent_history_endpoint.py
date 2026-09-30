@@ -141,14 +141,19 @@ async def test_get_recent_history_quarantines_screen_chains_before_rendering():
         SimpleNamespace(type="human", content="陪我聊聊"),
         SimpleNamespace(type="ai", content=_CHAIN),
         SimpleNamespace(type="ai", content="普通的一句回复。"),
+        SimpleNamespace(type="human", content="继续"),
+        # A chain split over the replies that end the history: the new
+        # session's user turn follows them, so they are one run.
+        SimpleNamespace(type="ai", content="屏幕搭话 蓝色小车停在一棵大树旁边，树叶的影子落在了车顶上。"),
+        SimpleNamespace(type="ai", content="屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"),
     ]))
 
     with patch.object(memory_server.runtime, "_config_manager", fake_config), \
          patch.object(memory_server.runtime, "recent_history_manager", fake_recent):
         result = await memory_server.get_recent_history("test_char", "zh")
 
-    assert "蓝色小车" not in result
-    assert f"test_char | {SCREEN_HISTORY_PLACEHOLDER['zh']}" in result
+    assert "蓝色小车" not in result and "红色小车" not in result
+    assert result.count(f"test_char | {SCREEN_HISTORY_PLACEHOLDER['zh']}") == 3
     assert "test_char | 普通的一句回复。" in result
     assert "Master | 陪我聊聊" in result
 

@@ -90,7 +90,7 @@ def _is_tool_image_turn(messages, index) -> bool:
     return False
 
 
-def _assistant_tail_run(messages) -> tuple[int, int]:
+def _assistant_tail_run(messages, *, trailing_turn: bool = False) -> tuple[int, int]:
     """Half-open range of the consecutive assistant messages that answer the
     last user turn; ``(0, 0)`` when there is no such run.
 
@@ -112,15 +112,23 @@ def _assistant_tail_run(messages) -> tuple[int, int]:
 
     Image turns injected by the tool loop are not user turns and are skipped
     when looking for the last one.
+
+    ``trailing_turn`` treats the end of ``messages`` as followed by a user
+    turn. History restored into a new session's prompt is exactly that: the
+    next thing the model sees is the user speaking, so the run at the end is
+    the one that answers "the current turn".
     """
-    last_user = next(
-        (
-            index for index in range(len(messages) - 1, -1, -1)
-            if _role_and_content(messages[index])[0] in _USER_ROLES
-            and not _is_tool_image_turn(messages, index)
-        ),
-        -1,
-    )
+    if trailing_turn:
+        last_user = len(messages)
+    else:
+        last_user = next(
+            (
+                index for index in range(len(messages) - 1, -1, -1)
+                if _role_and_content(messages[index])[0] in _USER_ROLES
+                and not _is_tool_image_turn(messages, index)
+            ),
+            -1,
+        )
     if last_user <= 1:
         return 0, 0
     start = last_user
@@ -145,7 +153,8 @@ def _is_independent_delivery(message) -> bool:
 
 
 def project_screen_history(messages, *, guard_enabled: bool | None = None,
-                           placeholder: str | None = None, hits: dict | None = None):
+                           placeholder: str | None = None, hits: dict | None = None,
+                           trailing_turn: bool = False):
     """Return a request-only view; keep saved transcripts and tool metadata.
 
     A message carrying a confirmed chain loses its whole body, not just the
@@ -164,6 +173,9 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
     Detection needs labelled, multi-item chains. Unlabelled history and
     comments below ``MIN_PROSE`` are left byte-for-byte alone, silently.
 
+    ``trailing_turn`` is for restored history: the end of ``messages`` is
+    treated as followed by the next user turn (see ``_assistant_tail_run``).
+
     ``placeholder`` is the locale row the caller resolved (English when
     omitted). ``hits``, when given, receives the count of quarantined messages
     per category: ``"message"`` for a chain inside one message and ``"run"``
@@ -175,7 +187,7 @@ def project_screen_history(messages, *, guard_enabled: bool | None = None,
         return messages
     if placeholder is None:
         placeholder = SCREEN_HISTORY_PLACEHOLDER["en"]
-    tail_start, tail_end = _assistant_tail_run(messages)
+    tail_start, tail_end = _assistant_tail_run(messages, trailing_turn=trailing_turn)
     tail_quarantine: set[int] = set()
     segment_start = tail_start
     for boundary in range(tail_start, tail_end + 1):

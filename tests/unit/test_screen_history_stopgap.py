@@ -544,3 +544,31 @@ def test_a_repeated_quarantine_is_logged_once_at_info(monkeypatch):
         client._dialog_messages_for_provider(batch)
         levels.append("info" if fake.info.called else "debug" if fake.debug.called else None)
     assert levels == ["info", "debug", "debug", "info"]
+
+
+def test_restored_history_counts_its_last_run_as_the_current_turn():
+    """Restored history is followed by the user speaking in the new session,
+    so a chain spread over the run at its end is quarantined there even
+    though no user message follows it in the list."""
+    messages = [_user("聊"), _assistant(_COMMENT_A), _assistant(_COMMENT_B)]
+    assert project_screen_history(messages) is messages
+    projected = project_screen_history(messages, trailing_turn=True)
+    assert [m["content"] for m in projected[1:]] == [PLACEHOLDER, PLACEHOLDER]
+    # The run still has to follow a user turn.
+    lone = [_assistant(_COMMENT_A), _assistant(_COMMENT_B)]
+    assert project_screen_history(lone, trailing_turn=True) is lone
+
+
+def test_hot_swap_cache_catches_a_chain_split_over_entries(monkeypatch):
+    from types import SimpleNamespace
+    from main_logic.core.notify import NotifyMixin
+
+    monkeypatch.delenv(SCREEN_GUARD_ENV, raising=False)
+    owner = SimpleNamespace(lanlan_name="YUI", master_name="Alice", user_language="zh")
+    cache = [{"role": "Alice", "text": "陪我聊聊"},
+             {"role": "YUI", "text": _COMMENT_A},
+             {"role": "YUI", "text": _COMMENT_B}]
+    rendered = NotifyMixin._convert_cache_to_str(owner, cache).splitlines()
+    assert rendered == ["Alice | 陪我聊聊",
+                        f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}",
+                        f"YUI | {SCREEN_HISTORY_PLACEHOLDER['zh']}"]

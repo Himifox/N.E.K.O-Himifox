@@ -331,14 +331,21 @@ class _StreamingMixin:
         start = _find_by_identity(history, -1, anchor)
         if start < 0:
             return
-        for message in reversed(history[start + 1:]):
+        # This turn ends at the first user message after its own, the same
+        # boundary _commit_cancelled_reply uses; past it is the interrupting
+        # turn, whose tool rounds must not be touched.
+        kept = None
+        for message in history[start + 1:]:
+            if isinstance(message, HumanMessage):
+                break
             if (
                 isinstance(message, dict)
                 and message.get("role") == "assistant"
                 and message.get("tool_calls")
             ):
-                message["content"] = shown
-                return
+                kept = message
+        if kept is not None:
+            kept["content"] = shown
 
     async def _check_repetition(self, response: str) -> bool:
         """
