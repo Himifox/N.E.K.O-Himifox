@@ -1090,3 +1090,70 @@ async def test_every_ready_typed_input_goes_through_the_setup_tracking(entry):
     mgr._process_stream_input.assert_awaited_once()
     assert mgr._process_stream_input.await_args.args[0]["data"] == "你好"
     mgr._process_stream_data_internal.assert_not_awaited()
+
+
+@pytest.mark.parametrize("state", ["live", "completion_pending"])
+async def test_a_declined_ephemeral_does_nothing_before_declining(monkeypatch, state):
+    """With another reply in progress at entry, prompt_ephemeral declines
+    before any work: no anti-repeat preload, no image fitting, and above all
+    no vision switch, which would replace and close the client that reply
+    is streaming on."""
+    import memory.anti_repeat as anti_repeat
+    import main_logic.omni_offline_client._lifecycle as lifecycle_module
+
+    client = _client()
+    client.vision_model = "vision-x"
+    client.switch_model = AsyncMock()
+    fit = AsyncMock(return_value=(["img"], None))
+    monkeypatch.setattr(lifecycle_module, "fit_images_to_turn_budget", fit)
+    corpus = MagicMock()
+    corpus.apreload = AsyncMock()
+    monkeypatch.setattr(anti_repeat, "get_anti_repeat_corpus", lambda: corpus)
+    seen = {}
+
+    async def callback_arrives():
+        if seen:
+            return
+        seen["delivered"] = await client.prompt_ephemeral(
+            "callback with media", images=["b64"], completion_mode="response",
+        )
+
+    if state == "completion_pending":
+        async def cleanup(_seq):
+            await callback_arrives()
+
+        client._notify_reasoning_done = cleanup
+        client.script = [[_text("回调说完。"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback")
+    else:
+        client.script = [[_text("文本前半，"), callback_arrives, _text("后半。"), _text("", "stop")]]
+        await client.stream_text("T")
+    assert seen == {"delivered": False}
+    client.switch_model.assert_not_awaited()
+    fit.assert_not_awaited()
+    corpus.apreload.assert_not_awaited()
+
+
+async def test_a_reply_begun_during_the_ephemeral_setup_is_not_displaced(monkeypatch):
+    """Another reply can begin during prompt_ephemeral's own setup awaits
+    (the anti-repeat preload here); the check right before the begin still
+    declines, so that reply is neither cut nor handed over."""
+    import memory.anti_repeat as anti_repeat
+
+    client = _client()
+    client.on_response_displaced = MagicMock()
+    other = {}
+
+    async def preload(_name):
+        other["generation"] = client._begin_response_generation()
+
+    corpus = MagicMock()
+    corpus.apreload = AsyncMock(side_effect=preload)
+    monkeypatch.setattr(anti_repeat, "get_anti_repeat_corpus", lambda: corpus)
+    client.script = [[_text("不该发出"), _text("", "stop")]]
+    delivered = await client.prompt_ephemeral("avatar", completion_mode="response")
+    assert delivered is False
+    assert client.requests == []
+    assert client._active_response_generation == other["generation"]
+    client.on_response_displaced.assert_not_called()
+    client._finish_response_generation(other["generation"])

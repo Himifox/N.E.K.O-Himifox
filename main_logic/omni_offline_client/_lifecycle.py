@@ -269,6 +269,21 @@ class _LifecycleMixin:
             self._is_responding = False
         return claimed
 
+    def _declines_over_another_reply(self, completion_mode: str) -> bool:
+        """Whether a ``prompt_ephemeral`` must not start: another reply is
+        live, guard-paused or waiting on its completion."""
+        if (
+            getattr(self, "_active_response_generation", None) is None
+            and getattr(self, "_completion_pending_generation", None) is None
+        ):
+            return False
+        logger.info(
+            "prompt_ephemeral: another reply is still in progress, not starting "
+            "(completion_mode=%s)",
+            completion_mode,
+        )
+        return True
+
     def is_idle(self) -> bool:
         """No reply is live, guard-paused, waiting on its completion, or still
         inside a ``stream_text`` / ``prompt_ephemeral`` call: its
@@ -477,6 +492,14 @@ class _LifecycleMixin:
         if not instruction or not instruction.strip():
             return False
 
+        # Early decline, before any await: nothing below (the anti-repeat
+        # preload, the vision switch, image fitting) is worth doing for a
+        # turn that cannot begin, and the vision switch replaces and closes
+        # the client a live reply is streaming on. The check right before the
+        # begin stays authoritative: these awaits can let another reply begin.
+        if self._declines_over_another_reply(completion_mode):
+            return False
+
         # A regular visible response stages anti-repeat memory immediately
         # before terminal callbacks. That commit boundary cannot gain an await,
         # so perform the first disk-backed load before generation starts.
@@ -665,18 +688,11 @@ class _LifecycleMixin:
         # A non-user reply never begins over another reply that is live,
         # guard-paused or waiting on its completion: it would displace (cut)
         # it, and the displaced turn's close would carry this reply's avatar
-        # meta, which is set just before this call. Checked before the
-        # diagnostics reset below (they are the live reply's) and with no
-        # await between here and the begin, so it cannot go stale.
-        if (
-            getattr(self, "_active_response_generation", None) is not None
-            or getattr(self, "_completion_pending_generation", None) is not None
-        ):
-            logger.info(
-                "prompt_ephemeral: another reply is still in progress, not starting "
-                "(completion_mode=%s)",
-                completion_mode,
-            )
+        # meta, which is set just before this call. This is the authoritative
+        # check: before the diagnostics reset below (they are the live
+        # reply's) and with no await between here and the begin, so it cannot
+        # go stale.
+        if self._declines_over_another_reply(completion_mode):
             return False
 
         # Retry 策略与 stream_text 对偶（max_retries=3, [1, 2]s 间隔）。
