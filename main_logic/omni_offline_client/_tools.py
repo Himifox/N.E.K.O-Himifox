@@ -13,9 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
-from utils.screen_comment_guard import project_screen_history
-
 from ._shared import (
     _answered_chunk,
     _generation_check,
@@ -73,41 +70,12 @@ class _ToolingMixin:
     def _dialog_messages_for_provider(self, messages):
         """Build the request view of ``messages``; the saved history is untouched.
 
-        Two repairs, both on a copy:
-
-        * Quarantine whole abnormal assistant bodies (screen-comment chains).
-          No user wording restores a quarantined body -- asking to quote or
-          translate history gets the same placeholder as any other turn.
-        * Drop tool-call bookkeeping the provider would reject: a round that is
-          still executing (or was cancelled mid-batch) sits in the shared
-          history while another turn builds its request, and an
-          ``assistant(tool_calls)`` without its tool replies is a 400.
+        Drops tool-call bookkeeping the provider would reject, on a copy: a
+        round that is still executing (or was cancelled mid-batch) sits in the
+        shared history while another turn builds its request, and an
+        ``assistant(tool_calls)`` without its tool replies is a 400.
         """
-        hits: dict = {}
-        projected = project_screen_history(
-            messages,
-            placeholder=_loc(SCREEN_HISTORY_PLACEHOLDER, self._tool_image_locale()),
-            hits=hits,
-        )
-        if projected is not messages:
-            # The history is re-projected on every provider call; log a
-            # quarantine once, not on every later request that repeats it.
-            signature = tuple(
-                id(old) for new, old in zip(projected, messages) if new is not old
-            )
-            log = (
-                logger.debug
-                if signature == getattr(self, "_screen_quarantine_signature", None)
-                else logger.info
-            )
-            self._screen_quarantine_signature = signature
-            log(
-                "OmniOfflineClient: screen-chain request view quarantined "
-                "%d message(s) with an in-message chain, %d in a cross-message run",
-                hits.get("message", 0),
-                hits.get("run", 0),
-            )
-        return self._paired_tool_rounds(projected)
+        return self._paired_tool_rounds(messages)
 
     @staticmethod
     def _paired_tool_rounds(messages):
@@ -1076,9 +1044,9 @@ class _ToolingMixin:
             # 上一轮注入的工具图，本轮才谈得上"送到了"。
             tool_frames_published = False
             async for chunk in self._astream_declining_tools(
-                # Projected here rather than inside the helper so both the
-                # first attempt and the retry-after-tools-refusal get the same
-                # quarantined view.
+                # Built here rather than inside the helper so both the first
+                # attempt and the retry-after-tools-refusal get the same
+                # repaired view.
                 self._dialog_messages_for_provider(messages),
                 overrides,
                 response_generation=response_generation,

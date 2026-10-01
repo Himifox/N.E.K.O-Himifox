@@ -71,10 +71,7 @@ from config.prompts.prompts_sys import (
     AGENT_TASKS_HEADER,
     AGENT_TASKS_NOTICE,
 )
-from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
-from config.prompts.prompts_tool import normalize_tool_image_locale
 from utils.language_utils import normalize_language_code, is_supported_language_code
-from utils.screen_comment_guard import project_screen_history
 from ._shared import logger
 
 
@@ -135,49 +132,11 @@ class NotifyMixin:
         except Exception as e:
             logger.error(f"💥 WS Send User Activity Error: {e}")
 
-    def _convert_cache_to_str(self, cache, preceding=()):
-        """[Hot-swap related] Convert the cache to a string.
-
-        This text is primed into the next session's system prompt, where the
-        offline client's request-view projection never sees it, so the
-        character's lines pass the same screen-chain quarantine here, with
-        the same rules (a chain inside one line, or spread over the run of
-        character lines that ends the cache and follows a master line). The
-        next thing the new session sees is the user speaking, hence
-        ``trailing_turn``.
-
-        Pass every slice that ends up adjacent in one prompt in one call:
-        judged apart, a chain split across two slices is missed. A slice
-        appended after text that was already primed passes that text as
-        ``preceding``; it is judged with the slice but not rendered again.
-
-        Known boundary: the memory server's recent history (rendered by
-        ``/new_dialog`` just before these lines) is judged on its own, so a
-        chain split between memory's last replies and the cache's first ones
-        is not joined. Closing it needs a structured memory tail from that
-        service.
-        """
-        preceding = list(preceding)
-        entries = preceding + list(cache)
-        roles = {
-            self.lanlan_name: "assistant",
-            getattr(self, "master_name", None): "user",
-        }
-        messages = [
-            {"role": roles.get(i['role'], "system"), "content": i['text']}
-            for i in entries
-        ]
-        projected = project_screen_history(
-            messages,
-            placeholder=_loc(
-                SCREEN_HISTORY_PLACEHOLDER,
-                normalize_tool_image_locale(getattr(self, 'user_language', None)),
-            ),
-            trailing_turn=True,
-        )
+    def _convert_cache_to_str(self, cache):
+        """[Hot-swap related] Convert the cache to a string"""
         res = ""
-        for i, message in list(zip(entries, projected))[len(preceding):]:
-            res += f"{i['role']} | {message['content']}\n"
+        for i in cache:
+            res += f"{i['role']} | {i['text']}\n"
         return res
 
     async def _build_initial_prompt(self) -> str:

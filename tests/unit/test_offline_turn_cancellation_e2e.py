@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import main_logic.omni_offline_client._genai_support as _ofc_genai
-from config.prompts.prompts_screen_history import SCREEN_HISTORY_PLACEHOLDER
 from main_logic.tool_calling import ToolDefinition, ToolImage, ToolResult
 from tests.unit.test_offline_provider_frame_publish import _make_client, _png_b64
 from tests.unit.test_tool_calling import (
@@ -24,9 +23,6 @@ from tests.unit.test_tool_calling import (
 from utils.llm_client import AIMessage, HumanMessage, LLMStreamChunk
 
 pytestmark = pytest.mark.unit
-
-_COMMENT_A = "屏幕搭话 蓝色小车停在一棵大树旁边，树叶的影子落在了车顶上。"
-_COMMENT_B = "屏幕搭话 远处的红色小车正在缓慢经过桥面，桥下的河水十分平静。"
 
 
 def _text(content, finish=None):
@@ -41,7 +37,7 @@ def _tool_calls(*ids, text=""):
     ])
 
 
-def _client(provider="openai", *, handler=None, cap=2, language="zh"):
+def _client(provider="openai", *, handler=None, cap=2):
     """A stream_text/prompt_ephemeral-capable client over the real tool loop.
 
     ``client.script`` lists one provider response per request: a list of
@@ -64,7 +60,7 @@ def _client(provider="openai", *, handler=None, cap=2, language="zh"):
     client.on_response_done = AsyncMock()
     client.on_proactive_done = AsyncMock()
     client._notify_reasoning_done = AsyncMock()
-    client._user_language_provider = lambda: language
+    client._user_language_provider = lambda: "zh"
     client.max_tool_iterations = cap
     client.on_tool_call = handler
     client.on_tool_round_start = None
@@ -255,44 +251,30 @@ async def test_replacement_and_tool_image_slots_survive_a_shifted_history():
     assert image.data_b64 in json.dumps(client.requests[1], ensure_ascii=False, default=repr)
 
 
-# ── Independent deliveries are marked ───────────────────────────────────────
-
-async def test_persisted_ephemeral_replies_are_marked_as_independent_deliveries():
-    """Callbacks and greetings answer an instruction, not the user, so the
-    guard must not join them with the reply to the user's turn."""
-    from utils.screen_comment_guard import project_screen_history
-
-    client = _client()
-    client._conversation_history += [HumanMessage(content="聊"), AIMessage(content="正常回复。")]
-    for comment in (_COMMENT_A, _COMMENT_B):
-        client.script = [[_text(comment), _text("", "stop")]]
-        client.requests.clear()
-        assert await client.prompt_ephemeral("callback")
-    delivered = client._conversation_history[-2:]
-    assert [m.additional_kwargs for m in delivered] == [{"dialog_source": "proactive"}] * 2
-    messages = client._conversation_history + [HumanMessage(content="继续")]
-    assert project_screen_history(messages) is messages
-
-
 # ── The request view reaches every provider call site ───────────────────────
 
-def _poisoned(client):
-    client._conversation_history += [
-        HumanMessage(content="聊"), AIMessage(content=_COMMENT_A), AIMessage(content=_COMMENT_B),
-    ]
+def _with_pending_round(client):
+    """Seed another turn's tool round that is still executing (or was cut
+    mid-batch): it sits in the shared history with its call unanswered.
+    Returns that assistant turn."""
+    pending = {"role": "assistant", "content": "我查一下", "tool_calls": [{
+        "id": "pending", "type": "function",
+        "function": {"name": "pending_lookup", "arguments": "{}"},
+    }]}
+    client._conversation_history += [HumanMessage(content="查一下"), pending]
+    return pending
 
 
-def _assert_quarantined(payload, placeholder):
+def _assert_paired(payload):
     text = json.dumps(payload, ensure_ascii=False, default=repr)
-    assert _COMMENT_A not in text and _COMMENT_B not in text
-    assert placeholder in text
+    assert "pending_lookup" not in text, "the unanswered call reached the provider"
+    assert "我查一下" in text, "its text stays as a plain assistant turn"
 
 
 @pytest.mark.parametrize("with_image", [False, True])
-async def test_openai_tool_loop_and_forced_final_both_send_the_request_view(with_image):
+async def test_openai_tool_loop_and_forced_final_both_drop_an_unanswered_round(with_image):
     """Request 1 is the tool loop, request 2 the forced-final call (cap=1).
-    A tool image appends a {"role": "user"} turn in place; the forced-final
-    request must still find the run before the real user turn."""
+    A tool image appends a {"role": "user"} turn in place."""
     image = ToolImage(data_b64=_png_b64(4, 4, (1, 2, 3)), mime="image/png")
 
     async def handler(call):
@@ -300,43 +282,44 @@ async def test_openai_tool_loop_and_forced_final_both_send_the_request_view(with
                           images=[image] if with_image else [])
 
     client = _client(handler=handler, cap=1)
-    _poisoned(client)
+    pending = _with_pending_round(client)
     client.script = [[_tool_calls("c1")], [_text("好"), _text("", "stop")]]
     await client.stream_text("继续")
 
     assert len(client.requests) == 2
     for payload in client.requests:
-        _assert_quarantined(payload, SCREEN_HISTORY_PLACEHOLDER["zh"])
-    assert AIMessage(content=_COMMENT_A) in client._conversation_history, "saved as is"
+        _assert_paired(payload)
+    assert any(m is pending for m in client._conversation_history), "saved as is"
+    assert pending["tool_calls"][0]["id"] == "pending"
 
 
 async def _noop_tool(call):
     return ToolResult(call_id=call.call_id, name=call.name, output={})
 
 
-async def test_tools_refusal_retry_sends_the_request_view():
+async def test_tools_refusal_retry_drops_an_unanswered_round():
     client = _client(handler=_noop_tool)
-    _poisoned(client)
+    _with_pending_round(client)
     client.script = [RuntimeError("this model does not support tools"),
                      [_text("好"), _text("", "stop")]]
     await client.stream_text("继续")
     assert len(client.requests) == 2
     for payload in client.requests:
-        _assert_quarantined(payload, SCREEN_HISTORY_PLACEHOLDER["zh"])
+        _assert_paired(payload)
 
 
-async def test_gemini_tool_loop_and_forced_final_both_send_the_request_view():
+async def test_gemini_tool_loop_and_forced_final_both_drop_an_unanswered_round():
     async def handler(call):
         return ToolResult(call_id=call.call_id, name=call.name, output={})
 
-    client = _client("gemini", handler=handler, cap=1, language="en")
-    _poisoned(client)
+    client = _client("gemini", handler=handler, cap=1)
+    _with_pending_round(client)
     client.script = [[_gemini_calls("c1")], [_GenaiChunk([_GenaiPart(text="ok")])]]
     await client.stream_text("go on")
 
     assert len(client.requests) == 2
     for contents in client.requests:
-        _assert_quarantined(contents, SCREEN_HISTORY_PLACEHOLDER["en"])
+        _assert_paired(contents)
 
 
 # ── Individual cancellation checks the loops rely on ────────────────────────
@@ -426,7 +409,6 @@ async def test_cancelled_proactive_reply_goes_before_the_interrupting_user_turn(
     assert _history_shape(client) == [
         ("human", "earlier", None), ("ai", "刚才看到", None), ("human", "Q-new", None),
     ]
-    assert client._conversation_history[2].additional_kwargs == {"dialog_source": "proactive"}
 
 
 async def test_cancel_during_the_prefix_flush_commits_before_the_interrupter():
