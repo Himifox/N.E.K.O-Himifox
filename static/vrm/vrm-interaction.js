@@ -1113,6 +1113,15 @@ class VRMInteraction {
         const endedModel = this.manager.currentModel;
         // 异步收尾期间若更换模型，保存旧快照并停止操作当前场景。
         const stoppedSnapshot = this._captureInteractionPreferences() || null;
+        // 此时模型、相机和视口仍匹配，提前计算回弹目标；即使收尾被模型
+        // 切换打断，也不能把屏幕外的释放点写入旧模型偏好。
+        if (stoppedSnapshot && endedModel?.scene) {
+            const target = this.clampModelPosition(endedModel.scene.position.clone());
+            if (target?.isVector3 && Number.isFinite(target.x)
+                && Number.isFinite(target.y) && Number.isFinite(target.z)) {
+                stoppedSnapshot.position = { x: target.x, y: target.y, z: target.z };
+            }
+        }
         // 保留本次拖拽类型再清状态，跨屏切换只对 pan 生效
         // （orbit 绕包围盒中心原地转身，屏幕投影不位移，无需多屏切换）
         const wasPanDrag = this.dragMode === 'pan';

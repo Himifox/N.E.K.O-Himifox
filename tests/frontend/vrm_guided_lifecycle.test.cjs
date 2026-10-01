@@ -46,6 +46,7 @@ const vm = require('node:vm');
             renderer: { domElement: { ...events, style: {} } },
             playVRMAAnimation: async () => true, stopVRMAAnimation() {} };
         const interaction = new window.VRMInteraction(manager);
+        interaction.clampModelPosition = position => position;
         interaction._snapModelIntoScreen = async () => {};
         interaction._savePositionAfterInteraction = async () => { saves.push(scene.quaternion.clone()); };
         interaction._hitTestModel = () => true;
@@ -298,6 +299,7 @@ const vm = require('node:vm');
     for (const stage of ['display', 'hint', 'snap']) {
         const f = fixture(); const writes = capturePreferences(f); const waiting = deferred();
         f.mouseDown(0); f.scene.position.set(3, 2, 1);
+        f.interaction.clampModelPosition = position => { position.x = 1; return position; };
         let snaps = 0;
         f.interaction._checkAndSwitchDisplay = async () => { if (stage === 'display') await waiting.promise; return false; };
         f.interaction._recordDragHintPointerEdgeRelease = async () => { if (stage === 'hint') await waiting.promise; };
@@ -308,7 +310,7 @@ const vm = require('node:vm');
         waiting.resolve(); await flush();
         assert.equal(writes.length, 1, stage);
         assert.equal(writes[0][0], '/model-a.vrm');
-        assert.deepEqual({ ...writes[0][1] }, { x: 3, y: 2, z: 1 });
+        assert.deepEqual({ ...writes[0][1] }, { x: 1, y: 2, z: 1 });
         assert.equal(snaps, stage === 'snap' ? 1 : 0);
         assert.deepEqual(f.manager.currentModel.scene.position.toArray(), [0, 0, 0]);
         f.interaction.cleanupDragAndZoom();
