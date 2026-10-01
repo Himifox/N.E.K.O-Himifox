@@ -1110,6 +1110,9 @@ class VRMInteraction {
      */
     async _endDrag() {
         if (!this.isDragging) return;
+        const endedModel = this.manager.currentModel;
+        // 异步收尾期间若更换模型，保存旧快照并停止操作当前场景。
+        const stoppedSnapshot = this._captureInteractionPreferences() || null;
         // 保留本次拖拽类型再清状态，跨屏切换只对 pan 生效
         // （orbit 绕包围盒中心原地转身，屏幕投影不位移，无需多屏切换）
         const wasPanDrag = this.dragMode === 'pan';
@@ -1125,13 +1128,25 @@ class VRMInteraction {
         const displaySwitched = wasPanDrag
             ? await this._checkAndSwitchDisplay()
             : false;
+        if (this.manager.currentModel !== endedModel) {
+            await this._savePositionAfterInteraction(stoppedSnapshot);
+            return;
+        }
 
         if (!displaySwitched) {
             if (wasPanDrag) {
                 await this._recordDragHintPointerEdgeRelease('vrm');
+                if (this.manager.currentModel !== endedModel) {
+                    await this._savePositionAfterInteraction(stoppedSnapshot);
+                    return;
+                }
             }
             // 拖拽结束后：若超出屏幕范围，执行回弹
             await this._snapModelIntoScreen({ animate: true });
+            if (this.manager.currentModel !== endedModel) {
+                await this._savePositionAfterInteraction(stoppedSnapshot);
+                return;
+            }
 
             // 拖动结束后保存位置（包含回弹后的位置）
             await this._savePositionAfterInteraction();
@@ -1595,6 +1610,7 @@ class VRMInteraction {
             // 只要用户把模型中心拖出当前窗口但未完成切屏，就记一次 miss。
             displaySwitchAttempted = true;
             const displays = await window.electronScreen.getAllDisplays();
+            if (this.manager.currentModel?.scene !== scene) return false;
             if (!displays || displays.length <= 1) {
                 recordDisplaySwitchMiss();
                 return false;
@@ -1602,6 +1618,7 @@ class VRMInteraction {
 
             // 3. 计算模型中心在整个桌面（screen）上的绝对坐标
             const currentDisplay = await window.electronScreen.getCurrentDisplay();
+            if (this.manager.currentModel?.scene !== scene) return false;
             if (!currentDisplay) {
                 console.warn('[VRM] 无法获取当前显示器信息');
                 recordDisplaySwitchMiss();
@@ -1662,6 +1679,7 @@ class VRMInteraction {
             console.log('[VRM] 检测到模型移出当前屏幕，准备切换到屏幕:', targetDisplay.id);
 
             const result = await window.electronScreen.moveWindowToDisplay(switchScreenX, switchScreenY);
+            if (this.manager.currentModel?.scene !== scene) return false;
 
             if (!(result && result.success && !result.sameDisplay)) {
                 recordDisplaySwitchMiss();
@@ -1679,12 +1697,14 @@ class VRMInteraction {
 
             // 6. 等待一帧让新窗口尺寸生效，再执行回弹与保存
             await new Promise(resolve => requestAnimationFrame(resolve));
+            if (this.manager.currentModel?.scene !== scene) return false;
             this._moveModelCenterToWindowPoint(desiredModelCenterX, desiredModelCenterY);
 
             if (useDragPointerForSwitch) {
                 await this._savePositionAfterInteraction();
             } else {
                 await this._snapModelIntoScreen({ animate: true });
+                if (this.manager.currentModel?.scene !== scene) return false;
                 await this._savePositionAfterInteraction();
             }
             if (window.NekoAvatarMultiScreenDragHint &&
@@ -2320,7 +2340,7 @@ class VRMInteraction {
     /**
      * 保存模型位置和状态到后端（交互结束后调用）
      */
-    async _savePositionAfterInteraction() {
+    _captureInteractionPreferences() {
         const model = this.manager.currentModel;
         const core = this.manager.core;
         if (!model || !model.url || !core || typeof core.saveUserPreferences !== 'function') {
@@ -2402,6 +2422,12 @@ class VRMInteraction {
             console.warn('[VRM] 获取显示器信息失败:', error);
             return null;
         });
+        return { core, modelUrl, position, scale, rotation, displayInfo, viewportInfo, cameraPosition };
+    }
+
+    async _savePositionAfterInteraction(snapshot = this._captureInteractionPreferences()) {
+        if (!snapshot) return;
+        const { core, modelUrl, position, scale, rotation, displayInfo, viewportInfo, cameraPosition } = snapshot;
         // 入队不阻塞交互；返回的 Promise 覆盖实际写入完成。
         return core.saveUserPreferences(
             modelUrl,

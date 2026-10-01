@@ -293,6 +293,26 @@ const vm = require('node:vm');
         assert.equal(f.scene.position.x, switched ? 2 : 1);
         f.interaction.cleanupDragAndZoom();
     }
+    // A model switch during drag completion saves the old immutable snapshot
+    // and never snaps or persists the newly selected model.
+    for (const stage of ['display', 'hint', 'snap']) {
+        const f = fixture(); const writes = capturePreferences(f); const waiting = deferred();
+        f.mouseDown(0); f.scene.position.set(3, 2, 1);
+        let snaps = 0;
+        f.interaction._checkAndSwitchDisplay = async () => { if (stage === 'display') await waiting.promise; return false; };
+        f.interaction._recordDragHintPointerEdgeRelease = async () => { if (stage === 'hint') await waiting.promise; };
+        f.interaction._snapModelIntoScreen = async () => { snaps++; if (stage === 'snap') await waiting.promise; };
+        f.interaction.setLocked(true); await flush();
+        f.manager.currentModel = { url: '/model-b.vrm', scene: new THREE.Object3D() };
+        f.scene.position.set(99, 99, 99);
+        waiting.resolve(); await flush();
+        assert.equal(writes.length, 1, stage);
+        assert.equal(writes[0][0], '/model-a.vrm');
+        assert.deepEqual({ ...writes[0][1] }, { x: 3, y: 2, z: 1 });
+        assert.equal(snaps, stage === 'snap' ? 1 : 0);
+        assert.deepEqual(f.manager.currentModel.scene.position.toArray(), [0, 0, 0]);
+        f.interaction.cleanupDragAndZoom();
+    }
     // An original-position selection while release is pending must retain one
     // arrival/rest flow, including selection partway through the turn.
     for (const halfway of [false, true]) {
