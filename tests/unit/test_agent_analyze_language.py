@@ -532,3 +532,32 @@ def test_every_analyze_publish_call_site_passes_a_language():
 
     assert checked >= 3, f"found only {checked} publish call sites — did the API get renamed?"
     assert not offenders, f"analyze publish call sites missing language=: {offenders}"
+
+
+def test_turn_end_dispatch_keeps_the_owner_of_a_turn_without_request_id():
+    """An independent voice turn has no request id but still owns its route."""
+    from main_logic import cross_server
+
+    assert cross_server._turn_end_dispatch_owner(
+        "public_knowledge", had_user_input=True
+    ) == "public_knowledge"
+    # Retaining it past a failed dispatch still needs a turn to bind to.
+    assert cross_server._pending_analyze_owner("", "public_knowledge") is None
+    assert cross_server._turn_end_dispatch_owner(
+        "public_knowledge", had_user_input=False
+    ) is None
+    assert cross_server._turn_end_dispatch_owner(
+        "something_else", had_user_input=True
+    ) is None
+
+
+def test_turn_end_dispatch_reads_the_owner_without_the_request_id_binding():
+    """Guard the call site: the immediate dispatch must not go through the
+    request-id-bound pending owner again."""
+    import inspect
+
+    from main_logic import cross_server
+
+    source = inspect.getsource(cross_server)
+    assert "dispatch_route_owner = _turn_end_dispatch_owner(" in source
+    assert 'current_pending_owner["owner"]' not in source

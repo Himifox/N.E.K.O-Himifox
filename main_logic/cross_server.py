@@ -450,6 +450,24 @@ def _pending_analyze_owner(
     return {"turn_id": turn_id, "owner": owner}
 
 
+def _turn_end_dispatch_owner(
+    route_owner: object,
+    *,
+    had_user_input: bool,
+) -> str | None:
+    """The owner the analyzer gets for this turn's own, immediate dispatch.
+
+    It comes straight from this turn end, with or without a request id: an
+    independent voice turn has none, yet its route owner is just as much its
+    own. Only retaining an owner past a failed dispatch needs a request id to
+    bind it to (``_pending_analyze_owner``). A turn without user input is never
+    given an owner.
+    """
+    if not had_user_input:
+        return None
+    return normalize_analyze_route_owner(route_owner)
+
+
 def _session_end_analyze_owner(
     pending: dict[str, str] | None,
     recent: list[dict],
@@ -1352,10 +1370,9 @@ async def run_sync_connector(
                                         # Every turn owns its routing decision.  A new user
                                         # turn invalidates a failed predecessor; a genuinely
                                         # proactive turn must never inherit a user's owner.
-                                        dispatch_route_owner = (
-                                            current_pending_owner["owner"]
-                                            if current_pending_owner
-                                            else None
+                                        dispatch_route_owner = _turn_end_dispatch_owner(
+                                            message.get("route_owner"),
+                                            had_user_input=_turn_had_user_input,
                                         )
                                         if recent and has_user and latest_user_is_avatar_drop:
                                             logger.info(f"[{lanlan_name}] analyze_request skipped (avatar_drop turn_end), messages={len(recent)}")
