@@ -32,7 +32,7 @@ from utils.config_manager import get_config_manager
 from queue import Queue
 from uuid import uuid4
 import soxr
-from ._shared import logger, ContextAppendResult
+from ._shared import logger, ContextAppendResult, _ReplyTurn
 
 from .context_append import ContextAppendMixin
 from .focus import FocusMixin
@@ -364,6 +364,9 @@ class LLMSessionManager(
         self._text_route_owners: dict[str, str] = {}
         self._tool_turn_epoch = 0
         self._tool_turn_evidence: dict | None = None
+        # 最近一次交给 Offline client 的回复（见 _shared._ReplyTurn）。热切换
+        # promote 轮换 speech id 时靠它把仍在途的回复带到新 id 上。
+        self._open_reply_turn: Optional[_ReplyTurn] = None
         self._magic_command_image_drop_request_ids: set[str] = set()
         self._magic_command_image_drop_request_order: deque[str] = deque()
         # (request_id, staged image) pairs for offline attachments still queued in
