@@ -365,6 +365,10 @@ class VRMInteraction {
         const meta = String(vrm?.meta?.metaVersion || '');
         const isVrm10 = version === '0.0' || version === '1.0'
             ? version === '1.0' : meta === '1' || meta.startsWith('1.');
+        if (isVrm10 && typeof vrm?.userData?.orientationFlipped !== 'boolean') {
+            // 缺失检测器时无法确认反向创作模型的局部正面，保持现有姿态。
+            return { yawOffset: null };
+        }
         return { yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI };
     }
 
@@ -376,7 +380,8 @@ class VRMInteraction {
         if ((dx * dx + dz * dz) <= 1e-8) return null;
         // rotation.y 是模型局部坐标的 yaw；视觉正面需要使用移动朝向校准值，
         // 不能把保存的裸 rotation.y 当成“面向镜头”的角度直接写回。
-        return Math.atan2(dx, dz) + this._getMovementFacingProfile().yawOffset;
+        const yawOffset = this._getMovementFacingProfile().yawOffset;
+        return Number.isFinite(yawOffset) ? Math.atan2(dx, dz) + yawOffset : null;
     }
 
     _getSceneYaw(scene) {
@@ -428,7 +433,8 @@ class VRMInteraction {
     _smoothTurnToCamera(scene, targetYaw = null) {
         this._cancelSmoothFacing();
         if (!Number.isFinite(targetYaw)) targetYaw = this._getCameraFacingRotationY(scene);
-        if (!scene || !Number.isFinite(targetYaw)) return Promise.resolve(false);
+        if (!scene) return Promise.resolve(false);
+        if (!Number.isFinite(targetYaw)) return Promise.resolve(true);
         let diff = targetYaw - this._getSceneYaw(scene);
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
@@ -632,7 +638,7 @@ class VRMInteraction {
             const profile = this._movementFacingProfile || (this._movementFacingProfile = this._getMovementFacingProfile());
             const facing = cameraRight.multiplyScalar(screenX)
                 .addScaledVector(cameraForward, screenY);
-            if (facing.lengthSq() > 1e-8) {
+            if (Number.isFinite(profile.yawOffset) && facing.lengthSq() > 1e-8) {
                 const angle = Math.atan2(facing.x, facing.z) + profile.yawOffset;
                 const currentYaw = this._getSceneYaw(scene);
                 let diff = angle - currentYaw;

@@ -90,6 +90,30 @@ for (const missing of [undefined, {}]) {
     }
 }
 context.window.VRMOrientationDetector = helper;
+
+// No detector means no calibration for a fresh reverse-authored VRM1.
+context.window.VRMOrientationDetector = undefined;
+{
+    const scene = new Object3D(); const head = new Object3D(); const chest = new Object3D();
+    head.position.set(0, 1, 0.2); scene.add(head, chest);
+    const vrm = { scene, meta: { metaVersion: '1.0' }, userData: {},
+        humanoid: { humanBones: { head: { node: head }, chest: { node: chest } } } };
+    assert.equal(helper.detectNeedsRotation(vrm), true);
+    const interaction = new Interaction({ currentModel: { scene, vrm }, core: { vrmVersion: '1.0' },
+        camera: { position: new Vector3(0, 0, 5), quaternion: new Quaternion(),
+            getWorldDirection(v) { return v.set(0, 0, -1); } } });
+    assert.equal(interaction._getMovementFacingProfile().yawOffset, null);
+    assert.equal(interaction._getCameraFacingRotationY(scene), null);
+    const pose = scene.quaternion.clone();
+    interaction.isMoving = true; interaction.moveTarget = new Vector3(0, 10, 0);
+    interaction._updateGuidedMovement(0.1);
+    assert.ok(scene.position.y > 0, 'uncalibrated model can still translate');
+    assert.ok(scene.quaternion.angleTo(pose) < 1e-8, 'do not guess an uncalibrated heading');
+    assert.equal(await interaction._smoothTurnToCamera(scene), true, 'arrival can finish and persist without turning');
+    assert.ok(scene.quaternion.angleTo(pose) < 1e-8);
+}
+context.window.VRMOrientationDetector = helper;
+
 console.log('VRM guided movement facing: OK');
 
 // Real frame intervals must also work when the previous trip left the model
