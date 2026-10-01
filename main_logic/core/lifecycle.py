@@ -666,6 +666,7 @@ class LifecycleMixin:
         await self._cleanup_pending_session_resources()  # 关闭由 manager 持有，取消也不会丢
         self.is_hot_swap_imminent = False
         self._turn_wrap_up_owed = False
+        self._voice_turn_wrap_up_hold = None
         # 状态机是 per-manager 的，跨 start_session/end_session 复用同一实例。
         # 若上一轮 proactive 在 PHASE1/PHASE2 中途 WS 断开、PROACTIVE_DONE 来不及
         # fire，phase/_preempted 会泄漏到新会话，堵死 can_start_proactive。
@@ -1805,7 +1806,10 @@ class LifecycleMixin:
                         else:
                             # Close the offline reply this turn interrupted
                             # before handle_new_message clears its text; its
-                            # wrap-up is owed (see _interrupt_offline_reply).
+                            # wrap-up is owed (see _interrupt_offline_reply)
+                            # and held by this voice turn until it ends (the
+                            # dispatch's _abandon_core_voice_turn).
+                            self._hold_owed_wrap_up_for_voice_turn(turn.turn_id)
                             await self._interrupt_offline_reply(current)
                         if (
                             not operation_is_current()

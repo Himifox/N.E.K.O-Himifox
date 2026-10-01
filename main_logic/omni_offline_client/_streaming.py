@@ -319,6 +319,25 @@ class _StreamingMixin:
             )
         history.insert(position, reply)
 
+    def _commit_reply(self, anchor, text: str, generation: int) -> bool:
+        """Write a reply's final ``text`` to history; False once it is no
+        longer live.
+
+        Every await before a commit (the end-of-stream prefix flush, the tail
+        or summary sent to TTS) is a cancellation point, so each commit decides
+        where to write at the moment it writes: a live or guard-paused reply is
+        appended, a cancelled or displaced one goes through
+        ``_commit_cancelled_reply`` and never lands after the interrupting
+        turn's user message. A caller keeps a reply that is no longer live out
+        of the repetition check too.
+        """
+        if self._active_response_generation != generation:
+            self._commit_cancelled_reply(anchor, AIMessage(content=text))
+            return False
+        if text:
+            self._conversation_history.append(AIMessage(content=text))
+        return True
+
     def _trim_cancelled_round_text(self, anchor, shown: str) -> None:
         """Make a kept, cancelled tool round hold only the text that was shown.
 
@@ -1718,9 +1737,12 @@ class _StreamingMixin:
                                     "(原 %d tokens → 截断后 %d tokens)",
                                     original_tokens, count_tokens(recovery_text),
                                 )
-                                if history_recovery_text:
-                                    self._conversation_history.append(AIMessage(content=history_recovery_text))
-                                await self._check_repetition(recovery_text)
+                                # The recovery may first be emitted by the
+                                # end-of-stream flush above, a cancellation point.
+                                if self._commit_reply(
+                                    user_message, history_recovery_text, response_generation,
+                                ):
+                                    await self._check_repetition(recovery_text)
                                 assistant_message = history_recovery_text
                                 guard_exhausted = True
                                 break
@@ -1858,14 +1880,15 @@ class _StreamingMixin:
                                 "静默 commit prefix (%d chars) 到 history，TTS 残队列保留",
                                 len(summary_prefix_for_history),
                             )
-                            if summary_prefix_for_history:
-                                self._conversation_history.append(
-                                    AIMessage(content=summary_prefix_for_history)
-                                )
                             # 重复检测只看 prefix（= 真正进 history / 被 TTS 读的部分）。
                             # 用 assistant_message_total 会把判定为乱码、已丢弃的 tail
                             # 也塞进 _recent_responses，污染后续重复判定。
-                            if summary_prefix_for_history:
+                            if (
+                                self._commit_reply(
+                                    user_message, summary_prefix_for_history, response_generation,
+                                )
+                                and summary_prefix_for_history
+                            ):
                                 await self._check_repetition(summary_prefix_for_history)
                             assistant_message = ""
                             guard_exhausted = True
@@ -1928,25 +1951,15 @@ class _StreamingMixin:
                         # Token usage 由 _AsyncStreamWrapper hook 在流结束时自动记录，
                         # 此处不再手动调用 TokenTracker.record() 避免双重计数。
 
-                        # The awaits above (prefix flush, tail/summary to TTS)
-                        # are cancellation points too, so the commit decides
-                        # where to write at the moment it writes.
-                        _cancelled_at_commit = (
-                            self._active_response_generation != response_generation
+                        # final AIMessage 只写未被 inline 持久化的最后一段
+                        # （pre-tool 文本已经在前面 ``assistant.tool_calls.content``
+                        # 里了，再 append 一次会双写历史）。
+                        _live_at_commit = self._commit_reply(
+                            user_message, assistant_message, response_generation,
                         )
-                        if assistant_message:
-                            # final AIMessage 只写未被 inline 持久化的最后一段
-                            # （pre-tool 文本已经在前面 ``assistant.tool_calls.content``
-                            # 里了，再 append 一次会双写历史）。
-                            if _cancelled_at_commit:
-                                self._commit_cancelled_reply(
-                                    user_message, AIMessage(content=assistant_message),
-                                )
-                            else:
-                                self._conversation_history.append(AIMessage(content=assistant_message))
                         # 重复检测看完整一轮文本（含 pre-tool），与人类用户感知
                         # 的"这一轮 AI 说了什么"一致。
-                        if assistant_message_total and not _cancelled_at_commit:
+                        if assistant_message_total and _live_at_commit:
                             await self._check_repetition(assistant_message_total)
                         break
 

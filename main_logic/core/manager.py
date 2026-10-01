@@ -361,6 +361,9 @@ class LLMSessionManager(
         # Typed inputs being handled (StreamingMixin._process_stream_input):
         # an owed wrap-up waits for their reply rather than running before it.
         self._reply_setup_depth = 0
+        # The independent-ASR voice turn (its id) holding an owed wrap-up from
+        # its speech onset until it ends (TurnMixin._voice_turn_holds_owed_wrap_up).
+        self._voice_turn_wrap_up_hold: Optional[str] = None
         # 最近一次交给 Offline client 的回复（见 _shared._ReplyTurn）。热切换
         # promote 轮换 speech id 时靠它把仍在途的回复带到新 id 上。
         self._open_reply_turn: Optional[_ReplyTurn] = None

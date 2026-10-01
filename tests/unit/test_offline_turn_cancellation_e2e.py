@@ -446,7 +446,60 @@ async def test_cancel_during_the_prefix_flush_commits_before_the_interrupter():
     assert _history_shape(client) == [
         ("human", "Q1", None), ("ai", "短回复", None), ("human", "Q2", None),
     ]
+    # No longer live at its commit: kept out of the repetition check too.
+    assert client._recent_responses == []
     client.on_response_done.assert_not_awaited()
+
+
+_OVER_BUDGET = "先说一句。再说第二句，然后还有很多很多没说完的话"
+
+
+def _length_guarded_client(held_by):
+    """A client whose whole reply is still held at the end of the stream, so
+    the end-of-stream flush is where the length guard trips and where the
+    recovery is first emitted: a reply shorter than the name-prefix buffer,
+    or a Focus turn on a leak-prone model that never closed a think block."""
+    client = _client()
+    client.enable_response_guard = True
+    client.max_response_length = 8
+    if held_by == "think_stripper":
+        client.model = "qwen3.5-plus"
+    else:
+        client._prefix_buffer_size = 100
+    client.script = [[_text(_OVER_BUDGET), _text("", "stop")]]
+    return client, held_by == "think_stripper"
+
+
+@pytest.mark.parametrize("held_by", ["name_prefix", "think_stripper"])
+async def test_a_length_recovery_cut_in_the_flush_commits_before_the_interrupter(held_by):
+    """The recovery written by the length guard decides where it goes at the
+    moment it writes, like the regular commit: cancelled during the flush's
+    emit, it lands before the interrupter's message and stays out of the
+    repetition check."""
+    client, thinking_on = _length_guarded_client(held_by)
+
+    async def on_text_delta(text, is_first, **_kw):
+        await client.handle_interruption()
+        client._conversation_history.append(HumanMessage(content="Q2"))
+
+    client.on_text_delta = AsyncMock(side_effect=on_text_delta)
+    await client.stream_text("Q1", thinking_on=thinking_on)
+    assert _emitted(client) == ["先说一句。"]
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", "先说一句。", None), ("human", "Q2", None),
+    ]
+    assert client._recent_responses == []
+    client.on_response_done.assert_not_awaited()
+
+
+@pytest.mark.parametrize("held_by", ["name_prefix", "think_stripper"])
+async def test_a_live_length_recovery_from_the_flush_is_appended_and_counted(held_by):
+    client, thinking_on = _length_guarded_client(held_by)
+    await client.stream_text("Q1", thinking_on=thinking_on)
+    assert _emitted(client) == ["先说一句。"]
+    assert _history_shape(client) == [("human", "Q1", None), ("ai", "先说一句。", None)]
+    assert client._recent_responses == ["先说一句。"]
+    client.on_response_done.assert_awaited_once()
 
 
 @pytest.mark.parametrize("content", ["", "   "])

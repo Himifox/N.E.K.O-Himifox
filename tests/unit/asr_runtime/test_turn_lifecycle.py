@@ -40,6 +40,8 @@ async def test_speech_started_interrupts_and_prepares_turn_once() -> None:
     # finalize instead of running while this voice turn's reply streams.
     runtime._close_interrupted_offline_turn.assert_called_once_with("response")
     assert runtime._turn_wrap_up_owed is True
+    # Held by this voice turn until it ends, not paid while the user speaks.
+    assert runtime._voice_turn_wrap_up_hold == f"asr-{epoch}-1"
     runtime.handle_new_message.assert_awaited_once_with()
     assert runtime._asr_turn_prepared is True
 

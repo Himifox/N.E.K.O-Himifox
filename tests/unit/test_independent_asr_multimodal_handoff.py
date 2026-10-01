@@ -928,7 +928,13 @@ async def test_offline_replacement_wins_and_receives_multimodal_turn() -> None:
     expected.handle_interruption = AsyncMock()
     expected.submit_multimodal_turn = AsyncMock()
     replacement = OmniOfflineClient.__new__(OmniOfflineClient)
-    replacement.handle_interruption = AsyncMock()
+    holds_at_interrupt = []
+
+    async def interrupt():
+        holds_at_interrupt.append(manager._voice_turn_wrap_up_hold)
+        return "response"
+
+    replacement.handle_interruption = AsyncMock(side_effect=interrupt)
     replacement.submit_multimodal_turn = AsyncMock()
     manager.session = expected
     turn = SimpleNamespace(
@@ -958,8 +964,11 @@ async def test_offline_replacement_wins_and_receives_multimodal_turn() -> None:
     replacement.handle_interruption.assert_awaited_once_with()
     # The replacement's interrupted reply is closed as its own AI turn.
     manager._close_interrupted_offline_turn.assert_called_once_with("response")
-    # Owed to the next finalize, not run while the handoff's reply streams.
+    # Owed to the next finalize, not run while the handoff's reply streams,
+    # and held by this voice turn from before the interruption until the
+    # dispatch ends it (_abandon_core_voice_turn).
     assert manager._turn_wrap_up_owed is True
+    assert holds_at_interrupt == ["turn-1"]
     replacement.submit_multimodal_turn.assert_awaited_once_with(
         "what is this",
         ("raw-frame",),

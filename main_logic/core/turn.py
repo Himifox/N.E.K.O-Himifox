@@ -407,19 +407,23 @@ class TurnMixin:
 
         Runs when the offline session reports it went idle
         (``_on_offline_session_idle``), when a typed input or a mini-game
-        command has been handled (``_with_owed_wrap_up_held``), and on the
-        command paths that start no reply. Left owed while one of those is
-        still being handled (a typed input's reply completion pays it, and a
-        wrap-up between the interruption and that reply could start a final
-        swap right before it; a command seals its own turn first), and while
-        the offline session is not idle: a reply live, guard-paused, waiting
-        on its completion, or a cancelled one still finishing its task (a
-        tool handler, its history commit). The session's idle notification
-        pays it once that drains.
+        command has been handled (``_with_owed_wrap_up_held``), when an
+        independent-ASR voice turn ends (``_abandon_core_voice_turn``), and
+        on the command paths that start no reply. Left owed while one of
+        those is still being handled (a typed input's or a voice turn's reply
+        completion pays it, and a wrap-up between the interruption and that
+        reply could start a final swap right before it, or while the user is
+        still speaking; a command seals its own turn first), and while the
+        offline session is not idle: a reply live, guard-paused, waiting on
+        its completion, or a cancelled one still finishing its task (a tool
+        handler, its history commit). The session's idle notification pays
+        it once that drains.
         """
         if not getattr(self, "_turn_wrap_up_owed", False):
             return
         if getattr(self, "_reply_setup_depth", 0) > 0:
+            return
+        if self._voice_turn_holds_owed_wrap_up():
             return
         session = self.session
         if isinstance(session, OmniOfflineClient) and not session.is_idle():
@@ -456,6 +460,29 @@ class TurnMixin:
                         self.lanlan_name,
                         settle_error,
                     )
+
+    def _voice_turn_holds_owed_wrap_up(self) -> bool:
+        """Whether an independent-ASR voice turn still holds the owed wrap-up.
+
+        The voice counterpart of ``_with_owed_wrap_up_held``, for a turn that
+        interrupts the offline reply at speech onset and gets its reply only
+        once the user has finished speaking. The hold is the turn's id
+        (``_voice_turn_wrap_up_hold``), set before that interruption and
+        released when the turn ends (``_abandon_core_voice_turn``, which
+        every end of a Core voice turn goes through, after its reply call
+        has returned); the reply's own completion pays the debt. A newer
+        voice turn replaces the hold, ``_init_renew_status`` clears it, and
+        a hold whose turn record is gone (every end of a turn drops its
+        record) no longer counts and is dropped here, so a missed release
+        cannot keep the debt unpaid.
+        """
+        turn_id = getattr(self, "_voice_turn_wrap_up_hold", None)
+        if turn_id is None:
+            return False
+        if turn_id in (getattr(self, "_core_multimodal_turns", None) or {}):
+            return True
+        self._voice_turn_wrap_up_hold = None
+        return False
 
     def _on_offline_session_idle(self) -> None:
         """``OmniOfflineClient.on_idle``: its last reply call returned.
