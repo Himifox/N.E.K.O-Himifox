@@ -273,6 +273,7 @@ class VRMInteraction {
         if (!scene || !camera || !renderer || !THREE) return false;
         if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return false;
 
+        this._cancelGuidedMovement();
         const center = this._getProjectedModelCenterInWindow();
         if (!center) return false;
 
@@ -321,8 +322,9 @@ class VRMInteraction {
     }
 
     _isEditableTarget(target) {
+        if (target?.isContentEditable) return true;
         if (!target || typeof target.closest !== 'function') return false;
-        return !!target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]');
+        return !!target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
     }
 
     _screenPointToMovementTarget(clientX, clientY) {
@@ -353,17 +355,8 @@ class VRMInteraction {
     }
 
     _getMovementFacingProfile() {
-        const vrm = this.manager?.currentModel?.vrm;
-        const detector = window.VRMOrientationDetector;
-        if (detector && typeof detector.getMovementFacingProfile === 'function') {
-            return detector.getMovementFacingProfile(vrm, this.manager?.core?.vrmVersion);
-        }
-        const version = String(this.manager?.core?.vrmVersion || '');
-        const meta = String(vrm?.meta?.metaVersion || '');
-        const isVrm10 = version === '0.0' || version === '1.0'
-            ? version === '1.0' : meta === '1' || meta.startsWith('1.');
-        return { yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI,
-            horizontalSign: 1, vrmVersion: isVrm10 ? '1.0' : '0.0' };
+        return window.VRMOrientationDetector.getMovementFacingProfile(
+            this.manager?.currentModel?.vrm, this.manager?.core?.vrmVersion);
     }
 
     _getCameraFacingRotationY(scene) {
@@ -534,12 +527,9 @@ class VRMInteraction {
             if (endedOwnerToken && motion && typeof motion.releaseExternalPlayback === 'function') {
                 await motion.releaseExternalPlayback(this._movementRestOwner, {
                     token: endedOwnerToken,
-                    resume: !cancel
+                    // 释放最后一个移动 owner 时，由播放器统一恢复一次待机。
+                    resume: true
                 });
-            }
-            if (!cancel && endedOwnerToken && endedToken === this.movementToken && !this.isDragging
-                && this.manager.currentModel?.scene === endedScene && motion && typeof motion.rest === 'function') {
-                await motion.rest({ force: true, seed: 'guided-movement-arrival' });
             }
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时恢复待机失败:', error);
@@ -584,6 +574,10 @@ class VRMInteraction {
     }
 
     _updateGuidedMovement(delta) {
+        if (this.isDragging) {
+            this._cancelGuidedMovement();
+            return;
+        }
         if (!this.isMoving || !this.moveTarget || !this.manager.currentModel?.scene) return;
         const scene = this.manager.currentModel.scene;
         const target = this.moveTarget;
@@ -627,7 +621,7 @@ class VRMInteraction {
             // cameraForward 指向远离镜头的方向，因此屏幕向上（screenY > 0）
             // 使用正的前向分量。模型版本的局部正面差异由 yawOffset 统一校正。
             const profile = this._movementFacingProfile || (this._movementFacingProfile = this._getMovementFacingProfile());
-            const facing = cameraRight.multiplyScalar(screenX * profile.horizontalSign)
+            const facing = cameraRight.multiplyScalar(screenX)
                 .addScaledVector(cameraForward, screenY);
             if (facing.lengthSq() > 1e-8) {
                 const angle = Math.atan2(facing.x, facing.z) + profile.yawOffset;
@@ -1158,7 +1152,7 @@ class VRMInteraction {
             }
 
             // 拖动结束后保存位置（包含回弹后的位置）
-            await this._savePositionAfterInteraction();
+            await this._savePositionAfterInteraction(this._captureInteractionPreferences(stoppedSnapshot?.displayInfo));
         }
     }
 
@@ -1512,6 +1506,7 @@ class VRMInteraction {
         if (!THREE) return false;
 
         const scene = this.manager.currentModel.scene;
+        this._cancelGuidedMovement();
         const startPosition = scene.position.clone();
 
         // 使用原有的边界检查逻辑计算目标位置
@@ -2349,7 +2344,7 @@ class VRMInteraction {
     /**
      * 保存模型位置和状态到后端（交互结束后调用）
      */
-    _captureInteractionPreferences() {
+    _captureInteractionPreferences(capturedDisplayInfo) {
         const model = this.manager.currentModel;
         const core = this.manager.core;
         if (!model || !model.url || !core || typeof core.saveUserPreferences !== 'function') {
@@ -2417,7 +2412,7 @@ class VRMInteraction {
         }
 
         // 姿态、相机和屏幕信息已同步捕获；显示器查询作为快照的一部分排队。
-        const displayInfo = (async () => {
+        const displayInfo = capturedDisplayInfo ?? (async () => {
             if (!window.electronScreen?.getCurrentDisplay) return null;
             const currentDisplay = await window.electronScreen.getCurrentDisplay();
             if (!currentDisplay) return null;
@@ -2435,9 +2430,14 @@ class VRMInteraction {
     }
 
     async _savePositionAfterInteraction(snapshot = this._captureInteractionPreferences()) {
+        // 交互收尾只同步入队，不等待 IPC、网络或之前的写入。
+        void this._persistInteractionPreferences(snapshot);
+    }
+
+    async _persistInteractionPreferences(snapshot = this._captureInteractionPreferences()) {
         if (!snapshot) return;
         const { core, modelUrl, position, scale, rotation, displayInfo, viewportInfo, cameraPosition } = snapshot;
-        // 入队不阻塞交互；返回的 Promise 覆盖实际写入完成。
+        // 需要确认持久化完成的调用方可显式等待此入口。
         return core.saveUserPreferences(
             modelUrl,
             position,

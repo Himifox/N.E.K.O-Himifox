@@ -46,7 +46,7 @@ const vm = require('node:vm');
         f.manager._cameraTarget = new THREE.Vector3(1, 2, -1);
         camera.lookAt(f.manager._cameraTarget);
         const expectedQuaternion = camera.quaternion.clone();
-        const saving = f.interaction._savePositionAfterInteraction(); await flush();
+        const saving = f.interaction._persistInteractionPreferences(); await flush();
         camera.quaternion.identity(); f.manager._cameraTarget.set(9, 9, 9);
         f.requests[0].complete(); await saving;
         const preferences = f.persisted.get('/model-a.vrm');
@@ -100,7 +100,7 @@ const vm = require('node:vm');
     // Hold its server response and prove the lock request cannot overtake it.
     {
         const f = fixture(); f.scene.position.y = 1;
-        const first = f.interaction._savePositionAfterInteraction(); await flush();
+        const first = f.interaction._persistInteractionPreferences(); await flush();
         assert.equal(f.requests.length, 1);
         f.scene.position.y = 2; f.interaction.isMoving = true; f.interaction.setLocked(true); await flush();
         assert.equal(f.requests.length, 1, 'do not send the locked pose while an older write is in flight');
@@ -116,12 +116,12 @@ const vm = require('node:vm');
         const f = fixture(); const lookups = [];
         window.electronScreen = { getCurrentDisplay() { const d = deferred(); lookups.push(d); return d.promise; } };
         f.scene.position.set(1, 2, 3); f.manager.camera.position.z = 7;
-        const first = f.interaction._savePositionAfterInteraction();
+        const first = f.interaction._persistInteractionPreferences();
         f.interaction.cleanupDragAndZoom();
         const sceneB = new THREE.Object3D(); sceneB.position.y = 9;
         f.manager.currentModel = { url: '/model-b.vrm', scene: sceneB };
         f.manager.camera.position.z = 11; window.screen.width = 1280;
-        const second = f.interaction._savePositionAfterInteraction();
+        const second = f.interaction._persistInteractionPreferences();
         assert.equal(lookups.length, 2);
         lookups[1].resolve({ screenX: 1920, screenY: 0 }); await flush();
         assert.equal(f.requests.length, 0);
@@ -141,8 +141,8 @@ const vm = require('node:vm');
     // Network failure must not poison the queue or discard the subsequent pose.
     {
         const f = fixture();
-        const first = f.interaction._savePositionAfterInteraction(); await flush();
-        f.scene.position.y = 4; const second = f.interaction._savePositionAfterInteraction();
+        const first = f.interaction._persistInteractionPreferences(); await flush();
+        f.scene.position.y = 4; const second = f.interaction._persistInteractionPreferences();
         f.requests[0].fail(); await first; await flush();
         assert.equal(f.requests.length, 2);
         f.requests[1].complete(); await second;
@@ -192,7 +192,7 @@ const vm = require('node:vm');
         window.electronScreen = { getCurrentDisplay: () => displayFailure === 'timeout'
             ? new Promise(() => {}) : Promise.reject(new Error('display fixture failure')) };
         f.scene.position.y = 5;
-        const first = f.interaction._savePositionAfterInteraction(); await flush();
+        const first = f.interaction._persistInteractionPreferences(); await flush();
         if (displayFailure === 'timeout') {
             assert.equal(f.requests.length, 0);
             const displayTimer = [...timers.values()].find(timer => timer.delay === 1000);
@@ -201,7 +201,7 @@ const vm = require('node:vm');
         assert.equal(f.requests.length, 1);
         assert.equal(f.requests[0].preferences.display, undefined);
         window.electronScreen = null; f.scene.position.y = 6;
-        const second = f.interaction._savePositionAfterInteraction();
+        const second = f.interaction._persistInteractionPreferences();
         f.requests[0].complete(); await first; await flush();
         assert.equal(f.requests.length, 2);
         f.requests[1].complete(); await second;
@@ -233,8 +233,8 @@ const vm = require('node:vm');
     // Viewer mode entered while a save waits in the queue remains read-only.
     {
         const f = fixture();
-        const first = f.interaction._savePositionAfterInteraction(); await flush();
-        f.scene.position.y = 3; const second = f.interaction._savePositionAfterInteraction();
+        const first = f.interaction._persistInteractionPreferences(); await flush();
+        f.scene.position.y = 3; const second = f.interaction._persistInteractionPreferences();
         window.isViewerMode = true;
         f.requests[0].complete(); await first;
         assert.equal(await second, false);

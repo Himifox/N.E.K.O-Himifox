@@ -14,7 +14,7 @@ const vm = require('node:vm');
         document: { ...events, body: { classList: { contains: () => false } } },
         requestAnimationFrame(callback) { frames.set(++frameId, callback); return frameId; },
         cancelAnimationFrame(id) { frames.delete(id); }, clearTimeout, setTimeout });
-    for (const file of ['vrm-orientation.js', 'vrm-interaction.js']) {
+    for (const file of ['vrm-orientation.js', 'vrm-interaction.js', 'vrm-manager.js']) {
         vm.runInContext(fs.readFileSync(path.join(root, 'static/vrm', file), 'utf8'), context);
     }
     const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -29,13 +29,14 @@ const vm = require('node:vm');
         const leases = new Map();
         window.electronScreen = null;
         window.screen = { width: 1920, height: 1080 };
+        window.innerWidth = 1920; window.innerHeight = 1080;
         const saves = [];
         let rests = 0;
         window.NekoMotion = {
             async holdExternalPlayback(owner, { token }) { leases.set(owner, token); },
-            async releaseExternalPlayback(owner, { token }) {
+            async releaseExternalPlayback(owner, { token, resume = true }) {
                 if (leases.get(owner) !== token) return false;
-                leases.delete(owner); return true;
+                leases.delete(owner); if (resume && !leases.size) rests++; return true;
             },
             async rest() { rests++; }
         };
@@ -182,7 +183,7 @@ const vm = require('node:vm');
         const expectedSaves = f.saves.length;
         releasing.resolve(); await finished;
         assert.equal(f.saves.length, expectedSaves + (takeover === 'same-position' ? 1 : 0));
-        assert.equal(f.rests(), takeover === 'same-position' ? 1 : 0, 'same-position selection preserves the existing rest responsibility');
+        assert.equal(f.rests(), 1, 'release restores idle once before the pending continuation');
         f.interaction.cleanupDragAndZoom();
     }
     // Locking settles the current pose; unlike a drag, there is no later mouseup
@@ -362,6 +363,60 @@ const vm = require('node:vm');
         assert.equal(scheduled, 1); f.interaction._cancelSmoothFacing();
         assert.equal(await turn, false); assert.equal(cancelled, 1); assert.equal(frames.size, 0);
         delete window.nekoFramePacing; f.interaction.cleanupDragAndZoom();
+    }
+
+
+    // Editable DOM descendants, including plaintext-only/inherited editors, never arm F.
+    {
+        const f = fixture();
+        assert.equal(f.interaction._isEditableTarget({ isContentEditable: true }), true);
+        for (const mode of ['plaintext-only', '']) {
+            let selector;
+            assert.equal(f.interaction._isEditableTarget({ closest(value) { selector = value; return { contentEditable: mode }; } }), true);
+            assert.ok(selector.includes('[contenteditable]:not([contenteditable="false"])'));
+        }
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Persistence may stay pending after arrival; its token and idle finish promptly.
+    {
+        const f = fixture(); const writing = deferred(); let count = 0;
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        f.manager.currentModel.url = '/slow-save.vrm';
+        f.manager.core.saveUserPreferences = () => { count++; return writing.promise; };
+        f.interaction._savePositionAfterInteraction = window.VRMInteraction.prototype._savePositionAfterInteraction;
+        f.scene.rotation.y = Math.PI / 2;
+        const done = f.interaction._finishMovement(); finishTurn(); await done;
+        assert.equal(f.interaction._movementFinishingToken, null);
+        assert.equal(f.rests(), 1); assert.equal(count, 1);
+        f.interaction.setLocked(true); await flush(); assert.equal(count, 1);
+        writing.resolve(true); await flush(); f.interaction.cleanupDragAndZoom();
+    }
+    // Reuse display IPC while capturing the final, post-snap pose.
+    {
+        const f = fixture(); const writes = capturePreferences(f); let queries = 0;
+        window.electronScreen = { getCurrentDisplay: async () => { queries++; return { screenX: 0, screenY: 0 }; } };
+        f.interaction.isDragging = true; f.interaction.dragMode = 'pan';
+        f.interaction._checkAndSwitchDisplay = async () => false;
+        f.interaction._snapModelIntoScreen = async () => { f.scene.position.x = 2; };
+        await f.interaction._endDrag(); await flush();
+        assert.equal(queries, 1); assert.equal(writes[0][1].x, 2);
+        f.interaction.cleanupDragAndZoom();
+    }
+
+
+    // Programmatic repositioning owns the model before the next movement frame.
+    for (const method of ['setModelPosition', 'resetModelPosition']) {
+        const f = fixture(); f.manager.interaction = f.interaction;
+        f.manager.currentModel.vrm.scene = f.scene;
+        f.manager.setModelScaleScalar = () => {};
+        f.select(new THREE.Vector3(0, 5, 0)); await flush();
+        if (method === 'setModelPosition') window.VRMManager.prototype[method].call(f.manager, 1, 2, 3);
+        else window.VRMManager.prototype[method].call(f.manager);
+        const position = f.scene.position.clone();
+        f.interaction.update(1 / 60); await flush();
+        assert.equal(f.interaction.isMoving, false);
+        assert.ok(f.scene.position.equals(position), 'stale target cannot overwrite programmatic position');
+        f.interaction.cleanupDragAndZoom();
     }
 
     // Preference snapshots already accepted for saving survive model switches;

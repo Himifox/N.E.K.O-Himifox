@@ -22,10 +22,8 @@ class VRMOrientationDetector {
             ? coreVersion === '1.0'
             : metaVersion === '1' || metaVersion === '1.0' || metaVersion.startsWith('1.');
         return {
-            vrmVersion: isVrm10 ? '1.0' : '0.0',
             // VRM0 的局部正面为 -Z，VRM1 为 +Z；用同一 yaw 校正所有方向。
-            yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI,
-            horizontalSign: 1
+            yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI
         };
     }
 

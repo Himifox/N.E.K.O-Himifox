@@ -191,7 +191,7 @@ class VRMAnimation {
 
         if (vrm.humanoid) {
             const vrmVersion = this._detectVRMVersion(vrm);
-            if (vrmVersion === '1.0' && (vrm.humanoid.autoUpdateHumanBones || this.vrmaIsPlaying)) {
+            if (vrmVersion === '1.0' && vrm.humanoid.autoUpdateHumanBones) {
                 vrm.humanoid.update();
             } else if (vrmVersion === '0.0') {
                 const mixerRoot = this.vrmaMixer?.getRoot?.();
@@ -761,8 +761,8 @@ class VRMAnimation {
             if (options.movement === true) {
                 this._stripRootTranslationTracks(clip, vrm);
             }
-            // 不用名称数量阈值否决动作：three-vrm 的 Normalized_* / VRM0 映射
-            // 可能让静态节点名检查产生误判；由 createVRMAnimationClip 的实际绑定结果决定。
+            // 普通动作不使用名称数量阈值：three-vrm 的 Normalized_* / VRM0 映射
+            // 可能让静态节点名检查产生误判；移动动作在下方额外验证绑定覆盖。
             this._normalizeQuaternionTrackSigns(clip);
             // 跨 clip 同半球对齐：必须在 _normalizeQuaternionTrackSigns 之后、
             // _createAndConfigureAction 之前。此刻 vrmaMixer 上仍是上一条 action 在跑，

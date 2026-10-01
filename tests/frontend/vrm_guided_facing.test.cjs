@@ -16,10 +16,10 @@ for (const file of ['vrm-orientation.js', 'vrm-interaction.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, 'static/vrm', file), 'utf8'), context);
 }
 const { VRMOrientationDetector: detector, VRMInteraction: Interaction } = context.window;
-assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, '0.0').vrmVersion, '0.0');
-assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: 'broken' } }, '1.0').vrmVersion, '1.0');
-assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, 'unknown').vrmVersion, '1.0');
-assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '0.0' } }).vrmVersion, '0.0');
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, '0.0').yawOffset, Math.PI);
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: 'broken' } }, '1.0').yawOffset, 0);
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, 'unknown').yawOffset, 0);
+assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '0.0' } }).yawOffset, Math.PI);
 
 // A reverse-authored VRM1 goes through the real bone detector before preferences.
 for (const savedYaw of [null, 0.7]) {
@@ -44,9 +44,6 @@ for (const savedYaw of [null, 0.7]) {
     }
     interaction._setSceneYaw(scene, interaction._getCameraFacingRotationY(scene));
     assert.ok(new Vector3(0, 0, -1).applyQuaternion(scene.quaternion).z > 0.99);
-    const helper = context.window.VRMOrientationDetector; delete context.window.VRMOrientationDetector;
-    assert.equal(interaction._getMovementFacingProfile().yawOffset, Math.PI);
-    context.window.VRMOrientationDetector = helper;
 }
 
 for (const version of ['0.0', '1.0']) {
@@ -80,14 +77,6 @@ for (const version of ['0.0', '1.0']) {
         }
     }
 }
-// Missing orientation helper must preserve core-version precedence too.
-const savedDetector = context.window.VRMOrientationDetector;
-delete context.window.VRMOrientationDetector;
-for (const version of ['0.0', '1.0']) {
-    const interaction = new Interaction({ currentModel: { vrm: { meta: { metaVersion: '1.0' } } }, core: { vrmVersion: version } });
-    assert.equal(interaction._getMovementFacingProfile().yawOffset, version === '1.0' ? 0 : Math.PI);
-}
-context.window.VRMOrientationDetector = savedDetector;
 console.log('VRM guided movement facing: OK');
 
 // Real frame intervals must also work when the previous trip left the model
