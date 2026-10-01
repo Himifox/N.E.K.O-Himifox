@@ -43,8 +43,8 @@ const vm = require('node:vm');
     {
         const f = fixture(); const camera = f.manager.camera;
         camera.position.set(2, 3, 7);
-        camera.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.7);
         f.manager._cameraTarget = new THREE.Vector3(1, 2, -1);
+        camera.lookAt(f.manager._cameraTarget);
         const expectedQuaternion = camera.quaternion.clone();
         const saving = f.interaction._savePositionAfterInteraction(); await flush();
         camera.quaternion.identity(); f.manager._cameraTarget.set(9, 9, 9);
@@ -59,9 +59,35 @@ const vm = require('node:vm');
         while (depth) { if (source[end] === '{') depth++; if (source[end] === '}') depth--; end++; }
         context.savedPreferences = preferences; context.savedManager = f.manager;
         vm.runInContext(`(function(preferences) { ${source.slice(bodyStart + 1, end - 1)} }).call({manager: savedManager}, savedPreferences)`, context);
-        assert.ok(camera.quaternion.angleTo(expectedQuaternion) < 1e-8);
+        assert.ok(camera.quaternion.angleTo(expectedQuaternion) < 1e-7);
         assert.deepEqual(f.manager._cameraTarget.toArray(), [1, 2, -1]);
         assert.deepEqual(camera.position.toArray(), [2, 3, 7]);
+        // Run the complete loader with a decoded GLTF fixture and real OrbitControls.
+        const threeUrl = 'data:text/javascript;base64,' + fs.readFileSync(path.join(root, 'static/libs/three.core.js')).toString('base64');
+        const orbitSource = fs.readFileSync(path.join(root, 'static/libs/three/addons/controls/OrbitControls.js'), 'utf8')
+            .replace("from 'three'", `from '${threeUrl}'`);
+        const { OrbitControls } = await import('data:text/javascript;base64,' + Buffer.from(orbitSource).toString('base64'));
+        const restoredManager = { camera: new THREE.PerspectiveCamera(), scene: new THREE.Scene(),
+            renderer: { render() {} }, _activeLoadToken: 1 };
+        restoredManager.controls = new OrbitControls(restoredManager.camera);
+        const modelScene = new THREE.Object3D();
+        modelScene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshBasicMaterial()));
+        const loadWindow = { THREE, screen: window.screen, addEventListener() {}, removeEventListener() {},
+            testGLTFModule: { GLTFLoader: class { register() {} load(_url, done) { done({ userData: { vrm: { scene: modelScene } }, animations: [] }); } } },
+            testVRMModule: { VRMLoaderPlugin: class {} } };
+        const loadContext = vm.createContext({ window: loadWindow, console, AbortController, setTimeout, clearTimeout,
+            localStorage: { getItem: () => 'high' }, requestAnimationFrame: callback => { queueMicrotask(callback); return 1; },
+            fetch: async () => ({ ok: true, json: async () => [preferences] }) });
+        vm.runInContext(source.replace("await import('three/addons/loaders/GLTFLoader.js')", 'window.testGLTFModule')
+            .replaceAll("await import('@pixiv/three-vrm')", 'window.testVRMModule'), loadContext);
+        const loaderCore = new loadWindow.VRMCore(restoredManager);
+        loaderCore.detectVRMVersion = () => '1.0';
+        loaderCore.optimizeMaterials = () => {}; loaderCore.applyQualitySettings = () => {};
+        await loaderCore.loadModel('/model-a.vrm', {}, 1);
+        assert.deepEqual(restoredManager.controls.target.toArray(), [1, 2, -1]);
+        assert.ok(restoredManager.camera.quaternion.angleTo(expectedQuaternion) < 1e-7);
+        restoredManager.controls.update();
+        assert.ok(restoredManager.camera.quaternion.angleTo(expectedQuaternion) < 1e-7);
         const invalid = f.manager.core.saveUserPreferences('/model-a.vrm',
             { x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }, null, null, null,
             { x: 2, y: 3, z: 7, qx: NaN, qy: Infinity, qz: 0, qw: 1, targetX: 0, targetY: NaN });

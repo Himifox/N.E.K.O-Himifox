@@ -1243,7 +1243,12 @@ class VRMCore {
             this.applyQualitySettings(window.renderQuality || 'medium');
 
             if (this.manager.controls) {
-                this.manager.controls.target.set(0, center.y, 0);
+                // 相机恢复流程已确定存档或默认观察目标，控制器必须使用同一目标。
+                if (this.manager._cameraTarget?.isVector3) {
+                    this.manager.controls.target.copy(this.manager._cameraTarget);
+                } else {
+                    this.manager.controls.target.set(0, center.y, 0);
+                }
                 this.manager.controls.update();
             }
 
