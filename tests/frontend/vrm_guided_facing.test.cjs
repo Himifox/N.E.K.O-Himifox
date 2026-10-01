@@ -52,6 +52,14 @@ for (const version of ['0.0', '1.0']) {
         }
     }
 }
+// Missing orientation helper must preserve core-version precedence too.
+const savedDetector = context.window.VRMOrientationDetector;
+delete context.window.VRMOrientationDetector;
+for (const version of ['0.0', '1.0']) {
+    const interaction = new Interaction({ currentModel: { vrm: { meta: { metaVersion: '1.0' } } }, core: { vrmVersion: version } });
+    assert.equal(interaction._getMovementFacingProfile().yawOffset, version === '1.0' ? 0 : Math.PI);
+}
+context.window.VRMOrientationDetector = savedDetector;
 console.log('VRM guided movement facing: OK');
 
 // Real frame intervals must also work when the previous trip left the model

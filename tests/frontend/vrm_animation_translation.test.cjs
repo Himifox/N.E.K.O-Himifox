@@ -10,9 +10,9 @@ vm.runInThisContext(
     { filename: 'static/vrm/vrm-animation.js' }
 );
 
-async function playFixture(vrmVersion, options) {
-    const rotationNames = ['Normalized_Hips', 'Normalized_Spine', 'Normalized_Head'];
-    const hipsPosition = { name: 'Normalized_Hips.position', values: [0, 1, 0, 0, 0.5, 0] };
+async function playFixture(vrmVersion, options, rejectCoverage = false) {
+    const rotationNames = ['Normalized_J_Bip_C_Hips', 'Normalized_Spine', 'Normalized_Head'];
+    const hipsPosition = { name: 'Normalized_J_Bip_C_Hips.position', values: [0, 1, 0, 0, 0.5, 0] };
     const rootPositions = [hipsPosition, { name: 'Reference.position' }, { name: 'Root.position' }];
     const handPosition = { name: 'Normalized_LeftHand.position' };
     const rotations = rotationNames.map(name => ({ name: `${name}.quaternion` }));
@@ -24,7 +24,7 @@ async function playFixture(vrmVersion, options) {
         traverse() {},
         getObjectByName(name) { return boneNames.has(name) ? { name } : null; }
     };
-    const vrm = { scene, humanoid: { autoUpdateHumanBones: true } };
+    const vrm = { scene, humanoid: { autoUpdateHumanBones: true, getNormalizedBoneNode: bone => bone === 'hips' ? { name: 'Normalized_J_Bip_C_Hips' } : null } };
     const animation = new global.VRMAnimation({ currentModel: { vrm }, core: { vrmVersion } });
     animation._initLoader = async () => ({
         loadAsync: async () => ({ userData: { vrmAnimations: [{}] } })
@@ -40,6 +40,19 @@ async function playFixture(vrmVersion, options) {
     };
     animation._playAction = nextAction => { playedAction = nextAction; };
 
+    if (rejectCoverage) {
+        scene.getObjectByName = () => null;
+        const idleAction = {};
+        animation.currentAction = idleAction;
+        animation.vrmaIsPlaying = true;
+        animation.isIdleAnimation = true;
+        await assert.rejects(animation.playVRMAAnimation('/fixture.vrma', options), /轨道匹配不足/);
+        assert.equal(animation.currentAction, idleAction);
+        assert.equal(animation.vrmaIsPlaying, true);
+        assert.equal(animation.isIdleAnimation, true, 'failed movement must preserve idle rendering policy');
+        assert.equal(configuredClip, undefined);
+        return;
+    }
     assert.equal(await animation.playVRMAAnimation('/fixture.vrma', options), true);
     assert.equal(playedAction, action);
     return { configuredClip, tracks, rootPositions, handPosition, rotations, hipsPosition };
@@ -53,6 +66,7 @@ async function playFixture(vrmVersion, options) {
             assert.deepEqual(fixture.configuredClip.tracks, fixture.tracks);
             assert.deepEqual(fixture.hipsPosition.values, [0, 1, 0, 0, 0.5, 0]);
         }
+        await playFixture(vrmVersion, { movement: true }, true);
         const fixture = await playFixture(vrmVersion, { movement: true });
         assert.deepEqual(fixture.configuredClip.tracks, [fixture.handPosition, ...fixture.rotations]);
         assert.equal(fixture.rootPositions.some(track => fixture.configuredClip.tracks.includes(track)), false);

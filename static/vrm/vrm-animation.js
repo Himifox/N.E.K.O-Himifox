@@ -392,15 +392,16 @@ class VRMAnimation {
         // 否则 VRM 0.x 的轨道会失去目标并把模型留在 T-pose。
     }
 
-    _stripRootTranslationTracks(clip) {
+    _stripRootTranslationTracks(clip, vrm) {
         if (!clip?.tracks) return;
         const rootNames = /^(?:normalized[_ .])?(?:hips|reference|root)$/i;
+        const hipsName = vrm?.humanoid?.getNormalizedBoneNode?.('hips')?.name;
         const before = clip.tracks.length;
         clip.tracks = clip.tracks.filter((track) => {
             const parts = String(track.name || '').split('.');
             const property = parts.pop();
-            const nodeName = parts.pop() || '';
-            return !(property === 'position' && rootNames.test(nodeName));
+            const nodeName = parts.join('.');
+            return !(property === 'position' && (nodeName === hipsName || rootNames.test(nodeName)));
         });
         if (clip.tracks.length !== before) {
             console.debug('[VRM Animation] 已移除根平移轨道，避免与桌宠场景位移叠加:', before - clip.tracks.length);
@@ -758,7 +759,7 @@ class VRMAnimation {
             // 引导移动由 vrm-interaction 控制 scene.position，避免根平移叠加。
             // 普通动画保留 authored 平移，否则坐姿/躺姿等动作会丢失髋部高度。
             if (options.movement === true) {
-                this._stripRootTranslationTracks(clip);
+                this._stripRootTranslationTracks(clip, vrm);
             }
             // 不用名称数量阈值否决动作：three-vrm 的 Normalized_* / VRM0 映射
             // 可能让静态节点名检查产生误判；由 createVRMAnimationClip 的实际绑定结果决定。
@@ -767,9 +768,6 @@ class VRMAnimation {
             // _createAndConfigureAction 之前。此刻 vrmaMixer 上仍是上一条 action 在跑，
             // 骨骼 quaternion 反映当前姿态；后续 _playAction 的 crossfade slerp 才能走最短路径。
             this._alignClipToCurrentPose(clip);
-
-            // 判断是否为待机动画（仅在显式传入 isIdle: true 时才视为待机）
-            this.isIdleAnimation = !!options.isIdle;
 
             const mixerRoot = this._findBestMixerRoot(vrm, clip);
             // 移动动作必须至少绑定到一组人形旋转轨道；否则 AnimationMixer 仍可能
@@ -789,6 +787,8 @@ class VRMAnimation {
                 this._releaseMixerAction(newAction, this.vrmaMixer);
                 return false;
             }
+            // 新 action 已验证并准备播放后才提交播放分类。
+            this.isIdleAnimation = !!options.isIdle;
             this._playAction(newAction, options, vrm);
             return true;
 

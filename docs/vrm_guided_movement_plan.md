@@ -35,7 +35,7 @@
 - 目标由相机反投影并经过现有可见边界限制，移动在 `update(delta)` 中按帧推进，抵达后吸附到目标并保存位置。
 - 移动中再次使用 `F` + 左键会替换目标；普通左键命中模型后拖拽会接管并取消自动移动。
 - 移动开始尝试播放 `world-walk.vrma.gz`，移动结束停止该动作并交还 `NekoMotion` 待机所有权；锁定、清理和模型销毁路径会释放动作占用。
-- 当前实现已接入 `world-walk-start → world-walk → world-walk-stop-small` 的基础状态机；动作加载或骨骼不兼容时仍回退到纯位移。转向动作和两个目标模型的兼容性仍需实测。
+- 当前只播放循环 `world-walk`，尚未接入起步、停止和转向 clip 状态机；动作加载或骨骼不兼容时回退到纯位移。没有完整 `NekoMotion` 动作恢复运行时的预览页面只移动位置，保留原动作。到达转身使用共享帧调度，转身途中换目标沿用原恢复朝向。两个目标模型的兼容性仍需实测。
 
 ## 状态机
 
@@ -91,21 +91,11 @@ movementFacing   // 是否由移动方向驱动身体朝向
 
 已导入 `static/vrm/animation/` 的 Hanami/Overte 移动资源：
 
-- `world-walk-start.vrma.gz`
 - `world-walk.vrma.gz`
-- `world-walk-slow.vrma.gz`
-- `world-walk-stop.vrma.gz`
-- `world-walk-stop-small.vrma.gz`
-- `world-turn-left.vrma.gz`
-- `world-turn-right.vrma.gz`
-- `world-jog.vrma.gz`
-- `world-jog-back.vrma.gz`
-- `world-run.vrma.gz`
-- `world-run-back.vrma.gz`
 
-来源和许可记录在 `static/vrm/animation/HANAMI_VRMA_NOTICE.md`。这些动作保持在移动域，不加入普通聊天动作候选。Hanami 的目录说明 `world-` 域包含起步、步行、停止和转向动作；动作文件为 VRMA humanoid clip，模型无须专门绑定即可尝试播放，但仍必须对两个目标模型实测。
+来源和许可记录在 `static/vrm/animation/HANAMI_VRMA_NOTICE.md`。该动作保持在移动域，不加入普通聊天动作候选。Hanami 的目录说明 `world-` 域包含起步、步行、停止和转向动作；动作文件为 VRMA humanoid clip，模型无须专门绑定即可尝试播放，但仍必须对两个目标模型实测。
 
-### 动作播放策略
+### 后续完整状态机的动作播放策略（尚未接入）
 
 ```text
 开始移动       → world-walk-start
@@ -153,7 +143,7 @@ movementFacing   // 是否由移动方向驱动身体朝向
 2. 增加屏幕平面目标计算、平滑位移、边界限制和到达阈值。（已完成）
 3. 接入普通拖拽抢占、锁定、失焦、切换和销毁清理。（已完成）
 4. 在两个模型上做骨骼轨道和脚底兼容性探测。
-5. 接入 `world-walk-start → world-walk → world-walk-stop`，处理动作所有权和待机恢复。（基础起步/循环/停止已完成，仍需模型实测）
+5. 接入 `world-walk-start → world-walk → world-walk-stop`，处理动作所有权和待机恢复。（仅循环走路已接入；起步和停止仍待实现及模型实测）
 6. 增加转向和目标替换处理。
 7. 分别在 48911 页面和 Electron 桌宠窗口验证穿透、焦点和性能。
 8. 运行与交互模块和动作播放器相关的最小测试，并记录两个模型的验收结果。

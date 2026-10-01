@@ -106,11 +106,7 @@ assert.deepEqual(relativeFiles.filter(function (name) { return !name.endsWith('.
 assert.equal(relativeFiles.filter(function (name) { return name.endsWith('.vrma.gz'); }).length, 62);
 
 const allVrmFiles = walk(path.join(root, 'static/vrm'));
-const movementAssets = [
-    'world-jog-back', 'world-jog', 'world-run-back', 'world-run',
-    'world-turn-left', 'world-turn-right', 'world-walk-slow',
-    'world-walk-start', 'world-walk-stop-small', 'world-walk-stop', 'world-walk'
-];
+const movementAssets = ['world-walk'];
 movementAssets.forEach(function (name) {
     const relativePath = 'static/vrm/animation/' + name + '.vrma.gz';
     const decoded = zlib.gunzipSync(fs.readFileSync(path.join(root, relativePath)));
@@ -608,7 +604,7 @@ async function verifyColdExternalPlaybackOwnership() {
 }
 
 verifyColdExternalPlaybackOwnership().then(function () {
-    console.log('VRM motion policy and source integrity: OK (75 catalog + 11 movement gzip assets)');
+    console.log('VRM motion policy and source integrity: OK (75 catalog + 1 movement gzip asset)');
 }).catch(function (error) {
     console.error(error);
     process.exitCode = 1;

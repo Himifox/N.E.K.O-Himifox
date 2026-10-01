@@ -124,13 +124,13 @@ class VRMInteraction {
         this._movementAction = null;
         this._movementRestOwner = 'guided-movement';
         this._movementOwnerToken = null;
-        this._movementPhaseTimer = null;
+        this._movementFinishingToken = null;
+        this._smoothFacingTargetYaw = null;
         this._smoothFacingFrame = null;
         this._smoothFacingResolve = null;
         this._movementKeyDownHandler = null;
         this._movementKeyUpHandler = null;
         this._movementBlurHandler = null;
-        this._movementClickHandler = null;
     }
 
 
@@ -349,13 +349,25 @@ class VRMInteraction {
         return action;
     }
 
+    _getMovementScratch() {
+        return this._movementScratch || (this._movementScratch = {
+            forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), turn: new THREE.Quaternion(),
+            offset: new THREE.Vector3(), cameraRight: new THREE.Vector3(),
+            cameraUp: new THREE.Vector3(), cameraForward: new THREE.Vector3()
+        });
+    }
+
     _getMovementFacingProfile() {
         const vrm = this.manager?.currentModel?.vrm;
         const detector = window.VRMOrientationDetector;
         if (detector && typeof detector.getMovementFacingProfile === 'function') {
             return detector.getMovementFacingProfile(vrm, this.manager?.core?.vrmVersion);
         }
-        return { yawOffset: Math.PI, horizontalSign: 1, vrmVersion: '0.0' };
+        const version = String(this.manager?.core?.vrmVersion || '');
+        const meta = String(vrm?.meta?.metaVersion || '');
+        const isVrm10 = version === '0.0' || version === '1.0'
+            ? version === '1.0' : meta === '1' || meta.startsWith('1.');
+        return { yawOffset: isVrm10 ? 0 : Math.PI, horizontalSign: 1, vrmVersion: isVrm10 ? '1.0' : '0.0' };
     }
 
     _getCameraFacingRotationY(scene) {
@@ -370,7 +382,7 @@ class VRMInteraction {
     }
 
     _getSceneYaw(scene) {
-        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(scene.quaternion);
+        const forward = this._getMovementScratch().forward.set(0, 0, 1).applyQuaternion(scene.quaternion);
         return Math.atan2(forward.x, forward.z);
     }
 
@@ -378,49 +390,14 @@ class VRMInteraction {
         // XYZ 欧拉角在掉头后可能等价地表示为 X/Z ≈ π。此时只改 rotation.y
         // 会反转真实转向；绕世界 Y 轴组合四元数，保留模型原有俯仰和侧倾。
         const delta = yaw - this._getSceneYaw(scene);
-        const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), delta);
+        const scratch = this._getMovementScratch();
+        const turn = scratch.turn.setFromAxisAngle(scratch.up, delta);
         scene.quaternion.premultiply(turn);
-    }
-
-    async _turnToRestFacing(scene, targetYaw) {
-        if (!scene || !Number.isFinite(targetYaw) || typeof this.manager.playVRMAAnimation !== 'function') return;
-        let diff = targetYaw - this._getSceneYaw(scene);
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        if (Math.abs(diff) < 0.02) return;
-        const path = diff < 0
-            ? '/static/vrm/animation/world-turn-left.vrma.gz'
-            : '/static/vrm/animation/world-turn-right.vrma.gz';
-        try {
-            const played = await this.manager.playVRMAAnimation(path, {
-                loop: false,
-                fadeDuration: 0.15,
-                immediate: false,
-                isIdle: false,
-                movement: true
-            });
-            if (played !== true) return;
-            const duration = Math.max(0.25, Math.min(1.2, this._currentVRMADuration(0.65)));
-            const startYaw = this._getSceneYaw(scene);
-            await new Promise(resolve => {
-                const startedAt = performance.now();
-                const tick = (now) => {
-                    const progress = Math.min(1, Math.max(0, (now - startedAt) / (duration * 1000)));
-                    const eased = progress * progress * (3 - 2 * progress);
-                    this._setSceneYaw(scene, startYaw + diff * eased);
-                    if (progress < 1) requestAnimationFrame(tick);
-                    else resolve();
-                };
-                requestAnimationFrame(tick);
-            });
-        } catch (error) {
-            console.warn('[VRM Interaction] 到达后的转向动作不可用，保持当前朝向:', error);
-        }
     }
 
     _cancelSmoothFacing() {
         if (this._smoothFacingFrame !== null) {
-            cancelAnimationFrame(this._smoothFacingFrame);
+            this._smoothFacingFrame();
             this._smoothFacingFrame = null;
         }
         if (this._smoothFacingResolve) {
@@ -430,12 +407,18 @@ class VRMInteraction {
     }
 
     _cancelGuidedMovement() {
+        const interrupted = this.isMoving || !!this._movementAction || this._movementOwnerToken !== null
+            || this._movementFinishingToken !== null || this._smoothFacingFrame !== null;
         this._cancelSmoothFacing();
+        this._smoothFacingTargetYaw = null;
+        this._movementRestRotationY = null;
+        this._movementFinishingToken = null;
         // 已完成转向的结束流程仍可能在等待播放器；接管时也要使其失效。
         this.movementToken += 1;
         if (this.isMoving || this._movementAction || this._movementOwnerToken !== null) {
             void this._finishMovement({ cancel: true });
         }
+        return interrupted;
     }
 
     _smoothTurnToCamera(scene, targetYaw = null) {
@@ -446,6 +429,7 @@ class VRMInteraction {
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
         if (Math.abs(diff) < 0.02) return Promise.resolve(true);
+        this._smoothFacingTargetYaw = targetYaw;
         const startYaw = this._getSceneYaw(scene);
         const startedAt = performance.now();
         const duration = 360;
@@ -456,16 +440,17 @@ class VRMInteraction {
                 const eased = progress * progress * (3 - 2 * progress);
                 this._setSceneYaw(scene, startYaw + diff * eased);
                 if (progress < 1) {
-                    this._smoothFacingFrame = requestAnimationFrame(tick);
+                    this._smoothFacingFrame = this._scheduleSnapFrame(tick);
                 } else {
                     // 最后一帧写入目标值，避免浮点误差在多次移动后累计成朝向偏移。
                     this._setSceneYaw(scene, targetYaw);
                     this._smoothFacingFrame = null;
+                    this._smoothFacingTargetYaw = null;
                     this._smoothFacingResolve = null;
                     resolve(true);
                 }
             };
-            this._smoothFacingFrame = requestAnimationFrame(tick);
+            this._smoothFacingFrame = this._scheduleSnapFrame(tick);
         });
     }
 
@@ -475,13 +460,6 @@ class VRMInteraction {
         this.movementMaxSpeed = Math.max(0, Math.min(0.9, value));
         if (this.movementMaxSpeed === 0) this.movementVelocity = 0;
         return this.movementMaxSpeed;
-    }
-
-    _clearMovementPhaseTimer() {
-        if (this._movementPhaseTimer !== null) {
-            clearTimeout(this._movementPhaseTimer);
-            this._movementPhaseTimer = null;
-        }
     }
 
     _currentVRMADuration(fallbackSeconds) {
@@ -508,6 +486,10 @@ class VRMInteraction {
         const manager = this.manager;
         if (!manager || typeof manager.playVRMAAnimation !== 'function') return;
         const motion = window.NekoMotion;
+        // 预览页没有动作恢复运行时：仅移动场景，保留原有动作。
+        if (typeof motion?.holdExternalPlayback !== 'function'
+            || typeof motion?.releaseExternalPlayback !== 'function'
+            || typeof motion?.rest !== 'function') return;
         const ownerToken = String(token);
         try {
             this._movementOwnerToken = ownerToken;
@@ -540,10 +522,10 @@ class VRMInteraction {
         this.moveTarget = null;
         this.movementToken += 1;
         const endedToken = this.movementToken;
+        this._movementFinishingToken = endedToken;
         const endedScene = this.manager.currentModel?.scene;
         this._movementAction = null;
         this._movementOwnerToken = null;
-        this._clearMovementPhaseTimer();
         const restFacing = this._movementRestRotationY;
         this._movementRestRotationY = null;
         const motion = window.NekoMotion;
@@ -552,7 +534,7 @@ class VRMInteraction {
         try {
             // 当前两套目标模型对 stop/turn clip 的骨骼兼容性还不稳定；到达时先安全
             // 停止循环走路并恢复 humanoid/rest，避免连续切换多个 clip 触发 T-pose。
-            if (this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
+            if (endedOwnerToken && this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时停止动作失败:', error);
         }
@@ -563,7 +545,7 @@ class VRMInteraction {
                     resume: !cancel
                 });
             }
-            if (!cancel && endedToken === this.movementToken && !this.isDragging
+            if (!cancel && endedOwnerToken && endedToken === this.movementToken && !this.isDragging
                 && this.manager.currentModel?.scene === endedScene && motion && typeof motion.rest === 'function') {
                 await motion.rest({ force: true, seed: 'guided-movement-arrival' });
             }
@@ -575,18 +557,24 @@ class VRMInteraction {
             && this.manager.currentModel?.scene === endedScene) {
             await this._savePositionAfterInteraction();
         }
+        if (this._movementFinishingToken === endedToken) this._movementFinishingToken = null;
     }
 
     _selectMovementTarget(clientX, clientY) {
         const target = this._screenPointToMovementTarget(clientX, clientY);
         if (!target || !this.manager.currentModel?.scene) return false;
+        const pendingRestYaw = this._smoothFacingTargetYaw;
         this._cancelSmoothFacing();
+        this._smoothFacingTargetYaw = null;
+        this._movementFinishingToken = null;
         this.movementToken += 1;
         const scene = this.manager.currentModel.scene;
         // 目标替换/开始移动前只保存一次当前状态，避免在每帧推进时写配置。
-        void this._savePositionAfterInteraction();
+        if (!Number.isFinite(pendingRestYaw)) void this._savePositionAfterInteraction();
+        else this._movementRestRotationY = pendingRestYaw;
         const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
         if (!willMove) {
+            if (Number.isFinite(pendingRestYaw)) this.isMoving = true;
             void this._finishMovement();
             return true;
         }
@@ -605,7 +593,8 @@ class VRMInteraction {
         if (!this.isMoving || !this.moveTarget || !this.manager.currentModel?.scene) return;
         const scene = this.manager.currentModel.scene;
         const target = this.moveTarget;
-        const offset = target.clone().sub(scene.position);
+        const scratch = this._getMovementScratch();
+        const offset = scratch.offset.copy(target).sub(scene.position);
         const distance = offset.length();
         if (!Number.isFinite(distance) || distance <= this.movementArrivalThreshold) {
             scene.position.copy(target);
@@ -631,9 +620,9 @@ class VRMInteraction {
             // 位移发生在与屏幕平行的平面上，其中“上下”主要落在世界 Y 轴；直接只看 X/Z
             // 会让角色只能左右转身。把屏幕水平/垂直分量重新投影到地面方向：屏幕向上
             // 视为远离镜头，向下视为靠近镜头，从而得到完整的前后左右与斜向朝向。
-            const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-            const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-            const cameraForward = new THREE.Vector3();
+            const cameraRight = scratch.cameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+            const cameraUp = scratch.cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+            const cameraForward = scratch.cameraForward;
             camera.getWorldDirection(cameraForward);
             const screenX = offset.dot(cameraRight);
             const screenY = offset.dot(cameraUp);
@@ -725,6 +714,7 @@ class VRMInteraction {
         this.cleanupDragAndZoom();
 
         this._movementKeyDownHandler = (e) => {
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (this._isEditableTarget(e.target)) return;
             if (String(e.key || '').toLowerCase() !== 'f') return;
             if (this.checkLocked() || isYuiGuideDragLocked()) return;
@@ -1172,9 +1162,9 @@ class VRMInteraction {
             this._restoreButtonPointerEvents();
         }
         if (locked) {
-            this._cancelGuidedMovement();
-            // 锁定后没有拖拽结束事件补存，保留停止时的位置和朝向。
-            void this._savePositionAfterInteraction();
+            const interrupted = this._cancelGuidedMovement();
+            // 只补存被锁定打断的移动；普通锁定不产生额外配置写入。
+            if (interrupted) void this._savePositionAfterInteraction();
         }
     }
 

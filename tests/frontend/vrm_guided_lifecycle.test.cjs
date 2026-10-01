@@ -213,6 +213,73 @@ const vm = require('node:vm');
         assert.equal(writes.length, 1, 'cancelled arrival must not overwrite the locked pose');
         f.interaction.cleanupDragAndZoom();
     }
+    // Preview pages without a motion runtime retain the existing animation.
+    for (const cancel of [false, true]) {
+        const f = fixture(); delete window.NekoMotion;
+        let plays = 0, stops = 0;
+        f.manager.playVRMAAnimation = async () => { plays++; return true; };
+        f.manager.stopVRMAAnimation = () => { stops++; };
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        f.interaction._updateGuidedMovement(0.1);
+        assert.ok(f.scene.position.y > 0, 'preview still supports pure translation');
+        if (cancel) f.interaction.setLocked(true);
+        else { f.scene.position.copy(f.interaction.moveTarget); const finished = f.interaction._finishMovement();
+            if (frames.size) finishTurn(); await finished; }
+        await flush(); assert.equal(plays, 0); assert.equal(stops, 0);
+        f.interaction.cleanupDragAndZoom();
+    }
+
+    // A retarget during the arrival turn inherits the intended rest heading.
+    for (const samePosition of [false, true]) {
+        const f = fixture(); f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        f.scene.rotation.y = Math.PI / 2;
+        void f.interaction._finishMovement(); await flush();
+        for (const [id, callback] of [...frames]) { frames.delete(id); callback(150); }
+        assert.ok(f.scene.rotation.y > 0.1);
+        f.saves.length = 0;
+        f.select(samePosition ? f.scene.position.clone() : new THREE.Vector3(0, 2, 0));
+        await flush(); assert.equal(f.saves.length, 0, 'never save a half-finished arrival heading');
+        if (!samePosition) {
+            assert.equal(f.interaction._movementRestRotationY, 0);
+            f.scene.rotation.y = -Math.PI / 2;
+            void f.interaction._finishMovement(); await flush();
+        }
+        finishTurn(); await flush();
+        assert.ok(f.scene.quaternion.angleTo(new THREE.Quaternion()) < 1e-8);
+        assert.equal(f.saves.length, 1);
+        f.interaction.cleanupDragAndZoom();
+    }
+
+    // Ordinary lock toggles never write preferences; interrupted movement does.
+    {
+        const f = fixture(); f.interaction.setLocked(true); await flush();
+        f.interaction.setLocked(false); f.interaction.setLocked(true); await flush();
+        assert.equal(f.saves.length, 0); f.interaction.cleanupDragAndZoom();
+    }
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+        const f = fixture(); let prevented = false;
+        f.interaction._movementKeyDownHandler({ key: 'f', [modifier]: true,
+            preventDefault() { prevented = true; } });
+        assert.equal(f.interaction.targetMode, false); assert.equal(prevented, false);
+        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() { prevented = true; } });
+        assert.equal(f.interaction.targetMode, true); assert.equal(prevented, true);
+        f.interaction._movementKeyUpHandler({ key: 'f' });
+        assert.equal(f.interaction.targetMode, false); f.interaction.cleanupDragAndZoom();
+    }
+    // Arrival scheduling uses the shared paced-frame hook, including cancellation.
+    {
+        const f = fixture(); let scheduled = 0, cancelled = 0;
+        window.nekoFramePacing = { requestPacedFrame(callback) {
+            scheduled++; const id = ++frameId; frames.set(id, callback);
+            return () => { cancelled++; frames.delete(id); };
+        } };
+        f.scene.rotation.y = Math.PI / 2;
+        const turn = f.interaction._smoothTurnToCamera(f.scene, 0);
+        assert.equal(scheduled, 1); f.interaction._cancelSmoothFacing();
+        assert.equal(await turn, false); assert.equal(cancelled, 1); assert.equal(frames.size, 0);
+        delete window.nekoFramePacing; f.interaction.cleanupDragAndZoom();
+    }
+
     // Preference snapshots already accepted for saving survive model switches;
     // request ordering and snapshot isolation use the real core in the dedicated
     // vrm_preferences_persistence.test.cjs regression suite.

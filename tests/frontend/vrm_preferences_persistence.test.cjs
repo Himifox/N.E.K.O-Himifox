@@ -45,7 +45,7 @@ const vm = require('node:vm');
         const f = fixture(); f.scene.position.y = 1;
         const first = f.interaction._savePositionAfterInteraction(); await flush();
         assert.equal(f.requests.length, 1);
-        f.scene.position.y = 2; f.interaction.setLocked(true); await flush();
+        f.scene.position.y = 2; f.interaction.isMoving = true; f.interaction.setLocked(true); await flush();
         assert.equal(f.requests.length, 1, 'do not send the locked pose while an older write is in flight');
         f.requests[0].complete(); await first; await flush();
         assert.equal(f.requests.length, 2);
