@@ -193,12 +193,8 @@ class VRMAnimation {
             const vrmVersion = this._detectVRMVersion(vrm);
             if (vrmVersion === '1.0' && vrm.humanoid.autoUpdateHumanBones) {
                 vrm.humanoid.update();
-            } else if (vrmVersion === '0.0') {
-                const mixerRoot = this.vrmaMixer?.getRoot?.();
-                const normalizedRoot = vrm.humanoid?._normalizedHumanBones?.root;
-                if (normalizedRoot && mixerRoot === normalizedRoot && vrm.humanoid.autoUpdateHumanBones) {
-                    vrm.humanoid.update();
-                }
+            } else if (vrmVersion === '0.0' && vrm.humanoid.autoUpdateHumanBones) {
+                vrm.humanoid.update();
             }
         }
 

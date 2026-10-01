@@ -68,6 +68,20 @@ const vm = require('node:vm');
         return writes;
     }
 
+    // Replacing a target after walking starts keeps the clip and its lease.
+    {
+        const f = fixture(); let plays = 0;
+        f.manager.playVRMAAnimation = async () => { plays++; return true; };
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        const ownerToken = f.interaction._movementOwnerToken;
+        f.select(new THREE.Vector3(1, 1, 0)); await flush();
+        assert.equal(plays, 1);
+        assert.equal(f.interaction._movementOwnerToken, ownerToken);
+        assert.equal(f.leases.size, 1);
+        f.interaction.cleanupDragAndZoom(); await flush();
+        assert.equal(f.leases.size, 0);
+    }
+
     // Clicking the current position before the walk loads must release the lease,
     // even though no movement action has been assigned yet.
     for (const result of [true, false]) {

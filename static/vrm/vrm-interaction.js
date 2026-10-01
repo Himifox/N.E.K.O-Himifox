@@ -562,6 +562,8 @@ class VRMInteraction {
         if (!target || !this.manager.currentModel?.scene) return false;
         const scene = this.manager.currentModel.scene;
         const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
+        const keepWalkPlayback = this.isMoving && this._movementAction === 'walk'
+            && this._movementOwnerToken !== null;
         // 原地重选仍属于同一次到达，保留正在等待 release/rest 的结束流程。
         if (!willMove && !this.isMoving && this._movementFinishingToken !== null) return true;
         const pendingRestYaw = this._smoothFacingTargetYaw;
@@ -584,7 +586,7 @@ class VRMInteraction {
         this.movementVelocity = 0;
         this._movementFacingProfile = this._getMovementFacingProfile();
         const token = this.movementToken;
-        void this._beginMovementPlayback(token);
+        if (!keepWalkPlayback) void this._beginMovementPlayback(token);
         return true;
     }
 

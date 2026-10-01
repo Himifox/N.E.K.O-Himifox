@@ -60,6 +60,19 @@ async function playFixture(vrmVersion, options, rejectCoverage = false) {
 
 (async () => {
     for (const vrmVersion of ['0.0', '1.0']) {
+        // Low quality / disabled physics skips vrm.update(); mixer playback must
+        // still synchronize normalized bones even when its root is the scene.
+        let humanoidUpdates = 0;
+        const scene = { uuid: `pose-${vrmVersion}`, traverse() {}, updateMatrixWorld() {} };
+        const humanoid = { autoUpdateHumanBones: true, update() { humanoidUpdates++; } };
+        const animation = new global.VRMAnimation({ currentModel: { vrm: { scene, humanoid } }, core: { vrmVersion } });
+        animation.vrmaIsPlaying = true;
+        animation.vrmaMixer = { update() {}, getRoot: () => scene };
+        animation.update(1 / 60);
+        assert.equal(humanoidUpdates, 1);
+        humanoid.autoUpdateHumanBones = false;
+        animation.update(1 / 60);
+        assert.equal(humanoidUpdates, 1, 'explicitly disabled synchronization remains respected');
         // Ordinary sitting/rest playback must preserve authored hip height.
         for (const options of [undefined, { movement: false }, { isIdle: true }]) {
             const fixture = await playFixture(vrmVersion, options);
