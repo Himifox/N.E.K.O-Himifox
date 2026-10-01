@@ -622,6 +622,7 @@ class _StreamingMixin:
         response_discarded_callback: Optional[
             Callable[[str, int, int, bool, Optional[str]], Awaitable[None]]
         ] = None,
+        response_done_callback: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> None:
         """
         Send a text message to the API and stream the response.
@@ -663,6 +664,11 @@ class _StreamingMixin:
         ``response_discarded_callback`` binds discard ownership to this invocation.
         It avoids re-reading mutable session-level request state after a later text
         request has already started.
+
+        ``response_done_callback`` does the same for the completion, which runs
+        in place of ``on_response_done``. It still runs whenever the session
+        callback would, including for a reply cut by ``close()``; the caller
+        decides what a late completion may still touch.
 
         ``system_prefix_images`` binds passive callback media to the same
         invocation as ``system_prefix``.  Unlike ``_pending_images``, this list
@@ -2167,9 +2173,11 @@ class _StreamingMixin:
             finally:
                 completion_taken_over = not self._take_completion(response_generation)
 
-            # Call response done callback. Skipped exactly when someone else
-            # took the close over: an interrupter (mid-reply, or a claim during
-            # the status await above) or a user reply that displaced this one
-            # (see _begin_response_generation). A close() still runs it.
-            if not completion_taken_over and self.on_response_done:
-                await self.on_response_done()
+            # Call response done callback (the caller's bound one, else the
+            # session's). Skipped exactly when someone else took the close
+            # over: an interrupter (mid-reply, or a claim during the status
+            # await above) or a user reply that displaced this one (see
+            # _begin_response_generation). A close() still runs it.
+            done_callback = response_done_callback or self.on_response_done
+            if not completion_taken_over and done_callback:
+                await done_callback()

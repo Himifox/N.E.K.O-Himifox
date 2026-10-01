@@ -142,7 +142,7 @@ def test_rps_payload_normalizer_accepts_the_nine_canonical_rounds(
 async def test_rps_payload_reaches_the_runtime_delivered_result_without_action_fields(
     monkeypatch,
 ):
-    from main_logic.core import greeting
+    from main_logic.core import greeting, notify, turn
 
     class FakeOfflineClient:
         _is_responding = False
@@ -153,7 +153,10 @@ async def test_rps_payload_reaches_the_runtime_delivered_result_without_action_f
         async def prompt_ephemeral(self, *_args, **_kwargs):
             return True
 
-    class RuntimeHarness(greeting.GreetingMixin):
+    class RuntimeHarness(greeting.GreetingMixin, turn.TurnMixin):
+        # TurnMixin's turn-end senders check the socket through NotifyMixin.
+        _has_connected_websocket = notify.NotifyMixin._has_connected_websocket
+
         def __init__(self):
             self.is_active = True
             self.session = FakeOfflineClient()
@@ -755,7 +758,7 @@ def test_payload_normalizer_requires_touch_zone_only_for_declared_tools():
 
 def _builtin_runtime(monkeypatch, *, cooldown_ms=600, clock=None):
     """A runtime harness driving the built-in (definition v1) interaction path."""
-    from main_logic.core import greeting
+    from main_logic.core import greeting, notify, turn
 
     class FakeOfflineClient:
         _is_responding = False
@@ -766,7 +769,10 @@ def _builtin_runtime(monkeypatch, *, cooldown_ms=600, clock=None):
         async def prompt_ephemeral(self, *_args, **_kwargs):
             return True
 
-    class RuntimeHarness(greeting.GreetingMixin):
+    class RuntimeHarness(greeting.GreetingMixin, turn.TurnMixin):
+        # TurnMixin's turn-end senders check the socket through NotifyMixin.
+        _has_connected_websocket = notify.NotifyMixin._has_connected_websocket
+
         def __init__(self):
             self.is_active = True
             self.session = FakeOfflineClient()
