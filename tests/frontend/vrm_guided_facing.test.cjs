@@ -66,7 +66,7 @@ console.log('VRM guided movement facing: OK');
 // facing the opposite direction. A large single delta hides backward steps.
 for (const version of ['0.0', '1.0']) {
     const authoredFront = version === '1.0' ? 1 : -1;
-    for (const rotation of [[0, 0, 0], [-3.1354805766406257, 0.05088144987006485, -3.128094060958441]]) {
+    for (const rotation of [[0, 0, 0], [0, Math.PI, 0], [-3.1354805766406257, 0.05088144987006485, -3.128094060958441]]) {
     const scene = new Object3D();
     scene.rotation.set(...rotation);
     const camera = {

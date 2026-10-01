@@ -149,6 +149,7 @@ const vm = require('node:vm');
             assert.equal(frames.size, 0);
             assert.equal(f.interaction.dragMode, button === 2 ? 'orbit' : 'pan');
             assert.equal(f.saves.length, 0, 'cancelled arrival must not save a stale heading');
+            if (arriving) assert.ok(f.scene.quaternion.angleTo(new THREE.Quaternion()) < 1e-8, 'manual takeover starts from the intended arrival heading');
             f.interaction.cleanupDragAndZoom();
         }
     }
@@ -178,8 +179,8 @@ const vm = require('node:vm');
         else f.select(f.scene.position.clone());
         const expectedSaves = f.saves.length;
         releasing.resolve(); await finished;
-        assert.equal(f.saves.length, expectedSaves);
-        assert.equal(f.rests(), 0, 'superseded finish must not restart rest playback');
+        assert.equal(f.saves.length, expectedSaves + (takeover === 'same-position' ? 1 : 0));
+        assert.equal(f.rests(), takeover === 'same-position' ? 1 : 0, 'same-position selection preserves the existing rest responsibility');
         f.interaction.cleanupDragAndZoom();
     }
     // Locking settles the current pose; unlike a drag, there is no later mouseup
@@ -198,7 +199,7 @@ const vm = require('node:vm');
         if (stage === 'arrival-middle') {
             for (const [id, callback] of [...frames.entries()]) { frames.delete(id); callback(180); }
         } else if (stage === 'release-pending') finishTurn();
-        const lockedRotation = f.scene.quaternion.clone();
+        const lockedRotation = stage === 'moving' ? f.scene.quaternion.clone() : new THREE.Quaternion();
         f.interaction.setLocked(true); await flush();
         assert.equal(writes.length, 1, `${stage}: locking must persist the stopped pose`);
         assert.deepEqual([writes[0][1].x, writes[0][1].y, writes[0][1].z], [0, stage === 'moving' ? 1 : 2, 0]);
@@ -247,6 +248,48 @@ const vm = require('node:vm');
         finishTurn(); await flush();
         assert.ok(f.scene.quaternion.angleTo(new THREE.Quaternion()) < 1e-8);
         assert.equal(f.saves.length, 1);
+        f.interaction.cleanupDragAndZoom();
+    }
+
+    // Facing calibration is read once per trip, then refreshed on retarget.
+    {
+        const f = fixture(); let reads = 0;
+        const profile = f.interaction._getMovementFacingProfile.bind(f.interaction);
+        f.interaction._getMovementFacingProfile = () => { reads++; return profile(); };
+        f.select(new THREE.Vector3(0, -2, 0)); await flush();
+        for (let i = 0; i < 5; i++) f.interaction._updateGuidedMovement(1 / 60);
+        assert.equal(reads, 1);
+        f.select(new THREE.Vector3(0, -3, 0)); await flush();
+        assert.equal(reads, 2);
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+    // Locking during pan or orbit must persist the manually changed pose.
+    for (const button of [0, 2]) {
+        const f = fixture(); f.mouseDown(button);
+        f.scene.position.set(1, 2, 3); f.scene.rotation.y = 0.7;
+        const expected = f.scene.quaternion.clone();
+        f.interaction.setLocked(true); await flush();
+        assert.equal(f.saves.length, 1);
+        assert.ok(f.saves[0].angleTo(expected) < 1e-8);
+        assert.equal(f.interaction.isDragging, false);
+        f.interaction.cleanupDragAndZoom();
+    }
+    // An original-position selection while release is pending must retain one
+    // arrival/rest flow, including selection partway through the turn.
+    for (const halfway of [false, true]) {
+        const f = fixture(); const releasing = deferred();
+        f.select(new THREE.Vector3(0, 1, 0)); await flush(); f.saves.length = 0;
+        const release = window.NekoMotion.releaseExternalPlayback;
+        window.NekoMotion.releaseExternalPlayback = async (...args) => { await release(...args); await releasing.promise; };
+        f.scene.rotation.y = Math.PI / 2;
+        const finished = f.interaction._finishMovement();
+        if (halfway) for (const [id, callback] of [...frames]) { frames.delete(id); callback(150); }
+        const token = f.interaction.movementToken;
+        f.select(f.scene.position.clone());
+        assert.equal(f.interaction.movementToken, token);
+        finishTurn(); releasing.resolve(); await finished;
+        assert.equal(f.rests(), 1); assert.equal(f.saves.length, 1);
+        assert.ok(f.scene.quaternion.angleTo(new THREE.Quaternion()) < 1e-8);
         f.interaction.cleanupDragAndZoom();
     }
 

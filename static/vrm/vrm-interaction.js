@@ -344,11 +344,6 @@ class VRMInteraction {
         return this.clampModelPosition(target);
     }
 
-    _setMovementAction(action) {
-        this._movementAction = action;
-        return action;
-    }
-
     _getMovementScratch() {
         return this._movementScratch || (this._movementScratch = {
             forward: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), turn: new THREE.Quaternion(),
@@ -409,7 +404,10 @@ class VRMInteraction {
     _cancelGuidedMovement() {
         const interrupted = this.isMoving || !!this._movementAction || this._movementOwnerToken !== null
             || this._movementFinishingToken !== null || this._smoothFacingFrame !== null;
+        const scene = this.manager.currentModel?.scene;
+        const targetYaw = this._smoothFacingTargetYaw;
         this._cancelSmoothFacing();
+        if (scene && Number.isFinite(targetYaw)) this._setSceneYaw(scene, targetYaw);
         this._smoothFacingTargetYaw = null;
         this._movementRestRotationY = null;
         this._movementFinishingToken = null;
@@ -462,13 +460,8 @@ class VRMInteraction {
         return this.movementMaxSpeed;
     }
 
-    _currentVRMADuration(fallbackSeconds) {
-        const duration = Number(this.manager?.animation?.currentAction?._clip?.duration);
-        return Number.isFinite(duration) && duration > 0 ? duration : fallbackSeconds;
-    }
-
     async _playMovementClip(token, path, action, options = {}) {
-        if (token !== this.movementToken || !this.isMoving) return 0;
+        if (token !== this.movementToken || !this.isMoving) return false;
         const played = await this.manager.playVRMAAnimation(path, {
             loop: !!options.loop,
             fadeDuration: options.fadeDuration ?? 0.2,
@@ -477,9 +470,9 @@ class VRMInteraction {
             movement: true,
             shouldApply: () => token === this.movementToken && this.isMoving
         });
-        if (token !== this.movementToken || !this.isMoving || played !== true) return 0;
-        this._setMovementAction(action);
-        return this._currentVRMADuration(options.fallbackSeconds || 0.4);
+        if (token !== this.movementToken || !this.isMoving || played !== true) return false;
+        this._movementAction = action;
+        return true;
     }
 
     async _beginMovementPlayback(token) {
@@ -493,21 +486,16 @@ class VRMInteraction {
         const ownerToken = String(token);
         try {
             this._movementOwnerToken = ownerToken;
-            if (motion && typeof motion.holdExternalPlayback === 'function') {
-                await motion.holdExternalPlayback(this._movementRestOwner, { token: ownerToken });
-            }
+            await motion.holdExternalPlayback(this._movementRestOwner, { token: ownerToken });
             if (token !== this.movementToken || !this.isMoving) {
-                if (motion && typeof motion.releaseExternalPlayback === 'function') {
-                    await motion.releaseExternalPlayback(this._movementRestOwner, { token: ownerToken, resume: false });
-                }
+                await motion.releaseExternalPlayback(this._movementRestOwner, { token: ownerToken, resume: false });
                 return;
             }
             // 桌宠场景不使用 world-walk-start：该过渡 clip 的首尾姿态与待机
             // crossfade 会造成起步瞬间的根节点拉动。直接从无根位移的循环走路开始。
             await this._playMovementClip(token, '/static/vrm/animation/world-walk.vrma.gz', 'walk', {
                 loop: true,
-                immediate: true,
-                fallbackSeconds: 1
+                immediate: true
             });
         } catch (error) {
             // 动作不兼容时保留位置移动；不能让资源问题阻断目标移动。
@@ -519,6 +507,7 @@ class VRMInteraction {
         if (!this.isMoving && !this._movementAction && this._movementOwnerToken === null) return;
         const endedOwnerToken = this._movementOwnerToken;
         this.isMoving = false;
+        this._movementFacingProfile = null;
         this.moveTarget = null;
         this.movementToken += 1;
         const endedToken = this.movementToken;
@@ -563,16 +552,18 @@ class VRMInteraction {
     _selectMovementTarget(clientX, clientY) {
         const target = this._screenPointToMovementTarget(clientX, clientY);
         if (!target || !this.manager.currentModel?.scene) return false;
+        const scene = this.manager.currentModel.scene;
+        const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
+        // 原地重选仍属于同一次到达，保留正在等待 release/rest 的结束流程。
+        if (!willMove && !this.isMoving && this._movementFinishingToken !== null) return true;
         const pendingRestYaw = this._smoothFacingTargetYaw;
         this._cancelSmoothFacing();
         this._smoothFacingTargetYaw = null;
         this._movementFinishingToken = null;
         this.movementToken += 1;
-        const scene = this.manager.currentModel.scene;
         // 目标替换/开始移动前只保存一次当前状态，避免在每帧推进时写配置。
         if (!Number.isFinite(pendingRestYaw)) void this._savePositionAfterInteraction();
         else this._movementRestRotationY = pendingRestYaw;
-        const willMove = target.distanceTo(scene.position) > this.movementArrivalThreshold;
         if (!willMove) {
             if (Number.isFinite(pendingRestYaw)) this.isMoving = true;
             void this._finishMovement();
@@ -584,6 +575,7 @@ class VRMInteraction {
         this.moveTarget = target;
         this.isMoving = true;
         this.movementVelocity = 0;
+        this._movementFacingProfile = this._getMovementFacingProfile();
         const token = this.movementToken;
         void this._beginMovementPlayback(token);
         return true;
@@ -632,7 +624,7 @@ class VRMInteraction {
             if (cameraForward.lengthSq() > 1e-8) cameraForward.normalize();
             // cameraForward 指向远离镜头的方向，因此屏幕向上（screenY > 0）
             // 使用正的前向分量。模型版本的局部正面差异由 yawOffset 统一校正。
-            const profile = this._getMovementFacingProfile();
+            const profile = this._movementFacingProfile || (this._movementFacingProfile = this._getMovementFacingProfile());
             const facing = cameraRight.multiplyScalar(screenX * profile.horizontalSign)
                 .addScaledVector(cameraForward, screenY);
             if (facing.lengthSq() > 1e-8) {
@@ -1140,6 +1132,7 @@ class VRMInteraction {
      * 设置锁定状态
      */
     setLocked(locked) {
+        const wasDragging = this.isDragging;
         this.isLocked = locked;
         if (this.manager) {
             this.manager.isLocked = locked;
@@ -1163,8 +1156,8 @@ class VRMInteraction {
         }
         if (locked) {
             const interrupted = this._cancelGuidedMovement();
-            // 只补存被锁定打断的移动；普通锁定不产生额外配置写入。
-            if (interrupted) void this._savePositionAfterInteraction();
+            // 锁定会吞掉拖拽结束事件，补存拖拽或引导移动被打断的姿态。
+            if (interrupted || wasDragging) void this._savePositionAfterInteraction();
         }
     }
 

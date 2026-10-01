@@ -97,6 +97,8 @@ movementFacing   // 是否由移动方向驱动身体朝向
 
 ### 后续完整状态机的动作播放策略（尚未接入）
 
+当前仓库只保留 `world-walk.vrma.gz`。下列起步、停止和转向资源已移除，后续实现前需重新导入并记录许可，再完成模型兼容性验证。
+
 ```text
 开始移动       → world-walk-start
 开始持续移动   → world-walk
