@@ -419,6 +419,58 @@ const vm = require('node:vm');
         f.interaction.cleanupDragAndZoom();
     }
 
+
+    // An old drag continuation cannot cancel or save over a newer target.
+    for (const stage of ['display', 'hint', 'snap']) {
+        const f = fixture(); const pending = deferred();
+        f.interaction.isDragging = true; f.interaction.dragMode = 'pan';
+        f.interaction._checkAndSwitchDisplay = async () => stage === 'display' ? pending.promise : false;
+        f.interaction._recordDragHintPointerEdgeRelease = async () => stage === 'hint' ? pending.promise : false;
+        f.interaction._snapModelIntoScreen = async () => stage === 'snap' ? pending.promise : false;
+        const ending = f.interaction._endDrag(); await flush();
+        f.select(new THREE.Vector3(0, 5, 0)); await flush();
+        const token = f.interaction.movementToken; const saves = f.saves.length;
+        pending.resolve(false); await ending;
+        assert.equal(f.interaction.isMoving, true, stage);
+        assert.equal(f.interaction.movementToken, token, stage);
+        assert.equal(f.saves.length, saves, 'old drag must not persist over new movement');
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+
+
+    // The real Electron display query must stop before moving the window if a new target owns the scene.
+    for (const stage of ['all-displays', 'current-display']) {
+        const f = fixture(); const pending = deferred(); let moves = 0;
+        f.scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()));
+        f.manager.currentModel.vrm.scene = f.scene;
+        f.manager.renderer.domElement.getBoundingClientRect = () => ({ width: 1920, height: 1080 });
+        f.manager.camera.updateMatrixWorld();
+        f.interaction._lastPanDragPointerScreen = { x: 2000, y: 500 };
+        window.electronScreen = {
+            getAllDisplays: async () => stage === 'all-displays' ? pending.promise : [
+                { id: 1, screenX: 0, screenY: 0, width: 1920, height: 1080 },
+                { id: 2, screenX: 1920, screenY: 0, width: 1920, height: 1080 }],
+            getCurrentDisplay: async () => pending.promise,
+            moveWindowToDisplay: async () => { moves++; return { success: true }; }
+        };
+        const checking = f.interaction._checkAndSwitchDisplay(); await flush();
+        f.select(new THREE.Vector3(0, 5, 0)); await flush();
+        pending.resolve(stage === 'all-displays' ? [{ id: 1 }, { id: 2 }] : { screenX: 0, screenY: 0 });
+        assert.equal(await checking, false); assert.equal(moves, 0);
+        assert.equal(f.interaction.isMoving, true);
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+    // A queued rebound frame cannot write over a newly selected movement.
+    {
+        const f = fixture(); const rebound = f.interaction._animateModelToPosition(f.scene.position.clone(), new THREE.Vector3(2, 0, 0));
+        f.select(new THREE.Vector3(0, 5, 0)); await flush();
+        const position = f.scene.position.clone();
+        for (const [id, callback] of [...frames]) { frames.delete(id); callback(360); }
+        assert.equal(await rebound, false); assert.ok(f.scene.position.equals(position));
+        assert.equal(f.interaction.isMoving, true);
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+
     // Preference snapshots already accepted for saving survive model switches;
     // request ordering and snapshot isolation use the real core in the dedicated
     // vrm_preferences_persistence.test.cjs regression suite.

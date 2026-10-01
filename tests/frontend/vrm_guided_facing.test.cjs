@@ -77,6 +77,19 @@ for (const version of ['0.0', '1.0']) {
         }
     }
 }
+// Module loaders continue after a failed orientation script; retain safe parity.
+const helper = context.window.VRMOrientationDetector;
+for (const missing of [undefined, {}]) {
+    context.window.VRMOrientationDetector = missing;
+    for (const version of ['0.0', '1.0', 'unknown']) {
+        for (const flipped of [false, true]) {
+            const vrm = { meta: { metaVersion: '1.0' }, userData: { orientationFlipped: flipped } };
+            const interaction = new Interaction({ currentModel: { vrm }, core: { vrmVersion: version } });
+            assert.equal(interaction._getMovementFacingProfile().yawOffset, helper.getMovementFacingProfile(vrm, version).yawOffset);
+        }
+    }
+}
+context.window.VRMOrientationDetector = helper;
 console.log('VRM guided movement facing: OK');
 
 // Real frame intervals must also work when the previous trip left the model

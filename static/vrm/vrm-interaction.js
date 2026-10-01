@@ -355,8 +355,17 @@ class VRMInteraction {
     }
 
     _getMovementFacingProfile() {
-        return window.VRMOrientationDetector.getMovementFacingProfile(
-            this.manager?.currentModel?.vrm, this.manager?.core?.vrmVersion);
+        const vrm = this.manager?.currentModel?.vrm;
+        const version = this.manager?.core?.vrmVersion;
+        const detector = window.VRMOrientationDetector;
+        if (typeof detector?.getMovementFacingProfile === 'function') {
+            return detector.getMovementFacingProfile(vrm, version);
+        }
+        // 脚本加载器允许单个模块失败后继续；仅在 detector 缺失时保底。
+        const meta = String(vrm?.meta?.metaVersion || '');
+        const isVrm10 = version === '0.0' || version === '1.0'
+            ? version === '1.0' : meta === '1' || meta.startsWith('1.');
+        return { yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI };
     }
 
     _getCameraFacingRotationY(scene) {
@@ -1105,6 +1114,8 @@ class VRMInteraction {
     async _endDrag() {
         if (!this.isDragging) return;
         const endedModel = this.manager.currentModel;
+        const interactionToken = { value: this.movementToken };
+        const stillOwnsInteraction = () => interactionToken.value === this.movementToken && !this.isDragging;
         // 异步收尾期间若更换模型，保存旧快照并停止操作当前场景。
         const stoppedSnapshot = this._captureInteractionPreferences() || null;
         // 此时模型、相机和视口仍匹配，提前计算回弹目标；即使收尾被模型
@@ -1129,12 +1140,14 @@ class VRMInteraction {
         // 多屏幕支持：仅对平移拖拽检测是否移出当前屏幕并切换到新屏幕
         // 与 Live2D 行为对齐：若发生切屏，_checkAndSwitchDisplay 内部负责回弹和保存
         const displaySwitched = wasPanDrag
-            ? await this._checkAndSwitchDisplay()
+            ? await this._checkAndSwitchDisplay({ interactionToken })
             : false;
         if (this.manager.currentModel !== endedModel) {
             await this._savePositionAfterInteraction(stoppedSnapshot);
             return;
         }
+
+        if (!stillOwnsInteraction()) return;
 
         if (!displaySwitched) {
             if (wasPanDrag) {
@@ -1144,13 +1157,17 @@ class VRMInteraction {
                     return;
                 }
             }
+            if (!stillOwnsInteraction()) return;
             // 拖拽结束后：若超出屏幕范围，执行回弹
-            await this._snapModelIntoScreen({ animate: true });
+            const snapping = this._snapModelIntoScreen({ animate: true });
+            interactionToken.value = this.movementToken;
+            await snapping;
             if (this.manager.currentModel !== endedModel) {
                 await this._savePositionAfterInteraction(stoppedSnapshot);
                 return;
             }
 
+            if (!stillOwnsInteraction()) return;
             // 拖动结束后保存位置（包含回弹后的位置）
             await this._savePositionAfterInteraction(this._captureInteractionPreferences(stoppedSnapshot?.displayInfo));
         }
@@ -1170,11 +1187,11 @@ class VRMInteraction {
         // 不再修改 pointerEvents，改用逻辑拦截
         // 这样锁定时虽然不能移动/缩放，但依然可以点中模型弹出菜单
 
-        if (locked && wasDragging) void this._endDrag();
         if (locked) {
             const interrupted = this._cancelGuidedMovement();
             // 锁定会吞掉拖拽结束事件，补存拖拽或引导移动被打断的姿态。
-            if (interrupted && !wasDragging) void this._savePositionAfterInteraction();
+            if (wasDragging) void this._endDrag();
+            else if (interrupted) void this._savePositionAfterInteraction();
         }
     }
 
@@ -1467,11 +1484,19 @@ class VRMInteraction {
         const startTime = performance.now();
         const scene = this.manager.currentModel.scene;
 
+        const interactionToken = this.movementToken;
         this._isSnappingModel = true;
 
         return new Promise((resolve) => {
             this._snapResolve = resolve;
             const animate = (currentTime) => {
+                if (this.manager.currentModel?.scene !== scene || interactionToken !== this.movementToken) {
+                    this._isSnappingModel = false;
+                    this._snapCancelFrame = null;
+                    this._snapResolve = null;
+                    resolve(false);
+                    return;
+                }
                 const elapsed = currentTime - startTime;
                 const progress = Math.min(elapsed / duration, 1);
                 const eased = easingFn(progress);
@@ -1533,7 +1558,7 @@ class VRMInteraction {
      * 多屏幕支持：检测模型是否移出当前屏幕并切换到新屏幕
      * 返回 true 表示发生了切屏（内部已保存位置），返回 false 表示未切屏
      */
-    async _checkAndSwitchDisplay() {
+    async _checkAndSwitchDisplay({ interactionToken = { value: this.movementToken } } = {}) {
         // 仅在 Electron 环境下执行
         if (!window.electronScreen || !window.electronScreen.moveWindowToDisplay) {
             return false;
@@ -1546,6 +1571,7 @@ class VRMInteraction {
         const renderer = this.manager.renderer;
         if (!scene || !vrm || !camera || !renderer) return false;
 
+        const stillOwnsInteraction = () => interactionToken.value === this.movementToken && !this.isDragging;
         const recordDisplaySwitchMiss = () => {
             if (window.NekoAvatarMultiScreenDragHint &&
                 typeof window.NekoAvatarMultiScreenDragHint.recordDisplaySwitchMiss === 'function') {
@@ -1614,7 +1640,7 @@ class VRMInteraction {
             // 只要用户把模型中心拖出当前窗口但未完成切屏，就记一次 miss。
             displaySwitchAttempted = true;
             const displays = await window.electronScreen.getAllDisplays();
-            if (this.manager.currentModel?.scene !== scene) return false;
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
             if (!displays || displays.length <= 1) {
                 recordDisplaySwitchMiss();
                 return false;
@@ -1622,7 +1648,7 @@ class VRMInteraction {
 
             // 3. 计算模型中心在整个桌面（screen）上的绝对坐标
             const currentDisplay = await window.electronScreen.getCurrentDisplay();
-            if (this.manager.currentModel?.scene !== scene) return false;
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
             if (!currentDisplay) {
                 console.warn('[VRM] 无法获取当前显示器信息');
                 recordDisplaySwitchMiss();
@@ -1683,7 +1709,7 @@ class VRMInteraction {
             console.log('[VRM] 检测到模型移出当前屏幕，准备切换到屏幕:', targetDisplay.id);
 
             const result = await window.electronScreen.moveWindowToDisplay(switchScreenX, switchScreenY);
-            if (this.manager.currentModel?.scene !== scene) return false;
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
 
             if (!(result && result.success && !result.sameDisplay)) {
                 recordDisplaySwitchMiss();
@@ -1701,14 +1727,17 @@ class VRMInteraction {
 
             // 6. 等待一帧让新窗口尺寸生效，再执行回弹与保存
             await new Promise(resolve => requestAnimationFrame(resolve));
-            if (this.manager.currentModel?.scene !== scene) return false;
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
             this._moveModelCenterToWindowPoint(desiredModelCenterX, desiredModelCenterY);
+            interactionToken.value = this.movementToken;
 
             if (useDragPointerForSwitch) {
                 await this._savePositionAfterInteraction();
             } else {
-                await this._snapModelIntoScreen({ animate: true });
-                if (this.manager.currentModel?.scene !== scene) return false;
+                const snapping = this._snapModelIntoScreen({ animate: true });
+                interactionToken.value = this.movementToken;
+                await snapping;
+                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
                 await this._savePositionAfterInteraction();
             }
             if (window.NekoAvatarMultiScreenDragHint &&
