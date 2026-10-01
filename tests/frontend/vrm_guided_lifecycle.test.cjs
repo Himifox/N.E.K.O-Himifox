@@ -471,6 +471,18 @@ const vm = require('node:vm');
         f.interaction.cleanupDragAndZoom(); await flush();
     }
 
+
+    // IME composing F events must remain available to the input method.
+    for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
+        const f = fixture(); let prevented = false;
+        f.interaction._movementKeyDownHandler({ key: 'f', ...composing, preventDefault() { prevented = true; } });
+        assert.equal(f.interaction.targetMode, false);
+        assert.equal(prevented, false);
+        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
+        assert.equal(f.interaction.targetMode, true, 'ordinary F still selects a target');
+        f.interaction.cleanupDragAndZoom();
+    }
+
     // Preference snapshots already accepted for saving survive model switches;
     // request ordering and snapshot isolation use the real core in the dedicated
     // vrm_preferences_persistence.test.cjs regression suite.

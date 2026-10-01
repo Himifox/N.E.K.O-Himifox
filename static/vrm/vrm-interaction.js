@@ -711,6 +711,7 @@ class VRMInteraction {
         this.cleanupDragAndZoom();
 
         this._movementKeyDownHandler = (e) => {
+            if (e.isComposing || e.keyCode === 229) return;
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (this._isEditableTarget(e.target)) return;
             if (String(e.key || '').toLowerCase() !== 'f') return;
