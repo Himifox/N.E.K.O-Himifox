@@ -409,26 +409,7 @@ class StreamingMixin:
         if message.get("input_type") != "text" or not isinstance(message.get("data"), str):
             await self._process_stream_data_internal(message)
             return
-        self._reply_setup_depth = getattr(self, "_reply_setup_depth", 0) + 1
-        cancelled = False
-        try:
-            await self._process_stream_data_internal(message)
-        except asyncio.CancelledError:
-            # Torn down (a session end resets the debt): start nothing.
-            cancelled = True
-            raise
-        finally:
-            self._reply_setup_depth -= 1
-            if not cancelled:
-                # Never let the settle replace an error the input raised.
-                try:
-                    await self._settle_owed_turn_wrap_up()
-                except Exception as settle_error:
-                    logger.warning(
-                        "[%s] owed turn wrap-up after a typed input failed: %s",
-                        self.lanlan_name,
-                        settle_error,
-                    )
+        await self._with_owed_wrap_up_held(self._process_stream_data_internal(message))
 
     async def _process_stream_data_internal(self, message: dict):
         """Internal method: the actual stream_data processing logic"""
@@ -842,6 +823,7 @@ class StreamingMixin:
                             "thinking_on": _focus_thinking,
                             "response_discarded_callback": response_discarded_callback,
                             "response_done_callback": response_done_callback,
+                            "reply_owner": reply_turn,
                         }
                         def _mark_cb_turn_committed() -> None:
                             nonlocal _cb_turn_committed

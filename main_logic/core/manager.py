@@ -483,6 +483,9 @@ class LLMSessionManager(
         # 文本判断是否问问号 → 触发 unfinished_thread 机制（5 分钟内允许至多 2
         # 次跟进）；topic sink 独立消费同一 turn，不和 activity tracker 耦合。
         self._current_ai_turn_text: str = ''
+        # A discard emptied that buffer after its text had already reached
+        # cross_server, which stays in that assistant turn until a turn end.
+        self._discarded_turn_open: bool = False
         self._recent_ai_voice_echo_text: str = ''
         self._recent_ai_voice_echo_at: float = 0.0
         self._pending_ai_voice_echo_text: str = ''

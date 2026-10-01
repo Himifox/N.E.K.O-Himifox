@@ -302,6 +302,13 @@ class _ReplyTurn:
     session: Any = None
 
 
+def _taken_over_reply_turn(kind) -> _ReplyTurn | None:
+    """The snapshot a taken-over Offline reply was handed over with
+    (``InterruptedReply.owner``), or None for an unbound reply."""
+    owner = getattr(kind, "owner", None)
+    return owner if isinstance(owner, _ReplyTurn) else None
+
+
 def _purge_closed_tool_calls(history: list, *, start: int = 0) -> int:
     """Remove every CLOSED tool-call pair from the conversation history: an
     assistant message (role=assistant, carrying tool_calls) plus the tool-result

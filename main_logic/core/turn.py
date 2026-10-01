@@ -39,6 +39,7 @@ import numpy as np
 from ._shared import (
     _REQUEST_ID_UNSET,
     _ReplyTurn,
+    _taken_over_reply_turn,
     _MAGIC_COMMAND_IMAGE_DROP_REQUEST_MAX,
     _VOICE_ECHO_LOOKBACK_SECONDS,
     _VOICE_ECHO_LOOKBACK_CHARS,
@@ -329,6 +330,7 @@ class TurnMixin:
         """
         self._note_ai_turn(text=self._current_ai_turn_text or None)
         self._current_ai_turn_text = ''
+        self._discarded_turn_open = False
 
     async def _interrupt_offline_reply(self, session) -> bool:
         """Stop ``session``'s reply and close it as its own AI turn.
@@ -358,12 +360,16 @@ class TurnMixin:
         # A claimed completion belongs to a reply that streamed to the end;
         # a cancelled one was cut mid-reply (OmniOfflineClient.InterruptedReply).
         finished = getattr(kind, "finished", False) is True
-        kind = str(kind) if isinstance(kind, str) else "response"
-        request_id = (
-            getattr(self, '_active_text_request_id', None)
-            if kind != "agent_callback" else None
-        )
-        turn_end_msg = self._close_interrupted_offline_turn(kind)
+        owner = _taken_over_reply_turn(kind)
+        taken_over = kind if isinstance(kind, str) else "response"
+        kind = str(taken_over)
+        if kind == "agent_callback":
+            request_id = None
+        elif owner is not None:
+            request_id = owner.request_id
+        else:
+            request_id = getattr(self, '_active_text_request_id', None)
+        turn_end_msg = self._close_interrupted_offline_turn(taken_over)
         if kind == "response":
             self._turn_wrap_up_owed = True
         if finished and isinstance(turn_end_msg, dict):
@@ -400,11 +406,12 @@ class TurnMixin:
         """Pay an interrupted reply's owed wrap-up once nothing else will.
 
         Runs when the offline session reports it went idle
-        (``_on_offline_session_idle``), when a typed input's handling ends
-        (``_process_stream_input``), and on the command paths that start no
-        reply. Left owed while a typed input is still being handled (its
-        reply's completion pays it, and a wrap-up between the interruption
-        and that reply could start a final swap right before it), and while
+        (``_on_offline_session_idle``), when a typed input or a mini-game
+        command has been handled (``_with_owed_wrap_up_held``), and on the
+        command paths that start no reply. Left owed while one of those is
+        still being handled (a typed input's reply completion pays it, and a
+        wrap-up between the interruption and that reply could start a final
+        swap right before it; a command seals its own turn first), and while
         the offline session is not idle: a reply live, guard-paused, waiting
         on its completion, or a cancelled one still finishing its task (a
         tool handler, its history commit). The session's idle notification
@@ -418,6 +425,37 @@ class TurnMixin:
         if isinstance(session, OmniOfflineClient) and not session.is_idle():
             return
         await self._finalize_turn_after_emit()
+
+    async def _with_owed_wrap_up_held(self, work):
+        """Await ``work`` holding an owed wrap-up, then settle it.
+
+        For input handling that interrupts the offline reply and then does
+        its own work over several awaits: a typed input setting up its reply
+        (``_process_stream_input``), a mini-game command sealing its own turn
+        (``_maybe_handle_mini_game_magic_command``). The interrupted reply's
+        task can end in that window, and its idle notification must not pay
+        the wrap-up then. Settled once ``work`` is done, unless it was
+        cancelled (a torn-down session resets the debt); a failing settle
+        never replaces an error ``work`` raised.
+        """
+        self._reply_setup_depth = getattr(self, "_reply_setup_depth", 0) + 1
+        cancelled = False
+        try:
+            return await work
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            self._reply_setup_depth -= 1
+            if not cancelled:
+                try:
+                    await self._settle_owed_turn_wrap_up()
+                except Exception as settle_error:
+                    logger.warning(
+                        "[%s] owed turn wrap-up after an input failed: %s",
+                        self.lanlan_name,
+                        settle_error,
+                    )
 
     def _on_offline_session_idle(self) -> None:
         """``OmniOfflineClient.on_idle``: its last reply call returned.
@@ -434,7 +472,14 @@ class TurnMixin:
         """Close an offline reply whose close was handed over to the caller.
 
         ``kind`` is what ``handle_interruption()`` (or a displacing begin)
-        reported: the turn end the skipped completion would have sent.
+        reported: the turn end the skipped completion would have sent. When
+        it carries the reply's own snapshot (``InterruptedReply.owner``, the
+        ``_ReplyTurn`` Core handed over with the reply), the close uses that
+        reply's request id and meta, never the shared fields, which by now
+        may hold another reply's (a newer typed input's id, or the meta a
+        retired client's parked avatar reply staged), and releases the shared
+        ones only while they still hold its own. Only unbound replies
+        (independent-ASR voice, proactive) fall back to the shared fields.
         "agent_callback" is a proactive reply, closed with ``turn end
         agent_callback`` as ``handle_proactive_complete`` would, so
         cross_server does not send an analyze request for it. Without a turn
@@ -455,23 +500,37 @@ class TurnMixin:
         and TTS are the caller's business. Nothing said since the last turn
         end means no turn end to send, but the request id and the turn meta
         are taken either way, so neither can ride the next turn's turn end.
+        A discard that emptied the AI-turn buffer did not end cross_server's
+        turn (``_discarded_turn_open``), so that still counts as said.
         Returns the turn end it queued, or None.
         """
+        owner = _taken_over_reply_turn(kind)
+        kind = str(kind) if isinstance(kind, str) else "response"
+        said = bool(self._current_ai_turn_text) or getattr(
+            self, "_discarded_turn_open", False
+        )
         if kind == "agent_callback":
-            if not self._current_ai_turn_text:
+            if not said:
                 return None
             self._flush_ai_turn_text_to_tracker()
             turn_end_msg: dict = {'type': 'system', 'data': 'turn end agent_callback'}
             self.sync_message_queue.put(turn_end_msg)
             return turn_end_msg
         request_id = None
-        if take_request_id:
+        if owner is not None:
+            request_id = owner.request_id
+            if request_id and self._active_text_request_id == request_id:
+                self._active_text_request_id = None
+        elif take_request_id:
             request_id = getattr(self, '_active_text_request_id', None)
             self._active_text_request_id = None
-        if not self._current_ai_turn_text:
-            self._pending_turn_meta = None
+        if not said:
+            if owner is None or (
+                owner.meta is not None and self._pending_turn_meta is owner.meta
+            ):
+                self._pending_turn_meta = None
             return None
-        turn_end_msg = self._queue_turn_end(request_id)
+        turn_end_msg = self._queue_turn_end(request_id, reply_turn=owner)
         self._flush_ai_turn_text_to_tracker()
         return turn_end_msg
 
@@ -481,18 +540,35 @@ class TurnMixin:
 
         Called synchronously from the new reply's begin, before it emits
         anything, so the AI-turn buffer holds only the displaced reply's
-        text. Closed like an interrupted one, except the text request id is
-        left alone: it is set before the new text reply starts, so it may
-        already be that turn's. (A displaced text turn's own id is either
-        already overwritten by then or retired by the next reply's turn end.)
-        Any pending turn meta is the displaced reply's: ``prompt_ephemeral``
-        never displaces, so only a user reply displaces an avatar one. A
+        text. Closed like an interrupted one. A bound reply (its snapshot
+        rides on ``kind``) is closed with its own request id and meta; an
+        unbound one leaves the shared text request id alone: it is set before
+        the new text reply starts, so it may already be that turn's. A
         displaced "response" owes its wrap-up, as an interrupted one does.
+
+        The frontend gets what the skipped completion would have released,
+        as ``_interrupt_offline_reply`` does. A reply that had streamed to the
+        end and was only waiting on its completion (``kind.finished``, a
+        claim) gets the frontend copy of its turn end: the frontend's current
+        bubble is still its own (the new reply has emitted nothing yet), so it
+        is sealed there. A bound reply cut mid-stream gets ``turn abandoned``
+        for its request instead. This callback is sync, so the sends run in
+        tasks; they are created before the new reply has even sent its
+        provider request, so they reach the WebSocket before that reply's
+        first chunk can. No TTS done: the new reply streams on the current
+        speech id.
         """
-        kind = str(kind) if isinstance(kind, str) else "response"
-        self._close_interrupted_offline_turn(kind, take_request_id=False)
+        owner = _taken_over_reply_turn(kind)
+        finished = getattr(kind, "finished", False) is True
+        taken_over = kind if isinstance(kind, str) else "response"
+        kind = str(taken_over)
+        turn_end_msg = self._close_interrupted_offline_turn(taken_over, take_request_id=False)
         if kind == "response":
             self._turn_wrap_up_owed = True
+        if finished and isinstance(turn_end_msg, dict):
+            self._fire_task(self._send_turn_end_to_frontend(turn_end_msg))
+        elif kind == "response" and owner is not None and owner.request_id:
+            self._fire_task(self._send_turn_abandoned(owner.request_id))
 
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.
@@ -990,6 +1066,11 @@ class TurnMixin:
         # 作为各自独立的后台任务分发，旧请求 A 的迟到 discard 可以落在新请求 B
         # 已经开始 publish 之后，无门控地清会连 B 的前缀一起抹掉。
         if may_clear_shared_output():
+            if self._current_ai_turn_text:
+                # That text already reached cross_server, whose assistant turn
+                # stays open until a turn end: should this reply's close be
+                # taken over now, the close must still send one.
+                self._discarded_turn_open = True
             self._current_ai_turn_text = ''
             await self._clear_tts_pipeline()
 
@@ -1028,6 +1109,10 @@ class TurnMixin:
             and may_clear_shared_output()
         )
         if recovery_owns_shared_state:
+            # The recovered body goes to cross_server untracked (see
+            # _track_recovery_ai_turn_text): an interruption cutting the steps
+            # below must still end that turn there.
+            self._discarded_turn_open = True
             try:
                 if _truncated_text is not None:
                     body_text = _truncated_text
@@ -1524,6 +1609,16 @@ class TurnMixin:
         game_type = self._normalize_mini_game_magic_command(data)
         if not game_type:
             return False
+        # No reply follows a command: the owed wrap-up of the reply it
+        # interrupts is paid once the command's own turn is sealed, not when
+        # that reply's task happens to end in one of the command's awaits.
+        await self._with_owed_wrap_up_held(
+            self._run_mini_game_magic_command(message, data, game_type)
+        )
+        return True
+
+    async def _run_mini_game_magic_command(self, message: dict, data: str, game_type: str) -> None:
+        """Interrupt the offline reply, seal the command's turn, launch the game."""
         request_id = message.get("request_id")
         # Drop only this command's own attachments: those it already staged (the
         # composer sends images before the text) and any arriving later.
@@ -1573,15 +1668,11 @@ class TurnMixin:
         )
         await self._emit_agent_callback_turn_end(request_id)
         await self._push_mini_game_magic_command_launch(game_type)
-        # No reply follows a command: pay an interrupted reply's owed wrap-up
-        # now that the command's own turn is sealed.
-        await self._settle_owed_turn_wrap_up()
         logger.info(
             "[%s] text input sent mini-game magic command: %s",
             self.lanlan_name,
             game_type,
         )
-        return True
 
     async def _push_mini_game_magic_command_launch(self, game_type: str) -> bool:
         """Ask the frontend to open ``game_type`` through the invite launch event.

@@ -25,6 +25,7 @@ from main_logic.proactive_delivery import (
     TURN_ATTACHED_IMAGE_MAX_TOTAL_BYTES,
     fit_images_to_turn_budget,
 )
+from main_logic.session_state import session_reply_in_progress
 from utils.llm_client import (
     peek_dialog_slop_lang,
     reset_dialog_slop_lang,
@@ -35,6 +36,7 @@ from utils.slop_filter import resolve_dialog_slop_lang
 from ._media import _FRAME_SOURCE_PROACTIVE
 from ._shared import (
     AIMessage,
+    Any,
     Awaitable,
     Callable,
     HumanMessage,
@@ -100,14 +102,20 @@ class InterruptedReply(str):
     not cut: it streamed to the end and nothing newer has streamed since, so
     the frontend's current bubble is still its own and may be sealed with
     the normal turn end. A cancelled (live or guard-paused) reply is not
-    finished. A ``str``, so every ``== "response"`` / truthiness check holds.
+    finished. ``owner`` is the opaque token the caller handed to the reply
+    (``reply_owner``), so its closer closes that reply rather than whatever
+    the caller's shared per-turn state holds by then; None when the reply was
+    started without one. A ``str``, so every ``== "response"`` / truthiness
+    check holds.
     """
 
     finished: bool
+    owner: Any
 
-    def __new__(cls, kind: str, *, finished: bool = False):
+    def __new__(cls, kind: str, *, finished: bool = False, owner: Any = None):
         obj = super().__new__(cls, kind or "response")
         obj.finished = bool(finished)
+        obj.owner = owner
         return obj
 
 
@@ -199,7 +207,9 @@ class _LifecycleMixin:
             )
             return False
 
-    def _begin_response_generation(self, completion_kind: str = "response") -> int:
+    def _begin_response_generation(
+        self, completion_kind: str = "response", owner: Any = None,
+    ) -> int:
         """Start a generation. ``completion_kind`` names the turn end its
         completion sends ("response", or "agent_callback" for a proactive
         reply completed by ``on_proactive_done``); an interruption reports it
@@ -222,6 +232,7 @@ class _LifecycleMixin:
         self._response_generation = generation
         self._active_response_generation = generation
         self._active_completion_kind = completion_kind
+        self._active_reply_owner = owner
         self._is_responding = True
         if displaced:
             notify = getattr(self, "on_response_displaced", None)
@@ -244,7 +255,8 @@ class _LifecycleMixin:
         if live is not None:
             self._record_handed_over(live)
             return InterruptedReply(
-                getattr(self, "_active_completion_kind", "response") or "response"
+                getattr(self, "_active_completion_kind", "response") or "response",
+                owner=getattr(self, "_active_reply_owner", None),
             )
         return self._claim_pending_completion()
 
@@ -264,19 +276,27 @@ class _LifecycleMixin:
         claimed = InterruptedReply(
             getattr(self, "_completion_pending_kind", "response") or "response",
             finished=getattr(self, "_completion_pending_finished", True),
+            owner=getattr(self, "_completion_pending_owner", None),
         )
         self._completion_pending_generation = None
         if getattr(self, "_active_response_generation", None) is None:
             self._is_responding = False
         return claimed
 
+    def has_reply_in_progress(self) -> bool:
+        """A reply is live, guard-paused or waiting on its completion.
+
+        What a proactive turn must not start over: ``prompt_ephemeral``
+        declines on it, and the core's proactive gates read the same check
+        (``session_reply_in_progress``) before they rotate the speech id.
+        Narrower than ``is_idle``, which also counts reply calls that are
+        only still returning."""
+        return session_reply_in_progress(self)
+
     def _declines_over_another_reply(self, completion_mode: str) -> bool:
         """Whether a ``prompt_ephemeral`` must not start: another reply is
         live, guard-paused or waiting on its completion."""
-        if (
-            getattr(self, "_active_response_generation", None) is None
-            and getattr(self, "_completion_pending_generation", None) is None
-        ):
+        if not self.has_reply_in_progress():
             return False
         logger.info(
             "prompt_ephemeral: another reply is still in progress, not starting "
@@ -291,9 +311,7 @@ class _LifecycleMixin:
         pre-generation awaits, or a cancelled one finishing its tool handler
         and its history commit after the interruption let go of it."""
         return not (
-            getattr(self, "_is_responding", False)
-            or getattr(self, "_active_response_generation", None) is not None
-            or getattr(self, "_completion_pending_generation", None) is not None
+            self.has_reply_in_progress()
             or getattr(self, "_reply_calls_in_flight", 0)
         )
 
@@ -333,6 +351,7 @@ class _LifecycleMixin:
 
     def _mark_completion_pending(
         self, generation: int, kind: str = "response", *, finished: bool = True,
+        owner: Any = None,
     ) -> None:
         """A finished generation whose completion callback has not run yet.
 
@@ -349,6 +368,7 @@ class _LifecycleMixin:
         self._completion_pending_generation = generation
         self._completion_pending_kind = kind
         self._completion_pending_finished = finished
+        self._completion_pending_owner = owner
         self._is_responding = True
 
     def _take_completion(self, generation: int) -> bool:
@@ -452,6 +472,7 @@ class _LifecycleMixin:
         on_committed: Optional[Callable[[], None]] = None,
         on_committed_text: Optional[Callable[[str], None]] = None,
         response_done_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        reply_owner: Any = None,
     ) -> bool:
         """Send a fire-and-forget instruction to the LLM and stream the response.
 
@@ -721,7 +742,7 @@ class _LifecycleMixin:
             if completion_mode != "response" and getattr(self, "on_proactive_done", None)
             else "response"
         )
-        response_generation = self._begin_response_generation(_completion_kind)
+        response_generation = self._begin_response_generation(_completion_kind, reply_owner)
 
         try:
             set_call_type("proactive")
@@ -1023,6 +1044,7 @@ class _LifecycleMixin:
                     response_generation,
                     _completion_kind,
                     finished=not response_cancelled,
+                    owner=reply_owner,
                 )
             try:
                 await self._notify_reasoning_done(_reasoning_owner_seq)
@@ -1162,7 +1184,8 @@ class _LifecycleMixin:
             # Whatever rode along with a claim, a cancelled live reply was cut
             # mid-stream: not finished, never sealed as one.
             return InterruptedReply(
-                getattr(self, "_active_completion_kind", "response") or "response"
+                getattr(self, "_active_completion_kind", "response") or "response",
+                owner=getattr(self, "_active_reply_owner", None),
             )
         return claimed
 

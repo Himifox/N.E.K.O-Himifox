@@ -24,6 +24,7 @@ import pytest
 
 import main_logic.core as core_module
 import main_logic.omni_offline_client._streaming as offline_streaming
+from main_logic.omni_offline_client._lifecycle import InterruptedReply
 from main_logic.tool_calling import ToolDefinition, ToolResult
 from tests.unit.test_avatar_interaction_payload_contract import (
     _builtin_runtime,
@@ -440,6 +441,86 @@ async def test_a_reply_ends_its_turn_without_a_meta_it_did_not_stage(ending):
     assert mgr._pending_turn_meta is avatar_meta
 
 
+@pytest.mark.parametrize("ending", ["interrupted", "claimed", "displaced"])
+async def test_a_taken_over_reply_ends_its_turn_without_a_meta_it_did_not_stage(ending):
+    """The same holds when the reply's close is taken over (an interruption,
+    a claim of its completion window, a displacing begin): the closer gets
+    the reply's own snapshot back (``InterruptedReply.owner``) and closes the
+    turn with that, not with the shared fields."""
+    mgr = _core_manager()
+    mgr._fire_task = asyncio.ensure_future
+    avatar_meta = {"kind": "avatar_interaction", "interaction_id": "i-1"}
+    mgr._pending_turn_meta = avatar_meta
+    reply_turn = mgr._begin_reply_turn(speech_id=mgr.current_speech_id, request_id="req-B")
+    reply_turn.session = mgr.session
+    mgr._active_text_request_id = "req-B"
+    mgr._current_ai_turn_text = "B说到一半"
+    taken_over = InterruptedReply("response", finished=ending == "claimed", owner=reply_turn)
+
+    if ending == "displaced":
+        mgr._close_displaced_offline_turn(taken_over)
+        await asyncio.sleep(0)
+    else:
+        session = SimpleNamespace(handle_interruption=AsyncMock(return_value=taken_over))
+        assert await mgr._interrupt_offline_reply(session)
+
+    assert [("meta" in m, m.get("request_id")) for m in _sync(mgr, "turn end")] == [(False, "req-B")]
+    assert mgr._pending_turn_meta is avatar_meta
+    assert mgr._active_text_request_id is None
+
+
+async def test_a_taken_over_text_turn_never_carries_a_retired_avatar_replys_meta():
+    """An avatar reply parked in a tool on a client end_session retired keeps
+    its meta staged until it unwinds. The user's text turn A on the new client,
+    interrupted by B, is closed from its own snapshot: cross_server must not
+    file A as an avatar interaction (its isolation path drops A's reply from
+    ordinary memory and caches it under the avatar's memory note)."""
+    tool, tool_entered, tool_release = _parked_tool()
+    old = _client([[_text("摸摸头"), _tool_call("c1")]], tool=tool)
+    mgr = _observe(_make_callback_media_manager(old))
+    _wire(mgr, old)
+    meta = {"kind": "avatar_interaction", "interaction_id": "i-1", "memory_note": "poke"}
+    # greeting.handle_avatar_interaction, around prompt_ephemeral
+    mgr._pending_turn_meta = meta
+    avatar_turn = mgr._begin_reply_turn(speech_id=mgr.current_speech_id, meta=meta)
+    avatar_turn.session = old
+
+    async def avatar_done():
+        await mgr.handle_response_complete(reply_turn=avatar_turn)
+
+    avatar = asyncio.create_task(old.prompt_ephemeral(
+        "avatar", completion_mode="response", persist_response=False,
+        response_done_callback=avatar_done,
+    ))
+    await asyncio.wait_for(tool_entered.wait(), 5)
+    await old.close()  # end_session: the avatar reply stays parked, its meta staged
+
+    a_speaking, a_release = asyncio.Event(), asyncio.Event()
+
+    async def park_a():
+        a_speaking.set()
+        await a_release.wait()
+
+    new = _wire(mgr, _client([
+        [_text("A说到一半"), park_a, _text("A后半"), _text("", "stop")],
+        [_text("B的回答"), _text("", "stop")],
+    ]))
+    new.on_response_displaced = mgr._close_displaced_offline_turn
+    mgr.session = new
+    turn_a = asyncio.create_task(_text_turn(mgr, "第一句", "req-A"))
+    await asyncio.wait_for(a_speaking.wait(), 5)
+    turn_b = asyncio.create_task(_text_turn(mgr, "第二句", "req-B"))  # interrupts A
+    a_release.set()
+    await asyncio.wait_for(asyncio.gather(turn_a, turn_b), 5)
+    tool_release.set()
+    await asyncio.wait_for(avatar, 5)  # stands down: the host moved on
+
+    assert [(m.get("request_id"), "meta" in m) for m in _sync(mgr, "turn end")] == [
+        ("req-A", False), ("req-B", False),
+    ]
+    assert mgr._pending_turn_meta is meta  # left to the avatar path to drop
+
+
 @pytest.mark.parametrize("retired", [True, False])
 async def test_an_avatar_reply_binds_its_completion_to_its_own_turn(monkeypatch, retired):
     """The avatar path hands prompt_ephemeral a completion bound to its reply.
@@ -613,3 +694,32 @@ async def test_a_stale_reply_skips_the_takeover_cleanup(current):
     assert mgr._clear_tts_pipeline.await_count == (1 if current else 0)
     assert mgr._current_ai_turn_text == ("" if current else "镜像台词")
     assert mgr._active_text_request_id == (None if current else "req-mirror")
+
+
+async def test_the_avatar_path_hands_its_own_snapshot_to_the_client(monkeypatch):
+    """The avatar reply's snapshot rides with its generation (reply_owner), so
+    whoever takes its close over closes it with its own meta and its own
+    (absent) request id, never a typed reply's id from the shared field."""
+    runtime = _builtin_runtime(monkeypatch)
+    runtime._takeover_active = False
+    runtime.use_tts = False
+    runtime.tts_thread = None
+    runtime.sync_message_queue = _FakeQueue()
+    runtime._current_ai_turn_text = ""
+    runtime._active_text_request_id = "req-B"  # a typed input still in setup
+    runtime._open_reply_turn = None
+    _observe(runtime)
+    seen = {}
+
+    async def prompt_ephemeral(_instruction, *, reply_owner=None, **_kwargs):
+        seen["owner"] = reply_owner
+        seen["open"] = runtime._open_reply_turn
+        return True
+
+    runtime.session.prompt_ephemeral = prompt_ephemeral
+    await runtime.handle_avatar_interaction(_fist_payload("fist-owner"))
+
+    owner = seen["owner"]
+    assert owner is not None and owner is seen["open"]
+    assert owner.request_id is None
+    assert owner.meta["kind"] == "avatar_interaction"

@@ -623,6 +623,7 @@ class _StreamingMixin:
             Callable[[str, int, int, bool, Optional[str]], Awaitable[None]]
         ] = None,
         response_done_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        reply_owner: Any = None,
     ) -> None:
         """
         Send a text message to the API and stream the response.
@@ -669,6 +670,11 @@ class _StreamingMixin:
         in place of ``on_response_done``. It still runs whenever the session
         callback would, including for a reply cut by ``close()``; the caller
         decides what a late completion may still touch.
+
+        ``reply_owner`` is an opaque token for the caller's own record of this
+        reply. When the reply's close is taken over (an interruption, or a
+        displacing begin), ``InterruptedReply.owner`` hands it back, so the
+        caller closes this reply and not whatever its shared state holds then.
 
         ``system_prefix_images`` binds passive callback media to the same
         invocation as ``system_prefix``.  Unlike ``_pending_images``, this list
@@ -1035,7 +1041,7 @@ class _StreamingMixin:
                 self.max_response_length, summary_mode=True,
             )
 
-        response_generation = self._begin_response_generation()
+        response_generation = self._begin_response_generation(owner=reply_owner)
         # 这一轮的工具图槽位，跨 attempt 存活。见 _astream_visible_with_tools
         # 里的说明：由内层 finally 释放的话，一次可重试的失败会把像素换成占位
         # 符，而重试用的是同一份历史。
@@ -2130,7 +2136,7 @@ class _StreamingMixin:
             # unrelated interruption to claim. A turn taken over mid-reply
             # never marks, so its take reports it as taken over too.
             if not interrupter_owned:
-                self._mark_completion_pending(response_generation)
+                self._mark_completion_pending(response_generation, owner=reply_owner)
             try:
                 # 整轮判定：所有重试都没产生过任何文本（包括 pre-tool）才算 LLM_NO_RESPONSE。
                 # 用 final-segment 会让"tool 轮跑完了但模型没出 final 文本"的场景被错报。

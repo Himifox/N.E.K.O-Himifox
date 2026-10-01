@@ -22,7 +22,7 @@ import asyncio
 import time
 from main_logic.omni_realtime_client import OmniRealtimeClient
 from main_logic.omni_offline_client import OmniOfflineClient, _strip_nonverbal_directives
-from main_logic.session_state import SessionEvent
+from main_logic.session_state import SessionEvent, session_reply_in_progress
 from main_logic.startup_greeting_policy import (
     _STARTUP_GREETING_BURST_SECONDS,
     _STARTUP_GREETING_EARLIER_SAMPLES,
@@ -347,9 +347,7 @@ class GreetingMixin:
             # A guard pause drops _is_responding while its reply is still live;
             # prompt_ephemeral would decline to start over it, after the speech
             # id below had already been rotated under that reply.
-            if getattr(self.session, "_is_responding", False) or isinstance(
-                getattr(self.session, "_active_response_generation", None), int
-            ):
+            if session_reply_in_progress(self.session):
                 logger.debug("[%s] handle_avatar_interaction: text session busy, skipping", self.lanlan_name)
                 await self.send_avatar_interaction_ack(interaction_id, False, "busy")
                 return {"accepted": False, "reason": "busy", "interaction_id": interaction_id}
@@ -402,6 +400,7 @@ class GreetingMixin:
                         completion_mode="response",
                         persist_response=False,
                         response_done_callback=response_done_callback,
+                        reply_owner=reply_turn,
                     )
                 except Exception as e:
                     logger.exception(
